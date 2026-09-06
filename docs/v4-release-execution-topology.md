@@ -236,6 +236,60 @@ Step 8: Evidence Emission & Self-Validation
   - Generate extended `V4_PRODUCTION_RELEASE_EVIDENCE.json`.
 ```
 
+### 3.3 Dedicated v4 release state machine
+
+The manual production entry point is `.github/workflows/release-v4.yml`. It
+accepts an explicit version, channel, `v<version>` tag, source SHA, external
+updater-key path, notes path, and UTC publication timestamp. The workflow
+requires the checked-out commit and workflow SHA to equal the requested source
+SHA, then executes these fail-closed states:
+
+```text
+ValidateRequest -> ValidateAuthority -> BuildCandidate -> CreateDraft
+  -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
+  -> PublishDraft -> PromoteMetadata -> FinalVerify
+```
+
+Only `BuildCandidate` calls
+`scripts/orchestrate_v4_production_release.ps1`, exactly once. The candidate
+manifest is the only asset upload authority. The following states download the
+draft assets again and compare names, sizes, and SHA-256 digests before running
+the Authenticode `unsigned-zero-budget`, Tauri updater signature, SPDX SBOM,
+exact-bundle, current-user install/launch/uninstall, GUI/input-safety, and
+active-playback rejection checks. The packaged official Tauri updater fixture
+runs at this post-download boundary: a throwaway previous-v4 bridge consumes
+the exact downloaded installer and `.sig`, while the production candidate is
+never rebuilt. The packaged candidate also proves that update admission is
+rejected while playback is active.
+
+The same post-download qualification invokes a bounded Windows Defender
+custom scan against the exact downloaded installer and records the artifact
+name, size, SHA-256, scan result, and Defender status. This is a mandatory
+production gate: missing Defender cmdlets, disabled protection, scan failure,
+or a detection fails closed; no `unavailable` result is promotable.
+
+Attestation happens on those downloaded bytes with GitHub OIDC and is verified
+against the source repository, this workflow, the exact workflow SHA, and the
+candidate subjects. Publication changes only the draft flag. Metadata promotion
+is unreachable until publication returns a non-draft release, and final
+verification re-fetches both public assets and the selected stable/beta
+metadata path. Any failure after draft creation requires a new SemVer/RC; no
+asset, release tag, or published metadata is replaced in place.
+
+The authority preflight requires `pumni/Sky-Auto-Player-Releases` to have an
+existing `main` branch. If the authority is empty, the workflow stops and the
+maintainer must perform a separately reviewed one-time minimal bootstrap; the
+release transaction never creates initial authority history implicitly. The
+only cross-repository secret is the bounded
+`V4_RELEASE_AUTHORITY_TOKEN`, scoped to the authority repository's
+Administration-read and Contents read/write permissions needed to inspect
+immutable releases, create/upload/read/publish the draft, and write channel
+metadata. It is never used for updater-key custody. A maintainer may run
+`scripts/test_v4_release_authority_rehearsal.ps1 -ConfirmDisposable` after
+bootstrap; that explicit rehearsal creates and deletes one uniquely tagged
+draft and verifies upload/download bytes through the real authority API. It
+never publishes a release or mutates an existing tag.
+
 ---
 
 ## 4. Evidence Schemas and Promotion

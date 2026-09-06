@@ -22,6 +22,14 @@ fn main() {
         sky_desktop_shell_lib::run_gui_smoke();
         return;
     }
+    if args
+        .iter()
+        .any(|arg| arg == "--selftest-update-active-playback")
+    {
+        std::process::exit(
+            sky_desktop_shell_lib::selftest_update_install_rejection_during_playback(),
+        );
+    }
     if args.iter().any(|arg| arg == "--selftest-desktop-update") {
         sky_desktop_shell_lib::run_update_smoke();
         return;

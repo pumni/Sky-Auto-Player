@@ -113,6 +113,23 @@ pub fn print_inventory(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Export only the canonical public updater root for a throwaway packaged
+/// qualification fixture. The inventory parser remains the authority for
+/// both validation and the exported value; no private material is involved.
+pub fn export_canonical_public_key(root: &Path, output: &Path) -> Result<()> {
+    let inventory = inventory_public_trust_roots(root)?;
+    let parent = output
+        .parent()
+        .ok_or("updater public-key export requires a parent directory")?;
+    fs::create_dir_all(parent)?;
+    fs::write(output, format!("{}\n", inventory.canonical_public_key))?;
+    println!(
+        "[xtask] V4 updater public-root export: PASS (public identity only; {} bytes)",
+        inventory.canonical_public_key.len()
+    );
+    Ok(())
+}
+
 /// Verify local updater private key without printing private material or password.
 pub fn verify_local_private_key(
     root: &Path,

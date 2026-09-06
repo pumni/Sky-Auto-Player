@@ -2,6 +2,10 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$BundleDir,
+  [string]$CandidateInstallerPath,
+  [string]$CandidateSignaturePath,
+  [string]$CandidateVersion,
+  [string]$CandidatePublicKeyPath,
   [switch]$KeepFixtureOnFailure
 )
 
@@ -34,7 +38,22 @@ $oldKeyPath = Join-Path $fixtureRoot 'old.key'
 $newKeyPath = Join-Path $fixtureRoot 'new.key'
 $oldSignaturePath = Join-Path $fixtureRoot 'old.sig'
 $candidateForOldSigningPath = Join-Path $fixtureRoot 'candidate-for-old-signing.exe'
-$candidateVersion = '4.0.0-alpha.2'
+$providedCandidate = -not [string]::IsNullOrWhiteSpace($CandidateInstallerPath) -or
+  -not [string]::IsNullOrWhiteSpace($CandidateSignaturePath) -or
+  -not [string]::IsNullOrWhiteSpace($CandidateVersion) -or
+  -not [string]::IsNullOrWhiteSpace($CandidatePublicKeyPath)
+if ($providedCandidate) {
+  if ([string]::IsNullOrWhiteSpace($CandidateInstallerPath) -or
+    [string]::IsNullOrWhiteSpace($CandidateSignaturePath) -or
+    [string]::IsNullOrWhiteSpace($CandidateVersion) -or
+    [string]::IsNullOrWhiteSpace($CandidatePublicKeyPath)) {
+    throw 'Provided-candidate updater qualification requires installer, signature, version, and public-key paths'
+  }
+  if ($CandidateVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+    throw "Provided-candidate updater qualification received a non-canonical SemVer: $CandidateVersion"
+  }
+}
+$candidateVersion = if ($providedCandidate) { $CandidateVersion } else { '4.0.0-alpha.2' }
 $cutoverVersion = '4.0.0-alpha.3'
 $port = 17845
 $serverJob = $null
@@ -113,16 +132,28 @@ try {
     Pop-Location
   }
   $oldPublicKey = ([IO.File]::ReadAllText("$oldKeyPath.pub")).Trim()
-  $newPublicKey = ([IO.File]::ReadAllText("$newKeyPath.pub")).Trim()
+  $newPublicKey = if ($providedCandidate) {
+    $candidatePublicKey = (Resolve-Path -LiteralPath $CandidatePublicKeyPath -ErrorAction Stop).Path
+    $candidatePublicKeyItem = Get-Item -LiteralPath $candidatePublicKey -ErrorAction Stop
+    if ($candidatePublicKeyItem.Length -le 0 -or $candidatePublicKeyItem.Length -gt 4096) {
+      throw 'Provided candidate public key is empty or unbounded'
+    }
+    ([IO.File]::ReadAllText($candidatePublicKey)).Trim()
+  } else {
+    ([IO.File]::ReadAllText("$newKeyPath.pub")).Trim()
+  }
   if ([string]::IsNullOrWhiteSpace($oldPublicKey) -or [string]::IsNullOrWhiteSpace($newPublicKey)) {
     throw 'Updater fixture public key generation failed'
+  }
+  if ($newPublicKey -match 'PRIVATE KEY' -or $newPublicKey.Length -gt 4096) {
+    throw 'Updater fixture public key contains forbidden or unbounded material'
   }
   Write-FixtureUpdaterConfig $bridgeConfigPath $oldPublicKey
   Write-FixtureUpdaterConfig $cutoverConfigPath $newPublicKey
 
-  # Build the actual bridge client with old+new roots. The candidate build
-  # below is rebuilt with only the new root, so the installed binaries exercise
-  # the same Rust/Tauri transition as production rotation.
+  # Build only the throwaway bridge client with old+new roots. In production
+  # qualification the candidate below is the exact installer and signature
+  # downloaded from the release draft; it is never rebuilt by this fixture.
   Invoke-FixtureBuild $bridgeConfigPath $oldKeyPath "$oldPublicKey|$newPublicKey"
   $previousInstallers = @(Get-ChildItem -LiteralPath $bundleRoot -Filter '*4.0.0-alpha.1_x64-setup.exe' -File)
   if ($previousInstallers.Count -ne 1) {
@@ -130,40 +161,51 @@ try {
   }
   Copy-Item -LiteralPath $previousInstallers[0].FullName -Destination $previousInstallerCopy -Force
 
-  $cargoCandidate = $cargoSource -replace 'version = "4\.0\.0-alpha\.1"', ('version = "' + $candidateVersion + '"')
-  $lockCandidate = [regex]::Replace(
-    $lockSource,
-    '(?s)(name = "sky_desktop_shell"\r?\nversion = ")4\.0\.0-alpha\.1("\r?\n)',
-    '${1}' + $candidateVersion + '${2}',
-    1
-  )
-  if ($lockCandidate -eq $lockSource) { throw 'Could not locate the desktop package in Cargo.lock' }
-  [IO.File]::WriteAllText($candidateCargoPath, $cargoCandidate, [Text.UTF8Encoding]::new($false))
-  [IO.File]::WriteAllText($lockPath, $lockCandidate, [Text.UTF8Encoding]::new($false))
-  Invoke-FixtureBuild $cutoverConfigPath $newKeyPath $newPublicKey
+  if ($providedCandidate) {
+    $candidateArchive = Get-Item -LiteralPath (Resolve-Path -LiteralPath $CandidateInstallerPath -ErrorAction Stop).Path -ErrorAction Stop
+    $candidateSignature = Get-Item -LiteralPath (Resolve-Path -LiteralPath $CandidateSignaturePath -ErrorAction Stop).Path -ErrorAction Stop
+    if ($candidateArchive.Extension.ToLowerInvariant() -ne '.exe' -or
+      $candidateSignature.Name -ne "$($candidateArchive.Name).sig") {
+      throw 'Provided candidate installer/signature names are not an exact pair'
+    }
+  } else {
+    $cargoCandidate = $cargoSource -replace 'version = "4\.0\.0-alpha\.1"', ('version = "' + $candidateVersion + '"')
+    $lockCandidate = [regex]::Replace(
+      $lockSource,
+      '(?s)(name = "sky_desktop_shell"\r?\nversion = ")4\.0\.0-alpha\.1("\r?\n)',
+      '${1}' + $candidateVersion + '${2}',
+      1
+    )
+    if ($lockCandidate -eq $lockSource) { throw 'Could not locate the desktop package in Cargo.lock' }
+    [IO.File]::WriteAllText($candidateCargoPath, $cargoCandidate, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($lockPath, $lockCandidate, [Text.UTF8Encoding]::new($false))
+    Invoke-FixtureBuild $cutoverConfigPath $newKeyPath $newPublicKey
 
-  $candidateArchives = @(Get-ChildItem -LiteralPath $bundleRoot -Filter "*${candidateVersion}*-setup.exe" -File)
-  if ($candidateArchives.Count -ne 1) {
-    throw "Expected exactly one new-root candidate installer, found $($candidateArchives.Count)"
+    $candidateArchives = @(Get-ChildItem -LiteralPath $bundleRoot -Filter "*${candidateVersion}*-setup.exe" -File)
+    if ($candidateArchives.Count -ne 1) {
+      throw "Expected exactly one new-root candidate installer, found $($candidateArchives.Count)"
+    }
+    $candidateArchive = $candidateArchives[0]
+    $candidateSignature = Get-Item -LiteralPath ($candidateArchive.FullName + '.sig') -ErrorAction Stop
   }
-  $candidateArchive = $candidateArchives[0]
-  $candidateSignature = Get-Item -LiteralPath ($candidateArchive.FullName + '.sig') -ErrorAction Stop
   $signatureText = ([IO.File]::ReadAllText($candidateSignature.FullName)).Trim()
   if ([string]::IsNullOrWhiteSpace($signatureText)) { throw 'Candidate updater signature is empty' }
 
-  # Sign the exact candidate bytes with the old root only. This detached
-  # signature is used after cutover to prove the new-root-only client rejects
-  # an old-root artifact through its real Update::download path.
-  Copy-Item -LiteralPath $candidateArchive.FullName -Destination $candidateForOldSigningPath -Force
-  Push-Location $desktopRoot
-  try {
-    bun run tauri signer sign --private-key-path $oldKeyPath --password '' $candidateForOldSigningPath | Out-Null
-  } finally {
-    Pop-Location
+  if (-not $providedCandidate) {
+    # Sign the exact candidate bytes with the old root only. This detached
+    # signature is used after cutover to prove the new-root-only client rejects
+    # an old-root artifact through its real Update::download path.
+    Copy-Item -LiteralPath $candidateArchive.FullName -Destination $candidateForOldSigningPath -Force
+    Push-Location $desktopRoot
+    try {
+      bun run tauri signer sign --private-key-path $oldKeyPath --password '' $candidateForOldSigningPath | Out-Null
+    } finally {
+      Pop-Location
+    }
+    Move-Item -LiteralPath "$candidateForOldSigningPath.sig" -Destination $oldSignaturePath -Force
+    $oldSignatureText = ([IO.File]::ReadAllText($oldSignaturePath)).Trim()
+    if ([string]::IsNullOrWhiteSpace($oldSignatureText)) { throw 'Old-root updater signature is empty' }
   }
-  Move-Item -LiteralPath "$candidateForOldSigningPath.sig" -Destination $oldSignaturePath -Force
-  $oldSignatureText = ([IO.File]::ReadAllText($oldSignaturePath)).Trim()
-  if ([string]::IsNullOrWhiteSpace($oldSignatureText)) { throw 'Old-root updater signature is empty' }
 
   $newManifest = [ordered]@{
     version = $candidateVersion
@@ -176,19 +218,21 @@ try {
       }
     }
   }
-  $oldManifest = [ordered]@{
-    version = $cutoverVersion
-    notes = 'Old-root rejection candidate.'
-    pub_date = '2026-09-04T00:00:00Z'
-    platforms = [ordered]@{
-      'windows-x86_64-nsis' = [ordered]@{
-        signature = $oldSignatureText
-        url = "http://127.0.0.1:$port/candidate/update.exe"
+  $newManifest | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $manifestPath -Encoding utf8
+  if (-not $providedCandidate) {
+    $oldManifest = [ordered]@{
+      version = $cutoverVersion
+      notes = 'Old-root rejection candidate.'
+      pub_date = '2026-09-04T00:00:00Z'
+      platforms = [ordered]@{
+        'windows-x86_64-nsis' = [ordered]@{
+          signature = $oldSignatureText
+          url = "http://127.0.0.1:$port/candidate/update.exe"
+        }
       }
     }
+    $oldManifest | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $oldManifestPath -Encoding utf8
   }
-  $newManifest | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $manifestPath -Encoding utf8
-  $oldManifest | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $oldManifestPath -Encoding utf8
 
   $archivePath = $candidateArchive.FullName
   $serverJob = Start-Job -ScriptBlock {
@@ -281,21 +325,26 @@ try {
     $previousOffset = $offset
   }
 
-  # Switch only the server manifest. The restarted candidate is the cutover
-  # binary compiled with [new]; it must reject the old-only detached signature.
-  Copy-Item -LiteralPath $oldManifestPath -Destination $manifestPath -Force
-  $cutoverProcess = Start-Process -FilePath $appPath -ArgumentList @(
-    '--selftest-desktop-update',
-    '--selftest-update-marker', $cutoverMarkerPath
-  ) -WindowStyle Hidden -PassThru
-  Wait-Process -Id $cutoverProcess.Id -Timeout 180
-  Wait-ForPath -Path $cutoverMarkerPath
-  $cutoverResult = ([IO.File]::ReadAllText($cutoverMarkerPath)).Trim()
-  if (-not $cutoverResult.StartsWith('update-failed:')) {
-    throw "Cutover client accepted an old-root artifact: $cutoverResult"
+  if ($providedCandidate) {
+    "Packaged Tauri updater draft qualification: PASS (throwaway previous-v4 bridge applied the exact downloaded candidate $candidateVersion; safety phases=$($requiredPhases -join ', '))" |
+      Add-Content $summaryPath -Encoding UTF8
+  } else {
+    # Switch only the server manifest. The restarted candidate is the cutover
+    # binary compiled with [new]; it must reject the old-only detached signature.
+    Copy-Item -LiteralPath $oldManifestPath -Destination $manifestPath -Force
+    $cutoverProcess = Start-Process -FilePath $appPath -ArgumentList @(
+      '--selftest-desktop-update',
+      '--selftest-update-marker', $cutoverMarkerPath
+    ) -WindowStyle Hidden -PassThru
+    Wait-Process -Id $cutoverProcess.Id -Timeout 180
+    Wait-ForPath -Path $cutoverMarkerPath
+    $cutoverResult = ([IO.File]::ReadAllText($cutoverMarkerPath)).Trim()
+    if (-not $cutoverResult.StartsWith('update-failed:')) {
+      throw "Cutover client accepted an old-root artifact: $cutoverResult"
+    }
+    "Packaged Tauri updater rotation: PASS (bridge [old,new] applied new-root-only $candidateVersion; cutover [new] rejected old-root-only $cutoverVersion; safety phases=$($requiredPhases -join ', '))" |
+      Add-Content $summaryPath -Encoding UTF8
   }
-  "Packaged Tauri updater rotation: PASS (bridge [old,new] applied new-root-only $candidateVersion; cutover [new] rejected old-root-only $cutoverVersion; safety phases=$($requiredPhases -join ', '))" |
-    Add-Content $summaryPath -Encoding UTF8
 } finally {
   if ($null -ne $serverJob) {
     New-Item -ItemType File -Path $stopPath -Force | Out-Null

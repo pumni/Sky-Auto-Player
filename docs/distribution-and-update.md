@@ -33,9 +33,11 @@ no production certificate, provider, or thumbprint is required by the current
 
 Qualification binds the exact NSIS installer and Tauri signature bytes by
 SHA-256 and retains the governed unsigned-zero-budget Authenticode evidence,
-SPDX SBOM, provenance, clean worktree, install/launch/uninstall, and
-previous-v4-to-candidate-v4 fixture evidence. Release orchestration remains
-subject to the dedicated v4 release authority and its reviewed promotion policy.
+SPDX SBOM, provenance, clean worktree, install/launch/uninstall, and the
+post-download previous-v4-to-candidate-v4 fixture evidence. That fixture
+consumes the exact installer and `.sig` re-downloaded from the draft; it does
+not rebuild the candidate. Release orchestration remains subject to the
+dedicated v4 release authority and its reviewed promotion policy.
 
 The remainder of this document is retained as a historical v3-maintenance
 reference. It is not a current v4 runtime, packaging, release, or update
@@ -88,7 +90,8 @@ gh attestation verify SUPPLY_CHAIN_ATTESTATION.json -R pumni/Sky-Auto-Player
 Prerelease tags (`vX.Y.ZrcN`, `vX.Y.Z.devN`, and equivalent PEP 440 forms) are
 created as draft GitHub releases and published as prereleases for beta-channel
 validation only after qualification. Stable tags are published only after the
-repository's exact-artifact, manifest, provenance, fresh-install, and Defender
+repository's exact-artifact, manifest, provenance, fresh-install, exact
+downloaded-byte updater, packaged playback-admission, and Defender
 qualification gates pass. Published tags and assets are immutable; fixes
 require a new version.
 

@@ -101,6 +101,31 @@ pub fn run_update_smoke() {
     run_inner(false, true);
 }
 
+/// Prove the packaged update admission boundary remains fail-closed while
+/// physical playback owns the activity gate. This is a hidden qualification
+/// seam only; it does not add an updater protocol or install path.
+pub fn selftest_update_install_rejection_during_playback() -> i32 {
+    let activity = app_state::ActivityCoordinator::default();
+    let _playback = match activity.reserve_playback("packaged-qualification") {
+        Ok(lease) => lease,
+        Err(error) => {
+            eprintln!("packaged playback admission self-test could not start: {error}");
+            return 1;
+        }
+    };
+    match activity.reserve_update() {
+        Err(app_state::ActivityReservationError::PhysicalPlaybackActive) => 0,
+        Ok(_) => {
+            eprintln!("packaged update admission self-test accepted installation during playback");
+            1
+        }
+        Err(error) => {
+            eprintln!("packaged update admission self-test returned unexpected error: {error}");
+            1
+        }
+    }
+}
+
 fn run_inner(gui_smoke: bool, update_smoke: bool) {
     let update_marker = update_smoke_marker("--selftest-update-marker");
     let update_safety_marker = update_smoke_marker("--selftest-update-safety-marker");

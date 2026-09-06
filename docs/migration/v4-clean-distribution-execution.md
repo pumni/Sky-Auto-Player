@@ -222,7 +222,9 @@ Required qualification matrix:
 - pre-exit all-input-release safety;
 - Authenticode verification;
 - updater-signature verification;
-- Defender status/detection evidence;
+- exact downloaded-installer Defender custom scan with no detection; missing
+  Defender cmdlets, disabled protection, scan failure, or detection fails
+  closed;
 - packaged GUI smoke;
 - update-channel isolation;
 - immutable release/asset identity check.
