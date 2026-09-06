@@ -1,3 +1,21 @@
+function Get-V4ReleaseAuthorityAssetUploadUrl {
+    param(
+        [Parameter(Mandatory = $true)] [string]$UploadUrl,
+        [Parameter(Mandatory = $true)] [string]$AssetName
+    )
+
+    if ($UploadUrl.Contains("?")) {
+        throw "release asset upload base URL must not already contain a query"
+    }
+
+    $escapedAssetName = [Uri]::EscapeDataString($AssetName)
+    $assetUrl = [string]::Concat($UploadUrl, "?name=", $escapedAssetName)
+    if (-not $assetUrl.StartsWith(($UploadUrl + "?name="), [StringComparison]::Ordinal)) {
+        throw "release asset upload URL construction failed"
+    }
+    return $assetUrl
+}
+
 function Invoke-V4ReleaseAuthorityAssetUpload {
     param(
         [Parameter(Mandatory = $true)] [string]$UploadUrl,
@@ -13,16 +31,8 @@ function Invoke-V4ReleaseAuthorityAssetUpload {
     if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
         throw "release asset upload file is missing"
     }
-    if ($UploadUrl.Contains("?")) {
-        throw "release asset upload base URL must not already contain a query"
-    }
 
-    $escapedAssetName = [Uri]::EscapeDataString($AssetName)
-    $assetUrl = [string]::Concat($UploadUrl, "?name=", $escapedAssetName)
-    if (-not $assetUrl.StartsWith(($UploadUrl + "?name="), [StringComparison]::Ordinal)) {
-        throw "release asset upload URL construction failed"
-    }
-
+    $assetUrl = Get-V4ReleaseAuthorityAssetUploadUrl -UploadUrl $UploadUrl -AssetName $AssetName
     $client = [System.Net.Http.HttpClient]::new()
     $request = $null
     $fileStream = $null
