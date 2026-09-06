@@ -42,7 +42,9 @@ foreach ($script in @(
 
 foreach ($marker in @(
     'System.Net.Http.HttpClient', 'System.Net.Http.StreamContent', 'System.IO.FileStream',
-    'Headers.Authorization', 'SendAsync', 'ReadAsStringAsync', 'application/octet-stream'
+    'Headers.Authorization', 'UserAgent', 'application/vnd.github+json',
+    'X-GitHub-Api-Version', '2026-03-10', 'ContentLength', 'fileLength',
+    'SendAsync', 'ReadAsStringAsync', 'application/octet-stream'
 )) {
     if (-not $uploadHelper.Contains($marker)) {
         Fail "raw release asset upload helper is missing marker: $marker"
@@ -64,10 +66,26 @@ function Test-RawUploadBodyByteIdentity {
         [IO.File]::WriteAllBytes($testPath, $expected)
         $stream = [IO.FileStream]::new($testPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         $content = [System.Net.Http.StreamContent]::new($stream)
+        $content.Headers.ContentLength = [int64]$stream.Length
+        if ($content.Headers.ContentLength -ne [int64]$expected.Length) {
+            Fail "raw upload content length changed"
+        }
         $request = [System.Net.Http.HttpRequestMessage]::new(
             [System.Net.Http.HttpMethod]::Post,
             "https://uploads.github.com/test"
         )
+        $request.Headers.UserAgent.ParseAdd("Sky-Auto-Player-v4-release-pipeline/1.0")
+        [void]$request.Headers.Accept.Add(
+            [System.Net.Http.Headers.MediaTypeWithQualityHeaderValue]::new(
+                "application/vnd.github+json"
+            )
+        )
+        [void]$request.Headers.Add("X-GitHub-Api-Version", "2026-03-10")
+        if ($request.Headers.UserAgent.ToString() -ne "Sky-Auto-Player-v4-release-pipeline/1.0" -or
+            $request.Headers.Accept.ToString() -ne "application/vnd.github+json" -or
+            $request.Headers.GetValues("X-GitHub-Api-Version") -join "," -ne "2026-03-10") {
+            Fail "raw upload protocol headers changed"
+        }
         $request.Content = $content
         $captured = $request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
         if ($captured.Length -ne $expected.Length) { Fail "raw upload body length changed" }

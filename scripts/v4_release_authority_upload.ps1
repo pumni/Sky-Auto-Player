@@ -31,10 +31,22 @@ function Invoke-V4ReleaseAuthorityAssetUpload {
         $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::new(
             "application/octet-stream"
         )
+        $fileLength = [int64]$fileStream.Length
+        $content.Headers.ContentLength = $fileLength
+        if ($content.Headers.ContentLength -ne $fileLength) {
+            throw "release asset upload content length is not exact"
+        }
         $request = [System.Net.Http.HttpRequestMessage]::new(
             [System.Net.Http.HttpMethod]::Post,
             [Uri]$assetUrl
         )
+        $request.Headers.UserAgent.ParseAdd("Sky-Auto-Player-v4-release-pipeline/1.0")
+        [void]$request.Headers.Accept.Add(
+            [System.Net.Http.Headers.MediaTypeWithQualityHeaderValue]::new(
+                "application/vnd.github+json"
+            )
+        )
+        [void]$request.Headers.Add("X-GitHub-Api-Version", "2026-03-10")
         $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new(
             "Bearer",
             $Token
