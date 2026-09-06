@@ -13,7 +13,7 @@ const WINDOWS_ARCH: &str = "x64";
 const UNSIGNED_ZERO_BUDGET_MODE: &str = "unsigned-zero-budget";
 // Public Tauri updater trust material. The matching private key is generated
 // and stored outside the repository by the release operator.
-pub const V4_TAURI_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2MzU1MjYwQTBDNjYzRDUKUldUVlk4YWdZRkkxOWdWRnNkRTNVY0habzA0YlQ4OFkxZk42WEM3OGVnSW5WNlc5SHlSbGF3QWEK";
+pub const V4_TAURI_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5QUFCRDJFNzgzODgxOEMKUldTTWdUaDRMcjJxR2JxeE5kTUx5VlIxS1dhOHRrSTEzY2FMeE8wYldtckM2TjV2KzRwQUNaTEUK";
 
 #[derive(Debug, Serialize)]
 struct ArtifactSummary {

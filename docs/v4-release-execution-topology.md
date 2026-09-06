@@ -351,7 +351,7 @@ Provides provenance and audit trails for release records:
   "authenticode_provider": "none",
   "approved_signer_thumbprint": null,
   "observed_signer_thumbprint": null,
-  "updater_key_id": "F6355260A0C663D5",
+  "updater_key_id": "19AABD2E7838818C",
   "updater_signature_status": "valid",
   "sbom": "SBOM.spdx.json",
   "sbom_sha256": "fedcba...",

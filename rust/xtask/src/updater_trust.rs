@@ -21,7 +21,7 @@ pub fn inventory_public_trust_roots(root: &Path) -> Result<UpdaterTrustInventory
     let canonical = crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY;
     let _decoded_key = decode_public_key(canonical)?;
     let key_id = extract_key_id_from_public_key(canonical)?;
-    if key_id != "F6355260A0C663D5" {
+    if key_id != "19AABD2E7838818C" {
         return Err(format!("unexpected canonical key id: {key_id}").into());
     }
 
@@ -441,14 +441,14 @@ mod tests {
     fn extract_key_id_matches_canonical_v4() {
         let canonical = crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY;
         let key_id = extract_key_id_from_public_key(canonical).unwrap();
-        assert_eq!(key_id, "F6355260A0C663D5");
+        assert_eq!(key_id, "19AABD2E7838818C");
     }
 
     #[test]
     fn inventory_proves_single_canonical_v4_root() {
         let repo_root = crate::repo::root();
         let inventory = inventory_public_trust_roots(&repo_root).unwrap();
-        assert_eq!(inventory.canonical_key_id, "F6355260A0C663D5");
+        assert_eq!(inventory.canonical_key_id, "19AABD2E7838818C");
         assert_eq!(
             inventory.canonical_public_key,
             crate::tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
