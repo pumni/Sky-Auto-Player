@@ -1,4 +1,4 @@
-name: V4 Runner Environment Probe
+name: V4 Runner Credential Probe
 
 on:
   pull_request:
@@ -10,25 +10,93 @@ permissions:
 
 jobs:
   probe:
-    name: Probe PUMZ runner-local password inheritance
+    name: Probe PUMZ Windows Credential Manager bridge
     runs-on: [self-hosted, windows, v4-release, single-tenant]
     steps:
-      - name: Check Actions step-process password presence
+      - name: Check session credential presence without exposing content
         shell: pwsh
         run: |
-          $name = 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
-          $value = [Environment]::GetEnvironmentVariable($name, 'Process')
-          if ([string]::IsNullOrWhiteSpace($value)) {
-            Write-Host 'Runner job password presence: ABSENT'
-            exit 42
-          }
-          Write-Host 'Runner job password presence: PRESENT_NONEMPTY'
+          $source = @'
+          using System;
+          using System.ComponentModel;
+          using System.Runtime.InteropServices;
 
-          pwsh -NoProfile -NonInteractive -Command "if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('TAURI_SIGNING_PRIVATE_KEY_PASSWORD','Process'))) { exit 42 } else { exit 0 }"
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Runner job child inheritance: FAIL'
-          }
-          Write-Host 'Runner job child inheritance: PASS'
+          public static class SkyV4CredentialProbe
+          {
+              private const uint CRED_TYPE_GENERIC = 1;
+              private const int ERROR_NOT_FOUND = 1168;
 
-          # Never print, hash, measure, persist, or export the secret value.
-          Remove-Variable value -ErrorAction SilentlyContinue
+              [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+              private struct CREDENTIAL
+              {
+                  public uint Flags;
+                  public uint Type;
+                  public IntPtr TargetName;
+                  public IntPtr Comment;
+                  public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+                  public uint CredentialBlobSize;
+                  public IntPtr CredentialBlob;
+                  public uint Persist;
+                  public uint AttributeCount;
+                  public IntPtr Attributes;
+                  public IntPtr TargetAlias;
+                  public IntPtr UserName;
+              }
+
+              [DllImport("Advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]
+              private static extern bool CredRead(string target, uint type, uint reservedFlag, out IntPtr credentialPtr);
+
+              [DllImport("Advapi32.dll", SetLastError = true)]
+              private static extern void CredFree(IntPtr buffer);
+
+              public static bool HasNonEmptyBlob(string target)
+              {
+                  IntPtr credentialPtr;
+                  if (!CredRead(target, CRED_TYPE_GENERIC, 0, out credentialPtr))
+                  {
+                      int error = Marshal.GetLastWin32Error();
+                      if (error == ERROR_NOT_FOUND)
+                      {
+                          return false;
+                      }
+                      throw new Win32Exception(error);
+                  }
+
+                  try
+                  {
+                      var credential = (CREDENTIAL)Marshal.PtrToStructure(credentialPtr, typeof(CREDENTIAL));
+                      return credential.CredentialBlob != IntPtr.Zero && credential.CredentialBlobSize > 0;
+                  }
+                  finally
+                  {
+                      CredFree(credentialPtr);
+                  }
+              }
+          }
+          '@
+
+          Add-Type -TypeDefinition $source -Language CSharp
+          $target = 'SkyAutoPlayer/V4UpdaterProbe'
+
+          if (-not [SkyV4CredentialProbe]::HasNonEmptyBlob($target)) {
+            Write-Host 'Windows credential probe: ABSENT'
+            exit 0
+          }
+
+          Write-Host 'Windows credential probe: PRESENT_NONEMPTY'
+
+          # Prove the job can consume broker output and pass only an ephemeral marker
+          # to a child process. This marker is not credential material.
+          $env:SKY_V4_CREDENTIAL_BROKER_PROBE = 'present'
+          try {
+            pwsh -NoProfile -NonInteractive -Command "if (`$env:SKY_V4_CREDENTIAL_BROKER_PROBE -ne 'present') { exit 42 } else { exit 0 }"
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Credential broker child inheritance: FAIL'
+            }
+            Write-Host 'Credential broker child inheritance: PASS'
+          }
+          finally {
+            Remove-Item Env:SKY_V4_CREDENTIAL_BROKER_PROBE -ErrorAction SilentlyContinue
+          }
+
+          # Never print, hash, measure, decode, persist, or export credential content.
