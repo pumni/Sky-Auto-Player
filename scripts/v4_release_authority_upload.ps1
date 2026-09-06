@@ -13,8 +13,16 @@ function Invoke-V4ReleaseAuthorityAssetUpload {
     if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
         throw "release asset upload file is missing"
     }
+    if ($UploadUrl.Contains("?")) {
+        throw "release asset upload base URL must not already contain a query"
+    }
 
-    $assetUrl = "$UploadUrl?name=$([Uri]::EscapeDataString($AssetName))"
+    $escapedAssetName = [Uri]::EscapeDataString($AssetName)
+    $assetUrl = [string]::Concat($UploadUrl, "?name=", $escapedAssetName)
+    if (-not $assetUrl.StartsWith(($UploadUrl + "?name="), [StringComparison]::Ordinal)) {
+        throw "release asset upload URL construction failed"
+    }
+
     $client = [System.Net.Http.HttpClient]::new()
     $request = $null
     $fileStream = $null
