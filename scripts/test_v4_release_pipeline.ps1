@@ -40,6 +40,7 @@ foreach ($marker in @(
     'persist-credentials: false',
     'actions/attest@',
     '--source-digest $env:GITHUB_SHA',
+    'Initialize release state root', 'RUNNER_TEMP', 'GITHUB_RUN_ID', 'GITHUB_ENV',
     'RecordAttestations', 'PublishDraft', 'PromoteMetadata', 'FinalVerify'
 )) {
     if (-not $workflow.Contains($marker)) { Fail "workflow marker is missing: $marker" }
@@ -47,9 +48,15 @@ foreach ($marker in @(
 foreach ($forbidden in @(
     'cargo xtask dist', 'Sky-Auto-Player-Updater.exe', 'MANIFEST.json.sig',
     'softprops/action-gh-release', 'secrets.TAURI_SIGNING_PRIVATE_KEY',
-    'secrets.UPDATER_PRIVATE_KEY', 'secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
+    'secrets.UPDATER_PRIVATE_KEY', 'secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
+    'V4_RELEASE_STATE_ROOT: ${{ runner.temp }}'
 )) {
     if ($workflow.Contains($forbidden)) { Fail "forbidden production workflow marker remains: $forbidden" }
+}
+$stateRootInit = $workflow.IndexOf('- name: Initialize release state root', [StringComparison]::Ordinal)
+$checkout = $workflow.IndexOf('- name: Check out the exact requested source SHA', [StringComparison]::Ordinal)
+if ($stateRootInit -lt 0 -or $checkout -lt 0 -or $stateRootInit -gt $checkout) {
+    Fail "release state root must be initialized from runner default environment before checkout and release steps"
 }
 
 class MockReleaseApi {
