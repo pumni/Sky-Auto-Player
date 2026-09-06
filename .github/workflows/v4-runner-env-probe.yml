@@ -10,93 +10,92 @@ permissions:
 
 jobs:
   probe:
-    name: Probe PUMZ Windows Credential Manager bridge
+    name: Probe PUMZ Windows Credential Manager real-key broker
     runs-on: [self-hosted, windows, v4-release, single-tenant]
     steps:
-      - name: Check session credential presence without exposing content
+      - name: Check out exact remediation source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        with:
+          ref: 80fc064364ac39f9ee5a02373f539af6998a4d14
+
+      - name: Verify exact source SHA and clean runner environment
         shell: pwsh
         run: |
-          $source = @'
-          using System;
-          using System.ComponentModel;
-          using System.Runtime.InteropServices;
-
-          public static class SkyV4CredentialProbe
-          {
-              private const uint CRED_TYPE_GENERIC = 1;
-              private const int ERROR_NOT_FOUND = 1168;
-
-              [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-              private struct CREDENTIAL
-              {
-                  public uint Flags;
-                  public uint Type;
-                  public IntPtr TargetName;
-                  public IntPtr Comment;
-                  public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
-                  public uint CredentialBlobSize;
-                  public IntPtr CredentialBlob;
-                  public uint Persist;
-                  public uint AttributeCount;
-                  public IntPtr Attributes;
-                  public IntPtr TargetAlias;
-                  public IntPtr UserName;
-              }
-
-              [DllImport("Advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]
-              private static extern bool CredRead(string target, uint type, uint reservedFlag, out IntPtr credentialPtr);
-
-              [DllImport("Advapi32.dll", SetLastError = true)]
-              private static extern void CredFree(IntPtr buffer);
-
-              public static bool HasNonEmptyBlob(string target)
-              {
-                  IntPtr credentialPtr;
-                  if (!CredRead(target, CRED_TYPE_GENERIC, 0, out credentialPtr))
-                  {
-                      int error = Marshal.GetLastWin32Error();
-                      if (error == ERROR_NOT_FOUND)
-                      {
-                          return false;
-                      }
-                      throw new Win32Exception(error);
-                  }
-
-                  try
-                  {
-                      var credential = (CREDENTIAL)Marshal.PtrToStructure(credentialPtr, typeof(CREDENTIAL));
-                      return credential.CredentialBlob != IntPtr.Zero && credential.CredentialBlobSize > 0;
-                  }
-                  finally
-                  {
-                      CredFree(credentialPtr);
-                  }
-              }
+          # 1. Exact remediation SHA
+          $currentSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          $expectedSha = "80fc064364ac39f9ee5a02373f539af6998a4d14"
+          if ($currentSha -ne $expectedSha) {
+            throw "Exact remediation SHA mismatch: expected $expectedSha, got $currentSha"
           }
-          '@
+          Write-Host "Exact remediation SHA: PASS ($currentSha)"
 
-          Add-Type -TypeDefinition $source -Language CSharp
-          $target = 'SkyAutoPlayer/V4UpdaterProbe'
-
-          if (-not [SkyV4CredentialProbe]::HasNonEmptyBlob($target)) {
-            Write-Host 'Windows credential probe: ABSENT'
-            exit 0
+          # 2. Runner identity
+          if ($env:RUNNER_NAME -ne "PUMZ") {
+            throw "Runner is not PUMZ: $env:RUNNER_NAME"
           }
+          Write-Host "Runner PUMZ: PASS"
 
-          Write-Host 'Windows credential probe: PRESENT_NONEMPTY'
-
-          # Prove the job can consume broker output and pass only an ephemeral marker
-          # to a child process. This marker is not credential material.
-          $env:SKY_V4_CREDENTIAL_BROKER_PROBE = 'present'
-          try {
-            pwsh -NoProfile -NonInteractive -Command "if (`$env:SKY_V4_CREDENTIAL_BROKER_PROBE -ne 'present') { exit 42 } else { exit 0 }"
-            if ($LASTEXITCODE -ne 0) {
-              throw 'Credential broker child inheritance: FAIL'
+          # 3. Ambient signing variables must be ABSENT across scopes
+          $names = @(
+            'TAURI_SIGNING_PRIVATE_KEY',
+            'TAURI_SIGNING_PRIVATE_KEY_PATH',
+            'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
+          )
+          foreach ($name in $names) {
+            if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name, 'Process'))) {
+              throw "Legacy signing env variable $name is PRESENT in Process scope"
             }
-            Write-Host 'Credential broker child inheritance: PASS'
+            if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name, 'User'))) {
+              throw "Legacy signing env variable $name is PRESENT in User scope"
+            }
+            if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name, 'Machine'))) {
+              throw "Legacy signing env variable $name is PRESENT in Machine scope"
+            }
+          }
+          Write-Host "Legacy signing env absent: PASS"
+
+      - name: Verify real private key via Credential Manager broker
+        shell: pwsh
+        run: |
+          # 1. Resolve key path from runner-local temporary bridge (never print the path or key bytes)
+          $bridgeFile = "C:\Users\pe4cE_HOA\.sky-auto-player-secrets\v4_updater_key_path.bridge"
+          if (-not (Test-Path -LiteralPath $bridgeFile -PathType Leaf)) {
+            throw "Temporary runner-local key path bridge not found: $bridgeFile"
+          }
+          $keyPath = (Get-Content -LiteralPath $bridgeFile -TotalCount 1).Trim()
+          if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) {
+            throw "Private key file does not exist at bridged path"
+          }
+          Write-Host "Runner-local private key path resolved: PASS"
+
+          # 2. Test credential broker read
+          . scripts/v4_updater_credential_broker.ps1
+          if (-not (Test-V4UpdaterProductionCredential)) {
+            throw "Canonical credential absent in Windows Credential Manager"
+          }
+          Write-Host "Credential broker read: PASS"
+
+          # 3. Execute verifier contract with cleanup in finally
+          try {
+            $output = & pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify_v4_updater_private_key.ps1 -KeyPath $keyPath -UseCredentialBroker
+            $rendered = $output -join "`n"
+            Write-Host $rendered
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Verifier exited with error code $LASTEXITCODE"
+            }
+            if ($rendered -notmatch "19AABD2E7838818C") {
+              throw "Verifier output did not match expected Key ID 19AABD2E7838818C"
+            }
+            if ($rendered -notmatch "Local updater private key matches canonical production v4 root") {
+              throw "Verifier did not report successful match"
+            }
+            Write-Host "Private-key verifier: PASS — Key ID 19AABD2E7838818C"
           }
           finally {
-            Remove-Item Env:SKY_V4_CREDENTIAL_BROKER_PROBE -ErrorAction SilentlyContinue
+            Remove-V4UpdaterProductionCredential
+            if (Test-V4UpdaterProductionCredential) {
+              throw "Credential cleanup failed: canonical target still present"
+            }
+            Write-Host "Credential cleanup: PASS"
           }
-
-          # Never print, hash, measure, decode, persist, or export credential content.
