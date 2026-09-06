@@ -7,9 +7,11 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pipelinePath = Join-Path $PSScriptRoot "v4_release_pipeline.ps1"
 $rehearsalPath = Join-Path $PSScriptRoot "test_v4_release_authority_rehearsal.ps1"
+$uploadHelperPath = Join-Path $PSScriptRoot "v4_release_authority_upload.ps1"
 $workflowPath = Join-Path $repoRoot ".github/workflows/release-v4.yml"
 $pipeline = Get-Content -LiteralPath $pipelinePath -Raw
 $rehearsal = Get-Content -LiteralPath $rehearsalPath -Raw
+$uploadHelper = Get-Content -LiteralPath $uploadHelperPath -Raw
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 
 function Fail([string]$Message) { throw "FAILED: $Message" }
@@ -19,14 +21,16 @@ foreach ($script in @(
     [pscustomobject]@{ Name = "authority rehearsal"; Source = $rehearsal }
 )) {
     foreach ($forbidden in @(
-        'gh @Arguments --output', 'gh.exe @Arguments --output', '--output $OutputPath'
+        'gh @Arguments --output', 'gh.exe @Arguments --output', '--output $OutputPath',
+        '"$uploadUrl?name='
     )) {
         if ($script.Source.Contains($forbidden)) {
             Fail "$($script.Name) must not use gh api --output for binary asset downloads"
         }
     }
     foreach ($marker in @(
-        'Invoke-GhBinaryOutput', 'PSVersionTable.PSVersion', '7.4.0', 'RedirectStandardOutput',
+        'Invoke-GhBinaryOutput', 'Invoke-V4ReleaseAuthorityAssetUpload',
+        'PSVersionTable.PSVersion', '7.4.0', 'RedirectStandardOutput',
         'RedirectStandardError', 'StandardOutput.BaseStream', 'ReadToEndAsync',
         'ArgumentList'
     )) {
@@ -35,6 +39,52 @@ foreach ($script in @(
         }
     }
 }
+
+foreach ($marker in @(
+    'System.Net.Http.HttpClient', 'System.Net.Http.StreamContent', 'System.IO.FileStream',
+    'Headers.Authorization', 'SendAsync', 'ReadAsStringAsync', 'application/octet-stream'
+)) {
+    if (-not $uploadHelper.Contains($marker)) {
+        Fail "raw release asset upload helper is missing marker: $marker"
+    }
+}
+if ($uploadHelper.Contains('gh ') -or $uploadHelper.Contains('ArgumentList')) {
+    Fail "raw release asset upload helper must not invoke GitHub CLI"
+}
+
+function Test-RawUploadBodyByteIdentity {
+    $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-raw-upload-test-" + [guid]::NewGuid().ToString("N"))
+    $testPath = Join-Path $testRoot "binary-fixture.bin"
+    $expected = [byte[]](0x00, 0xFF, 0x80, 0x41, 0xC3, 0x28, 0x0D, 0x0A, 0x7F)
+    $stream = $null
+    $content = $null
+    $request = $null
+    try {
+        New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
+        [IO.File]::WriteAllBytes($testPath, $expected)
+        $stream = [IO.FileStream]::new($testPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $content = [System.Net.Http.StreamContent]::new($stream)
+        $request = [System.Net.Http.HttpRequestMessage]::new(
+            [System.Net.Http.HttpMethod]::Post,
+            "https://uploads.github.com/test"
+        )
+        $request.Content = $content
+        $captured = $request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        if ($captured.Length -ne $expected.Length) { Fail "raw upload body length changed" }
+        for ($index = 0; $index -lt $expected.Length; $index++) {
+            if ($captured[$index] -ne $expected[$index]) { Fail "raw upload body bytes changed" }
+        }
+    } finally {
+        if ($null -ne $request) { $request.Dispose() }
+        if ($null -ne $content) { $content.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
+        if (Test-Path -LiteralPath $testRoot) {
+            Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Test-RawUploadBodyByteIdentity
 
 foreach ($marker in @(
     'failed closed at phase',

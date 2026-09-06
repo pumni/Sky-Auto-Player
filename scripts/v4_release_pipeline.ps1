@@ -43,6 +43,7 @@ $authenticodeEvidenceName = "TAURI_AUTHENTICODE_EVIDENCE.json"
 $installedAuthenticodeEvidenceName = "INSTALLED_AUTHENTICODE_EVIDENCE.json"
 $summaryName = "TAURI_ARTIFACT_SUMMARY.json"
 $sbomName = "SBOM.spdx.json"
+. (Join-Path $PSScriptRoot "v4_release_authority_upload.ps1")
 
 function Fail([string]$Message) {
     throw "V4 release pipeline failed closed: $Message"
@@ -429,14 +430,14 @@ function Invoke-CreateDraft {
     foreach ($record in $manifest.assets) {
         $candidate = (Get-CandidateRecords | Where-Object { $_.name -eq [string]$record.name })
         if ($null -eq $candidate) { Fail "candidate manifest contains an unknown asset" }
-        $assetUrl = "$uploadUrl?name=$([Uri]::EscapeDataString([string]$record.name))"
         # GitHub's release-specific upload_url is deliberately used here. The
         # endpoint rejects duplicate names; this path never deletes or
         # replaces an asset after a failed upload.
-        $uploaded = Invoke-AuthorityApi -Arguments @(
-            "api", "--method", "POST", $assetUrl,
-            "--header", "Content-Type: application/octet-stream", "--input", $candidate.path
-        )
+        $uploaded = Invoke-V4ReleaseAuthorityAssetUpload `
+            -UploadUrl $uploadUrl `
+            -AssetName ([string]$record.name) `
+            -FilePath ([string]$candidate.path) `
+            -Token (Get-AuthorityToken)
         if ([string]$uploaded.name -ne [string]$record.name -or
             [int64]$uploaded.size -ne [int64]$record.size -or
             [string]$uploaded.state -ne "uploaded") {

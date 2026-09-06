@@ -30,6 +30,7 @@ $oldGhToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
 $failure = $null
 $failurePhase = $null
 $phase = "initialize"
+. (Join-Path $PSScriptRoot "v4_release_authority_upload.ps1")
 
 function Invoke-GhBinaryOutput {
     param(
@@ -122,11 +123,11 @@ function Invoke-AuthorityApi {
 try {
     $phase = "prepare-artifact"
     New-Item -ItemType Directory -Path $rehearsalRoot -Force | Out-Null
-    [IO.File]::WriteAllText(
-        $artifactPath,
-        "throwaway v4 authority upload rehearsal $([guid]::NewGuid().ToString('N'))`n",
-        [Text.UTF8Encoding]::new($false)
+    $artifactBytes = [byte[]](
+        0x00, 0xFF, 0x80, 0x41, 0xC3, 0x28, 0x0D, 0x0A, 0x7F,
+        [byte][char]([guid]::NewGuid().ToString("N")[0])
     )
+    [IO.File]::WriteAllBytes($artifactPath, $artifactBytes)
     $expectedHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $expectedSize = (Get-Item -LiteralPath $artifactPath).Length
 
@@ -161,10 +162,11 @@ try {
     }
 
     $phase = "upload-asset"
-    $uploaded = Invoke-AuthorityApi -Arguments @(
-        "api", "--method", "POST", "$uploadUrl?name=$([Uri]::EscapeDataString($artifactName))",
-        "--header", "Content-Type: text/plain", "--input", $artifactPath
-    )
+    $uploaded = Invoke-V4ReleaseAuthorityAssetUpload `
+        -UploadUrl $uploadUrl `
+        -AssetName $artifactName `
+        -FilePath $artifactPath `
+        -Token $token
     if ([string]$uploaded.name -ne $artifactName -or [int64]$uploaded.size -ne [int64]$expectedSize) {
         throw "authority rehearsal upload response did not preserve the exact asset identity"
     }
