@@ -6,11 +6,35 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pipelinePath = Join-Path $PSScriptRoot "v4_release_pipeline.ps1"
+$rehearsalPath = Join-Path $PSScriptRoot "test_v4_release_authority_rehearsal.ps1"
 $workflowPath = Join-Path $repoRoot ".github/workflows/release-v4.yml"
 $pipeline = Get-Content -LiteralPath $pipelinePath -Raw
+$rehearsal = Get-Content -LiteralPath $rehearsalPath -Raw
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 
 function Fail([string]$Message) { throw "FAILED: $Message" }
+
+foreach ($script in @(
+    [pscustomobject]@{ Name = "production release pipeline"; Source = $pipeline },
+    [pscustomobject]@{ Name = "authority rehearsal"; Source = $rehearsal }
+)) {
+    foreach ($forbidden in @(
+        'gh @Arguments --output', 'gh.exe @Arguments --output', '--output $OutputPath'
+    )) {
+        if ($script.Source.Contains($forbidden)) {
+            Fail "$($script.Name) must not use gh api --output for binary asset downloads"
+        }
+    }
+    foreach ($marker in @(
+        'Invoke-GhBinaryOutput', 'PSVersionTable.PSVersion', '7.4.0', 'RedirectStandardOutput',
+        'RedirectStandardError', 'StandardOutput.BaseStream', 'ReadToEndAsync',
+        'ArgumentList'
+    )) {
+        if (-not $script.Source.Contains($marker)) {
+            Fail "$($script.Name) binary download helper is missing marker: $marker"
+        }
+    }
+}
 
 if (([regex]::Matches($pipeline, "orchestrate_v4_production_release\.ps1")).Count -ne 1) {
     Fail "production orchestrator must have exactly one call site"

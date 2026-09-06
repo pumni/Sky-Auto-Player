@@ -592,10 +592,12 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     let workflow_path = root.join(".github/workflows/release-v4.yml");
     let pipeline_path = root.join("scripts/v4_release_pipeline.ps1");
     let regression_path = root.join("scripts/test_v4_release_pipeline.ps1");
+    let pipeline = fs::read_to_string(&pipeline_path)?;
+    let regression = fs::read_to_string(&regression_path)?;
     v4_release_pipeline_contract_source(
         &fs::read_to_string(&workflow_path)?,
-        &fs::read_to_string(&pipeline_path)?,
-        &fs::read_to_string(&regression_path)?,
+        &pipeline,
+        &regression,
     )
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> {
         format!("v4 release pipeline contract: {error}").into()
@@ -616,6 +618,39 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
                 "v4 authority rehearsal is missing its bounded cleanup marker: {marker}"
             )
             .into());
+        }
+    }
+    for (name, source) in [
+        ("production release pipeline", pipeline.as_str()),
+        ("authority rehearsal", rehearsal.as_str()),
+    ] {
+        for forbidden in [
+            "gh @Arguments --output",
+            "gh.exe @Arguments --output",
+            "--output $OutputPath",
+        ] {
+            if source.contains(forbidden) {
+                return Err(format!(
+                    "{name} must not use gh api --output for binary asset downloads"
+                )
+                .into());
+            }
+        }
+        for marker in [
+            "Invoke-GhBinaryOutput",
+            "PSVersionTable.PSVersion",
+            "7.4.0",
+            "RedirectStandardOutput",
+            "RedirectStandardError",
+            "StandardOutput.BaseStream",
+            "ReadToEndAsync",
+            "ArgumentList",
+        ] {
+            if !source.contains(marker) {
+                return Err(
+                    format!("{name} binary download helper is missing marker: {marker}").into(),
+                );
+            }
         }
     }
     println!("[xtask] v4 release pipeline state-machine contract: PASS");
