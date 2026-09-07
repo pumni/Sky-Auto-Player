@@ -284,4 +284,239 @@ if ($mock.BuildCount -ne 1 -or -not $mock.Promoted -or $mock.Draft -or -not $moc
     Fail "mock state machine did not preserve build-once/publication ordering"
 }
 
+# Production evidence Authenticode binding contract regression test
+. (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
+
+$evidenceTestRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-evidence-binding-test-" + [guid]::NewGuid().ToString("N"))
+try {
+    New-Item -ItemType Directory -Path $evidenceTestRoot -Force | Out-Null
+    $testVersion = "4.0.0-rc.1"
+    $testInstaller = "Sky Auto Player_${testVersion}_x64-setup.exe"
+    $testSignature = "$testInstaller.sig"
+    $testSha = "1234567890abcdef1234567890abcdef12345678"
+    $testAuthSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    $testSbomSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    $testInstallerSha = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    $testSigSha = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    $testKeyId = "19AABD2E7838818C"
+
+    # Verify builder produces required fields with exact values and independent digest
+    $prodObj = New-V4CanonicalProductionEvidence `
+        -SourceSha $testSha `
+        -Version $testVersion `
+        -Channel "stable" `
+        -InstallerName $testInstaller `
+        -SignatureName $testSignature `
+        -InstallerSize 1234567 `
+        -SignatureSize 512 `
+        -InstallerSha256 $testInstallerSha `
+        -SignatureSha256 $testSigSha `
+        -AuthenticodeEvidenceSha256 $testAuthSha `
+        -SbomSha256 $testSbomSha `
+        -UpdaterKeyId $testKeyId
+
+    if (-not $prodObj.Contains("authenticode_evidence") -or -not $prodObj.Contains("authenticode_evidence_sha256")) {
+        Fail "production evidence builder omitted required Authenticode binding property"
+    }
+    if ($prodObj["authenticode_evidence"] -ne "TAURI_AUTHENTICODE_EVIDENCE.json") {
+        Fail "production evidence builder authenticode_evidence filename must be TAURI_AUTHENTICODE_EVIDENCE.json"
+    }
+    if ($prodObj["authenticode_evidence_sha256"] -ne $testAuthSha) {
+        Fail "production evidence builder authenticode_evidence_sha256 must match AuthenticodeEvidenceSha256 input"
+    }
+    if ($prodObj["authenticode_evidence_sha256"] -eq $prodObj["installer_sha256"] -or
+        $prodObj["authenticode_evidence_sha256"] -eq $prodObj["updater_signature_sha256"] -or
+        $prodObj["authenticode_evidence_sha256"] -eq $prodObj["sbom_sha256"]) {
+        Fail "production evidence builder improperly reused another digest for authenticode_evidence_sha256"
+    }
+
+    $qualObj = New-V4CanonicalQualificationEvidence `
+        -Version $testVersion `
+        -InstallerName $testInstaller `
+        -SignatureName $testSignature `
+        -InstallerSize 1234567 `
+        -SignatureSize 512 `
+        -InstallerSha256 $testInstallerSha `
+        -SignatureSha256 $testSigSha `
+        -AuthenticodeEvidenceSha256 $testAuthSha `
+        -SbomSha256 $testSbomSha
+
+    $qualPath = Join-Path $evidenceTestRoot "V4_QUALIFICATION_EVIDENCE.json"
+    $prodPath = Join-Path $evidenceTestRoot "V4_PRODUCTION_RELEASE_EVIDENCE.json"
+    $qualObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $qualPath -Encoding utf8
+
+    $records = @(
+        [pscustomobject]@{ name = $testInstaller; size = [int64]1234567; sha256 = $testInstallerSha },
+        [pscustomobject]@{ name = $testSignature; size = [int64]512; sha256 = $testSigSha },
+        [pscustomobject]@{ name = "V4_PRODUCTION_RELEASE_EVIDENCE.json"; size = [int64]100; sha256 = "1" * 64 },
+        [pscustomobject]@{ name = "V4_QUALIFICATION_EVIDENCE.json"; size = [int64]100; sha256 = "2" * 64 },
+        [pscustomobject]@{ name = "TAURI_AUTHENTICODE_EVIDENCE.json"; size = [int64]100; sha256 = $testAuthSha },
+        [pscustomobject]@{ name = "SBOM.spdx.json"; size = [int64]100; sha256 = $testSbomSha }
+    )
+
+    # Helper to invoke pipeline Assert-EvidenceIdentity in a scoped environment
+    function Invoke-EvidenceIdentityAssertion([string]$TargetProdPath) {
+        $scopedScript = @'
+param(
+    [string]$PipelinePath,
+    [string]$TargetProdPath,
+    [string]$QualPath,
+    [string]$TestSha,
+    [string]$TestVersion,
+    [string]$TestInstaller,
+    [string]$TestInstallerSha,
+    [string]$TestSigSha,
+    [string]$TestAuthSha,
+    [string]$TestSbomSha
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$SourceSha = $TestSha
+$Version = $TestVersion
+$Channel = 'stable'
+$productionEvidenceName = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'
+$qualificationEvidenceName = 'V4_QUALIFICATION_EVIDENCE.json'
+$authenticodeEvidenceName = 'TAURI_AUTHENTICODE_EVIDENCE.json'
+$sbomName = 'SBOM.spdx.json'
+function Fail([string]$Message) { throw $Message }
+function Get-ExpectedInstallerName { return $TestInstaller }
+
+$pipelineCode = Get-Content -LiteralPath $PipelinePath -Raw
+$startIdx = $pipelineCode.IndexOf('function Assert-EvidenceIdentity(')
+if ($startIdx -lt 0) { throw 'Could not locate Assert-EvidenceIdentity function start' }
+$openBrace = $pipelineCode.IndexOf('{', $startIdx)
+if ($openBrace -lt 0) { throw 'Could not locate Assert-EvidenceIdentity body start' }
+$closeBrace = $pipelineCode.IndexOf("`n}", $openBrace)
+if ($closeBrace -lt 0) { throw 'Could not locate Assert-EvidenceIdentity body end' }
+$fnBody = $pipelineCode.Substring($openBrace + 1, $closeBrace - $openBrace - 1)
+
+$fn = [scriptblock]::Create("param([string]`$ProductionPath, [string]`$QualificationPath, [object[]]`$Records)`n$fnBody")
+
+$recs = @(
+    [pscustomobject]@{ name = $TestInstaller; size = [int64]1234567; sha256 = $TestInstallerSha },
+    [pscustomobject]@{ name = "$TestInstaller.sig"; size = [int64]512; sha256 = $TestSigSha },
+    [pscustomobject]@{ name = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'; size = [int64]100; sha256 = ('1' * 64) },
+    [pscustomobject]@{ name = 'V4_QUALIFICATION_EVIDENCE.json'; size = [int64]100; sha256 = ('2' * 64) },
+    [pscustomobject]@{ name = 'TAURI_AUTHENTICODE_EVIDENCE.json'; size = [int64]100; sha256 = $TestAuthSha },
+    [pscustomobject]@{ name = 'SBOM.spdx.json'; size = [int64]100; sha256 = $TestSbomSha }
+)
+
+& $fn $TargetProdPath $QualPath $recs
+'@
+        $worker = Join-Path $evidenceTestRoot "assert_worker.ps1"
+        Set-Content -LiteralPath $worker -Value $scopedScript -Encoding utf8
+        $res = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $worker `
+            -PipelinePath $pipelinePath `
+            -TargetProdPath $TargetProdPath `
+            -QualPath $qualPath `
+            -TestSha $testSha `
+            -TestVersion $testVersion `
+            -TestInstaller $testInstaller `
+            -TestInstallerSha $testInstallerSha `
+            -TestSigSha $testSigSha `
+            -TestAuthSha $testAuthSha `
+            -TestSbomSha $testSbomSha 2>&1 | Out-String
+        return @{ ExitCode = $LASTEXITCODE; Output = $res }
+    }
+
+    # 1. Valid production evidence passes consumer Assert-EvidenceIdentity
+    $prodObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $prodPath -Encoding utf8
+    $validRun = Invoke-EvidenceIdentityAssertion $prodPath
+    if ($validRun.ExitCode -ne 0) {
+        Fail "consumer Assert-EvidenceIdentity rejected valid production evidence: $($validRun.Output)"
+    }
+
+    # 2. Missing authenticode_evidence fails closed
+    $missingAuthObj = New-V4CanonicalProductionEvidence `
+        -SourceSha $testSha `
+        -Version $testVersion `
+        -Channel "stable" `
+        -InstallerName $testInstaller `
+        -SignatureName $testSignature `
+        -InstallerSize 1234567 `
+        -SignatureSize 512 `
+        -InstallerSha256 $testInstallerSha `
+        -SignatureSha256 $testSigSha `
+        -AuthenticodeEvidenceSha256 $testAuthSha `
+        -SbomSha256 $testSbomSha `
+        -UpdaterKeyId $testKeyId
+    $missingAuthObj.Remove("authenticode_evidence")
+    $missingAuthPath = Join-Path $evidenceTestRoot "missing_auth.json"
+    $missingAuthObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $missingAuthPath -Encoding utf8
+    $missingAuthRun = Invoke-EvidenceIdentityAssertion $missingAuthPath
+    if ($missingAuthRun.ExitCode -eq 0) {
+        Fail "consumer Assert-EvidenceIdentity accepted production evidence missing authenticode_evidence"
+    }
+
+    # 3. Missing authenticode_evidence_sha256 fails closed
+    $missingShaObj = New-V4CanonicalProductionEvidence `
+        -SourceSha $testSha `
+        -Version $testVersion `
+        -Channel "stable" `
+        -InstallerName $testInstaller `
+        -SignatureName $testSignature `
+        -InstallerSize 1234567 `
+        -SignatureSize 512 `
+        -InstallerSha256 $testInstallerSha `
+        -SignatureSha256 $testSigSha `
+        -AuthenticodeEvidenceSha256 $testAuthSha `
+        -SbomSha256 $testSbomSha `
+        -UpdaterKeyId $testKeyId
+    $missingShaObj.Remove("authenticode_evidence_sha256")
+    $missingShaPath = Join-Path $evidenceTestRoot "missing_sha.json"
+    $missingShaObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $missingShaPath -Encoding utf8
+    $missingShaRun = Invoke-EvidenceIdentityAssertion $missingShaPath
+    if ($missingShaRun.ExitCode -eq 0) {
+        Fail "consumer Assert-EvidenceIdentity accepted production evidence missing authenticode_evidence_sha256"
+    }
+
+    # 4. Tampered filename fails closed
+    $tamperedNameObj = New-V4CanonicalProductionEvidence `
+        -SourceSha $testSha `
+        -Version $testVersion `
+        -Channel "stable" `
+        -InstallerName $testInstaller `
+        -SignatureName $testSignature `
+        -InstallerSize 1234567 `
+        -SignatureSize 512 `
+        -InstallerSha256 $testInstallerSha `
+        -SignatureSha256 $testSigSha `
+        -AuthenticodeEvidenceSha256 $testAuthSha `
+        -SbomSha256 $testSbomSha `
+        -UpdaterKeyId $testKeyId
+    $tamperedNameObj["authenticode_evidence"] = "TAMPERED_AUTHENTICODE_EVIDENCE.json"
+    $tamperedNamePath = Join-Path $evidenceTestRoot "tampered_name.json"
+    $tamperedNameObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tamperedNamePath -Encoding utf8
+    $tamperedNameRun = Invoke-EvidenceIdentityAssertion $tamperedNamePath
+    if ($tamperedNameRun.ExitCode -eq 0) {
+        Fail "consumer Assert-EvidenceIdentity accepted production evidence with tampered authenticode_evidence filename"
+    }
+
+    # 5. Tampered SHA-256 fails closed
+    $tamperedShaObj = New-V4CanonicalProductionEvidence `
+        -SourceSha $testSha `
+        -Version $testVersion `
+        -Channel "stable" `
+        -InstallerName $testInstaller `
+        -SignatureName $testSignature `
+        -InstallerSize 1234567 `
+        -SignatureSize 512 `
+        -InstallerSha256 $testInstallerSha `
+        -SignatureSha256 $testSigSha `
+        -AuthenticodeEvidenceSha256 $testAuthSha `
+        -SbomSha256 $testSbomSha `
+        -UpdaterKeyId $testKeyId
+    $tamperedShaObj["authenticode_evidence_sha256"] = "f" * 64
+    $tamperedShaPath = Join-Path $evidenceTestRoot "tampered_sha.json"
+    $tamperedShaObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tamperedShaPath -Encoding utf8
+    $tamperedShaRun = Invoke-EvidenceIdentityAssertion $tamperedShaPath
+    if ($tamperedShaRun.ExitCode -eq 0) {
+        Fail "consumer Assert-EvidenceIdentity accepted production evidence with tampered authenticode_evidence_sha256"
+    }
+} finally {
+    if (Test-Path -LiteralPath $evidenceTestRoot) {
+        Remove-Item -LiteralPath $evidenceTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "V4 release pipeline contract/self-test: PASS (mock draft/download/qualify/attest/publish/promote; build count=1)"
