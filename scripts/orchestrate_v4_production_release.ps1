@@ -515,34 +515,21 @@ try {
             throw "Emitted qualification evidence failed promote_v4_metadata validation"
         }
 
-        # Comprehensive V4_PRODUCTION_RELEASE_EVIDENCE.json
-        $productionEvidence = [ordered]@{
-            schema_version = 1
-            evidence_type = "v4-production-release-qualification"
-            source_sha = $expectedSha
-            version = $Version
-            channel = $Channel
-            product_name = "Sky Auto Player"
-            identifier = "io.github.pumni.skyautoplayer"
-            target = "nsis"
-            install_mode = "currentUser"
-            installer = $expectedInstallerName
-            installer_size = (Get-Item -LiteralPath $installerPath).Length
-            installer_sha256 = $installerSha256
-            updater_signature = $expectedSignatureName
-            signature_size = (Get-Item -LiteralPath $signaturePath).Length
-            updater_signature_sha256 = $signatureSha256
-            authenticode_mode = "unsigned-zero-budget"
-            authenticode_state = "unsigned"
-            authenticode_provider = "none"
-            approved_signer_thumbprint = $null
-            observed_signer_thumbprint = $observedThumbprint
-            updater_key_id = $canonicalKeyId
-            updater_signature_status = "valid"
-            sbom = "SBOM.spdx.json"
-            sbom_sha256 = $sbomSha256
-            qualification_status = "PASS"
-        }
+        # Comprehensive V4_PRODUCTION_RELEASE_EVIDENCE.json via shared builder contract
+        $productionEvidence = New-V4CanonicalProductionEvidence `
+            -SourceSha $expectedSha `
+            -Version $Version `
+            -Channel $Channel `
+            -InstallerName $expectedInstallerName `
+            -SignatureName $expectedSignatureName `
+            -InstallerSize (Get-Item -LiteralPath $installerPath).Length `
+            -SignatureSize (Get-Item -LiteralPath $signaturePath).Length `
+            -InstallerSha256 $installerSha256 `
+            -SignatureSha256 $signatureSha256 `
+            -AuthenticodeEvidenceSha256 $authEvidenceSha256 `
+            -SbomSha256 $sbomSha256 `
+            -UpdaterKeyId $canonicalKeyId `
+            -ObservedSignerThumbprint $observedThumbprint
         $productionEvidencePath = Join-Path $resolvedEvidenceDir "V4_PRODUCTION_RELEASE_EVIDENCE.json"
         $productionEvidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $productionEvidencePath -Encoding utf8
 
