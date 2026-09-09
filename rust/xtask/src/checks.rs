@@ -1560,9 +1560,20 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let updater_fixture = fs::read_to_string(root.join("scripts/ci_tauri_update_e2e_core.ps1"))?;
     for marker in [
         "Updater N-to-N+1 preservation",
+        "Updater N-to-N+1 resource replacement",
+        "catalog-sentinel",
         "SKY_APP_DATA_ROOT",
         "updater-preserved-user.json",
         "user_song_sha256_before",
+        "built_in_manifest_sha256_before",
+        "built_in_manifest_sha256_after",
+        "selected_builtin_id_before",
+        "selected_builtin_id_after",
+        "selected_builtin_content_sha256_before",
+        "selected_builtin_content_sha256_after",
+        "Restore-CanonicalBuiltinCatalog",
+        "Clear-FixtureResourceStaging",
+        "source_tree_restore",
         "cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot",
     ] {
         if !updater_fixture.contains(marker) {

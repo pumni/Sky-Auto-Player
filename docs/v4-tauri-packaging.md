@@ -229,6 +229,11 @@ It additionally creates a user-owned song before update N, records its exact
 SHA-256, verifies that the SHA is unchanged after N+1, and runs the installed
 built-in catalog verifier against the N+1 resource tree. This proves that the
 updater replaces immutable install payload without deleting mutable user data.
+The bridge N build uses a valid temporary sentinel for one canonical JSON sheet
+and its manifest hash while retaining the same stable ID; the fixture records
+the installed N manifest/content hashes, restores the canonical source bytes in
+`finally` before building N+1, and requires N+1 to have different manifest and
+content hashes with the same selected stable ID.
 
 ## Acceptance boundary
 
