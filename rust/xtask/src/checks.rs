@@ -518,6 +518,135 @@ fn workflow_job_blocks(source: &str) -> Vec<(String, String)> {
     jobs
 }
 
+fn workflow_step_blocks(source: &str) -> Vec<(String, String)> {
+    let mut steps = Vec::new();
+    let mut current_name = None;
+    let mut current_block = String::new();
+
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - line.trim_start().len();
+        if indent == 6 && trimmed.starts_with("- name: ") {
+            if let Some(name) = current_name.take() {
+                steps.push((name, std::mem::take(&mut current_block)));
+            }
+            current_name = Some(trimmed["- name: ".len()..].to_owned());
+            current_block.push_str(line);
+            current_block.push('\n');
+            continue;
+        }
+        if current_name.is_some() {
+            current_block.push_str(line);
+            current_block.push('\n');
+        }
+    }
+    if let Some(name) = current_name {
+        steps.push((name, current_block));
+    }
+
+    steps
+}
+
+fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
+    const MINT_STEP: &str = "Mint release-metadata GitHub App token";
+    const PROMOTE_STEP: &str = "Promote release metadata only after immutable publication";
+    const APP_TOKEN_OUTPUT: &str = "steps.metadata-app-token.outputs.token";
+    const APP_PRIVATE_KEY: &str = "secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY";
+
+    let steps = workflow_step_blocks(workflow);
+    let mint = steps
+        .iter()
+        .find(|(name, _)| name == MINT_STEP)
+        .map(|(_, block)| block.as_str())
+        .ok_or("v4 release workflow is missing the metadata App token mint step")?;
+    let promote = steps
+        .iter()
+        .find(|(name, _)| name == PROMOTE_STEP)
+        .map(|(_, block)| block.as_str())
+        .ok_or("v4 release workflow is missing the metadata promotion step")?;
+
+    for marker in [
+        "id: metadata-app-token",
+        "uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+        "app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}",
+        "private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}",
+        "owner: ${{ github.repository_owner }}",
+        "repositories: ${{ github.event.repository.name }}",
+        "permission-contents: write",
+    ] {
+        if !mint.contains(marker) {
+            return Err(format!(
+                "metadata App token mint step is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    if mint.contains("\n        run:") || mint.contains("\n        env:") {
+        return Err(
+            "metadata App private key must be consumed only by the token-mint action".into(),
+        );
+    }
+    if workflow.matches(APP_PRIVATE_KEY).count() != 1 {
+        return Err(
+            "metadata App private key must occur exactly once in the release workflow".into(),
+        );
+    }
+    if workflow.matches(APP_TOKEN_OUTPUT).count() != 1 {
+        return Err(
+            "metadata App installation token must be used by exactly one workflow step".into(),
+        );
+    }
+    if !promote.contains(APP_TOKEN_OUTPUT) {
+        return Err("only PromoteMetadata may consume the metadata App token".into());
+    }
+    if promote.contains("GH_TOKEN: ${{ github.token }}") {
+        return Err("PromoteMetadata must not use the repository GITHUB_TOKEN".into());
+    }
+
+    for (name, block) in &steps {
+        if name != MINT_STEP && block.contains(APP_PRIVATE_KEY) {
+            return Err(
+                format!("metadata App private key escaped the token-mint action: {name}").into(),
+            );
+        }
+        if name != PROMOTE_STEP && block.contains(APP_TOKEN_OUTPUT) {
+            return Err(
+                format!("metadata App token was used outside PromoteMetadata: {name}").into(),
+            );
+        }
+    }
+
+    for normal_step in [
+        "Create exact candidate draft in canonical repository",
+        "Publish the already-qualified draft immutably",
+        "Re-fetch and verify final public release and metadata",
+    ] {
+        let block = steps
+            .iter()
+            .find(|(name, _)| name == normal_step)
+            .map(|(_, block)| block.as_str())
+            .ok_or_else(|| format!("v4 release workflow is missing release step: {normal_step}"))?;
+        if !block.contains("GH_TOKEN: ${{ github.token }}") {
+            return Err(format!(
+                "normal release step must retain the repository GITHUB_TOKEN: {normal_step}"
+            )
+            .into());
+        }
+    }
+
+    let mint_position = workflow
+        .find("- name: Mint release-metadata GitHub App token")
+        .ok_or("metadata App token mint step position is unavailable")?;
+    let promote_position = workflow
+        .find("- name: Promote release metadata only after immutable publication")
+        .ok_or("metadata promotion step position is unavailable")?;
+    if mint_position >= promote_position {
+        return Err("metadata App token must be minted immediately before promotion".into());
+    }
+
+    Ok(())
+}
+
 fn job_uses_sensitive_runner(job: &str) -> bool {
     job.lines().any(|line| {
         let trimmed = line.trim_start();
@@ -785,6 +914,7 @@ fn v4_release_pipeline_contract_source(
             "repository GITHUB_TOKEN must be present on every GitHub-mutating/read step".into(),
         );
     }
+    validate_metadata_app_token_scope(&workflow)?;
 
     if pipeline
         .matches("orchestrate_v4_production_release.ps1")
@@ -3214,6 +3344,28 @@ jobs:
     github.event.repository.default_branch
     refs/heads/main
     environment: v4-production-release
+    steps:
+      - name: Create exact candidate draft in canonical repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Publish the already-qualified draft immutably
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Mint release-metadata GitHub App token
+        id: metadata-app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
+          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Promote release metadata only after immutable publication
+        env:
+          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+      - name: Re-fetch and verify final public release and metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
     Verify isolated production runner boundary
     verify_v4_release_runner.ps1
     cleanup_v4_release_state.ps1
@@ -3267,6 +3419,52 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         assert!(
             v4_release_pipeline_contract_source(workflow, &duplicated_build, regression).is_err()
         );
+    }
+
+    #[test]
+    fn metadata_app_token_is_scoped_to_promotion_and_keeps_private_key_in_action_input() {
+        let workflow = r#"
+      - name: Create exact candidate draft in canonical repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Publish the already-qualified draft immutably
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Mint release-metadata GitHub App token
+        id: metadata-app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
+          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Promote release metadata only after immutable publication
+        env:
+          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+      - name: Re-fetch and verify final public release and metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+"#;
+        assert!(validate_metadata_app_token_scope(workflow).is_ok());
+
+        let broad_token = workflow.replace(
+            "GH_TOKEN: ${{ github.token }}\n      - name: Publish",
+            "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}\n      - name: Publish",
+        );
+        assert!(validate_metadata_app_token_scope(&broad_token).is_err());
+
+        let repository_token_for_promotion = workflow.replace(
+            "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
+            "GH_TOKEN: ${{ github.token }}",
+        );
+        assert!(validate_metadata_app_token_scope(&repository_token_for_promotion).is_err());
+
+        let private_key_in_env = workflow.replace(
+            "        with:\n          app-id:",
+            "        env:\n          app-id:",
+        );
+        assert!(validate_metadata_app_token_scope(&private_key_in_env).is_err());
     }
 
     #[test]

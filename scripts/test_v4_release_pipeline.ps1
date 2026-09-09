@@ -374,12 +374,40 @@ foreach ($marker in @(
     'github.event.repository.default_branch',
     'refs/heads/main',
     'environment: v4-production-release',
+    'Mint release-metadata GitHub App token',
+    'id: metadata-app-token',
+    'actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349',
+    'app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}',
+    'private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}',
+    'owner: ${{ github.repository_owner }}',
+    'repositories: ${{ github.event.repository.name }}',
+    'permission-contents: write',
+    'GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}',
     'Verify isolated production runner boundary',
     'verify_v4_release_runner.ps1',
     'cleanup_v4_release_state.ps1',
     'RecordAttestations', 'PublishDraft', 'PromoteMetadata', 'FinalVerify'
 )) {
     if (-not $workflow.Contains($marker)) { Fail "workflow marker is missing: $marker" }
+}
+$metadataTokenMarker = 'GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}'
+$metadataTokenUses = ([regex]::Matches($workflow, [regex]::Escape($metadataTokenMarker))).Count
+if ($metadataTokenUses -ne 1) {
+    Fail "metadata App installation token must be used exactly once"
+}
+$metadataPrivateKeyMarker = 'secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY'
+$metadataPrivateKeyUses = ([regex]::Matches($workflow, [regex]::Escape($metadataPrivateKeyMarker))).Count
+if ($metadataPrivateKeyUses -ne 1) {
+    Fail "metadata App private key must be consumed exactly once by the token-mint action"
+}
+$promotionStart = $workflow.IndexOf('- name: Promote release metadata only after immutable publication', [StringComparison]::Ordinal)
+if ($promotionStart -lt 0) { Fail "metadata promotion step is missing" }
+$promotionEnd = $workflow.IndexOf("`n      - name:", $promotionStart + 1, [StringComparison]::Ordinal)
+if ($promotionEnd -lt 0) { $promotionEnd = $workflow.Length }
+$promotionBlock = $workflow.Substring($promotionStart, $promotionEnd - $promotionStart)
+if (-not $promotionBlock.Contains($metadataTokenMarker) -or
+    $promotionBlock.Contains('GH_TOKEN: ${{ github.token }}')) {
+    Fail "metadata promotion must use only the short-lived App token"
 }
 foreach ($forbidden in @(
     'cargo xtask dist', 'Sky-Auto-Player-Updater.exe', 'MANIFEST.json.sig',
