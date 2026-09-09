@@ -237,6 +237,8 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "scripts/promote_v4_metadata.ps1",
     "scripts/orchestrate_v4_production_release.ps1",
     "scripts/ci_tauri_update_e2e_core.ps1",
+    "scripts/verify_v4_release_runner.ps1",
+    "scripts/cleanup_v4_release_state.ps1",
     ".github/workflows/release.yml",
     ".github/workflows/release-v4.yml",
     ".github/workflows/rehearse-v4-production-topology.yml",
@@ -460,6 +462,117 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
+const APPROVED_RELEASE_RUNNER_WORKFLOWS: &[&str] = &[
+    ".github/workflows/release-v4.yml",
+    ".github/workflows/rehearse-v4-production-topology.yml",
+];
+const RELEASE_RUNNER_LABEL_MARKER: &str =
+    "runs-on: [self-hosted, windows, v4-release, single-tenant]";
+
+fn workflow_declares_event(source: &str, event: &str) -> bool {
+    source
+        .lines()
+        .any(|line| line.trim_start().starts_with(event))
+}
+
+fn validate_release_runner_workflow(relative: &str, source: &str) -> Result<()> {
+    let uses_sensitive_runner = source.contains("self-hosted")
+        || source.contains("v4-release")
+        || source.contains("single-tenant");
+    if !uses_sensitive_runner {
+        return Ok(());
+    }
+    if !APPROVED_RELEASE_RUNNER_WORKFLOWS.contains(&relative) {
+        return Err(format!(
+            "unapproved workflow targets the production release runner boundary: {relative}"
+        )
+        .into());
+    }
+    for forbidden_event in ["pull_request:", "pull_request_target:", "push:"] {
+        if workflow_declares_event(source, forbidden_event) {
+            return Err(format!(
+                "production release runner workflow declares an untrusted trigger `{forbidden_event}`: {relative}"
+            )
+            .into());
+        }
+    }
+    if source.matches(RELEASE_RUNNER_LABEL_MARKER).count() != 1 {
+        return Err(format!(
+            "approved release runner workflow must contain exactly one signing-runner job: {relative}"
+        )
+        .into());
+    }
+    for marker in [
+        RELEASE_RUNNER_LABEL_MARKER,
+        "workflow_dispatch:",
+        "dispatch-boundary",
+        "github.event.repository.default_branch",
+        "refs/heads/main",
+        "environment: v4-production-release",
+        "V4_UPDATER_PRIVATE_KEY_PATH",
+        "RUNNER_TEMP",
+        "verify_v4_release_runner.ps1",
+        "cleanup_v4_release_state.ps1",
+        "persist-credentials: false",
+    ] {
+        if !source.contains(marker) {
+            return Err(format!(
+                "approved release runner workflow is missing its trust-boundary marker `{marker}`: {relative}"
+            )
+            .into());
+        }
+    }
+    for forbidden_input in [
+        "updater_private_key_path:",
+        "inputs.updater_private_key_path",
+    ] {
+        if source.contains(forbidden_input) {
+            return Err(format!(
+                "production release runner workflow accepts an operator-controlled key path `{forbidden_input}`: {relative}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn release_runner_contract(root: &Path) -> Result<()> {
+    let workflows_root = root.join(".github/workflows");
+    let mut observed = BTreeSet::new();
+    for entry in WalkDir::new(&workflows_root) {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if !entry.file_type().is_file()
+            || !matches!(
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str()),
+                Some("yml" | "yaml")
+            )
+        {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|error| error.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = fs::read_to_string(entry.path())?;
+        validate_release_runner_workflow(&relative, &source)?;
+        if APPROVED_RELEASE_RUNNER_WORKFLOWS.contains(&relative.as_str()) {
+            observed.insert(relative);
+        }
+    }
+    for required in APPROVED_RELEASE_RUNNER_WORKFLOWS {
+        if !observed.contains(*required) {
+            return Err(format!("approved release runner workflow is missing: {required}").into());
+        }
+    }
+    println!("[xtask] v4 release runner trust boundary: PASS");
+    Ok(())
+}
+
 fn v4_release_pipeline_contract_source(
     workflow: &str,
     pipeline: &str,
@@ -476,7 +589,13 @@ fn v4_release_pipeline_contract_source(
         "contents: write",
         "GH_TOKEN: ${{ github.token }}",
         "ref: ${{ inputs.source_sha }}",
-        "Verify runner-local updater key configuration",
+        "release-dispatch-boundary",
+        "github.event.repository.default_branch",
+        "refs/heads/main",
+        "environment: v4-production-release",
+        "Verify isolated production runner boundary",
+        "verify_v4_release_runner.ps1",
+        "cleanup_v4_release_state.ps1",
         "V4_UPDATER_PRIVATE_KEY_PATH",
         "-UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH",
         "persist-credentials: false",
@@ -663,9 +782,16 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "name: V4 Production Topology Rehearsal",
         "workflow_dispatch:",
         "runs-on: [self-hosted, windows, v4-release, single-tenant]",
+        "rehearsal-dispatch-boundary",
+        "github.event.repository.default_branch",
+        "refs/heads/main",
+        "environment: v4-production-release",
         "ref: ${{ inputs.source_sha }}",
         "persist-credentials: false",
-        "updater_private_key_path:",
+        "Verify isolated rehearsal runner boundary",
+        "verify_v4_release_runner.ps1",
+        "cleanup_v4_release_state.ps1",
+        "Preserve bounded rehearsal evidence",
         "BuildCandidate",
         "test_v4_production_topology_rehearsal.ps1",
         "-CandidateStateRoot $env:V4_REHEARSAL_STATE_ROOT",
@@ -688,6 +814,9 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "FinalVerify",
         "gh release",
         "softprops/action-gh-release",
+        "updater_private_key_path:",
+        "inputs.updater_private_key_path",
+        "KeepStateOnFailure",
     ] {
         if topology_workflow.contains(forbidden) {
             return Err(format!(
@@ -2558,6 +2687,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             tauri_bundle::validate_config(&root)?;
             v4_trust_material_contract(&root)?;
             release_metadata_contract(&root)?;
+            release_runner_contract(&root)?;
             v4_release_pipeline_contract(&root)?;
             packaged_ci_contract(&root)?;
             v4_legacy_updater_retirement(&root)?;
@@ -2899,6 +3029,35 @@ read_only=true
     }
 
     #[test]
+    fn release_runner_contract_rejects_sensitive_runner_on_general_ci() {
+        let workflow = r#"
+on:
+  pull_request:
+jobs:
+  build:
+    runs-on: [self-hosted, windows, v4-release, single-tenant]
+"#;
+        let error = validate_release_runner_workflow(".github/workflows/ci.yml", workflow)
+            .expect_err("general CI must not target the production signing runner");
+        assert!(error.to_string().contains("unapproved workflow"));
+    }
+
+    #[test]
+    fn release_runner_contract_rejects_untrusted_trigger_on_approved_workflow() {
+        let workflow = r#"
+on:
+  workflow_dispatch:
+  pull_request:
+jobs:
+  release:
+    runs-on: [self-hosted, windows, v4-release, single-tenant]
+"#;
+        let error = validate_release_runner_workflow(".github/workflows/release-v4.yml", workflow)
+            .expect_err("approved release workflow must reject PR triggers");
+        assert!(error.to_string().contains("untrusted trigger"));
+    }
+
+    #[test]
     fn v4_release_pipeline_contract_requires_draft_download_and_publish_order() {
         let workflow = r#"
 name: V4 Release Pipeline
@@ -2914,7 +3073,13 @@ jobs:
       attestations: write
     runs-on: [self-hosted, windows, v4-release, single-tenant]
     ref: ${{ inputs.source_sha }}
-    Verify runner-local updater key configuration
+    release-dispatch-boundary
+    github.event.repository.default_branch
+    refs/heads/main
+    environment: v4-production-release
+    Verify isolated production runner boundary
+    verify_v4_release_runner.ps1
+    cleanup_v4_release_state.ps1
     V4_UPDATER_PRIVATE_KEY_PATH
     -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
     persist-credentials: false

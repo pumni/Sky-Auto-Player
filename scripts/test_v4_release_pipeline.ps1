@@ -109,7 +109,7 @@ if (-not $pipeline.Contains("FixtureTargetDir")) {
     Fail "production qualification must pass an explicit fixture target directory"
 }
 foreach ($marker in @(
-    'runner-local updater key configuration',
+    'Verify isolated production runner boundary',
     'V4_UPDATER_PRIVATE_KEY_PATH',
     '-UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH'
 )) {
@@ -346,6 +346,8 @@ if ($wrongNotesProbe.ExitCode -eq 0) {
 }
 
 foreach ($brokerFile in @(
+    'verify_v4_release_runner.ps1',
+    'cleanup_v4_release_state.ps1',
     'v4_updater_credential_broker.ps1',
     'set_v4_updater_session_credential.ps1',
     'remove_v4_updater_session_credential.ps1',
@@ -368,7 +370,13 @@ foreach ($marker in @(
     'actions/attest@',
     '--source-digest $env:GITHUB_SHA',
     'Initialize release state root', 'RUNNER_TEMP', 'GITHUB_RUN_ID', 'GITHUB_ENV',
-    'Verify runner-local updater key configuration',
+    'release-dispatch-boundary',
+    'github.event.repository.default_branch',
+    'refs/heads/main',
+    'environment: v4-production-release',
+    'Verify isolated production runner boundary',
+    'verify_v4_release_runner.ps1',
+    'cleanup_v4_release_state.ps1',
     'RecordAttestations', 'PublishDraft', 'PromoteMetadata', 'FinalVerify'
 )) {
     if (-not $workflow.Contains($marker)) { Fail "workflow marker is missing: $marker" }
@@ -392,9 +400,16 @@ foreach ($marker in @(
     'name: V4 Production Topology Rehearsal',
     'workflow_dispatch:',
     'runs-on: [self-hosted, windows, v4-release, single-tenant]',
+    'rehearsal-dispatch-boundary',
+    'github.event.repository.default_branch',
+    'refs/heads/main',
+    'environment: v4-production-release',
     'ref: ${{ inputs.source_sha }}',
     'persist-credentials: false',
-    'updater_private_key_path:',
+    'Verify isolated rehearsal runner boundary',
+    'verify_v4_release_runner.ps1',
+    'cleanup_v4_release_state.ps1',
+    'Preserve bounded rehearsal evidence',
     'BuildCandidate',
     'test_v4_production_topology_rehearsal.ps1',
     '-CandidateStateRoot $env:V4_REHEARSAL_STATE_ROOT',
@@ -414,7 +429,10 @@ foreach ($forbidden in @(
     'PromoteMetadata',
     'FinalVerify',
     'gh release',
-    'softprops/action-gh-release'
+    'softprops/action-gh-release',
+    'updater_private_key_path:',
+    'inputs.updater_private_key_path',
+    'KeepStateOnFailure'
 )) {
     if ($topologyWorkflow.Contains($forbidden)) {
         Fail "production-topology rehearsal workflow contains a legacy release-topology marker: $forbidden"
