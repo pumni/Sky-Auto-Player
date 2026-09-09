@@ -1040,7 +1040,10 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "persist-credentials: false",
         "Verify isolated rehearsal runner boundary",
         "verify_v4_release_runner.ps1",
+        "StateRoot = @($env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT)",
+        "& (Join-Path $PWD \"scripts/verify_v4_release_runner.ps1\") @runnerBoundaryArgs",
         "cleanup_v4_release_state.ps1",
+        "& (Join-Path $PWD \"scripts/cleanup_v4_release_state.ps1\") @cleanupArgs",
         "Preserve bounded rehearsal evidence",
         "BuildCandidate",
         "test_v4_production_topology_rehearsal.ps1",
@@ -1067,6 +1070,7 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "updater_private_key_path:",
         "inputs.updater_private_key_path",
         "KeepStateOnFailure",
+        "-StateRoot $env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT",
     ] {
         if topology_workflow.contains(forbidden) {
             return Err(format!(
