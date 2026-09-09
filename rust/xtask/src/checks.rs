@@ -469,17 +469,112 @@ const APPROVED_RELEASE_RUNNER_WORKFLOWS: &[&str] = &[
 const RELEASE_RUNNER_LABEL_MARKER: &str =
     "runs-on: [self-hosted, windows, v4-release, single-tenant]";
 
-fn workflow_declares_event(source: &str, event: &str) -> bool {
-    source
-        .lines()
-        .any(|line| line.trim_start().starts_with(event))
+fn approved_release_runner_job(relative: &str) -> Option<&'static str> {
+    match relative {
+        ".github/workflows/release-v4.yml" => Some("release"),
+        ".github/workflows/rehearse-v4-production-topology.yml" => Some("rehearsal"),
+        _ => None,
+    }
+}
+
+fn workflow_job_blocks(source: &str) -> Vec<(String, String)> {
+    let mut jobs = Vec::new();
+    let mut in_jobs = false;
+    let mut current_id = None;
+    let mut current_block = String::new();
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let indent = line.len() - line.trim_start().len();
+        if !in_jobs {
+            if indent == 0 && trimmed == "jobs:" {
+                in_jobs = true;
+            }
+            continue;
+        }
+        if indent == 0 && !trimmed.is_empty() {
+            if let Some(job_id) = current_id.take() {
+                jobs.push((job_id, std::mem::take(&mut current_block)));
+            }
+            break;
+        }
+        if indent == 2 && !trimmed.is_empty() && !trimmed.starts_with('#') && trimmed.ends_with(':')
+        {
+            if let Some(job_id) = current_id.take() {
+                jobs.push((job_id, std::mem::take(&mut current_block)));
+            }
+            current_id = Some(trimmed.trim_end_matches(':').to_owned());
+            continue;
+        }
+        if current_id.is_some() {
+            current_block.push_str(line);
+            current_block.push('\n');
+        }
+    }
+    if let Some(job_id) = current_id {
+        jobs.push((job_id, current_block));
+    }
+
+    jobs
+}
+
+fn job_uses_sensitive_runner(job: &str) -> bool {
+    job.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("runs-on:")
+            && (trimmed.contains("self-hosted")
+                || trimmed.contains("v4-release")
+                || trimmed.contains("single-tenant"))
+    })
+}
+
+fn job_has_exact_release_runner_labels(job: &str) -> bool {
+    job.lines()
+        .any(|line| line.trim() == RELEASE_RUNNER_LABEL_MARKER)
+}
+
+fn job_has_protected_release_environment(job: &str) -> bool {
+    job.lines()
+        .any(|line| line.trim() == "environment: v4-production-release")
+}
+
+fn workflow_declares_only_dispatch(source: &str) -> bool {
+    let mut in_on = false;
+    let mut found_dispatch = false;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let indent = line.len() - line.trim_start().len();
+        if !in_on {
+            if indent == 0 && trimmed == "on:" {
+                in_on = true;
+            }
+            continue;
+        }
+        if indent == 0 && !trimmed.is_empty() {
+            break;
+        }
+        if indent == 2 && trimmed.ends_with(':') {
+            let event = trimmed.trim_end_matches(':');
+            if event == "workflow_dispatch" {
+                found_dispatch = true;
+            } else {
+                return false;
+            }
+        }
+    }
+    found_dispatch
 }
 
 fn validate_release_runner_workflow(relative: &str, source: &str) -> Result<()> {
-    let uses_sensitive_runner = source.contains("self-hosted")
+    let jobs = workflow_job_blocks(source);
+    let sensitive_jobs = jobs
+        .iter()
+        .filter(|(_, job)| job_uses_sensitive_runner(job))
+        .collect::<Vec<_>>();
+    let source_mentions_sensitive_runner = source.contains("self-hosted")
         || source.contains("v4-release")
         || source.contains("single-tenant");
-    if !uses_sensitive_runner {
+    if !source_mentions_sensitive_runner {
         return Ok(());
     }
     if !APPROVED_RELEASE_RUNNER_WORKFLOWS.contains(&relative) {
@@ -488,27 +583,52 @@ fn validate_release_runner_workflow(relative: &str, source: &str) -> Result<()> 
         )
         .into());
     }
-    for forbidden_event in ["pull_request:", "pull_request_target:", "push:"] {
-        if workflow_declares_event(source, forbidden_event) {
+    if !workflow_declares_only_dispatch(source) {
+        return Err(format!(
+            "production release runner workflow must whitelist workflow_dispatch as its only trigger: {relative}"
+        )
+        .into());
+    }
+    let approved_job = approved_release_runner_job(relative).ok_or_else(|| {
+        format!("approved release runner workflow has no approved job mapping: {relative}")
+    })?;
+    if sensitive_jobs.is_empty() {
+        return Err(format!(
+            "release runner labels could not be mapped to a job block: {relative}"
+        )
+        .into());
+    }
+    for (job_id, job) in &sensitive_jobs {
+        if job_id != approved_job {
             return Err(format!(
-                "production release runner workflow declares an untrusted trigger `{forbidden_event}`: {relative}"
+                "job `{job_id}` is not approved for the production release runner boundary: {relative}"
+            )
+            .into());
+        }
+        if !job_has_exact_release_runner_labels(job) {
+            return Err(format!(
+                "job `{job_id}` must use the exact dedicated release runner labels: {relative}"
+            )
+            .into());
+        }
+        if !job_has_protected_release_environment(job) {
+            return Err(format!(
+                "job `{job_id}` must declare environment: v4-production-release in its own job block: {relative}"
             )
             .into());
         }
     }
-    if source.matches(RELEASE_RUNNER_LABEL_MARKER).count() != 1 {
+    if sensitive_jobs.len() != 1 {
         return Err(format!(
-            "approved release runner workflow must contain exactly one signing-runner job: {relative}"
+            "approved release runner workflow must contain exactly one sensitive runner job: {relative}"
         )
         .into());
     }
     for marker in [
-        RELEASE_RUNNER_LABEL_MARKER,
         "workflow_dispatch:",
         "dispatch-boundary",
         "github.event.repository.default_branch",
         "refs/heads/main",
-        "environment: v4-production-release",
         "V4_UPDATER_PRIVATE_KEY_PATH",
         "RUNNER_TEMP",
         "verify_v4_release_runner.ps1",
@@ -3054,7 +3174,24 @@ jobs:
 "#;
         let error = validate_release_runner_workflow(".github/workflows/release-v4.yml", workflow)
             .expect_err("approved release workflow must reject PR triggers");
-        assert!(error.to_string().contains("untrusted trigger"));
+        assert!(error.to_string().contains("only trigger"));
+    }
+
+    #[test]
+    fn release_runner_contract_rejects_unprotected_sensitive_job_subset() {
+        let workflow = r#"
+on:
+  workflow_dispatch:
+jobs:
+  release:
+    runs-on: [self-hosted, windows, v4-release, single-tenant]
+    environment: v4-production-release
+  unprotected:
+    runs-on: [self-hosted, windows, v4-release]
+"#;
+        let error = validate_release_runner_workflow(".github/workflows/release-v4.yml", workflow)
+            .expect_err("an unprotected sensitive job subset must be rejected");
+        assert!(error.to_string().contains("not approved"));
     }
 
     #[test]
