@@ -12,16 +12,66 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
-
 pub const SUPPORTED_EXTENSIONS: [&str; 3] = ["json", "skysheet", "txt"];
+pub const SONG_ID_LENGTH: usize = 32;
 pub const MAX_PAGE_SIZE: usize = 200;
 pub const MAX_QUERY_LENGTH: usize = 1024;
 pub const FUZZY_SCORE_CUTOFF: f64 = 60.0;
+pub use crate::catalog_manifest::{
+    BUILTIN_MANIFEST_SCHEMA_VERSION, BuiltinCatalogManifest, BuiltinManifestError,
+    BuiltinSongManifestEntry, RetiredBuiltinSong,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogSourceEntry {
     pub canonical_path: String,
     pub title: String,
+    pub identity: CatalogSourceIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogSourceIdentity {
+    PathDerived,
+    Stable(StableSongId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StableSongId(String);
+
+impl StableSongId {
+    pub fn new(value: impl Into<String>) -> Result<Self, CatalogError> {
+        let value = value.into();
+        if !is_valid_song_id(&value) {
+            return Err(CatalogError::UnknownSongId);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl CatalogSourceEntry {
+    pub fn path_derived(canonical_path: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            canonical_path: canonical_path.into(),
+            title: title.into(),
+            identity: CatalogSourceIdentity::PathDerived,
+        }
+    }
+
+    pub fn stable(
+        canonical_path: impl Into<String>,
+        title: impl Into<String>,
+        song_id: StableSongId,
+    ) -> Self {
+        Self {
+            canonical_path: canonical_path.into(),
+            title: title.into(),
+            identity: CatalogSourceIdentity::Stable(song_id),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +131,8 @@ pub enum CatalogError {
     UnsupportedExtension,
     #[error("song ID collision for distinct canonical paths")]
     IdCollision,
+    #[error("catalog source declares conflicting identities for one canonical path")]
+    IdentityPathConflict,
     #[error("malformed or unknown song ID")]
     UnknownSongId,
     #[error("fuzzy ranking is not available for this shadow index")]
@@ -147,7 +199,7 @@ impl CatalogIndex {
     ) -> Result<CatalogSnapshot, CatalogError> {
         let mut entries: Vec<CatalogEntry> = Vec::new();
         let mut by_id: HashMap<String, usize> = HashMap::new();
-        let mut seen_paths = HashMap::<String, ()>::new();
+        let mut seen_paths = HashMap::<String, String>::new();
         for source in sources {
             if source.canonical_path.is_empty() {
                 return Err(CatalogError::EmptyPath);
@@ -156,10 +208,19 @@ impl CatalogIndex {
                 return Err(CatalogError::UnsupportedExtension);
             }
             let normalized_path = normalized_canonical_path(&source.canonical_path);
-            if seen_paths.insert(normalized_path.clone(), ()).is_some() {
+            let song_id = match &source.identity {
+                CatalogSourceIdentity::PathDerived => {
+                    song_id_for_canonical_path(&source.canonical_path)
+                }
+                CatalogSourceIdentity::Stable(stable) => stable.as_str().to_owned(),
+            };
+            if let Some(previous_id) = seen_paths.get(&normalized_path) {
+                if previous_id != &song_id {
+                    return Err(CatalogError::IdentityPathConflict);
+                }
                 continue;
             }
-            let song_id = song_id_for_canonical_path(&source.canonical_path);
+            seen_paths.insert(normalized_path.clone(), song_id.clone());
             if let Some(previous) = by_id.get(&song_id) {
                 if normalized_canonical_path(&entries[*previous].canonical_path) != normalized_path
                 {
@@ -358,11 +419,7 @@ impl CatalogIndex {
         generation: Option<u64>,
     ) -> Result<&str, CatalogError> {
         self.check_generation(generation)?;
-        if song_id.len() != 32
-            || !song_id
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        {
+        if !is_valid_song_id(song_id) {
             return Err(CatalogError::UnknownSongId);
         }
         self.by_id
@@ -406,6 +463,13 @@ pub fn normalize_search_text(value: &str) -> String {
         })
         .collect::<String>();
     unicode_casefold(&decomposed)
+}
+
+pub fn is_valid_song_id(song_id: &str) -> bool {
+    song_id.len() == SONG_ID_LENGTH
+        && song_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn unicode_casefold(value: &str) -> String {
@@ -661,10 +725,56 @@ mod tests {
     }
 
     fn entry(path: &str, title: &str) -> CatalogSourceEntry {
-        CatalogSourceEntry {
-            canonical_path: path.into(),
-            title: title.into(),
-        }
+        CatalogSourceEntry::path_derived(path, title)
+    }
+
+    #[test]
+    fn stable_identity_survives_resource_path_and_content_changes() {
+        let stable_id = StableSongId::new("0123456789abcdef0123456789abcdef").unwrap();
+        let mut catalog = CatalogIndex::default();
+        let first = catalog
+            .replace_entries([CatalogSourceEntry::stable(
+                r"C:\install\builtin-songs\sheets\song.json",
+                "Song",
+                stable_id.clone(),
+            )])
+            .unwrap();
+        let second = catalog
+            .replace_entries([CatalogSourceEntry::stable(
+                r"D:\different-install\builtin-songs\sheets\renamed.json",
+                "Song (corrected)",
+                stable_id,
+            )])
+            .unwrap();
+        assert_eq!(first.items[0].song_id, second.items[0].song_id);
+        assert_eq!(second.items[0].title, "Song (corrected)");
+    }
+
+    #[test]
+    fn identity_conflicts_are_rejected_instead_of_deduplicated() {
+        let stable_a = StableSongId::new("0123456789abcdef0123456789abcdef").unwrap();
+        let stable_b = StableSongId::new("fedcba9876543210fedcba9876543210").unwrap();
+        let mut catalog = CatalogIndex::default();
+        let same_path = [
+            CatalogSourceEntry::stable("C:/songs/a.json", "A", stable_a.clone()),
+            CatalogSourceEntry::stable("C:/songs/a.json", "A", stable_b),
+        ];
+        assert_eq!(
+            catalog.replace_entries(same_path),
+            Err(CatalogError::IdentityPathConflict)
+        );
+        let different_path = [
+            CatalogSourceEntry::stable("C:/songs/a.json", "A", stable_a),
+            CatalogSourceEntry::stable(
+                "C:/songs/b.json",
+                "B",
+                StableSongId::new("0123456789abcdef0123456789abcdef").unwrap(),
+            ),
+        ];
+        assert_eq!(
+            catalog.replace_entries(different_path),
+            Err(CatalogError::IdCollision)
+        );
     }
 
     #[test]

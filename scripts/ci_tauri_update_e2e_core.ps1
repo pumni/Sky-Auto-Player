@@ -32,8 +32,14 @@ if ($fixtureTargetRoot.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase) 
   $fixtureTargetRoot.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
   throw 'Updater fixture target directory must be outside the repository workspace'
 }
-$fixtureBundleRoot = Join-Path $fixtureTargetRoot 'dist/bundle/nsis'
+$bridgeTargetRoot = Join-Path $fixtureTargetRoot 'bridge'
+$candidateTargetRoot = Join-Path $fixtureTargetRoot 'candidate'
+$bridgeBundleRoot = Join-Path $bridgeTargetRoot 'dist/bundle/nsis'
+$candidateBundleRoot = Join-Path $candidateTargetRoot 'dist/bundle/nsis'
 $installRoot = Join-Path $fixtureRoot 'installed'
+$appDataRoot = Join-Path $fixtureRoot 'app-data'
+$userSongsRoot = Join-Path $appDataRoot 'songs'
+$userSongPath = Join-Path $userSongsRoot 'updater-preserved-user.json'
 $markerPath = Join-Path $fixtureRoot 'completion.txt'
 $expectedVersionPath = Join-Path $fixtureRoot 'expected-installed-version.txt'
 $cutoverMarkerPath = Join-Path $fixtureRoot 'cutover.txt'
@@ -72,6 +78,7 @@ $httpEvidencePath = if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
 }
 $manifestContract = [ordered]@{ status = 'not-checked' }
 $candidateContract = [ordered]@{ status = 'not-checked' }
+$preservationContract = [ordered]@{ status = 'not-checked' }
 $fixtureStatus = 'FAIL'
 $port = 0
 $serverJob = $null
@@ -80,6 +87,7 @@ $candidateArchive = $null
 $candidateSignature = $null
 $candidateCargoPath = Join-Path $desktopRoot 'src-tauri/Cargo.toml'
 $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
+$oldAppDataRoot = [Environment]::GetEnvironmentVariable('SKY_APP_DATA_ROOT', 'Process')
 $cargoSource = [IO.File]::ReadAllText($candidateCargoPath)
 $lockSource = [IO.File]::ReadAllText($lockPath)
 
@@ -95,6 +103,81 @@ function Get-DisposableLoopbackPort {
 
 function Get-ByteSha256([byte[]]$Bytes) {
   return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+}
+
+$catalogManifestPath = Join-Path $repoRoot 'builtin-songs/manifest.json'
+$catalogManifestSourceBytes = [IO.File]::ReadAllBytes($catalogManifestPath)
+$catalogManifestDocument = Get-Content -LiteralPath $catalogManifestPath -Raw | ConvertFrom-Json
+$catalogSentinelEntries = @($catalogManifestDocument.songs | Where-Object {
+    [string]$_.path -like 'sheets/*.json'
+  })
+if ($catalogSentinelEntries.Count -lt 1) {
+  throw 'Updater fixture requires at least one canonical JSON built-in song for the N sentinel'
+}
+$catalogSentinelEntry = $catalogSentinelEntries[0]
+$catalogSentinelId = [string]$catalogSentinelEntry.id
+$catalogSentinelRelativePath = ([string]$catalogSentinelEntry.path).Substring('sheets/'.Length)
+if ([string]::IsNullOrWhiteSpace($catalogSentinelRelativePath) -or
+  $catalogSentinelRelativePath.Contains('..')) {
+  throw 'Updater fixture selected an invalid built-in sentinel path'
+}
+$catalogSongPath = Join-Path (Join-Path $repoRoot 'songs') $catalogSentinelRelativePath
+if (-not (Test-Path -LiteralPath $catalogSongPath -PathType Leaf)) {
+  throw "Updater fixture sentinel source is missing: $catalogSongPath"
+}
+$catalogSongSourceBytes = [IO.File]::ReadAllBytes($catalogSongPath)
+$catalogSentinelSongBytes = [Text.Encoding]::UTF8.GetBytes(
+  '{"name":"Updater bridge catalog sentinel","bpm":120,"songNotes":[{"time":0,"key":"1Key0"},{"time":333,"key":"1Key1"}]}'
+)
+$catalogSentinelSongSha = Get-ByteSha256 $catalogSentinelSongBytes
+$catalogBridgeEvidence = $null
+$catalogCandidateEvidence = $null
+$catalogSourceRestoreStatus = 'not-started'
+$catalogSourceRestoreError = $null
+
+function Set-CatalogBridgeSentinel {
+  $manifest = Get-Content -LiteralPath $catalogManifestPath -Raw | ConvertFrom-Json
+  $entries = @($manifest.songs | Where-Object { [string]$_.id -eq $catalogSentinelId })
+  if ($entries.Count -ne 1 -or [string]$entries[0].path -ne [string]$catalogSentinelEntry.path) {
+    throw 'Updater fixture could not locate its selected built-in catalog sentinel entry'
+  }
+  $entries[0].sha256 = $catalogSentinelSongSha
+  $manifestBytes = [Text.Encoding]::UTF8.GetBytes(($manifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine)
+  [IO.File]::WriteAllBytes($catalogManifestPath, $manifestBytes)
+  [IO.File]::WriteAllBytes($catalogSongPath, $catalogSentinelSongBytes)
+  Write-Host "Updater fixture catalog-sentinel: bridge N uses stable ID $catalogSentinelId with sentinel content SHA $catalogSentinelSongSha"
+}
+
+function Restore-CanonicalBuiltinCatalog {
+  [IO.File]::WriteAllBytes($catalogManifestPath, $catalogManifestSourceBytes)
+  [IO.File]::WriteAllBytes($catalogSongPath, $catalogSongSourceBytes)
+  $manifestSha = Get-ByteSha256 ([IO.File]::ReadAllBytes($catalogManifestPath))
+  $songSha = Get-ByteSha256 ([IO.File]::ReadAllBytes($catalogSongPath))
+  if ($manifestSha -ne (Get-ByteSha256 $catalogManifestSourceBytes) -or
+    $songSha -ne (Get-ByteSha256 $catalogSongSourceBytes)) {
+    throw 'Updater fixture failed to restore canonical built-in catalog source bytes'
+  }
+  $script:catalogSourceRestoreStatus = 'PASS'
+}
+
+function Get-InstalledBuiltinEvidence {
+  param([Parameter(Mandatory = $true)] [string]$Root)
+
+  $manifestPath = Join-Path $Root 'manifest.json'
+  $manifestBytes = [IO.File]::ReadAllBytes($manifestPath)
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  $entries = @($manifest.songs | Where-Object { [string]$_.id -eq $catalogSentinelId })
+  if ($entries.Count -ne 1 -or [string]$entries[0].path -ne [string]$catalogSentinelEntry.path) {
+    throw 'Installed built-in catalog does not preserve the selected sentinel identity/path'
+  }
+  $songPath = Join-Path $Root ([string]$entries[0].path)
+  $songBytes = [IO.File]::ReadAllBytes($songPath)
+  [pscustomobject]@{
+    manifest_sha256 = Get-ByteSha256 $manifestBytes
+    selected_id = [string]$entries[0].id
+    selected_content_sha256 = Get-ByteSha256 $songBytes
+    selected_manifest_sha256 = [string]$entries[0].sha256
+  }
 }
 
 function Invoke-LoopbackHttpBytes([string]$Uri) {
@@ -181,6 +264,7 @@ function Write-HttpEvidence([string]$Status) {
       proxy_environment = $proxy
       manifest = $manifestContract
       candidate = $candidateContract
+      preservation = $preservationContract
       requests = $requests
     }
     $parent = Split-Path -Parent $httpEvidencePath
@@ -217,11 +301,20 @@ function Write-FixtureUpdaterConfig {
   } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
+function Clear-FixtureResourceStaging {
+  param([Parameter(Mandatory = $true)] [string]$TargetRoot)
+  $stagingRoot = Join-Path $TargetRoot 'dist/builtin-songs'
+  if (Test-Path -LiteralPath $stagingRoot) {
+    Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+  }
+}
+
 function Invoke-FixtureBuild {
   param(
     [string]$ConfigPath,
     [string]$PrivateKeyPath,
-    [string]$PublicRoots
+    [string]$PublicRoots,
+    [Parameter(Mandatory = $true)] [string]$TargetRoot
   )
   $privateKey = ([IO.File]::ReadAllText($PrivateKeyPath)).Trim()
   if ([string]::IsNullOrWhiteSpace($privateKey)) {
@@ -233,8 +326,9 @@ function Invoke-FixtureBuild {
   $oldCargoTargetDir = [Environment]::GetEnvironmentVariable('CARGO_TARGET_DIR', 'Process')
   $oldFixturePort = [Environment]::GetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', 'Process')
   try {
-    [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $fixtureTargetRoot, 'Process')
+    [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $TargetRoot, 'Process')
     [Environment]::SetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', [string]$port, 'Process')
+    Clear-FixtureResourceStaging -TargetRoot $TargetRoot
     Push-Location $desktopRoot
     try {
       & bun run tauri build --ci --config $ConfigPath -- --profile dist --features tauri-update-fixture
@@ -243,13 +337,13 @@ function Invoke-FixtureBuild {
       Pop-Location
     }
   } finally {
-    if ($null -eq $oldCargoTargetDir) {
-      [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $null, 'Process')
+    if ([string]::IsNullOrEmpty($oldCargoTargetDir)) {
+      Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
     } else {
       [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $oldCargoTargetDir, 'Process')
     }
-    if ($null -eq $oldFixturePort) {
-      [Environment]::SetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', $null, 'Process')
+    if ([string]::IsNullOrEmpty($oldFixturePort)) {
+      Remove-Item Env:SKY_TAURI_UPDATE_FIXTURE_PORT -ErrorAction SilentlyContinue
     } else {
       [Environment]::SetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', $oldFixturePort, 'Process')
     }
@@ -263,8 +357,9 @@ try {
   $port = Get-DisposableLoopbackPort
   New-Item -ItemType Directory -Path $fixtureRoot, $installRoot -Force | Out-Null
   New-Item -ItemType File -Path $requestLogPath -Force | Out-Null
-  New-Item -ItemType Directory -Path $fixtureBundleRoot -Force | Out-Null
-  $fixtureBundleRoot = (Resolve-Path -LiteralPath $fixtureBundleRoot -ErrorAction Stop).Path
+  New-Item -ItemType Directory -Path $bridgeBundleRoot, $candidateBundleRoot -Force | Out-Null
+  $bridgeBundleRoot = (Resolve-Path -LiteralPath $bridgeBundleRoot -ErrorAction Stop).Path
+  $candidateBundleRoot = (Resolve-Path -LiteralPath $candidateBundleRoot -ErrorAction Stop).Path
 
   foreach ($candidatePath in @($CandidateInstallerPath, $CandidateSignaturePath)) {
     if (-not [string]::IsNullOrWhiteSpace($candidatePath)) {
@@ -306,12 +401,17 @@ try {
   # Build only the throwaway bridge client with old+new roots. In production
   # qualification the candidate below is the exact installer and signature
   # downloaded from the release draft; it is never rebuilt by this fixture.
-  Invoke-FixtureBuild $bridgeConfigPath $oldKeyPath "$oldPublicKey|$newPublicKey"
-  $previousInstallers = @(Get-ChildItem -LiteralPath $fixtureBundleRoot -Filter '*4.0.0-alpha.1_x64-setup.exe' -File)
+  Set-CatalogBridgeSentinel
+  Invoke-FixtureBuild $bridgeConfigPath $oldKeyPath "$oldPublicKey|$newPublicKey" $bridgeTargetRoot
+  $previousInstallers = @(Get-ChildItem -LiteralPath $bridgeBundleRoot -Filter '*4.0.0-alpha.1_x64-setup.exe' -File)
   if ($previousInstallers.Count -ne 1) {
     throw "Expected exactly one bridge-v4 installer, found $($previousInstallers.Count)"
   }
   Copy-Item -LiteralPath $previousInstallers[0].FullName -Destination $previousInstallerCopy -Force
+  Restore-CanonicalBuiltinCatalog
+  if ($catalogSourceRestoreStatus -ne 'PASS') {
+    throw 'Updater fixture did not restore the canonical source tree before building N+1'
+  }
 
   if ($providedCandidate) {
     $candidateArchive = Get-Item -LiteralPath (Resolve-Path -LiteralPath $CandidateInstallerPath -ErrorAction Stop).Path -ErrorAction Stop
@@ -331,9 +431,9 @@ try {
     if ($lockCandidate -eq $lockSource) { throw 'Could not locate the desktop package in Cargo.lock' }
     [IO.File]::WriteAllText($candidateCargoPath, $cargoCandidate, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($lockPath, $lockCandidate, [Text.UTF8Encoding]::new($false))
-    Invoke-FixtureBuild $cutoverConfigPath $newKeyPath $newPublicKey
+    Invoke-FixtureBuild $cutoverConfigPath $newKeyPath $newPublicKey $candidateTargetRoot
 
-    $candidateArchives = @(Get-ChildItem -LiteralPath $fixtureBundleRoot -Filter ("*" + $candidateVersion + "*-setup.exe") -File)
+    $candidateArchives = @(Get-ChildItem -LiteralPath $candidateBundleRoot -Filter ("*" + $candidateVersion + "*-setup.exe") -File)
     if ($candidateArchives.Count -ne 1) {
       throw "Expected exactly one new-root candidate installer, found $($candidateArchives.Count)"
     }
@@ -496,6 +596,24 @@ try {
   New-Item -Path $locationKey -Force -Value $installRoot | Out-Null
   $appPath = Join-Path $installRoot 'sky_desktop_shell.exe'
   if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed bridge app is missing: $appPath" }
+  $bridgeBuiltinRoot = Join-Path $installRoot 'builtin-songs'
+  & cargo xtask builtin-catalog verify-installed --root $bridgeBuiltinRoot
+  if ($LASTEXITCODE -ne 0) { throw "Bridge installed built-in catalog verification failed with exit code $LASTEXITCODE" }
+  $catalogBridgeEvidence = Get-InstalledBuiltinEvidence -Root $bridgeBuiltinRoot
+  if ($catalogBridgeEvidence.selected_id -ne $catalogSentinelId -or
+    $catalogBridgeEvidence.selected_content_sha256 -ne $catalogSentinelSongSha -or
+    $catalogBridgeEvidence.selected_manifest_sha256 -ne $catalogSentinelSongSha) {
+    throw 'Bridge installed built-in catalog did not contain the expected N sentinel bytes and hash'
+  }
+
+  $userSongBytes = [Text.Encoding]::UTF8.GetBytes('{"name":"Updater preserved user","songNotes":[{"time":0,"key":"1Key0"}]}')
+  New-Item -ItemType Directory -Path $userSongsRoot -Force | Out-Null
+  [IO.File]::WriteAllBytes($userSongPath, $userSongBytes)
+  $userSongShaBefore = Get-ByteSha256 $userSongBytes
+  if ((Get-ByteSha256 ([IO.File]::ReadAllBytes($userSongPath))) -ne $userSongShaBefore) {
+    throw 'Could not establish the updater user-song preservation fixture'
+  }
+  [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $appDataRoot, 'Process')
 
   $appProcess = Start-Process -FilePath $appPath -ArgumentList @(
     '--selftest-desktop-update',
@@ -522,8 +640,58 @@ try {
     $previousOffset = $offset
   }
 
+  if (-not (Test-Path -LiteralPath $userSongPath -PathType Leaf)) {
+    throw 'Updater removed the user song from application data'
+  }
+  $userSongShaAfter = Get-ByteSha256 ([IO.File]::ReadAllBytes($userSongPath))
+  if ($userSongShaAfter -ne $userSongShaBefore) {
+    throw "Updater changed the user song bytes: before=$userSongShaBefore after=$userSongShaAfter"
+  }
+  $candidateBuiltinRoot = Join-Path $installRoot 'builtin-songs'
+  & cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot
+  if ($LASTEXITCODE -ne 0) { throw "Candidate installed built-in catalog verification failed with exit code $LASTEXITCODE" }
+  $candidateBuiltinManifest = Get-Content -LiteralPath (Join-Path $candidateBuiltinRoot 'manifest.json') -Raw | ConvertFrom-Json
+  $candidateBuiltinCount = @($candidateBuiltinManifest.songs).Count
+  if ($candidateBuiltinCount -le 0) {
+    throw 'Candidate installed built-in catalog is empty after update'
+  }
+  $catalogCandidateEvidence = Get-InstalledBuiltinEvidence -Root $candidateBuiltinRoot
+  if ($catalogBridgeEvidence.manifest_sha256 -eq $catalogCandidateEvidence.manifest_sha256) {
+    throw 'Updater did not replace the installed built-in manifest bytes across N-to-N+1'
+  }
+  if ($catalogBridgeEvidence.selected_id -ne $catalogCandidateEvidence.selected_id) {
+    throw 'Updater changed the selected built-in stable ID across N-to-N+1'
+  }
+  if ($catalogBridgeEvidence.selected_content_sha256 -eq $catalogCandidateEvidence.selected_content_sha256) {
+    throw 'Updater did not replace the selected built-in content bytes across N-to-N+1'
+  }
+  if ($catalogCandidateEvidence.selected_id -ne $catalogSentinelId) {
+    throw 'Candidate installed built-in catalog lost the selected stable identity'
+  }
+  if ($catalogSourceRestoreStatus -ne 'PASS') {
+    throw 'Updater fixture source tree was not restored before candidate qualification'
+  }
+  $candidateBuiltinManifestSha = $catalogCandidateEvidence.manifest_sha256
+  $preservationContract = [ordered]@{
+    status = 'PASS'
+    transition = 'N-to-N+1'
+    user_song = 'updater-preserved-user.json'
+    user_song_sha256_before = $userSongShaBefore
+    user_song_sha256_after = $userSongShaAfter
+    built_in_manifest_sha256_before = $catalogBridgeEvidence.manifest_sha256
+    built_in_manifest_sha256_after = $catalogCandidateEvidence.manifest_sha256
+    selected_builtin_id_before = $catalogBridgeEvidence.selected_id
+    selected_builtin_id_after = $catalogCandidateEvidence.selected_id
+    selected_builtin_content_sha256_before = $catalogBridgeEvidence.selected_content_sha256
+    selected_builtin_content_sha256_after = $catalogCandidateEvidence.selected_content_sha256
+    source_tree_restore = $catalogSourceRestoreStatus
+    built_in_song_count_after = $candidateBuiltinCount
+  }
+  Write-Host "Updater N-to-N+1 resource replacement: PASS (user_sha256=$userSongShaAfter; built_in_manifest_sha256_before=$($catalogBridgeEvidence.manifest_sha256); built_in_manifest_sha256_after=$candidateBuiltinManifestSha; selected_id=$($catalogCandidateEvidence.selected_id); selected_content_sha256_before=$($catalogBridgeEvidence.selected_content_sha256); selected_content_sha256_after=$($catalogCandidateEvidence.selected_content_sha256); source_tree_restore=$catalogSourceRestoreStatus)"
+  Write-Host "Updater N-to-N+1 preservation: PASS (user_sha256=$userSongShaAfter; built_in_count=$candidateBuiltinCount; built_in_manifest_sha256=$candidateBuiltinManifestSha)"
+
   if ($providedCandidate) {
-    "Packaged Tauri updater draft qualification: PASS (throwaway previous-v4 bridge applied the exact downloaded candidate $candidateVersion; safety phases=$($requiredPhases -join ', '))" |
+    "Packaged Tauri updater draft qualification: PASS (throwaway previous-v4 bridge applied the exact downloaded candidate $candidateVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   } else {
     # Switch only the server manifest. The restarted candidate is the cutover
@@ -539,7 +707,7 @@ try {
     if (-not $cutoverResult.StartsWith('update-failed:')) {
       throw "Cutover client accepted an old-root artifact: $cutoverResult"
     }
-    "Packaged Tauri updater rotation: PASS (bridge [old,new] applied new-root-only $candidateVersion; cutover [new] rejected old-root-only $cutoverVersion; safety phases=$($requiredPhases -join ', '))" |
+    "Packaged Tauri updater rotation: PASS (bridge [old,new] applied new-root-only $candidateVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; cutover [new] rejected old-root-only $cutoverVersion; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   }
   $fixtureStatus = 'PASS'
@@ -549,12 +717,29 @@ try {
     Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
     Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
   }
+  try {
+    Restore-CanonicalBuiltinCatalog
+  } catch {
+    $catalogSourceRestoreStatus = 'FAIL'
+    $catalogSourceRestoreError = $_.Exception.Message
+    $fixtureStatus = 'FAIL'
+    $preservationContract.status = 'FAIL'
+    $preservationContract.source_tree_restore = 'FAIL'
+  }
   [IO.File]::WriteAllText($candidateCargoPath, $cargoSource, [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText($lockPath, $lockSource, [Text.UTF8Encoding]::new($false))
+  if ([string]::IsNullOrEmpty($oldAppDataRoot)) {
+    Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
+  } else {
+    [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $oldAppDataRoot, 'Process')
+  }
   Remove-Item Env:SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS -ErrorAction SilentlyContinue
   Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
   Write-HttpEvidence $fixtureStatus
+  if ($null -ne $catalogSourceRestoreError) {
+    throw "Updater fixture source-tree restoration failed: $catalogSourceRestoreError"
+  }
   if (-not $KeepFixtureOnFailure -and (Test-Path -LiteralPath $fixtureRoot)) {
     Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
   }

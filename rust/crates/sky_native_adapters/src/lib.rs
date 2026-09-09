@@ -6,7 +6,8 @@
 
 use serde_json::{Map, Value};
 use sky_app_core::catalog::{
-    CatalogError, CatalogSourceEntry, SUPPORTED_EXTENSIONS, SongSource, song_id_for_canonical_path,
+    BuiltinCatalogManifest, CatalogError, CatalogSourceEntry, SUPPORTED_EXTENSIONS, SongSource,
+    StableSongId, song_id_for_canonical_path,
 };
 use sky_app_core::library::{
     ImportedSourceKind, ImportedSourceRef, LIBRARY_MANIFEST_VERSION, LibraryError,
@@ -24,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub mod paths;
-pub use paths::{AppPaths, CALIBRATION_EXE, V4_APP_IDENTIFIER, snapshot_directory};
+pub use paths::{AppPaths, AppResources, CALIBRATION_EXE, V4_APP_IDENTIFIER, snapshot_directory};
 
 pub const DEFAULT_TRANSPORT_MARGIN_US: u64 = 300;
 pub const CALIBRATION_MARGIN_SOURCE_DEFAULT: &str = "default_transport_300";
@@ -525,61 +526,183 @@ pub struct FileCatalogSource {
 #[derive(Debug, Clone, Default)]
 pub struct CatalogComposition {
     pub entries: Vec<CatalogSourceEntry>,
-    pub primary_membership: BTreeSet<String>,
+    pub library_membership: BTreeSet<String>,
+    pub builtin_membership: BTreeSet<String>,
+    pub user_membership: BTreeSet<String>,
     pub imported_membership: HashMap<String, BTreeSet<String>>,
     pub imported_status: Vec<ImportedSourceCatalogStatus>,
+    pub builtin_status: BuiltinCatalogStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedSourceCatalogStatus {
-    pub source_id: String,
-    pub kind: ImportedSourceKind,
-    pub display_name: String,
-    pub song_count: usize,
-    pub available: bool,
+pub enum BuiltinCatalogFailureCode {
+    ResourceUnavailable,
+    MalformedManifest,
+    MissingResource,
+    InvalidResource,
 }
 
-impl FileCatalogSource {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuiltinCatalogStatus {
+    Available { song_count: usize },
+    Unavailable { code: BuiltinCatalogFailureCode },
+}
+
+impl Default for BuiltinCatalogStatus {
+    fn default() -> Self {
+        Self::Unavailable {
+            code: BuiltinCatalogFailureCode::ResourceUnavailable,
+        }
     }
-    pub fn root(&self) -> &Path {
-        &self.root
+}
+
+pub struct BuiltinCatalogSource {
+    resources: AppResources,
+}
+
+impl BuiltinCatalogSource {
+    pub fn new(resources: AppResources) -> Self {
+        Self { resources }
     }
 
-    pub fn catalog_composition_with_imports(
+    pub fn resources(&self) -> &AppResources {
+        &self.resources
+    }
+
+    fn load(
+        &self,
+    ) -> (
+        Vec<CatalogSourceEntry>,
+        BTreeSet<String>,
+        BuiltinCatalogStatus,
+    ) {
+        let root = self.resources.builtin_catalog_root();
+        if !root.is_dir() {
+            return (
+                Vec::new(),
+                BTreeSet::new(),
+                BuiltinCatalogStatus::Unavailable {
+                    code: BuiltinCatalogFailureCode::ResourceUnavailable,
+                },
+            );
+        }
+        let manifest_path = self.resources.builtin_catalog_manifest_path();
+        let manifest = match fs::read(&manifest_path).map_err(|_| ()).and_then(|bytes| {
+            serde_json::from_slice::<BuiltinCatalogManifest>(&bytes).map_err(|_| ())
+        }) {
+            Ok(manifest) => manifest,
+            Err(()) => {
+                return (
+                    Vec::new(),
+                    BTreeSet::new(),
+                    BuiltinCatalogStatus::Unavailable {
+                        code: BuiltinCatalogFailureCode::MalformedManifest,
+                    },
+                );
+            }
+        };
+        if manifest.validate().is_err() {
+            return (
+                Vec::new(),
+                BTreeSet::new(),
+                BuiltinCatalogStatus::Unavailable {
+                    code: BuiltinCatalogFailureCode::MalformedManifest,
+                },
+            );
+        }
+        let canonical_root = match fs::canonicalize(root) {
+            Ok(root) => root,
+            Err(_) => {
+                return (
+                    Vec::new(),
+                    BTreeSet::new(),
+                    BuiltinCatalogStatus::Unavailable {
+                        code: BuiltinCatalogFailureCode::ResourceUnavailable,
+                    },
+                );
+            }
+        };
+        let mut entries = Vec::with_capacity(manifest.songs.len());
+        let mut membership = BTreeSet::new();
+        for item in manifest.songs {
+            let path = root.join(&item.path);
+            let canonical = match fs::canonicalize(&path) {
+                Ok(path) if path.starts_with(&canonical_root) && path.is_file() => path,
+                _ => {
+                    return (
+                        Vec::new(),
+                        BTreeSet::new(),
+                        BuiltinCatalogStatus::Unavailable {
+                            code: BuiltinCatalogFailureCode::MissingResource,
+                        },
+                    );
+                }
+            };
+            let stable_id = match StableSongId::new(item.id) {
+                Ok(id) => id,
+                Err(_) => {
+                    return (
+                        Vec::new(),
+                        BTreeSet::new(),
+                        BuiltinCatalogStatus::Unavailable {
+                            code: BuiltinCatalogFailureCode::InvalidResource,
+                        },
+                    );
+                }
+            };
+            membership.insert(stable_id.as_str().to_owned());
+            entries.push(CatalogSourceEntry::stable(
+                canonical.to_string_lossy(),
+                item.title,
+                stable_id,
+            ));
+        }
+        let status = BuiltinCatalogStatus::Available {
+            song_count: entries.len(),
+        };
+        (entries, membership, status)
+    }
+}
+
+pub struct CatalogComposer {
+    builtin: BuiltinCatalogSource,
+    user: FileCatalogSource,
+}
+
+impl CatalogComposer {
+    pub fn new(builtin: BuiltinCatalogSource, user: FileCatalogSource) -> Self {
+        Self { builtin, user }
+    }
+
+    pub fn compose(
         &self,
         imports: &[ImportedSourceRef],
     ) -> Result<CatalogComposition, CatalogError> {
-        let mut composition = CatalogComposition {
-            entries: self.entries()?,
-            ..Default::default()
-        };
-        composition.primary_membership = composition
-            .entries
+        let (builtin_entries, builtin_membership, builtin_status) = self.builtin.load();
+        let user_entries = self.user.entries()?;
+        let user_membership = user_entries
             .iter()
             .map(|entry| song_id_for_canonical_path(&entry.canonical_path))
-            .collect();
-
+            .collect::<BTreeSet<_>>();
+        let mut composition = CatalogComposition {
+            entries: builtin_entries,
+            builtin_membership: builtin_membership.clone(),
+            user_membership: user_membership.clone(),
+            library_membership: builtin_membership
+                .union(&user_membership)
+                .cloned()
+                .collect(),
+            builtin_status,
+            ..Default::default()
+        };
+        composition.entries.extend(user_entries);
         for import in imports {
             let path = PathBuf::from(&import.canonical_path);
             let display_name = import_display_name(&path, import.kind);
             if !path.exists() {
-                composition
-                    .imported_status
-                    .push(ImportedSourceCatalogStatus {
-                        source_id: import.source_id.clone(),
-                        kind: import.kind,
-                        display_name,
-                        song_count: 0,
-                        available: false,
-                    });
-                composition
-                    .imported_membership
-                    .insert(import.source_id.clone(), BTreeSet::new());
+                record_missing_import(&mut composition, import, display_name);
                 continue;
             }
-
             let imported = match import.kind {
                 ImportedSourceKind::File => entries_from_file(&path),
                 ImportedSourceKind::Folder => entries_from_directory(&path, true),
@@ -587,18 +710,7 @@ impl FileCatalogSource {
             let imported = match imported {
                 Ok(entries) => entries,
                 Err(_) => {
-                    composition
-                        .imported_status
-                        .push(ImportedSourceCatalogStatus {
-                            source_id: import.source_id.clone(),
-                            kind: import.kind,
-                            display_name,
-                            song_count: 0,
-                            available: false,
-                        });
-                    composition
-                        .imported_membership
-                        .insert(import.source_id.clone(), BTreeSet::new());
+                    record_missing_import(&mut composition, import, display_name);
                     continue;
                 }
             };
@@ -620,25 +732,47 @@ impl FileCatalogSource {
                 .insert(import.source_id.clone(), membership);
             composition.entries.extend(imported);
         }
-
         composition
             .entries
             .sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
-        composition.entries.dedup_by(|left, right| {
-            left.canonical_path
-                .eq_ignore_ascii_case(&right.canonical_path)
-        });
         Ok(composition)
     }
+}
 
-    /// Compose the primary songs directory with explicit native-owned import
-    /// references. Missing imported paths are ignored so a disconnected
-    /// removable drive does not make the rest of the catalog unavailable.
-    pub fn entries_with_imports(
-        &self,
-        imports: &[ImportedSourceRef],
-    ) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
-        Ok(self.catalog_composition_with_imports(imports)?.entries)
+fn record_missing_import(
+    composition: &mut CatalogComposition,
+    import: &ImportedSourceRef,
+    display_name: String,
+) {
+    composition
+        .imported_status
+        .push(ImportedSourceCatalogStatus {
+            source_id: import.source_id.clone(),
+            kind: import.kind,
+            display_name,
+            song_count: 0,
+            available: false,
+        });
+    composition
+        .imported_membership
+        .insert(import.source_id.clone(), BTreeSet::new());
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedSourceCatalogStatus {
+    pub source_id: String,
+    pub kind: ImportedSourceKind,
+    pub display_name: String,
+    pub song_count: usize,
+    pub available: bool,
+}
+
+impl FileCatalogSource {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 }
 
@@ -654,14 +788,12 @@ fn entries_from_file(path: &Path) -> Result<Vec<CatalogSourceEntry>, CatalogErro
     }
     let canonical = fs::canonicalize(path)
         .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
-    Ok(vec![CatalogSourceEntry {
-        canonical_path: canonical.to_string_lossy().into_owned(),
-        title: path
-            .file_stem()
+    Ok(vec![CatalogSourceEntry::path_derived(
+        canonical.to_string_lossy(),
+        path.file_stem()
             .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_owned(),
-    }])
+            .unwrap_or_default(),
+    )])
 }
 
 fn entries_from_directory(
@@ -1466,9 +1598,16 @@ mod tests {
         store.save(&manifest).expect("manifest save");
         assert_eq!(store.load().expect("manifest load"), manifest);
 
-        let entries = FileCatalogSource::new(&songs)
-            .entries_with_imports(&manifest.imports)
-            .expect("composed entries");
+        let composer = CatalogComposer::new(
+            BuiltinCatalogSource::new(AppResources::from_builtin_catalog_root(
+                root.join("missing-builtin"),
+            )),
+            FileCatalogSource::new(&songs),
+        );
+        let entries = composer
+            .compose(&manifest.imports)
+            .expect("composed entries")
+            .entries;
         assert_eq!(entries.len(), 3);
         assert!(
             entries
@@ -1476,17 +1615,22 @@ mod tests {
                 .any(|entry| entry.canonical_path.ends_with("local.txt"))
         );
 
-        let composition = FileCatalogSource::new(&songs)
-            .catalog_composition_with_imports(&[
-                manifest.imports[0].clone(),
-                ImportedSourceRef {
-                    source_id: "b".repeat(32),
-                    canonical_path: root.join("disconnected").to_string_lossy().into_owned(),
-                    kind: ImportedSourceKind::Folder,
-                },
-            ])
-            .expect("catalog composition");
-        assert_eq!(composition.primary_membership.len(), 1);
+        let composition = CatalogComposer::new(
+            BuiltinCatalogSource::new(AppResources::from_builtin_catalog_root(
+                root.join("missing-builtin"),
+            )),
+            FileCatalogSource::new(&songs),
+        )
+        .compose(&[
+            manifest.imports[0].clone(),
+            ImportedSourceRef {
+                source_id: "b".repeat(32),
+                canonical_path: root.join("disconnected").to_string_lossy().into_owned(),
+                kind: ImportedSourceKind::Folder,
+            },
+        ])
+        .expect("catalog composition");
+        assert_eq!(composition.library_membership.len(), 1);
         assert_eq!(composition.imported_status.len(), 2);
         assert_eq!(composition.imported_status[0].song_count, 2);
         assert!(composition.imported_status[0].available);
@@ -1495,16 +1639,107 @@ mod tests {
         assert!(!composition.imported_status[1].available);
         assert!(composition.imported_membership[&"b".repeat(32)].is_empty());
 
-        let duplicate = FileCatalogSource::new(&songs)
-            .catalog_composition_with_imports(&[ImportedSourceRef {
-                source_id: "c".repeat(32),
-                canonical_path: songs.to_string_lossy().into_owned(),
-                kind: ImportedSourceKind::Folder,
-            }])
-            .expect("duplicate composition");
-        assert_eq!(duplicate.entries.len(), 1);
+        let duplicate = CatalogComposer::new(
+            BuiltinCatalogSource::new(AppResources::from_builtin_catalog_root(
+                root.join("missing-builtin"),
+            )),
+            FileCatalogSource::new(&songs),
+        )
+        .compose(&[ImportedSourceRef {
+            source_id: "c".repeat(32),
+            canonical_path: songs.to_string_lossy().into_owned(),
+            kind: ImportedSourceKind::Folder,
+        }])
+        .expect("duplicate composition");
+        assert_eq!(duplicate.entries.len(), 2);
         assert_eq!(duplicate.imported_status[0].song_count, 1);
         assert_eq!(duplicate.imported_membership[&"c".repeat(32)].len(), 1);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn builtin_source_is_manifest_driven_and_fails_as_one_source() {
+        let root = std::env::temp_dir().join(format!("sky-v4-builtin-{}", std::process::id()));
+        let resource_root = root.join("builtin-songs");
+        let sheets = resource_root.join("sheets");
+        let user_root = root.join("user-songs");
+        fs::create_dir_all(&sheets).expect("sheets");
+        fs::create_dir_all(&user_root).expect("user songs");
+        let builtin_path = sheets.join("stable.json");
+        fs::write(
+            &builtin_path,
+            br#"{"name":"Stable","songNotes":[{"time":0,"key":"1Key0"}]}"#,
+        )
+        .expect("builtin song");
+        fs::write(
+            user_root.join("user.json"),
+            br#"{"name":"User","songNotes":[{"time":0,"key":"1Key1"}]}"#,
+        )
+        .expect("user song");
+        let digest = sha256_bytes(&fs::read(&builtin_path).expect("read builtin"));
+        let manifest = BuiltinCatalogManifest {
+            schema_version: 1,
+            songs: vec![sky_app_core::catalog::BuiltinSongManifestEntry {
+                id: "0123456789abcdef0123456789abcdef".into(),
+                path: "sheets/stable.json".into(),
+                title: "Stable".into(),
+                sha256: digest,
+            }],
+            retired_songs: Vec::new(),
+        };
+        fs::write(
+            resource_root.join("manifest.json"),
+            serde_json::to_vec(&manifest).expect("manifest json"),
+        )
+        .expect("manifest");
+        let composition = CatalogComposer::new(
+            BuiltinCatalogSource::new(AppResources::from_builtin_catalog_root(resource_root)),
+            FileCatalogSource::new(&user_root),
+        )
+        .compose(&[])
+        .expect("composition");
+        assert_eq!(composition.builtin_membership.len(), 1);
+        assert_eq!(composition.user_membership.len(), 1);
+        assert_eq!(composition.library_membership.len(), 2);
+        assert_eq!(composition.entries.len(), 2);
+        assert_eq!(
+            composition.builtin_status,
+            BuiltinCatalogStatus::Available { song_count: 1 }
+        );
+
+        let missing_resource_root = root.join("missing-resource-builtin");
+        fs::create_dir_all(&missing_resource_root).expect("missing resource root");
+        let mut missing_manifest = manifest;
+        missing_manifest.songs[0].path = "sheets/missing.json".into();
+        fs::write(
+            missing_resource_root.join("manifest.json"),
+            serde_json::to_vec(&missing_manifest).expect("missing resource manifest json"),
+        )
+        .expect("missing resource manifest");
+        let missing = CatalogComposer::new(
+            BuiltinCatalogSource::new(AppResources::from_builtin_catalog_root(
+                missing_resource_root,
+            )),
+            FileCatalogSource::new(&user_root),
+        )
+        .compose(&[])
+        .expect("missing built-in source must not break user composition");
+        assert_eq!(missing.entries.len(), 1);
+        assert!(missing.builtin_membership.is_empty());
+        assert_eq!(
+            missing.builtin_status,
+            BuiltinCatalogStatus::Unavailable {
+                code: BuiltinCatalogFailureCode::MissingResource
+            }
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn sha256_bytes(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }

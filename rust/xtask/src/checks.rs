@@ -1,4 +1,4 @@
-use crate::{Result, audits, branding, process, repo, supply_chain, tauri_bundle};
+use crate::{Result, audits, branding, builtin_catalog, process, repo, supply_chain, tauri_bundle};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use minisign_verify::PublicKey;
 use serde_json::Value;
@@ -1249,6 +1249,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "SBOM verification failed with exit code",
         "Tauri bundle verification failed with exit code",
         "Installed Authenticode verification failed with exit code",
+        "cargo xtask builtin-catalog verify-installed",
         "CI self-signed credentials remain test-only",
         "Tauri updater signer generation failed with exit code",
         "Tauri build failed with exit code",
@@ -1554,6 +1555,32 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     ] {
         if !ci.contains(marker) {
             return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
+        }
+    }
+    let updater_fixture = fs::read_to_string(root.join("scripts/ci_tauri_update_e2e_core.ps1"))?;
+    for marker in [
+        "Updater N-to-N+1 preservation",
+        "Updater N-to-N+1 resource replacement",
+        "catalog-sentinel",
+        "SKY_APP_DATA_ROOT",
+        "updater-preserved-user.json",
+        "user_song_sha256_before",
+        "built_in_manifest_sha256_before",
+        "built_in_manifest_sha256_after",
+        "selected_builtin_id_before",
+        "selected_builtin_id_after",
+        "selected_builtin_content_sha256_before",
+        "selected_builtin_content_sha256_after",
+        "Restore-CanonicalBuiltinCatalog",
+        "Clear-FixtureResourceStaging",
+        "source_tree_restore",
+        "cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot",
+    ] {
+        if !updater_fixture.contains(marker) {
+            return Err(format!(
+                "updater fixture is missing its required preservation marker: {marker}"
+            )
+            .into());
         }
     }
     if ci.matches("cargo install cargo-vet").count() != 1 {
@@ -2939,6 +2966,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             }
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
+            builtin_catalog::run(&root, "verify", &[])?;
             v4_trust_material_contract(&root)?;
             release_metadata_contract(&root)?;
             release_runner_contract(&root)?;
@@ -2947,6 +2975,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             v4_legacy_updater_retirement(&root)?;
         }
         "rust" => {
+            builtin_catalog::run(&root, "verify", &[])?;
             // The canonical Windows qualification runs workspace tests in a
             // restricted environment.  Keep process-global test fixtures
             // deterministic there; this does not change product concurrency.
@@ -3525,6 +3554,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         # Tauri bundle verification failed with exit code
       - name: Qualify current-user install, launch, and uninstall
         run: check sky_desktop_shell.exe uninstall.exe
+      - run: cargo xtask builtin-catalog verify-installed --root installed/builtin-songs
       - name: Clean up ephemeral Authenticode test certificate
         run: pwsh scripts/cleanup_v4_test_signing.ps1
         # Installer attestation verification failed with exit code
@@ -3594,6 +3624,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
       - run: cargo xtask verify-tauri-bundle
       - name: Qualify current-user install, launch, and uninstall
         run: check sky_desktop_shell.exe uninstall.exe
+      - run: cargo xtask builtin-catalog verify-installed --root installed/builtin-songs
       - uses: actions/upload-artifact@v7
   status:
     needs: [changes, static, supply_chain, validate, packaged]

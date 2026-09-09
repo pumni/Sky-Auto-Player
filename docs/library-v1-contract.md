@@ -66,13 +66,20 @@ enum:
 { kind: playlist, id: playlist-id }
 ```
 
-All Songs is restricted to the primary/bundled song membership. Imported assets
-may remain in the native playable index, but they do not change the All Songs
-source. Liked Songs uses liked IDs, and a playlist uses its persisted song IDs.
+All Songs is restricted to the library membership projection: immutable built-in
+resources plus the primary user song directory. Imported assets may remain in
+the native playable index, but they do not change the All Songs source. Liked
+Songs uses liked IDs, and a playlist uses its persisted song IDs.
 All allow-lists are resolved in native state before calling the existing
 catalog primitive. Imported membership and the composed playable catalog are
 rebuilt together for one catalog generation; missing imports do not prevent All
 Songs from loading.
+
+The native composer keeps separate built-in, user, and imported projections.
+`library_membership = builtin_membership ∪ user_membership`; frontend DTOs and
+navigator sources remain unchanged. Built-in IDs come from the committed V4
+resource manifest and user/imported IDs retain the existing canonical-path
+policy. The composer does not content-dedupe or remap either ownership class.
 
 Deleting a playlist removes only its membership and native playlist record; it
 never deletes songs or local files. Playlist mutations return summaries, not

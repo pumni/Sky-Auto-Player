@@ -2,6 +2,7 @@ use crate::native_runtime::{NativeDesktopRuntime, TestSeams};
 use crate::native_update::UpdateService;
 #[cfg(any(test, feature = "tauri-test"))]
 use sky_native_adapters::AppPaths;
+use sky_native_adapters::AppResources;
 #[cfg(any(test, feature = "tauri-test"))]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -207,6 +208,7 @@ struct AppStateInner {
     coherence: Mutex<()>,
     activity: ActivityCoordinator,
     test_seams: Mutex<TestSeams>,
+    resources: Mutex<Option<AppResources>>,
     #[cfg(any(test, feature = "tauri-test"))]
     paths_override: Mutex<Option<AppPaths>>,
     closing: AtomicBool,
@@ -224,6 +226,7 @@ impl Default for AppState {
                 coherence: Mutex::new(()),
                 activity: ActivityCoordinator::default(),
                 test_seams: Mutex::new(TestSeams::Disabled),
+                resources: Mutex::new(None),
                 #[cfg(any(test, feature = "tauri-test"))]
                 paths_override: Mutex::new(None),
                 closing: AtomicBool::new(false),
@@ -262,9 +265,17 @@ impl AppState {
             Some(p) => p,
             None => sky_native_adapters::AppPaths::resolve()?,
         };
+        let resources = self
+            .inner
+            .resources
+            .lock()
+            .map_err(|_| "native resource state poisoned".to_string())?
+            .clone()
+            .unwrap_or_else(|| AppResources::from_resource_dir(paths.install_root()));
         let runtime = Arc::new(
             NativeDesktopRuntime::from_paths_with_activity_and_seams_and_update_service(
                 paths,
+                resources,
                 self.activity(),
                 test_seams,
                 self.update_service()
@@ -297,6 +308,15 @@ impl AppState {
             .update_service
             .lock()
             .map_err(|_| "native update service state poisoned".to_string())? = Some(service);
+        Ok(())
+    }
+
+    pub(crate) fn configure_resources(&self, resources: AppResources) -> Result<(), String> {
+        *self
+            .inner
+            .resources
+            .lock()
+            .map_err(|_| "native resource state poisoned".to_string())? = Some(resources);
         Ok(())
     }
 

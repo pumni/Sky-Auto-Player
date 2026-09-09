@@ -378,7 +378,7 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Repository verification — Rust
-        if: needs.changes.outputs.package_required != 'true'
+        if: needs.changes.outputs.code_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo xtask check rust
@@ -750,6 +750,8 @@ jobs:
           try {
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed Tauri executable is missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Tauri uninstaller is missing: $uninstaller" }
+            cargo xtask builtin-catalog verify-installed --root (Join-Path $installRoot "builtin-songs")
+            if ($LASTEXITCODE -ne 0) { throw "Installed built-in catalog verification failed with exit code $LASTEXITCODE" }
             $installedPe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse |
               Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll') -and $_.Name -ne 'uninstall.exe' })
             if ($installedPe.Count -eq 0) { throw "Installed Tauri tree contains no project PE files" }
@@ -758,6 +760,20 @@ jobs:
               -Artifact $installedPe.FullName `
               -Evidence rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
             if ($LASTEXITCODE -ne 0) { throw "Installed Authenticode verification failed with exit code $LASTEXITCODE" }
+            $freshAppData = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-fresh-appdata-" + [guid]::NewGuid().ToString("N"))
+            $env:SKY_APP_DATA_ROOT = $freshAppData
+            $env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST = "1"
+            try {
+              $catalogSelftest = Start-Process -FilePath $appPath -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
+              if ($catalogSelftest.ExitCode -ne 0) { throw "Packaged built-in catalog self-test exited with $($catalogSelftest.ExitCode)" }
+              $userSongs = @(Get-ChildItem -LiteralPath (Join-Path $freshAppData "songs") -File -Recurse -ErrorAction SilentlyContinue)
+              if ($userSongs.Count -ne 0) { throw "Built-in catalog self-test populated the user songs directory" }
+              "Packaged built-in catalog fresh-install self-test: PASS (user songs remain empty; user composition exercised)" | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+            } finally {
+              Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
+              Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST -ErrorAction SilentlyContinue
+              if (Test-Path -LiteralPath $freshAppData) { Remove-Item -LiteralPath $freshAppData -Recurse -Force -ErrorAction SilentlyContinue }
+            }
             $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
             Start-Sleep -Seconds 5
             if ($appProcess.HasExited) { throw "Packaged Tauri application exited during launch smoke (exit $($appProcess.ExitCode))" }

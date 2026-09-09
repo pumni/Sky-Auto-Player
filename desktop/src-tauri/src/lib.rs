@@ -179,6 +179,19 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .setup(move |app| {
+            use tauri::{Manager, path::BaseDirectory};
+
+            match app
+                .path()
+                .resolve("builtin-songs", BaseDirectory::Resource)
+            {
+                Ok(root) => setup_state.configure_resources(
+                    sky_native_adapters::AppResources::from_builtin_catalog_root(root),
+                )?,
+                Err(error) => eprintln!(
+                    "built-in catalog resource resolution unavailable; continuing with user sources: {error}"
+                ),
+            }
             setup_state.configure_update_service(app.handle().clone())?;
             if update_smoke {
                 let app_handle = app.handle().clone();
@@ -391,8 +404,11 @@ pub fn selftest_packaged_shell() -> i32 {
             std::process::exit(2);
         }
     };
+    let resources = sky_native_adapters::AppResources::from_resource_dir(paths.install_root());
+    let selftest_paths = paths.clone();
     let runtime = match native_runtime::NativeDesktopRuntime::from_paths_with_activity_and_seams(
         paths,
+        resources,
         app_state::ActivityCoordinator::default(),
         TestSeams::SafePackage,
     ) {
@@ -427,6 +443,71 @@ pub fn selftest_packaged_shell() -> i32 {
         let bootstrap = runtime.bootstrap()?;
         if bootstrap.native_build.native_build_commit.is_empty() {
             return Err("bootstrap omitted native build identity".into());
+        }
+        let mut catalog_generation = bootstrap.catalog_generation;
+        let builtin_count = match runtime.builtin_catalog_status()? {
+            sky_native_adapters::BuiltinCatalogStatus::Available { song_count }
+                if song_count > 0 =>
+            {
+                song_count
+            }
+            sky_native_adapters::BuiltinCatalogStatus::Available { .. } => {
+                return Err("packaged built-in catalog is empty".into());
+            }
+            sky_native_adapters::BuiltinCatalogStatus::Unavailable { code } => {
+                return Err(format!("packaged built-in catalog unavailable: {code:?}"));
+            }
+        };
+        let initial_catalog: commands::CatalogSearchDto =
+            serde_json::from_value(runtime.dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":200}),
+            )?)
+            .map_err(|error| format!("packaged catalog search response: {error}"))?;
+        if initial_catalog.total as usize != builtin_count {
+            return Err(format!(
+                "packaged All Songs count {} does not match built-in manifest count {builtin_count}",
+                initial_catalog.total
+            ));
+        }
+        if std::env::var_os("SKY_BUILTIN_CATALOG_FRESH_SELFTEST").is_some() {
+            selftest_paths
+                .ensure_mutable_directories()
+                .map_err(|error| format!("fresh packaged app-data setup failed: {error}"))?;
+            if !sky_native_adapters::snapshot_directory(selftest_paths.user_music_root())
+                .map_err(|error| format!("fresh user songs snapshot failed: {error}"))?
+                .is_empty()
+            {
+                return Err("fresh packaged app-data songs directory is not empty".into());
+            }
+            let user_song = selftest_paths.user_music_root().join("packaged-user.json");
+            std::fs::write(
+                &user_song,
+                br#"{"name":"Packaged user","songNotes":[{"time":0,"key":"1Key0"}]}"#,
+            )
+            .map_err(|error| format!("fresh user song write failed: {error}"))?;
+            let reloaded: commands::CatalogReloadDto =
+                serde_json::from_value(runtime.dispatch("catalog.reload", serde_json::json!({}))?)
+                    .map_err(|error| format!("packaged catalog reload response: {error}"))?;
+            let composed: commands::CatalogSearchDto = serde_json::from_value(runtime.dispatch(
+                "catalog.search",
+                serde_json::json!({
+                    "query":"",
+                    "offset":0,
+                    "limit":200,
+                    "generation":reloaded.generation
+                }),
+            )?)
+            .map_err(|error| format!("composed catalog search response: {error}"))?;
+            if composed.total as usize != builtin_count + 1 {
+                return Err(format!(
+                    "All Songs did not compose one user song with built-ins: {}",
+                    composed.total
+                ));
+            }
+            catalog_generation = reloaded.generation;
+            std::fs::remove_file(&user_song)
+                .map_err(|error| format!("fresh user song cleanup failed: {error}"))?;
         }
         let settings: commands::SettingsDto =
             serde_json::from_value(runtime.dispatch("settings.get", serde_json::json!({}))?)
@@ -472,7 +553,7 @@ pub fn selftest_packaged_shell() -> i32 {
                 "query": "",
                 "offset": 0,
                 "limit": 1,
-                "generation": bootstrap.catalog_generation
+                "generation": catalog_generation
             }),
         )?)
         .map_err(|error| format!("catalog.search response: {error}"))?;

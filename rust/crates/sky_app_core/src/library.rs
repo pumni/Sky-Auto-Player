@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SONG_ID_LENGTH: usize = 32;
+pub use crate::catalog::{SONG_ID_LENGTH, is_valid_song_id};
 pub const MAX_LIKED_SONGS: usize = 100_000;
 pub const LIBRARY_MANIFEST_VERSION: u32 = 1;
 pub const COLLECTION_ID_LENGTH: usize = 32;
@@ -458,13 +458,6 @@ fn validate_import_source_id(id: &str) -> Result<(), LibraryError> {
         return Err(LibraryError::InvalidImportSourceId);
     }
     Ok(())
-}
-
-pub fn is_valid_song_id(song_id: &str) -> bool {
-    song_id.len() == SONG_ID_LENGTH
-        && song_id
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 #[cfg(test)]

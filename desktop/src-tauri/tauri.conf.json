@@ -31,6 +31,10 @@
   "bundle": {
     "active": true,
     "icon": ["icons/icon.ico"],
+    "resources": {
+      "../../songs/*": "builtin-songs/sheets",
+      "../../builtin-songs/manifest.json": "builtin-songs/manifest.json"
+    },
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,
     "windows": {

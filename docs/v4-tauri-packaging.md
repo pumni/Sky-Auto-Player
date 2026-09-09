@@ -27,6 +27,33 @@ policy, but it does not block this project's release.
 - Authenticode: `unsigned-zero-budget`; the bounded `signCommand` deliberately performs no signing
 - React updater surface: bounded state, release notes, and progress only
 
+## Immutable built-in catalog qualification
+
+The Tauri bundle maps the repository `songs/` source tree and the committed
+`builtin-songs/manifest.json` into the installer-owned `builtin-songs/` resource
+root. `cargo xtask builtin-catalog verify` is a pure verification command: it
+checks manifest schema and identity rules, exact source membership, supported
+extensions, file hashes, and song parseability. Packaging does not regenerate
+the manifest or assign identities.
+
+The native shell resolves `BaseDirectory::Resource/builtin-songs` and injects
+that path into the native runtime. Built-ins are never copied into
+`AppData/.../songs`; the latter remains the mutable user library. Runtime
+catalog composition is all-or-nothing for the built-in source, records a
+bounded native status on failure, and continues with valid user/imported
+sources.
+
+The canonical current-user package qualification runs the hidden packaged shell
+self-test with a fresh `SKY_APP_DATA_ROOT`. It proves that `All Songs` contains
+exactly the manifest active count while the user `songs/` directory is empty,
+then adds one ordinary user sheet and verifies the composed count before
+cleanup. Before the self-test, qualification runs
+`cargo xtask builtin-catalog verify-installed --root <install>/builtin-songs`
+against the installed tree from that same NSIS candidate. This verifier checks
+the installed manifest schema, active/retired identities, exact declared file
+set, per-song SHA-256, and installed song parsing. A source checkout is not a
+substitute for this installed-resource evidence.
+
 V4 has no portable ZIP updater contract and no bundled
 `Sky-Auto-Player-Updater.exe`. The retired v3 assembler and updater remain
 available only through Git history and the `v3-maintenance` line; they are not
@@ -198,6 +225,15 @@ the reviewed overlap `[old,new]` to cutover `[new]` updater-trust transition aga
 packaged clients. This is a signing-key rotation fixture, not a compatibility path for
 pre-release v4 builds. The same evidence records the ordered native quiesce,
 key-release, state-persistence, and resource-close phases.
+It additionally creates a user-owned song before update N, records its exact
+SHA-256, verifies that the SHA is unchanged after N+1, and runs the installed
+built-in catalog verifier against the N+1 resource tree. This proves that the
+updater replaces immutable install payload without deleting mutable user data.
+The bridge N build uses a valid temporary sentinel for one canonical JSON sheet
+and its manifest hash while retaining the same stable ID; the fixture records
+the installed N manifest/content hashes, restores the canonical source bytes in
+`finally` before building N+1, and requires N+1 to have different manifest and
+content hashes with the same selected stable ID.
 
 ## Acceptance boundary
 
