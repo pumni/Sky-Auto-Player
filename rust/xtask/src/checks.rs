@@ -211,7 +211,61 @@ fn tauri_feature_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn release_authority_contract(root: &Path) -> Result<()> {
+const LEGACY_RELEASE_TOPOLOGY_MARKERS: &[&str] = &[
+    "Sky-Auto-Player-Releases",
+    "V4_RELEASE_AUTHORITY_TOKEN",
+    "V4_RELEASE_AUTHORITY_REPOSITORY",
+    "Invoke-AuthorityApi",
+    "AuthorityTokenEnv",
+    "AuthorityCheckout",
+    "release-authority",
+    "release_authority",
+];
+
+fn find_legacy_release_topology_marker(source: &str) -> Option<&'static str> {
+    LEGACY_RELEASE_TOPOLOGY_MARKERS
+        .iter()
+        .copied()
+        .find(|marker| source.contains(marker))
+}
+
+const ACTIVE_RELEASE_SURFACES: &[&str] = &[
+    "rust/tools/sky_ci_classifier/src/lib.rs",
+    "rust/xtask/src/main.rs",
+    "rust/xtask/src/release_metadata.rs",
+    "scripts/v4_release_pipeline.ps1",
+    "scripts/promote_v4_metadata.ps1",
+    "scripts/orchestrate_v4_production_release.ps1",
+    "scripts/ci_tauri_update_e2e_core.ps1",
+    ".github/workflows/release.yml",
+    ".github/workflows/release-v4.yml",
+    ".github/workflows/rehearse-v4-production-topology.yml",
+    "desktop/src-tauri/src/native_update.rs",
+    "desktop/src-tauri/tauri.conf.json",
+    "desktop/src-tauri/Cargo.toml",
+];
+
+fn active_release_surface_source<'a>(path: &Path, source: &'a str) -> &'a str {
+    if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+        source
+            .split_once("\n#[cfg(test)]")
+            .map_or(source, |(production, _)| production)
+    } else {
+        source
+    }
+}
+
+fn validate_active_release_surface(relative: &str, source: &str) -> Result<()> {
+    if let Some(forbidden) = find_legacy_release_topology_marker(source) {
+        return Err(format!(
+            "legacy release-topology marker `{forbidden}` remains in active surface {relative}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn release_metadata_contract(root: &Path) -> Result<()> {
     let native_path = root.join("desktop/src-tauri/src/native_update.rs");
     let native = fs::read_to_string(&native_path)?;
     for marker in [
@@ -224,7 +278,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
     ] {
         if !native.contains(marker) {
             return Err(format!(
-                "Rust updater authority is missing the fixed v4 contract marker: {marker}"
+                "Rust updater release metadata is missing the fixed v4 contract marker: {marker}"
             )
             .into());
         }
@@ -237,13 +291,13 @@ fn release_authority_contract(root: &Path) -> Result<()> {
     ] {
         if native.contains(forbidden) {
             return Err(format!(
-                "Rust v4 updater authority contains a forbidden fallback/injection marker: {forbidden}"
+                "Rust v4 updater release metadata contains a forbidden fallback/injection marker: {forbidden}"
             )
             .into());
         }
     }
 
-    let generator_path = root.join("rust/xtask/src/release_authority.rs");
+    let generator_path = root.join("rust/xtask/src/release_metadata.rs");
     let generator = fs::read_to_string(&generator_path)?;
     for marker in [
         "RELEASE_REPOSITORY: &str = \"pumni/Sky-Auto-Player\"",
@@ -274,10 +328,19 @@ fn release_authority_contract(root: &Path) -> Result<()> {
     ] {
         if generator.contains(forbidden) {
             return Err(format!(
-                "v4 metadata generator contains a forbidden authority marker: {forbidden}"
+                "v4 metadata generator contains a forbidden legacy repository marker: {forbidden}"
             )
             .into());
         }
+    }
+
+    for relative in ACTIVE_RELEASE_SURFACES {
+        let path = root.join(relative);
+        let source = fs::read_to_string(&path)?;
+        // Keep the guard focused on executable/active release surfaces. Rust
+        // regression fixtures may name retired paths explicitly so the
+        // classifier contract can prove they are not registered anymore.
+        validate_active_release_surface(relative, active_release_surface_source(&path, &source))?;
     }
 
     let bundle_path = root.join("rust/xtask/src/tauri_bundle.rs");
@@ -307,7 +370,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
     ] {
         if !acceptance.contains(marker) {
             return Err(format!(
-                "v4 release authority acceptance is missing its read-only marker: {marker}"
+                "v4 release contract acceptance is missing its read-only marker: {marker}"
             )
             .into());
         }
@@ -320,7 +383,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
     ] {
         if acceptance.contains(forbidden) {
             return Err(format!(
-                "read-only v4 authority acceptance contains a release mutation: {forbidden}"
+                "read-only v4 release contract acceptance contains a release mutation: {forbidden}"
             )
             .into());
         }
@@ -334,7 +397,7 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "[ValidateSet(\"stable\", \"beta\")]",
         "$canonicalRepository = \"pumni/Sky-Auto-Player\"",
         "$QualificationEvidence",
-        "release-authority validate --channel $Channel",
+        "release-metadata validate --channel $Channel",
         "releases/tags/v$version",
         "published_at",
         "installer_sha256",
@@ -389,11 +452,11 @@ fn release_authority_contract(root: &Path) -> Result<()> {
     ] {
         if !ci.contains(marker) {
             return Err(
-                format!("CI is missing the v4 release authority gate marker: {marker}").into(),
+                format!("CI is missing the v4 release contract gate marker: {marker}").into(),
             );
         }
     }
-    println!("[xtask] v4 release authority contract: PASS");
+    println!("[xtask] v4 release metadata contract: PASS");
     Ok(())
 }
 
@@ -521,7 +584,7 @@ fn v4_release_pipeline_contract_source(
         "active-playback-install-rejected",
         "ci_v4_release_latest_guard.ps1",
         "promote_v4_metadata.ps1",
-        "release-authority",
+        "release-metadata",
         "published_at",
         "draft = $true",
         "draft = $false",
@@ -628,7 +691,7 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     ] {
         if topology_workflow.contains(forbidden) {
             return Err(format!(
-                "production-topology rehearsal workflow contains an authority mutation marker: {forbidden}"
+                "production-topology rehearsal workflow contains a legacy release mutation marker: {forbidden}"
             )
             .into());
         }
@@ -2494,7 +2557,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
             v4_trust_material_contract(&root)?;
-            release_authority_contract(&root)?;
+            release_metadata_contract(&root)?;
             v4_release_pipeline_contract(&root)?;
             packaged_ci_contract(&root)?;
             v4_legacy_updater_retirement(&root)?;
@@ -2753,7 +2816,7 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
     }
 
     #[test]
-    fn release_authority_contract_requires_rust_owned_channels_and_read_only_acceptance() {
+    fn release_metadata_contract_requires_rust_owned_channels_and_read_only_acceptance() {
         let native = r#"
 const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json";
 const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json";
@@ -2784,6 +2847,55 @@ read_only=true
         assert!(acceptance.contains("legacy Latest guard"));
         assert!(acceptance.contains("releases/latest"));
         assert!(!acceptance.contains("gh release create"));
+    }
+
+    #[test]
+    fn release_metadata_negative_guard_rejects_legacy_topology_markers() {
+        for marker in LEGACY_RELEASE_TOPOLOGY_MARKERS {
+            assert_eq!(find_legacy_release_topology_marker(marker), Some(*marker));
+        }
+        assert_eq!(
+            find_legacy_release_topology_marker(
+                "canonical release-metadata contract and same-repository pipeline"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn release_metadata_negative_guard_covers_runtime_and_release_surfaces() {
+        for surface in [
+            "desktop/src-tauri/src/native_update.rs",
+            "desktop/src-tauri/tauri.conf.json",
+            ".github/workflows/rehearse-v4-production-topology.yml",
+        ] {
+            assert!(ACTIVE_RELEASE_SURFACES.contains(&surface));
+        }
+
+        let runtime_error = validate_active_release_surface(
+            "desktop/src-tauri/src/native_update.rs",
+            "const ENDPOINT = \"https://github.com/pumni/Sky-Auto-Player-Releases/releases\";",
+        )
+        .expect_err("legacy repository marker must be rejected in the updater runtime surface");
+        assert!(runtime_error.to_string().contains("native_update.rs"));
+
+        let config_error = validate_active_release_surface(
+            "desktop/src-tauri/tauri.conf.json",
+            "V4_RELEASE_AUTHORITY_REPOSITORY",
+        )
+        .expect_err("legacy authority marker must be rejected in updater configuration");
+        assert!(config_error.to_string().contains("tauri.conf.json"));
+
+        let workflow_error = validate_active_release_surface(
+            ".github/workflows/rehearse-v4-production-topology.yml",
+            "AuthorityCheckout",
+        )
+        .expect_err("legacy authority marker must be rejected in release workflow surfaces");
+        assert!(
+            workflow_error
+                .to_string()
+                .contains("rehearse-v4-production-topology.yml")
+        );
     }
 
     #[test]
@@ -2830,7 +2942,7 @@ function Invoke-BuildCandidate {
 }
 function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; make_latest = $false; GitHub's successful DELETE endpoints return an empty body }
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
-function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-authority; published_at; Start-MpScan; scan_performed }
+function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { GH_TOKEN }
 function Invoke-PublishDraft { draft = $false; make_latest = $false }
 function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication; branch = "release-metadata"; GITHUB_REPOSITORY; Invoke-GitHubApi }

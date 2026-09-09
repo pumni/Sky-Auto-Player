@@ -6,7 +6,7 @@ mod checks;
 mod classifier;
 mod hash;
 mod process;
-mod release_authority;
+mod release_metadata;
 mod repo;
 mod sbom;
 mod supply_chain;
@@ -20,7 +20,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-authority validate-monotonic --channel <stable|beta> --current <path> --candidate <path>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -318,7 +318,7 @@ fn main() -> Result<()> {
                 Path::new(&payload),
             )
         }
-        "release-authority" => match args.get(1).map(String::as_str) {
+        "release-metadata" => match args.get(1).map(String::as_str) {
             Some("generate") => {
                 let mut channel = None;
                 let mut version = None;
@@ -352,45 +352,45 @@ fn main() -> Result<()> {
                         "--output" => output = Some(required_value(&args, &mut i, "--output")?),
                         option => {
                             return Err(format!(
-                                "unknown release-authority generate option: {option}"
+                                "unknown release-metadata generate option: {option}"
                             )
                             .into());
                         }
                     }
                     i += 1;
                 }
-                release_authority::generate(release_authority::GenerateInput {
-                    channel: release_authority::Channel::parse(
+                release_metadata::generate(release_metadata::GenerateInput {
+                    channel: release_metadata::Channel::parse(
                         channel
                             .as_deref()
-                            .ok_or("release-authority generate requires --channel <stable|beta>")?,
+                            .ok_or("release-metadata generate requires --channel <stable|beta>")?,
                     )?,
                     version: version
                         .as_deref()
-                        .ok_or("release-authority generate requires --version <semver>")?,
+                        .ok_or("release-metadata generate requires --version <semver>")?,
                     notes_path: Path::new(
                         notes_file
                             .as_deref()
-                            .ok_or("release-authority generate requires --notes-file <path>")?,
+                            .ok_or("release-metadata generate requires --notes-file <path>")?,
                     ),
                     pub_date: pub_date
                         .as_deref()
-                        .ok_or("release-authority generate requires --pub-date <rfc3339>")?,
+                        .ok_or("release-metadata generate requires --pub-date <rfc3339>")?,
                     platform: platform
                         .as_deref()
-                        .ok_or("release-authority generate requires --platform windows-x86_64")?,
+                        .ok_or("release-metadata generate requires --platform windows-x86_64")?,
                     asset_url: asset_url
                         .as_deref()
-                        .ok_or("release-authority generate requires --asset-url <url>")?,
+                        .ok_or("release-metadata generate requires --asset-url <url>")?,
                     signature_path: Path::new(
                         signature_file
                             .as_deref()
-                            .ok_or("release-authority generate requires --signature-file <path>")?,
+                            .ok_or("release-metadata generate requires --signature-file <path>")?,
                     ),
                     output: Path::new(
                         output
                             .as_deref()
-                            .ok_or("release-authority generate requires --output <path>")?,
+                            .ok_or("release-metadata generate requires --output <path>")?,
                     ),
                 })
             }
@@ -406,23 +406,23 @@ fn main() -> Result<()> {
                         }
                         option => {
                             return Err(format!(
-                                "unknown release-authority validate option: {option}"
+                                "unknown release-metadata validate option: {option}"
                             )
                             .into());
                         }
                     }
                     i += 1;
                 }
-                release_authority::validate(
-                    release_authority::Channel::parse(
+                release_metadata::validate(
+                    release_metadata::Channel::parse(
                         channel
                             .as_deref()
-                            .ok_or("release-authority validate requires --channel <stable|beta>")?,
+                            .ok_or("release-metadata validate requires --channel <stable|beta>")?,
                     )?,
                     Path::new(
                         metadata
                             .as_deref()
-                            .ok_or("release-authority validate requires --metadata <path>")?,
+                            .ok_or("release-metadata validate requires --metadata <path>")?,
                     ),
                 )
             }
@@ -440,28 +440,28 @@ fn main() -> Result<()> {
                         }
                         option => {
                             return Err(format!(
-                                "unknown release-authority validate-monotonic option: {option}"
+                                "unknown release-metadata validate-monotonic option: {option}"
                             )
                             .into());
                         }
                     }
                     i += 1;
                 }
-                release_authority::validate_monotonic(
-                    release_authority::Channel::parse(channel.as_deref().ok_or(
-                        "release-authority validate-monotonic requires --channel <stable|beta>",
+                release_metadata::validate_monotonic(
+                    release_metadata::Channel::parse(channel.as_deref().ok_or(
+                        "release-metadata validate-monotonic requires --channel <stable|beta>",
                     )?)?,
                     Path::new(
                         current.as_deref().ok_or(
-                            "release-authority validate-monotonic requires --current <path>",
+                            "release-metadata validate-monotonic requires --current <path>",
                         )?,
                     ),
                     Path::new(candidate.as_deref().ok_or(
-                        "release-authority validate-monotonic requires --candidate <path>",
+                        "release-metadata validate-monotonic requires --candidate <path>",
                     )?),
                 )
             }
-            _ => Err("release-authority requires generate, validate, or validate-monotonic".into()),
+            _ => Err("release-metadata requires generate, validate, or validate-monotonic".into()),
         },
         _ => {
             eprintln!("{}", usage());

@@ -364,7 +364,7 @@ try {
     notes = 'Deterministic bridge rotation candidate.'
     pub_date = '2026-09-04T00:00:00Z'
     platforms = [ordered]@{
-      # Match the production release-authority manifest exactly. Tauri's
+      # Match the production release metadata manifest exactly. Tauri's
       # updater accepts this platform key and falls back from the bundle
       # specific target when the packaged runtime does not expose it.
       'windows-x86_64' = [ordered]@{

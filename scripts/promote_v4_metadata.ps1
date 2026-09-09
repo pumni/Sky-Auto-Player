@@ -301,7 +301,7 @@ $evidenceDigests = $null
 $sourceRoot = (Resolve-Path -LiteralPath $SourceCheckout).Path
 $metadataPath = (Resolve-Path -LiteralPath $Metadata).Path
 $validation = & cargo run --manifest-path (Join-Path $sourceRoot "rust/Cargo.toml") --locked -p sky_xtask -- `
-    release-authority validate --channel $Channel --metadata $metadataPath
+    release-metadata validate --channel $Channel --metadata $metadataPath
 if ($LASTEXITCODE -ne 0) { throw "v4 metadata structural validation failed" }
 
 $evidenceDigests = Assert-QualificationEvidence $evidence $version $expectedInstaller $expectedSignature
@@ -341,7 +341,7 @@ $destinationParent = Split-Path -Parent $destination
 New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
 if (Test-Path -LiteralPath $destination -PathType Leaf) {
     $monotonic = & cargo run --manifest-path (Join-Path $sourceRoot "rust/Cargo.toml") --locked -p sky_xtask -- `
-        release-authority validate-monotonic --channel $Channel --current $destination --candidate $metadata 2>&1
+        release-metadata validate-monotonic --channel $Channel --current $destination --candidate $metadata 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "existing release-metadata channel is not a valid strict SemVer roll-forward: $($monotonic -join "`n")"
     }

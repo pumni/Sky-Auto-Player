@@ -31,9 +31,12 @@ foreach ($source in @(
     foreach ($forbidden in @(
         "Sky-Auto-Player-Releases",
         "V4_RELEASE_AUTHORITY_TOKEN",
+        "V4_RELEASE_AUTHORITY_REPOSITORY",
         "Invoke-AuthorityApi",
         "AuthorityTokenEnv",
-        "AuthorityCheckout"
+        "AuthorityCheckout",
+        "release-authority",
+        "release_authority"
     )) {
         if ($source.Text.Contains($forbidden)) {
             Fail "$($source.Name) retains forbidden two-repository marker: $forbidden"
@@ -414,7 +417,7 @@ foreach ($forbidden in @(
     'softprops/action-gh-release'
 )) {
     if ($topologyWorkflow.Contains($forbidden)) {
-        Fail "production-topology rehearsal workflow contains an authority mutation marker: $forbidden"
+        Fail "production-topology rehearsal workflow contains a legacy release-topology marker: $forbidden"
     }
 }
 $stateRootInit = $workflow.IndexOf('- name: Initialize release state root', [StringComparison]::Ordinal)
@@ -729,7 +732,7 @@ $recs = @(
 
 # Safe release asset name contract regression tests
 function Test-SafeReleaseAssetNameContract {
-    # 1. Source installer name with spaces maps to deterministic safe authority name
+    # 1. Source installer name with spaces maps to deterministic safe release name
     $sourceInstaller = "Sky Auto Player_4.0.0-rc.1_x64-setup.exe"
     $safeInstaller = Get-V4SafeReleaseAssetName $sourceInstaller
     if ($safeInstaller -ne "Sky.Auto.Player_4.0.0-rc.1_x64-setup.exe") {
@@ -741,7 +744,7 @@ function Test-SafeReleaseAssetNameContract {
         Fail "Get-V4SafeReleaseAssetName did not map signature name spaces to dots"
     }
 
-    # 2. Source and authority records keep identical SHA and size
+    # 2. Source and release records keep identical SHA and size
     $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-record-test-" + [guid]::NewGuid().ToString("N"))
     try {
         New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -759,7 +762,7 @@ function Test-SafeReleaseAssetNameContract {
             sha256 = $fileSha
         }
         if ($rec.size -ne [int64]$testBytes.Length -or $rec.sha256 -ne $fileSha) {
-            Fail "source and authority record sizes or SHA-256 digests do not match"
+            Fail "source and release record sizes or SHA-256 digests do not match"
         }
         if ($rec.source_name -ne $sourceInstaller -or $rec.release_name -ne $safeInstaller) {
             Fail "record does not cleanly separate source_name from release_name"
@@ -791,7 +794,7 @@ function Test-SafeReleaseAssetNameContract {
         }
     }
 
-    # 5. Authority-name collision fails before CreateDraft
+    # 5. Release-name collision fails before CreateDraft
     if ($pipeline -notmatch 'release asset name collision detected') {
         Fail "pipeline must contain release asset name collision check before CreateDraft"
     }
@@ -813,7 +816,7 @@ function Test-SafeReleaseAssetNameContract {
         Copy-Item -LiteralPath $dlFile -Destination $stagedFile
         $stagedHash = (Get-FileHash -LiteralPath $stagedFile -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($stagedHash -ne $dlHash) {
-            Fail "staging safe authority name into source bundle mutated file bytes"
+            Fail "staging safe release name into source bundle mutated file bytes"
         }
         if ((Get-Item -LiteralPath $stagedFile).Name -ne $sourceInstaller) {
             Fail "staged file name does not match expected source installer name"
