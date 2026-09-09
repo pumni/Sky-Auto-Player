@@ -1019,8 +1019,9 @@ fn v4_release_pipeline_contract_source(
         "Invoke-GitHubApi",
         "v4_release_asset_upload.ps1",
         "upload_url",
-        "immutable-releases",
         "Assert-ImmutableRelease",
+        "Assert-ImmutableRelease $published",
+        "repository release is not marked immutable",
         "ci_tauri_update_e2e.ps1",
         "CandidateInstallerPath",
         "CandidateSignaturePath",
@@ -1052,6 +1053,27 @@ fn v4_release_pipeline_contract_source(
                 format!("v4 release coordinator is missing its required marker: {marker}").into(),
             );
         }
+    }
+    if pipeline.contains("repos/$repository/immutable-releases") {
+        return Err(
+            "ValidateRepository must not call the administration-only immutable-releases endpoint"
+                .into(),
+        );
+    }
+    let publish_position = pipeline
+        .find("function Invoke-PublishDraft")
+        .ok_or("v4 release coordinator is missing the publication state")?;
+    let immutable_guard_position = pipeline
+        .find("Assert-ImmutableRelease $published")
+        .ok_or("v4 release coordinator is missing the published immutable-release guard")?;
+    let promote_position = pipeline
+        .find("function Invoke-PromoteMetadata")
+        .ok_or("v4 release coordinator is missing the metadata promotion state")?;
+    if immutable_guard_position < publish_position || immutable_guard_position > promote_position {
+        return Err(
+            "published immutable-release verification must remain after publication and before metadata promotion"
+                .into(),
+        );
     }
     let draft_boundary = pipeline
         .find("function Invoke-CreateDraft")
@@ -3772,7 +3794,7 @@ function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
 function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; freshUserSongs = @(; Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { GH_TOKEN }
-function Invoke-PublishDraft { draft = $false; make_latest = $false }
+function Invoke-PublishDraft { draft = $false; make_latest = $false; Assert-ImmutableRelease $published; repository release is not marked immutable }
 function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication; branch = "release-metadata"; GITHUB_REPOSITORY; Invoke-GitHubApi }
 function Invoke-FinalVerify { FinalVerify }
 "#;

@@ -378,7 +378,9 @@ foreach ($marker in @(
     'GitHub''s successful DELETE endpoints return an empty body',
     'Get-FileHash', 'verify-signature', 'sbom', 'verify-tauri-bundle',
     'current-user', 'active-playback-install-rejected', 'upload_url',
-    'immutable-releases', 'Assert-ImmutableRelease', 'Start-MpScan',
+    'Assert-ImmutableRelease $published', 'repository release is not marked immutable',
+    'V4 immutable publication guard self-test', 'immutable=false rejected',
+    'Start-MpScan',
     'previous-v4-to-exact-downloaded-candidate-update',
     'selftest-update-active-playback', 'scan_performed',
     'cargo xtask builtin-catalog verify-installed',
@@ -399,6 +401,13 @@ foreach ($marker in @(
     '(?m)^# [^\r\n]+(?=\r?$)'
 )) {
     if (-not $pipeline.Contains($marker)) { Fail "pipeline marker is missing: $marker" }
+}
+if ($pipeline.Contains('repos/$repository/immutable-releases')) {
+    Fail "ValidateRepository must not call the administration-only immutable-releases endpoint"
+}
+$pipelineSelfTestOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $pipelinePath -State SelfTest 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0 -or $pipelineSelfTestOutput -notmatch 'immutable=false rejected; immutable=true accepted') {
+    Fail "pipeline immutable publication guard self-test did not reject immutable=false"
 }
 foreach ($marker in @(
     'function Get-SanitizedReleaseProbeOutput',
