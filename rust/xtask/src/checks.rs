@@ -1,4 +1,4 @@
-use crate::{Result, audits, branding, process, repo, supply_chain, tauri_bundle};
+use crate::{Result, audits, branding, builtin_catalog, process, repo, supply_chain, tauri_bundle};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use minisign_verify::PublicKey;
 use serde_json::Value;
@@ -2935,6 +2935,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             }
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
+            builtin_catalog::run(&root, "verify", &[])?;
             v4_trust_material_contract(&root)?;
             release_metadata_contract(&root)?;
             release_runner_contract(&root)?;

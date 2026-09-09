@@ -38,6 +38,33 @@ pub const LOGS_SUBDIR: &str = "logs";
 /// Default subdirectory name for user music under the app-data root.
 pub const DEFAULT_SONGS_SUBDIR: &str = "songs";
 
+/// Installer-owned immutable resources resolved by the Tauri shell.  This is
+/// deliberately separate from `AppPaths`, whose roots are mutable/user-owned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppResources {
+    builtin_catalog_root: PathBuf,
+}
+
+impl AppResources {
+    pub fn from_builtin_catalog_root(root: PathBuf) -> Self {
+        Self {
+            builtin_catalog_root: root,
+        }
+    }
+
+    pub fn from_resource_dir(resource_dir: impl AsRef<Path>) -> Self {
+        Self::from_builtin_catalog_root(resource_dir.as_ref().join("builtin-songs"))
+    }
+
+    pub fn builtin_catalog_root(&self) -> &Path {
+        &self.builtin_catalog_root
+    }
+
+    pub fn builtin_catalog_manifest_path(&self) -> PathBuf {
+        self.builtin_catalog_root.join("manifest.json")
+    }
+}
+
 /// Canonical typed directory and path authority for Sky Auto Player v4.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPaths {

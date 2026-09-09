@@ -104,6 +104,7 @@ fn catalog_fixture_preserves_ids_order_normalization_and_generation() {
         Some(CatalogSourceEntry {
             canonical_path: path.into(),
             title,
+            identity: sky_app_core::catalog::CatalogSourceIdentity::PathDerived,
         })
     });
     let snapshot = index.replace_entries(entries).expect("catalog index");

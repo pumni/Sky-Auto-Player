@@ -44,12 +44,13 @@ use sky_app_core::song::{
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_native_adapters::{
-    AppPaths, CALIBRATION_ARTIFACT_SCHEMA_VERSION, CALIBRATION_CACHE_VERSION,
-    CALIBRATION_EVIDENCE_KIND, CALIBRATION_HOST_FINGERPRINT_VERSION, CALIBRATION_MAX_SHRINK_US,
+    AppPaths, AppResources, BuiltinCatalogSource, BuiltinCatalogStatus,
+    CALIBRATION_ARTIFACT_SCHEMA_VERSION, CALIBRATION_CACHE_VERSION, CALIBRATION_EVIDENCE_KIND,
+    CALIBRATION_HOST_FINGERPRINT_VERSION, CALIBRATION_MAX_SHRINK_US,
     CALIBRATION_MEASUREMENT_PROTOCOL_VERSION, CALIBRATION_NATIVE_VERSION,
     CALIBRATION_REQUIRED_BUCKETS, CALIBRATION_SAMPLE_COUNT, CALIBRATION_SOURCE_FORMULA_VERSION,
-    CatalogComposition, FileCatalogSource, ImportedSourceCatalogStatus, JsonLibraryManifestStore,
-    JsonSettingsStore, load_calibration_resolution,
+    CatalogComposer, CatalogComposition, FileCatalogSource, ImportedSourceCatalogStatus,
+    JsonLibraryManifestStore, JsonSettingsStore, load_calibration_resolution,
 };
 use sky_player::adapter_support::{
     ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
@@ -1297,7 +1298,7 @@ pub(crate) struct NativeDesktopRuntime {
     paths: AppPaths,
     settings: Mutex<SettingsService<JsonSettingsStore>>,
     library_manifest: Mutex<LibraryManifestService<JsonLibraryManifestStore>>,
-    catalog_source: FileCatalogSource,
+    catalog_composer: CatalogComposer,
     catalog: Mutex<CatalogState>,
     analysis_cache: Mutex<HashMap<String, CachedSongAnalysis>>,
     events: Arc<Mutex<NativeEventHub>>,
@@ -1329,9 +1330,12 @@ pub(crate) struct NativeLibraryImportRequest {
 #[derive(Default)]
 struct CatalogState {
     index: CatalogIndex,
-    primary_membership: BTreeSet<String>,
+    library_membership: BTreeSet<String>,
+    builtin_membership: BTreeSet<String>,
+    user_membership: BTreeSet<String>,
     imported_membership: HashMap<String, BTreeSet<String>>,
     imported_status: Vec<ImportedSourceCatalogStatus>,
+    builtin_status: BuiltinCatalogStatus,
 }
 
 impl CatalogMetadata {
@@ -1356,8 +1360,10 @@ impl NativeDesktopRuntime {
     #[allow(dead_code)]
     pub(crate) fn for_current_install() -> Result<Self, String> {
         let paths = AppPaths::resolve()?;
+        let resources = AppResources::from_resource_dir(paths.install_root());
         Self::from_paths_with_activity_and_seams(
             paths,
+            resources,
             ActivityCoordinator::default(),
             TestSeams::Disabled,
         )
@@ -1378,7 +1384,8 @@ impl NativeDesktopRuntime {
         activity: ActivityCoordinator,
     ) -> Result<Self, String> {
         let paths = AppPaths::resolve()?;
-        Self::from_paths_with_activity_and_seams(paths, activity, TestSeams::Disabled)
+        let resources = AppResources::from_resource_dir(paths.install_root());
+        Self::from_paths_with_activity_and_seams(paths, resources, activity, TestSeams::Disabled)
     }
 
     #[allow(dead_code)]
@@ -1392,26 +1399,29 @@ impl NativeDesktopRuntime {
 
     pub(crate) fn from_paths_with_activity_and_seams(
         paths: AppPaths,
+        resources: AppResources,
         activity: ActivityCoordinator,
         test_seams: TestSeams,
     ) -> Result<Self, String> {
         Self::from_paths_with_activity_and_seams_and_update_service(
-            paths, activity, test_seams, None,
+            paths, resources, activity, test_seams, None,
         )
     }
 
     pub(crate) fn from_paths_with_activity_and_seams_and_update_service(
         paths: AppPaths,
+        resources: AppResources,
         activity: ActivityCoordinator,
         test_seams: TestSeams,
         update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
     ) -> Result<Self, String> {
         paths.assert_clean_boundary()?;
-        Self::from_paths_internal(paths, activity, test_seams, update_service)
+        Self::from_paths_internal(paths, resources, activity, test_seams, update_service)
     }
 
     fn from_paths_internal(
         paths: AppPaths,
+        resources: AppResources,
         activity: ActivityCoordinator,
         test_seams: TestSeams,
         update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
@@ -1461,7 +1471,10 @@ impl NativeDesktopRuntime {
             paths,
             settings: Mutex::new(settings),
             library_manifest: Mutex::new(library_manifest),
-            catalog_source: FileCatalogSource::new(songs_dir),
+            catalog_composer: CatalogComposer::new(
+                BuiltinCatalogSource::new(resources),
+                FileCatalogSource::new(songs_dir),
+            ),
             catalog: Mutex::new(CatalogState::default()),
             analysis_cache: Mutex::new(HashMap::new()),
             events,
@@ -1489,7 +1502,8 @@ impl NativeDesktopRuntime {
             install_root.join("logs"),
             install_root.join("songs"),
         );
-        Self::from_paths_internal(paths, activity, test_seams, None)
+        let resources = AppResources::from_resource_dir(&install_root);
+        Self::from_paths_internal(paths, resources, activity, test_seams, None)
     }
 
     #[allow(dead_code)]
@@ -1822,9 +1836,12 @@ impl NativeDesktopRuntime {
                     .index
                     .replace_entries(composition.entries)
                     .map_err(catalog_error)?;
-                catalog.primary_membership = composition.primary_membership;
+                catalog.library_membership = composition.library_membership;
+                catalog.builtin_membership = composition.builtin_membership;
+                catalog.user_membership = composition.user_membership;
                 catalog.imported_membership = composition.imported_membership;
                 catalog.imported_status = composition.imported_status;
+                catalog.builtin_status = composition.builtin_status;
                 return Ok(snapshot);
             }
         }
@@ -1844,35 +1861,46 @@ impl NativeDesktopRuntime {
             .index
             .replace_entries(composition.entries)
             .map_err(catalog_error)?;
-        catalog.primary_membership = composition.primary_membership;
+        catalog.library_membership = composition.library_membership;
+        catalog.builtin_membership = composition.builtin_membership;
+        catalog.user_membership = composition.user_membership;
         catalog.imported_membership = composition.imported_membership;
         catalog.imported_status = composition.imported_status;
+        catalog.builtin_status = composition.builtin_status;
         drop(catalog);
         self.invalidate_analysis_cache();
         self.playback.invalidate_catalog(snapshot.generation);
-        let primary_total = self.primary_catalog_total(snapshot.generation)?;
+        let library_total = self.library_catalog_total(snapshot.generation)?;
         self.publish(UiEvent::CatalogChanged {
             v: crate::DESKTOP_PROTOCOL_VERSION,
             payload: CatalogChangedPayload {
                 generation: snapshot.generation,
-                total: primary_total as u64,
+                total: library_total as u64,
             },
         })?;
         Ok(CatalogReloadDto {
             generation: snapshot.generation,
-            total: primary_total as u64,
+            total: library_total as u64,
         })
     }
 
-    fn primary_catalog_total(&self, generation: u64) -> Result<usize, String> {
+    fn library_catalog_total(&self, generation: u64) -> Result<usize, String> {
         let catalog = self
             .catalog
             .lock()
             .map_err(|_| "native catalog lock poisoned".to_string())?;
         catalog
             .index
-            .count_allowed_ids(&catalog.primary_membership, Some(generation))
+            .count_allowed_ids(&catalog.library_membership, Some(generation))
             .map_err(catalog_error)
+    }
+
+    pub(crate) fn builtin_catalog_status(&self) -> Result<BuiltinCatalogStatus, String> {
+        self.ensure_catalog_loaded()?;
+        self.catalog
+            .lock()
+            .map_err(|_| "native catalog lock poisoned".to_string())
+            .map(|catalog| catalog.builtin_status.clone())
     }
 
     fn catalog_composition(&self) -> Result<CatalogComposition, String> {
@@ -1883,8 +1911,8 @@ impl NativeDesktopRuntime {
             .snapshot()
             .imports
             .clone();
-        self.catalog_source
-            .catalog_composition_with_imports(&imports)
+        self.catalog_composer
+            .compose(&imports)
             .map_err(catalog_error)
     }
 
@@ -2034,8 +2062,8 @@ impl NativeDesktopRuntime {
         // Resolve the selected native paths before touching the manifest. The
         // resulting IDs are opaque and path-free at the application boundary.
         let composition = self
-            .catalog_source
-            .catalog_composition_with_imports(&imports)
+            .catalog_composer
+            .compose(&imports)
             .map_err(catalog_error)?;
         let song_ids = imports
             .iter()
@@ -2088,7 +2116,7 @@ impl NativeDesktopRuntime {
                     .catalog
                     .lock()
                     .map_err(|_| "native catalog lock poisoned".to_string())?;
-                Some(catalog.primary_membership.clone())
+                Some(catalog.library_membership.clone())
             }
             LibrarySource::Playlist { id } => {
                 if !sky_app_core::library::is_valid_collection_id(id) {
@@ -6582,6 +6610,7 @@ mod tests {
 
         let runtime = NativeDesktopRuntime::from_paths_with_activity_and_seams(
             paths.clone(),
+            sky_native_adapters::AppResources::from_resource_dir(&install_root),
             ActivityCoordinator::default(),
             TestSeams::SafePackage,
         )

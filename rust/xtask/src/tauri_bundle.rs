@@ -86,6 +86,21 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
     if targets.len() != 1 || targets[0].as_str() != Some(NSIS_TARGET) {
         return Err("Tauri bundle.targets must contain only nsis for v4.0".into());
     }
+    let resources = bundle
+        .get("resources")
+        .and_then(Value::as_object)
+        .ok_or("Tauri bundle.resources must map the immutable built-in catalog")?;
+    if resources.len() != 2
+        || resources.get("../../songs/*").and_then(Value::as_str) != Some("builtin-songs/sheets")
+        || resources
+            .get("../../builtin-songs/manifest.json")
+            .and_then(Value::as_str)
+            != Some("builtin-songs/manifest.json")
+    {
+        return Err(
+            "Tauri bundle.resources must map songs and the built-in manifest exactly".into(),
+        );
+    }
     let windows = bundle
         .get("windows")
         .and_then(Value::as_object)

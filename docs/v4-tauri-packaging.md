@@ -27,6 +27,29 @@ policy, but it does not block this project's release.
 - Authenticode: `unsigned-zero-budget`; the bounded `signCommand` deliberately performs no signing
 - React updater surface: bounded state, release notes, and progress only
 
+## Immutable built-in catalog qualification
+
+The Tauri bundle maps the repository `songs/` source tree and the committed
+`builtin-songs/manifest.json` into the installer-owned `builtin-songs/` resource
+root. `cargo xtask builtin-catalog verify` is a pure verification command: it
+checks manifest schema and identity rules, exact source membership, supported
+extensions, file hashes, and song parseability. Packaging does not regenerate
+the manifest or assign identities.
+
+The native shell resolves `BaseDirectory::Resource/builtin-songs` and injects
+that path into the native runtime. Built-ins are never copied into
+`AppData/.../songs`; the latter remains the mutable user library. Runtime
+catalog composition is all-or-nothing for the built-in source, records a
+bounded native status on failure, and continues with valid user/imported
+sources.
+
+The canonical current-user package qualification runs the hidden packaged shell
+self-test with a fresh `SKY_APP_DATA_ROOT`. It proves that `All Songs` contains
+exactly the manifest active count while the user `songs/` directory is empty,
+then adds one ordinary user sheet and verifies the composed count before
+cleanup. This evidence is executed against the installed files from the same
+NSIS candidate; a source checkout is not a substitute.
+
 V4 has no portable ZIP updater contract and no bundled
 `Sky-Auto-Player-Updater.exe`. The retired v3 assembler and updater remain
 available only through Git history and the `v3-maintenance` line; they are not
