@@ -1245,6 +1245,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
         "SBOM verification failed with exit code",
         "Tauri bundle verification failed with exit code",
         "Installed Authenticode verification failed with exit code",
+        "cargo xtask builtin-catalog verify-installed",
         "CI self-signed credentials remain test-only",
         "Tauri updater signer generation failed with exit code",
         "Tauri build failed with exit code",
@@ -2944,6 +2945,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             v4_legacy_updater_retirement(&root)?;
         }
         "rust" => {
+            builtin_catalog::run(&root, "verify", &[])?;
             // The canonical Windows qualification runs workspace tests in a
             // restricted environment.  Keep process-global test fixtures
             // deterministic there; this does not change product concurrency.
@@ -3522,6 +3524,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         # Tauri bundle verification failed with exit code
       - name: Qualify current-user install, launch, and uninstall
         run: check sky_desktop_shell.exe uninstall.exe
+      - run: cargo xtask builtin-catalog verify-installed --root installed/builtin-songs
       - name: Clean up ephemeral Authenticode test certificate
         run: pwsh scripts/cleanup_v4_test_signing.ps1
         # Installer attestation verification failed with exit code
@@ -3591,6 +3594,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
       - run: cargo xtask verify-tauri-bundle
       - name: Qualify current-user install, launch, and uninstall
         run: check sky_desktop_shell.exe uninstall.exe
+      - run: cargo xtask builtin-catalog verify-installed --root installed/builtin-songs
       - uses: actions/upload-artifact@v7
   status:
     needs: [changes, static, supply_chain, validate, packaged]

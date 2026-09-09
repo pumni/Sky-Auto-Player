@@ -16,6 +16,10 @@ const MANIFEST_RELATIVE_PATH: &str = "builtin-songs/manifest.json";
 pub fn run(root: &Path, operation: &str, args: &[(String, String)]) -> Result<()> {
     match operation {
         "verify" => verify(root),
+        "verify-installed" => {
+            let catalog_root = required(args, "root")?;
+            verify_installed(Path::new(&catalog_root))
+        }
         "refresh" => refresh(root),
         "add" => add(root, args),
         "rename" => rename(root, args),
@@ -33,8 +37,11 @@ fn manifest_path(root: &Path) -> PathBuf {
 }
 
 fn load(root: &Path) -> Result<BuiltinCatalogManifest> {
-    let path = manifest_path(root);
-    let bytes = fs::read(&path)?;
+    load_manifest(&manifest_path(root))
+}
+
+fn load_manifest(path: &Path) -> Result<BuiltinCatalogManifest> {
+    let bytes = fs::read(path)?;
     let manifest: BuiltinCatalogManifest = serde_json::from_slice(&bytes)?;
     Ok(manifest)
 }
@@ -113,6 +120,145 @@ fn verify(root: &Path) -> Result<()> {
     }
     println!(
         "Built-in catalog verification: PASS (schema=1, active={}, retired={})",
+        manifest.songs.len(),
+        manifest.retired_songs.len()
+    );
+    Ok(())
+}
+
+fn verify_installed(root: &Path) -> Result<()> {
+    let manifest = load_manifest(&root.join("manifest.json"))?;
+    manifest
+        .validate()
+        .map_err(|error| format!("installed built-in manifest: {error}"))?;
+    if !root.is_dir() {
+        return Err(format!(
+            "installed built-in catalog directory is missing: {}",
+            root.display()
+        )
+        .into());
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name != "manifest.json" && name != "sheets" {
+            return Err(format!(
+                "installed built-in catalog contains an unexpected root entry: {}",
+                entry.path().display()
+            )
+            .into());
+        }
+        if entry.file_type()?.is_symlink() {
+            return Err(format!(
+                "installed built-in catalog contains a symlink: {}",
+                entry.path().display()
+            )
+            .into());
+        }
+    }
+
+    let canonical_root = fs::canonicalize(root)?;
+    let mut declared = BTreeSet::new();
+    for song in &manifest.songs {
+        let path = root.join(&song.path);
+        let canonical_path = fs::canonicalize(&path).map_err(|error| {
+            format!(
+                "declared installed built-in resource is missing ({}): {error}",
+                path.display()
+            )
+        })?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(format!(
+                "installed built-in resource escapes its catalog root: {}",
+                song.path
+            )
+            .into());
+        }
+        if !canonical_path.is_file() {
+            return Err(format!(
+                "declared installed built-in resource is not a file: {}",
+                path.display()
+            )
+            .into());
+        }
+        let digest = sha256_file(&canonical_path)?;
+        if digest != song.sha256 {
+            return Err(format!(
+                "installed built-in hash mismatch for {}: manifest {}, actual {}",
+                song.path, song.sha256, digest
+            )
+            .into());
+        }
+        let bytes = fs::read(&canonical_path)?;
+        let fallback = canonical_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or(&song.title);
+        parse_song_json(&bytes, fallback).map_err(|error| {
+            format!(
+                "installed built-in song is not parseable ({}): {error}",
+                song.path
+            )
+        })?;
+        declared.insert(song.path.clone());
+    }
+
+    let sheets_root = root.join("sheets");
+    if !sheets_root.is_dir() {
+        return Err(format!(
+            "installed built-in resource directory is missing: {}",
+            sheets_root.display()
+        )
+        .into());
+    }
+    let mut discovered = BTreeSet::new();
+    for entry in WalkDir::new(&sheets_root).follow_links(false) {
+        let entry = entry?;
+        if entry.file_type().is_symlink() {
+            return Err(format!(
+                "installed built-in resource tree contains a symlink: {}",
+                entry.path().display()
+            )
+            .into());
+        }
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            return Err(format!(
+                "installed built-in resource tree contains an unexpected entry: {}",
+                entry.path().display()
+            )
+            .into());
+        }
+        if !is_supported(entry.path()) {
+            return Err(format!(
+                "installed built-in resource tree contains an unsupported file: {}",
+                entry.path().display()
+            )
+            .into());
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|_| "installed built-in resource path escaped its catalog root")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        discovered.insert(relative);
+    }
+    if discovered != declared {
+        let missing = declared.difference(&discovered).collect::<Vec<_>>();
+        let extra = discovered.difference(&declared).collect::<Vec<_>>();
+        return Err(format!(
+            "installed built-in manifest/resource drift: missing={missing:?}, extra={extra:?}"
+        )
+        .into());
+    }
+
+    println!(
+        "Installed built-in catalog verification: PASS (schema=1, active={}, retired={})",
         manifest.songs.len(),
         manifest.retired_songs.len()
     );

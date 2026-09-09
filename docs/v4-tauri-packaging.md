@@ -47,8 +47,12 @@ The canonical current-user package qualification runs the hidden packaged shell
 self-test with a fresh `SKY_APP_DATA_ROOT`. It proves that `All Songs` contains
 exactly the manifest active count while the user `songs/` directory is empty,
 then adds one ordinary user sheet and verifies the composed count before
-cleanup. This evidence is executed against the installed files from the same
-NSIS candidate; a source checkout is not a substitute.
+cleanup. Before the self-test, qualification runs
+`cargo xtask builtin-catalog verify-installed --root <install>/builtin-songs`
+against the installed tree from that same NSIS candidate. This verifier checks
+the installed manifest schema, active/retired identities, exact declared file
+set, per-song SHA-256, and installed song parsing. A source checkout is not a
+substitute for this installed-resource evidence.
 
 V4 has no portable ZIP updater contract and no bundled
 `Sky-Auto-Player-Updater.exe`. The retired v3 assembler and updater remain

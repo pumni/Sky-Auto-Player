@@ -378,7 +378,7 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Repository verification — Rust
-        if: needs.changes.outputs.package_required != 'true'
+        if: needs.changes.outputs.code_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo xtask check rust
@@ -750,6 +750,8 @@ jobs:
           try {
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed Tauri executable is missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Tauri uninstaller is missing: $uninstaller" }
+            cargo xtask builtin-catalog verify-installed --root (Join-Path $installRoot "builtin-songs")
+            if ($LASTEXITCODE -ne 0) { throw "Installed built-in catalog verification failed with exit code $LASTEXITCODE" }
             $installedPe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse |
               Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll') -and $_.Name -ne 'uninstall.exe' })
             if ($installedPe.Count -eq 0) { throw "Installed Tauri tree contains no project PE files" }

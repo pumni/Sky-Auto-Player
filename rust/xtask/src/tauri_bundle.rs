@@ -541,6 +541,10 @@ mod tests {
                 "active": true,
                 "targets": [NSIS_TARGET],
                 "createUpdaterArtifacts": true,
+                "resources": {
+                    "../../songs/*": "builtin-songs/sheets",
+                    "../../builtin-songs/manifest.json": "builtin-songs/manifest.json"
+                },
                 "windows": {
                     "signCommand": "pwsh -File ../../scripts/sign_v4_authenticode.ps1 %1",
                     "nsis": {"installMode": CURRENT_USER_INSTALL_MODE}
