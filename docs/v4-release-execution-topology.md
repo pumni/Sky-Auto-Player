@@ -139,7 +139,29 @@ Dedicated self-hosted Windows runners executing production releases must satisfy
 3. **Stale Output Purge**: Target bundle and evidence directories are purged of previous candidate installers, signatures, and evidence prior to building. Stale outputs from aborted or previous runs can never be reused.
 4. **Isolated Key Storage**: Private updater keys and certificate stores must reside outside the repository tree, accessible only via restricted paths or secure hardware/cloud seams.
 
-### 2.4 Production Passphrase Transport: Windows Credential Manager Session Broker
+### 2.4 GitHub Actions Runner Isolation and Operator Requirements
+
+The labels `self-hosted, windows, v4-release, single-tenant` identify the production signing
+runner boundary. Only `release-v4.yml` and `rehearse-v4-production-topology.yml` may target that
+label set. Both workflows are `workflow_dispatch` only, require the canonical repository's
+`refs/heads/main` dispatch context, and are protected by the `v4-production-release` environment.
+Pull-request, fork, push, and general CI workflows must remain on ordinary hosted or non-release
+runners.
+
+The runner-local `V4_UPDATER_PRIVATE_KEY_PATH` is provisioned outside the checkout and is never a
+workflow input. Release state is created under `RUNNER_TEMP`, outside `GITHUB_WORKSPACE`, and is
+removed by an unconditional cleanup step after bounded JSON evidence is retained. Checkout keeps
+`persist-credentials: false`; no generated token, private-key copy, or credential file may be
+written into the source workspace.
+
+The repository owner is responsible for keeping this runner dedicated to this repository's
+production release environment, applying OS/toolchain security patches, and preferring an ephemeral
+or regularly reimaged machine. The runner must never be registered for general public-repository CI.
+If compromise is suspected, disable the runner and production environment, revoke or rotate the
+updater key using [v4-updater-key-custody.md](v4-updater-key-custody.md), inspect release and
+metadata history, and reimage or replace the runner before restoring release access.
+
+### 2.5 Production Passphrase Transport: Windows Credential Manager Session Broker
 
 Incident #140 established that parent-process environment variable inheritance does not reach Actions step processes on dedicated runner hosts (such as PUMZ). Parent-process env inheritance is explicitly **not** the production transport.
 

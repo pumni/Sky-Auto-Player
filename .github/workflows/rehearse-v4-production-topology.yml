@@ -20,11 +20,6 @@ on:
         description: "Exact source commit SHA; must equal this workflow checkout and GITHUB_SHA"
         required: true
         type: string
-      updater_private_key_path:
-        description: "Path to the externally stored updater key on the dedicated runner"
-        required: true
-        type: string
-
 permissions:
   contents: read
 
@@ -37,10 +32,33 @@ defaults:
     shell: pwsh
 
 jobs:
+  rehearsal-dispatch-boundary:
+    name: Validate canonical rehearsal dispatch context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fail closed outside the canonical default branch
+        shell: bash
+        env:
+          EXPECTED_REPOSITORY: pumni/Sky-Auto-Player
+          EXPECTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch" || { echo "rehearsal requires workflow_dispatch" >&2; exit 1; }
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY" || { echo "rehearsal repository is not canonical" >&2; exit 1; }
+          test "$GITHUB_REF" = "refs/heads/main" || { echo "rehearsal must be dispatched from refs/heads/main" >&2; exit 1; }
+          test "$EXPECTED_DEFAULT_BRANCH" = "main" || { echo "canonical repository default branch must be main" >&2; exit 1; }
+
   rehearsal:
     name: V4 production-topology rehearsal
+    needs: rehearsal-dispatch-boundary
+    if: needs.rehearsal-dispatch-boundary.result == 'success'
     # This is the same dedicated/single-tenant runner class used by production.
     runs-on: [self-hosted, windows, v4-release, single-tenant]
+    environment: v4-production-release
+    permissions:
+      contents: read
     env:
       V4_REHEARSAL_VERSION: ${{ inputs.version }}
       V4_REHEARSAL_CHANNEL: ${{ inputs.channel }}
@@ -64,12 +82,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify isolated rehearsal runner boundary
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/verify_v4_release_runner.ps1 `
+            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
+            -StateRoot $env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT
+
       - name: Verify dedicated runner tools
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,gh.exe
 
       - name: Build one non-production candidate with the production builder
-        env:
-          V4_UPDATER_PRIVATE_KEY_PATH: ${{ inputs.updater_private_key_path }}
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
             -State BuildCandidate `
@@ -90,5 +112,21 @@ jobs:
             -Channel $env:V4_REHEARSAL_CHANNEL `
             -Tag $env:V4_REHEARSAL_TAG `
             -SourceSha $env:V4_REHEARSAL_SOURCE_SHA `
-            -WorkflowSha $env:V4_REHEARSAL_WORKFLOW_SHA `
-            -KeepStateOnFailure
+            -WorkflowSha $env:V4_REHEARSAL_WORKFLOW_SHA
+
+      - name: Preserve bounded rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v4-production-topology-rehearsal-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}\sky-v4-production-topology-rehearsal-${{ github.run_id }}\candidate\*.json
+            ${{ runner.temp }}\sky-v4-production-topology-rehearsal-${{ github.run_id }}\qualification\*.json
+
+      - name: Clean runner-local rehearsal state
+        if: always()
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/cleanup_v4_release_state.ps1 `
+            -StateRoot $env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT

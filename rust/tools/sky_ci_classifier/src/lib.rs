@@ -58,6 +58,8 @@ pub const RELEASE_FILES: &[&str] = &[
     "scripts/v4_release_pipeline.ps1",
     "scripts/orchestrate_v4_production_release.ps1",
     "scripts/test_v4_production_orchestrator.ps1",
+    "scripts/verify_v4_release_runner.ps1",
+    "scripts/cleanup_v4_release_state.ps1",
     "scripts/test_v4_release_pipeline.ps1",
     "scripts/v4_updater_credential_broker.ps1",
     "scripts/set_v4_updater_session_credential.ps1",
