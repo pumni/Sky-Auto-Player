@@ -239,9 +239,12 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "scripts/ci_tauri_update_e2e_core.ps1",
     "scripts/verify_v4_release_runner.ps1",
     "scripts/cleanup_v4_release_state.ps1",
+    "scripts/cleanup_v4_draft_rehearsal.ps1",
+    "scripts/v4_draft_rehearsal_external_state.ps1",
     ".github/workflows/release.yml",
     ".github/workflows/release-v4.yml",
     ".github/workflows/rehearse-v4-production-topology.yml",
+    ".github/workflows/rehearse-v4-draft.yml",
     "desktop/src-tauri/src/native_update.rs",
     "desktop/src-tauri/tauri.conf.json",
     "desktop/src-tauri/Cargo.toml",
@@ -465,6 +468,7 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
 const APPROVED_RELEASE_RUNNER_WORKFLOWS: &[&str] = &[
     ".github/workflows/release-v4.yml",
     ".github/workflows/rehearse-v4-production-topology.yml",
+    ".github/workflows/rehearse-v4-draft.yml",
 ];
 const RELEASE_RUNNER_LABEL_MARKER: &str =
     "runs-on: [self-hosted, windows, v4-release, single-tenant]";
@@ -473,6 +477,7 @@ fn approved_release_runner_job(relative: &str) -> Option<&'static str> {
     match relative {
         ".github/workflows/release-v4.yml" => Some("release"),
         ".github/workflows/rehearse-v4-production-topology.yml" => Some("rehearsal"),
+        ".github/workflows/rehearse-v4-draft.yml" => Some("draft-rehearsal"),
         _ => None,
     }
 }
@@ -1036,14 +1041,211 @@ fn v4_release_pipeline_contract_source(
     Ok(())
 }
 
+fn v4_draft_rehearsal_contract_source(
+    workflow: &str,
+    cleanup: &str,
+    external_state: &str,
+) -> Result<()> {
+    let workflow = workflow.replace("\r\n", "\n");
+    for marker in [
+        "name: V4 Controlled Same-Repository Draft Rehearsal",
+        "workflow_dispatch:",
+        "group: v4-release-${{ inputs.tag }}",
+        "contents: read",
+        "contents: write",
+        "id-token: write",
+        "attestations: write",
+        "draft-rehearsal-dispatch-boundary",
+        "github.event.repository.default_branch",
+        "refs/heads/main",
+        "runs-on: [self-hosted, windows, v4-release, single-tenant]",
+        "environment: v4-production-release",
+        "ref: ${{ inputs.source_sha }}",
+        "persist-credentials: false",
+        "V4_UPDATER_PRIVATE_KEY_PATH",
+        "verify_v4_release_runner.ps1",
+        "cleanup_v4_release_state.ps1",
+        "Create exact candidate draft in canonical repository",
+        "Re-download exact draft assets from canonical repository",
+        "Qualify exact re-downloaded candidate bytes",
+        "Record verified exact-byte attestations",
+        "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "--source-digest $env:GITHUB_SHA",
+        "-Mode Capture",
+        "-Mode Verify",
+        "cleanup_v4_draft_rehearsal.ps1",
+        "v4_draft_rehearsal_external_state.ps1",
+        "if: always()",
+    ] {
+        if !workflow.contains(marker) {
+            return Err(format!(
+                "controlled draft rehearsal workflow is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    if !workflow_declares_only_dispatch(&workflow) {
+        return Err(
+            "controlled draft rehearsal must whitelist workflow_dispatch as its only trigger"
+                .into(),
+        );
+    }
+
+    let workflow_states = [
+        "-State ValidateRequest",
+        "-State ValidateRepository",
+        "-State BuildCandidate",
+        "-State CreateDraft",
+        "-State DownloadDraft",
+        "-State QualifyDownloaded",
+        "-State RecordAttestations",
+    ];
+    let mut previous = 0;
+    for marker in workflow_states {
+        let position = workflow.find(marker).ok_or_else(|| {
+            format!("controlled draft rehearsal is missing state marker: {marker}")
+        })?;
+        if position < previous {
+            return Err("controlled draft rehearsal states are not ordered fail-closed".into());
+        }
+        previous = position;
+    }
+
+    for forbidden in [
+        "PublishDraft",
+        "PromoteMetadata",
+        "FinalVerify",
+        "create-github-app-token",
+        "metadata-app-token",
+        "softprops/action-gh-release",
+        "gh release",
+        "actions/create-github-app-token",
+        "updater_private_key_path:",
+        "inputs.updater_private_key_path",
+        "make_latest = $true",
+        "V4_RELEASE_AUTHORITY_TOKEN",
+        "V4_RELEASE_AUTHORITY_REPOSITORY",
+    ] {
+        if workflow.contains(forbidden) {
+            return Err(format!(
+                "controlled draft rehearsal contains a forbidden publication or trust-boundary marker: {forbidden}"
+            )
+            .into());
+        }
+    }
+    if workflow.matches("GH_TOKEN: ${{ github.token }}").count() < 1 {
+        return Err(
+            "controlled draft rehearsal must use the repository GITHUB_TOKEN for GitHub operations"
+                .into(),
+        );
+    }
+
+    let cleanup = cleanup.replace("\r\n", "\n");
+    for marker in [
+        "RUNNER_TEMP",
+        "GITHUB_WORKSPACE",
+        "StateRoot must be a child of RUNNER_TEMP",
+        "source_sha",
+        "draft",
+        "published_at",
+        "body",
+        "git/ref/tags",
+        "--method",
+        "DELETE",
+        "remainingRelease",
+        "remainingTag",
+        "draft-cleanup-authorized.json",
+        "refusing to delete a published release",
+        "mismatched source",
+    ] {
+        if !cleanup.contains(marker) {
+            return Err(format!(
+                "controlled draft rehearsal cleanup is missing its fail-closed marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "PublishDraft",
+        "PromoteMetadata",
+        "FinalVerify",
+        "Sky-Auto-Player-Releases",
+        "V4_RELEASE_AUTHORITY_",
+    ] {
+        if cleanup.contains(forbidden) {
+            return Err(format!(
+                "controlled draft rehearsal cleanup contains a forbidden marker: {forbidden}"
+            )
+            .into());
+        }
+    }
+
+    let external_state = external_state.replace("\r\n", "\n");
+    for marker in [
+        "Capture",
+        "Verify",
+        "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json",
+        "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json",
+        "releases/latest",
+        "^v3\\.",
+        "AllowAutoRedirect",
+        "Headers.Authorization",
+        "StatusCode",
+        "sha256",
+        "external-state-before.json",
+        "external-state-after.json",
+        "GITHUB_REPOSITORY",
+        "target_release_absent",
+        "target_tag_absent",
+    ] {
+        if !external_state.contains(marker) {
+            return Err(format!(
+                "controlled draft rehearsal external-state check is missing its marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "--method",
+        "POST",
+        "PATCH",
+        "PUT",
+        "DELETE",
+        "gh release",
+        "Sky-Auto-Player-Releases",
+        "V4_RELEASE_AUTHORITY_",
+    ] {
+        if external_state.contains(forbidden) {
+            return Err(format!(
+                "controlled draft rehearsal external-state check contains a mutation marker: {forbidden}"
+            )
+            .into());
+        }
+    }
+    if !external_state.contains("System.Net.Http.HttpMethod]::Get") {
+        return Err("raw metadata verification must use an explicit unauthenticated GET".into());
+    }
+    if external_state.contains("Headers.Authorization =") {
+        return Err("raw metadata verification must not assign an Authorization header".into());
+    }
+    Ok(())
+}
+
 fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     let workflow_path = root.join(".github/workflows/release-v4.yml");
     let topology_workflow_path = root.join(".github/workflows/rehearse-v4-production-topology.yml");
+    let draft_workflow_path = root.join(".github/workflows/rehearse-v4-draft.yml");
     let pipeline_path = root.join("scripts/v4_release_pipeline.ps1");
     let regression_path = root.join("scripts/test_v4_release_pipeline.ps1");
+    let draft_cleanup_path = root.join("scripts/cleanup_v4_draft_rehearsal.ps1");
+    let external_state_path = root.join("scripts/v4_draft_rehearsal_external_state.ps1");
     let pipeline = fs::read_to_string(&pipeline_path)?;
     let regression = fs::read_to_string(&regression_path)?;
     let topology_workflow = fs::read_to_string(&topology_workflow_path)?;
+    let draft_workflow = fs::read_to_string(&draft_workflow_path)?;
+    let draft_cleanup = fs::read_to_string(&draft_cleanup_path)?;
+    let external_state = fs::read_to_string(&external_state_path)?;
     v4_release_pipeline_contract_source(
         &fs::read_to_string(&workflow_path)?,
         &pipeline,
@@ -1103,6 +1305,11 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
+    v4_draft_rehearsal_contract_source(&draft_workflow, &draft_cleanup, &external_state).map_err(
+        |error| -> Box<dyn std::error::Error + Send + Sync> {
+            format!("controlled draft rehearsal contract: {error}").into()
+        },
+    )?;
     for script_name in [
         "scripts/v4_updater_credential_broker.ps1",
         "scripts/set_v4_updater_session_credential.ps1",
@@ -3379,6 +3586,46 @@ jobs:
         let error = validate_release_runner_workflow(".github/workflows/release-v4.yml", workflow)
             .expect_err("an unprotected sensitive job subset must be rejected");
         assert!(error.to_string().contains("not approved"));
+    }
+
+    #[test]
+    fn controlled_draft_rehearsal_contract_rejects_publication_and_weak_runner_regressions() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let workflow = fs::read_to_string(root.join(".github/workflows/rehearse-v4-draft.yml"))
+            .expect("controlled draft rehearsal workflow fixture must exist");
+        let cleanup = fs::read_to_string(root.join("scripts/cleanup_v4_draft_rehearsal.ps1"))
+            .expect("controlled draft cleanup fixture must exist");
+        let external =
+            fs::read_to_string(root.join("scripts/v4_draft_rehearsal_external_state.ps1"))
+                .expect("external state fixture must exist");
+
+        v4_draft_rehearsal_contract_source(&workflow, &cleanup, &external)
+            .expect("controlled draft rehearsal contract should pass its repository fixture");
+
+        let publication_regression = workflow.replace(
+            "-State RecordAttestations",
+            "-State RecordAttestations\n            -State PublishDraft",
+        );
+        assert!(
+            v4_draft_rehearsal_contract_source(&publication_regression, &cleanup, &external)
+                .is_err(),
+            "draft rehearsal must reject a publication state"
+        );
+
+        let weak_runner = workflow.replace(
+            RELEASE_RUNNER_LABEL_MARKER,
+            "runs-on: [self-hosted, windows, v4-release]",
+        );
+        let error = validate_release_runner_workflow(
+            ".github/workflows/rehearse-v4-draft.yml",
+            &weak_runner,
+        )
+        .expect_err("draft rehearsal must retain the exact signing runner labels");
+        assert!(
+            error
+                .to_string()
+                .contains("exact dedicated release runner labels")
+        );
     }
 
     #[test]
