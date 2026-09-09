@@ -34,6 +34,9 @@ if ($fixtureTargetRoot.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase) 
 }
 $fixtureBundleRoot = Join-Path $fixtureTargetRoot 'dist/bundle/nsis'
 $installRoot = Join-Path $fixtureRoot 'installed'
+$appDataRoot = Join-Path $fixtureRoot 'app-data'
+$userSongsRoot = Join-Path $appDataRoot 'songs'
+$userSongPath = Join-Path $userSongsRoot 'updater-preserved-user.json'
 $markerPath = Join-Path $fixtureRoot 'completion.txt'
 $expectedVersionPath = Join-Path $fixtureRoot 'expected-installed-version.txt'
 $cutoverMarkerPath = Join-Path $fixtureRoot 'cutover.txt'
@@ -72,6 +75,7 @@ $httpEvidencePath = if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
 }
 $manifestContract = [ordered]@{ status = 'not-checked' }
 $candidateContract = [ordered]@{ status = 'not-checked' }
+$preservationContract = [ordered]@{ status = 'not-checked' }
 $fixtureStatus = 'FAIL'
 $port = 0
 $serverJob = $null
@@ -80,6 +84,7 @@ $candidateArchive = $null
 $candidateSignature = $null
 $candidateCargoPath = Join-Path $desktopRoot 'src-tauri/Cargo.toml'
 $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
+$oldAppDataRoot = [Environment]::GetEnvironmentVariable('SKY_APP_DATA_ROOT', 'Process')
 $cargoSource = [IO.File]::ReadAllText($candidateCargoPath)
 $lockSource = [IO.File]::ReadAllText($lockPath)
 
@@ -181,6 +186,7 @@ function Write-HttpEvidence([string]$Status) {
       proxy_environment = $proxy
       manifest = $manifestContract
       candidate = $candidateContract
+      preservation = $preservationContract
       requests = $requests
     }
     $parent = Split-Path -Parent $httpEvidencePath
@@ -243,13 +249,13 @@ function Invoke-FixtureBuild {
       Pop-Location
     }
   } finally {
-    if ($null -eq $oldCargoTargetDir) {
-      [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $null, 'Process')
+    if ([string]::IsNullOrEmpty($oldCargoTargetDir)) {
+      Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
     } else {
       [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $oldCargoTargetDir, 'Process')
     }
-    if ($null -eq $oldFixturePort) {
-      [Environment]::SetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', $null, 'Process')
+    if ([string]::IsNullOrEmpty($oldFixturePort)) {
+      Remove-Item Env:SKY_TAURI_UPDATE_FIXTURE_PORT -ErrorAction SilentlyContinue
     } else {
       [Environment]::SetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', $oldFixturePort, 'Process')
     }
@@ -496,6 +502,18 @@ try {
   New-Item -Path $locationKey -Force -Value $installRoot | Out-Null
   $appPath = Join-Path $installRoot 'sky_desktop_shell.exe'
   if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed bridge app is missing: $appPath" }
+  $bridgeBuiltinRoot = Join-Path $installRoot 'builtin-songs'
+  & cargo xtask builtin-catalog verify-installed --root $bridgeBuiltinRoot
+  if ($LASTEXITCODE -ne 0) { throw "Bridge installed built-in catalog verification failed with exit code $LASTEXITCODE" }
+
+  $userSongBytes = [Text.Encoding]::UTF8.GetBytes('{"name":"Updater preserved user","songNotes":[{"time":0,"key":"1Key0"}]}')
+  New-Item -ItemType Directory -Path $userSongsRoot -Force | Out-Null
+  [IO.File]::WriteAllBytes($userSongPath, $userSongBytes)
+  $userSongShaBefore = Get-ByteSha256 $userSongBytes
+  if ((Get-ByteSha256 ([IO.File]::ReadAllBytes($userSongPath))) -ne $userSongShaBefore) {
+    throw 'Could not establish the updater user-song preservation fixture'
+  }
+  [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $appDataRoot, 'Process')
 
   $appProcess = Start-Process -FilePath $appPath -ArgumentList @(
     '--selftest-desktop-update',
@@ -522,8 +540,35 @@ try {
     $previousOffset = $offset
   }
 
+  if (-not (Test-Path -LiteralPath $userSongPath -PathType Leaf)) {
+    throw 'Updater removed the user song from application data'
+  }
+  $userSongShaAfter = Get-ByteSha256 ([IO.File]::ReadAllBytes($userSongPath))
+  if ($userSongShaAfter -ne $userSongShaBefore) {
+    throw "Updater changed the user song bytes: before=$userSongShaBefore after=$userSongShaAfter"
+  }
+  $candidateBuiltinRoot = Join-Path $installRoot 'builtin-songs'
+  & cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot
+  if ($LASTEXITCODE -ne 0) { throw "Candidate installed built-in catalog verification failed with exit code $LASTEXITCODE" }
+  $candidateBuiltinManifest = Get-Content -LiteralPath (Join-Path $candidateBuiltinRoot 'manifest.json') -Raw | ConvertFrom-Json
+  $candidateBuiltinCount = @($candidateBuiltinManifest.songs).Count
+  if ($candidateBuiltinCount -le 0) {
+    throw 'Candidate installed built-in catalog is empty after update'
+  }
+  $candidateBuiltinManifestSha = Get-ByteSha256 ([IO.File]::ReadAllBytes((Join-Path $candidateBuiltinRoot 'manifest.json')))
+  $preservationContract = [ordered]@{
+    status = 'PASS'
+    transition = 'N-to-N+1'
+    user_song = 'updater-preserved-user.json'
+    user_song_sha256_before = $userSongShaBefore
+    user_song_sha256_after = $userSongShaAfter
+    built_in_manifest_sha256_after = $candidateBuiltinManifestSha
+    built_in_song_count_after = $candidateBuiltinCount
+  }
+  Write-Host "Updater N-to-N+1 preservation: PASS (user_sha256=$userSongShaAfter; built_in_count=$candidateBuiltinCount; built_in_manifest_sha256=$candidateBuiltinManifestSha)"
+
   if ($providedCandidate) {
-    "Packaged Tauri updater draft qualification: PASS (throwaway previous-v4 bridge applied the exact downloaded candidate $candidateVersion; safety phases=$($requiredPhases -join ', '))" |
+    "Packaged Tauri updater draft qualification: PASS (throwaway previous-v4 bridge applied the exact downloaded candidate $candidateVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   } else {
     # Switch only the server manifest. The restarted candidate is the cutover
@@ -539,7 +584,7 @@ try {
     if (-not $cutoverResult.StartsWith('update-failed:')) {
       throw "Cutover client accepted an old-root artifact: $cutoverResult"
     }
-    "Packaged Tauri updater rotation: PASS (bridge [old,new] applied new-root-only $candidateVersion; cutover [new] rejected old-root-only $cutoverVersion; safety phases=$($requiredPhases -join ', '))" |
+    "Packaged Tauri updater rotation: PASS (bridge [old,new] applied new-root-only $candidateVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; cutover [new] rejected old-root-only $cutoverVersion; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   }
   $fixtureStatus = 'PASS'
@@ -551,6 +596,11 @@ try {
   }
   [IO.File]::WriteAllText($candidateCargoPath, $cargoSource, [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText($lockPath, $lockSource, [Text.UTF8Encoding]::new($false))
+  if ([string]::IsNullOrEmpty($oldAppDataRoot)) {
+    Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
+  } else {
+    [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $oldAppDataRoot, 'Process')
+  }
   Remove-Item Env:SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS -ErrorAction SilentlyContinue
   Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue

@@ -1,6 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 songs/** text eol=lf
+builtin-songs/manifest.json text eol=lf
 rust/supply-chain/*.toml text eol=lf
 rust/supply-chain/*.lock text eol=lf
 **/Cargo.toml text eol=lf

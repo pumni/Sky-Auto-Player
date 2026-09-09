@@ -225,6 +225,10 @@ the reviewed overlap `[old,new]` to cutover `[new]` updater-trust transition aga
 packaged clients. This is a signing-key rotation fixture, not a compatibility path for
 pre-release v4 builds. The same evidence records the ordered native quiesce,
 key-release, state-persistence, and resource-close phases.
+It additionally creates a user-owned song before update N, records its exact
+SHA-256, verifies that the SHA is unchanged after N+1, and runs the installed
+built-in catalog verifier against the N+1 resource tree. This proves that the
+updater replaces immutable install payload without deleting mutable user data.
 
 ## Acceptance boundary
 

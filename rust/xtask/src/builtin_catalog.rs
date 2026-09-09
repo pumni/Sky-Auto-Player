@@ -287,7 +287,7 @@ fn add(root: &Path, args: &[(String, String)]) -> Result<()> {
     let mut manifest = load(root)?;
     let id = match args.iter().find(|(key, _)| key == "id") {
         Some((_, value)) => StableSongId::new(value.clone())?,
-        None => StableSongId::new(deterministic_id(&path))?,
+        None => issue_opaque_id(&manifest)?,
     };
     if manifest
         .songs
@@ -426,10 +426,149 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn deterministic_id(path: &str) -> String {
-    let digest = Sha256::digest(format!("sky-v4-builtin:{path}").as_bytes());
-    digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+fn issue_opaque_id(manifest: &BuiltinCatalogManifest) -> Result<StableSongId> {
+    for _ in 0..32 {
+        let mut bytes = [0_u8; 16];
+        getrandom::fill(&mut bytes)
+            .map_err(|error| format!("secure built-in identity issuance failed: {error}"))?;
+        let value = bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if ledger_contains(manifest, &value) {
+            continue;
+        }
+        return Ok(StableSongId::new(value)?);
+    }
+    Err("secure built-in identity issuance exhausted its collision budget".into())
+}
+
+fn ledger_contains(manifest: &BuiltinCatalogManifest, value: &str) -> bool {
+    manifest.songs.iter().any(|song| song.id == value)
+        || manifest.retired_songs.iter().any(|song| song.id == value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn empty_manifest() -> BuiltinCatalogManifest {
+        BuiltinCatalogManifest {
+            schema_version: 1,
+            songs: Vec::new(),
+            retired_songs: Vec::new(),
+        }
+    }
+
+    fn temp_root(label: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("sky-builtin-catalog-{label}-{suffix}"))
+    }
+
+    #[test]
+    fn opaque_issuance_is_random_and_skips_active_and_retired_ledger() {
+        let mut manifest = empty_manifest();
+        manifest.songs.push(BuiltinSongManifestEntry {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            path: "sheets/active.json".into(),
+            title: "Active".into(),
+            sha256: "a".repeat(64),
+        });
+        manifest.retired_songs.push(RetiredBuiltinSong {
+            id: "fedcba9876543210fedcba9876543210".into(),
+            last_title: "Retired".into(),
+        });
+        assert!(ledger_contains(
+            &manifest,
+            "0123456789abcdef0123456789abcdef"
+        ));
+        assert!(ledger_contains(
+            &manifest,
+            "fedcba9876543210fedcba9876543210"
+        ));
+        assert!(!ledger_contains(
+            &manifest,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        let first = issue_opaque_id(&manifest).expect("first opaque ID");
+        manifest.songs.push(BuiltinSongManifestEntry {
+            id: first.as_str().into(),
+            path: "sheets/issued.json".into(),
+            title: "Issued".into(),
+            sha256: "b".repeat(64),
+        });
+        let second = issue_opaque_id(&manifest).expect("second opaque ID");
+        assert_ne!(first, second);
+        assert_ne!(first.as_str(), "0123456789abcdef0123456789abcdef");
+        assert_ne!(second.as_str(), "fedcba9876543210fedcba9876543210");
+    }
+
+    #[test]
+    fn add_rename_refresh_retire_restore_preserves_opaque_identity() {
+        let root = temp_root("lifecycle");
+        let source = root.join("songs");
+        let manifest_path = root.join(MANIFEST_RELATIVE_PATH);
+        fs::create_dir_all(&source).expect("source directory");
+        fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+            .expect("manifest directory");
+        fs::write(
+            source.join("original.json"),
+            br#"{"name":"Original","songNotes":[{"time":0,"key":"1Key0"}]}"#,
+        )
+        .expect("source song");
+        fs::write(
+            &manifest_path,
+            to_vec_pretty(&empty_manifest()).expect("empty manifest"),
+        )
+        .expect("manifest");
+
+        add(
+            &root,
+            &[
+                ("path".into(), "sheets/original.json".into()),
+                ("title".into(), "Original".into()),
+            ],
+        )
+        .expect("add");
+        let first = load(&root).expect("manifest after add");
+        let issued_id = first.songs[0].id.clone();
+
+        rename(
+            &root,
+            &[
+                ("from".into(), "sheets/original.json".into()),
+                ("to".into(), "sheets/renamed.json".into()),
+            ],
+        )
+        .expect("rename");
+        refresh(&root).expect("refresh");
+        let renamed = load(&root).expect("manifest after refresh");
+        assert_eq!(renamed.songs[0].id, issued_id);
+
+        retire(&root, &[(String::from("id"), issued_id.clone())]).expect("retire");
+        let retired = load(&root).expect("manifest after retire");
+        assert_eq!(retired.retired_songs[0].id, issued_id);
+        fs::write(
+            source.join("renamed.json"),
+            br#"{"name":"Restored","songNotes":[{"time":0,"key":"1Key1"}]}"#,
+        )
+        .expect("replacement song");
+        restore(
+            &root,
+            &[
+                ("id".into(), issued_id.clone()),
+                ("path".into(), "sheets/renamed.json".into()),
+                ("title".into(), "Restored".into()),
+            ],
+        )
+        .expect("restore");
+        let restored = load(&root).expect("manifest after restore");
+        assert_eq!(restored.songs[0].id, issued_id);
+        assert!(restored.retired_songs.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
 }

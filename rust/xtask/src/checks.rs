@@ -1557,6 +1557,21 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
         }
     }
+    let updater_fixture = fs::read_to_string(root.join("scripts/ci_tauri_update_e2e_core.ps1"))?;
+    for marker in [
+        "Updater N-to-N+1 preservation",
+        "SKY_APP_DATA_ROOT",
+        "updater-preserved-user.json",
+        "user_song_sha256_before",
+        "cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot",
+    ] {
+        if !updater_fixture.contains(marker) {
+            return Err(format!(
+                "updater fixture is missing its required preservation marker: {marker}"
+            )
+            .into());
+        }
+    }
     if ci.matches("cargo install cargo-vet").count() != 1 {
         return Err("CI must install cargo-vet exactly once in the supply-chain job".into());
     }

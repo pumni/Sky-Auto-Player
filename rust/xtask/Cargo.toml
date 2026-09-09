@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 base64 = "=0.22.1"
+getrandom = "0.3"
 ico = "0.5"
 minisign-verify = "=0.2.5"
 roxmltree = "0.20.0"
