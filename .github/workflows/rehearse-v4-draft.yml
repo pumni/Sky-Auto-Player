@@ -1,0 +1,261 @@
+name: V4 Controlled Same-Repository Draft Rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Canonical v4 SemVer (without v prefix or build metadata)"
+        required: true
+        type: string
+      channel:
+        description: "v4 metadata channel"
+        required: true
+        type: choice
+        options: [stable, beta]
+      tag:
+        description: "Canonical repository release tag; must be exactly v<version>"
+        required: true
+        type: string
+      source_sha:
+        description: "Exact source commit SHA; must equal this workflow checkout and GITHUB_SHA"
+        required: true
+        type: string
+      release_notes_path:
+        description: "Bounded release notes file in the checked-out source"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v4-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  draft-rehearsal-dispatch-boundary:
+    name: Validate canonical draft rehearsal dispatch context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fail closed outside the canonical default branch
+        shell: bash
+        env:
+          EXPECTED_REPOSITORY: pumni/Sky-Auto-Player
+          EXPECTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch" || { echo "draft rehearsal requires workflow_dispatch" >&2; exit 1; }
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY" || { echo "draft rehearsal repository is not canonical" >&2; exit 1; }
+          test "$GITHUB_REF" = "refs/heads/main" || { echo "draft rehearsal must be dispatched from refs/heads/main" >&2; exit 1; }
+          test "$EXPECTED_DEFAULT_BRANCH" = "main" || { echo "canonical repository default branch must be main" >&2; exit 1; }
+
+  draft-rehearsal:
+    name: V4 controlled same-repository draft rehearsal
+    needs: draft-rehearsal-dispatch-boundary
+    if: needs.draft-rehearsal-dispatch-boundary.result == 'success'
+    # This is the same dedicated/single-tenant runner class used by production.
+    runs-on: [self-hosted, windows, v4-release, single-tenant]
+    environment: v4-production-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      V4_DRAFT_REHEARSAL_VERSION: ${{ inputs.version }}
+      V4_DRAFT_REHEARSAL_CHANNEL: ${{ inputs.channel }}
+      V4_DRAFT_REHEARSAL_TAG: ${{ inputs.tag }}
+      V4_DRAFT_REHEARSAL_SOURCE_SHA: ${{ inputs.source_sha }}
+      V4_DRAFT_REHEARSAL_WORKFLOW_SHA: ${{ github.sha }}
+      V4_DRAFT_REHEARSAL_NOTES_PATH: ${{ inputs.release_notes_path }}
+
+    steps:
+      - name: Initialize isolated draft rehearsal state root
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) { throw "RUNNER_TEMP is unavailable" }
+          if ([string]::IsNullOrWhiteSpace($env:GITHUB_RUN_ID)) { throw "GITHUB_RUN_ID is unavailable" }
+          $base = Join-Path $env:RUNNER_TEMP ("sky-v4-draft-rehearsal-" + $env:GITHUB_RUN_ID)
+          "V4_DRAFT_REHEARSAL_STATE_ROOT=$base" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Check out the exact requested source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify isolated draft rehearsal runner boundary
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/verify_v4_release_runner.ps1 `
+            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT
+
+      - name: Validate exact v4 draft rehearsal request
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
+            -State ValidateRequest `
+            -Version $env:V4_DRAFT_REHEARSAL_VERSION `
+            -Channel $env:V4_DRAFT_REHEARSAL_CHANNEL `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG `
+            -SourceSha $env:V4_DRAFT_REHEARSAL_SOURCE_SHA `
+            -WorkflowSha $env:V4_DRAFT_REHEARSAL_WORKFLOW_SHA `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_DRAFT_REHEARSAL_NOTES_PATH
+
+      - name: Verify canonical repository release policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
+            -State ValidateRepository `
+            -Version $env:V4_DRAFT_REHEARSAL_VERSION `
+            -Channel $env:V4_DRAFT_REHEARSAL_CHANNEL `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG `
+            -SourceSha $env:V4_DRAFT_REHEARSAL_SOURCE_SHA `
+            -WorkflowSha $env:V4_DRAFT_REHEARSAL_WORKFLOW_SHA `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_DRAFT_REHEARSAL_NOTES_PATH
+
+      - name: Snapshot external release state before draft creation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_draft_rehearsal_external_state.ps1 `
+            -Mode Capture `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG
+
+      - name: Verify dedicated runner tools
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,gh.exe
+
+      - name: Build one exact candidate with the production builder
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
+            -State BuildCandidate `
+            -Version $env:V4_DRAFT_REHEARSAL_VERSION `
+            -Channel $env:V4_DRAFT_REHEARSAL_CHANNEL `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG `
+            -SourceSha $env:V4_DRAFT_REHEARSAL_SOURCE_SHA `
+            -WorkflowSha $env:V4_DRAFT_REHEARSAL_WORKFLOW_SHA `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT `
+            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
+
+      - name: Create exact candidate draft in canonical repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
+            -State CreateDraft `
+            -Version $env:V4_DRAFT_REHEARSAL_VERSION `
+            -Channel $env:V4_DRAFT_REHEARSAL_CHANNEL `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG `
+            -SourceSha $env:V4_DRAFT_REHEARSAL_SOURCE_SHA `
+            -WorkflowSha $env:V4_DRAFT_REHEARSAL_WORKFLOW_SHA `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_DRAFT_REHEARSAL_NOTES_PATH
+
+      - name: Re-download exact draft assets from canonical repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
+            -State DownloadDraft `
+            -Version $env:V4_DRAFT_REHEARSAL_VERSION `
+            -Channel $env:V4_DRAFT_REHEARSAL_CHANNEL `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG `
+            -SourceSha $env:V4_DRAFT_REHEARSAL_SOURCE_SHA `
+            -WorkflowSha $env:V4_DRAFT_REHEARSAL_WORKFLOW_SHA `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT
+
+      - name: Qualify exact re-downloaded candidate bytes
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
+            -State QualifyDownloaded `
+            -Version $env:V4_DRAFT_REHEARSAL_VERSION `
+            -Channel $env:V4_DRAFT_REHEARSAL_CHANNEL `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG `
+            -SourceSha $env:V4_DRAFT_REHEARSAL_SOURCE_SHA `
+            -WorkflowSha $env:V4_DRAFT_REHEARSAL_WORKFLOW_SHA `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT
+
+      - name: Attest exact downloaded candidate and signature
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\downloaded\*.exe
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\downloaded\*.sig
+
+      - name: Attest SPDX SBOM for exact downloaded candidate
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\downloaded\*.exe
+          sbom-path: ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\downloaded\SBOM.spdx.json
+
+      - name: Verify exact-source OIDC attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $gh = (Get-Command gh.exe -CommandType Application -ErrorAction Stop).Source
+          $downloaded = Join-Path $env:V4_DRAFT_REHEARSAL_STATE_ROOT "downloaded"
+          $installer = @(Get-ChildItem -LiteralPath $downloaded -Filter "*.exe" -File)
+          $signature = @(Get-ChildItem -LiteralPath $downloaded -Filter "*.sig" -File)
+          if ($installer.Count -ne 1 -or $signature.Count -ne 1) { throw "Downloaded attestation subject set is not exact" }
+          $signerWorkflow = "$env:GITHUB_REPOSITORY/.github/workflows/rehearse-v4-draft.yml"
+          & $gh attestation verify $installer[0].FullName -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          if ($LASTEXITCODE -ne 0) { throw "Installer exact-source attestation verification failed" }
+          & $gh attestation verify $signature[0].FullName -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          if ($LASTEXITCODE -ne 0) { throw "Updater signature exact-source attestation verification failed" }
+          & $gh attestation verify $installer[0].FullName -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3 --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
+          if ($LASTEXITCODE -ne 0) { throw "SBOM exact-source attestation verification failed" }
+
+      - name: Record verified exact-byte attestations
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
+            -State RecordAttestations `
+            -Version $env:V4_DRAFT_REHEARSAL_VERSION `
+            -Channel $env:V4_DRAFT_REHEARSAL_CHANNEL `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG `
+            -SourceSha $env:V4_DRAFT_REHEARSAL_SOURCE_SHA `
+            -WorkflowSha $env:V4_DRAFT_REHEARSAL_WORKFLOW_SHA `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT
+
+      - name: Remove only the rehearsal draft and matching tag
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/cleanup_v4_draft_rehearsal.ps1 `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG `
+            -SourceSha $env:V4_DRAFT_REHEARSAL_SOURCE_SHA
+
+      - name: Verify external release state was unchanged
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_draft_rehearsal_external_state.ps1 `
+            -Mode Verify `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT `
+            -Tag $env:V4_DRAFT_REHEARSAL_TAG
+
+      - name: Preserve bounded draft rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v4-controlled-draft-rehearsal-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\**\*.json
+
+      - name: Clean runner-local draft rehearsal state
+        if: always()
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/cleanup_v4_release_state.ps1 `
+            -StateRoot $env:V4_DRAFT_REHEARSAL_STATE_ROOT

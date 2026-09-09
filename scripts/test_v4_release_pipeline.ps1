@@ -12,6 +12,9 @@ $fixtureCorePath = Join-Path $PSScriptRoot "ci_tauri_update_e2e_core.ps1"
 $uploadHelperPath = Join-Path $PSScriptRoot "v4_release_asset_upload.ps1"
 $workflowPath = Join-Path $repoRoot ".github/workflows/release-v4.yml"
 $topologyWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4-production-topology.yml"
+$draftWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4-draft.yml"
+$draftCleanupPath = Join-Path $PSScriptRoot "cleanup_v4_draft_rehearsal.ps1"
+$externalStatePath = Join-Path $PSScriptRoot "v4_draft_rehearsal_external_state.ps1"
 $pipeline = Get-Content -LiteralPath $pipelinePath -Raw
 $topologyRehearsal = Get-Content -LiteralPath $topologyRehearsalPath -Raw
 $fixtureWrapper = Get-Content -LiteralPath $fixtureWrapperPath -Raw
@@ -19,6 +22,9 @@ $fixtureCore = Get-Content -LiteralPath $fixtureCorePath -Raw
 $uploadHelper = Get-Content -LiteralPath $uploadHelperPath -Raw
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $topologyWorkflow = Get-Content -LiteralPath $topologyWorkflowPath -Raw
+$draftWorkflow = Get-Content -LiteralPath $draftWorkflowPath -Raw
+$draftCleanup = Get-Content -LiteralPath $draftCleanupPath -Raw
+$externalState = Get-Content -LiteralPath $externalStatePath -Raw
 $testHarness = Get-Content -LiteralPath $PSCommandPath -Raw
 
 foreach ($source in @(
@@ -26,7 +32,10 @@ foreach ($source in @(
     [pscustomobject]@{ Name = "release pipeline"; Text = $pipeline },
     [pscustomobject]@{ Name = "metadata promotion"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") -Raw) },
     [pscustomobject]@{ Name = "asset upload"; Text = $uploadHelper },
-    [pscustomobject]@{ Name = "legacy Latest guard"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1") -Raw) }
+    [pscustomobject]@{ Name = "legacy Latest guard"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1") -Raw) },
+    [pscustomobject]@{ Name = "controlled draft rehearsal workflow"; Text = $draftWorkflow },
+    [pscustomobject]@{ Name = "controlled draft cleanup"; Text = $draftCleanup },
+    [pscustomobject]@{ Name = "controlled draft external-state check"; Text = $externalState }
 )) {
     foreach ($forbidden in @(
         "Sky-Auto-Player-Releases",
@@ -45,6 +54,97 @@ foreach ($source in @(
 }
 
 function Fail([string]$Message) { throw "FAILED: $Message" }
+
+foreach ($marker in @(
+    'name: V4 Controlled Same-Repository Draft Rehearsal',
+    'workflow_dispatch:',
+    'group: v4-release-${{ inputs.tag }}',
+    'draft-rehearsal-dispatch-boundary',
+    'runs-on: [self-hosted, windows, v4-release, single-tenant]',
+    'environment: v4-production-release',
+    'contents: write',
+    'id-token: write',
+    'attestations: write',
+    'ref: ${{ inputs.source_sha }}',
+    'persist-credentials: false',
+    'ValidateRequest', 'ValidateRepository', 'BuildCandidate', 'CreateDraft',
+    'DownloadDraft', 'QualifyDownloaded', 'RecordAttestations',
+    'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6',
+    '--source-digest $env:GITHUB_SHA',
+    '-Mode Capture', '-Mode Verify',
+    'cleanup_v4_draft_rehearsal.ps1',
+    'v4_draft_rehearsal_external_state.ps1',
+    'if: always()',
+    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+)) {
+    if (-not $draftWorkflow.Contains($marker)) {
+        Fail "controlled draft rehearsal workflow marker is missing: $marker"
+    }
+}
+$draftStates = @(
+    '-State ValidateRequest', '-State ValidateRepository', '-State BuildCandidate',
+    '-State CreateDraft', '-State DownloadDraft', '-State QualifyDownloaded',
+    '-State RecordAttestations'
+)
+$previousDraftStatePosition = -1
+foreach ($stateMarker in $draftStates) {
+    $draftStatePosition = $draftWorkflow.IndexOf($stateMarker)
+    if ($draftStatePosition -lt 0 -or $draftStatePosition -lt $previousDraftStatePosition) {
+        Fail "controlled draft rehearsal states are missing or out of order: $stateMarker"
+    }
+    $previousDraftStatePosition = $draftStatePosition
+}
+foreach ($forbidden in @(
+    'PublishDraft', 'PromoteMetadata', 'FinalVerify',
+    'create-github-app-token', 'metadata-app-token',
+    'softprops/action-gh-release', 'gh release',
+    'actions/create-github-app-token',
+    'updater_private_key_path:', 'inputs.updater_private_key_path',
+    'V4_RELEASE_AUTHORITY_TOKEN', 'V4_RELEASE_AUTHORITY_REPOSITORY',
+    'make_latest = $true'
+)) {
+    if ($draftWorkflow.Contains($forbidden)) {
+        Fail "controlled draft rehearsal workflow contains forbidden marker: $forbidden"
+    }
+}
+
+foreach ($marker in @(
+    'RUNNER_TEMP', 'GITHUB_WORKSPACE', 'StateRoot must be a child of RUNNER_TEMP',
+    'source_sha', 'published_at', 'git/ref/tags', '--method', 'DELETE',
+    'remainingRelease', 'remainingTag', 'draft-cleanup-authorized.json',
+    'refusing to delete a published release', 'mismatched source'
+)) {
+    if (-not $draftCleanup.Contains($marker)) {
+        Fail "controlled draft cleanup marker is missing: $marker"
+    }
+}
+foreach ($forbidden in @('PublishDraft', 'PromoteMetadata', 'FinalVerify', 'Sky-Auto-Player-Releases', 'V4_RELEASE_AUTHORITY_')) {
+    if ($draftCleanup.Contains($forbidden)) {
+        Fail "controlled draft cleanup contains forbidden marker: $forbidden"
+    }
+}
+
+foreach ($marker in @(
+    'Capture', 'Verify',
+    'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json',
+    'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json',
+    'releases/latest', '^v3\.', 'AllowAutoRedirect', 'Headers.Authorization',
+    'StatusCode', 'sha256', 'external-state-before.json', 'external-state-after.json',
+    'GITHUB_REPOSITORY', 'target_release_absent', 'target_tag_absent'
+)) {
+    if (-not $externalState.Contains($marker)) {
+        Fail "controlled draft external-state marker is missing: $marker"
+    }
+}
+foreach ($forbidden in @('--method', 'POST', 'PATCH', 'PUT', 'DELETE', 'gh release', 'Sky-Auto-Player-Releases', 'V4_RELEASE_AUTHORITY_')) {
+    if ($externalState.Contains($forbidden)) {
+        Fail "controlled draft external-state check contains forbidden mutation marker: $forbidden"
+    }
+}
+if (-not $externalState.Contains('System.Net.Http.HttpMethod]::Get') -or
+    $externalState.Contains('Headers.Authorization =')) {
+    Fail "raw metadata endpoint check must be an explicit unauthenticated GET"
+}
 
 function Test-StrictModeEmptyFreshUserSongs {
     Set-StrictMode -Version Latest
