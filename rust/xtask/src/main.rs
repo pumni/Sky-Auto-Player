@@ -20,7 +20,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-authority generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-authority validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-authority validate-monotonic --channel <stable|beta> --current <path> --candidate <path>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -426,7 +426,42 @@ fn main() -> Result<()> {
                     ),
                 )
             }
-            _ => Err("release-authority requires generate or validate".into()),
+            Some("validate-monotonic") => {
+                let mut channel = None;
+                let mut current = None;
+                let mut candidate = None;
+                let mut i = 2;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--channel" => channel = Some(required_value(&args, &mut i, "--channel")?),
+                        "--current" => current = Some(required_value(&args, &mut i, "--current")?),
+                        "--candidate" => {
+                            candidate = Some(required_value(&args, &mut i, "--candidate")?)
+                        }
+                        option => {
+                            return Err(format!(
+                                "unknown release-authority validate-monotonic option: {option}"
+                            )
+                            .into());
+                        }
+                    }
+                    i += 1;
+                }
+                release_authority::validate_monotonic(
+                    release_authority::Channel::parse(channel.as_deref().ok_or(
+                        "release-authority validate-monotonic requires --channel <stable|beta>",
+                    )?)?,
+                    Path::new(
+                        current.as_deref().ok_or(
+                            "release-authority validate-monotonic requires --current <path>",
+                        )?,
+                    ),
+                    Path::new(candidate.as_deref().ok_or(
+                        "release-authority validate-monotonic requires --candidate <path>",
+                    )?),
+                )
+            }
+            _ => Err("release-authority requires generate, validate, or validate-monotonic".into()),
         },
         _ => {
             eprintln!("{}", usage());

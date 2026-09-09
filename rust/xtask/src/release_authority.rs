@@ -113,6 +113,23 @@ pub fn validate(channel: Channel, metadata_path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_monotonic(
+    channel: Channel,
+    current_metadata_path: &Path,
+    candidate_metadata_path: &Path,
+) -> Result<()> {
+    let current: TauriMetadata = serde_json::from_slice(&fs::read(current_metadata_path)?)?;
+    let candidate: TauriMetadata = serde_json::from_slice(&fs::read(candidate_metadata_path)?)?;
+    validate_roll_forward(channel, Some(&current), &candidate)?;
+    println!(
+        "[xtask] v4 {} metadata monotonicity: PASS ({} -> {})",
+        channel_name(channel),
+        current.version,
+        candidate.version
+    );
+    Ok(())
+}
+
 fn build_metadata(
     channel: Channel,
     version_value: &str,
@@ -208,6 +225,29 @@ fn validate_metadata(metadata: &TauriMetadata, channel: Channel) -> Result<()> {
             "asset URL must be an HTTPS GitHub release URL without credentials or query state"
                 .into(),
         );
+    }
+    Ok(())
+}
+
+fn validate_roll_forward(
+    channel: Channel,
+    current: Option<&TauriMetadata>,
+    candidate: &TauriMetadata,
+) -> Result<()> {
+    validate_metadata(candidate, channel)?;
+    if let Some(current) = current {
+        validate_metadata(current, channel)?;
+        let current_version = version::parse(&current.version)?;
+        let candidate_version = version::parse(&candidate.version)?;
+        if candidate_version <= current_version {
+            return Err(format!(
+                "{} metadata promotion must strictly increase SemVer: current {}, candidate {}",
+                channel_name(channel),
+                current.version,
+                candidate.version
+            )
+            .into());
+        }
     }
     Ok(())
 }
@@ -410,5 +450,66 @@ mod tests {
             );
         }
         assert!(validate_metadata(&metadata("4.0.0", &stable_url), Channel::Beta).is_err());
+    }
+
+    #[test]
+    fn first_promotion_allows_a_valid_candidate_without_current_metadata() {
+        let candidate_url = canonical_asset_url("4.0.0-beta.1");
+        assert!(
+            validate_roll_forward(
+                Channel::Beta,
+                None,
+                &metadata("4.0.0-beta.1", &candidate_url)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn promotion_requires_a_strict_semver_upgrade() {
+        let current_url = canonical_asset_url("4.0.0-beta.1");
+        let current = metadata("4.0.0-beta.1", &current_url);
+        for candidate_version in ["4.0.0-beta.1", "4.0.0-alpha.9"] {
+            let candidate_url = canonical_asset_url(candidate_version);
+            assert!(
+                validate_roll_forward(
+                    Channel::Beta,
+                    Some(&current),
+                    &metadata(candidate_version, &candidate_url)
+                )
+                .is_err(),
+                "accepted non-increasing candidate {candidate_version}"
+            );
+        }
+    }
+
+    #[test]
+    fn promotion_accepts_a_strict_semver_upgrade() {
+        let current_url = canonical_asset_url("4.0.0-beta.1");
+        let candidate_url = canonical_asset_url("4.0.0-beta.2");
+        assert!(
+            validate_roll_forward(
+                Channel::Beta,
+                Some(&metadata("4.0.0-beta.1", &current_url)),
+                &metadata("4.0.0-beta.2", &candidate_url)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn promotion_rejects_malformed_current_metadata() {
+        let current_url = canonical_asset_url("4.0.0-beta.1");
+        let mut current = metadata("4.0.0-beta.1", &current_url);
+        current.platforms.clear();
+        let candidate_url = canonical_asset_url("4.0.0-beta.2");
+        assert!(
+            validate_roll_forward(
+                Channel::Beta,
+                Some(&current),
+                &metadata("4.0.0-beta.2", &candidate_url)
+            )
+            .is_err()
+        );
     }
 }

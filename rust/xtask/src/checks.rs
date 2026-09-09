@@ -256,6 +256,9 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "valid_signature",
         "version::parse",
         "parsed_version.major != 4",
+        "validate_monotonic",
+        "validate_roll_forward",
+        "candidate_version <= current_version",
     ] {
         if !generator.contains(marker) {
             return Err(format!(
@@ -338,6 +341,8 @@ fn release_authority_contract(root: &Path) -> Result<()> {
         "updater_signature_sha256",
         "Get-PublishedAssetSha256",
         "Assert-PublishedAsset",
+        "validate-monotonic",
+        "strictly monotonic",
         "Invoke-PromotionSelfTest",
         "same-name/different-bytes",
         "Copy-Item -LiteralPath $Metadata",
@@ -500,6 +505,10 @@ fn v4_release_pipeline_contract_source(
         "unsigned-zero-budget",
         "canonical repository main is not initialized",
         "refs/heads/main",
+        "release-metadata branch is not initialized",
+        "Assert-MetadataBranchReadiness",
+        "metadataBootstrapContract",
+        "release-metadata readiness",
         "repository already contains published release/tag",
         "unpublished draft reuse",
         "published tags are immutable",
@@ -519,6 +528,13 @@ fn v4_release_pipeline_contract_source(
         "make_latest = $false",
         "target_commitish = $SourceSha.ToLowerInvariant()",
         "branch = \"release-metadata\"",
+        "validate-monotonic",
+        "Write-RepositoryContentFile",
+        "Get-PublicMetadataDocument",
+        "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json",
+        "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json",
+        "AllowAutoRedirect",
+        "Headers.Authorization",
         "GITHUB_REPOSITORY",
         "Invoke-GitHubApi",
         "v4_release_asset_upload.ps1",
@@ -2808,7 +2824,7 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 make_latest = $false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
+ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 make_latest = $false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
