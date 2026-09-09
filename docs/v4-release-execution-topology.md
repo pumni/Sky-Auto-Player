@@ -143,9 +143,18 @@ Dedicated self-hosted Windows runners executing production releases must satisfy
 ### 2.4 GitHub Actions Runner Isolation and Operator Requirements
 
 The labels `self-hosted, windows, v4-release, single-tenant` identify the production signing
-runner boundary. Only `release-v4.yml` and `rehearse-v4-production-topology.yml` may target that
-label set. Both workflows are `workflow_dispatch` only, require the canonical repository's
+runner boundary. The exact approved workflow/job allowlist is:
+
+- `.github/workflows/release-v4.yml` — job `release`, the official immutable publication path.
+- `.github/workflows/rehearse-v4-production-topology.yml` — job `rehearsal`, qualification-topology only.
+- `.github/workflows/rehearse-v4-draft.yml` — job `draft-rehearsal`, controlled draft rehearsal only.
+
+All three workflows are `workflow_dispatch` only, require the canonical repository's
 `refs/heads/main` dispatch context, and are protected by the `v4-production-release` environment.
+The draft rehearsal may create and delete only its own matching unpublished draft/tag, may create
+and verify OIDC attestations for the exact downloaded candidate, and must never publish a release
+or promote `release-metadata`. It uses the same exact runner labels and source-bound checkout as
+the official path; it is not an official publication or metadata-promotion path.
 Pull-request, fork, push, and general CI workflows must remain on ordinary hosted or non-release
 runners.
 
@@ -346,6 +355,18 @@ rehearsed without creating a GitHub Release draft. The manual workflow
 the ref containing the exact requested source SHA. It uses the same dedicated
 runner labels and explicit updater-key path as production, builds one candidate,
 then runs the script below. It has no release mutation or metadata promotion state.
+
+After that topology gate passes, the controlled same-repository draft rehearsal
+may exercise the GitHub draft boundary without publishing it. The manual workflow
+`.github/workflows/rehearse-v4-draft.yml` uses the same exact source binding, protected
+environment, dedicated runner, and concurrency group as the official release workflow.
+It executes `ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDraft
+-> DownloadDraft -> QualifyDownloaded -> RecordAttestations`, then deletes only the
+matching unpublished draft/tag. Its OIDC and SPDX attestations are verified against the
+exact downloaded bytes before `RecordAttestations`; `PublishDraft`, metadata promotion,
+and final public-release verification are intentionally unreachable in this workflow.
+The rehearsal snapshots and compares legacy v3 GitHub Latest plus both public
+`release-metadata` channel endpoints before and after cleanup.
 
 ```powershell
 pwsh scripts/test_v4_production_topology_rehearsal.ps1 -CandidateStateRoot $candidateStateRoot -StateRoot (Join-Path $env:RUNNER_TEMP "sky-v4-production-topology-rehearsal") -Version $version -Channel $channel -Tag "v$version" -SourceSha $sourceSha -WorkflowSha $sourceSha

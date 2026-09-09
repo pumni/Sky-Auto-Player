@@ -823,7 +823,50 @@ fn release_runner_contract(root: &Path) -> Result<()> {
             return Err(format!("approved release runner workflow is missing: {required}").into());
         }
     }
+    release_runner_documentation_contract(root)?;
     println!("[xtask] v4 release runner trust boundary: PASS");
+    Ok(())
+}
+
+fn release_runner_documentation_contract(root: &Path) -> Result<()> {
+    let documentation = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))?;
+    release_runner_documentation_contract_source(&documentation)
+}
+
+fn release_runner_documentation_contract_source(documentation: &str) -> Result<()> {
+    let section_start = documentation
+        .find("### 2.4 GitHub Actions Runner Isolation and Operator Requirements")
+        .ok_or("release runner documentation is missing section 2.4")?;
+    let section = &documentation[section_start..];
+    let section = section
+        .find("\n### ")
+        .map_or(section, |end| &section[..end]);
+
+    let mut documented = BTreeSet::new();
+    for (index, code_segment) in section.split('`').enumerate() {
+        if index % 2 == 1 && code_segment.starts_with(".github/workflows/") {
+            documented.insert(code_segment.to_owned());
+        }
+    }
+    let expected = APPROVED_RELEASE_RUNNER_WORKFLOWS
+        .iter()
+        .map(|workflow| (*workflow).to_owned())
+        .collect::<BTreeSet<_>>();
+    if documented != expected {
+        return Err(format!(
+            "documented release runner workflow allowlist does not match the enforced allowlist: documented={documented:?}, enforced={expected:?}"
+        )
+        .into());
+    }
+    for workflow in APPROVED_RELEASE_RUNNER_WORKFLOWS {
+        let marker = format!("`{workflow}`");
+        if section.matches(&marker).count() != 1 {
+            return Err(format!(
+                "documented release runner workflow must appear exactly once in section 2.4: {workflow}"
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -3586,6 +3629,33 @@ jobs:
         let error = validate_release_runner_workflow(".github/workflows/release-v4.yml", workflow)
             .expect_err("an unprotected sensitive job subset must be rejected");
         assert!(error.to_string().contains("not approved"));
+    }
+
+    #[test]
+    fn release_runner_documentation_allowlist_matches_enforced_workflows() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let documentation = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))
+            .expect("release runner documentation fixture must exist");
+        release_runner_documentation_contract_source(&documentation)
+            .expect("documentation must enumerate exactly the approved runner workflows");
+
+        let missing = documentation.replace(
+            "`.github/workflows/rehearse-v4-draft.yml`",
+            "`draft-rehearsal-workflow-omitted.yml`",
+        );
+        assert!(
+            release_runner_documentation_contract_source(&missing).is_err(),
+            "documentation must fail when an approved runner workflow is omitted"
+        );
+
+        let extra = documentation.replace(
+            "- `.github/workflows/release-v4.yml` — job `release`, the official immutable publication path.",
+            "- `.github/workflows/release-v4.yml` — job `release`, the official immutable publication path.\n- `.github/workflows/unapproved.yml` — not approved.",
+        );
+        assert!(
+            release_runner_documentation_contract_source(&extra).is_err(),
+            "documentation must fail when an unapproved runner workflow is added"
+        );
     }
 
     #[test]
