@@ -244,9 +244,19 @@ jobs:
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT
 
+      - name: Mint release-metadata GitHub App token
+        id: metadata-app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
+          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
       - name: Promote release metadata only after immutable publication
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
             -State PromoteMetadata `
