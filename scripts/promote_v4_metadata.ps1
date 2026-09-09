@@ -339,6 +339,16 @@ $checkoutRoot = (Resolve-Path -LiteralPath $MetadataCheckout).Path
 $destination = Join-Path $checkoutRoot "channels\$Channel\latest.json"
 $destinationParent = Split-Path -Parent $destination
 New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+if (Test-Path -LiteralPath $destination -PathType Leaf) {
+    $monotonic = & cargo run --manifest-path (Join-Path $sourceRoot "rust/Cargo.toml") --locked -p sky_xtask -- `
+        release-authority validate-monotonic --channel $Channel --current $destination --candidate $metadata 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "existing release-metadata channel is not a valid strict SemVer roll-forward: $($monotonic -join "`n")"
+    }
+    Write-Host "Validated release-metadata $Channel promotion against current branch state"
+} else {
+    Write-Host "Validated first release-metadata $Channel promotion without fabricated current metadata"
+}
 $temporary = "$destination.$PID.tmp"
 try {
     Copy-Item -LiteralPath $Metadata -Destination $temporary -Force
@@ -347,5 +357,5 @@ try {
     Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "Prepared validated v4 $Channel metadata for v$version to $destination"
+Write-Host "Prepared validated v4 $Channel metadata for v$version to $destination (strictly monotonic per channel)"
 Write-Host "The release-metadata branch is published separately after validation; this action never publishes or mutates a GitHub release."

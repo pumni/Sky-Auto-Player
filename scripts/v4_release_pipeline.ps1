@@ -32,6 +32,18 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $canonicalRepository = "pumni/Sky-Auto-Player"
+$metadataBootstrapPath = ".release-metadata/README.md"
+$metadataBootstrapContract = @(
+    "# Sky Auto Player v4 release metadata",
+    "",
+    "bootstrap_contract: sky-auto-player-v4-release-metadata-v1",
+    "This orphan branch contains deployment-state metadata only.",
+    "The channel latest.json files are created only by qualified immutable release promotion."
+) -join "`n"
+$rawMetadataEndpoints = @{
+    stable = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json"
+    beta = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json"
+}
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $installerSuffix = "_x64-setup.exe"
 $productionEvidenceName = "V4_PRODUCTION_RELEASE_EVIDENCE.json"
@@ -251,6 +263,56 @@ function Get-CanonicalRepository {
     return $env:GITHUB_REPOSITORY
 }
 
+function Write-RepositoryContentFile([object]$Response, [string]$Path, [string]$ExpectedPath) {
+    if ($null -eq $Response -or [string]$Response.type -ne "file" -or
+        [string]$Response.path -ne $ExpectedPath) {
+        Fail "repository content response is not the expected file: $ExpectedPath"
+    }
+    $encoded = [regex]::Replace([string]$Response.content, '\s', '')
+    if ([string]::IsNullOrWhiteSpace($encoded)) { Fail "repository content file is empty: $ExpectedPath" }
+    try {
+        $bytes = [Convert]::FromBase64String($encoded)
+    } catch {
+        Fail "repository content file is not valid base64: $ExpectedPath"
+    }
+    if ($bytes.Length -eq 0) { Fail "repository content file has no bytes: $ExpectedPath" }
+    [IO.File]::WriteAllBytes($Path, $bytes)
+}
+
+function Assert-MetadataBranchReadiness([string]$Repository) {
+    $branch = Invoke-GitHubApi -Arguments @("api", "repos/$Repository/git/ref/heads/release-metadata") -AllowNotFound
+    if ($null -eq $branch) { Fail "canonical release-metadata branch is not initialized" }
+    if ([string]$branch.ref -ne "refs/heads/release-metadata" -or
+        [string]$branch.object.type -ne "commit") {
+        Fail "canonical release-metadata branch identity is not canonical"
+    }
+
+    $bootstrap = Invoke-GitHubApi -Arguments @(
+        "api", "repos/$Repository/contents/$metadataBootstrapPath`?ref=release-metadata"
+    ) -AllowNotFound
+    if ($null -eq $bootstrap) { Fail "release-metadata bootstrap contract is missing" }
+    $bootstrapPath = Join-Path (Get-EffectiveStateRoot) "release-metadata-bootstrap.md"
+    Write-RepositoryContentFile $bootstrap $bootstrapPath $metadataBootstrapPath
+    $bootstrapText = [IO.File]::ReadAllText($bootstrapPath, [Text.UTF8Encoding]::new($false)).TrimEnd("`r", "`n")
+    if ($bootstrapText -ne $metadataBootstrapContract) {
+        Fail "release-metadata bootstrap contract is not canonical"
+    }
+
+    foreach ($channelName in @("stable", "beta")) {
+        $metadataPath = "channels/$channelName/latest.json"
+        $metadata = Invoke-GitHubApi -Arguments @(
+            "api", "repos/$Repository/contents/$metadataPath`?ref=release-metadata"
+        ) -AllowNotFound
+        if ($null -eq $metadata) { continue }
+        $localPath = Join-Path (Get-EffectiveStateRoot) "repository-$channelName-latest.json"
+        Write-RepositoryContentFile $metadata $localPath $metadataPath
+        Invoke-Checked "cargo" @(
+            "xtask", "release-authority", "validate", "--channel", $channelName, "--metadata", $localPath
+        ) "existing release-metadata $channelName channel failed canonical validation"
+    }
+    Write-Host "V4 release-metadata readiness: PASS (orphan branch exists; bootstrap contract and existing channels are valid)"
+}
+
 function Assert-RepositoryReleasePolicy {
     $repository = Get-CanonicalRepository
     $main = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/ref/heads/main") -AllowNotFound
@@ -262,7 +324,57 @@ function Assert-RepositoryReleasePolicy {
     if ($null -eq $immutable -or -not [bool]$immutable.enabled) {
         Fail "canonical repository immutable-releases policy is not enabled"
     }
-    Write-Host "V4 repository release preconditions: PASS (main exists; immutable releases enabled)"
+    Assert-MetadataBranchReadiness $repository
+    Write-Host "V4 repository release preconditions: PASS (main exists; immutable releases enabled; release-metadata ready)"
+}
+
+function Get-PublicMetadataDocument([string]$Channel) {
+    if (-not $rawMetadataEndpoints.ContainsKey($Channel)) {
+        Fail "raw metadata endpoint channel is not canonical: $Channel"
+    }
+    $endpoint = [string]$rawMetadataEndpoints[$Channel]
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.AllowAutoRedirect = $false
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $lastError = ""
+    try {
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $request = $null
+            $response = $null
+            try {
+                $request = [System.Net.Http.HttpRequestMessage]::new(
+                    [System.Net.Http.HttpMethod]::Get,
+                    $endpoint
+                )
+                [void]$request.Headers.Accept.ParseAdd("application/json")
+                if ($null -ne $request.Headers.Authorization) {
+                    $lastError = "raw metadata request unexpectedly carries Authorization"
+                } else {
+                    $response = $client.SendAsync($request).GetAwaiter().GetResult()
+                    $status = [int]$response.StatusCode
+                    if ($status -eq 200) {
+                        $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                        if (-not [string]::IsNullOrWhiteSpace($body)) {
+                            return [pscustomobject]@{ Endpoint = $endpoint; Body = $body }
+                        }
+                        $lastError = "raw metadata endpoint returned an empty body"
+                    } else {
+                        $lastError = "raw metadata endpoint returned HTTP $status"
+                    }
+                }
+            } catch {
+                $lastError = $_.Exception.Message
+            } finally {
+                if ($null -ne $response) { $response.Dispose() }
+                if ($null -ne $request) { $request.Dispose() }
+            }
+            if ($attempt -lt 3) { Start-Sleep -Seconds 2 }
+        }
+    } finally {
+        $client.Dispose()
+        $handler.Dispose()
+    }
+    Fail "raw metadata endpoint did not return a non-empty unauthenticated 200 response after bounded retry: $lastError"
 }
 
 function Get-ExpectedInstallerName {
@@ -804,6 +916,17 @@ function Invoke-PromoteMetadata {
     if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) { Fail "promotion did not produce the governed channel metadata" }
     $encoded = [Convert]::ToBase64String([IO.File]::ReadAllBytes($destination))
     $existing = Invoke-GitHubApi -Arguments @("api", "repos/$repository/contents/channels/$Channel/latest.json?ref=release-metadata") -AllowNotFound
+    if ($null -ne $existing) {
+        $currentPath = Join-Path $root "current-$Channel-latest.json"
+        Write-RepositoryContentFile $existing $currentPath "channels/$Channel/latest.json"
+        Invoke-Checked "cargo" @(
+            "xtask", "release-authority", "validate-monotonic", "--channel", $Channel,
+            "--current", $currentPath, "--candidate", $destination
+        ) "live release-metadata channel is not a valid strict SemVer roll-forward"
+        Write-Host "V4 metadata promotion: live channel passed strictly monotonic SemVer validation"
+    } else {
+        Write-Host "V4 metadata promotion: first channel publication (no current latest.json)"
+    }
     $payload = [ordered]@{
         message = "Promote v4 $Channel metadata for $Version"
         content = $encoded
@@ -835,20 +958,33 @@ function Invoke-FinalVerify {
     }
     $metadataResponse = Invoke-GitHubApi -Arguments @("api", "repos/$repository/contents/channels/$Channel/latest.json?ref=release-metadata")
     $metadataPath = Join-Path (Get-EffectiveStateRoot) "final-metadata.json"
-    $metadataBase64 = [regex]::Replace([string]$metadataResponse.content, '\s', '')
-    [IO.File]::WriteAllBytes($metadataPath, [Convert]::FromBase64String($metadataBase64))
-    Invoke-Checked "cargo" @("xtask", "release-authority", "validate", "--channel", $Channel, "--metadata", $metadataPath) "final public metadata failed deterministic validation"
+    Write-RepositoryContentFile $metadataResponse $metadataPath "channels/$Channel/latest.json"
+    Invoke-Checked "cargo" @("xtask", "release-authority", "validate", "--channel", $Channel, "--metadata", $metadataPath) "authenticated metadata failed deterministic validation"
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+    $publicMetadata = Get-PublicMetadataDocument $Channel
+    if ([string]$publicMetadata.Endpoint -ne [string]$rawMetadataEndpoints[$Channel]) {
+        Fail "final metadata was not fetched from the exact canonical raw.githubusercontent.com endpoint"
+    }
+    $publicMetadataPath = Join-Path (Get-EffectiveStateRoot) "final-public-metadata.json"
+    [IO.File]::WriteAllText($publicMetadataPath, $publicMetadata.Body, [Text.UTF8Encoding]::new($false))
+    Invoke-Checked "cargo" @("xtask", "release-authority", "validate", "--channel", $Channel, "--metadata", $publicMetadataPath) "unauthenticated raw metadata failed deterministic validation"
+    $publicMetadataJson = Get-Content -LiteralPath $publicMetadataPath -Raw | ConvertFrom-Json
     $sourceInstaller = Get-ExpectedInstallerName
     $releaseInstaller = Get-V4SafeReleaseAssetName $sourceInstaller
     $releaseSignature = Get-V4SafeReleaseAssetName "$sourceInstaller.sig"
     $expectedUrl = "https://github.com/$repository/releases/download/$Tag/$releaseInstaller"
-    if ([string]$metadata.version -ne $Version -or [string]$metadata.platforms.'windows-x86_64'.url -ne $expectedUrl) {
+    if ([string]$metadata.version -ne $Version -or [string]$metadata.platforms.'windows-x86_64'.url -ne $expectedUrl -or
+        [string]$publicMetadataJson.version -ne $Version -or
+        [string]$publicMetadataJson.platforms.'windows-x86_64'.url -ne $expectedUrl) {
         Fail "final metadata does not reference the exact immutable public asset"
     }
     $finalSignature = Get-Content -LiteralPath (Join-Path (Get-EffectiveStateRoot) "final-$releaseSignature") -Raw
     $metadataSignature = [string]$metadata.platforms.'windows-x86_64'.signature
-    if ($finalSignature.Trim() -ne $metadataSignature.Trim()) {
+    $publicMetadataSignature = [string]$publicMetadataJson.platforms.'windows-x86_64'.signature
+    if ($finalSignature.Trim() -ne $metadataSignature.Trim() -or
+        $finalSignature.Trim() -ne $publicMetadataSignature.Trim() -or
+        [string]$publicMetadataJson.version -ne [string]$metadata.version -or
+        [string]$publicMetadataJson.platforms.'windows-x86_64'.url -ne [string]$metadata.platforms.'windows-x86_64'.url) {
         Fail "final metadata signature does not match the exact public Tauri signature asset"
     }
     if ($expectedUrl -notmatch '^https://github\.com/pumni/Sky-Auto-Player/releases/download/') {
