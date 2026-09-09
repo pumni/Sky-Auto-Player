@@ -1,8 +1,12 @@
 # ADR-0006: V4 Clean Distribution, Installation, and Update Boundary
 
-Status: accepted
+Status: superseded by [ADR-0007](ADR-0007-single-repository-v4-release-architecture.md)
 
 Date: 2026-09-03
+
+> Historical decision record. This ADR preserves the pre-release two-repository design and its
+> rationale; it is not the current production architecture. ADR-0007 supersedes the dedicated
+> release-authority topology before the first official v4 release.
 
 ## Context
 

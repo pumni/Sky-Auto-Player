@@ -200,7 +200,7 @@ Windows Authenticode is an OS / SmartScreen / install-time gate during manual in
 Consequently, an attacker who possesses the private updater key could forge update signatures
 that deployed client instances would accept as valid if the attacker can serve them via an
 update channel. Therefore, **the primary and immediate authorization gate against updater key
-compromise is the Release Authority channel freeze**.
+compromise is the protected `release-metadata` channel freeze**.
 
 ### Incident Response Procedure
 
@@ -209,9 +209,10 @@ If the private updater key is suspected or confirmed to be compromised:
 1. **Severity 1 Incident Declaration**:
    - Immediately invoke the security process in `SECURITY.md`.
 
-2. **Freeze Release Authority Channels (Critical Containment)**:
+2. **Freeze `release-metadata` Channels (Critical Containment)**:
    - Immediately delete or overwrite `channels/stable/latest.json` and `channels/beta/latest.json`
-     in `pumni/Sky-Auto-Player-Releases` with emergency quarantine metadata (empty or revoked).
+     in the `release-metadata` branch of `pumni/Sky-Auto-Player` with emergency quarantine metadata
+     (empty or revoked).
    - This immediately halts all background update polling by existing clients, preventing them
      from fetching attacker-signed payloads.
 

@@ -26,7 +26,7 @@ protocol. Tauri updater signatures and the retired v3 manifest signature are
 different contracts; only the former is used for v4 updates.
 
 V4 update ordering is SemVer-only. Rust owns the fixed stable/beta metadata
-endpoints and channel policy; React cannot provide updater authority, keys,
+endpoints and channel policy; React cannot provide metadata endpoints, keys,
 URLs, or downgrade policy. The v4 trust root is public-only in source, while
 the private updater key remains external, encrypted at rest with an independent
 encrypted backup. Optional Authenticode signer inputs remain external; no
@@ -40,7 +40,8 @@ SPDX SBOM, provenance, clean worktree, install/launch/uninstall, and the
 post-download previous-v4-to-candidate-v4 fixture evidence. That fixture
 consumes the exact installer and `.sig` re-downloaded from the draft; it does
 not rebuild the candidate. Release orchestration remains subject to the
-dedicated v4 release authority and its reviewed promotion policy.
+single-repository runbook in `v4-release-authority.md` and its reviewed
+promotion policy.
 
 The remainder of this document is retained as a historical v3-maintenance
 reference. It is not a current v4 runtime, packaging, release, or update
@@ -207,24 +208,24 @@ The native updater uses HTTPS only and checks redirects against:
 bases, arbitrary mirrors, shell downloads, and TLS-verification bypasses are
 rejected. Release metadata never supplies the manual browser destination.
 
-### V4 authority boundary
+### V4 release-metadata boundary
 
 V4 never queries either v3 endpoint above. The Rust `UpdateService` selects
 exactly one of these fixed Tauri static metadata endpoints from the persisted
 channel setting:
 
 ```text
-stable: https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json
-beta:   https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json
+stable: https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json
+beta:   https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json
 ```
 
-The metadata contains only the canonical Windows NSIS asset from the dedicated
-`pumni/Sky-Auto-Player-Releases` authority and the exact contents of its
-`.exe.sig` sidecar. Stable and beta metadata have separate paths and are never
-interchanged. Endpoint URLs, keys, artifact paths, and downgrade policy do
-not cross the Rust/React boundary. See `v4-release-authority.md` for the
-generator, validator, post-qualification promotion, and read-only namespace
-acceptance.
+The metadata contains only the canonical Windows NSIS asset from an immutable
+GitHub Release in `pumni/Sky-Auto-Player` and the exact contents of its `.exe.sig`
+sidecar. Stable and beta metadata have separate paths and are never interchanged.
+Endpoint URLs, keys, artifact paths, and downgrade policy do not cross the
+Rust/React boundary. See `v4-release-authority.md` for the generator, validator,
+strictly monotonic post-qualification promotion, and final public endpoint
+verification.
 
 ### 4. Archive and manifest safety
 

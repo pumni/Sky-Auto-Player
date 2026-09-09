@@ -99,10 +99,10 @@ dùng trong Sky.
 ## Cảnh báo Windows SmartScreen khi khởi động
 
 **Nguyên nhân**: Installer hoặc binary không đạt identity Authenticode mong đợi, hoặc không
-được tải từ release authority v4 canonical.
+được tải từ trang GitHub Releases chính thức của Sky Auto Player.
 
 **Sửa**: Không bỏ qua cảnh báo. Xóa file và tải lại installer cùng sidecar `.exe.sig` từ
-[release authority v4](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+[trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases).
 
 ## Cập nhật thủ công
 
@@ -111,7 +111,7 @@ dùng trong Sky.
 **Sửa**:
 
 1. Thử lại **Update and Restart** từ thông báo cập nhật trong app.
-2. Nếu vẫn thất bại, tải installer NSIS canonical từ [v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+2. Nếu vẫn thất bại, tải installer NSIS canonical từ [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases).
 3. Không dùng ZIP v3, `MANIFEST.json` hoặc updater executable độc lập cho v4.
 
 ## HUD hiển thị jitter timing cao

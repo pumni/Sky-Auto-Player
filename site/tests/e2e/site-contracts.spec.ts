@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 
 const origin = 'http://localhost:4321/Sky-Auto-Player';
+const officialReleasesUrl = 'https://github.com/pumni/Sky-Auto-Player/releases';
+const legacyLatestUrl = `${officialReleasesUrl}/latest`;
 
 const canonicalRoutes = [
   { path: '/', lang: 'en', canonical: 'https://pumni.github.io/Sky-Auto-Player/' },
@@ -45,6 +47,18 @@ test.describe('published route and asset contracts', () => {
       expect(html).toContain('<link rel="canonical" href="' + redirect.canonical + '"');
       expect(html).toContain('url=' + redirect.link);
       expect(html).toContain('href="' + redirect.link + '"');
+    }
+  });
+
+  test('active v4-facing pages use the releases collection, not legacy Latest', async ({
+    request,
+  }) => {
+    for (const path of ['/', '/faq/', '/vi/', '/vi/faq/']) {
+      const response = await request.get(origin + path);
+      expect(response.status()).toBe(200);
+      const html = await response.text();
+      expect(html).toContain(officialReleasesUrl);
+      expect(html).not.toContain(legacyLatestUrl);
     }
   });
 

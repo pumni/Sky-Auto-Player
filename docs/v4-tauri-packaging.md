@@ -3,7 +3,8 @@
 V4 uses the Tauri Windows bundler as its canonical package producer. The
 foundation enables the NSIS package and updater artifact generation. The
 Rust-owned `UpdateService` now drives the official Tauri updater through the
-dedicated v4 release authority described in `v4-release-authority.md`.
+single-repository release and `release-metadata` contract described in
+`v4-release-authority.md`.
 Production metadata may be absent until a qualified promotion. The independent
 Tauri updater trust root is committed as public material in the Tauri config
 and Rust updater boundary; missing or invalid trust material fails closed.
@@ -193,8 +194,9 @@ The isolated CI updater qualification runs
 script owns the fixture `CARGO_TARGET_DIR` for each throwaway build and serves
 the signed candidate from a loopback fixture, installs the previous v4 package, and verifies the official
 Tauri updater reaches the candidate version after restart. It also verifies
-the bridge `[old,new]` to cutover `[new]` trust transition against real
-packaged clients. The same evidence records the ordered native quiesce,
+the reviewed overlap `[old,new]` to cutover `[new]` updater-trust transition against real
+packaged clients. This is a signing-key rotation fixture, not a compatibility path for
+pre-release v4 builds. The same evidence records the ordered native quiesce,
 key-release, state-persistence, and resource-close phases.
 
 ## Acceptance boundary
@@ -205,6 +207,7 @@ uninstall remain Windows-manual acceptance evidence; the packaged update
 qualification is the deterministic previous-v4 -> candidate-v4 acceptance
 path. A full non-PR run must be dispatched from the branch so provenance and
 SPDX attestations are generated and verified before acceptance. The production
-release/channel authority is configured by WO-04. The v4 updater public trust
+release and `release-metadata` channel contract is documented in
+`v4-release-authority.md`. The v4 updater public trust
 root and rotation policy are implemented here; an approved Authenticode
 provider is optional future work and is not a release prerequisite.

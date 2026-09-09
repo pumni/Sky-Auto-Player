@@ -35,7 +35,7 @@ evidence:
 
 ## Tải xuống và cài đặt
 
-1. Vào [release authority v4](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+1. Vào [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases).
 2. Tải installer Tauri NSIS canonical và sidecar `.exe.sig`.
 3. Chạy installer và giữ vị trí current-user mặc định.
 4. Mở **Sky Auto Player** từ shortcut đã cài.
@@ -46,7 +46,7 @@ Lần đầu khởi động, ứng dụng tạo dữ liệu trong vùng app-data
 thủ công — mọi cài đặt được hỗ trợ đều có trong hộp thoại **Settings**.
 
 Installer canonical được xác minh Authenticode. Nếu Windows báo lỗi integrity hoặc publisher,
-hãy xóa file và tải lại từ release authority v4.
+hãy xóa file và tải lại từ trang GitHub Releases chính thức.
 
 ## Thêm bài hát
 
@@ -65,7 +65,8 @@ hãy xóa file và tải lại từ release authority v4.
 
 ## Cập nhật
 
-Sky Auto Player kiểm tra channel v4 qua release authority riêng và hiển thị banner khi có bản
+Sky Auto Player kiểm tra channel v4 qua metadata đã được xác thực trên branch `release-metadata`
+trong repository chính và hiển thị banner khi có bản
 mới. **Update and Restart** dùng official Tauri updater qua `UpdateService` Rust; updater xác
 minh `.sig` rồi chạy installer current-user. V4 không có `Sky-Auto-Player-Updater.exe`, updater
 ZIP portable hoặc hợp đồng `MANIFEST.json.sig` tùy biến.

@@ -101,10 +101,10 @@ in use inside Sky.
 ## Windows SmartScreen warning on launch
 
 **Cause**: The installer or an installed binary did not pass the expected Authenticode identity
-or was not downloaded from the canonical v4 authority.
+or was not downloaded from the official Sky Auto Player GitHub Releases page.
 
 **Fix**: Do not bypass the warning. Delete the download and obtain the installer and `.exe.sig`
-sidecar again from the [v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+sidecar again from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
 
 ## Updating manually
 
@@ -114,7 +114,7 @@ sidecar again from the [v4 release authority](https://github.com/pumni/Sky-Auto-
 
 1. Retry **Update and Restart** from the in-app update notice.
 2. If it still fails, uninstall only after preserving app data, then download the current
-   canonical NSIS installer from the [v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+   canonical NSIS installer from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
 3. Do not use a v3 ZIP, `MANIFEST.json`, or standalone updater executable for v4.
 
 ## The HUD shows high timing jitter

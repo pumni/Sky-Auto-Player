@@ -1,157 +1,133 @@
-# V4 Release Authority
+# V4 Release and Update Runbook
 
-V4 has a separate public release authority:
-
-```text
-pumni/Sky-Auto-Player-Releases
-```
-
-The source repository `pumni/Sky-Auto-Player` remains the legacy v3 release
-namespace. The v4 Rust `UpdateService` has exactly two compiled metadata
-endpoints:
+This is the current v4 release and update runbook. The supported architecture has one official
+repository:
 
 ```text
-stable: https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json
-beta:   https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json
+pumni/Sky-Auto-Player
 ```
 
-These URLs are selected by Rust from the persisted channel setting. They are
-not supplied by React, environment variables, command-line arguments, or a
-GitHub Releases fallback. The dedicated repository may remain without either
-`latest.json` file until the first qualified v4 promotion; a missing endpoint
-therefore fails closed.
+The repository contains the v4 source, immutable GitHub Releases, release provenance, and the
+`release-metadata` deployment branch, which must be protected before production cutover.
+`v4.0.1` is the first official v4 release lineage.
+The earlier v4.0.0 builds were rehearsal/pre-release infrastructure and are not a supported
+compatibility endpoint or migration target. There is no bridge, fallback, compatibility shim, or
+permanent second-repository release topology.
 
-## Canonical published asset
+## Public update channels
 
-The Windows package uses the actual Tauri NSIS output and has one updater
-asset/signature pair per release:
+The Rust `UpdateService` selects exactly one of these compiled, unauthenticated raw endpoints from
+the persisted channel setting:
+
+```text
+stable: https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json
+beta:   https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json
+```
+
+The frontend cannot provide an endpoint, key, URL, or downgrade policy. The `release-metadata`
+branch is mutable deployment state separate from immutable GitHub Release assets. Its channel files
+are created only by a successful qualified promotion; bootstrap must not create fabricated
+`latest.json` files. Until the first qualified promotion, a missing channel file fails closed.
+Branch ruleset/protection and the approved workflow/maintainer promotion path are owner/admin
+prerequisites tracked by issue #165; no official v4.0.1 dispatch is allowed before that gate passes.
+
+Stable and beta are independent paths:
+
+```text
+release-metadata/
+  channels/
+    stable/latest.json
+    beta/latest.json
+```
+
+Each promotion validates the complete Tauri metadata contract and requires a strictly greater
+SemVer than the current file in that channel. Equal-version and downgrade writes are rejected.
+
+## Canonical release asset
+
+The supported Windows package is the Tauri NSIS installer and its updater signature:
 
 ```text
 Sky Auto Player_<version>_x64-setup.exe
 Sky Auto Player_<version>_x64-setup.exe.sig
 ```
 
-The immutable release URL is derived from the exact version and filename:
+The immutable asset URL is derived from the version and filename in the official repository:
 
 ```text
-https://github.com/pumni/Sky-Auto-Player-Releases/releases/download/v<version>/Sky%20Auto%20Player_<version>_x64-setup.exe
+https://github.com/pumni/Sky-Auto-Player/releases/download/v<version>/Sky%20Auto%20Player_<version>_x64-setup.exe
 ```
 
-No portable ZIP, v3 `MANIFEST.json`, alias filename, source-repository
-release, or signature URL is valid v4 updater metadata. The `.sig` field in
-metadata contains the exact text from the published Tauri `.sig` file.
+Metadata contains the exact `.sig` text and the canonical `windows-x86_64` platform only. Portable
+ZIPs, custom v3 manifests, aliases, non-HTTPS URLs, other repositories, query/fragment state,
+malformed dates, extra platforms, and non-canonical artifact names are invalid v4 metadata.
 
-## Deterministic metadata
+## Deterministic metadata commands
 
-`cargo xtask release-authority generate` accepts only qualified-release
-inputs: the canonical SemVer version, normalized release notes, a
-second-precision UTC RFC3339 publication date, the exact
-`windows-x86_64` Tauri platform, the immutable asset URL, and the exact
-signature file. It emits the official Tauri static JSON shape:
+The repository-owned generator and validator are exposed through the `release-metadata` command:
 
-```json
-{
-  "version": "4.0.0",
-  "notes": "...",
-  "pub_date": "2026-09-04T00:00:00Z",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "<contents of .sig>",
-      "url": "<exact immutable asset URL>"
-    }
-  }
-}
+```text
+cargo xtask release-metadata generate --channel <stable|beta> --version <semver> \
+  --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 \
+  --asset-url <url> --signature-file <path> --output <path>
+
+cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>
+
+cargo xtask release-metadata validate-monotonic --channel <stable|beta> \
+  --current <path> --candidate <path>
 ```
 
-`cargo xtask release-authority validate --channel stable|beta` validates the
-same bounded contract. Stable accepts only final SemVer releases; beta is
-explicitly a prerelease channel. Stable and beta are separate destination
-paths: `channels/stable/latest.json` and `channels/beta/latest.json`. The
-validator rejects v3 URLs, non-HTTPS URLs, other owners/repos, query or
-fragment state, SemVer build metadata, malformed dates, extra platforms, and
-non-canonical artifact names.
+Stable accepts final SemVer releases; beta accepts prereleases. The validator also checks release
+identity, exact platform shape, signature contents, canonical URLs, and channel policy.
 
-The packaged qualification path emits a bounded
-`tauri-nsis-qualified-release` evidence object containing the canonical
-version/name/size pair and SHA-256 digests for both the installer and `.sig`,
-  plus `unsigned-zero-budget` Authenticode-state evidence and SPDX SBOM references/digests.
-  The installer is truthfully recorded as Authenticode-unsigned.
-`qualified=true` is not accepted by itself: the promotion gate rejects missing
-  or extra fields, `test` or other non-governed Authenticode modes, malformed evidence, digest
-mismatches, and same-name assets with different bytes. Metadata promotion is a separate operation after the
-immutable release has been published and the exact published assets have
-passed qualification. It compares GitHub's asset digest when present, or
-downloads and hashes the exact canonical asset when the API omits a digest.
-The promotion action copies only the validated generated file into the
-selected channel path; it never creates placeholder production metadata and
-never rebuilds or replaces a published binary. Stable promotion cannot write
-the beta path, and beta promotion cannot write the stable path.
+## Release transaction
 
-The repository-owned acceptance check
-`scripts/ci_v4_release_authority_acceptance.ps1` is read-only. It verifies
-that the public source repository's `/releases/latest` is still a published
-v3 release with its canonical v3 assets and that the dedicated authority is a
-public repository. It does not create, upload, publish, edit, or delete any
-release.
+The production workflow `.github/workflows/release-v4.yml` is manual, runs only through the
+protected `v4-production-release` environment on the dedicated signing runner, and uses the
+canonical repository token for same-repository release operations. Its transaction is:
 
-`scripts/promote_v4_metadata.ps1` is the separate promotion gate. It requires
-the bounded evidence emitted by the packaged qualification path, runs the Rust
-metadata validator, reads the dedicated repository's published release and
-exact installer/`.sig` pair, and compares names, sizes, and SHA-256 digests
-against the qualified bytes before atomically copying metadata into the
-selected channel path in an authority checkout. Its `-SelfTest` regression
-path proves arbitrary `qualified=true` evidence and same-name/different-bytes
-assets are rejected. The dedicated v4 release pipeline invokes this validator
-only after it has published the immutable draft, then writes the validated
-channel file through the bounded authority credential. The promotion helper
-itself never creates, edits, replaces, or deletes a GitHub release asset.
+```text
+ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDraft
+  -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
+  -> PublishDraft -> PromoteMetadata -> FinalVerify
+```
 
-The dedicated authority must have GitHub immutable releases enabled before
-the first production transaction. `ValidateAuthority` checks both the
-existing `refs/heads/main` bootstrap and the repository's immutable-release
-setting; `PublishDraft` and `FinalVerify` require the returned release object
-to report `immutable=true`. Assets are uploaded only through the
-release-specific `upload_url` returned by the create-release response, and a
-duplicate-name/upload error is never repaired by deleting or replacing an
-asset. A failed unpublished draft may be deleted and recreated with the same
-version after the candidate is fixed; once published or promoted, the release
-and tag are immutable and any fix requires a new SemVer/RC.
+The ordering is security-critical:
 
-## Release pipeline and authority bootstrap
+1. Validate the canonical repository, `main` source ref, immutable-release policy, and
+   `release-metadata` branch readiness before creating a draft.
+2. Build the exact source SHA once and create a draft in the official repository.
+3. Re-download the draft installer and signature, then qualify those exact bytes.
+4. Record SBOM and provenance/attestation evidence bound to the exact source and artifacts.
+5. Publish the already-qualified draft immutably with `make_latest=false` while the v3 Latest
+   contract remains protected.
+6. Generate, validate, and promote only the selected stable/beta metadata file after publication.
+7. Re-fetch the public release and verify the exact unauthenticated `raw.githubusercontent.com`
+   endpoint used by the client.
 
-`.github/workflows/release-v4.yml` is the only production v4 publication entry
-point. It is manual, runs on the dedicated/single-tenant Windows runner, and
-uses `V4_RELEASE_AUTHORITY_TOKEN` for release/assets/channel metadata writes.
-The source `GITHUB_TOKEN` and OIDC permissions remain separate and are used for
-source-bound attestations. The updater private key is not a GitHub secret: the
-production workflow does not accept a key-path input and reads
-`V4_UPDATER_PRIVATE_KEY_PATH` only from dedicated runner-local process
-configuration.
-The authority token contract is bounded to the dedicated repository only, with
-the minimum Administration read and Contents read/write capability needed to
-inspect immutable-release policy, create/read/publish release records, upload
-release assets, and write `channels/<channel>/latest.json`; it has no
-source-repository, Actions, secrets, package, or updater-key permission.
+Published release assets and tags are never repaired in place. A failed unpublished draft may be
+recreated after correction; a published fix requires a greater SemVer release.
 
-The pipeline first requires `refs/heads/main` in this repository. An empty
-authority repository therefore fails closed with an instruction to perform a
-separately reviewed one-time bootstrap. That bootstrap must create the minimal
-authority `main` history (including the channel directory contract) outside a
-production release dispatch. A release dispatch never creates the first
-authority commit as a side effect.
+## Qualification and trust properties
 
-The current pre-provider release policy is temporary `unsigned-zero-budget`: no
-Authenticode provider credentials are required in PR CI or ordinary CI, and an
-optional real-signer seam is separately governed. Production GA should use an approved real
-signer when a provider is selected and available; the release order is sign, verify, upload the
-signed draft, qualify the exact downloaded artifact, then publish. The retired v3 updater is preserved by Git
-history and the `v3-maintenance` line, but is not part of the current v4
-workspace or product graph.
+The release gate preserves these properties while using one repository:
 
-The v4 Tauri updater public trust root is committed independently of this
-release-authority metadata contract. Its operational private key remains
-outside the repository. The post-download fixture bridge trusts `[old,new]`
-and verifies the exact downloaded candidate bytes during `Update::download()`;
-the production candidate itself is not rebuilt by that qualification. A full
-non-PR workflow dispatch is required for provenance and SPDX attestation
-evidence.
+- build once, then qualify and publish the exact same bytes;
+- mandatory Tauri updater signature verification;
+- exact installer and signature SHA-256 evidence;
+- SPDX SBOM and GitHub OIDC provenance/attestation;
+- immutable GitHub Release publication;
+- strict stable/beta SemVer policy and monotonic metadata promotion;
+- protected production environment and isolated signing runner;
+- runner-local updater key outside the workspace, with no key-path workflow input;
+- least-privilege permissions and `persist-credentials: false` checkout;
+- fail-closed validation when metadata, release assets, signatures, or public endpoints differ.
+
+The current Authenticode policy is `unsigned-zero-budget`: updater cryptographic trust remains
+mandatory even while Windows publisher identity is intentionally unsigned. Any future production
+signer requires separate qualification and does not change the repository or metadata topology.
+
+For runner isolation, evidence retention, rehearsal, and owner/admin cutover requirements, see
+[`v4-release-execution-topology.md`](v4-release-execution-topology.md) and issue #165. Owner/admin
+actions such as branch protection, secret removal, repository deletion, and the final v4.0.1
+dispatch are not performed by this runbook.

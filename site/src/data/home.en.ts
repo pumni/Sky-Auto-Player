@@ -90,7 +90,7 @@ export const homeEn: HomeContent = {
       {
         title: 'Download',
         description:
-          'Get the canonical Tauri NSIS installer from the dedicated v4 release authority and install it for the current user.',
+          'Get the canonical Tauri NSIS installer from the official Sky Auto Player GitHub Releases page and install it for the current user.',
       },
       {
         title: 'Add a sheet',
@@ -179,7 +179,7 @@ export const homeEn: HomeContent = {
   finalCta: {
     title: 'Your next performance is already written.',
     description: 'Download Sky Auto Player, add a sheet and let the timing take care of itself.',
-    primaryCta: 'Download latest release',
+    primaryCta: 'Browse releases',
     secondaryCta: 'View source on GitHub',
   },
 };
