@@ -46,6 +46,27 @@ foreach ($source in @(
 
 function Fail([string]$Message) { throw "FAILED: $Message" }
 
+function Test-StrictModeEmptyFreshUserSongs {
+    Set-StrictMode -Version Latest
+    $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-empty-fresh-songs-test-" + [guid]::NewGuid().ToString("N"))
+    $freshSongsRoot = Join-Path $testRoot "songs"
+    try {
+        New-Item -ItemType Directory -Path $freshSongsRoot -Force | Out-Null
+        $freshUserSongs = @(
+            Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue
+        )
+        if ($freshUserSongs.Count -ne 0) {
+            Fail "empty fresh songs directory unexpectedly contained user songs"
+        }
+    } finally {
+        if (Test-Path -LiteralPath $testRoot) {
+            Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Test-StrictModeEmptyFreshUserSongs
+
 function Get-SanitizedReleaseProbeOutput {
     param(
         [AllowEmptyString()]

@@ -989,6 +989,8 @@ fn v4_release_pipeline_contract_source(
         "sha256_verified",
         "songs_parseable",
         "fresh-appdata-built-in-user-composition",
+        "freshUserSongs = @(",
+        "Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue",
         "SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
         "previousFreshSelfTest",
         "if ($null -eq $previousAppDataRoot)",
@@ -1019,6 +1021,15 @@ fn v4_release_pipeline_contract_source(
     {
         return Err(
             "v4 release coordinator regression test is missing build-once/publication guards"
+                .into(),
+        );
+    }
+    if !regression.contains("Test-StrictModeEmptyFreshUserSongs")
+        || !regression.contains("freshUserSongs = @(")
+        || !regression.contains("$freshUserSongs.Count -ne 0")
+    {
+        return Err(
+            "v4 release coordinator regression test is missing the StrictMode empty-directory guard"
                 .into(),
         );
     }
@@ -3442,13 +3453,14 @@ function Invoke-BuildCandidate {
 }
 function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; make_latest = $false; GitHub's successful DELETE endpoints return an empty body }
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
-function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
+function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; freshUserSongs = @(; Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { GH_TOKEN }
 function Invoke-PublishDraft { draft = $false; make_latest = $false }
 function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication; branch = "release-metadata"; GITHUB_REPOSITORY; Invoke-GitHubApi }
 function Invoke-FinalVerify { FinalVerify }
 "#;
         let regression = r#"
+function Test-StrictModeEmptyFreshUserSongs { Set-StrictMode -Version Latest; freshUserSongs = @(); $freshUserSongs.Count -ne 0 }
 class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$UploadedThroughReleaseUrl = $false; [bool]$ExactDownloadedBytes = $false; [bool]$immutable = $false; candidate rebuilt; promotion before immutable publication; BuildCount -ne 1; UploadedThroughReleaseUrl; ExactDownloadedBytes; immutable }
 "#;
         assert!(v4_release_pipeline_contract_source(workflow, pipeline, regression).is_ok());
@@ -3475,6 +3487,19 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
             )
             .is_err(),
             "production qualification must retain installed built-in catalog verification"
+        );
+        let missing_empty_directory_regression = regression.replace(
+            "Test-StrictModeEmptyFreshUserSongs",
+            "Test-MissingRegression",
+        );
+        assert!(
+            v4_release_pipeline_contract_source(
+                workflow,
+                pipeline,
+                &missing_empty_directory_regression
+            )
+            .is_err(),
+            "production qualification must retain the executable StrictMode empty-directory regression"
         );
     }
 
