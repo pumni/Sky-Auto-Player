@@ -436,7 +436,10 @@ foreach ($marker in @(
     'persist-credentials: false',
     'Verify isolated rehearsal runner boundary',
     'verify_v4_release_runner.ps1',
+    'StateRoot = @($env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT)',
+    '& (Join-Path $PWD "scripts/verify_v4_release_runner.ps1") @runnerBoundaryArgs',
     'cleanup_v4_release_state.ps1',
+    '& (Join-Path $PWD "scripts/cleanup_v4_release_state.ps1") @cleanupArgs',
     'Preserve bounded rehearsal evidence',
     'BuildCandidate',
     'test_v4_production_topology_rehearsal.ps1',
@@ -460,7 +463,8 @@ foreach ($forbidden in @(
     'softprops/action-gh-release',
     'updater_private_key_path:',
     'inputs.updater_private_key_path',
-    'KeepStateOnFailure'
+    'KeepStateOnFailure',
+    '-StateRoot $env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT'
 )) {
     if ($topologyWorkflow.Contains($forbidden)) {
         Fail "production-topology rehearsal workflow contains a legacy release-topology marker: $forbidden"

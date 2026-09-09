@@ -84,9 +84,11 @@ jobs:
 
       - name: Verify isolated rehearsal runner boundary
         run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/verify_v4_release_runner.ps1 `
-            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
-            -StateRoot $env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT
+          $runnerBoundaryArgs = @{
+            UpdaterPrivateKeyPath = $env:V4_UPDATER_PRIVATE_KEY_PATH
+            StateRoot = @($env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT)
+          }
+          & (Join-Path $PWD "scripts/verify_v4_release_runner.ps1") @runnerBoundaryArgs
 
       - name: Verify dedicated runner tools
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,gh.exe
@@ -128,5 +130,7 @@ jobs:
       - name: Clean runner-local rehearsal state
         if: always()
         run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/cleanup_v4_release_state.ps1 `
-            -StateRoot $env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT
+          $cleanupArgs = @{
+            StateRoot = @($env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT)
+          }
+          & (Join-Path $PWD "scripts/cleanup_v4_release_state.ps1") @cleanupArgs
