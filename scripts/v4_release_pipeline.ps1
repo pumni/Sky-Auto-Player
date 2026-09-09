@@ -307,7 +307,7 @@ function Assert-MetadataBranchReadiness([string]$Repository) {
         $localPath = Join-Path (Get-EffectiveStateRoot) "repository-$channelName-latest.json"
         Write-RepositoryContentFile $metadata $localPath $metadataPath
         Invoke-Checked "cargo" @(
-            "xtask", "release-authority", "validate", "--channel", $channelName, "--metadata", $localPath
+            "xtask", "release-metadata", "validate", "--channel", $channelName, "--metadata", $localPath
         ) "existing release-metadata $channelName channel failed canonical validation"
     }
     Write-Host "V4 release-metadata readiness: PASS (orphan branch exists; bootstrap contract and existing channels are valid)"
@@ -901,7 +901,7 @@ function Invoke-PromoteMetadata {
     $signature = Join-Path $downloaded $releaseSignature
     $assetUrl = "https://github.com/$repository/releases/download/$Tag/$releaseInstaller"
     Invoke-Checked "cargo" @(
-        "xtask", "release-authority", "generate", "--channel", $Channel, "--version", $Version,
+        "xtask", "release-metadata", "generate", "--channel", $Channel, "--version", $Version,
         "--notes-file", $notesPath, "--pub-date", $PublicationDateUtc, "--platform", "windows-x86_64",
         "--asset-url", $assetUrl, "--signature-file", $signature, "--output", $metadata
     ) "deterministic v4 metadata generation failed"
@@ -920,7 +920,7 @@ function Invoke-PromoteMetadata {
         $currentPath = Join-Path $root "current-$Channel-latest.json"
         Write-RepositoryContentFile $existing $currentPath "channels/$Channel/latest.json"
         Invoke-Checked "cargo" @(
-            "xtask", "release-authority", "validate-monotonic", "--channel", $Channel,
+            "xtask", "release-metadata", "validate-monotonic", "--channel", $Channel,
             "--current", $currentPath, "--candidate", $destination
         ) "live release-metadata channel is not a valid strict SemVer roll-forward"
         Write-Host "V4 metadata promotion: live channel passed strictly monotonic SemVer validation"
@@ -959,7 +959,7 @@ function Invoke-FinalVerify {
     $metadataResponse = Invoke-GitHubApi -Arguments @("api", "repos/$repository/contents/channels/$Channel/latest.json?ref=release-metadata")
     $metadataPath = Join-Path (Get-EffectiveStateRoot) "final-metadata.json"
     Write-RepositoryContentFile $metadataResponse $metadataPath "channels/$Channel/latest.json"
-    Invoke-Checked "cargo" @("xtask", "release-authority", "validate", "--channel", $Channel, "--metadata", $metadataPath) "authenticated metadata failed deterministic validation"
+    Invoke-Checked "cargo" @("xtask", "release-metadata", "validate", "--channel", $Channel, "--metadata", $metadataPath) "authenticated metadata failed deterministic validation"
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     $publicMetadata = Get-PublicMetadataDocument $Channel
     if ([string]$publicMetadata.Endpoint -ne [string]$rawMetadataEndpoints[$Channel]) {
@@ -967,7 +967,7 @@ function Invoke-FinalVerify {
     }
     $publicMetadataPath = Join-Path (Get-EffectiveStateRoot) "final-public-metadata.json"
     [IO.File]::WriteAllText($publicMetadataPath, $publicMetadata.Body, [Text.UTF8Encoding]::new($false))
-    Invoke-Checked "cargo" @("xtask", "release-authority", "validate", "--channel", $Channel, "--metadata", $publicMetadataPath) "unauthenticated raw metadata failed deterministic validation"
+    Invoke-Checked "cargo" @("xtask", "release-metadata", "validate", "--channel", $Channel, "--metadata", $publicMetadataPath) "unauthenticated raw metadata failed deterministic validation"
     $publicMetadataJson = Get-Content -LiteralPath $publicMetadataPath -Raw | ConvertFrom-Json
     $sourceInstaller = Get-ExpectedInstallerName
     $releaseInstaller = Get-V4SafeReleaseAssetName $sourceInstaller

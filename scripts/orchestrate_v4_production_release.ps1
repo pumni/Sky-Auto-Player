@@ -171,7 +171,7 @@ try {
         throw "Specified version '$Version' does not match Cargo.toml version '$cargoVersion'"
     }
 
-    # Validate channel vs version SemVer policy (ADR-0006 / v4-release-authority)
+    # Validate channel vs version SemVer policy (ADR-0006 / release metadata contract)
     $isPrerelease = $Version.Contains("-")
     if ($Channel -eq "stable" -and $isPrerelease) {
         throw "Channel 'stable' rejects prerelease version '$Version' (SemVer without hyphen required)"

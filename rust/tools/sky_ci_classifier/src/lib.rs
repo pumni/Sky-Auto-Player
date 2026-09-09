@@ -39,7 +39,7 @@ pub const CODE_PREFIXES: &[&str] = &["src/", "desktop/", "rust/", "tests/", "scr
 pub const UPDATER_FILES: &[&str] = &[
     "desktop/src-tauri/src/native_update.rs",
     "desktop/src-tauri/tauri.conf.json",
-    "rust/xtask/src/release_authority.rs",
+    "rust/xtask/src/release_metadata.rs",
     "rust/xtask/src/tauri_bundle.rs",
     "scripts/promote_v4_metadata.ps1",
 ];
@@ -52,14 +52,13 @@ pub const UPDATER_PREFIXES: &[&str] = &[
 
 pub const RELEASE_FILES: &[&str] = &[
     ".github/workflows/release-v4.yml",
-    "rust/xtask/src/release_authority.rs",
-    "scripts/ci_v4_release_authority_acceptance.ps1",
+    "rust/xtask/src/release_metadata.rs",
+    "scripts/ci_v4_release_latest_guard.ps1",
     "scripts/promote_v4_metadata.ps1",
     "scripts/v4_release_pipeline.ps1",
     "scripts/orchestrate_v4_production_release.ps1",
     "scripts/test_v4_production_orchestrator.ps1",
     "scripts/test_v4_release_pipeline.ps1",
-    "scripts/test_v4_release_authority_rehearsal.ps1",
     "scripts/v4_updater_credential_broker.ps1",
     "scripts/set_v4_updater_session_credential.ps1",
     "scripts/remove_v4_updater_session_credential.ps1",
@@ -378,9 +377,28 @@ mod tests {
     }
 
     #[test]
-    fn release_only_changes_select_release_authority_validation() {
+    fn release_only_changes_select_release_validation() {
         let result = values(&[".github/workflows/release-v4.yml"]);
         assert!(!result.0 && !result.1 && !result.2 && result.3);
+    }
+
+    #[test]
+    fn release_metadata_paths_are_current_and_legacy_paths_are_not_listed() {
+        let result = values(&["rust/xtask/src/release_metadata.rs"]);
+        assert!(!result.0 && !result.1 && result.2 && result.3);
+        for obsolete in [
+            "rust/xtask/src/release_authority.rs",
+            "scripts/ci_v4_release_authority_acceptance.ps1",
+            "scripts/test_v4_release_authority_rehearsal.ps1",
+        ] {
+            assert!(!UPDATER_FILES.contains(&obsolete) && !RELEASE_FILES.contains(&obsolete));
+        }
+        assert!(
+            !RELEASE_FILES
+                .iter()
+                .chain(UPDATER_FILES.iter())
+                .any(|path| path.contains("authority"))
+        );
     }
 
     #[test]

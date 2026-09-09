@@ -13,12 +13,12 @@ jobs:
     steps:
       - name: Retired legacy release workflow
         run: |
-          throw "The legacy v3 release workflow is retired; use the dedicated v4 release authority."
+          throw "The legacy v3 release workflow is retired; use the canonical v4 release pipeline."
 
 # Permanent namespace guard: v4 publication belongs only to the dedicated
-# authority, never to the legacy source-repository Releases API.
+# metadata branch, never to the legacy source-repository Releases API.
 # name: Block v4+ tags from legacy v3 release workflow
 # $tag = $env:GITHUB_REF_NAME
 # $tag -match '^v(?<major>\d+)\.'
 # $major -ge 4
-# v4 publication is prohibited in the legacy v3 release workflow; use the dedicated v4 release authority
+# v4 publication is prohibited in the legacy v3 release workflow; use the canonical v4 release pipeline
