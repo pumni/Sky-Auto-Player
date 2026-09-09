@@ -827,11 +827,9 @@ function Invoke-QualifyDownloaded {
             $catalogSelftest = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
             if ($catalogSelftest.ExitCode -ne 0) { Fail "downloaded candidate fresh built-in catalog self-test failed with exit code $($catalogSelftest.ExitCode)" }
             $freshSongsRoot = Join-Path $freshAppData "songs"
-            $freshUserSongs = if (Test-Path -LiteralPath $freshSongsRoot -PathType Container) {
-                @(Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse)
-            } else {
-                @()
-            }
+            $freshUserSongs = @(
+                Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue
+            )
             if ($freshUserSongs.Count -ne 0) { Fail "downloaded candidate fresh built-in catalog self-test populated user songs" }
             $freshBuiltinCatalogEvidence = [ordered]@{
                 status = "PASS"
