@@ -15,7 +15,7 @@ export function GET() {
 - [FAQ](${base}/faq/)
 - [Vietnamese home](${base}/vi/)
 - [Vietnamese FAQ](${base}/vi/faq/)
-- [Latest release](${SITE.releaseUrl})
+- [Releases](${SITE.releaseUrl})
 - [Source repository](${SITE.repositoryUrl})
 
 ## Guides

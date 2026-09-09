@@ -36,7 +36,7 @@ evidence:
 
 ## Download and install
 
-1. Go to the [dedicated v4 release authority](https://github.com/pumni/Sky-Auto-Player-Releases/releases).
+1. Go to the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
 2. Download the canonical Tauri NSIS installer and its `.exe.sig` sidecar.
 3. Run the installer and keep the default current-user location.
 4. Launch **Sky Auto Player** from the installed shortcut.
@@ -48,7 +48,7 @@ You do not need to edit it manually — all supported settings are available fro
 app's **Settings** dialog.
 
 The canonical installer is Authenticode-qualified. If Windows reports an installer integrity or
-publisher error, discard it and download the exact package again from the v4 release authority.
+publisher error, discard it and download the exact package again from the official GitHub Releases page.
 
 ## Adding songs
 
@@ -67,7 +67,8 @@ publisher error, discard it and download the exact package again from the v4 rel
 
 ## Updating
 
-Sky Auto Player checks the configured v4 channel through the dedicated release authority and
+Sky Auto Player checks the configured v4 channel through validated metadata on the main repository's
+`release-metadata` branch and
 shows a banner when an update is available. **Update and Restart** uses the official Tauri
 updater through the Rust-owned `UpdateService`; it verifies the Tauri `.sig` and runs the
 current-user NSIS installer. V4 has no bundled `Sky-Auto-Player-Updater.exe`, portable ZIP

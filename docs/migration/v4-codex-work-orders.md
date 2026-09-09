@@ -2,9 +2,10 @@
 
 Date: 2026-09-03
 
-This file is the execution queue for heavy implementation work intended to run locally on Windows.
-The governing architecture is `docs/adr/ADR-0006-v4-distribution-installation-update.md`; the execution
-specification is `docs/migration/v4-clean-distribution-execution.md`.
+This file is the historical execution queue for heavy implementation work intended to run locally
+on Windows. It is superseded by `docs/adr/ADR-0007-single-repository-v4-release-architecture.md`
+and is not current implementation guidance. Its original ADR and execution specification links are
+preserved as historical context.
 
 ## Global instructions for every work order
 

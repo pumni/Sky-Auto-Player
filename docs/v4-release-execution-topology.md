@@ -5,7 +5,8 @@ candidate qualification lifecycle, and provenance model for production v4 releas
 of Sky Auto Player.
 
 Governed by:
-- [docs/adr/ADR-0006-v4-distribution-installation-update.md](adr/ADR-0006-v4-distribution-installation-update.md)
+- [docs/adr/ADR-0007-single-repository-v4-release-architecture.md](adr/ADR-0007-single-repository-v4-release-architecture.md)
+- [docs/adr/ADR-0006-v4-distribution-installation-update.md](adr/ADR-0006-v4-distribution-installation-update.md) (historical, superseded)
 - [v4-tauri-packaging.md](v4-tauri-packaging.md)
 - [v4-release-authority.md](v4-release-authority.md)
 - [v4-updater-key-custody.md](v4-updater-key-custody.md)
@@ -244,8 +245,8 @@ Before initiating any build or invoking external tools, the orchestrator validat
    immediately after the production build to ensure build tools did not mutate tracked source or
    manifest files.
 4. **Version Alignment**: `desktop/src-tauri/Cargo.toml` package version matches `-Version`.
-5. **Channel Policy**: Aligned with WO-04 release authority (`stable` requires non-prerelease SemVer;
-   `beta` requires prerelease SemVer).
+5. **Channel Policy**: Aligned with the `release-metadata` contract (`stable` requires non-prerelease
+   SemVer; `beta` requires prerelease SemVer).
 6. **Key Path Isolation**: `-UpdaterPrivateKeyPath` is verified to reside outside the repository tree.
 7. **Key Validity Check**: Invokes `cargo xtask updater-trust verify-private-key` against the private key
    *before* building. Key ID is dynamically derived from canonical public root.
@@ -340,12 +341,11 @@ never rebuilt. The packaged candidate also proves that update admission is
 rejected while playback is active.
 
 Before creating a new RC, the exact production qualification topology can be
-rehearsed without creating a release-authority draft. The manual workflow
+rehearsed without creating a GitHub Release draft. The manual workflow
 `.github/workflows/rehearse-v4-production-topology.yml` must be dispatched from
 the ref containing the exact requested source SHA. It uses the same dedicated
 runner labels and explicit updater-key path as production, builds one candidate,
-then runs the script below. It has no release-authority token and no authority
-mutation state.
+then runs the script below. It has no release mutation or metadata promotion state.
 
 ```powershell
 pwsh scripts/test_v4_production_topology_rehearsal.ps1 -CandidateStateRoot $candidateStateRoot -StateRoot (Join-Path $env:RUNNER_TEMP "sky-v4-production-topology-rehearsal") -Version $version -Channel $channel -Tag "v$version" -SourceSha $sourceSha -WorkflowSha $sourceSha
@@ -374,19 +374,14 @@ and recreated with the same version after the candidate is fixed. Published
 assets, release tags, and metadata remain immutable; fixes then require a new
 SemVer/RC.
 
-The authority preflight requires `pumni/Sky-Auto-Player-Releases` to have an
-existing `main` branch. If the authority is empty, the workflow stops and the
-maintainer must perform a separately reviewed one-time minimal bootstrap; the
-release transaction never creates initial authority history implicitly. The
-only cross-repository secret is the bounded
-`V4_RELEASE_AUTHORITY_TOKEN`, scoped to the authority repository's
-Administration-read and Contents read/write permissions needed to inspect
-immutable releases, create/upload/read/publish the draft, and write channel
-metadata. It is never used for updater-key custody. A maintainer may run
-`scripts/test_v4_release_authority_rehearsal.ps1 -ConfirmDisposable` after
-bootstrap; that explicit rehearsal creates and deletes one uniquely tagged
-draft and verifies upload/download bytes through the real authority API. It
-never publishes a release or mutates an existing tag.
+The production preflight validates the canonical `pumni/Sky-Auto-Player` repository,
+the requested `main` source, immutable-release policy, and readiness of the
+`release-metadata` branch before `CreateDraft`. Bootstrap is a separately reviewed
+owner/maintainer operation and never creates fabricated channel files. The production
+workflow uses the same-repository `GITHUB_TOKEN` with job-scoped write permissions;
+there is no cross-repository release token. Metadata promotion is a post-publication
+operation and is strictly monotonic per channel. `FinalVerify` checks the public
+release and the unauthenticated raw endpoint used by the runtime updater.
 
 ---
 

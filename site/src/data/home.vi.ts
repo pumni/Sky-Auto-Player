@@ -87,7 +87,7 @@ export const homeVi: HomeContent = {
       {
         title: 'Tải xuống',
         description:
-          'Tải installer Tauri NSIS canonical từ v4 release authority và cài đặt cho current user.',
+          'Tải installer Tauri NSIS canonical từ trang GitHub Releases chính thức của Sky Auto Player và cài đặt cho current user.',
       },
       {
         title: 'Thêm sheet nhạc',
@@ -176,7 +176,7 @@ export const homeVi: HomeContent = {
   finalCta: {
     title: 'Màn trình diễn tiếp theo đã nằm sẵn trong sheet.',
     description: 'Tải Sky Auto Player, thêm một sheet và để ứng dụng xử lý phần timing.',
-    primaryCta: 'Tải bản mới nhất',
+    primaryCta: 'Xem các bản phát hành',
     secondaryCta: 'Xem mã nguồn trên GitHub',
   },
 };

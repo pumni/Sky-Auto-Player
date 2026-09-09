@@ -2,9 +2,11 @@
 
 Date: 2026-09-03
 
-Status: Phase 7 is complete on the WO-06 source-hardening branch. The current
-v4 workspace and release path use Tauri NSIS and the official Tauri updater;
-the retired custom updater is not a v4 dependency or release authority.
+Status: historical execution specification; superseded by
+`docs/adr/ADR-0007-single-repository-v4-release-architecture.md`.
+
+> This completed planning document preserves the pre-release migration history. Its former
+> two-repository topology and release-authority terminology are not current production guidance.
 
 Related ADR: `docs/adr/ADR-0006-v4-distribution-installation-update.md`
 

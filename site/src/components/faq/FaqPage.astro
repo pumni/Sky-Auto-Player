@@ -73,14 +73,14 @@ const structuredData = {
         <p>
           {
             isVi
-              ? 'Tải bản phát hành mới nhất rồi mở Library khi bài hát của bạn đã sẵn sàng.'
-              : 'Download the latest release, then open the Library when your song is ready.'
+              ? 'Mở trang bản phát hành rồi mở Library khi bài hát của bạn đã sẵn sàng.'
+              : 'Browse the releases, then open the Library when your song is ready.'
           }
         </p>
       </div>
       <div class="final-cta__actions">
         <a class="button button--primary" href={SITE.releaseUrl}
-          >{isVi ? 'Tải bản mới nhất' : 'Download latest release'}</a
+          >{isVi ? 'Xem bản phát hành' : 'Browse releases'}</a
         >
         <a class="button button--secondary" href={withBase(isVi ? '/vi/' : '/')}
           >{isVi ? 'Về trang chủ' : 'Back to landing page'}</a

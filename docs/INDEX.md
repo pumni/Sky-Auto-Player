@@ -44,8 +44,8 @@ default.
   integrity/provenance, rollback, and release contract.
 - [v4-tauri-packaging.md](v4-tauri-packaging.md) — v4 local Tauri NSIS/updater artifact qualification
   and current-user packaging contract.
-- [v4-release-authority.md](v4-release-authority.md) — v4 immutable release namespace, static
-  metadata, channel isolation, and read-only acceptance contract.
+- [v4-release-authority.md](v4-release-authority.md) — current one-repository v4 release/update
+  runbook, immutable GitHub Releases, and protected `release-metadata` channel contract.
 - [v4-updater-key-custody.md](v4-updater-key-custody.md) — v4 updater trust root custody, backup,
   loss, compromise, rotation, and recovery runbook.
 - [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md) — v4 production Authenticode
