@@ -774,6 +774,8 @@ function Invoke-QualifyDownloaded {
     $installRoot = Join-Path $root ("install-" + [guid]::NewGuid().ToString("N"))
     $app = Join-Path $installRoot "sky_desktop_shell.exe"
     $uninstaller = Join-Path $installRoot "uninstall.exe"
+    $installedBuiltinCatalogEvidence = $null
+    $freshBuiltinCatalogEvidence = $null
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { Fail "LOCALAPPDATA is unavailable for external app-data preservation qualification" }
     $preservationRoot = Join-Path $env:LOCALAPPDATA ("io.github.pumni.skyautoplayer/wo07-release-test-" + [guid]::NewGuid().ToString("N"))
     $preservationMarker = Join-Path $preservationRoot "preserve.txt"
@@ -788,11 +790,69 @@ function Invoke-QualifyDownloaded {
             $_.Extension.ToLowerInvariant() -in @(".exe", ".dll") -and $_.Name -ne "uninstall.exe"
         })
         if ($installedPe.Count -eq 0) { Fail "downloaded candidate installed no project PE files" }
+        $installedBuiltinRoot = Join-Path $installRoot "builtin-songs"
+        Invoke-Checked "cargo" @(
+            "xtask", "builtin-catalog", "verify-installed", "--root", $installedBuiltinRoot
+        ) "downloaded candidate installed built-in catalog verification failed"
+        $installedBuiltinFiles = @(Get-ChildItem -LiteralPath $installedBuiltinRoot -File -Recurse | Sort-Object FullName)
+        if ($installedBuiltinFiles.Count -eq 0) { Fail "downloaded candidate installed built-in catalog is empty" }
+        $installedBuiltinCatalogEvidence = [ordered]@{
+            verification = "cargo xtask builtin-catalog verify-installed"
+            root = "builtin-songs"
+            manifest_sha256 = (Get-FileHash -LiteralPath (Join-Path $installedBuiltinRoot "manifest.json") -Algorithm SHA256).Hash.ToLowerInvariant()
+            file_count = $installedBuiltinFiles.Count
+            files = @($installedBuiltinFiles | ForEach-Object {
+                [ordered]@{
+                    path = [IO.Path]::GetRelativePath($installRoot, $_.FullName).Replace("\", "/")
+                    size = [int64]$_.Length
+                    sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+            })
+            manifest_validated = $true
+            file_set_exact = $true
+            sha256_verified = $true
+            songs_parseable = $true
+        }
         Invoke-Checked "pwsh" @(
             "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
             "-File", (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1"),
             "-Mode", "unsigned-zero-budget", "-Artifact" , $installedPe.FullName
         ) "downloaded candidate installed PE state is not unsigned-zero-budget"
+        $previousAppDataRoot = [Environment]::GetEnvironmentVariable("SKY_APP_DATA_ROOT", "Process")
+        $previousFreshSelfTest = [Environment]::GetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", "Process")
+        $freshAppData = Join-Path $root ("fresh-appdata-" + [guid]::NewGuid().ToString("N"))
+        try {
+            [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $freshAppData, "Process")
+            [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", "1", "Process")
+            $catalogSelftest = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
+            if ($catalogSelftest.ExitCode -ne 0) { Fail "downloaded candidate fresh built-in catalog self-test failed with exit code $($catalogSelftest.ExitCode)" }
+            $freshSongsRoot = Join-Path $freshAppData "songs"
+            $freshUserSongs = if (Test-Path -LiteralPath $freshSongsRoot -PathType Container) {
+                @(Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse)
+            } else {
+                @()
+            }
+            if ($freshUserSongs.Count -ne 0) { Fail "downloaded candidate fresh built-in catalog self-test populated user songs" }
+            $freshBuiltinCatalogEvidence = [ordered]@{
+                status = "PASS"
+                app_data_root = "isolated-release-state"
+                built_ins_visible_in_all_songs = $true
+                user_song_composition_exercised = $true
+                user_songs_empty_after_selftest = $true
+            }
+        } finally {
+            if ($null -eq $previousAppDataRoot) {
+                Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
+            } else {
+                [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $previousAppDataRoot, "Process")
+            }
+            if ($null -eq $previousFreshSelfTest) {
+                Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST -ErrorAction SilentlyContinue
+            } else {
+                [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", $previousFreshSelfTest, "Process")
+            }
+            if (Test-Path -LiteralPath $freshAppData) { Remove-Item -LiteralPath $freshAppData -Recurse -Force -ErrorAction SilentlyContinue }
+        }
         $activity = Start-Process -FilePath $app -ArgumentList @("--selftest-update-active-playback") -WindowStyle Hidden -Wait -PassThru
         if ($activity.ExitCode -ne 0) { Fail "downloaded candidate packaged playback-active update rejection self-test failed" }
         $shell = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
@@ -829,10 +889,14 @@ function Invoke-QualifyDownloaded {
             "active-playback-install-rejected-packaged",
             "uninstall",
             "reinstall-preserves-external-app-data",
+            "installed-built-in-catalog-exact-manifest-file-set-sha-parseability",
+            "fresh-appdata-built-in-user-composition",
             "defender-exact-download-scan-no-detection",
             "spdx-sbom",
             "exact-asset-digest"
         )
+        installed_builtin_catalog = $installedBuiltinCatalogEvidence
+        fresh_builtin_catalog_selftest = $freshBuiltinCatalogEvidence
     })
     $state.qualified_after_download = $true
     $state.attested = $false

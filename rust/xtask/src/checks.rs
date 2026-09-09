@@ -982,6 +982,19 @@ fn v4_release_pipeline_contract_source(
         "scan_performed",
         "selftest-update-active-playback",
         "scan_v4_defender_exact.ps1",
+        "cargo xtask builtin-catalog verify-installed",
+        "installed-built-in-catalog-exact-manifest-file-set-sha-parseability",
+        "manifest_validated",
+        "file_set_exact",
+        "sha256_verified",
+        "songs_parseable",
+        "fresh-appdata-built-in-user-composition",
+        "SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
+        "previousFreshSelfTest",
+        "if ($null -eq $previousAppDataRoot)",
+        "Remove-Item Env:SKY_APP_DATA_ROOT",
+        "if ($null -eq $previousFreshSelfTest)",
+        "Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
         "v4_updater_credential_broker.ps1",
     ] {
         if !pipeline.contains(marker) {
@@ -3429,7 +3442,7 @@ function Invoke-BuildCandidate {
 }
 function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; make_latest = $false; GitHub's successful DELETE endpoints return an empty body }
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
-function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
+function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { GH_TOKEN }
 function Invoke-PublishDraft { draft = $false; make_latest = $false }
 function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication; branch = "release-metadata"; GITHUB_REPOSITORY; Invoke-GitHubApi }
@@ -3451,6 +3464,17 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         );
         assert!(
             v4_release_pipeline_contract_source(workflow, &duplicated_build, regression).is_err()
+        );
+        let missing_builtin_qualification =
+            pipeline.replace("cargo xtask builtin-catalog verify-installed; ", "");
+        assert!(
+            v4_release_pipeline_contract_source(
+                workflow,
+                &missing_builtin_qualification,
+                regression
+            )
+            .is_err(),
+            "production qualification must retain installed built-in catalog verification"
         );
     }
 
