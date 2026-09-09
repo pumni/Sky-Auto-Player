@@ -3,10 +3,9 @@
 //! React receives only the bounded DTOs below. Endpoint selection, updater
 //! configuration, signature verification, artifact handling, and install
 //! execution stay in this module and in the official Tauri updater plugin.
-//! The production authority is a fixed Rust-owned v4 metadata authority. The
-//! updater trust root is independent from the v3 release authority and is
-//! compiled into this boundary; a missing or invalid root makes the official
-//! updater fail closed.
+//! Production metadata endpoints are fixed Rust-owned v4 endpoints. The
+//! updater trust root is compiled into this boundary; a missing or invalid
+//! root makes the official updater fail closed.
 
 use crate::app_state::{ActivityCoordinator, ActivityReservationError, UpdateInstallLease};
 use crate::commands::{UpdateCheckDto, UpdateHandoffDto};
@@ -24,9 +23,12 @@ use url::Url;
 
 const MAX_RELEASE_NOTES: usize = 16 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const V4_RELEASE_AUTHORITY_REPOSITORY: &str = "pumni/Sky-Auto-Player-Releases";
-const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json";
-const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json";
+const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json";
+const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json";
+const OFFICIAL_METADATA_HOST: &str = "raw.githubusercontent.com";
+const OFFICIAL_METADATA_OWNER: &str = "pumni";
+const OFFICIAL_METADATA_REPOSITORY: &str = "Sky-Auto-Player";
+const OFFICIAL_METADATA_REF: &str = "release-metadata";
 #[cfg(not(feature = "tauri-update-fixture"))]
 const V4_TAURI_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5QUFCRDJFNzgzODgxOEMKUldTTWdUaDRMcjJxR2JxeE5kTUx5VlIxS1dhOHRrSTEzY2FMeE8wYldtckM2TjV2KzRwQUNaTEUK";
 #[cfg(not(feature = "tauri-update-fixture"))]
@@ -338,7 +340,7 @@ impl<R: Runtime> UpdateService<R> {
     }
 
     fn check_official(&self, channel: UpdateChannel) -> Result<Vec<Update>, String> {
-        let endpoint = authority_endpoint(channel)?;
+        let endpoint = metadata_endpoint(channel)?;
         let mut updates = Vec::new();
         let mut last_error = None;
         for public_key in updater_public_keys() {
@@ -369,7 +371,7 @@ impl<R: Runtime> UpdateService<R> {
         };
         let builder = builder
             .endpoints(vec![endpoint])
-            .map_err(|error| format!("update authority rejected: {error}"))?
+            .map_err(|error| format!("update metadata endpoint rejected: {error}"))?
             .on_before_exit(self.install_safety_hook())
             .restart_after_install(true);
         #[cfg(feature = "tauri-update-fixture")]
@@ -445,8 +447,7 @@ fn updater_public_keys() -> Vec<Option<&'static str>> {
 }
 
 /// Try each `Update`'s own Tauri verification context until the downloaded
-/// bytes verify. This is the runtime rotation mechanism: a bridge client can
-/// carry old and new roots, while a cutover client carries only the new root.
+/// bytes verify. This preserves the bounded trust-root rotation mechanism.
 fn first_verified_download<T>(
     updates: Vec<T>,
     mut download: impl FnMut(&T) -> Result<Vec<u8>, String>,
@@ -461,7 +462,7 @@ fn first_verified_download<T>(
     Err(last_error.unwrap_or_else(|| "update trust roots are unavailable".into()))
 }
 
-fn authority_endpoint(channel: UpdateChannel) -> Result<Url, String> {
+fn metadata_endpoint(channel: UpdateChannel) -> Result<Url, String> {
     let endpoint = if cfg!(feature = "tauri-update-fixture") {
         match channel {
             UpdateChannel::Stable => {
@@ -474,18 +475,70 @@ fn authority_endpoint(channel: UpdateChannel) -> Result<Url, String> {
             UpdateChannel::Stable => V4_STABLE_METADATA_ENDPOINT,
             UpdateChannel::Beta => V4_BETA_METADATA_ENDPOINT,
         };
-        if !endpoint.contains(V4_RELEASE_AUTHORITY_REPOSITORY) {
-            return Err("v4 authority URL is outside the dedicated release repository".into());
-        }
         endpoint.to_owned()
     };
-    Url::parse(&endpoint).map_err(|error| {
-        if cfg!(feature = "tauri-update-fixture") {
-            format!("fixture authority URL invalid: {error}")
-        } else {
-            format!("v4 authority URL invalid: {error}")
-        }
-    })
+    Url::parse(&endpoint)
+        .map_err(|error| {
+            if cfg!(feature = "tauri-update-fixture") {
+                format!("fixture metadata URL invalid: {error}")
+            } else {
+                format!("v4 metadata URL invalid: {error}")
+            }
+        })
+        .and_then(|endpoint| {
+            if cfg!(feature = "tauri-update-fixture") {
+                Ok(endpoint)
+            } else {
+                validate_official_metadata_endpoint(&endpoint, channel)?;
+                Ok(endpoint)
+            }
+        })
+}
+
+fn validate_official_metadata_endpoint(
+    endpoint: &Url,
+    channel: UpdateChannel,
+) -> Result<(), String> {
+    if endpoint.scheme() != "https"
+        || endpoint.host_str() != Some(OFFICIAL_METADATA_HOST)
+        || endpoint.port().is_some()
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err("v4 metadata URL has an unapproved origin or URL component".into());
+    }
+
+    let expected_channel = match channel {
+        UpdateChannel::Stable => "stable",
+        UpdateChannel::Beta => "beta",
+    };
+    let expected_segments = [
+        OFFICIAL_METADATA_OWNER,
+        OFFICIAL_METADATA_REPOSITORY,
+        OFFICIAL_METADATA_REF,
+        "channels",
+        expected_channel,
+        "latest.json",
+    ];
+    let actual_segments = endpoint
+        .path_segments()
+        .ok_or_else(|| "v4 metadata URL path is not hierarchical".to_string())?
+        .collect::<Vec<_>>();
+    if actual_segments != expected_segments
+        || endpoint.path()
+            != format!(
+                "/{}/{}/{}/channels/{}/latest.json",
+                OFFICIAL_METADATA_OWNER,
+                OFFICIAL_METADATA_REPOSITORY,
+                OFFICIAL_METADATA_REF,
+                expected_channel
+            )
+    {
+        return Err("v4 metadata URL path is not an approved channel endpoint".into());
+    }
+    Ok(())
 }
 
 fn candidate_from_update(update: &Update, channel: UpdateChannel) -> NativeUpdateCandidate {
@@ -589,8 +642,8 @@ fn opaque_id() -> Result<String, String> {
 mod tests {
     #[cfg(not(feature = "tauri-update-fixture"))]
     use super::{
-        V4_BETA_METADATA_ENDPOINT, V4_RELEASE_AUTHORITY_REPOSITORY, V4_STABLE_METADATA_ENDPOINT,
-        V4_TAURI_UPDATER_PUBLIC_KEY, V4_TAURI_UPDATER_PUBLIC_KEYS, authority_endpoint,
+        V4_BETA_METADATA_ENDPOINT, V4_STABLE_METADATA_ENDPOINT, V4_TAURI_UPDATER_PUBLIC_KEY,
+        V4_TAURI_UPDATER_PUBLIC_KEYS, metadata_endpoint, validate_official_metadata_endpoint,
     };
     use super::{bounded, first_verified_download, update_activity_error};
     use crate::app_state::ActivityReservationError;
@@ -599,17 +652,54 @@ mod tests {
 
     #[cfg(not(feature = "tauri-update-fixture"))]
     #[test]
-    fn production_authority_is_fixed_and_channel_isolated() {
-        let stable = authority_endpoint(UpdateChannel::Stable).unwrap();
-        let beta = authority_endpoint(UpdateChannel::Beta).unwrap();
+    fn production_metadata_endpoints_are_fixed_and_channel_isolated() {
+        let stable = metadata_endpoint(UpdateChannel::Stable).unwrap();
+        let beta = metadata_endpoint(UpdateChannel::Beta).unwrap();
         assert_eq!(stable.as_str(), V4_STABLE_METADATA_ENDPOINT);
         assert_eq!(beta.as_str(), V4_BETA_METADATA_ENDPOINT);
         assert_ne!(stable, beta);
         for endpoint in [stable, beta] {
             assert_eq!(endpoint.scheme(), "https");
             assert_eq!(endpoint.host_str(), Some("raw.githubusercontent.com"));
-            assert!(endpoint.path().contains(V4_RELEASE_AUTHORITY_REPOSITORY));
-            assert!(!endpoint.path().contains("Sky-Auto-Player/releases"));
+        }
+    }
+
+    #[cfg(not(feature = "tauri-update-fixture"))]
+    #[test]
+    fn production_metadata_allowlist_rejects_unapproved_endpoints() {
+        let rejected = [
+            (
+                "http://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json",
+                UpdateChannel::Stable,
+            ),
+            (
+                "https://evil.example/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json",
+                UpdateChannel::Stable,
+            ),
+            (
+                "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/main/channels/stable/latest.json",
+                UpdateChannel::Stable,
+            ),
+            (
+                "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json",
+                UpdateChannel::Stable,
+            ),
+            (
+                "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json?redirect=1",
+                UpdateChannel::Stable,
+            ),
+            (
+                "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json/",
+                UpdateChannel::Stable,
+            ),
+        ];
+
+        for (raw, channel) in rejected {
+            let endpoint = url::Url::parse(raw).unwrap();
+            assert!(
+                validate_official_metadata_endpoint(&endpoint, channel).is_err(),
+                "endpoint should be rejected: {raw}"
+            );
         }
     }
 
