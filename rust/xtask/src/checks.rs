@@ -229,6 +229,42 @@ fn find_legacy_release_topology_marker(source: &str) -> Option<&'static str> {
         .find(|marker| source.contains(marker))
 }
 
+const ACTIVE_RELEASE_SURFACES: &[&str] = &[
+    "rust/tools/sky_ci_classifier/src/lib.rs",
+    "rust/xtask/src/main.rs",
+    "rust/xtask/src/release_metadata.rs",
+    "scripts/v4_release_pipeline.ps1",
+    "scripts/promote_v4_metadata.ps1",
+    "scripts/orchestrate_v4_production_release.ps1",
+    "scripts/ci_tauri_update_e2e_core.ps1",
+    ".github/workflows/release.yml",
+    ".github/workflows/release-v4.yml",
+    ".github/workflows/rehearse-v4-production-topology.yml",
+    "desktop/src-tauri/src/native_update.rs",
+    "desktop/src-tauri/tauri.conf.json",
+    "desktop/src-tauri/Cargo.toml",
+];
+
+fn active_release_surface_source<'a>(path: &Path, source: &'a str) -> &'a str {
+    if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+        source
+            .split_once("\n#[cfg(test)]")
+            .map_or(source, |(production, _)| production)
+    } else {
+        source
+    }
+}
+
+fn validate_active_release_surface(relative: &str, source: &str) -> Result<()> {
+    if let Some(forbidden) = find_legacy_release_topology_marker(source) {
+        return Err(format!(
+            "legacy release-topology marker `{forbidden}` remains in active surface {relative}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn release_metadata_contract(root: &Path) -> Result<()> {
     let native_path = root.join("desktop/src-tauri/src/native_update.rs");
     let native = fs::read_to_string(&native_path)?;
@@ -298,39 +334,13 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
         }
     }
 
-    let active_release_surfaces = [
-        "rust/tools/sky_ci_classifier/src/lib.rs",
-        "rust/xtask/src/main.rs",
-        "rust/xtask/src/release_metadata.rs",
-        "scripts/v4_release_pipeline.ps1",
-        "scripts/promote_v4_metadata.ps1",
-        "scripts/orchestrate_v4_production_release.ps1",
-        "scripts/ci_tauri_update_e2e_core.ps1",
-        ".github/workflows/release.yml",
-        ".github/workflows/release-v4.yml",
-        "desktop/src-tauri/Cargo.toml",
-    ];
-    for relative in active_release_surfaces {
+    for relative in ACTIVE_RELEASE_SURFACES {
         let path = root.join(relative);
         let source = fs::read_to_string(&path)?;
         // Keep the guard focused on executable/active release surfaces. Rust
         // regression fixtures may name retired paths explicitly so the
         // classifier contract can prove they are not registered anymore.
-        let active_source =
-            if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-                source
-                    .split_once("\n#[cfg(test)]")
-                    .map_or(source.as_str(), |(production, _)| production)
-            } else {
-                source.as_str()
-            };
-        if let Some(forbidden) = find_legacy_release_topology_marker(active_source) {
-            return Err(format!(
-                "legacy release-topology marker `{forbidden}` remains in active surface {}",
-                path.display()
-            )
-            .into());
-        }
+        validate_active_release_surface(relative, active_release_surface_source(&path, &source))?;
     }
 
     let bundle_path = root.join("rust/xtask/src/tauri_bundle.rs");
@@ -2849,6 +2859,42 @@ read_only=true
                 "canonical release-metadata contract and same-repository pipeline"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn release_metadata_negative_guard_covers_runtime_and_release_surfaces() {
+        for surface in [
+            "desktop/src-tauri/src/native_update.rs",
+            "desktop/src-tauri/tauri.conf.json",
+            ".github/workflows/rehearse-v4-production-topology.yml",
+        ] {
+            assert!(ACTIVE_RELEASE_SURFACES.contains(&surface));
+        }
+
+        let runtime_error = validate_active_release_surface(
+            "desktop/src-tauri/src/native_update.rs",
+            "const ENDPOINT = \"https://github.com/pumni/Sky-Auto-Player-Releases/releases\";",
+        )
+        .expect_err("legacy repository marker must be rejected in the updater runtime surface");
+        assert!(runtime_error.to_string().contains("native_update.rs"));
+
+        let config_error = validate_active_release_surface(
+            "desktop/src-tauri/tauri.conf.json",
+            "V4_RELEASE_AUTHORITY_REPOSITORY",
+        )
+        .expect_err("legacy authority marker must be rejected in updater configuration");
+        assert!(config_error.to_string().contains("tauri.conf.json"));
+
+        let workflow_error = validate_active_release_surface(
+            ".github/workflows/rehearse-v4-production-topology.yml",
+            "AuthorityCheckout",
+        )
+        .expect_err("legacy authority marker must be rejected in release workflow surfaces");
+        assert!(
+            workflow_error
+                .to_string()
+                .contains("rehearse-v4-production-topology.yml")
         );
     }
 
