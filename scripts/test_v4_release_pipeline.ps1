@@ -630,7 +630,7 @@ foreach ($marker in @(
     'environment: v4-production-release',
     'Mint release-metadata GitHub App token',
     'id: metadata-app-token',
-    'actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349',
+    'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1',
     'app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}',
     'private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}',
     'owner: ${{ github.repository_owner }}',

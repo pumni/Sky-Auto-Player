@@ -570,7 +570,7 @@ fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
 
     for marker in [
         "id: metadata-app-token",
-        "uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+        "uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
         "app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}",
         "private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}",
         "owner: ${{ github.repository_owner }}",
@@ -1591,7 +1591,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     for marker in [
         "name: Updater fixture qualification",
         "needs: [changes, static, candidate, updater_bridge]",
-        "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
         "scripts/ci_validate_candidate.ps1",
         "scripts/ci_validate_bridge.ps1",
         "-Mode Validate",
@@ -1623,7 +1623,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     for marker in [
         "name: Packaged v4 Tauri NSIS qualification",
         "needs: [changes, static, candidate]",
-        "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
         "scripts/ci_validate_candidate.ps1",
         "-Mode Validate",
         "cargo xtask verify-tauri-bundle",
@@ -4507,7 +4507,7 @@ jobs:
         run: scripts/ci_v4_release_latest_guard.ps1 -Mode Verify -Channel $env:V4_RELEASE_CHANNEL -ExpectedTag $env:V4_RELEASE_TAG -ExpectedSourceSha $env:V4_RELEASE_SOURCE_SHA -StateRoot $env:V4_RELEASE_STATE_ROOT
       - name: Mint release-metadata GitHub App token
         id: metadata-app-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
           private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
@@ -4612,7 +4612,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
           GH_TOKEN: ${{ github.token }}
       - name: Mint release-metadata GitHub App token
         id: metadata-app-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
           private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
@@ -4706,7 +4706,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
     if: needs.changes.outputs.updater_required == 'true'
     steps:
       - name: Download updater bridge from this workflow run
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       - run: scripts/ci_validate_candidate.ps1 -Mode Validate -CandidateInstallerPath candidate.exe -CandidateSignaturePath candidate.sig -CandidateVersion 4.0.0-alpha.2 -CandidatePublicKeyPath candidate.pub
       - run: scripts/ci_validate_bridge.ps1 -Mode Validate -BridgeRoot bridge
       - run: dangerousInsecureTransportProtocol = true
@@ -4715,7 +4715,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
     name: Packaged v4 Tauri NSIS qualification
     needs: [changes, static, candidate]
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       - run: scripts/ci_validate_candidate.ps1 -Mode Validate
       - name: Build and sign canonical Tauri NSIS artifact
       - run: bun install --frozen-lockfile
