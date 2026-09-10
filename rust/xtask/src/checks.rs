@@ -1657,8 +1657,41 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         }
     }
 
+    let validate_position = packaged
+        .find("name: Validate exact current candidate contract")
+        .ok_or("packaged consumer must validate candidate.json before qualification")?;
+    let cache_position = packaged
+        .find("name: Rust cache")
+        .ok_or("packaged consumer must restore Rust cache before staging")?;
+    let stage_position = packaged
+        .find("name: Stage and re-hash exact current candidate after Rust cache restore")
+        .ok_or("packaged consumer must stage the candidate after Rust cache restore")?;
+    if validate_position >= cache_position || stage_position <= cache_position {
+        return Err(
+            "packaged candidate validation/staging order does not preserve the restored target tree"
+                .into(),
+        );
+    }
     for marker in [
-        "Run Authenticode tamper regression on bounded system PE fixture",
+        "Get-FileHash -LiteralPath $stagedInstaller -Algorithm SHA256",
+        "Get-FileHash -LiteralPath $stagedSignature -Algorithm SHA256",
+        "Get-FileHash -LiteralPath $env:SKY_CANDIDATE_PUBLIC_KEY -Algorithm SHA256",
+        "Staged candidate hashes do not match the validated candidate contract",
+    ] {
+        if !packaged.contains(marker) {
+            return Err(format!(
+                "packaged consumer is missing post-cache staging hash verification: {marker}"
+            )
+            .into());
+        }
+    }
+
+    for marker in [
+        "Build bounded unsigned Authenticode PE fixture",
+        "rustc --edition 2021 --target x86_64-pc-windows-msvc",
+        "Get-AuthenticodeSignature",
+        "SKY_AUTHENTICODE_FIXTURE",
+        "Run Authenticode tamper regression on controlled unsigned PE fixture",
         "scripts/test_v4_authenticode_integrity.ps1",
         "scripts/test_v4_production_signing_contract.ps1",
         "scripts/setup_v4_test_signing.ps1",
@@ -1671,6 +1704,14 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         if !normalized.contains(marker) {
             return Err(format!(
                 "CI build-once control-plane contract is missing its marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in ["SystemRoot", "notepad.exe"] {
+        if normalized.contains(forbidden) {
+            return Err(format!(
+                "release contract Authenticode fixture must not depend on a system PE: {forbidden}"
             )
             .into());
         }
@@ -2217,6 +2258,21 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             "ordinary CI must not retain artifact attestation creation or permissions".into(),
         );
     }
+    for marker in [
+        "#[cfg(feature = \"tauri-update-fixture\")]",
+        "FIXTURE_NEW_ONLY_ARG",
+        "fixture_new_only_requested",
+        "fixture_public_keys",
+        "next_back()",
+        "fixture_new_only_mode_selects_only_the_last_compiled_root",
+    ] {
+        if !native.contains(marker) {
+            return Err(format!(
+                "fixture-only updater new-root runtime seam is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
     let updater_fixture = fs::read_to_string(root.join("scripts/ci_tauri_update_e2e_core.ps1"))?;
     for marker in [
         "Updater N-to-N+1 preservation",
@@ -2238,6 +2294,12 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "candidateInstallerSha256",
         "oldSigningInstallerSha256",
         "Get-HigherSemVer",
+        "preservedBridgeRoot",
+        "--selftest-update-fixture-new-only",
+        "negativeRequestStart",
+        "negativeManifestRequests",
+        "negativeCandidateRequests",
+        "n_to_n_plus_1_installer_sha256",
         "old-root",
         "old_root_rejection_copy_matches",
     ] {

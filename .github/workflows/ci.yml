@@ -198,13 +198,55 @@ jobs:
         shell: pwsh
         run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
 
-      - name: Run Authenticode tamper regression on bounded system PE fixture
+      - name: Build bounded unsigned Authenticode PE fixture
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP "sky-v4-authenticode-unsigned-fixture"
+          if (Test-Path -LiteralPath $fixtureRoot) {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+          $source = Join-Path $fixtureRoot "main.rs"
+          $binary = Join-Path $fixtureRoot "sky-v4-authenticode-unsigned-fixture.exe"
+          Set-Content -LiteralPath $source -Value "fn main() {}" -Encoding utf8
+          rustc --edition 2021 --target x86_64-pc-windows-msvc --crate-name sky_v4_authenticode_unsigned -o $binary $source
+          if ($LASTEXITCODE -ne 0) { throw "Pinned Rust compiler failed to create the Authenticode fixture (exit $LASTEXITCODE)" }
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Pinned Rust compiler did not create the expected PE fixture: $binary" }
+          $signature = Get-AuthenticodeSignature -LiteralPath $binary
+          if ([string]$signature.Status -ne "NotSigned") {
+            throw "Controlled Authenticode fixture must start unsigned; observed status: $($signature.Status)"
+          }
+          "SKY_AUTHENTICODE_FIXTURE=$binary" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Run Authenticode tamper regression on controlled unsigned PE fixture
         shell: pwsh
         run: |
-          $source = Join-Path $env:SystemRoot "System32/notepad.exe"
-          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "System PE fixture is unavailable: $source" }
-          pwsh scripts/test_v4_authenticode_integrity.ps1 -Source $source
+          if ([string]::IsNullOrWhiteSpace($env:SKY_AUTHENTICODE_FIXTURE) -or
+              -not (Test-Path -LiteralPath $env:SKY_AUTHENTICODE_FIXTURE -PathType Leaf)) {
+            throw "Controlled unsigned Authenticode fixture is unavailable"
+          }
+          pwsh scripts/test_v4_authenticode_integrity.ps1 -Source $env:SKY_AUTHENTICODE_FIXTURE
           if ($LASTEXITCODE -ne 0) { throw "Authenticode tamper regression failed with exit code $LASTEXITCODE" }
+
+      - name: Clean up controlled Authenticode PE fixture
+        if: always()
+        shell: pwsh
+        run: |
+          $fixture = ([string]$env:SKY_AUTHENTICODE_FIXTURE).Trim()
+          $runnerTemp = [IO.Path]::GetFullPath(([string]$env:RUNNER_TEMP).Trim()).TrimEnd('\', '/')
+          if (-not [string]::IsNullOrWhiteSpace($fixture)) {
+            $resolved = [IO.Path]::GetFullPath($fixture)
+            $prefix = $runnerTemp + [IO.Path]::DirectorySeparatorChar
+            if (-not $resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+                [IO.Path]::GetFileName($resolved) -cne 'sky-v4-authenticode-unsigned-fixture.exe') {
+              throw "Refusing to remove an Authenticode fixture outside RUNNER_TEMP: $resolved"
+            }
+            $fixtureRoot = Split-Path -Parent $resolved
+            if (Test-Path -LiteralPath $fixtureRoot) {
+              Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+            }
+          }
 
       - name: Clean up Authenticode test certificate
         if: always()
@@ -731,7 +773,7 @@ jobs:
           name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/sky-auto-player-current-candidate
 
-      - name: Validate and stage exact current candidate
+      - name: Validate exact current candidate contract
         run: |
           $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
           pwsh scripts/ci_validate_candidate.ps1 `
@@ -740,21 +782,15 @@ jobs:
             -SourceSha "${{ github.event.pull_request.head.sha || github.sha }}"
           if ($LASTEXITCODE -ne 0) { throw "Downloaded current-candidate contract validation failed with exit code $LASTEXITCODE" }
           $metadata = Get-Content -LiteralPath (Join-Path $candidateRoot "candidate.json") -Raw | ConvertFrom-Json
-          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "rust/target/dist/bundle/nsis"
-          if (Test-Path -LiteralPath $bundleDir) {
-            Remove-Item -LiteralPath $bundleDir -Recurse -Force
-          }
-          New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
           $installer = Join-Path $candidateRoot $metadata.installer
           $signature = Join-Path $candidateRoot $metadata.updater_signature
-          Copy-Item -LiteralPath $installer -Destination (Join-Path $bundleDir $metadata.installer) -Force
-          Copy-Item -LiteralPath $signature -Destination (Join-Path $bundleDir $metadata.updater_signature) -Force
-          "SKY_TAURI_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_CANDIDATE_INSTALLER=$installer" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_CANDIDATE_SIGNATURE=$signature" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_CANDIDATE_PUBLIC_KEY=$(Join-Path $candidateRoot $metadata.updater_public_key)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_CANDIDATE_VERSION=$($metadata.version)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_INSTALLER_SHA256=$($metadata.installer_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_SIGNATURE_SHA256=$($metadata.updater_signature_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Rust — install pinned stable toolchain for packaged build
         env:
@@ -789,6 +825,29 @@ jobs:
 
       - name: Fail fast on package qualification dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
+
+      - name: Stage and re-hash exact current candidate after Rust cache restore
+        run: |
+          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "rust/target/dist/bundle/nsis"
+          if (Test-Path -LiteralPath $bundleDir) {
+            Remove-Item -LiteralPath $bundleDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+          $metadata = Get-Content -LiteralPath (Join-Path $env:SKY_CANDIDATE_ROOT "candidate.json") -Raw | ConvertFrom-Json
+          $stagedInstaller = Join-Path $bundleDir $metadata.installer
+          $stagedSignature = Join-Path $bundleDir $metadata.updater_signature
+          Copy-Item -LiteralPath $env:SKY_CANDIDATE_INSTALLER -Destination $stagedInstaller -Force
+          Copy-Item -LiteralPath $env:SKY_CANDIDATE_SIGNATURE -Destination $stagedSignature -Force
+          $installerSha = (Get-FileHash -LiteralPath $stagedInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+          $signatureSha = (Get-FileHash -LiteralPath $stagedSignature -Algorithm SHA256).Hash.ToLowerInvariant()
+          $publicKeySha = (Get-FileHash -LiteralPath $env:SKY_CANDIDATE_PUBLIC_KEY -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($installerSha -cne [string]$metadata.installer_sha256) { throw "Staged installer hash changed: expected=$($metadata.installer_sha256) observed=$installerSha" }
+          if ($signatureSha -cne [string]$metadata.updater_signature_sha256) { throw "Staged updater signature hash changed: expected=$($metadata.updater_signature_sha256) observed=$signatureSha" }
+          if ($publicKeySha -cne [string]$metadata.updater_public_key_sha256) { throw "Downloaded updater public-key hash changed: expected=$($metadata.updater_public_key_sha256) observed=$publicKeySha" }
+          if ($installerSha -cne $env:SKY_CANDIDATE_INSTALLER_SHA256 -or $signatureSha -cne $env:SKY_CANDIDATE_SIGNATURE_SHA256) {
+            throw "Staged candidate hashes do not match the validated candidate contract"
+          }
+          "SKY_TAURI_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Verify Tauri Authenticode signature
         env:

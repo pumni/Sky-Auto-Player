@@ -37,6 +37,7 @@ $candidateTargetRoot = Join-Path $fixtureTargetRoot 'candidate'
 $bridgeBundleRoot = Join-Path $bridgeTargetRoot 'dist/bundle/nsis'
 $candidateBundleRoot = Join-Path $candidateTargetRoot 'dist/bundle/nsis'
 $installRoot = Join-Path $fixtureRoot 'installed'
+$preservedBridgeRoot = Join-Path $fixtureRoot 'preserved-bridge'
 $appDataRoot = Join-Path $fixtureRoot 'app-data'
 $userSongsRoot = Join-Path $appDataRoot 'songs'
 $userSongPath = Join-Path $userSongsRoot 'updater-preserved-user.json'
@@ -467,6 +468,10 @@ try {
   } finally {
     Pop-Location
   }
+  $oldSigningInstallerSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($candidateForOldSigningPath))
+  if ($oldSigningInstallerSha256 -ne $candidateInstallerSha256) {
+    throw "Old-root signing changed the disposable installer bytes: candidate=$candidateInstallerSha256 old-signing-copy=$oldSigningInstallerSha256"
+  }
   Move-Item -LiteralPath "$candidateForOldSigningPath.sig" -Destination $oldSignaturePath -Force
   $oldSignatureText = ([IO.File]::ReadAllText($oldSignaturePath)).Trim()
   if ([string]::IsNullOrWhiteSpace($oldSignatureText)) { throw 'Old-root updater signature is empty' }
@@ -599,6 +604,7 @@ try {
   $candidateContract = [ordered]@{
     status = 'PASS'
     installer_sha256 = $candidateInstallerSha256
+    n_to_n_plus_1_installer_sha256 = $candidateInstallerSha256
     old_root_rejection_copy_sha256 = $oldSigningInstallerSha256
     old_root_rejection_copy_matches = ($candidateInstallerSha256 -eq $oldSigningInstallerSha256)
     http = Assert-ExactHttpResponse $candidateResponse $candidateBytes 'application/octet-stream' 'fixture candidate artifact'
@@ -620,6 +626,19 @@ try {
     $catalogBridgeEvidence.selected_content_sha256 -ne $catalogSentinelSongSha -or
     $catalogBridgeEvidence.selected_manifest_sha256 -ne $catalogSentinelSongSha) {
     throw 'Bridge installed built-in catalog did not contain the expected N sentinel bytes and hash'
+  }
+  $bridgeAppSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($appPath))
+  New-Item -ItemType Directory -Path $preservedBridgeRoot -Force | Out-Null
+  foreach ($item in @(Get-ChildItem -LiteralPath $installRoot -Force)) {
+    Copy-Item -LiteralPath $item.FullName -Destination $preservedBridgeRoot -Recurse -Force
+  }
+  $preservedBridgeAppPath = Join-Path $preservedBridgeRoot 'sky_desktop_shell.exe'
+  if (-not (Test-Path -LiteralPath $preservedBridgeAppPath -PathType Leaf)) {
+    throw "Preserved updater fixture bridge binary is missing: $preservedBridgeAppPath"
+  }
+  $preservedBridgeAppSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($preservedBridgeAppPath))
+  if ($preservedBridgeAppSha256 -ne $bridgeAppSha256) {
+    throw "Preserved updater fixture bridge bytes changed: original=$bridgeAppSha256 preserved=$preservedBridgeAppSha256"
   }
 
   $userSongBytes = [Text.Encoding]::UTF8.GetBytes('{"name":"Updater preserved user","songNotes":[{"time":0,"key":"1Key0"}]}')
@@ -706,13 +725,18 @@ try {
   Write-Host "Updater N-to-N+1 resource replacement: PASS (user_sha256=$userSongShaAfter; built_in_manifest_sha256_before=$($catalogBridgeEvidence.manifest_sha256); built_in_manifest_sha256_after=$candidateBuiltinManifestSha; selected_id=$($catalogCandidateEvidence.selected_id); selected_content_sha256_before=$($catalogBridgeEvidence.selected_content_sha256); selected_content_sha256_after=$($catalogCandidateEvidence.selected_content_sha256); source_tree_restore=$catalogSourceRestoreStatus)"
   Write-Host "Updater N-to-N+1 preservation: PASS (user_sha256=$userSongShaAfter; built_in_count=$candidateBuiltinCount; built_in_manifest_sha256=$candidateBuiltinManifestSha)"
 
-  # Switch only the server manifest. The installed candidate is the
-  # new-root-only client; it must reject the old-root signature over the same
-  # installer bytes through the real updater download/verification path.
+  if ([string]$candidateContract.http.body_sha256 -cne $candidateInstallerSha256) {
+    throw "N-to-N+1 served candidate SHA differs from the candidate installer SHA: served=$($candidateContract.http.body_sha256) candidate=$candidateInstallerSha256"
+  }
+  $negativeRequestStart = @(Get-Content -LiteralPath $requestLogPath -ErrorAction Stop).Count
+  # Switch only the server manifest. The preserved bridge is the same
+  # tauri-update-fixture binary that accepted the candidate with old+new roots;
+  # its fixture-only runtime seam now selects only the last (new) root.
   Copy-Item -LiteralPath $oldManifestPath -Destination $manifestPath -Force
-  $cutoverProcess = Start-Process -FilePath $appPath -ArgumentList @(
+  $cutoverProcess = Start-Process -FilePath $preservedBridgeAppPath -WorkingDirectory $preservedBridgeRoot -ArgumentList @(
     '--selftest-desktop-update',
-    '--selftest-update-marker', $cutoverMarkerPath
+    '--selftest-update-marker', $cutoverMarkerPath,
+    '--selftest-update-fixture-new-only'
   ) -WindowStyle Hidden -PassThru
   Wait-Process -Id $cutoverProcess.Id -Timeout 180
   Wait-ForPath -Path $cutoverMarkerPath
@@ -720,11 +744,35 @@ try {
   if (-not $cutoverResult.StartsWith('update-failed:')) {
     throw "Cutover client accepted an old-root artifact: $cutoverResult"
   }
+  $negativeRequests = @(
+    Get-Content -LiteralPath $requestLogPath -ErrorAction Stop |
+      Select-Object -Skip $negativeRequestStart |
+      Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+      ForEach-Object { $_ | ConvertFrom-Json }
+  )
+  $negativeManifestRequests = @($negativeRequests | Where-Object { [string]$_.path -eq '/stable' })
+  $negativeCandidateRequests = @($negativeRequests | Where-Object { [string]$_.path -eq '/candidate/update.exe' })
+  if ($negativeManifestRequests.Count -lt 1 -or $negativeCandidateRequests.Count -lt 1) {
+    throw "Old-root rejection did not reach both fixture manifest and candidate download paths: manifest=$($negativeManifestRequests.Count) candidate=$($negativeCandidateRequests.Count)"
+  }
+  foreach ($request in $negativeCandidateRequests) {
+    if ([string]$request.body_sha256 -cne $candidateInstallerSha256) {
+      throw "Old-root rejection served a candidate SHA different from N-to-N+1: served=$($request.body_sha256) candidate=$candidateInstallerSha256"
+    }
+  }
+  $candidateContract['old_root_rejection'] = [ordered]@{
+    status = 'PASS'
+    manifest_requests = $negativeManifestRequests.Count
+    candidate_requests = $negativeCandidateRequests.Count
+    served_candidate_sha256 = [string]$negativeCandidateRequests[0].body_sha256
+    matches_n_to_n_plus_1 = ([string]$negativeCandidateRequests[0].body_sha256 -ceq [string]$candidateContract.n_to_n_plus_1_installer_sha256)
+    update_result = $cutoverResult
+  }
   if ($providedCandidate) {
-    "Packaged Tauri updater draft qualification: PASS (throwaway previous-v4 bridge applied the exact downloaded candidate $candidateVersion; old-root rejection reused installer sha256=$candidateInstallerSha256 with synthetic higher version $cutoverVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
+    "Packaged Tauri updater draft qualification: PASS (preserved fixture bridge applied exact downloaded candidate $candidateVersion; N-to-N+1/old-root-rejection installer sha256=$candidateInstallerSha256; old-root manifest requests=$($negativeManifestRequests.Count); old-root candidate requests=$($negativeCandidateRequests.Count); synthetic higher version $cutoverVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   } else {
-    "Packaged Tauri updater rotation: PASS (bridge [old,new] applied new-root-only $candidateVersion; old-root rejection reused installer sha256=$candidateInstallerSha256 with synthetic higher version $cutoverVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
+    "Packaged Tauri updater rotation: PASS (preserved fixture bridge applied new-root-only $candidateVersion; N-to-N+1/old-root-rejection installer sha256=$candidateInstallerSha256; old-root manifest requests=$($negativeManifestRequests.Count); old-root candidate requests=$($negativeCandidateRequests.Count); synthetic higher version $cutoverVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   }
   $fixtureStatus = 'PASS'
