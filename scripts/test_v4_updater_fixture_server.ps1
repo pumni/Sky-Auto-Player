@@ -19,7 +19,8 @@ if ($coreContent -match '(?i)\$listener\s*\.\s*Close\s*\(') {
 }
 foreach ($marker in @(
         'Get-DisposableLoopbackPort',
-        'SKY_TAURI_UPDATE_FIXTURE_PORT',
+        'selftest-update-fixture-port',
+        'selftest-update-fixture-public-key',
         'Assert-ExactHttpResponse',
         'fixture-http-evidence.json',
         'Content-Length',

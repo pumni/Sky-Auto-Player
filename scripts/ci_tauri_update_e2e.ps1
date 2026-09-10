@@ -6,6 +6,12 @@ param(
   [string]$CandidateSignaturePath,
   [string]$CandidateVersion,
   [string]$CandidatePublicKeyPath,
+  [string]$BridgeRootPath,
+  [string]$BridgeInstallerPath,
+  [string]$BridgeSourceSha,
+  [string]$BridgeVersion,
+  [string]$BridgeSentinelId,
+  [string]$BridgeSentinelSha256,
   [string]$EvidencePath,
   [switch]$KeepFixtureOnFailure
 )
@@ -60,7 +66,10 @@ if ((Convert-FixtureCargoVersion -Source $syntheticCargo -Version $previousVersi
 
 
 $invokeArgs = @{ FixtureTargetDir = $FixtureTargetDir }
-foreach ($name in @('CandidateInstallerPath', 'CandidateSignaturePath', 'CandidateVersion', 'CandidatePublicKeyPath')) {
+foreach ($name in @(
+    'CandidateInstallerPath', 'CandidateSignaturePath', 'CandidateVersion', 'CandidatePublicKeyPath',
+    'BridgeRootPath', 'BridgeInstallerPath', 'BridgeSourceSha', 'BridgeVersion',
+    'BridgeSentinelId', 'BridgeSentinelSha256')) {
   if ($PSBoundParameters.ContainsKey($name)) {
     $invokeArgs[$name] = Get-Variable -Name $name -ValueOnly
   }
@@ -73,10 +82,18 @@ if ($KeepFixtureOnFailure) {
 }
 
 try {
-  $bridgeCargo = Convert-FixtureCargoVersion -Source $cargoSource -Version $previousVersion
-  $bridgeLock = Convert-FixtureLockVersion -Source $lockSource -Version $previousVersion
-  [IO.File]::WriteAllText($candidateCargoPath, $bridgeCargo, [Text.UTF8Encoding]::new($false))
-  [IO.File]::WriteAllText($lockPath, $bridgeLock, [Text.UTF8Encoding]::new($false))
+  $providedBridge = $PSBoundParameters.ContainsKey('BridgeRootPath') -or
+    $PSBoundParameters.ContainsKey('BridgeInstallerPath') -or
+    $PSBoundParameters.ContainsKey('BridgeSourceSha') -or
+    $PSBoundParameters.ContainsKey('BridgeVersion') -or
+    $PSBoundParameters.ContainsKey('BridgeSentinelId') -or
+    $PSBoundParameters.ContainsKey('BridgeSentinelSha256')
+  if (-not $providedBridge) {
+    $bridgeCargo = Convert-FixtureCargoVersion -Source $cargoSource -Version $previousVersion
+    $bridgeLock = Convert-FixtureLockVersion -Source $lockSource -Version $previousVersion
+    [IO.File]::WriteAllText($candidateCargoPath, $bridgeCargo, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($lockPath, $bridgeLock, [Text.UTF8Encoding]::new($false))
+  }
 
   & (Join-Path $PSScriptRoot 'ci_tauri_update_e2e_core.ps1') @invokeArgs
 } finally {

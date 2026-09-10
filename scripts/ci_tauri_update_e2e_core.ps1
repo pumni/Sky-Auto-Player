@@ -6,6 +6,12 @@ param(
   [string]$CandidateSignaturePath,
   [string]$CandidateVersion,
   [string]$CandidatePublicKeyPath,
+  [string]$BridgeRootPath,
+  [string]$BridgeInstallerPath,
+  [string]$BridgeSourceSha,
+  [string]$BridgeVersion,
+  [string]$BridgeSentinelId,
+  [string]$BridgeSentinelSha256,
   [string]$EvidencePath,
   [switch]$KeepFixtureOnFailure
 )
@@ -54,6 +60,31 @@ $oldKeyPath = Join-Path $fixtureRoot 'old.key'
 $newKeyPath = Join-Path $fixtureRoot 'new.key'
 $oldSignaturePath = Join-Path $fixtureRoot 'old.sig'
 $candidateForOldSigningPath = Join-Path $fixtureRoot 'candidate-for-old-signing.exe'
+$providedBridge = -not [string]::IsNullOrWhiteSpace($BridgeRootPath) -or
+  -not [string]::IsNullOrWhiteSpace($BridgeInstallerPath) -or
+  -not [string]::IsNullOrWhiteSpace($BridgeSourceSha) -or
+  -not [string]::IsNullOrWhiteSpace($BridgeVersion) -or
+  -not [string]::IsNullOrWhiteSpace($BridgeSentinelId) -or
+  -not [string]::IsNullOrWhiteSpace($BridgeSentinelSha256)
+if ($providedBridge) {
+  if ([string]::IsNullOrWhiteSpace($BridgeRootPath) -or
+    [string]::IsNullOrWhiteSpace($BridgeInstallerPath) -or
+    [string]::IsNullOrWhiteSpace($BridgeSourceSha) -or
+    [string]::IsNullOrWhiteSpace($BridgeVersion) -or
+    [string]::IsNullOrWhiteSpace($BridgeSentinelId) -or
+    [string]::IsNullOrWhiteSpace($BridgeSentinelSha256)) {
+    throw 'Provided-bridge updater qualification requires root, installer, source SHA, version, sentinel ID, and sentinel SHA'
+  }
+  if ($BridgeSourceSha -notmatch '^[0-9a-fA-F]{40}$' -or $BridgeSourceSha -match '^0{40}$') {
+    throw 'Provided-bridge updater qualification received an invalid source SHA'
+  }
+  if ($BridgeVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+    throw "Provided-bridge updater qualification received a non-canonical SemVer: $BridgeVersion"
+  }
+  if ($BridgeSentinelSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+    throw 'Provided-bridge updater qualification received an invalid sentinel SHA'
+  }
+}
 $providedCandidate = -not [string]::IsNullOrWhiteSpace($CandidateInstallerPath) -or
   -not [string]::IsNullOrWhiteSpace($CandidateSignaturePath) -or
   -not [string]::IsNullOrWhiteSpace($CandidateVersion) -or
@@ -142,7 +173,7 @@ $catalogSentinelSongBytes = [Text.Encoding]::UTF8.GetBytes(
 $catalogSentinelSongSha = Get-ByteSha256 $catalogSentinelSongBytes
 $catalogBridgeEvidence = $null
 $catalogCandidateEvidence = $null
-$catalogSourceRestoreStatus = 'not-started'
+$catalogSourceRestoreStatus = if ($providedBridge) { 'PASS' } else { 'not-started' }
 $catalogSourceRestoreError = $null
 
 function Set-CatalogBridgeSentinel {
@@ -305,7 +336,9 @@ function Write-FixtureUpdaterConfig {
       updater = [ordered]@{
         pubkey = $PublicKey
         dangerousInsecureTransportProtocol = $true
-        endpoints = @("http://127.0.0.1:$port/stable")
+        # The fixture runtime supplies the actual port and trust roots. This
+        # fixed placeholder only satisfies Tauri's bundle-time schema.
+        endpoints = @("http://127.0.0.1:1/stable")
       }
     }
   } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding utf8
@@ -323,21 +356,17 @@ function Invoke-FixtureBuild {
   param(
     [string]$ConfigPath,
     [string]$PrivateKeyPath,
-    [string]$PublicRoots,
     [Parameter(Mandatory = $true)] [string]$TargetRoot
   )
   $privateKey = ([IO.File]::ReadAllText($PrivateKeyPath)).Trim()
   if ([string]::IsNullOrWhiteSpace($privateKey)) {
     throw "Updater fixture private key is empty"
   }
-  $env:SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS = $PublicRoots
   $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ''
   $oldCargoTargetDir = [Environment]::GetEnvironmentVariable('CARGO_TARGET_DIR', 'Process')
-  $oldFixturePort = [Environment]::GetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', 'Process')
   try {
     [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $TargetRoot, 'Process')
-    [Environment]::SetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', [string]$port, 'Process')
     Clear-FixtureResourceStaging -TargetRoot $TargetRoot
     Push-Location $desktopRoot
     try {
@@ -352,12 +381,6 @@ function Invoke-FixtureBuild {
     } else {
       [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $oldCargoTargetDir, 'Process')
     }
-    if ([string]::IsNullOrEmpty($oldFixturePort)) {
-      Remove-Item Env:SKY_TAURI_UPDATE_FIXTURE_PORT -ErrorAction SilentlyContinue
-    } else {
-      [Environment]::SetEnvironmentVariable('SKY_TAURI_UPDATE_FIXTURE_PORT', $oldFixturePort, 'Process')
-    }
-    Remove-Item Env:SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS -ErrorAction SilentlyContinue
     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
   }
@@ -371,20 +394,41 @@ try {
   $bridgeBundleRoot = (Resolve-Path -LiteralPath $bridgeBundleRoot -ErrorAction Stop).Path
   $candidateBundleRoot = (Resolve-Path -LiteralPath $candidateBundleRoot -ErrorAction Stop).Path
 
-  foreach ($candidatePath in @($CandidateInstallerPath, $CandidateSignaturePath)) {
+  foreach ($candidatePath in @($CandidateInstallerPath, $CandidateSignaturePath, $BridgeInstallerPath)) {
     if (-not [string]::IsNullOrWhiteSpace($candidatePath)) {
       $resolvedCandidatePath = [IO.Path]::GetFullPath($candidatePath)
       $fixturePrefix = $fixtureTargetRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
       if ($resolvedCandidatePath.StartsWith($fixturePrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Downloaded candidate paths must remain outside the throwaway fixture target directory'
+        throw 'Downloaded candidate and bridge paths must remain outside the throwaway fixture target directory'
       }
+    }
+  }
+  if ($providedBridge) {
+    & (Join-Path $repoRoot 'scripts/ci_validate_bridge.ps1') `
+      -Mode Validate `
+      -BridgeRoot $BridgeRootPath `
+      -SourceSha $BridgeSourceSha `
+      -Version $BridgeVersion `
+      -SentinelId $BridgeSentinelId `
+      -SentinelContentSha256 $BridgeSentinelSha256 `
+      -RepositoryRoot $repoRoot
+    $bridgeMetadata = Get-Content -LiteralPath (Join-Path $BridgeRootPath 'bridge.json') -Raw | ConvertFrom-Json
+    $expectedBridgeInstaller = [IO.Path]::GetFullPath((Join-Path $BridgeRootPath ([string]$bridgeMetadata.installer)))
+    if ([IO.Path]::GetFullPath($BridgeInstallerPath) -cne $expectedBridgeInstaller) {
+      throw 'Provided bridge installer does not match bridge.json'
+    }
+    if ([string]$bridgeMetadata.sentinel_id -cne $catalogSentinelId -or
+      [string]$bridgeMetadata.sentinel_content_sha256 -ine $catalogSentinelSongSha) {
+      throw 'Provided bridge sentinel contract does not match the selected catalog sentinel'
     }
   }
 
   Push-Location $desktopRoot
   try {
     bun run tauri signer generate --ci --password '' --force -w $oldKeyPath *> $null
-    bun run tauri signer generate --ci --password '' --force -w $newKeyPath *> $null
+    if (-not $providedCandidate) {
+      bun run tauri signer generate --ci --password '' --force -w $newKeyPath *> $null
+    }
   } finally {
     Pop-Location
   }
@@ -405,20 +449,37 @@ try {
   if ($newPublicKey -match 'PRIVATE KEY' -or $newPublicKey.Length -gt 4096) {
     throw 'Updater fixture public key contains forbidden or unbounded material'
   }
-  Write-FixtureUpdaterConfig $bridgeConfigPath $oldPublicKey
-  Write-FixtureUpdaterConfig $cutoverConfigPath $newPublicKey
-
-  # Build only the throwaway bridge client with old+new roots. In production
-  # qualification the candidate below is the exact installer and signature
-  # downloaded from the release draft; it is never rebuilt by this fixture.
-  Set-CatalogBridgeSentinel
-  Invoke-FixtureBuild $bridgeConfigPath $oldKeyPath "$oldPublicKey|$newPublicKey" $bridgeTargetRoot
-  $previousInstallers = @(Get-ChildItem -LiteralPath $bridgeBundleRoot -Filter '*4.0.0-alpha.1_x64-setup.exe' -File)
-  if ($previousInstallers.Count -ne 1) {
-    throw "Expected exactly one bridge-v4 installer, found $($previousInstallers.Count)"
+  $candidatePublicKeyForRuntime = if ($providedCandidate) {
+    [IO.Path]::GetFullPath($CandidatePublicKeyPath)
+  } else {
+    [IO.Path]::GetFullPath("$newKeyPath.pub")
   }
-  Copy-Item -LiteralPath $previousInstallers[0].FullName -Destination $previousInstallerCopy -Force
-  Restore-CanonicalBuiltinCatalog
+  $fixtureRuntimeArguments = @(
+    '--selftest-update-fixture-port', [string]$port,
+    '--selftest-update-fixture-public-key', [IO.Path]::GetFullPath("$oldKeyPath.pub"),
+    '--selftest-update-fixture-public-key', $candidatePublicKeyForRuntime
+  )
+  if (-not $providedBridge) {
+    Write-FixtureUpdaterConfig $bridgeConfigPath $oldPublicKey
+    if (-not $providedCandidate) {
+      Write-FixtureUpdaterConfig $cutoverConfigPath $newPublicKey
+    }
+  }
+
+  # The ordinary updater consumer installs the exact prebuilt bridge. Only
+  # the release/rehearsal fallback builds its throwaway bridge here.
+  if ($providedBridge) {
+    Copy-Item -LiteralPath $BridgeInstallerPath -Destination $previousInstallerCopy -Force
+  } else {
+    Set-CatalogBridgeSentinel
+    Invoke-FixtureBuild $bridgeConfigPath $oldKeyPath $bridgeTargetRoot
+    $previousInstallers = @(Get-ChildItem -LiteralPath $bridgeBundleRoot -Filter '*4.0.0-alpha.1_x64-setup.exe' -File)
+    if ($previousInstallers.Count -ne 1) {
+      throw "Expected exactly one bridge-v4 installer, found $($previousInstallers.Count)"
+    }
+    Copy-Item -LiteralPath $previousInstallers[0].FullName -Destination $previousInstallerCopy -Force
+    Restore-CanonicalBuiltinCatalog
+  }
   if ($catalogSourceRestoreStatus -ne 'PASS') {
     throw 'Updater fixture did not restore the canonical source tree before building N+1'
   }
@@ -441,7 +502,7 @@ try {
     if ($lockCandidate -eq $lockSource) { throw 'Could not locate the desktop package in Cargo.lock' }
     [IO.File]::WriteAllText($candidateCargoPath, $cargoCandidate, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($lockPath, $lockCandidate, [Text.UTF8Encoding]::new($false))
-    Invoke-FixtureBuild $cutoverConfigPath $newKeyPath $newPublicKey $candidateTargetRoot
+    Invoke-FixtureBuild $cutoverConfigPath $newKeyPath $candidateTargetRoot
 
     $candidateArchives = @(Get-ChildItem -LiteralPath $candidateBundleRoot -Filter ("*" + $candidateVersion + "*-setup.exe") -File)
     if ($candidateArchives.Count -ne 1) {
@@ -650,12 +711,12 @@ try {
   }
   [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $appDataRoot, 'Process')
 
-  $appProcess = Start-Process -FilePath $appPath -ArgumentList @(
+  $appProcess = Start-Process -FilePath $appPath -ArgumentList (@(
     '--selftest-desktop-update',
     '--selftest-update-marker', $markerPath,
     '--selftest-update-expected-version-file', $expectedVersionPath,
     '--selftest-update-safety-marker', $safetyPath
-  ) -WindowStyle Hidden -PassThru
+  ) + $fixtureRuntimeArguments) -WindowStyle Hidden -PassThru
   Wait-Process -Id $appProcess.Id -Timeout 180
   Wait-ForPath -Path $markerPath
   $completion = ([IO.File]::ReadAllText($markerPath)).Trim()
@@ -733,11 +794,11 @@ try {
   # tauri-update-fixture binary that accepted the candidate with old+new roots;
   # its fixture-only runtime seam now selects only the last (new) root.
   Copy-Item -LiteralPath $oldManifestPath -Destination $manifestPath -Force
-  $cutoverProcess = Start-Process -FilePath $preservedBridgeAppPath -WorkingDirectory $preservedBridgeRoot -ArgumentList @(
+  $cutoverProcess = Start-Process -FilePath $preservedBridgeAppPath -WorkingDirectory $preservedBridgeRoot -ArgumentList (@(
     '--selftest-desktop-update',
     '--selftest-update-marker', $cutoverMarkerPath,
     '--selftest-update-fixture-new-only'
-  ) -WindowStyle Hidden -PassThru
+  ) + $fixtureRuntimeArguments) -WindowStyle Hidden -PassThru
   Wait-Process -Id $cutoverProcess.Id -Timeout 180
   Wait-ForPath -Path $cutoverMarkerPath
   $cutoverResult = ([IO.File]::ReadAllText($cutoverMarkerPath)).Trim()
@@ -798,7 +859,6 @@ try {
   } else {
     [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $oldAppDataRoot, 'Process')
   }
-  Remove-Item Env:SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS -ErrorAction SilentlyContinue
   Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
   Write-HttpEvidence $fixtureStatus
