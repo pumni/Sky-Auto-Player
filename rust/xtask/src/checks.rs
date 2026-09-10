@@ -3711,9 +3711,13 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
 /* retired migration-only process-surface checks removed */
 
 pub fn bindings() -> Result<()> {
+    bindings_with_env(&[])
+}
+
+fn bindings_with_env(extra_env: &[(&str, &str)]) -> Result<()> {
     let root = repo::root();
     let export_dir = prepare_binding_export_dir(&root)?;
-    generate_bindings(&root, &export_dir)?;
+    generate_bindings_with_env(&root, &export_dir, extra_env)?;
     write_command_names(&root, &export_dir)?;
     compare_generated_bindings(&root, &export_dir)?;
     compare_command_names(&root, &export_dir)?;
@@ -3797,11 +3801,20 @@ fn compare_command_names(root: &Path, export_dir: &Path) -> Result<()> {
 }
 
 fn generate_bindings(root: &Path, export_path: &Path) -> Result<()> {
+    generate_bindings_with_env(root, export_path, &[])
+}
+
+fn generate_bindings_with_env(
+    root: &Path,
+    export_path: &Path,
+    extra_env: &[(&str, &str)],
+) -> Result<()> {
     let export_dir = export_path
         .to_str()
         .ok_or("binding export directory is not valid UTF-8")?
         .to_owned();
-    let export_env = [("TS_RS_EXPORT_DIR", export_dir.as_str())];
+    let mut export_env = vec![("TS_RS_EXPORT_DIR", export_dir.as_str())];
+    export_env.extend_from_slice(extra_env);
     process::run(
         "cargo",
         &[
@@ -3901,6 +3914,8 @@ pub(crate) fn should_skip_supply_chain(flag: bool, env_val: Option<&str>) -> boo
 }
 
 fn check_desktop_native(root: &Path) -> Result<()> {
+    const NATIVE_TAURI_CONFIG: &str = r#"{"build":{"frontendDist":null}}"#;
+    let native_env = [("TAURI_CONFIG", NATIVE_TAURI_CONFIG)];
     process::run(
         "cargo",
         &[
@@ -3917,7 +3932,7 @@ fn check_desktop_native(root: &Path) -> Result<()> {
             "--locked",
         ],
         root,
-        &[],
+        &native_env,
     )?;
     process::run(
         "cargo",
@@ -3930,7 +3945,7 @@ fn check_desktop_native(root: &Path) -> Result<()> {
             "--locked",
         ],
         root,
-        &[],
+        &native_env,
     )?;
     process::run(
         "cargo",
@@ -3944,9 +3959,9 @@ fn check_desktop_native(root: &Path) -> Result<()> {
             "--locked",
         ],
         root,
-        &[],
+        &native_env,
     )?;
-    bindings()
+    bindings_with_env(&native_env)
 }
 
 pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
