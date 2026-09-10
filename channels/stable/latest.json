@@ -1,0 +1,11 @@
+{
+  "version": "4.0.1",
+  "notes": "# Sky Auto Player v4.0.1\n\n`v4.0.1` is the first supported v4 release lineage for Sky Auto Player.\n\n## Release identity\n\n- Canonical repository: `pumni/Sky-Auto-Player`\n- Canonical tag: `v4.0.1`\n- Release channel: stable\n- GitHub Latest policy: v4 releases use `make_latest=false` so the legacy v3\n  `v3.5.0` Latest release remains available during the coexistence period\n\n## Distribution and update contract\n\nThe supported Windows package is the Tauri NSIS installer and its Ed25519\nupdater signature. Release assets are qualified byte-for-byte, with matching\nSHA-256 evidence, SPDX SBOM, and GitHub OIDC provenance attestation.\n\nThe v4 updater consumes unauthenticated raw metadata from the canonical\nrepository's `release-metadata` branch:\n\n```text\nhttps://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json\nhttps://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json\n```\n\nStable metadata advances only through a strictly monotonic SemVer promotion;\nbeta metadata remains on its separate prerelease channel. The metadata\ncontract never fabricates a channel `latest.json` file during bootstrap.\n\n## Compatibility\n\nThe earlier v4.0.0 and RC artifacts were development and rehearsal artifacts,\nnot supported release targets. There is no compatibility bridge or alternate\nv4 update endpoint for those artifacts.",
+  "pub_date": "2026-09-10T06:40:42Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTTWdUaDRMcjJxR1FPanpQR2l0Z0ozamZWUE1kTWZqaGFtN1RCTUgrVkFaMlNxcG1JZHFIeVZscXpIMENZN2NlaHB0azJwa0QrVE1EQ1l5bVc3bjQzb3BVVVQzYVR4L3dzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIzMDY2CWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuMC4xX3g2NC1zZXR1cC5leGUKOTBMTFd6eHlKSkhyV2dDVWNPTllXL3R4SmtxQWxNRzhZaWJUR0wwYXRUSjE2L1lZMmFnYTVlVnU2RDkvMmNwUVJJWTMzeFVVc1BCYnFTUkQ3MVhaQ2c9PQo=",
+      "url": "https://github.com/pumni/Sky-Auto-Player/releases/download/v4.0.1/Sky.Auto.Player_4.0.1_x64-setup.exe"
+    }
+  }
+}
