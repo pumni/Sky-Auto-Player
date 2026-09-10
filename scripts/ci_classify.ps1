@@ -263,15 +263,12 @@ function Get-ClassificationForPaths([string[]]$RawPaths) {
     if ($unknownPaths.Count -gt 0) {
         return New-FullClassification "unknown path requires full validation: $(Get-DisplayPaths $unknownPaths)"
     }
-    if ($staticOnlyPaths.Count -gt 0 -and $paths.Count -eq $staticOnlyPaths.Count) {
-        return New-Classification "static-only: $(Get-DisplayPaths $staticOnlyPaths)"
-    }
-    if ($staticOnlyPaths.Count -gt 0) {
-        [void]($classification.classification_reason = "required lanes (static-only plus classified lanes): $(Get-DisplayPaths $paths)")
-    }
-
     $lanes = @($outputNames | Where-Object { [bool]$classification[$_] })
-    if ($lanes.Count -eq 0) {
+    if ($staticOnlyPaths.Count -gt 0 -and $lanes.Count -eq 0) {
+        [void]($classification.classification_reason = "static-only plus docs/site only: $(Get-DisplayPaths $paths)")
+    } elseif ($staticOnlyPaths.Count -gt 0) {
+        [void]($classification.classification_reason = "static-only plus required lanes ($($lanes -join ', ')): $(Get-DisplayPaths $paths)")
+    } elseif ($lanes.Count -eq 0) {
         [void]($classification.classification_reason = "docs/site only: $(Get-DisplayPaths $paths)")
     } else {
         [void]($classification.classification_reason = "required lanes ($($lanes -join ', ')): $(Get-DisplayPaths $paths)")

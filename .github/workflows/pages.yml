@@ -7,7 +7,6 @@ on:
       - 'site/**'
       - 'desktop/src-tauri/Cargo.toml'
       - '.github/workflows/pages.yml'
-      - '.github/actions/site-validate/**'
   workflow_dispatch:
 
 permissions:

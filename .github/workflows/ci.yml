@@ -60,11 +60,11 @@ jobs:
           set -euo pipefail
           classifier_args=()
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            classifier_args+=(--full)
+            classifier_args+=(-Full)
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            classifier_args+=(--base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.event.pull_request.head.sha }}")
+            classifier_args+=(-BaseSha "${{ github.event.pull_request.base.sha }}" -HeadSha "${{ github.event.pull_request.head.sha }}")
           else
-            classifier_args+=(--base-sha "${{ github.event.before }}" --head-sha "${{ github.sha }}")
+            classifier_args+=(-BaseSha "${{ github.event.before }}" -HeadSha "${{ github.sha }}")
           fi
           classification="$(pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_classify.ps1 "${classifier_args[@]}")"
           printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
@@ -362,8 +362,12 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Fail fast on Windows validation dependencies
-        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_required == 'true'
+      - name: Fail fast on Rust validation dependencies
+        if: needs.changes.outputs.rust_required == 'true'
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
+
+      - name: Fail fast on desktop validation dependencies
+        if: needs.changes.outputs.desktop_required == 'true'
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
 
       - name: Install Chromium for desktop browser smoke

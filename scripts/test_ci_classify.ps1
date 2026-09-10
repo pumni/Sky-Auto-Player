@@ -53,6 +53,13 @@ function Assert-Result([string]$Name, $Expected, [string[]]$Paths) {
     }
 }
 
+function Assert-ReasonContains([string]$Name, [string[]]$Paths, [string]$ExpectedText) {
+    $actual = Invoke-Classification $Paths -Name $Name
+    if (-not ([string]$actual.classification_reason).Contains($ExpectedText)) {
+        Fail "$Name expected classification_reason to contain '$ExpectedText' but got '$($actual.classification_reason)'"
+    }
+}
+
 try {
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
@@ -63,6 +70,9 @@ try {
     }
     Assert-Result "readme" $falseLanes @("README.md")
     Assert-Result "docs-evidence" $falseLanes @("docs/evidence/foo.png")
+    Assert-ReasonContains "static-only-with-readme" @(".config/rust_architecture_allowlist.json", "README.md") "static-only"
+    Assert-Result "static-only-with-site" (@{ site_required = "true" }) @(".config/rust_architecture_allowlist.json", "site/src/pages/index.astro")
+    Assert-ReasonContains "static-only-with-site-reason" @(".config/rust_architecture_allowlist.json", "site/src/pages/index.astro") "static-only"
     Assert-Result "release-notes" (@{ release_required = "true" }) @("docs/releases/v4.0.2.md")
     Assert-Result "site" (@{ site_required = "true" }) @("site/src/pages/index.astro")
     Assert-Result "desktop-frontend" (@{ desktop_required = "true"; desktop_e2e_required = "true"; package_required = "false" }) @("desktop/src/App.tsx")

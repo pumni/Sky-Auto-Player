@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: v4-release-${{ inputs.tag }}
+  group: v4-release-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 defaults:

@@ -79,7 +79,7 @@ function Fail([string]$Message) { throw "FAILED: $Message" }
 foreach ($marker in @(
     'name: V4 Controlled Same-Repository Draft Rehearsal',
     'workflow_dispatch:',
-    'group: v4-release-${{ inputs.tag }}',
+    'group: v4-release-${{ inputs.source_sha }}',
     'draft-rehearsal-dispatch-boundary',
     'runs-on: [self-hosted, windows, v4-release, single-tenant]',
     'environment: v4-production-release',
