@@ -1,4 +1,4 @@
-use super::super::{PlaybackClockState, QpcClock, RuntimeDispatchCoordinator};
+use super::super::{PlaybackClockState, QpcClock};
 use super::dispatch::DispatchStep;
 use super::{TrackedKeyState, focus_gate_matches};
 use crate::engine::shared::SharedProgressClock;
@@ -266,34 +266,40 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
     DownAdmission::Allowed
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_final_focus_loss(
-    qpc_clock: QpcClock,
-    backend: &mut TrackedKeyState,
-    coordinator: &mut RuntimeDispatchCoordinator,
+pub(crate) fn enter_focus_pause(
     clock_state: &mut PlaybackClockState,
     runtime: &mut super::WorkerRuntime,
-    target_hwnd: &AtomicIsize,
+    focus_ticks: QpcTicks,
+    progress_clock: &SharedProgressClock,
+) -> Result<bool, String> {
+    runtime.invalidate_down_authorization();
+    runtime.verified_target = None;
+    runtime.focus_restore_started_ticks = None;
+    if clock_state.has_pause_reason(PauseReason::Focus) {
+        return Ok(false);
+    }
+    clock_state
+        .enter_pause(PauseReason::Focus, focus_ticks)
+        .map_err(|error| format!("playback clock failure: {error}"))?;
+    progress_clock.publish(clock_state);
+    Ok(true)
+}
+
+pub(crate) fn handle_final_focus_loss(
+    qpc_clock: QpcClock,
+    clock_state: &mut PlaybackClockState,
+    runtime: &mut super::WorkerRuntime,
     progress_clock: &SharedProgressClock,
 ) -> Result<(), DispatchStep> {
-    runtime.verified_target = None;
     if !runtime.musical_physical_commit_started {
         return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
     }
     let focus_ticks = qpc_clock
         .now()
         .map_err(|error| DispatchStep::Terminate(format!("QPC failure: {error:?}")))?;
-    super::suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
-        .map_err(|error| DispatchStep::Terminate(format!("focus suspension failed: {error}")))?;
-    clock_state
-        .enter_pause(PauseReason::Focus, focus_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "playback clock failure after final focus check: {error}"
-            ))
-        })?;
-    progress_clock.publish(clock_state);
-    runtime.focus_restore_started_ticks = None;
+    enter_focus_pause(clock_state, runtime, focus_ticks, progress_clock)
+        .map(|_| ())
+        .map_err(DispatchStep::Terminate)?;
     Ok(())
 }
 

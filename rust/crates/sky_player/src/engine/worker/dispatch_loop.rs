@@ -5,7 +5,7 @@ use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
     CommandControlRuntime, CommandControlSignals, PlanningInput, WaitBoundary, WaitBoundaryInput,
     WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker, ensure_preflight_for_target,
-    focus_matches, focus_matches_hwnd, lease_bounded_ticks, load_target_stamp,
+    enter_focus_pause, focus_matches, focus_matches_hwnd, lease_bounded_ticks, load_target_stamp,
     plan_next_dispatch_projected, process_command_control, publish_backend_metrics,
     record_wait_failure, suspend_live_input, target_stamp_still_current, wait_for_next_boundary,
 };
@@ -428,24 +428,21 @@ pub(super) fn dispatch(
             }
 
             if !focus_ok {
-                core.runtime.invalidate_down_authorization();
-                core.runtime.verified_target = None;
-                core.runtime.focus_restore_started_ticks = None;
-                if !resources.playback.has_pause_reason(PauseReason::Focus) {
-                    *core.errors.abort_counts.entry("focus_lost").or_insert(0) += 1;
-                    if let Err(error) = resources
-                        .playback
-                        .enter_pause(PauseReason::Focus, now_ticks)
-                    {
+                let entered_focus_pause = match enter_focus_pause(
+                    &mut resources.playback,
+                    &mut core.runtime,
+                    now_ticks,
+                    &shared.publication.progress_clock,
+                ) {
+                    Ok(entered) => entered,
+                    Err(error) => {
                         core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some(format!("playback clock failure: {error}"));
+                        core.runtime.terminal_error = Some(error);
                         break;
                     }
-                    shared
-                        .publication
-                        .progress_clock
-                        .publish(&resources.playback);
+                };
+                if entered_focus_pause {
+                    *core.errors.abort_counts.entry("focus_lost").or_insert(0) += 1;
                     publish_backend_metrics(
                         &resources.backend,
                         &mut core.metrics,
@@ -480,6 +477,19 @@ pub(super) fn dispatch(
                         manual_pause || resources.playback.has_pause_reason(PauseReason::Manual);
                     core.runtime.verified_target = None;
                     if !manual_pause_active {
+                        if !focus_matches_hwnd(
+                            config.focus.require_focus,
+                            focus_active,
+                            preflight_target.hwnd,
+                        ) || !target_stamp_still_current(
+                            target_hwnd,
+                            target_generation,
+                            preflight_target,
+                        ) {
+                            core.runtime.verified_target = None;
+                            core.runtime.focus_restore_started_ticks = None;
+                            continue;
+                        }
                         if let Err(error) = suspend_live_input(
                             &mut resources.backend,
                             &mut resources.coordinator,
@@ -520,15 +530,17 @@ pub(super) fn dispatch(
                     if let Some(hook) = core.runtime.restore_race_hook.as_ref() {
                         hook(focus_active, target_hwnd, target_generation);
                     }
+                    let post_restore_target = load_target_stamp(target_hwnd, target_generation);
                     if !focus_matches_hwnd(
                         config.focus.require_focus,
                         focus_active,
-                        preflight_target.hwnd,
+                        post_restore_target.hwnd,
                     ) || !target_stamp_still_current(
                         target_hwnd,
                         target_generation,
                         preflight_target,
-                    ) {
+                    ) || post_restore_target != preflight_target
+                    {
                         core.runtime.verified_target = None;
                         core.runtime.focus_restore_started_ticks = None;
                         continue;

@@ -7,13 +7,14 @@ use super::super::invoke_final_gate_race_hook;
 use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
-    WorkerResources, WorkerRuntime, WorkerTimingState, final_control_admission_at,
-    final_control_precheck, final_down_target_admission, focus_matches, handle_final_focus_loss,
-    load_target_stamp, record_final_gate_rejection, record_sendinput_pre_call_lateness,
-    signed_ticks_to_us, suspend_live_input, target_stamp_still_current, trace_kind_for_packet_kind,
+    WorkerResources, WorkerRuntime, WorkerTimingState, enter_focus_pause,
+    final_control_admission_at, final_control_precheck, final_down_target_admission, focus_matches,
+    handle_final_focus_loss, load_target_stamp, record_final_gate_rejection,
+    record_sendinput_pre_call_lateness, signed_ticks_to_us, target_stamp_still_current,
+    trace_kind_for_packet_kind,
 };
 use super::DownBoundaryAdmission;
-use super::observation::{BlockedUnfocusedObservation, ObserverLifecycle};
+use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
 use super::recovery::{
     DownMissReason, record_missed_down_classification, record_rescue_admission, record_rescue_send,
@@ -22,8 +23,7 @@ use super::recovery::{
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
-use sky_dispatch_core::clock::PauseReason;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_authored_packet(
     ctx: AuthoredPacketContext<'_>,
@@ -143,8 +143,6 @@ fn commit_down_send_outcome(
     let admission = match admit_authored_down(
         view,
         config,
-        backend,
-        coordinator,
         clock_state,
         runtime,
         local_metrics,
@@ -176,8 +174,6 @@ fn commit_down_send_outcome(
         view,
         config,
         qpc_clock,
-        backend,
-        coordinator,
         clock_state,
         runtime,
         local_metrics,
@@ -197,7 +193,6 @@ fn commit_down_send_outcome(
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
         admission,
-        observer,
     ) {
         Ok(admission) => admission,
         Err(step) => return step,
@@ -284,8 +279,6 @@ fn resolve_target_crossing_qpc(
 fn admit_authored_down(
     view: &AuthoredBatchView,
     config: &WorkerConfig,
-    backend: &mut TrackedKeyState,
-    coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
@@ -315,24 +308,8 @@ fn admit_authored_down(
         if !runtime.musical_physical_commit_started {
             return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
         }
-        if let Err(error) =
-            suspend_live_input(backend, coordinator, target_hwnd.load(Ordering::Acquire))
-        {
-            return Err(DispatchStep::Terminate(format!(
-                "focus suspension failed: {error}"
-            )));
-        }
-        runtime
-            .production_forensics
-            .observe_lifecycle(ObserverLifecycle::ResetAll);
-        super::observation::enqueue_lifecycle(observer, ObserverLifecycle::ResetAll, local_metrics);
-        if let Err(error) = clock_state.enter_pause(PauseReason::Focus, now_ticks) {
-            return Err(DispatchStep::Terminate(format!(
-                "playback clock failure: {error}"
-            )));
-        }
-        progress_clock.publish(clock_state);
-        runtime.focus_restore_started_ticks = None;
+        enter_focus_pause(clock_state, runtime, now_ticks, progress_clock)
+            .map_err(DispatchStep::Terminate)?;
         if let Some(observer) = observer {
             observer.push(
                 super::observation::DispatchObservation::BlockedUnfocused(
@@ -435,8 +412,6 @@ fn finalize_authored_down_admission(
     view: &AuthoredBatchView,
     config: &WorkerConfig,
     qpc_clock: QpcClock,
-    backend: &mut TrackedKeyState,
-    coordinator: &mut RuntimeDispatchCoordinator,
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
@@ -455,7 +430,6 @@ fn finalize_authored_down_admission(
     boundary_crossing_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     admission: AdmissionOutcome,
-    observer: Option<&PendingObservationQueue>,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let AdmissionOutcome::Guarded {
         trace_kind,
@@ -521,23 +495,7 @@ fn finalize_authored_down_admission(
             DownAdmission::Allowed => {}
             DownAdmission::FocusLost => {
                 record_final_gate_rejection(local_metrics, FinalGateRejection::Focus);
-                handle_final_focus_loss(
-                    qpc_clock,
-                    backend,
-                    coordinator,
-                    clock_state,
-                    runtime,
-                    target_hwnd,
-                    progress_clock,
-                )?;
-                runtime
-                    .production_forensics
-                    .observe_lifecycle(ObserverLifecycle::ResetAll);
-                super::observation::enqueue_lifecycle(
-                    observer,
-                    ObserverLifecycle::ResetAll,
-                    local_metrics,
-                );
+                handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)?;
                 return Ok(AdmissionOutcome::FocusLost);
             }
             DownAdmission::TargetChanged => {
