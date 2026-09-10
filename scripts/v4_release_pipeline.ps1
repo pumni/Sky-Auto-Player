@@ -320,12 +320,8 @@ function Assert-RepositoryReleasePolicy {
         Fail "canonical repository main is not initialized"
     }
     if ([string]$main.ref -ne "refs/heads/main") { Fail "canonical repository main ref is not canonical" }
-    $immutable = Invoke-GitHubApi -Arguments @("api", "repos/$repository/immutable-releases") -AllowNotFound
-    if ($null -eq $immutable -or -not [bool]$immutable.enabled) {
-        Fail "canonical repository immutable-releases policy is not enabled"
-    }
     Assert-MetadataBranchReadiness $repository
-    Write-Host "V4 repository release preconditions: PASS (main exists; immutable releases enabled; release-metadata ready)"
+    Write-Host "V4 repository release preconditions: PASS (main exists; release-metadata ready; immutable publication is checked on the published release)"
 }
 
 function Get-PublicMetadataDocument([string]$Channel) {
@@ -1077,6 +1073,14 @@ function Invoke-SelfTest {
     } catch {
         if ($_.Exception.Message -notmatch "promotion before publication") { throw }
     }
+    try {
+        Assert-ImmutableRelease ([pscustomobject]@{ immutable = $false })
+        Fail "immutable=false unexpectedly passed the publication guard"
+    } catch {
+        if ($_.Exception.Message -notmatch "repository release is not marked immutable") { throw }
+    }
+    Assert-ImmutableRelease ([pscustomobject]@{ immutable = $true })
+    Write-Host "V4 immutable publication guard self-test: PASS (immutable=false rejected; immutable=true accepted)"
     $mock.attested = $true
     $mock.published = $true
     $mock.promoted = $true
