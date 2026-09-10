@@ -365,8 +365,9 @@ It executes `ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDr
 matching unpublished draft/tag. Its OIDC and SPDX attestations are verified against the
 exact downloaded bytes before `RecordAttestations`; `PublishDraft`, metadata promotion,
 and final public-release verification are intentionally unreachable in this workflow.
-The rehearsal snapshots and compares legacy v3 GitHub Latest plus both public
-`release-metadata` channel endpoints before and after cleanup.
+The rehearsal snapshots and compares the current GitHub Latest identity plus both public
+`release-metadata` channel endpoints before and after cleanup. It does not publish or promote
+anything, so it remains valid both before and after the one-time `v4.0.1` Latest operation.
 
 ```powershell
 pwsh scripts/test_v4_production_topology_rehearsal.ps1 -CandidateStateRoot $candidateStateRoot -StateRoot (Join-Path $env:RUNNER_TEMP "sky-v4-production-topology-rehearsal") -Version $version -Channel $channel -Tag "v$version" -SourceSha $sourceSha -WorkflowSha $sourceSha

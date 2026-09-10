@@ -15,9 +15,11 @@ the supported architecture depend on a second repository, a cross-repository cre
 publication authority, and a compatibility boundary that would have to be maintained indefinitely.
 
 The implementation work completed for the first official v4 release now provides the required
-isolation without a second repository. The source repository can keep the legacy v3 Latest contract
-while publishing v4 releases with `make_latest=false`, and the v4 runtime can consume a separate
-protected metadata branch in that same repository.
+isolation without a second repository. The source repository can publish v4 releases with
+channel-specific GitHub Latest behavior, and the v4 runtime can consume a separate protected
+metadata branch in that same repository. The temporary v3 Latest coexistence policy is retired by
+[ADR-0008](ADR-0008-v4-github-latest-policy.md); the one-time promotion of the already immutable
+`v4.0.1` release remains a separate owner/admin gate in issue #187.
 
 ## Decision
 
@@ -50,14 +52,16 @@ The same-repository production pipeline is draft-first and builds the exact sour
 ```text
 ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDraft
   -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
-  -> PublishDraft -> PromoteMetadata -> FinalVerify
+  -> PublishDraft -> Assert-ImmutableRelease -> Latest policy guard
+  -> PromoteMetadata -> FinalVerify
 ```
 
-`ValidateRepository` checks the canonical repository, `main`, immutable-release policy, and
-metadata-branch readiness before `CreateDraft`. Publication uses the canonical repository
-`GITHUB_TOKEN` and `make_latest=false` while v3 coexistence remains required. Metadata promotion
-occurs only after immutable publication. `FinalVerify` checks the public release and the exact
-unauthenticated raw metadata endpoint used by the client.
+`ValidateRepository` checks the canonical repository, `main`, and metadata-branch readiness before
+`CreateDraft`. Stable publication uses the canonical repository `GITHUB_TOKEN` with
+`make_latest="true"`; beta publication uses `make_latest="false"`. The read-only Latest policy
+guard runs after publication and immutable verification, and before minting the metadata App
+token. Metadata promotion occurs only after that guard. `FinalVerify` checks the public release
+and the exact unauthenticated raw metadata endpoint used by the client.
 
 ## Security properties retained
 
@@ -84,6 +88,6 @@ bounded metadata branch. Operators no longer need a dedicated release-authority 
 compatibility path. The former repository can be removed as an owner/admin cutover action after the
 rehearsal and final release gate in issue #165.
 
-The v3 Latest namespace remains protected by explicit `make_latest=false` release behavior until
-v3 coexistence is retired. A future change to that boundary requires a new ADR and release-gate
-evidence.
+The temporary v3 Latest coexistence namespace is historical context only. ADR-0008 defines the
+current channel-aware Latest policy, while issue #187 separately gates the one-time promotion of
+the immutable `v4.0.1` release without rebuilding or changing its tag, assets, or metadata.

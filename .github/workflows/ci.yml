@@ -202,7 +202,7 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
-      - name: Read-only legacy GitHub Latest guard
+      - name: Read-only GitHub Latest baseline guard
         env:
           GH_TOKEN: ${{ github.token }}
         run: pwsh scripts/ci_v4_release_latest_guard.ps1

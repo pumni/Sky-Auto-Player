@@ -111,13 +111,15 @@ function Assert-TagIdentity {
     }
 }
 
-function Get-LegacyLatestSnapshot {
+function Get-GitHubLatestSnapshot {
     $release = Invoke-ReadOnlyGitHubApi -Arguments @(
         "api", "repos/$env:GITHUB_REPOSITORY/releases/latest"
     )
-    if ($null -eq $release) { Fail "legacy GitHub Latest release is unavailable" }
+    if ($null -eq $release) { Fail "GitHub Latest release is unavailable" }
     $tagName = [string](Get-PropertyValue $release "tag_name")
-    if ($tagName -notmatch '^v3\.') { Fail "GitHub Latest is not the expected immutable legacy v3 release" }
+    if ($tagName -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+        Fail "GitHub Latest is not a supported published stable release"
+    }
     if ([bool](Get-PropertyValue $release "draft") -or
         [string]::IsNullOrWhiteSpace([string](Get-PropertyValue $release "published_at"))) {
         Fail "GitHub Latest is not a published non-draft release"
@@ -208,7 +210,7 @@ function Get-ExternalSnapshot {
     return [ordered]@{
         schema_version = 1
         repository = $env:GITHUB_REPOSITORY
-        legacy_latest = Get-LegacyLatestSnapshot
+        github_latest = Get-GitHubLatestSnapshot
         metadata = [ordered]@{
             stable = Get-RawMetadataSnapshot "stable"
             beta = Get-RawMetadataSnapshot "beta"
@@ -256,7 +258,7 @@ if ($Mode -eq "Capture") {
         source_sha = [string]$env:V4_DRAFT_REHEARSAL_SOURCE_SHA
         captured_utc = [DateTime]::UtcNow.ToString("o")
     })
-    Write-Host "V4 draft rehearsal external-state capture: PASS (legacy Latest and stable/beta metadata snapshotted)"
+    Write-Host "V4 draft rehearsal external-state capture: PASS (GitHub Latest and stable/beta metadata snapshotted)"
     exit 0
 }
 
@@ -274,7 +276,7 @@ $afterJson = Convert-SnapshotToJson $after
 $beforeHash = Get-JsonSha256 $beforeJson
 $afterHash = Get-JsonSha256 $afterJson
 if ($beforeJson -ne $afterJson) {
-    Fail "legacy Latest or stable/beta metadata changed during controlled draft rehearsal"
+    Fail "GitHub Latest or stable/beta metadata changed during controlled draft rehearsal"
 }
 Write-JsonFile $verificationPath ([ordered]@{
     schema_version = 1
@@ -283,10 +285,10 @@ Write-JsonFile $verificationPath ([ordered]@{
     tag = $Tag
     target_release_absent = $true
     target_tag_absent = $true
-    legacy_latest_unchanged = $true
+    github_latest_unchanged = $true
     stable_metadata_unchanged = $true
     beta_metadata_unchanged = $true
     before_sha256 = $beforeHash
     after_sha256 = $afterHash
 })
-Write-Host "V4 draft rehearsal external-state verification: PASS (draft/tag absent; legacy Latest and stable/beta metadata unchanged)"
+Write-Host "V4 draft rehearsal external-state verification: PASS (draft/tag absent; GitHub Latest and stable/beta metadata unchanged)"
