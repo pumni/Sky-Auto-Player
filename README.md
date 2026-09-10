@@ -6,18 +6,22 @@
 
 *Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the beat with sub-millisecond native precision.*
 
+[![Version](https://img.shields.io/github/v/release/pumni/Sky-Auto-Player?style=for-the-badge&label=version&color=blue)](https://github.com/pumni/Sky-Auto-Player/releases)
 [![Downloads](https://img.shields.io/github/downloads/pumni/Sky-Auto-Player/total?style=for-the-badge&label=downloads&logo=github&color=success)](https://github.com/pumni/Sky-Auto-Player/releases)
 [![License](https://img.shields.io/github/license/pumni/Sky-Auto-Player?style=for-the-badge&color=orange)](https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE)
 [![Stars](https://img.shields.io/github/stars/pumni/Sky-Auto-Player?style=for-the-badge&label=stars&color=gold)](https://github.com/pumni/Sky-Auto-Player/stargazers)
+
+**Current version: v4.0.1** · Windows 10/11 64-bit
 
 **[🌐 Landing Page](https://pumni.github.io/Sky-Auto-Player/)** · **[FAQ](https://pumni.github.io/Sky-Auto-Player/faq/)** · **[Releases / Downloads](https://github.com/pumni/Sky-Auto-Player/releases)**
 
 </div>
 
 <div align="center">
-  <a href="docs/evidence/desktop-nonphysical/library-real-tauri.png" target="_blank">
-    <img src="docs/evidence/desktop-nonphysical/library-real-tauri.png" alt="Sky Auto Player desktop Library" width="640" style="border-radius: 8px; max-width: 100%;">
+  <a href="docs/evidence/desktop-nonphysical/library-v4.0.1-app.png" target="_blank">
+    <img src="docs/evidence/desktop-nonphysical/library-v4.0.1-app.png" alt="Sky Auto Player v4.0.1 desktop Library" width="640" style="border-radius: 8px; max-width: 100%;">
   </a>
+  <p><em>Sky Auto Player v4.0.1 — Library, Song Details, and Player Bar.</em></p>
 </div>
 
 The packaged `Sky-Auto-Player.exe` opens the canonical Tauri desktop GUI. It is the only supported
