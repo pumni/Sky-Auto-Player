@@ -54,6 +54,7 @@ $summaryName = "TAURI_ARTIFACT_SUMMARY.json"
 $sbomName = "SBOM.spdx.json"
 . (Join-Path $PSScriptRoot "v4_release_asset_upload.ps1")
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
+. (Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1")
 
 function Fail([string]$Message) {
     throw "V4 release pipeline failed closed: $Message"
@@ -536,18 +537,56 @@ function Get-State {
     return $state
 }
 
+function Get-ReleaseCollection([string]$Repository) {
+    return @(Invoke-GitHubApi -Arguments @(
+        "api", "--paginate", "--slurp", "repos/$Repository/releases?per_page=100"
+    ))
+}
+
+function Get-ReleaseForTag([string]$Repository, [string]$RequestedTag) {
+    $direct = Invoke-GitHubApi -Arguments @(
+        "api", "repos/$Repository/releases/tags/$RequestedTag"
+    ) -AllowNotFound
+    $collection = if ($null -eq $direct) { Get-ReleaseCollection $Repository } else { @() }
+    return Select-V4ReleaseByTag -DirectRelease $direct -ReleaseCollection $collection -Tag $RequestedTag
+}
+
+function Assert-ExistingUnpublishedDraftMatchesRequest([object]$Release) {
+    if ([string]$Release.tag_name -ne $Tag) {
+        Fail "existing release tag does not match the requested tag"
+    }
+    if (-not [bool]$Release.draft -or
+        -not [string]::IsNullOrWhiteSpace([string]$Release.published_at)) {
+        Fail "repository already contains published release/tag $Tag; published releases and tags are immutable"
+    }
+    $source = $SourceSha.ToLowerInvariant()
+    $targetCommitish = [string]$Release.target_commitish
+    if ($targetCommitish -notmatch '^[0-9a-fA-F]{40}$' -or
+        $targetCommitish.ToLowerInvariant() -ne $source) {
+        Fail "existing draft source does not match the requested source"
+    }
+    $body = [string]$Release.body
+    if ($body -notmatch "(?m)^source_sha:\s*$([regex]::Escape($source))\s*$") {
+        Fail "existing draft body source does not match the requested source"
+    }
+}
+
 function Assert-NoExistingReleaseTag {
     $repository = Get-CanonicalRepository
-    $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag") -AllowNotFound
+    $release = Get-ReleaseForTag $repository $Tag
     if ($null -ne $release) {
-        $publishedAt = [string]$release.published_at
-        if (-not [bool]$release.draft -or -not [string]::IsNullOrWhiteSpace($publishedAt)) {
-            Fail "repository already contains published release/tag $Tag; published releases and tags are immutable"
-        }
+        Assert-ExistingUnpublishedDraftMatchesRequest $release
         $releaseId = [int64]$release.id
+        if ($releaseId -le 0) { Fail "existing draft release id is missing" }
         Invoke-GitHubApi -Arguments @(
             "api", "--method", "DELETE", "repos/$repository/releases/$releaseId"
         ) -AllowNotFound | Out-Null
+        $remainingReleaseById = Invoke-GitHubApi -Arguments @(
+            "api", "repos/$repository/releases/$releaseId"
+        ) -AllowNotFound
+        if ($null -ne $remainingReleaseById) { Fail "draft release could not be removed by release id" }
+        $remainingRelease = Get-ReleaseForTag $repository $Tag
+        if ($null -ne $remainingRelease) { Fail "draft release could not be removed" }
         $runId = if ([string]::IsNullOrWhiteSpace($env:GITHUB_RUN_ID)) { "local" } else { $env:GITHUB_RUN_ID }
         Write-Host "V4 unpublished draft reuse: deleted prior unpublished draft for $Tag (source_sha=$($SourceSha.ToLowerInvariant()), run_id=$runId)"
     }
