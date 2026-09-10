@@ -903,6 +903,8 @@ fn v4_release_pipeline_contract_source(
         "Qualify downloaded exact candidate bytes and packaged update",
         "RecordAttestations",
         "PublishDraft",
+        "Verify legacy GitHub Latest before metadata promotion",
+        "scripts/ci_v4_release_latest_guard.ps1",
         "PromoteMetadata",
         "FinalVerify",
     ] {
@@ -964,6 +966,34 @@ fn v4_release_pipeline_contract_source(
         );
     }
     validate_metadata_app_token_scope(&workflow)?;
+
+    let publish_step = workflow
+        .find("- name: Publish the already-qualified draft immutably")
+        .ok_or("v4 release workflow is missing the publication step")?;
+    let legacy_latest_step = workflow
+        .find("- name: Verify legacy GitHub Latest before metadata promotion")
+        .ok_or("v4 release workflow is missing the post-publication legacy Latest guard")?;
+    let metadata_token_step = workflow
+        .find("- name: Mint release-metadata GitHub App token")
+        .ok_or("v4 release workflow is missing the metadata App token step")?;
+    if publish_step >= legacy_latest_step || legacy_latest_step >= metadata_token_step {
+        return Err(
+            "legacy Latest guard must run after PublishDraft and before the metadata App token"
+                .into(),
+        );
+    }
+    let legacy_latest_end = workflow[legacy_latest_step..]
+        .find("\n      - name:")
+        .map_or(workflow.len(), |relative| legacy_latest_step + relative);
+    let legacy_latest_block = &workflow[legacy_latest_step..legacy_latest_end];
+    if !legacy_latest_block.contains("GH_TOKEN: ${{ github.token }}")
+        || !legacy_latest_block.contains("scripts/ci_v4_release_latest_guard.ps1")
+    {
+        return Err(
+            "post-publication legacy Latest guard must be read-only and use the repository token"
+                .into(),
+        );
+    }
 
     if pipeline
         .matches("orchestrate_v4_production_release.ps1")
@@ -3789,6 +3819,10 @@ jobs:
       - name: Publish the already-qualified draft immutably
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Verify legacy GitHub Latest before metadata promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci_v4_release_latest_guard.ps1
       - name: Mint release-metadata GitHub App token
         id: metadata-app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
