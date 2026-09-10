@@ -1005,7 +1005,9 @@ fn v4_release_pipeline_contract_source(
         "published_at",
         "draft = $true",
         "draft = $false",
-        "make_latest = $false",
+        "Get-V4ReleaseMakeLatestValue",
+        "make_latest = Get-V4ReleaseMakeLatestValue",
+        "make_latest is string enum false for create and publish",
         "target_commitish = $SourceSha.ToLowerInvariant()",
         "branch = \"release-metadata\"",
         "validate-monotonic",
@@ -1060,15 +1062,28 @@ fn v4_release_pipeline_contract_source(
                 .into(),
         );
     }
+    let create_draft_position = pipeline
+        .find("function Invoke-CreateDraft")
+        .ok_or("v4 release coordinator is missing the draft boundary")?;
     let publish_position = pipeline
         .find("function Invoke-PublishDraft")
         .ok_or("v4 release coordinator is missing the publication state")?;
-    let immutable_guard_position = pipeline
-        .find("Assert-ImmutableRelease $published")
-        .ok_or("v4 release coordinator is missing the published immutable-release guard")?;
     let promote_position = pipeline
         .find("function Invoke-PromoteMetadata")
         .ok_or("v4 release coordinator is missing the metadata promotion state")?;
+    if !pipeline[create_draft_position..publish_position]
+        .contains("make_latest = Get-V4ReleaseMakeLatestValue")
+        || !pipeline[publish_position..promote_position]
+            .contains("make_latest = Get-V4ReleaseMakeLatestValue")
+    {
+        return Err(
+            "CreateDraft and PublishDraft must use the GitHub make_latest string enum helper"
+                .into(),
+        );
+    }
+    let immutable_guard_position = pipeline
+        .find("Assert-ImmutableRelease $published")
+        .ok_or("v4 release coordinator is missing the published immutable-release guard")?;
     if immutable_guard_position < publish_position || immutable_guard_position > promote_position {
         return Err(
             "published immutable-release verification must remain after publication and before metadata promotion"
@@ -3786,15 +3801,15 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 make_latest = $false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
+ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 Get-V4ReleaseMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue make_latest is string enum false for create and publish target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
-function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; make_latest = $false; GitHub's successful DELETE endpoints return an empty body }
+function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; Get-V4ReleaseMakeLatestValue; make_latest = Get-V4ReleaseMakeLatestValue; make_latest is string enum false for create and publish; GitHub's successful DELETE endpoints return an empty body }
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
 function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; freshUserSongs = @(; Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { GH_TOKEN }
-function Invoke-PublishDraft { draft = $false; make_latest = $false; Assert-ImmutableRelease $published; repository release is not marked immutable }
+function Invoke-PublishDraft { draft = $false; Get-V4ReleaseMakeLatestValue; make_latest = Get-V4ReleaseMakeLatestValue; make_latest is string enum false for create and publish; Assert-ImmutableRelease $published; repository release is not marked immutable }
 function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication; branch = "release-metadata"; GITHUB_REPOSITORY; Invoke-GitHubApi }
 function Invoke-FinalVerify { FinalVerify }
 "#;

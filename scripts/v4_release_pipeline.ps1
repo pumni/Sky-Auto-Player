@@ -82,6 +82,11 @@ function Write-JsonFile([string]$Path, [object]$Value) {
     [IO.File]::WriteAllText($Path, $json + "`n", [Text.UTF8Encoding]::new($false))
 }
 
+function Get-V4ReleaseMakeLatestValue {
+    # GitHub's release API accepts an enum string here, not a JSON boolean.
+    return "false"
+}
+
 function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "Required state file is missing: $Path" }
     return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
@@ -576,7 +581,7 @@ function Invoke-CreateDraft {
         body = $body + ([IO.File]::ReadAllText($notesPath)).Trim()
         draft = $true
         prerelease = ($Channel -eq "beta")
-        make_latest = $false
+        make_latest = Get-V4ReleaseMakeLatestValue
     })
     $release = Invoke-GitHubApi -Arguments @("api", "--method", "POST", "repos/$repository/releases", "--input", $payloadPath)
     if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "repository did not create the requested draft release" }
@@ -915,7 +920,7 @@ function Invoke-PublishDraft {
         if ($downloadedHash -ne [string]$expected.sha256) { Fail "qualified downloaded digest changed before publication: $expectedReleaseName" }
     }
     $patchPath = Join-Path (Get-EffectiveStateRoot) "publish-release.json"
-    Write-JsonFile $patchPath ([ordered]@{ draft = $false; make_latest = $false })
+    Write-JsonFile $patchPath ([ordered]@{ draft = $false; make_latest = Get-V4ReleaseMakeLatestValue })
     $published = Invoke-GitHubApi -Arguments @("api", "--method", "PATCH", "repos/$repository/releases/$($state.release_id)", "--input", $patchPath)
     if ($published.draft -or [string]::IsNullOrWhiteSpace([string]$published.published_at)) { Fail "repository did not publish the already-qualified draft" }
     Assert-ImmutableRelease $published
@@ -1081,6 +1086,22 @@ function Invoke-SelfTest {
     }
     Assert-ImmutableRelease ([pscustomobject]@{ immutable = $true })
     Write-Host "V4 immutable publication guard self-test: PASS (immutable=false rejected; immutable=true accepted)"
+
+    foreach ($draftValue in @($true, $false)) {
+        $payload = [ordered]@{
+            draft = $draftValue
+            make_latest = Get-V4ReleaseMakeLatestValue
+        }
+        $roundTrip = (($payload | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
+        if ($roundTrip.make_latest -isnot [string] -or $roundTrip.make_latest -ne "false") {
+            Fail "GitHub release payload make_latest must round-trip as the string enum false"
+        }
+        if ($roundTrip.draft -isnot [bool] -or [bool]$roundTrip.draft -ne $draftValue) {
+            Fail "GitHub release payload draft must remain a JSON boolean"
+        }
+    }
+    Write-Host "V4 GitHub release payload self-test: PASS (make_latest is string enum false for create and publish)"
+
     $mock.attested = $true
     $mock.published = $true
     $mock.promoted = $true
