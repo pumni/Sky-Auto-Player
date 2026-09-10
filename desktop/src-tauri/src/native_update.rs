@@ -15,6 +15,10 @@ use crate::ui_events::{
 };
 use sky_app_core::settings::{ApplicationSettings, SettingsService, UpdateChannel as CoreChannel};
 use sky_native_adapters::JsonSettingsStore;
+#[cfg(feature = "tauri-update-fixture")]
+use std::fs;
+#[cfg(feature = "tauri-update-fixture")]
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Runtime};
@@ -23,25 +27,28 @@ use url::Url;
 
 const MAX_RELEASE_NOTES: usize = 16 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+#[cfg(not(feature = "tauri-update-fixture"))]
 const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json";
+#[cfg(not(feature = "tauri-update-fixture"))]
 const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json";
+#[cfg(not(feature = "tauri-update-fixture"))]
 const OFFICIAL_METADATA_HOST: &str = "raw.githubusercontent.com";
+#[cfg(not(feature = "tauri-update-fixture"))]
 const OFFICIAL_METADATA_OWNER: &str = "pumni";
+#[cfg(not(feature = "tauri-update-fixture"))]
 const OFFICIAL_METADATA_REPOSITORY: &str = "Sky-Auto-Player";
+#[cfg(not(feature = "tauri-update-fixture"))]
 const OFFICIAL_METADATA_REF: &str = "release-metadata";
 #[cfg(not(feature = "tauri-update-fixture"))]
 const V4_TAURI_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5QUFCRDJFNzgzODgxOEMKUldTTWdUaDRMcjJxR2JxeE5kTUx5VlIxS1dhOHRrSTEzY2FMeE8wYldtckM2TjV2KzRwQUNaTEUK";
 #[cfg(not(feature = "tauri-update-fixture"))]
 const V4_TAURI_UPDATER_PUBLIC_KEYS: &[&str] = &[V4_TAURI_UPDATER_PUBLIC_KEY];
 #[cfg(feature = "tauri-update-fixture")]
-const FIXTURE_TAURI_UPDATER_PUBLIC_KEYS: Option<&str> =
-    option_env!("SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS");
-#[cfg(feature = "tauri-update-fixture")]
 const FIXTURE_NEW_ONLY_ARG: &str = "--selftest-update-fixture-new-only";
-const FIXTURE_TAURI_UPDATER_PORT: &str = match option_env!("SKY_TAURI_UPDATE_FIXTURE_PORT") {
-    Some(port) => port,
-    None => "invalid-fixture-port",
-};
+#[cfg(feature = "tauri-update-fixture")]
+const FIXTURE_PORT_ARG: &str = "--selftest-update-fixture-port";
+#[cfg(feature = "tauri-update-fixture")]
+const FIXTURE_PUBLIC_KEY_ARG: &str = "--selftest-update-fixture-public-key";
 
 #[derive(Clone, Debug)]
 pub(crate) struct NativeUpdateCandidate {
@@ -345,8 +352,8 @@ impl<R: Runtime> UpdateService<R> {
         let endpoint = metadata_endpoint(channel)?;
         let mut updates = Vec::new();
         let mut last_error = None;
-        for public_key in updater_public_keys() {
-            match self.check_official_with_key(endpoint.clone(), public_key) {
+        for public_key in updater_public_keys()? {
+            match self.check_official_with_key(endpoint.clone(), public_key.as_deref()) {
                 Ok(Some(update)) => updates.push(update),
                 Ok(None) => {}
                 Err(error) => last_error = Some(error),
@@ -431,38 +438,119 @@ impl<R: Runtime> UpdateService<R> {
     }
 }
 
-fn updater_public_keys() -> Vec<Option<&'static str>> {
+fn updater_public_keys() -> Result<Vec<Option<String>>, String> {
     #[cfg(feature = "tauri-update-fixture")]
     {
-        FIXTURE_TAURI_UPDATER_PUBLIC_KEYS
-            .map(|keys| fixture_public_keys(keys, fixture_new_only_requested()))
-            .unwrap_or_else(|| vec![None])
+        let runtime = fixture_runtime_config()?;
+        Ok(fixture_public_keys(&runtime.public_keys, runtime.new_only))
     }
     #[cfg(not(feature = "tauri-update-fixture"))]
     {
-        V4_TAURI_UPDATER_PUBLIC_KEYS
+        Ok(V4_TAURI_UPDATER_PUBLIC_KEYS
             .iter()
-            .copied()
-            .map(Some)
-            .collect()
+            .map(|key| Some((*key).to_owned()))
+            .collect())
     }
 }
 
 #[cfg(feature = "tauri-update-fixture")]
-fn fixture_new_only_requested() -> bool {
-    std::env::args().any(|arg| arg == FIXTURE_NEW_ONLY_ARG)
+#[derive(Debug, PartialEq, Eq)]
+struct FixtureRuntimeConfig {
+    port: u16,
+    public_keys: Vec<String>,
+    new_only: bool,
 }
 
 #[cfg(feature = "tauri-update-fixture")]
-fn fixture_public_keys(keys: &'static str, new_only: bool) -> Vec<Option<&'static str>> {
+fn fixture_runtime_config() -> Result<FixtureRuntimeConfig, String> {
+    fixture_runtime_config_from_args(std::env::args().skip(1))
+}
+
+#[cfg(feature = "tauri-update-fixture")]
+fn fixture_runtime_config_from_args(
+    args: impl IntoIterator<Item = String>,
+) -> Result<FixtureRuntimeConfig, String> {
+    let mut port = None;
+    let mut public_key_paths = Vec::new();
+    let mut new_only = false;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            FIXTURE_NEW_ONLY_ARG => new_only = true,
+            FIXTURE_PORT_ARG => {
+                if port.is_some() {
+                    return Err("fixture runtime port was supplied more than once".into());
+                }
+                let value = args.next().ok_or("fixture runtime port value is missing")?;
+                let parsed = value
+                    .parse::<u16>()
+                    .map_err(|_| "fixture runtime port must be numeric".to_string())?;
+                if parsed == 0 {
+                    return Err("fixture runtime port must be between 1 and 65535".into());
+                }
+                port = Some(parsed);
+            }
+            FIXTURE_PUBLIC_KEY_ARG => {
+                let value = args
+                    .next()
+                    .ok_or("fixture runtime public-key path is missing")?;
+                public_key_paths.push(PathBuf::from(value));
+                if public_key_paths.len() > 4 {
+                    return Err("fixture runtime supplied too many public-key paths".into());
+                }
+            }
+            _ => {}
+        }
+    }
+    let port = port.ok_or("fixture runtime loopback port is missing")?;
+    if public_key_paths.is_empty() {
+        return Err("fixture runtime public-key paths are missing".into());
+    }
+    let public_keys = public_key_paths
+        .iter()
+        .map(|path| read_fixture_public_key(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(FixtureRuntimeConfig {
+        port,
+        public_keys,
+        new_only,
+    })
+}
+
+#[cfg(feature = "tauri-update-fixture")]
+fn read_fixture_public_key(path: &Path) -> Result<String, String> {
+    if path.as_os_str().len() > 260 {
+        return Err("fixture public-key path is unbounded".into());
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("fixture public-key path is unavailable: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > 4096 {
+        return Err("fixture public-key path must be a bounded regular file".into());
+    }
+    let value = fs::read_to_string(path)
+        .map_err(|error| format!("fixture public-key file is not valid UTF-8: {error}"))?;
+    let value = value.trim().to_owned();
+    let upper = value.to_ascii_uppercase();
+    if value.is_empty()
+        || value.contains('\0')
+        || upper.contains("PRIVATE KEY")
+        || upper.contains("SECRET KEY")
+    {
+        return Err("fixture public-key file contains missing or private-key material".into());
+    }
+    Ok(value)
+}
+
+#[cfg(feature = "tauri-update-fixture")]
+fn fixture_public_keys(keys: &[String], new_only: bool) -> Vec<Option<String>> {
     if new_only {
         return keys
-            .split('|')
-            .rfind(|key| !key.is_empty())
+            .last()
+            .cloned()
             .map(|key| vec![Some(key)])
-            .unwrap_or_else(|| vec![None]);
+            .unwrap_or_default();
     }
-    keys.split('|').map(Some).collect()
+    keys.iter().cloned().map(Some).collect()
 }
 
 /// Try each `Update`'s own Tauri verification context until the downloaded
@@ -482,38 +570,31 @@ fn first_verified_download<T>(
 }
 
 fn metadata_endpoint(channel: UpdateChannel) -> Result<Url, String> {
-    let endpoint = if cfg!(feature = "tauri-update-fixture") {
-        match channel {
-            UpdateChannel::Stable => {
-                format!("http://127.0.0.1:{FIXTURE_TAURI_UPDATER_PORT}/stable")
-            }
-            UpdateChannel::Beta => format!("http://127.0.0.1:{FIXTURE_TAURI_UPDATER_PORT}/beta"),
-        }
-    } else {
+    #[cfg(feature = "tauri-update-fixture")]
+    {
+        let runtime = fixture_runtime_config()?;
+        let path = match channel {
+            UpdateChannel::Stable => "stable",
+            UpdateChannel::Beta => "beta",
+        };
+        Url::parse(&format!("http://127.0.0.1:{}/{}", runtime.port, path))
+            .map_err(|error| format!("fixture metadata URL invalid: {error}"))
+    }
+
+    #[cfg(not(feature = "tauri-update-fixture"))]
+    {
         let endpoint = match channel {
             UpdateChannel::Stable => V4_STABLE_METADATA_ENDPOINT,
             UpdateChannel::Beta => V4_BETA_METADATA_ENDPOINT,
         };
-        endpoint.to_owned()
-    };
-    Url::parse(&endpoint)
-        .map_err(|error| {
-            if cfg!(feature = "tauri-update-fixture") {
-                format!("fixture metadata URL invalid: {error}")
-            } else {
-                format!("v4 metadata URL invalid: {error}")
-            }
-        })
-        .and_then(|endpoint| {
-            if cfg!(feature = "tauri-update-fixture") {
-                Ok(endpoint)
-            } else {
-                validate_official_metadata_endpoint(&endpoint, channel)?;
-                Ok(endpoint)
-            }
-        })
+        let endpoint =
+            Url::parse(endpoint).map_err(|error| format!("v4 metadata URL invalid: {error}"))?;
+        validate_official_metadata_endpoint(&endpoint, channel)?;
+        Ok(endpoint)
+    }
 }
 
+#[cfg(not(feature = "tauri-update-fixture"))]
 fn validate_official_metadata_endpoint(
     endpoint: &Url,
     channel: UpdateChannel,
@@ -671,15 +752,81 @@ mod tests {
 
     #[cfg(feature = "tauri-update-fixture")]
     #[test]
-    fn fixture_new_only_mode_selects_only_the_last_compiled_root() {
+    fn fixture_new_only_mode_selects_only_the_last_supplied_root() {
+        let keys = vec!["old-root".to_owned(), "new-root".to_owned()];
         assert_eq!(
-            super::fixture_public_keys("old-root|new-root", true),
-            vec![Some("new-root")]
+            super::fixture_public_keys(&keys, true),
+            vec![Some("new-root".to_owned())]
         );
         assert_eq!(
-            super::fixture_public_keys("old-root|new-root", false),
-            vec![Some("old-root"), Some("new-root")]
+            super::fixture_public_keys(&keys, false),
+            vec![Some("old-root".to_owned()), Some("new-root".to_owned())]
         );
+    }
+
+    #[cfg(feature = "tauri-update-fixture")]
+    #[test]
+    fn fixture_runtime_configuration_requires_a_loopback_port_and_public_keys() {
+        let missing_port = super::fixture_runtime_config_from_args([
+            super::FIXTURE_PUBLIC_KEY_ARG.to_owned(),
+            "missing.pub".to_owned(),
+        ]);
+        assert!(missing_port.is_err());
+
+        let missing_key = super::fixture_runtime_config_from_args([
+            super::FIXTURE_PORT_ARG.to_owned(),
+            "40000".to_owned(),
+        ]);
+        assert!(missing_key.is_err());
+    }
+
+    #[cfg(feature = "tauri-update-fixture")]
+    #[test]
+    fn fixture_runtime_configuration_rejects_invalid_port_and_private_key() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-auto-player-fixture-key-{}",
+            std::process::id()
+        ));
+        std::fs::write(&root, "PRIVATE KEY").expect("write fixture key");
+        let invalid_port = super::fixture_runtime_config_from_args([
+            super::FIXTURE_PORT_ARG.to_owned(),
+            "0".to_owned(),
+            super::FIXTURE_PUBLIC_KEY_ARG.to_owned(),
+            root.to_string_lossy().into_owned(),
+        ]);
+        assert!(invalid_port.is_err());
+
+        let private_key = super::fixture_runtime_config_from_args([
+            super::FIXTURE_PORT_ARG.to_owned(),
+            "40000".to_owned(),
+            super::FIXTURE_PUBLIC_KEY_ARG.to_owned(),
+            root.to_string_lossy().into_owned(),
+        ]);
+        assert!(private_key.is_err());
+        let _ = std::fs::remove_file(root);
+    }
+
+    #[cfg(feature = "tauri-update-fixture")]
+    #[test]
+    fn fixture_runtime_configuration_reads_bounded_keys_and_selects_new_only() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-auto-player-fixture-public-{}",
+            std::process::id()
+        ));
+        std::fs::write(&root, "fixture-public-root").expect("write fixture key");
+        let config = super::fixture_runtime_config_from_args([
+            "--selftest-desktop-update".to_owned(),
+            super::FIXTURE_PORT_ARG.to_owned(),
+            "40000".to_owned(),
+            super::FIXTURE_PUBLIC_KEY_ARG.to_owned(),
+            root.to_string_lossy().into_owned(),
+            super::FIXTURE_NEW_ONLY_ARG.to_owned(),
+        ])
+        .expect("valid fixture runtime configuration");
+        assert_eq!(config.port, 40000);
+        assert_eq!(config.public_keys, vec!["fixture-public-root"]);
+        assert!(config.new_only);
+        let _ = std::fs::remove_file(root);
     }
 
     #[cfg(not(feature = "tauri-update-fixture"))]
