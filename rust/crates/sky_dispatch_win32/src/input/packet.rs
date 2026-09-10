@@ -6,10 +6,11 @@ use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
 };
 use crate::clock::{QpcClock, QpcTicks};
+use sky_dispatch_core::model::MAX_KEYS;
 #[cfg(windows)]
 use std::mem::MaybeUninit;
 
-pub const MAX_PACKET_EVENTS: usize = 30;
+pub const MAX_PACKET_EVENTS: usize = MAX_KEYS;
 
 /// Return whether a packet containing a Down crossed its authoritative
 /// sender cutoff. The predicate is shared by the real SendInput envelope,
@@ -1567,9 +1568,12 @@ mod tests {
     }
 
     #[test]
-    fn physical_packet_accepts_at_most_thirty_events() {
-        let packet = PhysicalPacket::new(FULL_INSTRUMENT_MASK, FULL_INSTRUMENT_MASK);
-        assert_eq!(packet.event_count(), MAX_PACKET_EVENTS as u8);
+    fn physical_packet_accepts_fifteen_events_per_direction() {
+        for (up_mask, down_mask) in [(FULL_INSTRUMENT_MASK, 0), (0, FULL_INSTRUMENT_MASK)] {
+            let prepared = PreparedPhysicalPacket::try_new(PhysicalPacket::new(up_mask, down_mask))
+                .expect("fifteen-key packet prepares");
+            assert_eq!(prepared.event_count(), MAX_PACKET_EVENTS as u8);
+        }
     }
 
     #[test]
@@ -1593,6 +1597,7 @@ mod tests {
             .expect("full mixed packet prepares");
         let recovery = prepared.up_recovery_view().expect("full mixed Up prefix");
 
+        assert_eq!(prepared.event_count(), MAX_PACKET_EVENTS as u8);
         assert_eq!(recovery.packet(), PhysicalPacket::new(0x01ff, 0));
         assert_eq!(recovery.packet().event_count(), 9);
         #[cfg(windows)]
