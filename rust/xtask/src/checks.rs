@@ -368,11 +368,13 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
     let acceptance_path = root.join("scripts/ci_v4_release_latest_guard.ps1");
     let acceptance = fs::read_to_string(&acceptance_path)?;
     for marker in [
-        "legacy Latest guard",
+        "V4 GitHub Latest policy guard",
         "$canonicalRepository = \"pumni/Sky-Auto-Player\"",
         "releases/latest",
-        "make_latest=false",
+        "make_latest=$(if ($Channel -eq \"stable\") { \"true\" } else { \"false\" })",
         "read_only=true",
+        "ExpectedSourceSha",
+        "github-latest-before.json",
     ] {
         if !acceptance.contains(marker) {
             return Err(format!(
@@ -903,7 +905,8 @@ fn v4_release_pipeline_contract_source(
         "Qualify downloaded exact candidate bytes and packaged update",
         "RecordAttestations",
         "PublishDraft",
-        "Verify legacy GitHub Latest before metadata promotion",
+        "Snapshot GitHub Latest before publication",
+        "Verify GitHub Latest channel policy before metadata promotion",
         "scripts/ci_v4_release_latest_guard.ps1",
         "PromoteMetadata",
         "FinalVerify",
@@ -967,30 +970,52 @@ fn v4_release_pipeline_contract_source(
     }
     validate_metadata_app_token_scope(&workflow)?;
 
+    let capture_latest_step = workflow
+        .find("- name: Snapshot GitHub Latest before publication")
+        .ok_or("v4 release workflow is missing the pre-publication Latest snapshot")?;
     let publish_step = workflow
         .find("- name: Publish the already-qualified draft immutably")
         .ok_or("v4 release workflow is missing the publication step")?;
-    let legacy_latest_step = workflow
-        .find("- name: Verify legacy GitHub Latest before metadata promotion")
-        .ok_or("v4 release workflow is missing the post-publication legacy Latest guard")?;
+    let latest_policy_step = workflow
+        .find("- name: Verify GitHub Latest channel policy before metadata promotion")
+        .ok_or("v4 release workflow is missing the post-publication Latest policy guard")?;
     let metadata_token_step = workflow
         .find("- name: Mint release-metadata GitHub App token")
         .ok_or("v4 release workflow is missing the metadata App token step")?;
-    if publish_step >= legacy_latest_step || legacy_latest_step >= metadata_token_step {
+    if capture_latest_step >= publish_step
+        || publish_step >= latest_policy_step
+        || latest_policy_step >= metadata_token_step
+    {
         return Err(
-            "legacy Latest guard must run after PublishDraft and before the metadata App token"
+            "GitHub Latest capture and policy guard must surround PublishDraft before the metadata App token"
                 .into(),
         );
     }
-    let legacy_latest_end = workflow[legacy_latest_step..]
+    let capture_latest_end = workflow[capture_latest_step..]
         .find("\n      - name:")
-        .map_or(workflow.len(), |relative| legacy_latest_step + relative);
-    let legacy_latest_block = &workflow[legacy_latest_step..legacy_latest_end];
-    if !legacy_latest_block.contains("GH_TOKEN: ${{ github.token }}")
-        || !legacy_latest_block.contains("scripts/ci_v4_release_latest_guard.ps1")
+        .map_or(workflow.len(), |relative| capture_latest_step + relative);
+    let capture_latest_block = &workflow[capture_latest_step..capture_latest_end];
+    if !capture_latest_block.contains("GH_TOKEN: ${{ github.token }}")
+        || !capture_latest_block.contains("scripts/ci_v4_release_latest_guard.ps1")
+        || !capture_latest_block.contains("-Mode Capture")
+        || !capture_latest_block.contains("-StateRoot")
     {
         return Err(
-            "post-publication legacy Latest guard must be read-only and use the repository token"
+            "pre-publication Latest snapshot must be read-only and use the isolated state root"
+                .into(),
+        );
+    }
+    let latest_policy_end = workflow[latest_policy_step..]
+        .find("\n      - name:")
+        .map_or(workflow.len(), |relative| latest_policy_step + relative);
+    let latest_policy_block = &workflow[latest_policy_step..latest_policy_end];
+    if !latest_policy_block.contains("GH_TOKEN: ${{ github.token }}")
+        || !latest_policy_block.contains("scripts/ci_v4_release_latest_guard.ps1")
+        || !latest_policy_block.contains("-Mode Verify")
+        || !latest_policy_block.contains("-ExpectedSourceSha")
+    {
+        return Err(
+            "post-publication Latest policy guard must be read-only and verify exact source identity"
                 .into(),
         );
     }
@@ -1038,7 +1063,7 @@ fn v4_release_pipeline_contract_source(
         "draft = $false",
         "Get-V4ReleaseMakeLatestValue",
         "make_latest = Get-V4ReleaseMakeLatestValue",
-        "make_latest is string enum false for create and publish",
+        "make_latest is string enum true for stable and false for beta",
         "target_commitish = $SourceSha.ToLowerInvariant()",
         "branch = \"release-metadata\"",
         "validate-monotonic",
@@ -1320,7 +1345,7 @@ fn v4_draft_rehearsal_contract_source(
         "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json",
         "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json",
         "releases/latest",
-        "^v3\\.",
+        "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
         "AllowAutoRedirect",
         "Headers.Authorization",
         "StatusCode",
@@ -3619,13 +3644,15 @@ fn production_metadata_endpoints_are_fixed_and_channel_isolated() {}
         assert!(!native.contains("api.github.com/repos/pumni/Sky-Auto-Player/releases"));
 
         let acceptance = r#"
-# This is the read-only legacy Latest guard.
+# This is the read-only GitHub Latest policy guard.
 $canonicalRepository = "pumni/Sky-Auto-Player"
 releases/latest
-make_latest=false
+make_latest=$(if ($Channel -eq "stable") { "true" } else { "false" })
 read_only=true
+ExpectedSourceSha
+github-latest-before.json
 "#;
-        assert!(acceptance.contains("legacy Latest guard"));
+        assert!(acceptance.contains("GitHub Latest policy guard"));
         assert!(acceptance.contains("releases/latest"));
         assert!(!acceptance.contains("gh release create"));
     }
@@ -3816,13 +3843,17 @@ jobs:
       - name: Create exact candidate draft in canonical repository
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Snapshot GitHub Latest before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci_v4_release_latest_guard.ps1 -Mode Capture -StateRoot $env:V4_RELEASE_STATE_ROOT
       - name: Publish the already-qualified draft immutably
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Verify legacy GitHub Latest before metadata promotion
+      - name: Verify GitHub Latest channel policy before metadata promotion
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/ci_v4_release_latest_guard.ps1
+        run: scripts/ci_v4_release_latest_guard.ps1 -Mode Verify -Channel $env:V4_RELEASE_CHANNEL -ExpectedTag $env:V4_RELEASE_TAG -ExpectedSourceSha $env:V4_RELEASE_SOURCE_SHA -StateRoot $env:V4_RELEASE_STATE_ROOT
       - name: Mint release-metadata GitHub App token
         id: metadata-app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
@@ -3862,15 +3893,15 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue make_latest is string enum false for create and publish target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
+ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue make_latest is string enum true for stable and false for beta target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
-function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; Get-V4ReleaseMakeLatestValue; make_latest = Get-V4ReleaseMakeLatestValue; make_latest is string enum false for create and publish; GitHub's successful DELETE endpoints return an empty body }
+function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; Get-V4ReleaseMakeLatestValue; make_latest = Get-V4ReleaseMakeLatestValue; make_latest is string enum true for stable and false for beta; GitHub's successful DELETE endpoints return an empty body }
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
 function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; freshUserSongs = @(; Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { GH_TOKEN }
-function Invoke-PublishDraft { draft = $false; Get-V4ReleaseMakeLatestValue; make_latest = Get-V4ReleaseMakeLatestValue; make_latest is string enum false for create and publish; Assert-ImmutableRelease $published; repository release is not marked immutable }
+function Invoke-PublishDraft { draft = $false; Get-V4ReleaseMakeLatestValue; make_latest = Get-V4ReleaseMakeLatestValue; make_latest is string enum true for stable and false for beta; Assert-ImmutableRelease $published; repository release is not marked immutable }
 function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication; branch = "release-metadata"; GITHUB_REPOSITORY; Invoke-GitHubApi }
 function Invoke-FinalVerify { FinalVerify }
 "#;

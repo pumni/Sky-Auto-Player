@@ -89,20 +89,23 @@ canonical repository token for same-repository release operations. Its transacti
 ```text
 ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDraft
   -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
-  -> PublishDraft -> PromoteMetadata -> FinalVerify
+  -> Snapshot GitHub Latest -> PublishDraft -> Assert-ImmutableRelease
+  -> Latest policy guard -> PromoteMetadata -> FinalVerify
 ```
 
 The ordering is security-critical:
 
-1. Validate the canonical repository, `main` source ref, immutable-release policy, and
-   `release-metadata` branch readiness before creating a draft.
+1. Validate the canonical repository, `main` source ref, and `release-metadata` branch readiness
+   before creating a draft; immutable status is verified on the published release itself.
 2. Build the exact source SHA once and create a draft in the official repository.
 3. Re-download the draft installer and signature, then qualify those exact bytes.
 4. Record SBOM and provenance/attestation evidence bound to the exact source and artifacts.
-5. Publish the already-qualified draft immutably with `make_latest=false` while the v3 Latest
-   contract remains protected.
-6. Generate, validate, and promote only the selected stable/beta metadata file after publication.
-7. Re-fetch the public release and verify the exact unauthenticated `raw.githubusercontent.com`
+5. Snapshot the current GitHub Latest identity, then publish the already-qualified draft
+   immutably with `make_latest="true"` for stable or `make_latest="false"` for beta.
+6. Verify the channel-aware Latest policy before minting the metadata App token; stable must be
+   the exact new release and beta must leave the captured stable Latest unchanged.
+7. Generate, validate, and promote only the selected stable/beta metadata file after the guard.
+8. Re-fetch the public release and verify the exact unauthenticated `raw.githubusercontent.com`
    endpoint used by the client.
 
 Published release assets and tags are never repaired in place. A failed unpublished draft may be

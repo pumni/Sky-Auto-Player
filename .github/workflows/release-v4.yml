@@ -231,6 +231,11 @@ jobs:
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT
 
+      - name: Snapshot GitHub Latest before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1 -Mode Capture -StateRoot $env:V4_RELEASE_STATE_ROOT
+
       - name: Publish the already-qualified draft immutably
         env:
           GH_TOKEN: ${{ github.token }}
@@ -244,10 +249,15 @@ jobs:
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT
 
-      - name: Verify legacy GitHub Latest before metadata promotion
+      - name: Verify GitHub Latest channel policy before metadata promotion
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1 `
+          -Mode Verify `
+          -Channel $env:V4_RELEASE_CHANNEL `
+          -ExpectedTag $env:V4_RELEASE_TAG `
+          -ExpectedSourceSha $env:V4_RELEASE_SOURCE_SHA `
+          -StateRoot $env:V4_RELEASE_STATE_ROOT
 
       - name: Mint release-metadata GitHub App token
         id: metadata-app-token

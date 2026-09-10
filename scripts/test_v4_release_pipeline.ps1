@@ -28,13 +28,15 @@ $draftCleanup = Get-Content -LiteralPath $draftCleanupPath -Raw
 $externalState = Get-Content -LiteralPath $externalStatePath -Raw
 $draftLookup = Get-Content -LiteralPath $draftLookupPath -Raw
 $testHarness = Get-Content -LiteralPath $PSCommandPath -Raw
+$latestGuardPath = Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1"
+$latestGuard = Get-Content -LiteralPath $latestGuardPath -Raw
 
 foreach ($source in @(
     [pscustomobject]@{ Name = "release workflow"; Text = $workflow },
     [pscustomobject]@{ Name = "release pipeline"; Text = $pipeline },
     [pscustomobject]@{ Name = "metadata promotion"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") -Raw) },
     [pscustomobject]@{ Name = "asset upload"; Text = $uploadHelper },
-    [pscustomobject]@{ Name = "legacy Latest guard"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1") -Raw) },
+    [pscustomobject]@{ Name = "GitHub Latest policy guard"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1") -Raw) },
     [pscustomobject]@{ Name = "controlled draft rehearsal workflow"; Text = $draftWorkflow },
     [pscustomobject]@{ Name = "controlled draft cleanup"; Text = $draftCleanup },
     [pscustomobject]@{ Name = "controlled draft external-state check"; Text = $externalState },
@@ -54,6 +56,24 @@ foreach ($source in @(
             Fail "$($source.Name) retains forbidden two-repository marker: $forbidden"
         }
     }
+}
+
+foreach ($marker in @(
+    'ValidateSet("Baseline", "Capture", "Verify")',
+    'Get-GitHubJson "repos/$canonicalRepository/releases/latest"',
+    'github-latest-before.json',
+    'ExpectedTag', 'ExpectedSourceSha',
+    'make_latest=$(if ($Channel -eq "stable") { "true" } else { "false" })',
+    'stable publication did not become the exact GitHub Latest release',
+    'beta publication changed GitHub Latest identity',
+    'read_only=true'
+)) {
+    if (-not $latestGuard.Contains($marker)) {
+        Fail "GitHub Latest policy guard marker is missing: $marker"
+    }
+}
+if ($latestGuard.Contains('^v3\.')) {
+    Fail "GitHub Latest policy guard still hard-codes the retired v3-only namespace"
 }
 
 function Fail([string]$Message) { throw "FAILED: $Message" }
@@ -165,7 +185,7 @@ foreach ($marker in @(
     'Capture', 'Verify',
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json',
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json',
-    'releases/latest', '^v3\.', 'AllowAutoRedirect', 'Headers.Authorization',
+    'releases/latest', '^v[0-9]+\.[0-9]+\.[0-9]+$', 'AllowAutoRedirect', 'Headers.Authorization',
     'StatusCode', 'sha256', 'external-state-before.json', 'external-state-after.json',
     'GITHUB_REPOSITORY', 'target_release_absent', 'target_tag_absent',
     'v4_release_draft_lookup.ps1', 'Select-V4ReleaseByTag', '--paginate',
@@ -421,7 +441,7 @@ foreach ($marker in @(
     'V4 immutable publication guard self-test', 'immutable=false rejected',
     'Get-V4ReleaseMakeLatestValue',
     'V4 GitHub release payload self-test',
-    'make_latest is string enum false for create and publish',
+    'make_latest is string enum true for stable and false for beta',
     'Start-MpScan',
     'previous-v4-to-exact-downloaded-candidate-update',
     'selftest-update-active-playback', 'scan_performed',
@@ -451,7 +471,7 @@ $pipelineSelfTestOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Byp
 if ($LASTEXITCODE -ne 0 -or $pipelineSelfTestOutput -notmatch 'immutable=false rejected; immutable=true accepted') {
     Fail "pipeline immutable publication guard self-test did not reject immutable=false"
 }
-if ($pipelineSelfTestOutput -notmatch 'make_latest is string enum false for create and publish') {
+if ($pipelineSelfTestOutput -notmatch 'make_latest is string enum true for stable and false for beta') {
     Fail "pipeline GitHub release payload self-test did not verify the make_latest JSON enum type"
 }
 foreach ($marker in @(
@@ -591,7 +611,8 @@ foreach ($marker in @(
     'repositories: ${{ github.event.repository.name }}',
     'permission-contents: write',
     'GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}',
-    'Verify legacy GitHub Latest before metadata promotion',
+    'Snapshot GitHub Latest before publication',
+    'Verify GitHub Latest channel policy before metadata promotion',
     'scripts/ci_v4_release_latest_guard.ps1',
     'Verify isolated production runner boundary',
     'verify_v4_release_runner.ps1',
@@ -610,19 +631,31 @@ $metadataPrivateKeyUses = ([regex]::Matches($workflow, [regex]::Escape($metadata
 if ($metadataPrivateKeyUses -ne 1) {
     Fail "metadata App private key must be consumed exactly once by the token-mint action"
 }
+$captureLatestStep = $workflow.IndexOf('- name: Snapshot GitHub Latest before publication', [StringComparison]::Ordinal)
 $publishStep = $workflow.IndexOf('- name: Publish the already-qualified draft immutably', [StringComparison]::Ordinal)
-$legacyLatestStep = $workflow.IndexOf('- name: Verify legacy GitHub Latest before metadata promotion', [StringComparison]::Ordinal)
+$latestPolicyStep = $workflow.IndexOf('- name: Verify GitHub Latest channel policy before metadata promotion', [StringComparison]::Ordinal)
 $metadataTokenStep = $workflow.IndexOf('- name: Mint release-metadata GitHub App token', [StringComparison]::Ordinal)
-if ($publishStep -lt 0 -or $legacyLatestStep -lt 0 -or $metadataTokenStep -lt 0 -or
-    $publishStep -ge $legacyLatestStep -or $legacyLatestStep -ge $metadataTokenStep) {
-    Fail "legacy Latest guard must run after PublishDraft and before the metadata App token"
+if ($captureLatestStep -lt 0 -or $publishStep -lt 0 -or $latestPolicyStep -lt 0 -or $metadataTokenStep -lt 0 -or
+    $captureLatestStep -ge $publishStep -or $publishStep -ge $latestPolicyStep -or $latestPolicyStep -ge $metadataTokenStep) {
+    Fail "GitHub Latest capture/policy guard ordering is not fail-closed"
 }
-$legacyLatestStepEnd = $workflow.IndexOf("`n      - name:", $legacyLatestStep + 1, [StringComparison]::Ordinal)
-if ($legacyLatestStepEnd -lt 0) { $legacyLatestStepEnd = $workflow.Length }
-$legacyLatestBlock = $workflow.Substring($legacyLatestStep, $legacyLatestStepEnd - $legacyLatestStep)
-if (-not $legacyLatestBlock.Contains('GH_TOKEN: ${{ github.token }}') -or
-    -not $legacyLatestBlock.Contains('scripts/ci_v4_release_latest_guard.ps1')) {
-    Fail "post-publication legacy Latest guard must be read-only and use the repository token"
+$latestPolicyStepEnd = $workflow.IndexOf("`n      - name:", $latestPolicyStep + 1, [StringComparison]::Ordinal)
+if ($latestPolicyStepEnd -lt 0) { $latestPolicyStepEnd = $workflow.Length }
+$latestPolicyBlock = $workflow.Substring($latestPolicyStep, $latestPolicyStepEnd - $latestPolicyStep)
+$captureLatestStepEnd = $workflow.IndexOf("`n      - name:", $captureLatestStep + 1, [StringComparison]::Ordinal)
+if ($captureLatestStepEnd -lt 0) { $captureLatestStepEnd = $workflow.Length }
+$captureLatestBlock = $workflow.Substring($captureLatestStep, $captureLatestStepEnd - $captureLatestStep)
+if (-not $captureLatestBlock.Contains('GH_TOKEN: ${{ github.token }}') -or
+    -not $captureLatestBlock.Contains('scripts/ci_v4_release_latest_guard.ps1') -or
+    -not $captureLatestBlock.Contains('-Mode Capture') -or
+    -not $captureLatestBlock.Contains('-StateRoot')) {
+    Fail "pre-publication Latest snapshot must be read-only and use the isolated state root"
+}
+if (-not $latestPolicyBlock.Contains('GH_TOKEN: ${{ github.token }}') -or
+    -not $latestPolicyBlock.Contains('scripts/ci_v4_release_latest_guard.ps1') -or
+    -not $latestPolicyBlock.Contains('-Mode Verify') -or
+    -not $latestPolicyBlock.Contains('-ExpectedSourceSha')) {
+    Fail "post-publication Latest policy guard must be read-only and verify exact source identity"
 }
 $promotionStart = $workflow.IndexOf('- name: Promote release metadata only after immutable publication', [StringComparison]::Ordinal)
 if ($promotionStart -lt 0) { Fail "metadata promotion step is missing" }
