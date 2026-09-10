@@ -205,7 +205,8 @@ jobs:
 
     steps:
       - name: Start CI timing
-        run: pwsh scripts/ci_job_timing.ps1 -Mode start -Job updater-contract
+        run: |
+          "SKY_CI_JOB_STARTED_UPDATER_CONTRACT=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
