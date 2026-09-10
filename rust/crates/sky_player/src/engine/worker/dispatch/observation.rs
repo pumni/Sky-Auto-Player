@@ -35,20 +35,6 @@ pub enum DispatchObservation {
     Lifecycle(ObserverLifecycle),
 }
 
-pub(super) fn enqueue_lifecycle(
-    observer: Option<&super::observer::PendingObservationQueue>,
-    lifecycle: ObserverLifecycle,
-    local_metrics: &mut WorkerMetricsLocal,
-) {
-    if let Some(observer) = observer {
-        observer.push(
-            DispatchObservation::Lifecycle(lifecycle),
-            &mut local_metrics.observer_dropped_samples,
-            &mut local_metrics.observer_queue_high_watermark,
-        );
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct StaleMetadataObservation {
     pub source_action_index: u32,

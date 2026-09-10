@@ -2117,28 +2117,13 @@ fn first_final_foreground_loss_is_terminal_without_epoch_rebase() {
         sky_dispatch_core::clock::PlaybackClockState::new(epoch, DurationTicks::ZERO)
             .expect("playback clock");
     let original_epoch = clock_state.epoch;
-    let schedule =
-        sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15]).expect("empty schedule");
-    let mut coordinator =
-        sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::try_new_ticks(
-            schedule,
-            0,
-            DurationTicks::ZERO,
-            |_| Ok(TimelineTicks::ZERO),
-        )
-        .expect("coordinator");
-    let mut backend = TrackedKeyState::new();
     let mut runtime = super::worker::WorkerRuntime::default();
-    let target = AtomicIsize::new(123);
     let progress_clock = super::shared::SharedProgressClock::default();
 
     let result = super::worker::handle_final_focus_loss(
         qpc_clock,
-        &mut backend,
-        &mut coordinator,
         &mut clock_state,
         &mut runtime,
-        &target,
         &progress_clock,
     );
 
@@ -2344,6 +2329,58 @@ fn authored_focus_pause_publishes_progress_anchor() {
             .expect("progress projection")
             .paused,
         "pre-roll focus loss must not enter a rebased pause"
+    );
+}
+
+#[test]
+fn authored_post_start_focus_loss_pauses_without_resumable_cleanup() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::dispatch::DispatchObservation;
+
+    let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
+    let calls = harness.configure_send_counter();
+    harness.align_next_plan_to_future_for_test(500_000);
+    let seed_plan = harness.plan_current_dispatch();
+    let seed_step = harness.dispatch_due_from_plan_for_test(&seed_plan);
+    assert!(
+        matches!(seed_step, super::worker::DispatchStep::Dispatched),
+        "seed dispatch: {seed_step:?}"
+    );
+    harness.config.focus.require_focus = true;
+    let seed_send_calls = calls.load(Ordering::SeqCst);
+    let release_calls = harness.full_instrument_release_calls();
+    let active_mask = harness.backend_active_mask();
+    let coordinator_active_mask = harness.resources.coordinator.active_mask;
+    assert_ne!(
+        active_mask, 0,
+        "seed Down must establish physical ownership"
+    );
+    while harness.pop_observation().is_some() {}
+
+    let plan = harness.plan_current_dispatch();
+    harness.focus_active.store(false, Ordering::Release);
+
+    let step = harness.dispatch_authored_with_plan(&plan);
+
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(calls.load(Ordering::SeqCst), seed_send_calls);
+    assert_eq!(harness.full_instrument_release_calls(), release_calls);
+    assert_eq!(harness.backend_active_mask(), active_mask);
+    assert_eq!(
+        harness.resources.coordinator.active_mask,
+        coordinator_active_mask
+    );
+    assert!(
+        harness
+            .progress_clock
+            .load()
+            .expect("progress projection")
+            .paused
+    );
+    assert!(
+        !std::iter::from_fn(|| harness.pop_observation())
+            .any(|observation| { matches!(observation, DispatchObservation::Lifecycle(_)) }),
+        "cached focus loss must not publish a lifecycle reset"
     );
 }
 
@@ -3053,11 +3090,22 @@ fn authored_down_target_change_after_crossing_never_reaches_transport() {
 #[test]
 fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::dispatch::DispatchObservation;
 
-    let mut harness = ProductionDispatchTestHarness::new_down_only();
-    harness.config.focus.require_focus = true;
+    let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
     let calls = harness.configure_send_counter();
-    harness.advance_playback_time_us(100_000);
+    harness.align_next_plan_to_future_for_test(500_000);
+    let seed_plan = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_due_from_plan_for_test(&seed_plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+    harness.config.focus.require_focus = true;
+    let seed_send_calls = calls.load(Ordering::SeqCst);
+    let release_calls = harness.full_instrument_release_calls();
+    let active_mask = harness.backend_active_mask();
+    let coordinator_active_mask = harness.resources.coordinator.active_mask;
+    while harness.pop_observation().is_some() {}
     let plan = harness.plan_current_dispatch();
     harness.set_final_gate_race_hook(|focus, _, _, _, _, _, _| {
         focus.store(false, Ordering::Release);
@@ -3065,12 +3113,27 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
 
     let step = harness.dispatch_at_plan_target_for_test(&plan);
 
-    assert!(matches!(
-        step,
-        super::worker::DispatchStep::TerminateStatic("focus_lost_during_preroll")
-    ));
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(calls.load(Ordering::SeqCst), seed_send_calls);
+    assert_eq!(harness.full_instrument_release_calls(), release_calls);
+    assert_eq!(harness.backend_active_mask(), active_mask);
+    assert_eq!(
+        harness.resources.coordinator.active_mask,
+        coordinator_active_mask
+    );
+    assert!(
+        harness
+            .progress_clock
+            .load()
+            .expect("progress projection")
+            .paused
+    );
     assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
+    assert!(
+        !std::iter::from_fn(|| harness.pop_observation())
+            .any(|observation| { matches!(observation, DispatchObservation::Lifecycle(_)) }),
+        "final-gate focus loss must not publish a lifecycle reset"
+    );
 }
 
 #[test]
