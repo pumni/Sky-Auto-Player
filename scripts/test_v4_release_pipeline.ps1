@@ -380,6 +380,9 @@ foreach ($marker in @(
     'current-user', 'active-playback-install-rejected', 'upload_url',
     'Assert-ImmutableRelease $published', 'repository release is not marked immutable',
     'V4 immutable publication guard self-test', 'immutable=false rejected',
+    'Get-V4ReleaseMakeLatestValue',
+    'V4 GitHub release payload self-test',
+    'make_latest is string enum false for create and publish',
     'Start-MpScan',
     'previous-v4-to-exact-downloaded-candidate-update',
     'selftest-update-active-playback', 'scan_performed',
@@ -408,6 +411,9 @@ if ($pipeline.Contains('repos/$repository/immutable-releases')) {
 $pipelineSelfTestOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $pipelinePath -State SelfTest 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0 -or $pipelineSelfTestOutput -notmatch 'immutable=false rejected; immutable=true accepted') {
     Fail "pipeline immutable publication guard self-test did not reject immutable=false"
+}
+if ($pipelineSelfTestOutput -notmatch 'make_latest is string enum false for create and publish') {
+    Fail "pipeline GitHub release payload self-test did not verify the make_latest JSON enum type"
 }
 foreach ($marker in @(
     'function Get-SanitizedReleaseProbeOutput',
