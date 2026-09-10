@@ -114,6 +114,9 @@ jobs:
       - name: Run CI classifier self-tests
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_classify.ps1
 
+      - name: Run current-candidate contract self-tests
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_validate_candidate.ps1
+
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
 
@@ -167,7 +170,7 @@ jobs:
           bun-version: 1.4.0
 
       - name: Verify release contract test tools
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,signtool.exe
 
       - name: Install pinned desktop dependencies for release contract tests
         working-directory: desktop
@@ -189,6 +192,30 @@ jobs:
 
       - name: Run V4 updater private-key verifier secret-output regression
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_updater_private_key.ps1
+
+      - name: Prepare bounded ephemeral Authenticode test certificate
+        timeout-minutes: 2
+        shell: pwsh
+        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
+
+      - name: Run Authenticode tamper regression on bounded system PE fixture
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:SystemRoot "System32/notepad.exe"
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "System PE fixture is unavailable: $source" }
+          pwsh scripts/test_v4_authenticode_integrity.ps1 -Source $source
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode tamper regression failed with exit code $LASTEXITCODE" }
+
+      - name: Clean up Authenticode test certificate
+        if: always()
+        shell: pwsh
+        run: pwsh scripts/cleanup_v4_test_signing.ps1
+
+      - name: Run V4 production signing contract test
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_production_signing_contract.ps1
+          if ($LASTEXITCODE -ne 0) { throw "V4 production signing contract test failed with exit code $LASTEXITCODE" }
 
       - name: Report CI timing
         if: always()
@@ -402,9 +429,155 @@ jobs:
         if: always()
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job validate -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
 
+  candidate:
+    name: Build current Tauri candidate
+    needs: changes
+    if: needs.changes.outputs.package_required == 'true' || needs.changes.outputs.updater_required == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
+      SCCACHE_GHA_VERSION: sky-ci-v1
+      SKY_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Start CI timing
+        run: |
+          "SKY_CI_JOB_STARTED_CANDIDATE=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content $env:GITHUB_ENV -Encoding ASCII
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Rust — install pinned stable toolchain for current candidate
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
+
+      - name: Rust — verify current-candidate compiler
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          $version = (rustc --version)
+          if ($version -notmatch '^rustc 1\.98\.0\s') {
+            throw "Expected stable Rust 1.98.0 for current candidate, got: $version"
+          }
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.17.0"
+
+      - name: Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "rust -> target"
+          cache-targets: false
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Set up Bun for current candidate
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Fail fast on current-candidate dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
+
+      - name: Install pinned desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Build pinned desktop frontend once
+        working-directory: desktop
+        run: bun run build
+
+      - name: Build exactly one current Tauri candidate
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate.key"
+          $publicKeyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate.pub"
+          $configPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate-updater.json"
+          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "rust/target/dist/bundle/nsis"
+          if (Test-Path -LiteralPath $bundleDir) {
+            Remove-Item -LiteralPath $bundleDir -Recurse -Force
+          }
+          try {
+            Push-Location desktop
+            try {
+              bun run tauri signer generate --ci --password "" --force -w $keyPath
+              if ($LASTEXITCODE -ne 0) { throw "Tauri updater signer generation failed with exit code $LASTEXITCODE" }
+              Copy-Item -LiteralPath "$keyPath.pub" -Destination $publicKeyPath -Force
+              $privateKey = (Get-Content -LiteralPath $keyPath -Raw).Trim()
+              $testPublicKey = (Get-Content -LiteralPath $publicKeyPath -Raw).Trim()
+              [ordered]@{
+                plugins = [ordered]@{
+                  updater = [ordered]@{
+                    pubkey = $testPublicKey
+                    endpoints = @("https://example.invalid/sky-auto-player/{{target}}/{{arch}}/{{current_version}}")
+                  }
+                }
+              } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding utf8
+              $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
+              $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+              $env:SKY_AUTHENTICODE_MODE = "unsigned-zero-budget"
+              bun run tauri build --ci --config $configPath -- --profile dist
+              if ($LASTEXITCODE -ne 0) { throw "Current Tauri candidate build failed with exit code $LASTEXITCODE" }
+            } finally {
+              Pop-Location
+            }
+          } finally {
+            Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+            Remove-Item Env:SKY_AUTHENTICODE_MODE -ErrorAction SilentlyContinue
+          }
+          "SKY_CANDIDATE_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_PUBLIC_KEY=$publicKeyPath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Create exact current-candidate contract
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
+          pwsh scripts/ci_validate_candidate.ps1 `
+            -Mode Create `
+            -BundleDir $env:SKY_CANDIDATE_BUNDLE `
+            -PublicKeyPath $env:SKY_CANDIDATE_PUBLIC_KEY `
+            -OutputRoot $candidateRoot `
+            -SourceSha $env:SKY_CI_SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "Current-candidate contract creation failed with exit code $LASTEXITCODE" }
+          $files = @(Get-ChildItem -LiteralPath $candidateRoot -File)
+          if ($files.Count -ne 4 -or $files.Name -contains "sky-auto-player-current-candidate.key") {
+            throw "Current-candidate artifact contains an unexpected file set"
+          }
+          "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Upload exact current-candidate contract
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/sky-auto-player-current-candidate
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Report CI timing
+        if: always()
+        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job candidate -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
+
   updater_e2e:
     name: Updater fixture qualification
-    needs: [changes, static]
+    needs: [changes, static, candidate]
     if: needs.changes.outputs.updater_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
@@ -426,6 +599,26 @@ jobs:
           fetch-tags: false
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download current candidate from this workflow run
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/sky-auto-player-current-candidate
+
+      - name: Validate and bind exact current candidate
+        run: |
+          $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
+          pwsh scripts/ci_validate_candidate.ps1 `
+            -Mode Validate `
+            -CandidateRoot $candidateRoot `
+            -SourceSha "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ($LASTEXITCODE -ne 0) { throw "Downloaded current-candidate contract validation failed with exit code $LASTEXITCODE" }
+          $metadata = Get-Content -LiteralPath (Join-Path $candidateRoot "candidate.json") -Raw | ConvertFrom-Json
+          "SKY_CANDIDATE_INSTALLER=$(Join-Path $candidateRoot $metadata.installer)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_SIGNATURE=$(Join-Path $candidateRoot $metadata.updater_signature)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_PUBLIC_KEY=$(Join-Path $candidateRoot $metadata.updater_public_key)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_VERSION=$($metadata.version)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Rust — install pinned stable toolchain for updater fixture
         env:
@@ -486,7 +679,12 @@ jobs:
           # Packaged Tauri updater rotation: ci_tauri_update_e2e.ps1 sets SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS
           # separately for the bridge [old,new] and cutover [new] tauri-update-fixture builds.
           # Its generated configs alone enable dangerousInsecureTransportProtocol on loopback.
-          pwsh scripts/ci_tauri_update_e2e.ps1 -FixtureTargetDir $fixtureTarget
+          pwsh scripts/ci_tauri_update_e2e.ps1 `
+            -FixtureTargetDir $fixtureTarget `
+            -CandidateInstallerPath $env:SKY_CANDIDATE_INSTALLER `
+            -CandidateSignaturePath $env:SKY_CANDIDATE_SIGNATURE `
+            -CandidateVersion $env:SKY_CANDIDATE_VERSION `
+            -CandidatePublicKeyPath $env:SKY_CANDIDATE_PUBLIC_KEY
 
       - name: Clean up ephemeral Authenticode test certificate
         if: always()
@@ -502,15 +700,12 @@ jobs:
 
   packaged:
     name: Packaged v4 Tauri NSIS qualification
-    needs: [changes, static]
+    needs: [changes, static, candidate]
     if: needs.changes.outputs.package_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
     permissions:
       contents: read
-      id-token: write
-      attestations: write
-      artifact-metadata: write
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
@@ -529,6 +724,37 @@ jobs:
           fetch-tags: false
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download current candidate from this workflow run
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/sky-auto-player-current-candidate
+
+      - name: Validate and stage exact current candidate
+        run: |
+          $candidateRoot = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate"
+          pwsh scripts/ci_validate_candidate.ps1 `
+            -Mode Validate `
+            -CandidateRoot $candidateRoot `
+            -SourceSha "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ($LASTEXITCODE -ne 0) { throw "Downloaded current-candidate contract validation failed with exit code $LASTEXITCODE" }
+          $metadata = Get-Content -LiteralPath (Join-Path $candidateRoot "candidate.json") -Raw | ConvertFrom-Json
+          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "rust/target/dist/bundle/nsis"
+          if (Test-Path -LiteralPath $bundleDir) {
+            Remove-Item -LiteralPath $bundleDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+          $installer = Join-Path $candidateRoot $metadata.installer
+          $signature = Join-Path $candidateRoot $metadata.updater_signature
+          Copy-Item -LiteralPath $installer -Destination (Join-Path $bundleDir $metadata.installer) -Force
+          Copy-Item -LiteralPath $signature -Destination (Join-Path $bundleDir $metadata.updater_signature) -Force
+          "SKY_TAURI_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_INSTALLER=$installer" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_SIGNATURE=$signature" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_PUBLIC_KEY=$(Join-Path $candidateRoot $metadata.updater_public_key)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_CANDIDATE_VERSION=$($metadata.version)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Rust — install pinned stable toolchain for packaged build
         env:
@@ -561,104 +787,8 @@ jobs:
           # Main/manual runs remain the cache population path.
           save-if: ${{ github.event_name != 'pull_request' }}
 
-      - name: Set up Bun for production frontend build
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.0
-
-      - name: Fail fast on packaged build dependencies
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache,signtool.exe
-
-      - name: Resolve GitHub CLI for artifact attestation verification
-        run: |
-          $ghCommand = Get-Command gh.exe -CommandType Application -ErrorAction Stop
-          $ghPath = [IO.Path]::GetFullPath($ghCommand.Source)
-          if (-not (Test-Path -LiteralPath $ghPath -PathType Leaf)) {
-            throw "GitHub CLI executable is not a regular file: $ghPath"
-          }
-          "SKY_GH_PATH=$ghPath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-
-      - name: Install pinned desktop dependencies
-        working-directory: desktop
-        run: bun install --frozen-lockfile
-
-      - name: Build pinned desktop frontend
-        working-directory: desktop
-        run: bun run build
-
-      - name: Build and sign canonical Tauri NSIS artifact
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: |
-          $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-test.key"
-          $configPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-v4-test-updater.json"
-          $preBuildCargoHash = (Get-FileHash -LiteralPath "desktop/src-tauri/Cargo.toml" -Algorithm SHA256).Hash
-          try {
-            Push-Location desktop
-            try {
-              bun run tauri signer generate --ci --password "" --force -w $keyPath
-              if ($LASTEXITCODE -ne 0) { throw "Tauri updater signer generation failed with exit code $LASTEXITCODE" }
-              $privateKey = (Get-Content -LiteralPath $keyPath -Raw).Trim()
-              $testPublicKey = (Get-Content -LiteralPath "$keyPath.pub" -Raw).Trim()
-              [ordered]@{
-                plugins = [ordered]@{
-                  updater = [ordered]@{
-                    pubkey = $testPublicKey
-                    endpoints = @("https://example.invalid/sky-auto-player/{{target}}/{{arch}}/{{current_version}}")
-                  }
-                }
-              } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding utf8
-              $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
-              $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
-              $env:SKY_AUTHENTICODE_MODE = "unsigned-zero-budget"
-              bun run tauri build --ci --config $configPath -- --profile dist
-              if ($LASTEXITCODE -ne 0) { throw "Tauri build failed with exit code $LASTEXITCODE" }
-            } finally {
-              Pop-Location
-            }
-            $bundleDir = Join-Path $env:GITHUB_WORKSPACE 'rust/target/dist/bundle/nsis'
-            "SKY_TAURI_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
-            $installers = @(Get-ChildItem -LiteralPath $bundleDir -Filter '*-setup.exe' -File)
-            if ($installers.Count -ne 1) {
-              throw "Expected exactly one freshly built Tauri NSIS installer, found $($installers.Count)"
-            }
-          } finally {
-            Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath -Force -ErrorAction SilentlyContinue
-            Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-            $postPackagingDirty = @(& git status --porcelain | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            if ($postPackagingDirty.Count -gt 0) {
-              $postBuildCargoHash = (Get-FileHash -LiteralPath "desktop/src-tauri/Cargo.toml" -Algorithm SHA256).Hash
-              Write-Host "Pre-build Cargo.toml SHA256:  $preBuildCargoHash"
-              Write-Host "Post-build Cargo.toml SHA256: $postBuildCargoHash"
-              Write-Host "=== git status --porcelain ==="
-              & git status --porcelain
-              Write-Host "=== git diff --no-ext-diff -- desktop/src-tauri/Cargo.toml ==="
-              & git diff --no-ext-diff -- desktop/src-tauri/Cargo.toml
-              Write-Host "=== git diff --check -- desktop/src-tauri/Cargo.toml ==="
-              & git diff --check -- desktop/src-tauri/Cargo.toml
-              throw "Packaged build left working tree dirty: $($postPackagingDirty -join ', ')"
-            }
-          }
-
-      - name: Prepare bounded ephemeral Authenticode test certificate
-        timeout-minutes: 2
-        run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
-
-      - name: Run Authenticode tamper regression
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: |
-          # CI self-signed credentials remain test-only; canonical package evidence is unsigned.
-          pwsh scripts/test_v4_authenticode_integrity.ps1 `
-            -Source rust/target/dist/sky_desktop_shell.exe
-          if ($LASTEXITCODE -ne 0) { throw "Authenticode tamper regression failed with exit code $LASTEXITCODE" }
-
-      - name: Run V4 production signing contract test
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_production_signing_contract.ps1
-          if ($LASTEXITCODE -ne 0) { throw "V4 production signing contract test failed with exit code $LASTEXITCODE" }
+      - name: Fail fast on package qualification dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
 
       - name: Verify Tauri Authenticode signature
         env:
@@ -780,6 +910,8 @@ jobs:
             evidence_type = "tauri-nsis-qualified-release"
             qualified = $true
             qualification = "install-launch-uninstall"
+            source_sha = (Get-Content -LiteralPath (Join-Path $env:SKY_CANDIDATE_ROOT "candidate.json") -Raw | ConvertFrom-Json).source_sha
+            candidate_contract = "candidate.json"
             product_name = $summary.product_name
             identifier = $summary.identifier
             version = $summary.version
@@ -791,6 +923,7 @@ jobs:
             signature_size = $summary.signature_size
             installer_sha256 = $summary.installer_sha256
             updater_signature_sha256 = $summary.updater_signature_sha256
+            updater_public_key_sha256 = (Get-FileHash -LiteralPath $env:SKY_CANDIDATE_PUBLIC_KEY -Algorithm SHA256).Hash.ToLowerInvariant()
             authenticode_mode = "unsigned-zero-budget"
             authenticode_evidence = "TAURI_AUTHENTICODE_EVIDENCE.json"
             authenticode_evidence_sha256 = (Get-FileHash -LiteralPath rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -798,52 +931,6 @@ jobs:
             sbom_sha256 = (Get-FileHash -LiteralPath rust/target/dist/SBOM.spdx.json -Algorithm SHA256).Hash.ToLowerInvariant()
           }
           $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath rust/target/dist/V4_QUALIFICATION_EVIDENCE.json -Encoding utf8
-
-      - name: Clean up ephemeral Authenticode test certificate
-        if: always()
-        run: pwsh scripts/cleanup_v4_test_signing.ps1
-
-      - name: Attest exact Tauri NSIS artifact set
-        if: github.event_name != 'pull_request'
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-path: |
-            ${{ github.workspace }}/rust/target/dist/bundle/nsis/*.exe
-            ${{ github.workspace }}/rust/target/dist/bundle/nsis/*.sig
-
-      - name: Attest exact Tauri SPDX SBOM
-        if: github.event_name != 'pull_request'
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-path: ${{ github.workspace }}/rust/target/dist/bundle/nsis/*.exe
-          sbom-path: ${{ github.workspace }}/rust/target/dist/SBOM.spdx.json
-
-      - name: Verify exact GitHub artifact attestations
-        if: github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:SKY_GH_PATH) -or
-              -not (Test-Path -LiteralPath $env:SKY_GH_PATH -PathType Leaf)) {
-            throw "GitHub CLI absolute path is unavailable for attestation verification"
-          }
-          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "GH_TOKEN is unavailable for attestation verification"
-          }
-          $attestationHelp = (& $env:SKY_GH_PATH attestation verify --help 2>&1 | Out-String)
-          if ($attestationHelp -notmatch '--source-digest' -or
-              $attestationHelp -notmatch '--signer-workflow') {
-            throw "Installed GitHub CLI lacks the required exact-source attestation options"
-          }
-          $installer = Join-Path $env:SKY_TAURI_BUNDLE (Get-ChildItem -LiteralPath $env:SKY_TAURI_BUNDLE -Filter '*-setup.exe' -File).Name
-          $signature = "$installer.sig"
-          $signerWorkflow = "$env:GITHUB_REPOSITORY/.github/workflows/ci.yml"
-          & $env:SKY_GH_PATH attestation verify $installer -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
-          if ($LASTEXITCODE -ne 0) { throw "Installer attestation verification failed with exit code $LASTEXITCODE" }
-          & $env:SKY_GH_PATH attestation verify $signature -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
-          if ($LASTEXITCODE -ne 0) { throw "Updater signature attestation verification failed with exit code $LASTEXITCODE" }
-          & $env:SKY_GH_PATH attestation verify $installer -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3 --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
-          if ($LASTEXITCODE -ne 0) { throw "SBOM attestation verification failed with exit code $LASTEXITCODE" }
 
       - name: Upload exact Tauri NSIS release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -890,7 +977,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged, site]
+    needs: [changes, static, release_contract, supply_chain, validate, candidate, updater_e2e, packaged, site]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -913,10 +1000,12 @@ jobs:
           SUPPLY_CHAIN_REQUIRED: ${{ needs.changes.outputs.supply_chain_required }}
           SITE_REQUIRED: ${{ needs.changes.outputs.site_required }}
           STATIC_REQUIRED: ${{ needs.changes.outputs.static_required }}
+          CANDIDATE_REQUIRED: ${{ needs.changes.outputs.package_required == 'true' || needs.changes.outputs.updater_required == 'true' }}
           STATIC_RESULT: ${{ needs.static.result }}
           RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
           SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
+          CANDIDATE_RESULT: ${{ needs.candidate.result }}
           UPDATER_E2E_RESULT: ${{ needs.updater_e2e.result }}
           PACKAGED_RESULT: ${{ needs.packaged.result }}
           SITE_RESULT: ${{ needs.site.result }}
@@ -939,6 +1028,7 @@ jobs:
             [[ "$SUPPLY_CHAIN_RESULT" == "skipped" ]]
           fi
           if [[ "$RUST_REQUIRED" == "true" || "$DESKTOP_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
+          if [[ "$CANDIDATE_REQUIRED" == "true" ]]; then [[ "$CANDIDATE_RESULT" == "success" ]]; else [[ "$CANDIDATE_RESULT" == "skipped" ]]; fi
           if [[ "$UPDATER_REQUIRED" == "true" ]]; then [[ "$UPDATER_E2E_RESULT" == "success" ]]; else [[ "$UPDATER_E2E_RESULT" == "skipped" ]]; fi
           if [[ "$PACKAGE_REQUIRED" == "true" ]]; then
             [[ "$PACKAGED_RESULT" == "success" ]]
