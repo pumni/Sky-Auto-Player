@@ -24,8 +24,7 @@ param(
     [string]$WorkflowSha,
     [string]$StateRoot,
     [string]$UpdaterPrivateKeyPath,
-    [string]$ReleaseNotesPath,
-    [string]$PublicationDateUtc
+    [string]$ReleaseNotesPath
 )
 
 Set-StrictMode -Version Latest
@@ -115,21 +114,6 @@ function Assert-RequestIdentity {
     $isPrerelease = $Version.Contains("-")
     if ($Channel -eq "stable" -and $isPrerelease) { Fail "stable releases must use final SemVer" }
     if ($Channel -eq "beta" -and -not $isPrerelease) { Fail "beta releases must use a SemVer prerelease" }
-    if (-not [string]::IsNullOrWhiteSpace($PublicationDateUtc)) {
-        if ($PublicationDateUtc -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') {
-            Fail "publication date must be second-precision UTC RFC3339"
-        }
-        try {
-            [DateTimeOffset]::ParseExact(
-                $PublicationDateUtc,
-                "yyyy-MM-dd'T'HH:mm:ss'Z'",
-                [Globalization.CultureInfo]::InvariantCulture,
-                [Globalization.DateTimeStyles]::AssumeUniversal
-            ) | Out-Null
-        } catch {
-            Fail "publication date is not a valid UTC timestamp"
-        }
-    }
     if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
         Fail "source_sha must be an exact 40-character commit SHA"
     }
@@ -177,6 +161,28 @@ function Assert-ReleaseNotes {
         Fail "release notes heading must match the requested version"
     }
     return $resolved
+}
+
+function Convert-PublishedAtToMetadataTimestamp([object]$Release) {
+    $publishedAt = [string]$Release.published_at
+    if ([string]::IsNullOrWhiteSpace($publishedAt)) {
+        Fail "published GitHub Release is missing published_at"
+    }
+    try {
+        $parsed = [DateTimeOffset]::Parse(
+            $publishedAt,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+        # The metadata schema is second precision; this value is sourced from
+        # the actual GitHub Release publication timestamp, never an operator input.
+        return $parsed.ToUniversalTime().ToString(
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            [Globalization.CultureInfo]::InvariantCulture
+        )
+    } catch {
+        Fail "GitHub Release published_at is not a valid timestamp: $publishedAt"
+    }
 }
 
 function Invoke-GhBinaryOutput {
@@ -974,6 +980,7 @@ function Invoke-PublishDraft {
     $state.draft = $false
     $state.published = $true
     $state.immutable = $true
+    $state.published_at = [string]$published.published_at
     Write-JsonFile (Get-StatePath) $state
     Write-Host "V4 immutable publication: PASS (assets were not replaced or rebuilt)"
 }
@@ -999,6 +1006,17 @@ function Invoke-PromoteMetadata {
     $root = Get-EffectiveStateRoot
     $downloaded = Join-Path $root "downloaded"
     $repository = Get-CanonicalRepository
+    $publishedRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag")
+    if ($publishedRelease.draft -or [string]::IsNullOrWhiteSpace([string]$publishedRelease.published_at)) {
+        Fail "metadata promotion requires the already-published GitHub Release"
+    }
+    if ([string]$publishedRelease.tag_name -ne $Tag -or
+        [string]::IsNullOrWhiteSpace([string]$publishedRelease.target_commitish) -or
+        -not ([string]$publishedRelease.target_commitish).Equals($SourceSha, [StringComparison]::OrdinalIgnoreCase)) {
+        Fail "published GitHub Release identity does not match the exact source request"
+    }
+    Assert-ImmutableRelease $publishedRelease
+    $publicationDateUtc = Convert-PublishedAtToMetadataTimestamp $publishedRelease
     $metadataCheckout = Join-Path $root "release-metadata"
     if (Test-Path -LiteralPath $metadataCheckout) { Remove-Item -LiteralPath $metadataCheckout -Recurse -Force }
     Invoke-GitHubApi -Arguments @("repo", "clone", $repository, $metadataCheckout, "--", "--branch", "release-metadata", "--depth", "1") -Raw | Out-Null
@@ -1012,7 +1030,7 @@ function Invoke-PromoteMetadata {
     $assetUrl = "https://github.com/$repository/releases/download/$Tag/$releaseInstaller"
     Invoke-Checked "cargo" @(
         "xtask", "release-metadata", "generate", "--channel", $Channel, "--version", $Version,
-        "--notes-file", $notesPath, "--pub-date", $PublicationDateUtc, "--platform", "windows-x86_64",
+        "--notes-file", $notesPath, "--pub-date", $publicationDateUtc, "--platform", "windows-x86_64",
         "--asset-url", $assetUrl, "--signature-file", $signature, "--output", $metadata
     ) "deterministic v4 metadata generation failed"
     Invoke-Checked "pwsh" @(

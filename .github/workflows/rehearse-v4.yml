@@ -205,7 +205,7 @@ jobs:
           $installer = @(Get-ChildItem -LiteralPath $downloaded -Filter "*.exe" -File)
           $signature = @(Get-ChildItem -LiteralPath $downloaded -Filter "*.sig" -File)
           if ($installer.Count -ne 1 -or $signature.Count -ne 1) { throw "Downloaded attestation subject set is not exact" }
-          $signerWorkflow = "$env:GITHUB_REPOSITORY/.github/workflows/rehearse-v4-draft.yml"
+          $signerWorkflow = "$env:GITHUB_REPOSITORY/.github/workflows/rehearse-v4.yml"
           & $gh attestation verify $installer[0].FullName -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
           if ($LASTEXITCODE -ne 0) { throw "Installer exact-source attestation verification failed" }
           & $gh attestation verify $signature[0].FullName -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow

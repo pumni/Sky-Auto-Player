@@ -113,7 +113,7 @@ To establish true causal attribution for PR developer feedback, PR #96 (FAST-1) 
   - Fetch PR base commit (`--depth=1`): <1s
   - Install pinned Rust toolchain (1.98.0 minimal): 8s
   - Verify classifier toolchain (`RUSTUP_TOOLCHAIN: 1.98.0`): <1s
-  - Classify PR changed paths (`sky_ci_classifier`): **1.12s compilation + execution**
+  - Classify PR changed paths (`scripts/ci_classify.ps1`): **execution only; no Rust compilation**
   - Report CI timing (native Bash): <1s
 - **Classification Output**:
   ```text
@@ -121,7 +121,7 @@ To establish true causal attribution for PR developer feedback, PR #96 (FAST-1) 
   code_required=true
   package_required=true
   browser_required=false
-  classification_reason=package-sensitive: .github/workflows/ci.yml, .github/workflows/release.yml, rust/Cargo.lock
+  classification_reason=required lanes (rust_required, package_required, updater_required, release_required, supply_chain_required): .github/workflows/ci.yml, .github/workflows/release-v4.yml, rust/Cargo.lock
   ```
 
 #### Job 2: `static` (ID `100366597794`)

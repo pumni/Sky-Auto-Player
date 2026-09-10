@@ -2,38 +2,12 @@ name: V4 Release Pipeline
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Canonical v4 SemVer (without v prefix or build metadata)"
-        required: true
-        type: string
-      channel:
-        description: "v4 metadata channel"
-        required: true
-        type: choice
-        options: [stable, beta]
-      tag:
-        description: "Canonical repository release tag; must be exactly v<version>"
-        required: true
-        type: string
-      source_sha:
-        description: "Exact source commit SHA; must equal this workflow checkout and GITHUB_SHA"
-        required: true
-        type: string
-      release_notes_path:
-        description: "Bounded release notes file in the checked-out source"
-        required: true
-        type: string
-      publication_date_utc:
-        description: "Second-precision UTC RFC3339 publication timestamp"
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: v4-release-${{ inputs.tag }}
+  group: v4-release-${{ github.sha }}
   cancel-in-progress: false
 
 defaults:
@@ -72,13 +46,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      V4_RELEASE_VERSION: ${{ inputs.version }}
-      V4_RELEASE_CHANNEL: ${{ inputs.channel }}
-      V4_RELEASE_TAG: ${{ inputs.tag }}
-      V4_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
       V4_RELEASE_WORKFLOW_SHA: ${{ github.sha }}
-      V4_RELEASE_NOTES_PATH: ${{ inputs.release_notes_path }}
-      V4_RELEASE_PUBLICATION_DATE: ${{ inputs.publication_date_utc }}
 
     steps:
       - name: Initialize release state root
@@ -90,9 +58,32 @@ jobs:
       - name: Check out the exact requested source SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Derive exact release identity from checked-out source
+        run: |
+          $sourceSha = $env:GITHUB_SHA
+          if ($sourceSha -notmatch '^[0-9a-fA-F]{40}$') { throw "GITHUB_SHA is not an exact commit SHA" }
+          $cargo = Get-Content -LiteralPath "desktop/src-tauri/Cargo.toml" -Raw
+          if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw "Cargo package version is missing" }
+          $version = $Matches[1]
+          if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+            throw "Cargo package version is not canonical v4 SemVer without build metadata"
+          }
+          $channel = if ($version.Contains("-")) { "beta" } else { "stable" }
+          $tag = "v$version"
+          $notesPath = "docs/releases/v$version.md"
+          if (-not (Test-Path -LiteralPath $notesPath -PathType Leaf)) { throw "release notes are missing: $notesPath" }
+          @(
+            "V4_RELEASE_SOURCE_SHA=$sourceSha",
+            "V4_RELEASE_VERSION=$version",
+            "V4_RELEASE_CHANNEL=$channel",
+            "V4_RELEASE_TAG=$tag",
+            "V4_RELEASE_NOTES_PATH=$notesPath"
+          ) | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          Write-Host "Derived v4 release identity: version=$version channel=$channel tag=$tag source=$sourceSha notes=$notesPath"
 
       - name: Verify isolated production runner boundary
         run: |
@@ -110,8 +101,7 @@ jobs:
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
-            -PublicationDateUtc $env:V4_RELEASE_PUBLICATION_DATE
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
 
       - name: Verify canonical repository release policy
         env:
@@ -281,8 +271,7 @@ jobs:
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
-            -PublicationDateUtc $env:V4_RELEASE_PUBLICATION_DATE
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
 
       - name: Re-fetch and verify final public release and metadata
         env:

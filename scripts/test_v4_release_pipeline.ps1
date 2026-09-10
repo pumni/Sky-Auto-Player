@@ -11,8 +11,7 @@ $fixtureWrapperPath = Join-Path $PSScriptRoot "ci_tauri_update_e2e.ps1"
 $fixtureCorePath = Join-Path $PSScriptRoot "ci_tauri_update_e2e_core.ps1"
 $uploadHelperPath = Join-Path $PSScriptRoot "v4_release_asset_upload.ps1"
 $workflowPath = Join-Path $repoRoot ".github/workflows/release-v4.yml"
-$topologyWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4-production-topology.yml"
-$draftWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4-draft.yml"
+$draftWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4.yml"
 $draftCleanupPath = Join-Path $PSScriptRoot "cleanup_v4_draft_rehearsal.ps1"
 $externalStatePath = Join-Path $PSScriptRoot "v4_draft_rehearsal_external_state.ps1"
 $draftLookupPath = Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1"
@@ -22,7 +21,6 @@ $fixtureWrapper = Get-Content -LiteralPath $fixtureWrapperPath -Raw
 $fixtureCore = Get-Content -LiteralPath $fixtureCorePath -Raw
 $uploadHelper = Get-Content -LiteralPath $uploadHelperPath -Raw
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
-$topologyWorkflow = Get-Content -LiteralPath $topologyWorkflowPath -Raw
 $draftWorkflow = Get-Content -LiteralPath $draftWorkflowPath -Raw
 $draftCleanup = Get-Content -LiteralPath $draftCleanupPath -Raw
 $externalState = Get-Content -LiteralPath $externalStatePath -Raw
@@ -429,6 +427,8 @@ foreach ($marker in @(
     'Assert-MetadataBranchReadiness', 'metadataBootstrapContract',
     'release-metadata readiness', 'validate-monotonic', 'strictly monotonic',
     'Get-PublicMetadataDocument', 'Write-RepositoryContentFile',
+    'Convert-PublishedAtToMetadataTimestamp', '$publicationDateUtc',
+    'publishedRelease.target_commitish', 'published_at',
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json',
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json',
     'AllowAutoRedirect', 'Headers.Authorization',
@@ -523,8 +523,7 @@ function Invoke-ReleaseNotesValidation([string]$NotesPath) {
             "-SourceSha", $sourceSha,
             "-WorkflowSha", $sourceSha,
             "-StateRoot", $probeRoot,
-            "-ReleaseNotesPath", $NotesPath,
-            "-PublicationDateUtc", "2026-01-01T00:00:00Z"
+            "-ReleaseNotesPath", $NotesPath
         )
         $childOutput = (& pwsh @arguments 2>&1 | Out-String)
         $exitCode = [int]$LASTEXITCODE
@@ -613,7 +612,13 @@ foreach ($marker in @(
     'contents: read', 'id-token: write', 'attestations: write',
     'actions/upload-artifact@',
     'GH_TOKEN: ${{ github.token }}',
-    'ref: ${{ inputs.source_sha }}',
+    'ref: ${{ github.sha }}',
+    'Derive exact release identity from checked-out source',
+    'V4_RELEASE_SOURCE_SHA=$sourceSha',
+    'V4_RELEASE_VERSION=$version',
+    'V4_RELEASE_CHANNEL=$channel',
+    'V4_RELEASE_TAG=$tag',
+    'V4_RELEASE_NOTES_PATH=$notesPath',
     'persist-credentials: false',
     'actions/attest@',
     '--source-digest $env:GITHUB_SHA',
@@ -640,6 +645,9 @@ foreach ($marker in @(
     'RecordAttestations', 'PublishDraft', 'PromoteMetadata', 'FinalVerify'
 )) {
     if (-not $workflow.Contains($marker)) { Fail "workflow marker is missing: $marker" }
+}
+if ($workflow.Contains('inputs:') -or $workflow.Contains('inputs.')) {
+    Fail "production release workflow must not expose semantic workflow_dispatch inputs"
 }
 $metadataTokenMarker = 'GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}'
 $metadataTokenUses = ([regex]::Matches($workflow, [regex]::Escape($metadataTokenMarker))).Count
@@ -701,52 +709,6 @@ foreach ($forbidden in @(
     if ($workflow.Contains($forbidden)) { Fail "forbidden production workflow marker remains: $forbidden" }
 }
 
-foreach ($marker in @(
-    'name: V4 Production Topology Rehearsal',
-    'workflow_dispatch:',
-    'runs-on: [self-hosted, windows, v4-release, single-tenant]',
-    'rehearsal-dispatch-boundary',
-    'github.event.repository.default_branch',
-    'refs/heads/main',
-    'environment: v4-production-release',
-    'ref: ${{ inputs.source_sha }}',
-    'persist-credentials: false',
-    'Verify isolated rehearsal runner boundary',
-    'verify_v4_release_runner.ps1',
-    'StateRoot = @($env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT)',
-    '& (Join-Path $PWD "scripts/verify_v4_release_runner.ps1") @runnerBoundaryArgs',
-    'cleanup_v4_release_state.ps1',
-    '& (Join-Path $PWD "scripts/cleanup_v4_release_state.ps1") @cleanupArgs',
-    'Preserve bounded rehearsal evidence',
-    'BuildCandidate',
-    'test_v4_production_topology_rehearsal.ps1',
-    '-CandidateStateRoot $env:V4_REHEARSAL_STATE_ROOT',
-    'Execute exact production QualifyDownloaded topology',
-    '-StateRoot $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT',
-    '-UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH'
-)) {
-    if (-not $topologyWorkflow.Contains($marker)) {
-        Fail "production-topology rehearsal workflow marker is missing: $marker"
-    }
-}
-foreach ($forbidden in @(
-    'V4_RELEASE_AUTHORITY_TOKEN',
-    'ValidateRepository',
-    'CreateDraft',
-    'PublishDraft',
-    'PromoteMetadata',
-    'FinalVerify',
-    'gh release',
-    'softprops/action-gh-release',
-    'updater_private_key_path:',
-    'inputs.updater_private_key_path',
-    'KeepStateOnFailure',
-    '-StateRoot $env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT'
-)) {
-    if ($topologyWorkflow.Contains($forbidden)) {
-        Fail "production-topology rehearsal workflow contains a legacy release-topology marker: $forbidden"
-    }
-}
 $stateRootInit = $workflow.IndexOf('- name: Initialize release state root', [StringComparison]::Ordinal)
 $checkout = $workflow.IndexOf('- name: Check out the exact requested source SHA', [StringComparison]::Ordinal)
 if ($stateRootInit -lt 0 -or $checkout -lt 0 -or $stateRootInit -gt $checkout) {

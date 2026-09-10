@@ -146,10 +146,9 @@ The labels `self-hosted, windows, v4-release, single-tenant` identify the produc
 runner boundary. The exact approved workflow/job allowlist is:
 
 - `.github/workflows/release-v4.yml` — job `release`, the official immutable publication path.
-- `.github/workflows/rehearse-v4-production-topology.yml` — job `rehearsal`, qualification-topology only.
-- `.github/workflows/rehearse-v4-draft.yml` — job `draft-rehearsal`, controlled draft rehearsal only.
+- `.github/workflows/rehearse-v4.yml` — job `draft-rehearsal`, controlled draft rehearsal only.
 
-All three workflows are `workflow_dispatch` only, require the canonical repository's
+Both workflows are `workflow_dispatch` only, require the canonical repository's
 `refs/heads/main` dispatch context, and are protected by the `v4-production-release` environment.
 The draft rehearsal may create and delete only its own matching unpublished draft/tag, may create
 and verify OIDC attestations for the exact downloaded candidate, and must never publish a release
@@ -320,12 +319,12 @@ Step 8: Evidence Emission & Self-Validation
 ### 3.3 Dedicated v4 release state machine
 
 The manual production entry point is `.github/workflows/release-v4.yml`. It
-accepts an explicit version, channel, `v<version>` tag, source SHA, notes path,
-and UTC publication timestamp. The dedicated runner supplies
+derives the version, channel, `v<version>` tag, and notes path from the exact
+checked-out commit; GitHub supplies the immutable publication timestamp. The dedicated runner supplies
 `V4_UPDATER_PRIVATE_KEY_PATH` from runner-local process configuration; this is
 not a workflow input. The workflow
-requires the checked-out commit and workflow SHA to equal the requested source
-SHA, then executes these fail-closed states:
+requires the checked-out commit and workflow SHA to equal the exact source SHA,
+then executes these fail-closed states:
 
 ```text
 ValidateRequest -> ValidateAuthority -> BuildCandidate -> CreateDraft
@@ -349,16 +348,9 @@ the exact downloaded installer and `.sig`, while the production candidate is
 never rebuilt. The packaged candidate also proves that update admission is
 rejected while playback is active.
 
-Before creating a new RC, the exact production qualification topology can be
-rehearsed without creating a GitHub Release draft. The manual workflow
-`.github/workflows/rehearse-v4-production-topology.yml` must be dispatched from
-the ref containing the exact requested source SHA. It uses the same dedicated
-runner labels and explicit updater-key path as production, builds one candidate,
-then runs the script below. It has no release mutation or metadata promotion state.
-
-After that topology gate passes, the controlled same-repository draft rehearsal
-may exercise the GitHub draft boundary without publishing it. The manual workflow
-`.github/workflows/rehearse-v4-draft.yml` uses the same exact source binding, protected
+The controlled same-repository draft rehearsal may exercise the GitHub draft
+boundary without publishing it. The manual workflow
+`.github/workflows/rehearse-v4.yml` uses the same exact source binding, protected
 environment, dedicated runner, and concurrency group as the official release workflow.
 It executes `ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDraft
 -> DownloadDraft -> QualifyDownloaded -> RecordAttestations`, then deletes only the
@@ -368,6 +360,9 @@ and final public-release verification are intentionally unreachable in this work
 The rehearsal snapshots and compares the current GitHub Latest identity plus both public
 `release-metadata` channel endpoints before and after cleanup. It does not publish or promote
 anything, so it remains valid both before and after the one-time `v4.0.1` Latest operation.
+
+The exact production qualification topology remains a local, bounded harness rather than a
+second permanent workflow:
 
 ```powershell
 pwsh scripts/test_v4_production_topology_rehearsal.ps1 -CandidateStateRoot $candidateStateRoot -StateRoot (Join-Path $env:RUNNER_TEMP "sky-v4-production-topology-rehearsal") -Version $version -Channel $channel -Tag "v$version" -SourceSha $sourceSha -WorkflowSha $sourceSha

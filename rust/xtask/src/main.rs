@@ -4,7 +4,6 @@ mod audits;
 mod branding;
 mod builtin_catalog;
 mod checks;
-mod classifier;
 mod hash;
 mod process;
 mod release_metadata;
@@ -21,7 +20,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask ci classify [--full | --base <sha> --head <sha> | --paths-file <file>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>"
+    "Usage:\n  cargo xtask check <static|rust|desktop|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -56,31 +55,6 @@ fn main() -> Result<()> {
                 i += 1;
             }
             supply_chain::run(attestation.as_deref().map(Path::new))
-        }
-        "ci" if args.get(1).map(String::as_str) == Some("classify") => {
-            let mut full = false;
-            let mut base = None;
-            let mut head = None;
-            let mut paths_file = None;
-            let mut i = 2;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--full" => full = true,
-                    "--base" => base = Some(required_value(&args, &mut i, "--base")?),
-                    "--head" => head = Some(required_value(&args, &mut i, "--head")?),
-                    "--paths-file" => {
-                        paths_file = Some(required_value(&args, &mut i, "--paths-file")?)
-                    }
-                    option => return Err(format!("unknown classifier option: {option}").into()),
-                }
-                i += 1;
-            }
-            classifier::run(
-                full,
-                base.as_deref(),
-                head.as_deref(),
-                paths_file.as_deref(),
-            )
         }
         "version" if args.get(1).map(String::as_str) == Some("check") => {
             let mut tag = None;

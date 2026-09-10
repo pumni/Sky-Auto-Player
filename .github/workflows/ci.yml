@@ -30,75 +30,43 @@ jobs:
         shell: bash
 
     outputs:
-      code_required: ${{ steps.filter-pr.outputs.code_required || steps.filter-full.outputs.code_required }}
-      package_required: ${{ steps.filter-pr.outputs.package_required || steps.filter-full.outputs.package_required }}
-      updater_required: ${{ steps.filter-pr.outputs.updater_required || steps.filter-full.outputs.updater_required }}
-      release_required: ${{ steps.filter-pr.outputs.release_required || steps.filter-full.outputs.release_required }}
-      supply_chain_required: ${{ steps.filter-pr.outputs.supply_chain_required || steps.filter-full.outputs.supply_chain_required }}
-      classification_reason: ${{ steps.filter-pr.outputs.classification_reason || steps.filter-full.outputs.classification_reason }}
+      rust_required: ${{ steps.classify.outputs.rust_required }}
+      desktop_required: ${{ steps.classify.outputs.desktop_required }}
+      desktop_e2e_required: ${{ steps.classify.outputs.desktop_e2e_required }}
+      package_required: ${{ steps.classify.outputs.package_required }}
+      updater_required: ${{ steps.classify.outputs.updater_required }}
+      release_required: ${{ steps.classify.outputs.release_required }}
+      supply_chain_required: ${{ steps.classify.outputs.supply_chain_required }}
+      site_required: ${{ steps.classify.outputs.site_required }}
+      classification_reason: ${{ steps.classify.outputs.classification_reason }}
+      # static_required is an internal CI projection, not a classifier output.
+      static_required: ${{ steps.classify.outputs.rust_required == 'true' || steps.classify.outputs.desktop_required == 'true' || steps.classify.outputs.package_required == 'true' || steps.classify.outputs.updater_required == 'true' || steps.classify.outputs.release_required == 'true' || contains(steps.classify.outputs.classification_reason, 'static-only') }}
 
     steps:
       - name: Start CI timing
         run: echo "SKY_CI_JOB_STARTED_CHANGES=$(date +%s)" >> "$GITHUB_ENV"
 
-      - name: Emit full qualification matrix for main / manual dispatch
-        if: github.event_name != 'pull_request'
-        id: filter-full
-        run: |
-          {
-            echo "code_required=true"
-            echo "package_required=true"
-            echo "updater_required=true"
-            echo "release_required=true"
-            echo "supply_chain_required=true"
-            echo "classification_reason=full validation requested"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo '## Validation classification'
-            echo '```text'
-            echo 'code_required=true'
-            echo 'package_required=true'
-            echo 'updater_required=true'
-            echo 'release_required=true'
-            echo 'supply_chain_required=true'
-            echo 'classification_reason=full validation requested'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Checkout PR head
-        if: github.event_name == 'pull_request'
+      - name: Checkout source for path classification
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Fetch PR base commit
-        if: github.event_name == 'pull_request'
-        run: |
-          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
-
-      - name: Install pinned Rust toolchain for classifier
-        if: github.event_name == 'pull_request'
-        run: rustup toolchain install 1.98.0 --profile minimal
-
-      - name: Verify classifier toolchain
-        if: github.event_name == 'pull_request'
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
+      - name: Classify changed paths
+        id: classify
         run: |
           set -euo pipefail
-          rustc --version | grep -E '^rustc 1\.98\.0 '
-
-      - name: Classify PR changed paths
-        if: github.event_name == 'pull_request'
-        id: filter-pr
-        env:
-          RUSTUP_TOOLCHAIN: 1.98.0
-        run: |
-          set -euo pipefail
-          classification="$(cargo run --manifest-path rust/Cargo.toml -p sky_ci_classifier --locked -- --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}")"
+          classifier_args=()
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            classifier_args+=(--full)
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            classifier_args+=(--base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.event.pull_request.head.sha }}")
+          else
+            classifier_args+=(--base-sha "${{ github.event.before }}" --head-sha "${{ github.sha }}")
+          fi
+          classification="$(pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_classify.ps1 "${classifier_args[@]}")"
           printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$classification"
           {
@@ -124,7 +92,7 @@ jobs:
   static:
     name: Static and security gates
     needs: changes
-    if: needs.changes.outputs.code_required == 'true' || needs.changes.outputs.package_required == 'true' || needs.changes.outputs.updater_required == 'true' || needs.changes.outputs.release_required == 'true'
+    if: needs.changes.outputs.static_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -142,6 +110,9 @@ jobs:
           fetch-tags: false
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Run CI classifier self-tests
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_classify.ps1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
@@ -329,7 +300,7 @@ jobs:
   validate:
     name: Windows compatibility and unit tests
     needs: changes
-    if: needs.changes.outputs.code_required == 'true'
+    if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -352,9 +323,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Rust — install pinned stable toolchain
+        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_required == 'true'
         run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
 
       - name: Rust — verify pinned stable toolchain
+        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
@@ -378,21 +351,23 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Repository verification — Rust
-        if: needs.changes.outputs.code_required == 'true'
+        if: needs.changes.outputs.rust_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: cargo xtask check rust
 
       - name: Set up Bun for desktop verification
+        if: needs.changes.outputs.desktop_required == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
 
       - name: Fail fast on Windows validation dependencies
+        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_required == 'true'
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx,sccache
 
       - name: Install Chromium for desktop browser smoke
-        if: needs.changes.outputs.package_required == 'true'
+        if: needs.changes.outputs.desktop_e2e_required == 'true'
         working-directory: desktop
         run: |
           bun install --frozen-lockfile
@@ -404,10 +379,11 @@ jobs:
           bun node_modules/playwright/cli.js install chromium
 
       - name: Repository verification — desktop
+        if: needs.changes.outputs.desktop_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |
-          if ("${{ needs.changes.outputs.package_required }}" -eq "true") {
+          if ("${{ needs.changes.outputs.desktop_e2e_required }}" -eq "true") {
             cargo xtask check desktop
           } else {
             $env:SKY_DESKTOP_SKIP_BROWSER = "1"
@@ -887,10 +863,30 @@ jobs:
         if: always()
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job packaged -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
 
+  site:
+    name: Website validation
+    needs: changes
+    if: needs.changes.outputs.site_required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Validate site
+        uses: ./.github/actions/site-validate
+
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged]
+    needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged, site]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -904,21 +900,26 @@ jobs:
       - name: Require relevant gates to pass
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          CODE_REQUIRED: ${{ needs.changes.outputs.code_required }}
+          RUST_REQUIRED: ${{ needs.changes.outputs.rust_required }}
+          DESKTOP_REQUIRED: ${{ needs.changes.outputs.desktop_required }}
+          DESKTOP_E2E_REQUIRED: ${{ needs.changes.outputs.desktop_e2e_required }}
           PACKAGE_REQUIRED: ${{ needs.changes.outputs.package_required }}
           UPDATER_REQUIRED: ${{ needs.changes.outputs.updater_required }}
           RELEASE_REQUIRED: ${{ needs.changes.outputs.release_required }}
           SUPPLY_CHAIN_REQUIRED: ${{ needs.changes.outputs.supply_chain_required }}
+          SITE_REQUIRED: ${{ needs.changes.outputs.site_required }}
+          STATIC_REQUIRED: ${{ needs.changes.outputs.static_required }}
           STATIC_RESULT: ${{ needs.static.result }}
           RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
           SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           UPDATER_E2E_RESULT: ${{ needs.updater_e2e.result }}
           PACKAGED_RESULT: ${{ needs.packaged.result }}
+          SITE_RESULT: ${{ needs.site.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES_RESULT" == "success" ]]
-          if [[ "$CODE_REQUIRED" == "true" || "$PACKAGE_REQUIRED" == "true" || "$UPDATER_REQUIRED" == "true" || "$RELEASE_REQUIRED" == "true" ]]; then
+          if [[ "$STATIC_REQUIRED" == "true" ]]; then
             [[ "$STATIC_RESULT" == "success" ]]
           else
             [[ "$STATIC_RESULT" == "skipped" ]]
@@ -933,13 +934,14 @@ jobs:
           else
             [[ "$SUPPLY_CHAIN_RESULT" == "skipped" ]]
           fi
-          if [[ "$CODE_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
+          if [[ "$RUST_REQUIRED" == "true" || "$DESKTOP_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
           if [[ "$UPDATER_REQUIRED" == "true" ]]; then [[ "$UPDATER_E2E_RESULT" == "success" ]]; else [[ "$UPDATER_E2E_RESULT" == "skipped" ]]; fi
           if [[ "$PACKAGE_REQUIRED" == "true" ]]; then
             [[ "$PACKAGED_RESULT" == "success" ]]
           else
             [[ "$PACKAGED_RESULT" == "skipped" ]]
           fi
+          if [[ "$SITE_REQUIRED" == "true" ]]; then [[ "$SITE_RESULT" == "success" ]]; else [[ "$SITE_RESULT" == "skipped" ]]; fi
           echo "CI status is green."
 
       - name: Report CI timing

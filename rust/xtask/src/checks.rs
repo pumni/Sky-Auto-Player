@@ -230,7 +230,6 @@ fn find_legacy_release_topology_marker(source: &str) -> Option<&'static str> {
 }
 
 const ACTIVE_RELEASE_SURFACES: &[&str] = &[
-    "rust/tools/sky_ci_classifier/src/lib.rs",
     "rust/xtask/src/main.rs",
     "rust/xtask/src/release_metadata.rs",
     "scripts/v4_release_pipeline.ps1",
@@ -242,10 +241,8 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "scripts/cleanup_v4_draft_rehearsal.ps1",
     "scripts/v4_draft_rehearsal_external_state.ps1",
     "scripts/v4_release_draft_lookup.ps1",
-    ".github/workflows/release.yml",
     ".github/workflows/release-v4.yml",
-    ".github/workflows/rehearse-v4-production-topology.yml",
-    ".github/workflows/rehearse-v4-draft.yml",
+    ".github/workflows/rehearse-v4.yml",
     "desktop/src-tauri/src/native_update.rs",
     "desktop/src-tauri/tauri.conf.json",
     "desktop/src-tauri/Cargo.toml",
@@ -456,7 +453,7 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
         "V4_QUALIFICATION_EVIDENCE.json",
         "RELEASE_REQUIRED",
         "SUPPLY_CHAIN_REQUIRED",
-        "needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged]",
+        "needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged, site]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -470,8 +467,7 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
 
 const APPROVED_RELEASE_RUNNER_WORKFLOWS: &[&str] = &[
     ".github/workflows/release-v4.yml",
-    ".github/workflows/rehearse-v4-production-topology.yml",
-    ".github/workflows/rehearse-v4-draft.yml",
+    ".github/workflows/rehearse-v4.yml",
 ];
 const RELEASE_RUNNER_LABEL_MARKER: &str =
     "runs-on: [self-hosted, windows, v4-release, single-tenant]";
@@ -479,8 +475,7 @@ const RELEASE_RUNNER_LABEL_MARKER: &str =
 fn approved_release_runner_job(relative: &str) -> Option<&'static str> {
     match relative {
         ".github/workflows/release-v4.yml" => Some("release"),
-        ".github/workflows/rehearse-v4-production-topology.yml" => Some("rehearsal"),
-        ".github/workflows/rehearse-v4-draft.yml" => Some("draft-rehearsal"),
+        ".github/workflows/rehearse-v4.yml" => Some("draft-rehearsal"),
         _ => None,
     }
 }
@@ -888,7 +883,13 @@ fn v4_release_pipeline_contract_source(
         "attestations: write",
         "contents: write",
         "GH_TOKEN: ${{ github.token }}",
-        "ref: ${{ inputs.source_sha }}",
+        "ref: ${{ github.sha }}",
+        "Derive exact release identity from checked-out source",
+        "V4_RELEASE_SOURCE_SHA=$sourceSha",
+        "V4_RELEASE_VERSION=$version",
+        "V4_RELEASE_CHANNEL=$channel",
+        "V4_RELEASE_TAG=$tag",
+        "V4_RELEASE_NOTES_PATH=$notesPath",
         "release-dispatch-boundary",
         "github.event.repository.default_branch",
         "refs/heads/main",
@@ -916,6 +917,11 @@ fn v4_release_pipeline_contract_source(
                 format!("v4 release workflow is missing its required marker: {marker}").into(),
             );
         }
+    }
+    if workflow.contains("inputs:") || workflow.contains("inputs.") {
+        return Err(
+            "production release workflow must not expose semantic workflow_dispatch inputs".into(),
+        );
     }
     let workflow_states = [
         "-State ValidateRequest",
@@ -1401,15 +1407,13 @@ fn v4_draft_rehearsal_contract_source(
 
 fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     let workflow_path = root.join(".github/workflows/release-v4.yml");
-    let topology_workflow_path = root.join(".github/workflows/rehearse-v4-production-topology.yml");
-    let draft_workflow_path = root.join(".github/workflows/rehearse-v4-draft.yml");
+    let draft_workflow_path = root.join(".github/workflows/rehearse-v4.yml");
     let pipeline_path = root.join("scripts/v4_release_pipeline.ps1");
     let regression_path = root.join("scripts/test_v4_release_pipeline.ps1");
     let draft_cleanup_path = root.join("scripts/cleanup_v4_draft_rehearsal.ps1");
     let external_state_path = root.join("scripts/v4_draft_rehearsal_external_state.ps1");
     let pipeline = fs::read_to_string(&pipeline_path)?;
     let regression = fs::read_to_string(&regression_path)?;
-    let topology_workflow = fs::read_to_string(&topology_workflow_path)?;
     let draft_workflow = fs::read_to_string(&draft_workflow_path)?;
     let draft_cleanup = fs::read_to_string(&draft_cleanup_path)?;
     let external_state = fs::read_to_string(&external_state_path)?;
@@ -1421,57 +1425,6 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> {
         format!("v4 release pipeline contract: {error}").into()
     })?;
-    for marker in [
-        "name: V4 Production Topology Rehearsal",
-        "workflow_dispatch:",
-        "runs-on: [self-hosted, windows, v4-release, single-tenant]",
-        "rehearsal-dispatch-boundary",
-        "github.event.repository.default_branch",
-        "refs/heads/main",
-        "environment: v4-production-release",
-        "ref: ${{ inputs.source_sha }}",
-        "persist-credentials: false",
-        "Verify isolated rehearsal runner boundary",
-        "verify_v4_release_runner.ps1",
-        "StateRoot = @($env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT)",
-        "& (Join-Path $PWD \"scripts/verify_v4_release_runner.ps1\") @runnerBoundaryArgs",
-        "cleanup_v4_release_state.ps1",
-        "& (Join-Path $PWD \"scripts/cleanup_v4_release_state.ps1\") @cleanupArgs",
-        "Preserve bounded rehearsal evidence",
-        "BuildCandidate",
-        "test_v4_production_topology_rehearsal.ps1",
-        "-CandidateStateRoot $env:V4_REHEARSAL_STATE_ROOT",
-        "-StateRoot $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT",
-        "-UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH",
-    ] {
-        if !topology_workflow.contains(marker) {
-            return Err(format!(
-                "production-topology rehearsal workflow is missing its required marker: {marker}"
-            )
-            .into());
-        }
-    }
-    for forbidden in [
-        "V4_RELEASE_AUTHORITY_TOKEN",
-        "ValidateAuthority",
-        "CreateDraft",
-        "PublishDraft",
-        "PromoteMetadata",
-        "FinalVerify",
-        "gh release",
-        "softprops/action-gh-release",
-        "updater_private_key_path:",
-        "inputs.updater_private_key_path",
-        "KeepStateOnFailure",
-        "-StateRoot $env:V4_REHEARSAL_STATE_ROOT, $env:V4_REHEARSAL_QUALIFICATION_STATE_ROOT",
-    ] {
-        if topology_workflow.contains(forbidden) {
-            return Err(format!(
-                "production-topology rehearsal workflow contains a legacy release mutation marker: {forbidden}"
-            )
-            .into());
-        }
-    }
     v4_draft_rehearsal_contract_source(&draft_workflow, &draft_cleanup, &external_state).map_err(
         |error| -> Box<dyn std::error::Error + Send + Sync> {
             format!("controlled draft rehearsal contract: {error}").into()
@@ -1775,7 +1728,7 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
     }
 
     for marker in [
-        "needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged]",
+        "needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged, site]",
         "UPDATER_REQUIRED",
         "RELEASE_REQUIRED",
         "SUPPLY_CHAIN_REQUIRED",
@@ -1796,6 +1749,127 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
     packaged_ci_contract_source(&fs::read_to_string(&path)?)
         .map_err(|error| format!("{}: {error}", path.display()))?;
     println!("[xtask] canonical v4 packaged CI Tauri contract: PASS");
+    Ok(())
+}
+
+const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
+    ".github/workflows/ci.yml",
+    ".github/workflows/pages.yml",
+    ".github/workflows/release-v4.yml",
+    ".github/workflows/rehearse-v4.yml",
+];
+
+fn ci_control_plane_contract(root: &Path) -> Result<()> {
+    let workflows_root = root.join(".github/workflows");
+    let mut observed = BTreeSet::new();
+    for entry in fs::read_dir(&workflows_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|error| error.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if matches!(
+            entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str()),
+            Some("yml" | "yaml")
+        ) {
+            observed.insert(relative);
+        }
+    }
+    let expected = ACTIVE_CI_WORKFLOW_FILES
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect::<BTreeSet<_>>();
+    if observed != expected {
+        return Err(format!(
+            "active CI workflow set is not locked: observed={observed:?}, expected={expected:?}"
+        )
+        .into());
+    }
+
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?;
+    for output in [
+        "rust_required",
+        "desktop_required",
+        "desktop_e2e_required",
+        "package_required",
+        "updater_required",
+        "release_required",
+        "supply_chain_required",
+        "site_required",
+        "classification_reason",
+    ] {
+        let marker = format!("{output}: ${{{{ steps.classify.outputs.{output} }}}}");
+        if !ci.contains(&marker) {
+            return Err(format!("CI is missing classifier output projection: {output}").into());
+        }
+    }
+    for marker in [
+        "scripts/ci_classify.ps1",
+        "scripts/test_ci_classify.ps1",
+        "github.event.pull_request.base.sha",
+        "github.event.pull_request.head.sha",
+        "github.event.before",
+        "classifier_args+=(--full)",
+        "classifier_args+=(--base-sha",
+        "static_required:",
+        "contains(steps.classify.outputs.classification_reason, 'static-only')",
+        "desktop_e2e_required == 'true'",
+        "name: Website validation",
+        "if: needs.changes.outputs.site_required == 'true'",
+        "name: Sky Auto Player — required CI gate",
+        "needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged, site]",
+    ] {
+        if !ci.contains(marker) {
+            return Err(
+                format!("CI control-plane contract is missing its marker: {marker}").into(),
+            );
+        }
+    }
+    for forbidden in [
+        "cargo run --manifest-path rust/tools",
+        "static_required: ${{ steps.classify.outputs.static_required }}",
+    ] {
+        if ci.contains(forbidden) {
+            return Err(format!(
+                "CI control-plane contract contains retired classifier wiring: {forbidden}"
+            )
+            .into());
+        }
+    }
+
+    let pages = fs::read_to_string(root.join(".github/workflows/pages.yml"))?;
+    for marker in [
+        "bun run build",
+        "bun run verify:dist",
+        "actions/upload-pages-artifact@",
+        "actions/deploy-pages@",
+    ] {
+        if !pages.contains(marker) {
+            return Err(format!("Pages deploy contract is missing its marker: {marker}").into());
+        }
+    }
+    if pages.contains("./.github/actions/site-validate") || pages.contains("test:functional") {
+        return Err("Pages deploy workflow must not repeat the full site validation suite".into());
+    }
+
+    let release = fs::read_to_string(root.join(".github/workflows/release-v4.yml"))?;
+    if release.contains("inputs:") || release.contains("inputs.") {
+        return Err("production release workflow must have zero semantic dispatch inputs".into());
+    }
+    let rehearsal = fs::read_to_string(root.join(".github/workflows/rehearse-v4.yml"))?;
+    if rehearsal.contains("mode: topology") || rehearsal.contains("mode: draft") {
+        return Err("rehearsal workflow must not expose a topology/draft mode input".into());
+    }
+
+    println!("[xtask] CI/release control-plane contract: PASS");
     Ok(())
 }
 
@@ -3366,6 +3440,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             tauri_bundle::validate_config(&root)?;
             builtin_catalog::run(&root, "verify", &[])?;
             v4_trust_material_contract(&root)?;
+            ci_control_plane_contract(&root)?;
             release_metadata_contract(&root)?;
             release_runner_contract(&root)?;
             v4_release_pipeline_contract(&root)?;
@@ -3680,7 +3755,7 @@ github-latest-before.json
         for surface in [
             "desktop/src-tauri/src/native_update.rs",
             "desktop/src-tauri/tauri.conf.json",
-            ".github/workflows/rehearse-v4-production-topology.yml",
+            ".github/workflows/rehearse-v4.yml",
         ] {
             assert!(ACTIVE_RELEASE_SURFACES.contains(&surface));
         }
@@ -3700,15 +3775,11 @@ github-latest-before.json
         assert!(config_error.to_string().contains("tauri.conf.json"));
 
         let workflow_error = validate_active_release_surface(
-            ".github/workflows/rehearse-v4-production-topology.yml",
+            ".github/workflows/rehearse-v4.yml",
             "AuthorityCheckout",
         )
         .expect_err("legacy authority marker must be rejected in release workflow surfaces");
-        assert!(
-            workflow_error
-                .to_string()
-                .contains("rehearse-v4-production-topology.yml")
-        );
+        assert!(workflow_error.to_string().contains("rehearse-v4.yml"));
     }
 
     #[test]
@@ -3766,7 +3837,7 @@ jobs:
             .expect("documentation must enumerate exactly the approved runner workflows");
 
         let missing = documentation.replace(
-            "`.github/workflows/rehearse-v4-draft.yml`",
+            "`.github/workflows/rehearse-v4.yml`",
             "`draft-rehearsal-workflow-omitted.yml`",
         );
         assert!(
@@ -3787,7 +3858,7 @@ jobs:
     #[test]
     fn controlled_draft_rehearsal_contract_rejects_publication_and_weak_runner_regressions() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let workflow = fs::read_to_string(root.join(".github/workflows/rehearse-v4-draft.yml"))
+        let workflow = fs::read_to_string(root.join(".github/workflows/rehearse-v4.yml"))
             .expect("controlled draft rehearsal workflow fixture must exist");
         let cleanup = fs::read_to_string(root.join("scripts/cleanup_v4_draft_rehearsal.ps1"))
             .expect("controlled draft cleanup fixture must exist");
@@ -3812,11 +3883,9 @@ jobs:
             RELEASE_RUNNER_LABEL_MARKER,
             "runs-on: [self-hosted, windows, v4-release]",
         );
-        let error = validate_release_runner_workflow(
-            ".github/workflows/rehearse-v4-draft.yml",
-            &weak_runner,
-        )
-        .expect_err("draft rehearsal must retain the exact signing runner labels");
+        let error =
+            validate_release_runner_workflow(".github/workflows/rehearse-v4.yml", &weak_runner)
+                .expect_err("draft rehearsal must retain the exact signing runner labels");
         assert!(
             error
                 .to_string()
@@ -3839,7 +3908,13 @@ jobs:
       id-token: write
       attestations: write
     runs-on: [self-hosted, windows, v4-release, single-tenant]
-    ref: ${{ inputs.source_sha }}
+    ref: ${{ github.sha }}
+    Derive exact release identity from checked-out source
+    V4_RELEASE_SOURCE_SHA=$sourceSha
+    V4_RELEASE_VERSION=$version
+    V4_RELEASE_CHANNEL=$channel
+    V4_RELEASE_TAG=$tag
+    V4_RELEASE_NOTES_PATH=$notesPath
     release-dispatch-boundary
     github.event.repository.default_branch
     refs/heads/main
@@ -4076,7 +4151,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         uses: actions/upload-artifact@v7
         path: rust/target/dist/bundle/nsis
   status:
-    needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged]
+    needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged, site]
     env: { UPDATER_REQUIRED: true, RELEASE_REQUIRED: false, SUPPLY_CHAIN_REQUIRED: false, UPDATER_E2E_RESULT: success }
         "#;
         assert!(packaged_ci_contract_source(source).is_ok());
