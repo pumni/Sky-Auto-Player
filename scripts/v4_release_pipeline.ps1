@@ -90,6 +90,12 @@ function Get-V4ReleaseMakeLatestValue([string]$ReleaseChannel) {
     Fail "release channel is required to select make_latest"
 }
 
+function Get-V4ReleaseDraftMakeLatestValue {
+    # GitHub does not allow a draft or prerelease to become Latest. Keep draft
+    # creation independent from the eventual stable publication policy.
+    return "false"
+}
+
 function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "Required state file is missing: $Path" }
     return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
@@ -622,7 +628,7 @@ function Invoke-CreateDraft {
         body = $body + ([IO.File]::ReadAllText($notesPath)).Trim()
         draft = $true
         prerelease = ($Channel -eq "beta")
-        make_latest = Get-V4ReleaseMakeLatestValue $Channel
+        make_latest = Get-V4ReleaseDraftMakeLatestValue
     })
     $release = Invoke-GitHubApi -Arguments @("api", "--method", "POST", "repos/$repository/releases", "--input", $payloadPath)
     if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "repository did not create the requested draft release" }
@@ -1134,24 +1140,34 @@ function Invoke-SelfTest {
     Write-Host "V4 immutable publication guard self-test: PASS (immutable=false rejected; immutable=true accepted)"
 
     foreach ($channelCase in @(
-        [pscustomobject]@{ Channel = "stable"; Expected = "true" },
-        [pscustomobject]@{ Channel = "beta"; Expected = "false" }
+        [pscustomobject]@{ Channel = "stable"; PublishExpected = "true" },
+        [pscustomobject]@{ Channel = "beta"; PublishExpected = "false" }
     )) {
-        foreach ($draftValue in @($true, $false)) {
-            $payload = [ordered]@{
-                draft = $draftValue
-                make_latest = Get-V4ReleaseMakeLatestValue $channelCase.Channel
-            }
-            $roundTrip = (($payload | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
-            if ($roundTrip.make_latest -isnot [string] -or $roundTrip.make_latest -ne $channelCase.Expected) {
-                Fail "GitHub release payload make_latest must round-trip as the string enum $($channelCase.Expected) for $($channelCase.Channel)"
-            }
-            if ($roundTrip.draft -isnot [bool] -or [bool]$roundTrip.draft -ne $draftValue) {
-                Fail "GitHub release payload draft must remain a JSON boolean"
-            }
+        $draftPayload = [ordered]@{
+            draft = $true
+            make_latest = Get-V4ReleaseDraftMakeLatestValue
+        }
+        $draftRoundTrip = (($draftPayload | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
+        if ($draftRoundTrip.make_latest -isnot [string] -or $draftRoundTrip.make_latest -ne "false") {
+            Fail "GitHub draft payload make_latest must round-trip as the string enum false"
+        }
+        if ($draftRoundTrip.draft -isnot [bool] -or -not [bool]$draftRoundTrip.draft) {
+            Fail "GitHub draft payload draft must remain the JSON boolean true"
+        }
+
+        $publishPayload = [ordered]@{
+            draft = $false
+            make_latest = Get-V4ReleaseMakeLatestValue $channelCase.Channel
+        }
+        $publishRoundTrip = (($publishPayload | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
+        if ($publishRoundTrip.make_latest -isnot [string] -or $publishRoundTrip.make_latest -ne $channelCase.PublishExpected) {
+            Fail "GitHub publication payload make_latest must round-trip as the string enum $($channelCase.PublishExpected) for $($channelCase.Channel)"
+        }
+        if ($publishRoundTrip.draft -isnot [bool] -or [bool]$publishRoundTrip.draft) {
+            Fail "GitHub publication payload draft must remain the JSON boolean false"
         }
     }
-    Write-Host "V4 GitHub release payload self-test: PASS (make_latest is string enum true for stable and false for beta)"
+    Write-Host "V4 GitHub release payload self-test: PASS (draft false; stable publish true; beta publish false)"
 
     $mock.attested = $true
     $mock.published = $true

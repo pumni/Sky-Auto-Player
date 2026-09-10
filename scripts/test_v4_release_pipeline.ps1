@@ -440,8 +440,10 @@ foreach ($marker in @(
     'Assert-ImmutableRelease $published', 'repository release is not marked immutable',
     'V4 immutable publication guard self-test', 'immutable=false rejected',
     'Get-V4ReleaseMakeLatestValue',
+    'Get-V4ReleaseDraftMakeLatestValue',
+    'make_latest = Get-V4ReleaseDraftMakeLatestValue',
     'V4 GitHub release payload self-test',
-    'make_latest is string enum true for stable and false for beta',
+    'draft false; stable publish true; beta publish false',
     'Start-MpScan',
     'previous-v4-to-exact-downloaded-candidate-update',
     'selftest-update-active-playback', 'scan_performed',
@@ -471,8 +473,26 @@ $pipelineSelfTestOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Byp
 if ($LASTEXITCODE -ne 0 -or $pipelineSelfTestOutput -notmatch 'immutable=false rejected; immutable=true accepted') {
     Fail "pipeline immutable publication guard self-test did not reject immutable=false"
 }
-if ($pipelineSelfTestOutput -notmatch 'make_latest is string enum true for stable and false for beta') {
+if ($pipelineSelfTestOutput -notmatch 'draft false; stable publish true; beta publish false') {
     Fail "pipeline GitHub release payload self-test did not verify the make_latest JSON enum type"
+}
+$createDraftBody = $pipeline.Substring(
+    $pipeline.IndexOf('function Invoke-CreateDraft', [StringComparison]::Ordinal),
+    $pipeline.IndexOf('function Invoke-DownloadDraft', [StringComparison]::Ordinal) -
+        $pipeline.IndexOf('function Invoke-CreateDraft', [StringComparison]::Ordinal)
+)
+$publishDraftBody = $pipeline.Substring(
+    $pipeline.IndexOf('function Invoke-PublishDraft', [StringComparison]::Ordinal),
+    $pipeline.IndexOf('function Invoke-RecordAttestations', [StringComparison]::Ordinal) -
+        $pipeline.IndexOf('function Invoke-PublishDraft', [StringComparison]::Ordinal)
+)
+if (-not $createDraftBody.Contains('make_latest = Get-V4ReleaseDraftMakeLatestValue') -or
+    $createDraftBody.Contains('make_latest = Get-V4ReleaseMakeLatestValue $Channel')) {
+    Fail "CreateDraft must always use the draft-safe make_latest=false helper"
+}
+if (-not $publishDraftBody.Contains('make_latest = Get-V4ReleaseMakeLatestValue $Channel') -or
+    $publishDraftBody.Contains('Get-V4ReleaseDraftMakeLatestValue')) {
+    Fail "PublishDraft must use the channel-aware publication make_latest helper"
 }
 foreach ($marker in @(
     'function Get-SanitizedReleaseProbeOutput',

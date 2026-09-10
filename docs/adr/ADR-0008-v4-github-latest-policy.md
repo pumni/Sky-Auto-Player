@@ -25,6 +25,10 @@ The canonical same-repository release pipeline uses the GitHub Release API enum 
 - stable releases: `make_latest="true"`;
 - beta releases: `make_latest="false"`.
 
+Draft creation always uses `make_latest="false"` for both channels because GitHub does not allow
+a draft or prerelease release to become Latest. The stable/beta values above apply only to the
+publication PATCH that turns the qualified draft into a published release.
+
 `draft` remains a JSON boolean. The release workflow keeps the following fail-closed order:
 
 ```text

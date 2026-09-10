@@ -97,7 +97,8 @@ The ordering is security-critical:
 
 1. Validate the canonical repository, `main` source ref, and `release-metadata` branch readiness
    before creating a draft; immutable status is verified on the published release itself.
-2. Build the exact source SHA once and create a draft in the official repository.
+2. Build the exact source SHA once and create a draft in the official repository with
+   `make_latest="false"`; the channel-specific Latest value is applied only at publication.
 3. Re-download the draft installer and signature, then qualify those exact bytes.
 4. Record SBOM and provenance/attestation evidence bound to the exact source and artifacts.
 5. Snapshot the current GitHub Latest identity, then publish the already-qualified draft
