@@ -244,6 +244,11 @@ jobs:
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT
 
+      - name: Verify legacy GitHub Latest before metadata promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1
+
       - name: Mint release-metadata GitHub App token
         id: metadata-app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2

@@ -591,6 +591,8 @@ foreach ($marker in @(
     'repositories: ${{ github.event.repository.name }}',
     'permission-contents: write',
     'GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}',
+    'Verify legacy GitHub Latest before metadata promotion',
+    'scripts/ci_v4_release_latest_guard.ps1',
     'Verify isolated production runner boundary',
     'verify_v4_release_runner.ps1',
     'cleanup_v4_release_state.ps1',
@@ -607,6 +609,20 @@ $metadataPrivateKeyMarker = 'secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY'
 $metadataPrivateKeyUses = ([regex]::Matches($workflow, [regex]::Escape($metadataPrivateKeyMarker))).Count
 if ($metadataPrivateKeyUses -ne 1) {
     Fail "metadata App private key must be consumed exactly once by the token-mint action"
+}
+$publishStep = $workflow.IndexOf('- name: Publish the already-qualified draft immutably', [StringComparison]::Ordinal)
+$legacyLatestStep = $workflow.IndexOf('- name: Verify legacy GitHub Latest before metadata promotion', [StringComparison]::Ordinal)
+$metadataTokenStep = $workflow.IndexOf('- name: Mint release-metadata GitHub App token', [StringComparison]::Ordinal)
+if ($publishStep -lt 0 -or $legacyLatestStep -lt 0 -or $metadataTokenStep -lt 0 -or
+    $publishStep -ge $legacyLatestStep -or $legacyLatestStep -ge $metadataTokenStep) {
+    Fail "legacy Latest guard must run after PublishDraft and before the metadata App token"
+}
+$legacyLatestStepEnd = $workflow.IndexOf("`n      - name:", $legacyLatestStep + 1, [StringComparison]::Ordinal)
+if ($legacyLatestStepEnd -lt 0) { $legacyLatestStepEnd = $workflow.Length }
+$legacyLatestBlock = $workflow.Substring($legacyLatestStep, $legacyLatestStepEnd - $legacyLatestStep)
+if (-not $legacyLatestBlock.Contains('GH_TOKEN: ${{ github.token }}') -or
+    -not $legacyLatestBlock.Contains('scripts/ci_v4_release_latest_guard.ps1')) {
+    Fail "post-publication legacy Latest guard must be read-only and use the repository token"
 }
 $promotionStart = $workflow.IndexOf('- name: Promote release metadata only after immutable publication', [StringComparison]::Ordinal)
 if ($promotionStart -lt 0) { Fail "metadata promotion step is missing" }
