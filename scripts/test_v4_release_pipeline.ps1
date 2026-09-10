@@ -15,6 +15,7 @@ $topologyWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4-produ
 $draftWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4-draft.yml"
 $draftCleanupPath = Join-Path $PSScriptRoot "cleanup_v4_draft_rehearsal.ps1"
 $externalStatePath = Join-Path $PSScriptRoot "v4_draft_rehearsal_external_state.ps1"
+$draftLookupPath = Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1"
 $pipeline = Get-Content -LiteralPath $pipelinePath -Raw
 $topologyRehearsal = Get-Content -LiteralPath $topologyRehearsalPath -Raw
 $fixtureWrapper = Get-Content -LiteralPath $fixtureWrapperPath -Raw
@@ -25,6 +26,7 @@ $topologyWorkflow = Get-Content -LiteralPath $topologyWorkflowPath -Raw
 $draftWorkflow = Get-Content -LiteralPath $draftWorkflowPath -Raw
 $draftCleanup = Get-Content -LiteralPath $draftCleanupPath -Raw
 $externalState = Get-Content -LiteralPath $externalStatePath -Raw
+$draftLookup = Get-Content -LiteralPath $draftLookupPath -Raw
 $testHarness = Get-Content -LiteralPath $PSCommandPath -Raw
 
 foreach ($source in @(
@@ -35,7 +37,8 @@ foreach ($source in @(
     [pscustomobject]@{ Name = "legacy Latest guard"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1") -Raw) },
     [pscustomobject]@{ Name = "controlled draft rehearsal workflow"; Text = $draftWorkflow },
     [pscustomobject]@{ Name = "controlled draft cleanup"; Text = $draftCleanup },
-    [pscustomobject]@{ Name = "controlled draft external-state check"; Text = $externalState }
+    [pscustomobject]@{ Name = "controlled draft external-state check"; Text = $externalState },
+    [pscustomobject]@{ Name = "release draft lookup"; Text = $draftLookup }
 )) {
     foreach ($forbidden in @(
         "Sky-Auto-Player-Releases",
@@ -108,11 +111,45 @@ foreach ($forbidden in @(
     }
 }
 
+. $draftLookupPath
+
+function Test-DraftLookupFallback {
+    $draft = [pscustomobject]@{
+        id = 386002301
+        tag_name = 'v4.0.1'
+        draft = $true
+        published_at = $null
+    }
+    $selected = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection @($draft) -Tag 'v4.0.1'
+    if ($null -eq $selected -or [int64]$selected.id -ne 386002301) {
+        Fail "release lookup did not find a draft hidden from the by-tag endpoint"
+    }
+
+    try {
+        $null = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection @($draft, $draft) -Tag 'v4.0.1'
+        Fail "release lookup accepted duplicate tag candidates"
+    } catch {
+        if ($_.Exception.Message -notmatch 'duplicate releases use the requested tag') { throw }
+    }
+
+    try {
+        $null = Select-V4ReleaseByTag -DirectRelease ([pscustomobject]@{ tag_name = 'v4.0.0' }) -ReleaseCollection @() -Tag 'v4.0.1'
+        Fail "release lookup accepted a direct tag mismatch"
+    } catch {
+        if ($_.Exception.Message -notmatch 'direct release tag does not match') { throw }
+    }
+}
+
+Test-DraftLookupFallback
+
 foreach ($marker in @(
     'RUNNER_TEMP', 'GITHUB_WORKSPACE', 'StateRoot must be a child of RUNNER_TEMP',
     'source_sha', 'published_at', 'git/ref/tags', '--method', 'DELETE',
     'remainingRelease', 'remainingTag', 'draft-cleanup-authorized.json',
-    'refusing to delete a published release', 'mismatched source'
+    'release-state.json', 'releases/$releaseId', 'v4_release_draft_lookup.ps1',
+    'Select-V4ReleaseByTag', '--paginate', '--slurp', 'releases?per_page=100',
+    'refusing to delete a published release', 'mismatched source',
+    'draft release could not be removed by release id'
 )) {
     if (-not $draftCleanup.Contains($marker)) {
         Fail "controlled draft cleanup marker is missing: $marker"
@@ -130,7 +167,9 @@ foreach ($marker in @(
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json',
     'releases/latest', '^v3\.', 'AllowAutoRedirect', 'Headers.Authorization',
     'StatusCode', 'sha256', 'external-state-before.json', 'external-state-after.json',
-    'GITHUB_REPOSITORY', 'target_release_absent', 'target_tag_absent'
+    'GITHUB_REPOSITORY', 'target_release_absent', 'target_tag_absent',
+    'v4_release_draft_lookup.ps1', 'Select-V4ReleaseByTag', '--paginate',
+    '--slurp', 'releases?per_page=100'
 )) {
     if (-not $externalState.Contains($marker)) {
         Fail "controlled draft external-state marker is missing: $marker"

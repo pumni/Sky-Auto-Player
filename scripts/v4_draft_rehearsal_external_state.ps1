@@ -19,6 +19,7 @@ $metadataEndpoints = [ordered]@{
     stable = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json"
     beta = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json"
 }
+. (Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1")
 
 function Fail([string]$Message) {
     throw "V4 draft rehearsal external-state check failed closed: $Message"
@@ -82,6 +83,20 @@ function Invoke-ReadOnlyGitHubApi {
     } finally {
         Remove-Item -LiteralPath $errorPath -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Get-ReleaseCollection([string]$Repository) {
+    return @(Invoke-ReadOnlyGitHubApi -Arguments @(
+        "api", "--paginate", "--slurp", "repos/$Repository/releases?per_page=100"
+    ))
+}
+
+function Get-ReleaseForTag([string]$Repository, [string]$RequestedTag) {
+    $direct = Invoke-ReadOnlyGitHubApi -Arguments @(
+        "api", "repos/$Repository/releases/tags/$RequestedTag"
+    ) -AllowNotFound
+    $collection = if ($null -eq $direct) { Get-ReleaseCollection $Repository } else { @() }
+    return Select-V4ReleaseByTag -DirectRelease $direct -ReleaseCollection $collection -Tag $RequestedTag
 }
 
 function Assert-CanonicalRepository {
@@ -178,9 +193,7 @@ function Get-RawMetadataSnapshot([string]$Channel) {
 }
 
 function Get-TargetResidue {
-    $release = Invoke-ReadOnlyGitHubApi -Arguments @(
-        "api", "repos/$env:GITHUB_REPOSITORY/releases/tags/$Tag"
-    ) -AllowNotFound
+    $release = Get-ReleaseForTag $env:GITHUB_REPOSITORY $Tag
     $tagRef = Invoke-ReadOnlyGitHubApi -Arguments @(
         "api", "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$Tag"
     ) -AllowNotFound

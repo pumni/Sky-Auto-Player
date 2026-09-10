@@ -241,6 +241,7 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "scripts/cleanup_v4_release_state.ps1",
     "scripts/cleanup_v4_draft_rehearsal.ps1",
     "scripts/v4_draft_rehearsal_external_state.ps1",
+    "scripts/v4_release_draft_lookup.ps1",
     ".github/workflows/release.yml",
     ".github/workflows/release-v4.yml",
     ".github/workflows/rehearse-v4-production-topology.yml",
@@ -1049,6 +1050,13 @@ fn v4_release_pipeline_contract_source(
         "if ($null -eq $previousFreshSelfTest)",
         "Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
         "v4_updater_credential_broker.ps1",
+        "v4_release_draft_lookup.ps1",
+        "Select-V4ReleaseByTag",
+        "--paginate",
+        "--slurp",
+        "releases?per_page=100",
+        "existing draft source does not match the requested source",
+        "draft release could not be removed by release id",
     ] {
         if !pipeline.contains(marker) {
             return Err(
@@ -1115,6 +1123,12 @@ fn v4_release_pipeline_contract_source(
     {
         return Err(
             "v4 release coordinator regression test is missing the StrictMode empty-directory guard"
+            .into(),
+        );
+    }
+    if !regression.contains("Test-DraftLookupFallback") {
+        return Err(
+            "v4 release coordinator regression test is missing the hidden-draft collection fallback"
                 .into(),
         );
     }
@@ -1236,6 +1250,14 @@ fn v4_draft_rehearsal_contract_source(
         "remainingRelease",
         "remainingTag",
         "draft-cleanup-authorized.json",
+        "release-state.json",
+        "releases/$releaseId",
+        "v4_release_draft_lookup.ps1",
+        "Select-V4ReleaseByTag",
+        "--paginate",
+        "--slurp",
+        "releases?per_page=100",
+        "draft release could not be removed by release id",
         "refusing to delete a published release",
         "mismatched source",
     ] {
@@ -1278,6 +1300,11 @@ fn v4_draft_rehearsal_contract_source(
         "GITHUB_REPOSITORY",
         "target_release_absent",
         "target_tag_absent",
+        "v4_release_draft_lookup.ps1",
+        "Select-V4ReleaseByTag",
+        "--paginate",
+        "--slurp",
+        "releases?per_page=100",
     ] {
         if !external_state.contains(marker) {
             return Err(format!(
@@ -3801,7 +3828,7 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 Get-V4ReleaseMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue make_latest is string enum false for create and publish target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
+ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue make_latest is string enum false for create and publish target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
@@ -3815,6 +3842,7 @@ function Invoke-FinalVerify { FinalVerify }
 "#;
         let regression = r#"
 function Test-StrictModeEmptyFreshUserSongs { Set-StrictMode -Version Latest; freshUserSongs = @(); $freshUserSongs.Count -ne 0 }
+function Test-DraftLookupFallback { by-tag-404; paginated releases collection; duplicate releases use the requested tag }
 class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$UploadedThroughReleaseUrl = $false; [bool]$ExactDownloadedBytes = $false; [bool]$immutable = $false; candidate rebuilt; promotion before immutable publication; BuildCount -ne 1; UploadedThroughReleaseUrl; ExactDownloadedBytes; immutable }
 "#;
         assert!(v4_release_pipeline_contract_source(workflow, pipeline, regression).is_ok());
