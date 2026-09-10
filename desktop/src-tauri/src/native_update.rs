@@ -36,6 +36,8 @@ const V4_TAURI_UPDATER_PUBLIC_KEYS: &[&str] = &[V4_TAURI_UPDATER_PUBLIC_KEY];
 #[cfg(feature = "tauri-update-fixture")]
 const FIXTURE_TAURI_UPDATER_PUBLIC_KEYS: Option<&str> =
     option_env!("SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS");
+#[cfg(feature = "tauri-update-fixture")]
+const FIXTURE_NEW_ONLY_ARG: &str = "--selftest-update-fixture-new-only";
 const FIXTURE_TAURI_UPDATER_PORT: &str = match option_env!("SKY_TAURI_UPDATE_FIXTURE_PORT") {
     Some(port) => port,
     None => "invalid-fixture-port",
@@ -433,7 +435,7 @@ fn updater_public_keys() -> Vec<Option<&'static str>> {
     #[cfg(feature = "tauri-update-fixture")]
     {
         FIXTURE_TAURI_UPDATER_PUBLIC_KEYS
-            .map(|keys| keys.split('|').map(Some).collect())
+            .map(|keys| fixture_public_keys(keys, fixture_new_only_requested()))
             .unwrap_or_else(|| vec![None])
     }
     #[cfg(not(feature = "tauri-update-fixture"))]
@@ -444,6 +446,23 @@ fn updater_public_keys() -> Vec<Option<&'static str>> {
             .map(Some)
             .collect()
     }
+}
+
+#[cfg(feature = "tauri-update-fixture")]
+fn fixture_new_only_requested() -> bool {
+    std::env::args().any(|arg| arg == FIXTURE_NEW_ONLY_ARG)
+}
+
+#[cfg(feature = "tauri-update-fixture")]
+fn fixture_public_keys(keys: &'static str, new_only: bool) -> Vec<Option<&'static str>> {
+    if new_only {
+        return keys
+            .split('|')
+            .rfind(|key| !key.is_empty())
+            .map(|key| vec![Some(key)])
+            .unwrap_or_else(|| vec![None]);
+    }
+    keys.split('|').map(Some).collect()
 }
 
 /// Try each `Update`'s own Tauri verification context until the downloaded
@@ -649,6 +668,19 @@ mod tests {
     use crate::app_state::ActivityReservationError;
     #[cfg(not(feature = "tauri-update-fixture"))]
     use crate::ui_events::UpdateChannel;
+
+    #[cfg(feature = "tauri-update-fixture")]
+    #[test]
+    fn fixture_new_only_mode_selects_only_the_last_compiled_root() {
+        assert_eq!(
+            super::fixture_public_keys("old-root|new-root", true),
+            vec![Some("new-root")]
+        );
+        assert_eq!(
+            super::fixture_public_keys("old-root|new-root", false),
+            vec![Some("old-root"), Some("new-root")]
+        );
+    }
 
     #[cfg(not(feature = "tauri-update-fixture"))]
     #[test]

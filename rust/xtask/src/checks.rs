@@ -453,7 +453,7 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
         "V4_QUALIFICATION_EVIDENCE.json",
         "RELEASE_REQUIRED",
         "SUPPLY_CHAIN_REQUIRED",
-        "needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged, site]",
+        "needs: [changes, static, release_contract, supply_chain, validate, candidate, updater_e2e, packaged, site]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -1525,6 +1525,201 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
 }
 
 fn packaged_ci_contract_source(source: &str) -> Result<()> {
+    if source.replace("\r\n", "\n").contains("\n  candidate:\n") {
+        return packaged_ci_build_once_contract_source(source);
+    }
+    packaged_ci_contract_source_legacy(source)
+}
+
+fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
+    let normalized = source.replace("\r\n", "\n");
+    if normalized.matches("actions/attest@").count() != 0
+        || normalized.contains("id-token: write")
+        || normalized.contains("attestations: write")
+        || normalized.contains("artifact-metadata: write")
+    {
+        return Err("ordinary CI must not create or verify GitHub attestations or request attestation permissions".into());
+    }
+
+    let candidate_start = normalized
+        .find("  candidate:\n")
+        .ok_or("CI workflow is missing the current-candidate producer job")?;
+    let candidate_end = normalized[candidate_start..]
+        .find("\n  updater_e2e:\n")
+        .map(|offset| candidate_start + offset)
+        .ok_or("current-candidate producer must precede the updater consumer")?;
+    let candidate = &normalized[candidate_start..candidate_end];
+    for marker in [
+        "name: Build current Tauri candidate",
+        "needs: changes",
+        "if: needs.changes.outputs.package_required == 'true' || needs.changes.outputs.updater_required == 'true'",
+        "bun run build",
+        "bun run tauri build --ci --config",
+        "--profile dist",
+        "scripts/ci_validate_candidate.ps1",
+        "-Mode Create",
+        "-BundleDir",
+        "-PublicKeyPath",
+        "-OutputRoot",
+        "-SourceSha",
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "path: ${{ runner.temp }}/sky-auto-player-current-candidate",
+    ] {
+        if !candidate.contains(marker) {
+            return Err(format!(
+                "current-candidate producer is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let cleanup_position = candidate
+        .find("Remove-Item -LiteralPath $keyPath, \"$keyPath.pub\", $configPath")
+        .ok_or("current-candidate producer must delete its private key and build config")?;
+    let upload_position = candidate
+        .find("actions/upload-artifact@")
+        .ok_or("current-candidate producer must upload one workflow artifact")?;
+    if cleanup_position >= upload_position {
+        return Err("current-candidate private key cleanup must precede artifact upload".into());
+    }
+
+    let updater_start = candidate_end;
+    let updater_end = normalized[updater_start..]
+        .find("\n  packaged:\n")
+        .map(|offset| updater_start + offset)
+        .ok_or("CI workflow updater consumer must precede the packaged consumer")?;
+    let updater = &normalized[updater_start..updater_end];
+    for marker in [
+        "name: Updater fixture qualification",
+        "needs: [changes, static, candidate]",
+        "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+        "scripts/ci_validate_candidate.ps1",
+        "-Mode Validate",
+        "-CandidateInstallerPath",
+        "-CandidateSignaturePath",
+        "-CandidateVersion",
+        "-CandidatePublicKeyPath",
+        "scripts/ci_tauri_update_e2e.ps1",
+    ] {
+        if !updater.contains(marker) {
+            return Err(
+                format!("updater consumer is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    if updater.contains("bun run tauri build") {
+        return Err("updater consumer must not build a current candidate".into());
+    }
+
+    let package_start = updater_end;
+    let package_end = normalized[package_start..]
+        .find("\n  site:\n")
+        .map(|offset| package_start + offset)
+        .ok_or("CI workflow packaged consumer must precede the site job")?;
+    let packaged = &normalized[package_start..package_end];
+    for marker in [
+        "name: Packaged v4 Tauri NSIS qualification",
+        "needs: [changes, static, candidate]",
+        "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+        "scripts/ci_validate_candidate.ps1",
+        "-Mode Validate",
+        "cargo xtask verify-tauri-bundle",
+        "cargo xtask sbom generate",
+        "cargo xtask sbom verify",
+        "-Mode unsigned-zero-budget",
+        "current-user install, launch, and uninstall",
+        "cargo xtask builtin-catalog verify-installed",
+        "installer_sha256",
+        "updater_signature_sha256",
+        "updater_public_key_sha256",
+        "actions/upload-artifact@",
+    ] {
+        if !packaged.contains(marker) {
+            return Err(
+                format!("packaged consumer is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    for forbidden in [
+        "bun run tauri build",
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "scripts/test_v4_authenticode_integrity.ps1",
+        "scripts/test_v4_production_signing_contract.ps1",
+        "actions/attest@",
+        "id-token: write",
+        "attestations: write",
+        "name: Resolve GitHub CLI for artifact attestation verification",
+    ] {
+        if packaged.contains(forbidden) {
+            return Err(format!(
+                "packaged consumer contains forbidden producer/attestation work: {forbidden}"
+            )
+            .into());
+        }
+    }
+
+    let validate_position = packaged
+        .find("name: Validate exact current candidate contract")
+        .ok_or("packaged consumer must validate candidate.json before qualification")?;
+    let cache_position = packaged
+        .find("name: Rust cache")
+        .ok_or("packaged consumer must restore Rust cache before staging")?;
+    let stage_position = packaged
+        .find("name: Stage and re-hash exact current candidate after Rust cache restore")
+        .ok_or("packaged consumer must stage the candidate after Rust cache restore")?;
+    if validate_position >= cache_position || stage_position <= cache_position {
+        return Err(
+            "packaged candidate validation/staging order does not preserve the restored target tree"
+                .into(),
+        );
+    }
+    for marker in [
+        "Get-FileHash -LiteralPath $stagedInstaller -Algorithm SHA256",
+        "Get-FileHash -LiteralPath $stagedSignature -Algorithm SHA256",
+        "Get-FileHash -LiteralPath $env:SKY_CANDIDATE_PUBLIC_KEY -Algorithm SHA256",
+        "Staged candidate hashes do not match the validated candidate contract",
+    ] {
+        if !packaged.contains(marker) {
+            return Err(format!(
+                "packaged consumer is missing post-cache staging hash verification: {marker}"
+            )
+            .into());
+        }
+    }
+
+    for marker in [
+        "Build bounded unsigned Authenticode PE fixture",
+        "rustc --edition 2021 --target x86_64-pc-windows-msvc",
+        "Get-AuthenticodeSignature",
+        "SKY_AUTHENTICODE_FIXTURE",
+        "Run Authenticode tamper regression on controlled unsigned PE fixture",
+        "scripts/test_v4_authenticode_integrity.ps1",
+        "scripts/test_v4_production_signing_contract.ps1",
+        "scripts/setup_v4_test_signing.ps1",
+        "scripts/cleanup_v4_test_signing.ps1",
+        "needs: [changes, static, release_contract, supply_chain, validate, candidate, updater_e2e, packaged, site]",
+        "CANDIDATE_REQUIRED",
+        "CANDIDATE_RESULT",
+        "name: Sky Auto Player — required CI gate",
+    ] {
+        if !normalized.contains(marker) {
+            return Err(format!(
+                "CI build-once control-plane contract is missing its marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in ["SystemRoot", "notepad.exe"] {
+        if normalized.contains(forbidden) {
+            return Err(format!(
+                "release contract Authenticode fixture must not depend on a system PE: {forbidden}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn packaged_ci_contract_source_legacy(source: &str) -> Result<()> {
     let normalized = source.replace("\r\n", "\n");
     let package_needs = "needs: [changes, static]";
     let fixture_start = normalized
@@ -1748,6 +1943,29 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
     let path = root.join(".github/workflows/ci.yml");
     packaged_ci_contract_source(&fs::read_to_string(&path)?)
         .map_err(|error| format!("{}: {error}", path.display()))?;
+    let validator = fs::read_to_string(root.join("scripts/ci_validate_candidate.ps1"))?;
+    for marker in [
+        "schema_version",
+        "source_sha",
+        "installer_sha256",
+        "updater_signature_sha256",
+        "updater_public_key_sha256",
+        "Get-FileHash",
+        "updater-public-key.pub",
+        "PRIVATE KEY",
+        "candidate artifact must contain exactly four files",
+    ] {
+        if !validator.contains(marker) {
+            return Err(format!(
+                "current-candidate validator is missing its fail-closed marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let validator_test = root.join("scripts/test_ci_validate_candidate.ps1");
+    if !validator_test.exists() {
+        return Err("current-candidate validator self-test is missing".into());
+    }
     println!("[xtask] canonical v4 packaged CI Tauri contract: PASS");
     Ok(())
 }
@@ -1825,7 +2043,7 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "name: Website validation",
         "if: needs.changes.outputs.site_required == 'true'",
         "name: Sky Auto Player — required CI gate",
-        "needs: [changes, static, release_contract, supply_chain, validate, updater_e2e, packaged, site]",
+        "needs: [changes, static, release_contract, supply_chain, validate, candidate, updater_e2e, packaged, site]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -2019,14 +2237,40 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "TimeoutSeconds 30",
         "SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS",
         "Packaged Tauri updater rotation",
+        "scripts/ci_validate_candidate.ps1",
+        "CandidateInstallerPath",
+        "CandidateSignaturePath",
+        "CandidateVersion",
+        "CandidatePublicKeyPath",
         "cargo xtask sbom generate",
         "cargo xtask sbom verify",
         "workflow_dispatch:",
-        "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
-        "Verify exact GitHub artifact attestations",
     ] {
         if !ci.contains(marker) {
             return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
+        }
+    }
+    if ci.contains("actions/attest@")
+        || ci.contains("id-token: write")
+        || ci.contains("attestations: write")
+    {
+        return Err(
+            "ordinary CI must not retain artifact attestation creation or permissions".into(),
+        );
+    }
+    for marker in [
+        "#[cfg(feature = \"tauri-update-fixture\")]",
+        "FIXTURE_NEW_ONLY_ARG",
+        "fixture_new_only_requested",
+        "fixture_public_keys",
+        "rfind(|key| !key.is_empty())",
+        "fixture_new_only_mode_selects_only_the_last_compiled_root",
+    ] {
+        if !native.contains(marker) {
+            return Err(format!(
+                "fixture-only updater new-root runtime seam is missing its required marker: {marker}"
+            )
+            .into());
         }
     }
     let updater_fixture = fs::read_to_string(root.join("scripts/ci_tauri_update_e2e_core.ps1"))?;
@@ -2047,6 +2291,17 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "Clear-FixtureResourceStaging",
         "source_tree_restore",
         "cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot",
+        "candidateInstallerSha256",
+        "oldSigningInstallerSha256",
+        "Get-HigherSemVer",
+        "preservedBridgeRoot",
+        "--selftest-update-fixture-new-only",
+        "negativeRequestStart",
+        "negativeManifestRequests",
+        "negativeCandidateRequests",
+        "n_to_n_plus_1_installer_sha256",
+        "old-root",
+        "old_root_rejection_copy_matches",
     ] {
         if !updater_fixture.contains(marker) {
             return Err(format!(
@@ -4074,6 +4329,12 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
             "        env:\n          app-id:",
         );
         assert!(validate_metadata_app_token_scope(&private_key_in_env).is_err());
+    }
+
+    #[test]
+    fn packaged_ci_build_once_contract_accepts_locked_workflow() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        packaged_ci_contract(&root).expect("locked build-once CI contract must pass");
     }
 
     #[test]

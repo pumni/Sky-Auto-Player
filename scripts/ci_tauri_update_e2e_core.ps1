@@ -37,6 +37,7 @@ $candidateTargetRoot = Join-Path $fixtureTargetRoot 'candidate'
 $bridgeBundleRoot = Join-Path $bridgeTargetRoot 'dist/bundle/nsis'
 $candidateBundleRoot = Join-Path $candidateTargetRoot 'dist/bundle/nsis'
 $installRoot = Join-Path $fixtureRoot 'installed'
+$preservedBridgeRoot = Join-Path $fixtureRoot 'preserved-bridge'
 $appDataRoot = Join-Path $fixtureRoot 'app-data'
 $userSongsRoot = Join-Path $appDataRoot 'songs'
 $userSongPath = Join-Path $userSongsRoot 'updater-preserved-user.json'
@@ -69,7 +70,16 @@ if ($providedCandidate) {
   }
 }
 $candidateVersion = if ($providedCandidate) { $CandidateVersion } else { '4.0.0-alpha.2' }
-$cutoverVersion = '4.0.0-alpha.3'
+
+function Get-HigherSemVer([string]$Version) {
+  $match = [regex]::Match($Version, '^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
+  if (-not $match.Success) { throw "Cannot derive a higher synthetic updater version from $Version" }
+  $patch = [int64]$match.Groups[3].Value
+  if ($patch -eq [int64]::MaxValue) { throw 'Synthetic updater version patch component overflowed' }
+  return "$($match.Groups[1].Value).$($match.Groups[2].Value).$($patch + 1)"
+}
+
+$cutoverVersion = Get-HigherSemVer $candidateVersion
 $requestLogPath = Join-Path $fixtureRoot 'http-requests.jsonl'
 $httpEvidencePath = if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
   Join-Path $fixtureRoot 'fixture-http-evidence.json'
@@ -443,21 +453,28 @@ try {
   $signatureText = ([IO.File]::ReadAllText($candidateSignature.FullName)).Trim()
   if ([string]::IsNullOrWhiteSpace($signatureText)) { throw 'Candidate updater signature is empty' }
 
-  if (-not $providedCandidate) {
-    # Sign the exact candidate bytes with the old root only. This detached
-    # signature is used after cutover to prove the new-root-only client rejects
-    # an old-root artifact through its real Update::download path.
-    Copy-Item -LiteralPath $candidateArchive.FullName -Destination $candidateForOldSigningPath -Force
-    Push-Location $desktopRoot
-    try {
-      bun run tauri signer sign --private-key-path $oldKeyPath --password '' $candidateForOldSigningPath *> $null
-    } finally {
-      Pop-Location
-    }
-    Move-Item -LiteralPath "$candidateForOldSigningPath.sig" -Destination $oldSignaturePath -Force
-    $oldSignatureText = ([IO.File]::ReadAllText($oldSignaturePath)).Trim()
-    if ([string]::IsNullOrWhiteSpace($oldSignatureText)) { throw 'Old-root updater signature is empty' }
+  # Sign a disposable copy of the exact candidate bytes with the old root only.
+  # The copied bytes are hashed before and after signing so the old-root
+  # rejection path cannot quietly introduce a second current candidate.
+  $candidateInstallerSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($candidateArchive.FullName))
+  Copy-Item -LiteralPath $candidateArchive.FullName -Destination $candidateForOldSigningPath -Force
+  $oldSigningInstallerSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($candidateForOldSigningPath))
+  if ($oldSigningInstallerSha256 -ne $candidateInstallerSha256) {
+    throw "Old-root rejection copy changed the current candidate bytes: candidate=$candidateInstallerSha256 old-signing-copy=$oldSigningInstallerSha256"
   }
+  Push-Location $desktopRoot
+  try {
+    bun run tauri signer sign --private-key-path $oldKeyPath --password '' $candidateForOldSigningPath *> $null
+  } finally {
+    Pop-Location
+  }
+  $oldSigningInstallerSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($candidateForOldSigningPath))
+  if ($oldSigningInstallerSha256 -ne $candidateInstallerSha256) {
+    throw "Old-root signing changed the disposable installer bytes: candidate=$candidateInstallerSha256 old-signing-copy=$oldSigningInstallerSha256"
+  }
+  Move-Item -LiteralPath "$candidateForOldSigningPath.sig" -Destination $oldSignaturePath -Force
+  $oldSignatureText = ([IO.File]::ReadAllText($oldSignaturePath)).Trim()
+  if ([string]::IsNullOrWhiteSpace($oldSignatureText)) { throw 'Old-root updater signature is empty' }
 
   $newManifest = [ordered]@{
     version = $candidateVersion
@@ -474,20 +491,18 @@ try {
     }
   }
   $newManifest | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $manifestPath -Encoding utf8
-  if (-not $providedCandidate) {
-    $oldManifest = [ordered]@{
-      version = $cutoverVersion
-      notes = 'Old-root rejection candidate.'
-      pub_date = '2026-09-04T00:00:00Z'
-      platforms = [ordered]@{
-        'windows-x86_64' = [ordered]@{
-          signature = $oldSignatureText
-          url = "http://127.0.0.1:$port/candidate/update.exe"
-        }
+  $oldManifest = [ordered]@{
+    version = $cutoverVersion
+    notes = 'Old-root rejection candidate.'
+    pub_date = '2026-09-04T00:00:00Z'
+    platforms = [ordered]@{
+      'windows-x86_64' = [ordered]@{
+        signature = $oldSignatureText
+        url = "http://127.0.0.1:$port/candidate/update.exe"
       }
     }
-    $oldManifest | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $oldManifestPath -Encoding utf8
   }
+  $oldManifest | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $oldManifestPath -Encoding utf8
 
   $archivePath = $candidateArchive.FullName
   $serverJob = Start-Job -ScriptBlock {
@@ -582,9 +597,16 @@ try {
     http = $manifestHttp
   }
   $candidateBytes = [IO.File]::ReadAllBytes($candidateArchive.FullName)
+  if ((Get-ByteSha256 $candidateBytes) -ne $candidateInstallerSha256) {
+    throw 'Candidate bytes changed before loopback qualification'
+  }
   $candidateResponse = Invoke-LoopbackHttpBytes $expectedCandidateUrl
   $candidateContract = [ordered]@{
     status = 'PASS'
+    installer_sha256 = $candidateInstallerSha256
+    n_to_n_plus_1_installer_sha256 = $candidateInstallerSha256
+    old_root_rejection_copy_sha256 = $oldSigningInstallerSha256
+    old_root_rejection_copy_matches = ($candidateInstallerSha256 -eq $oldSigningInstallerSha256)
     http = Assert-ExactHttpResponse $candidateResponse $candidateBytes 'application/octet-stream' 'fixture candidate artifact'
   }
   Write-Host "Fixture HTTP manifest contract: PASS (status=200; content-type=application/json; content-length=$($manifestHttp.content_length); body-sha256=$($manifestHttp.body_sha256))"
@@ -604,6 +626,19 @@ try {
     $catalogBridgeEvidence.selected_content_sha256 -ne $catalogSentinelSongSha -or
     $catalogBridgeEvidence.selected_manifest_sha256 -ne $catalogSentinelSongSha) {
     throw 'Bridge installed built-in catalog did not contain the expected N sentinel bytes and hash'
+  }
+  $bridgeAppSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($appPath))
+  New-Item -ItemType Directory -Path $preservedBridgeRoot -Force | Out-Null
+  foreach ($item in @(Get-ChildItem -LiteralPath $installRoot -Force)) {
+    Copy-Item -LiteralPath $item.FullName -Destination $preservedBridgeRoot -Recurse -Force
+  }
+  $preservedBridgeAppPath = Join-Path $preservedBridgeRoot 'sky_desktop_shell.exe'
+  if (-not (Test-Path -LiteralPath $preservedBridgeAppPath -PathType Leaf)) {
+    throw "Preserved updater fixture bridge binary is missing: $preservedBridgeAppPath"
+  }
+  $preservedBridgeAppSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($preservedBridgeAppPath))
+  if ($preservedBridgeAppSha256 -ne $bridgeAppSha256) {
+    throw "Preserved updater fixture bridge bytes changed: original=$bridgeAppSha256 preserved=$preservedBridgeAppSha256"
   }
 
   $userSongBytes = [Text.Encoding]::UTF8.GetBytes('{"name":"Updater preserved user","songNotes":[{"time":0,"key":"1Key0"}]}')
@@ -690,24 +725,54 @@ try {
   Write-Host "Updater N-to-N+1 resource replacement: PASS (user_sha256=$userSongShaAfter; built_in_manifest_sha256_before=$($catalogBridgeEvidence.manifest_sha256); built_in_manifest_sha256_after=$candidateBuiltinManifestSha; selected_id=$($catalogCandidateEvidence.selected_id); selected_content_sha256_before=$($catalogBridgeEvidence.selected_content_sha256); selected_content_sha256_after=$($catalogCandidateEvidence.selected_content_sha256); source_tree_restore=$catalogSourceRestoreStatus)"
   Write-Host "Updater N-to-N+1 preservation: PASS (user_sha256=$userSongShaAfter; built_in_count=$candidateBuiltinCount; built_in_manifest_sha256=$candidateBuiltinManifestSha)"
 
+  if ([string]$candidateContract.http.body_sha256 -cne $candidateInstallerSha256) {
+    throw "N-to-N+1 served candidate SHA differs from the candidate installer SHA: served=$($candidateContract.http.body_sha256) candidate=$candidateInstallerSha256"
+  }
+  $negativeRequestStart = @(Get-Content -LiteralPath $requestLogPath -ErrorAction Stop).Count
+  # Switch only the server manifest. The preserved bridge is the same
+  # tauri-update-fixture binary that accepted the candidate with old+new roots;
+  # its fixture-only runtime seam now selects only the last (new) root.
+  Copy-Item -LiteralPath $oldManifestPath -Destination $manifestPath -Force
+  $cutoverProcess = Start-Process -FilePath $preservedBridgeAppPath -WorkingDirectory $preservedBridgeRoot -ArgumentList @(
+    '--selftest-desktop-update',
+    '--selftest-update-marker', $cutoverMarkerPath,
+    '--selftest-update-fixture-new-only'
+  ) -WindowStyle Hidden -PassThru
+  Wait-Process -Id $cutoverProcess.Id -Timeout 180
+  Wait-ForPath -Path $cutoverMarkerPath
+  $cutoverResult = ([IO.File]::ReadAllText($cutoverMarkerPath)).Trim()
+  if (-not $cutoverResult.StartsWith('update-failed:')) {
+    throw "Cutover client accepted an old-root artifact: $cutoverResult"
+  }
+  $negativeRequests = @(
+    Get-Content -LiteralPath $requestLogPath -ErrorAction Stop |
+      Select-Object -Skip $negativeRequestStart |
+      Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+      ForEach-Object { $_ | ConvertFrom-Json }
+  )
+  $negativeManifestRequests = @($negativeRequests | Where-Object { [string]$_.path -eq '/stable' })
+  $negativeCandidateRequests = @($negativeRequests | Where-Object { [string]$_.path -eq '/candidate/update.exe' })
+  if ($negativeManifestRequests.Count -lt 1 -or $negativeCandidateRequests.Count -lt 1) {
+    throw "Old-root rejection did not reach both fixture manifest and candidate download paths: manifest=$($negativeManifestRequests.Count) candidate=$($negativeCandidateRequests.Count)"
+  }
+  foreach ($request in $negativeCandidateRequests) {
+    if ([string]$request.body_sha256 -cne $candidateInstallerSha256) {
+      throw "Old-root rejection served a candidate SHA different from N-to-N+1: served=$($request.body_sha256) candidate=$candidateInstallerSha256"
+    }
+  }
+  $candidateContract['old_root_rejection'] = [ordered]@{
+    status = 'PASS'
+    manifest_requests = $negativeManifestRequests.Count
+    candidate_requests = $negativeCandidateRequests.Count
+    served_candidate_sha256 = [string]$negativeCandidateRequests[0].body_sha256
+    matches_n_to_n_plus_1 = ([string]$negativeCandidateRequests[0].body_sha256 -ceq [string]$candidateContract.n_to_n_plus_1_installer_sha256)
+    update_result = $cutoverResult
+  }
   if ($providedCandidate) {
-    "Packaged Tauri updater draft qualification: PASS (throwaway previous-v4 bridge applied the exact downloaded candidate $candidateVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
+    "Packaged Tauri updater draft qualification: PASS (preserved fixture bridge applied exact downloaded candidate $candidateVersion; N-to-N+1/old-root-rejection installer sha256=$candidateInstallerSha256; old-root manifest requests=$($negativeManifestRequests.Count); old-root candidate requests=$($negativeCandidateRequests.Count); synthetic higher version $cutoverVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   } else {
-    # Switch only the server manifest. The restarted candidate is the cutover
-    # binary compiled with [new]; it must reject the old-only detached signature.
-    Copy-Item -LiteralPath $oldManifestPath -Destination $manifestPath -Force
-    $cutoverProcess = Start-Process -FilePath $appPath -ArgumentList @(
-      '--selftest-desktop-update',
-      '--selftest-update-marker', $cutoverMarkerPath
-    ) -WindowStyle Hidden -PassThru
-    Wait-Process -Id $cutoverProcess.Id -Timeout 180
-    Wait-ForPath -Path $cutoverMarkerPath
-    $cutoverResult = ([IO.File]::ReadAllText($cutoverMarkerPath)).Trim()
-    if (-not $cutoverResult.StartsWith('update-failed:')) {
-      throw "Cutover client accepted an old-root artifact: $cutoverResult"
-    }
-    "Packaged Tauri updater rotation: PASS (bridge [old,new] applied new-root-only $candidateVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; cutover [new] rejected old-root-only $cutoverVersion; safety phases=$($requiredPhases -join ', '))" |
+    "Packaged Tauri updater rotation: PASS (preserved fixture bridge applied new-root-only $candidateVersion; N-to-N+1/old-root-rejection installer sha256=$candidateInstallerSha256; old-root manifest requests=$($negativeManifestRequests.Count); old-root candidate requests=$($negativeCandidateRequests.Count); synthetic higher version $cutoverVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   }
   $fixtureStatus = 'PASS'
