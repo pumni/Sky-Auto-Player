@@ -453,7 +453,7 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
         "V4_QUALIFICATION_EVIDENCE.json",
         "RELEASE_REQUIRED",
         "SUPPLY_CHAIN_REQUIRED",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_e2e, packaged, site]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -1712,7 +1712,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "scripts/test_v4_production_signing_contract.ps1",
         "scripts/setup_v4_test_signing.ps1",
         "scripts/cleanup_v4_test_signing.ps1",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_e2e, packaged, site]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
         "CANDIDATE_REQUIRED",
         "CANDIDATE_RESULT",
         "name: Sky Auto Player — required CI gate",
@@ -1939,12 +1939,14 @@ fn packaged_ci_contract_source_legacy(source: &str) -> Result<()> {
     }
 
     for marker in [
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_e2e, packaged, site]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
         "UPDATER_REQUIRED",
         "UPDATER_BRIDGE_REQUIRED",
+        "UPDATER_CONTRACT_REQUIRED",
         "DESKTOP_WEB_REQUIRED",
         "RELEASE_REQUIRED",
         "SUPPLY_CHAIN_REQUIRED",
+        "UPDATER_CONTRACT_RESULT",
         "UPDATER_E2E_RESULT",
     ] {
         if !normalized.contains(marker) {
@@ -2082,7 +2084,7 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "name: Website validation",
         "if: needs.changes.outputs.site_required == 'true'",
         "name: Sky Auto Player — required CI gate",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_e2e, packaged, site]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -2108,12 +2110,13 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     let static_start = ci
         .find("\n  static:\n")
         .ok_or("CI is missing the static job boundary")?;
-    if bridge_start >= static_start {
-        return Err(
-            "updater_bridge must be declared directly after changes and before static".into(),
-        );
+    let updater_contract_start = ci
+        .find("\n  updater_contract:\n")
+        .ok_or("CI is missing the updater_contract job")?;
+    if bridge_start >= updater_contract_start || updater_contract_start >= static_start {
+        return Err("updater_bridge and updater_contract must fan out before static".into());
     }
-    let bridge = &ci[bridge_start..static_start];
+    let bridge = &ci[bridge_start..updater_contract_start];
     for marker in [
         "name: Build updater bridge fixture",
         "needs: changes",
@@ -2150,6 +2153,45 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
                 .into(),
         );
     }
+    let updater_contract = &ci[updater_contract_start..static_start];
+    for marker in [
+        "name: Updater key-rotation contract",
+        "needs: changes",
+        "if: needs.changes.outputs.updater_required == 'true'",
+        "runs-on: windows-latest",
+        "rustup toolchain install 1.98.0",
+        "bun-version: 1.4.0",
+        "bun install --frozen-lockfile",
+        "scripts/test_v4_updater_key_rotation.ps1",
+        "contents: read",
+    ] {
+        if !updater_contract.contains(marker) {
+            return Err(
+                format!("updater_contract is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    if updater_contract
+        .lines()
+        .filter(|line| line.contains("needs.changes.outputs."))
+        .count()
+        != 1
+        || updater_contract.contains("actions/upload-artifact@")
+        || updater_contract.contains("attestations:")
+        || updater_contract.contains("id-token:")
+    {
+        return Err(
+            "updater_contract must be keyed only by updater_required and must not upload or attest"
+                .into(),
+        );
+    }
+    if updater_contract
+        .matches("scripts/test_v4_updater_key_rotation.ps1")
+        .count()
+        != 1
+    {
+        return Err("updater_contract must run key rotation exactly once".into());
+    }
     let candidate_start = ci
         .find("\n  candidate:\n")
         .ok_or("CI is missing the candidate producer job")?;
@@ -2173,6 +2215,9 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     let updater = &ci[updater_start..updater_end];
     for marker in [
         "needs: [changes, static, candidate, updater_bridge]",
+        "Download current candidate from this workflow run",
+        "Validate and bind exact current candidate",
+        "-CandidateInstallerPath $env:SKY_CANDIDATE_INSTALLER",
         "Download updater bridge from this workflow run",
         "scripts/ci_validate_bridge.ps1",
         "-BridgeRootPath $env:SKY_BRIDGE_ROOT",
@@ -2192,6 +2237,25 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         return Err(
             "provided updater consumer must not build a bridge, candidate, or frontend".into(),
         );
+    }
+    if updater.contains("scripts/test_v4_updater_key_rotation.ps1")
+        || updater.contains("updater_contract")
+    {
+        return Err(
+            "updater_e2e must retain runtime qualification without depending on updater_contract"
+                .into(),
+        );
+    }
+    let packaged_start = updater_end;
+    let status_boundary = ci
+        .find("\n  status:\n")
+        .ok_or("CI is missing the required aggregate gate")?;
+    let packaged = &ci[packaged_start..status_boundary];
+    if packaged.contains("updater_contract") {
+        return Err("packaged must not depend on updater_contract".into());
+    }
+    if candidate.contains("updater_contract") || bridge.contains("updater_contract") {
+        return Err("candidate and updater_bridge must not depend on updater_contract".into());
     }
     let validate_start = ci
         .find("\n  validate:\n")
@@ -2240,9 +2304,12 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     for marker in [
         "UPDATER_BRIDGE_REQUIRED",
         "UPDATER_BRIDGE_RESULT",
+        "UPDATER_CONTRACT_REQUIRED",
+        "UPDATER_CONTRACT_RESULT",
         "DESKTOP_WEB_REQUIRED",
         "DESKTOP_WEB_RESULT",
         "if [[ \"$UPDATER_BRIDGE_REQUIRED\" == \"true\" ]]",
+        "if [[ \"$UPDATER_CONTRACT_REQUIRED\" == \"true\" ]]",
         "if [[ \"$DESKTOP_WEB_REQUIRED\" == \"true\" ]]",
         "Sky Auto Player — required CI gate",
     ] {
@@ -4624,6 +4691,15 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
       - run: scripts/ci_validate_candidate.ps1 -Mode Create -BundleDir $bundleDir -PublicKeyPath $publicKeyPath -OutputRoot $candidateRoot -SourceSha $env:SKY_CI_SOURCE_SHA
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         path: ${{ runner.temp }}/sky-auto-player-current-candidate
+  updater_contract:
+    name: Updater key-rotation contract
+    needs: changes
+    if: needs.changes.outputs.updater_required == 'true'
+    runs-on: windows-latest
+    steps:
+      - run: rustup toolchain install 1.98.0
+      - run: bun install --frozen-lockfile
+      - run: scripts/test_v4_updater_key_rotation.ps1
   updater_e2e:
     name: Updater fixture qualification
     needs: [changes, static, candidate, updater_bridge]
@@ -4685,8 +4761,8 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
     # scripts/test_v4_production_signing_contract.ps1
     # scripts/setup_v4_test_signing.ps1
     # scripts/cleanup_v4_test_signing.ps1
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_e2e, packaged, site]
-    env: { UPDATER_REQUIRED: true, RELEASE_REQUIRED: false, SUPPLY_CHAIN_REQUIRED: false, UPDATER_BRIDGE_REQUIRED: true, DESKTOP_WEB_REQUIRED: true, CANDIDATE_REQUIRED: true, CANDIDATE_RESULT: success, UPDATER_E2E_RESULT: success }
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
+    env: { UPDATER_REQUIRED: true, RELEASE_REQUIRED: false, SUPPLY_CHAIN_REQUIRED: false, UPDATER_BRIDGE_REQUIRED: true, UPDATER_CONTRACT_REQUIRED: true, DESKTOP_WEB_REQUIRED: true, CANDIDATE_REQUIRED: true, CANDIDATE_RESULT: success, UPDATER_CONTRACT_RESULT: success, UPDATER_E2E_RESULT: success }
         "#;
         assert!(packaged_ci_contract_source(source).is_ok());
         let crlf_source = source.replace('\n', "\r\n");

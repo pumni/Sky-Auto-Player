@@ -354,3 +354,7 @@ On completion report:
 ## Out of scope follow-up
 
 After PR3 is merged, use measured post-PR3 timings before considering any PR4. Possible later work such as cache-key redesign, release-contract test decomposition, or candidate build optimization is explicitly not part of this PR.
+
+## Round 2 measured note
+
+Run `34511947829` showed that the independent non-production updater key-rotation contract consumed about 137 seconds inside `updater_e2e`, while the provided-bridge runtime qualification itself took about 43 seconds. This round extracts that contract into the parallel `updater_contract` lane keyed only by `updater_required`; updater runtime qualification and its coverage remain unchanged.

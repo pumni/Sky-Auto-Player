@@ -192,6 +192,51 @@ jobs:
         if: always()
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job updater-bridge -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
 
+  updater_contract:
+    name: Updater key-rotation contract
+    needs: changes
+    if: needs.changes.outputs.updater_required == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.0
+
+    steps:
+      - name: Start CI timing
+        run: pwsh scripts/ci_job_timing.ps1 -Mode start -Job updater-contract
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Rust — install pinned stable toolchain for updater contract
+        run: rustup toolchain install 1.98.0 --profile minimal --target x86_64-pc-windows-msvc
+
+      - name: Set up Bun for updater contract
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Fail fast on updater contract dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,bunx
+
+      - name: Install pinned desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Exercise non-production updater key rotation fixture
+        run: pwsh scripts/test_v4_updater_key_rotation.ps1
+
+      - name: Report CI timing
+        if: always()
+        run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job updater-contract
+
   static:
     name: Static and security gates
     needs: changes
@@ -882,9 +927,6 @@ jobs:
         timeout-minutes: 2
         run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
 
-      - name: Exercise non-production updater key rotation fixture
-        run: pwsh scripts/test_v4_updater_key_rotation.ps1
-
       - name: Install provided bridge and qualify packaged Tauri updater rotation
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
@@ -1214,7 +1256,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_e2e, packaged, site]
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -1239,6 +1281,7 @@ jobs:
           STATIC_REQUIRED: ${{ needs.changes.outputs.static_required }}
           CANDIDATE_REQUIRED: ${{ needs.changes.outputs.package_required == 'true' || needs.changes.outputs.updater_required == 'true' }}
           UPDATER_BRIDGE_REQUIRED: ${{ needs.changes.outputs.updater_required }}
+          UPDATER_CONTRACT_REQUIRED: ${{ needs.changes.outputs.updater_required }}
           DESKTOP_WEB_REQUIRED: ${{ needs.changes.outputs.desktop_required }}
           STATIC_RESULT: ${{ needs.static.result }}
           RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
@@ -1246,6 +1289,7 @@ jobs:
           VALIDATE_RESULT: ${{ needs.validate.result }}
           CANDIDATE_RESULT: ${{ needs.candidate.result }}
           UPDATER_BRIDGE_RESULT: ${{ needs.updater_bridge.result }}
+          UPDATER_CONTRACT_RESULT: ${{ needs.updater_contract.result }}
           UPDATER_E2E_RESULT: ${{ needs.updater_e2e.result }}
           PACKAGED_RESULT: ${{ needs.packaged.result }}
           DESKTOP_WEB_RESULT: ${{ needs.desktop_web.result }}
@@ -1272,6 +1316,7 @@ jobs:
           if [[ "$DESKTOP_WEB_REQUIRED" == "true" ]]; then [[ "$DESKTOP_WEB_RESULT" == "success" ]]; else [[ "$DESKTOP_WEB_RESULT" == "skipped" ]]; fi
           if [[ "$CANDIDATE_REQUIRED" == "true" ]]; then [[ "$CANDIDATE_RESULT" == "success" ]]; else [[ "$CANDIDATE_RESULT" == "skipped" ]]; fi
           if [[ "$UPDATER_BRIDGE_REQUIRED" == "true" ]]; then [[ "$UPDATER_BRIDGE_RESULT" == "success" ]]; else [[ "$UPDATER_BRIDGE_RESULT" == "skipped" ]]; fi
+          if [[ "$UPDATER_CONTRACT_REQUIRED" == "true" ]]; then [[ "$UPDATER_CONTRACT_RESULT" == "success" ]]; else [[ "$UPDATER_CONTRACT_RESULT" == "skipped" ]]; fi
           if [[ "$UPDATER_REQUIRED" == "true" ]]; then [[ "$UPDATER_E2E_RESULT" == "success" ]]; else [[ "$UPDATER_E2E_RESULT" == "skipped" ]]; fi
           if [[ "$PACKAGE_REQUIRED" == "true" ]]; then
             [[ "$PACKAGED_RESULT" == "success" ]]
