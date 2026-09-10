@@ -199,6 +199,7 @@ jobs:
         run: pwsh scripts/setup_v4_test_signing.ps1 -EnvFile $env:GITHUB_ENV -TimeoutSeconds 30
 
       - name: Build bounded unsigned Authenticode PE fixture
+        shell: pwsh
         env:
           RUSTUP_TOOLCHAIN: 1.98.0
         run: |

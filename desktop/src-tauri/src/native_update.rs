@@ -458,8 +458,7 @@ fn fixture_public_keys(keys: &'static str, new_only: bool) -> Vec<Option<&'stati
     if new_only {
         return keys
             .split('|')
-            .filter(|key| !key.is_empty())
-            .next_back()
+            .rfind(|key| !key.is_empty())
             .map(|key| vec![Some(key)])
             .unwrap_or_else(|| vec![None]);
     }

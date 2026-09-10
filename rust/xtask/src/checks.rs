@@ -2263,7 +2263,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "FIXTURE_NEW_ONLY_ARG",
         "fixture_new_only_requested",
         "fixture_public_keys",
-        "next_back()",
+        "rfind(|key| !key.is_empty())",
         "fixture_new_only_mode_selects_only_the_last_compiled_root",
     ] {
         if !native.contains(marker) {
