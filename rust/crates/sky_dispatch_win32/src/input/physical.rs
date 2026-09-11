@@ -4,6 +4,7 @@ use super::scan_code::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask};
 use crate::focus::foreground_window_matches;
 use sky_dispatch_core::model::MAX_KEYS;
+#[cfg(any(test, feature = "test-support"))]
 use smallvec::SmallVec;
 
 #[cfg(windows)]
@@ -67,6 +68,7 @@ pub(crate) fn map_instrument_virtual_keys(
     Some(virtual_keys)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstrumentPhysicalState {
     AllUp,
