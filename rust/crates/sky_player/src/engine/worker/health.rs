@@ -618,8 +618,10 @@ mod tests {
     fn fine_pre_call_bucket_saturates() {
         let mut timing = WorkerTimingState::create_test_timing();
         timing.pre_call_250us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(250);
-        let mut metrics = WorkerMetricsLocal::default();
-        metrics.pre_call_lt_250us = u64::MAX;
+        let mut metrics = WorkerMetricsLocal {
+            pre_call_lt_250us: u64::MAX,
+            ..WorkerMetricsLocal::default()
+        };
 
         record_sendinput_pre_call_lateness(
             QpcTicks::ZERO,

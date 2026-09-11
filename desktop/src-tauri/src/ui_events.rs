@@ -341,7 +341,7 @@ pub enum UiEvent {
     #[serde(rename = "diagnostics.snapshot")]
     DiagnosticsSnapshot {
         v: u64,
-        payload: DiagnosticsSnapshotDto,
+        payload: Box<DiagnosticsSnapshotDto>,
     },
     #[serde(rename = "calibration.progress")]
     CalibrationProgress {

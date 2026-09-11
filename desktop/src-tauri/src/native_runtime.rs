@@ -4130,7 +4130,7 @@ fn publish_diagnostics_snapshot_for_active(
             .map_err(|_| "native event hub lock poisoned".to_string())?
             .publish(UiEvent::DiagnosticsSnapshot {
                 v: crate::DESKTOP_PROTOCOL_VERSION,
-                payload,
+                payload: Box::new(payload),
             })
     })?;
     Ok(())
