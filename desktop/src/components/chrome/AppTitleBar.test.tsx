@@ -59,6 +59,18 @@ describe('AppTitleBar', () => {
       onResize: async () => () => undefined,
     };
 
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'current',
+          currentVersion: bootstrap.app_version,
+          availableVersion: null,
+          dialogOpen: false,
+        },
+      });
+    });
+
     render(<AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />);
     expect(screen.queryByRole('button', { name: /Update available:/ })).toBeNull();
 
@@ -67,7 +79,6 @@ describe('AppTitleBar', () => {
         update: {
           ...useStore.getState().update,
           state: 'available',
-          currentVersion: bootstrap.app_version,
           availableVersion: '4.0.2',
         },
       });
