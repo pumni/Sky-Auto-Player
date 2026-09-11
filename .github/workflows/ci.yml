@@ -654,6 +654,11 @@ jobs:
         working-directory: desktop
         run: bun run test:e2e
 
+      - name: Run production-bundle browser smoke
+        if: needs.changes.outputs.desktop_e2e_required == 'true'
+        working-directory: desktop
+        run: bun run test:e2e:bundle
+
       - name: Report CI timing
         if: always()
         run: |
