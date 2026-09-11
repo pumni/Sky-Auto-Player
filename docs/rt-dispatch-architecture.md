@@ -96,6 +96,16 @@ counter afterward. Sink/probe logs prove controlled Windows delivery and
 wrong-window safety only; they do not prove game receipt, audio latency, or the
 internal QPC timestamp chain.
 
+The `cleanup-full-release` scenario is the only acceptance scenario that claims
+fresh physical All-Up evidence. It authors one bounded Down chord across all 15
+logical slots, waits for all 15 sink KeyDown records after `startup_ready`, then
+requests normal `quit()` before the authored Up. Its pass evidence requires
+full-mask tracked cleanup (`attempted_mask = 0x7fff`, at least one attempt,
+successful release, no stuck mask, inconclusive verification, or transport
+anomaly) and exactly 15 matching sink KeyDown/KeyUp records. Canonical, W4, and
+focus-loss scenarios require their authored/logical and transport evidence only;
+a zero-mask terminal release result is not a fresh physical All-Up probe.
+
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch
 source metadata from that same packet view; deferred Up ownership may perform

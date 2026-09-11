@@ -10,7 +10,7 @@ use sky_dispatch_win32::focus::{
 #[cfg(test)]
 use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
 use sky_dispatch_win32::input::{
-    InstrumentKeyProfileSpec, PHYSICAL_INSTRUMENT_SCAN_CODES, PhysicalKey,
+    InstrumentKeyProfileSpec, FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, PhysicalKey,
 };
 use sky_dispatch_win32::mmcss::PriorityMode;
 use sky_player::adapter_support::compile_runtime_intents;
@@ -80,9 +80,6 @@ impl Scenario {
     }
     const fn needs_focus_probe(self) -> bool {
         matches!(self, Self::FocusLoss)
-    }
-    const fn cleanup_is_full(self) -> bool {
-        matches!(self, Self::CleanupFullRelease | Self::FocusLoss)
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,7 +370,7 @@ fn scenario_plan(scenario: Scenario) -> Result<ScenarioPlan, String> {
         match scenario {
             Scenario::CanonicalSingle | Scenario::W4Noncanonical => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 80_000, &[0])], (scenario == Scenario::W4Noncanonical).then_some(w4_profile_spec()), vec![0], vec![0], false),
             Scenario::CanonicalChord => (vec![action(0, ActionKind::Down, 50_000, &[0, 1]), action(1, ActionKind::Up, 90_000, &[0, 1])], None, vec![0, 1], vec![0, 1], false),
-            Scenario::CleanupFullRelease => (vec![action(0, ActionKind::Down, 50_000, &[0, 1, 2]), action(1, ActionKind::Up, 500_000, &[0, 1, 2])], None, vec![0, 1, 2], (0..MAX_KEYS).collect(), true),
+            Scenario::CleanupFullRelease => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 10_000_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
             Scenario::FocusLoss => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0]), action(2, ActionKind::Down, 1_000_000, &[1]), action(3, ActionKind::Up, 1_100_000, &[1])], None, vec![0], vec![0], false),
         };
     let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
@@ -548,8 +545,8 @@ fn reconcile_events(
     }
     Ok(())
 }
-fn cleanup_evidence_clean(released: bool, stuck_mask: u16, verification_inconclusive: bool, transport_anomaly: bool) -> bool {
-    released && stuck_mask == 0 && !verification_inconclusive && !transport_anomaly
+fn cleanup_evidence_clean(full_mask_required: bool, attempted_mask: u16, attempts: u8, released: bool, stuck_mask: u16, verification_inconclusive: bool, transport_anomaly: bool) -> bool {
+    released && stuck_mask == 0 && !verification_inconclusive && !transport_anomaly && (!full_mask_required || (attempted_mask == FULL_INSTRUMENT_MASK && attempts >= 1))
 }
 fn focus_evidence_clean(paused: bool, final_gate_focus_losses: u64, target_changes: u64, sink_events_clean: bool, probe_events_empty: bool) -> bool {
     paused && final_gate_focus_losses >= 1 && target_changes == 0 && sink_events_clean && probe_events_empty
@@ -608,7 +605,7 @@ fn wait_for_focus_pause(session: &NativeDispatchSession) -> bool {
     }
 }
 #[cfg(windows)]
-fn wait_for_sink_priming(path: &Path, cursor: LogCursor, ready: &ReadyRecord, expected_down: &[i32], expected_up: &[i32]) -> bool {
+fn wait_for_sink_events(path: &Path, cursor: LogCursor, ready: &ReadyRecord, expected_down: &[i32], expected_up: &[i32]) -> bool {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Ok(events) = read_log_window(path, cursor, ready, RECEIVE_ONLY_ROLE)
@@ -665,7 +662,7 @@ fn run_windows(args: RunArgs) -> i32 {
             let _ = session.join(Duration::from_secs(5));
             inconclusive!("production session did not reach startup_ready before focus challenge", json!({}));
         }
-        if !wait_for_sink_priming(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &expected_up) {
+        if !wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &expected_up) {
             let _ = session.quit();
             let _ = session.join(Duration::from_secs(5));
             inconclusive!("priming sink Down/Up evidence was not observed before focus challenge", json!({}));
@@ -686,8 +683,9 @@ fn run_windows(args: RunArgs) -> i32 {
         let observed = wait_for_focus_pause(&session);
         let _ = session.quit();
         observed
-    } else if args.scenario.cleanup_is_full() {
-        thread::sleep(Duration::from_millis(150));
+    } else if args.scenario == Scenario::CleanupFullRelease {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before cleanup proof", json!({})); }
+        if !wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &[]) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("full-mask sink Down evidence was not observed before cleanup", json!({})); }
         let _ = session.quit();
         false
     } else {
@@ -723,7 +721,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let Some(outcome) = snapshot.release_outcome.as_ref() else {
         inconclusive!("missing cleanup/release evidence", details);
     };
-    if !cleanup_evidence_clean(outcome.released_successfully, outcome.stuck_mask, outcome.verification_inconclusive, outcome.transport_anomaly) {
+    if !cleanup_evidence_clean(args.scenario == Scenario::CleanupFullRelease, outcome.attempted_mask, outcome.attempts, outcome.released_successfully, outcome.stuck_mask, outcome.verification_inconclusive, outcome.transport_anomaly) {
         return write_report(
             &args,
             Verdict::Fail,
@@ -891,7 +889,9 @@ mod tests {
     }
     #[test]
     fn focus_and_cleanup_verdicts_fail_closed_for_live_or_inconclusive_evidence() {
-        assert!(focus_evidence_clean(true, 1, 0, true, true)); assert!(!focus_evidence_clean(false, 1, 0, true, true)); assert!(!focus_evidence_clean(true, 0, 0, true, true)); assert!(!focus_evidence_clean(true, 1, 0, true, false)); assert!(!cleanup_evidence_clean(true, 0, true, false)); assert!(!cleanup_evidence_clean(true, 0, false, true)); assert!(cleanup_evidence_clean(true, 0, false, false));
+        let cleanup = scenario_plan(Scenario::CleanupFullRelease).expect("cleanup plan");
+        assert_eq!(cleanup.schedule.packets[0].down_mask, FULL_INSTRUMENT_MASK); assert!(cleanup.schedule.packets[1].scheduled_us > 150_000);
+        assert!(focus_evidence_clean(true, 1, 0, true, true)); assert!(!focus_evidence_clean(false, 1, 0, true, true)); assert!(!focus_evidence_clean(true, 0, 0, true, true)); assert!(!focus_evidence_clean(true, 1, 0, true, false)); assert!(!cleanup_evidence_clean(false, 0, 0, true, 0, true, false)); assert!(!cleanup_evidence_clean(true, 0, 1, true, 0, false, false)); assert!(!cleanup_evidence_clean(true, FULL_INSTRUMENT_MASK - 1, 1, true, 0, false, false)); assert!(cleanup_evidence_clean(true, FULL_INSTRUMENT_MASK, 1, true, 0, false, false)); assert!(!cleanup_evidence_clean(true, FULL_INSTRUMENT_MASK, 1, true, 0, false, true));
     }
 }
 }
