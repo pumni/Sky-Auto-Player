@@ -51,7 +51,7 @@ export function AppTitleBar({ useStore, settingsTriggerRef, windowControls }: Ap
           >
             <Button
               className="update-indicator"
-              aria-label={`Update available: ${updateVersion}`}
+              aria-label={`Open update ${updateVersion}`}
               onPress={() => setUpdateDialogOpen(true)}
             >
               <Download size={15} aria-hidden="true" />
