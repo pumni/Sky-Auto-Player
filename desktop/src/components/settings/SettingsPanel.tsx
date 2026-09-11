@@ -48,14 +48,7 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
       dialogRef.current?.focus();
     } else if (wasOpen.current) {
       wasOpen.current = false;
-      window.setTimeout(
-        () =>
-          (
-            settingsTriggerRef?.current ??
-            document.querySelector<HTMLElement>('[aria-label="Open settings"]')
-          )?.focus(),
-        0,
-      );
+      window.setTimeout(() => settingsTriggerRef?.current?.focus(), 0);
     }
   }, [open, settingsTriggerRef]);
 

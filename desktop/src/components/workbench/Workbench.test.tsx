@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ResizableSeparator } from './ResizableSeparator';
@@ -13,7 +14,31 @@ import {
   getUtilityWidthMax,
   solveWorkbenchGeometry,
   WORKBENCH_STORAGE_KEY,
+  useWorkbenchLayout,
 } from './useWorkbenchLayout';
+
+function LayoutUpdateHarness() {
+  const layout = useWorkbenchLayout(1200, true);
+  return (
+    <>
+      <output data-testid="layout-values">
+        {layout.expandedNavigatorWidth}:{layout.utilityWidth}
+      </output>
+      <button
+        type="button"
+        onClick={() => {
+          layout.setNavigatorWidth(300);
+          layout.setUtilityWidth(400);
+        }}
+      >
+        Update layout
+      </button>
+      <button type="button" onClick={() => layout.setUtilityWidth(410, true)}>
+        Commit utility width
+      </button>
+    </>
+  );
+}
 
 describe('ResizableSeparator', () => {
   afterEach(() => window.localStorage.clear());
@@ -106,7 +131,10 @@ describe('ResizableSeparator', () => {
 });
 
 describe('workbench layout persistence', () => {
-  afterEach(() => window.localStorage.clear());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+  });
 
   it('loads valid v4 values and clamps them to current bounds', () => {
     window.localStorage.setItem(
@@ -188,5 +216,28 @@ describe('workbench layout persistence', () => {
     expect(minimum.fits).toBe(true);
     expect(COMPACT_NAVIGATOR_WIDTH).toBe(56);
     expect(getNavigatorWidthMax(920)).toBeGreaterThanOrEqual(MIN_NAVIGATOR_WIDTH);
+  });
+
+  it('combines rapid functional updates while persisting only explicit commits', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    render(
+      <StrictMode>
+        <LayoutUpdateHarness />
+      </StrictMode>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update layout' }));
+
+    expect(screen.getByTestId('layout-values')).toHaveTextContent('300:400');
+    expect(setItem).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(WORKBENCH_STORAGE_KEY)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Commit utility width' }));
+
+    expect(JSON.parse(window.localStorage.getItem(WORKBENCH_STORAGE_KEY)!)).toMatchObject({
+      expandedNavigatorWidth: 300,
+      utilityWidth: 410,
+    });
+    expect(setItem).toHaveBeenCalledTimes(1);
   });
 });
