@@ -164,11 +164,27 @@ fn query_async_key_state(_index: usize, virtual_key: i32) -> i16 {
     }
 }
 
-pub(crate) fn instrument_physical_state_for_mask(
+fn instrument_physical_state_for_mask_with<
+    Context,
+    Foreground,
+    ContextResolver,
+    VirtualKeyMapper,
+    KeyStateQuery,
+>(
     target_hwnd: isize,
     requested_mask: u16,
-) -> InstrumentPhysicalState {
-    if target_hwnd == 0 || !foreground_window_matches(target_hwnd) {
+    mut foreground_matches: Foreground,
+    mut context_for_target: ContextResolver,
+    mut map_virtual_keys: VirtualKeyMapper,
+    mut query_key_state: KeyStateQuery,
+) -> InstrumentPhysicalState
+where
+    Foreground: FnMut(isize) -> bool,
+    ContextResolver: FnMut(isize) -> Option<Context>,
+    VirtualKeyMapper: FnMut(&Context, u16) -> Option<[i32; PHYSICAL_INSTRUMENT_SCAN_CODES.len()]>,
+    KeyStateQuery: FnMut(usize, i32) -> i16,
+{
+    if target_hwnd == 0 || !foreground_matches(target_hwnd) {
         return InstrumentPhysicalState::Inconclusive;
     }
     if requested_mask == 0 {
@@ -177,26 +193,44 @@ pub(crate) fn instrument_physical_state_for_mask(
     if requested_mask & !FULL_INSTRUMENT_MASK != 0 {
         return InstrumentPhysicalState::Inconclusive;
     }
+
+    let Some(context) = context_for_target(target_hwnd) else {
+        return InstrumentPhysicalState::Inconclusive;
+    };
+    let Some(virtual_keys) = map_virtual_keys(&context, requested_mask) else {
+        return InstrumentPhysicalState::Inconclusive;
+    };
+    let mut key_states = [0i16; PHYSICAL_INSTRUMENT_SCAN_CODES.len()];
+    for (index, &virtual_key) in virtual_keys.iter().enumerate() {
+        if requested_mask & (1u16 << index) == 0 {
+            continue;
+        }
+        key_states[index] = query_key_state(index, virtual_key);
+    }
+    if !foreground_matches(target_hwnd) {
+        return InstrumentPhysicalState::Inconclusive;
+    }
+    classify_async_key_states(requested_mask, &key_states)
+}
+
+pub(crate) fn instrument_physical_state_for_mask(
+    target_hwnd: isize,
+    requested_mask: u16,
+) -> InstrumentPhysicalState {
     #[cfg(windows)]
     {
-        let Some(context) = keyboard_context_for_target(target_hwnd) else {
-            return InstrumentPhysicalState::Inconclusive;
-        };
-        let Some(virtual_keys) = map_instrument_virtual_keys(&context, requested_mask) else {
-            return InstrumentPhysicalState::Inconclusive;
-        };
-        let mut key_states = [0i16; 15];
-        for (index, &virtual_key) in virtual_keys.iter().enumerate() {
-            if requested_mask & (1u16 << index) == 0 {
-                continue;
-            }
-            key_states[index] = query_async_key_state(index, virtual_key);
-        }
-        classify_async_key_states(requested_mask, &key_states)
+        instrument_physical_state_for_mask_with(
+            target_hwnd,
+            requested_mask,
+            foreground_window_matches,
+            keyboard_context_for_target,
+            map_instrument_virtual_keys,
+            query_async_key_state,
+        )
     }
     #[cfg(not(windows))]
     {
-        let _ = (target_hwnd, requested_mask);
+        let _ = (target_hwnd, requested_mask, foreground_window_matches);
         InstrumentPhysicalState::Inconclusive
     }
 }
@@ -237,5 +271,36 @@ pub fn is_scan_code_physically_down(scan_code: u16, target_hwnd: isize) -> Optio
     {
         let _ = (scan_code, target_hwnd);
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InstrumentPhysicalState, instrument_physical_state_for_mask_with};
+
+    #[test]
+    fn focus_transition_after_key_reads_is_inconclusive() {
+        let mut foreground_checks = 0;
+        let mut key_reads = 0;
+        let state = instrument_physical_state_for_mask_with(
+            42,
+            1,
+            |target| {
+                assert_eq!(target, 42);
+                foreground_checks += 1;
+                foreground_checks == 1
+            },
+            |_| Some(()),
+            |_, _| Some([0; super::PHYSICAL_INSTRUMENT_SCAN_CODES.len()]),
+            |index, _| {
+                assert_eq!(index, 0);
+                key_reads += 1;
+                i16::MIN
+            },
+        );
+
+        assert_eq!(state, InstrumentPhysicalState::Inconclusive);
+        assert_eq!(foreground_checks, 2);
+        assert_eq!(key_reads, 1);
     }
 }

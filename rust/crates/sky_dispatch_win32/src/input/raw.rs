@@ -116,6 +116,7 @@ pub fn send_input_raw_with_clock(
     }
     #[cfg(windows)]
     {
+        use windows_sys::Win32::Foundation::SetLastError;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, SendInput};
 
         if scan_codes.is_empty() {
@@ -144,6 +145,9 @@ pub fn send_input_raw_with_clock(
         let requested = len as u32;
         let cb_size = std::mem::size_of::<INPUT>() as i32;
 
+        // Clear stale thread-local state before the authoritative start sample;
+        // the reset must not sit inside the measured SendInput envelope.
+        unsafe { SetLastError(0) };
         let started_ticks = match clock.now() {
             Ok(ticks) => ticks,
             Err(timing_error) => {
@@ -191,5 +195,27 @@ pub fn send_input_raw_with_clock(
             win32_error: 0,
             timing_error,
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    #[test]
+    fn clears_last_error_before_authoritative_start_sample() {
+        let source = include_str!("raw.rs").replace("\r\n", "\n");
+        let sender = source
+            .split("pub fn send_input_raw_with_clock")
+            .nth(1)
+            .expect("raw sender implementation");
+        let reset = sender
+            .find("SetLastError(0)")
+            .expect("raw sender last-error reset");
+        let start = sender
+            .find("let started_ticks = match clock.now()")
+            .expect("raw sender authoritative start sample");
+        let syscall = sender.find("SendInput(").expect("raw SendInput call");
+
+        assert!(reset < start);
+        assert!(start < syscall);
     }
 }
