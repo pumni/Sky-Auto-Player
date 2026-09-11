@@ -45,6 +45,7 @@ const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
     "Win32::System::LibraryLoader",
     "Win32::System::SystemInformation",
     "Win32::System::Threading",
+    "Win32::Security",
     "Win32::UI::Input::KeyboardAndMouse",
     "Win32::UI::Controls",
     "Win32::UI::Shell",

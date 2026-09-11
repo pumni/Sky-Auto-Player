@@ -3449,6 +3449,15 @@ impl NativePlaybackService {
             settings.allow_title_fallback,
         )
         .ok_or_else(|| "no admissible visible Sky window was found".to_string())?;
+        if matches!(
+            sky_dispatch_win32::focus::target_integrity_compatibility(target),
+            sky_dispatch_win32::focus::TargetIntegrityCompatibility::Mismatch
+        ) {
+            return Err(
+                "target Sky process has higher integrity than Sky Auto Player; Windows UIPI can block SendInput"
+                    .to_string(),
+            );
+        }
         if !sky_dispatch_win32::focus::focus_window_and_verify(target, Duration::from_millis(100)) {
             return Err("validated Sky window could not be focused".into());
         }

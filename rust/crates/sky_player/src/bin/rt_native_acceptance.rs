@@ -51,8 +51,6 @@ const ACCEPTANCE_FRAME_US: u64 = 1_000_000_u64.div_ceil(ACCEPTANCE_FPS);
 const ACCEPTANCE_HOLD_FRAMES: u64 = 1;
 const ACCEPTANCE_DOWN_LATE_GRACE_US: u64 = 500;
 const ACCEPTANCE_TRANSPORT_MARGIN_US: u64 = 300;
-const ACCEPTANCE_MIN_HOLD_US: u64 = ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + ACCEPTANCE_DOWN_LATE_GRACE_US + ACCEPTANCE_TRANSPORT_MARGIN_US;
-const ACCEPTANCE_MIN_RELEASE_GAP_US: u64 = ACCEPTANCE_FRAME_US + ACCEPTANCE_DOWN_LATE_GRACE_US + ACCEPTANCE_TRANSPORT_MARGIN_US;
 const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scenario {
@@ -175,15 +173,7 @@ fn parse_hwnd(value: &str) -> Result<isize, String> {
     }
     Ok(parsed as isize)
 }
-fn parse_down_late_grace_us(value: &str) -> Result<u64, String> {
-    let parsed = value
-        .parse::<u64>()
-        .map_err(|_| "--down-late-grace-us must be 500, 750, or 1000".to_string())?;
-    match parsed {
-        500 | 750 | 1_000 => Ok(parsed),
-        _ => Err("--down-late-grace-us must be 500, 750, or 1000".to_string()),
-    }
-}
+fn parse_down_late_grace_us(value: &str) -> Result<u64, String> { let parsed = value.parse::<u64>().map_err(|_| "--down-late-grace-us must be 500, 750, or 1000".to_string())?; match parsed { 500 | 750 | 1_000 => Ok(parsed), _ => Err("--down-late-grace-us must be 500, 750, or 1000".to_string()) } }
 fn parse_args<I>(arguments: I) -> Result<ParsedCommand, String>
 where
     I: IntoIterator<Item = String>,
@@ -204,8 +194,7 @@ where
     let mut sink_events = None;
     let mut target_hwnd = None;
     let mut scenario = None;
-    let mut evidence = None;
-    let mut down_late_grace_us = None;
+    let mut evidence = None; let mut down_late_grace_us = None;
     let mut focus_probe_ready = None;
     let mut focus_probe_events = None;
     let mut focus_probe_hwnd = None;
@@ -391,14 +380,8 @@ fn scenario_plan(scenario: Scenario) -> Result<ScenarioPlan, String> {
         allow_unpaired_cleanup_ups,
     })
 }
-fn acceptance_min_hold_us(down_late_grace_us: u64) -> u64 {
-    ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US
-        + down_late_grace_us
-        + ACCEPTANCE_TRANSPORT_MARGIN_US
-}
-fn acceptance_min_release_gap_us(down_late_grace_us: u64) -> u64 {
-    ACCEPTANCE_FRAME_US + down_late_grace_us + ACCEPTANCE_TRANSPORT_MARGIN_US
-}
+fn acceptance_min_hold_us(down_late_grace_us: u64) -> u64 { ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + down_late_grace_us + ACCEPTANCE_TRANSPORT_MARGIN_US }
+fn acceptance_min_release_gap_us(down_late_grace_us: u64) -> u64 { ACCEPTANCE_FRAME_US + down_late_grace_us + ACCEPTANCE_TRANSPORT_MARGIN_US }
 fn production_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
     profile: Option<InstrumentKeyProfileSpec>,
@@ -906,7 +889,7 @@ mod tests {
     #[test] fn zero_event_safety_uses_full_deadline_and_catches_delayed_event() { let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(drain_event_window_with(&mut r, &mut c, DrainMode::ZeroEventSafety, &[], &[]), DrainResult::Pass(Vec::new())); assert_eq!(c.now_ms, DRAIN_DEADLINE_MS); let mut s = vec![complete_window(Vec::new()); 20]; s.push(complete_window(vec![event(1, "key_press", 0x15)])); let mut r = FakeReader { samples: s, index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ZeroEventSafety, &[], &[]), DrainResult::Fail(_, _))); }
     #[test] fn cleanup_reconciles_fifteen_down_and_up_records() { let e = (0..MAX_KEYS).map(|slot| physical(PHYSICAL_INSTRUMENT_SCAN_CODES[slot])).collect::<Vec<_>>(); let mut a = Vec::new(); for (i, k) in e.iter().enumerate() { a.push(event_with(i as u64 + 1, "key_press", k.scan_code, k.extended, 0)); } for (i, k) in e.iter().enumerate() { a.push(event_with(MAX_KEYS as u64 + i as u64 + 1, "key_release", k.scan_code, k.extended, 0)); } assert!(reconcile_events(&a, &e, &e, false).is_ok()); }
     #[test] fn w4_profile_and_cleanup_verdicts_remain_valid() { let p = MaterializedInstrumentKeyProfile::from_validated(sky_dispatch_win32::input::InstrumentKeyProfile::try_from_spec(w4_profile_spec()).unwrap()); assert_eq!(p.physical_key(0).scan_code, 0x02); let plan = scenario_plan(Scenario::CleanupFullRelease).unwrap(); assert_eq!(plan.schedule.packets[0].down_mask, FULL_INSTRUMENT_MASK); assert!(cleanup_evidence_clean(true, FULL_INSTRUMENT_MASK, 1, true, 0, false, false)); }
-    #[test] fn authorization_and_timing_contracts_remain_bounded() { let mut a = base_arguments("focus-loss"); a.extend(["--focus-probe-ready", "p", "--focus-probe-events", "e", "--focus-probe-hwnd", "0x43"].into_iter().map(str::to_owned)); let ParsedCommand::Run(args) = parse_args(a).expect("valid acceptance args") else { panic!("expected run command") }; assert_eq!(args.down_late_grace_us, ACCEPTANCE_DOWN_LATE_GRACE_US); assert_eq!(ACCEPTANCE_MIN_HOLD_US, 17_467); assert_eq!(ACCEPTANCE_MIN_RELEASE_GAP_US, 17_467); assert_eq!(acceptance_min_hold_us(750), 17_717); assert_eq!(acceptance_min_release_gap_us(1_000), 17_967); assert!(focus_evidence_clean(true, 1, 0, true, true)); }
+    #[test] fn authorization_and_timing_contracts_remain_bounded() { let mut a = base_arguments("focus-loss"); a.extend(["--focus-probe-ready", "p", "--focus-probe-events", "e", "--focus-probe-hwnd", "0x43"].into_iter().map(str::to_owned)); let ParsedCommand::Run(args) = parse_args(a).expect("valid acceptance args") else { panic!("expected run command") }; assert_eq!(args.down_late_grace_us, ACCEPTANCE_DOWN_LATE_GRACE_US); assert_eq!(acceptance_min_hold_us(500), 17_467); assert_eq!(acceptance_min_release_gap_us(500), 17_467); assert_eq!(acceptance_min_hold_us(750), 17_717); assert_eq!(acceptance_min_release_gap_us(1_000), 17_967); assert!(focus_evidence_clean(true, 1, 0, true, true)); }
     #[test] fn grace_override_accepts_only_controlled_ab_values() { for grace in ["500", "750", "1000"] { let mut args = base_arguments("canonical-single"); args.extend(["--down-late-grace-us", grace].into_iter().map(str::to_owned)); let ParsedCommand::Run(run) = parse_args(args).expect("valid grace override") else { panic!("expected run command") }; assert_eq!(run.down_late_grace_us, grace.parse::<u64>().unwrap()); } let mut args = base_arguments("canonical-single"); args.extend(["--down-late-grace-us", "600"].into_iter().map(str::to_owned)); assert!(parse_args(args).is_err()); }
 }
 }
