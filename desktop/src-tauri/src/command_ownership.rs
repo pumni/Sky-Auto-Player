@@ -271,4 +271,78 @@ mod tests {
             NATIVE_HANDLER_METHODS
         );
     }
+
+    #[test]
+    fn tauri_capability_and_handler_are_explicitly_bound_to_the_contract() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("Tauri config JSON");
+        assert_eq!(
+            config["app"]["security"]["capabilities"],
+            serde_json::json!(["main-capability"])
+        );
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json"))
+                .expect("main capability JSON");
+        assert_eq!(capability["identifier"], "main-capability");
+        assert_eq!(capability["windows"], serde_json::json!(["main"]));
+        assert_eq!(capability["platforms"], serde_json::json!(["windows"]));
+
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("capability permissions");
+        let expected_command_permissions = crate::ipc_contract::TAURI_COMMANDS
+            .iter()
+            .map(|command| format!("allow-{}", command.replace('_', "-")))
+            .collect::<Vec<_>>();
+        let actual_command_permissions = permissions
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|permission| permission.starts_with("allow-"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(actual_command_permissions, expected_command_permissions);
+        assert!(permissions.iter().all(|permission| {
+            permission
+                .as_str()
+                .is_some_and(|permission| !permission.contains('*'))
+        }));
+
+        let generated_command_names = include_str!("../../src/bridge/generated/command_names.ts");
+        for command in crate::ipc_contract::COMMANDS {
+            assert!(
+                generated_command_names.contains(&format!("'{}'", command.invoke_name)),
+                "generated command names missing {}",
+                command.invoke_name
+            );
+        }
+        assert!(
+            generated_command_names
+                .contains(&format!("'{}'", crate::ipc_contract::UI_EVENTS_COMMAND))
+        );
+
+        let handler_source = include_str!("lib.rs");
+        let handler_block = handler_source
+            .split_once(".invoke_handler(tauri::generate_handler![")
+            .and_then(|(_, source)| source.split_once("])"))
+            .map(|(source, _)| source)
+            .expect("production Tauri invoke handler");
+        let handler_names = handler_block
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("commands::")
+                    .and_then(|name| name.strip_suffix(','))
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let contract_names = crate::ipc_contract::TAURI_COMMANDS
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(handler_names, contract_names);
+        assert_eq!(
+            handler_names.len(),
+            crate::ipc_contract::TAURI_COMMANDS.len()
+        );
+    }
 }
