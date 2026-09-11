@@ -642,6 +642,24 @@ impl ProductionDispatchTestHarness {
         timing.down_late_grace_ticks = qpc_clock
             .duration_from_us(500)
             .expect("test down late-grace conversion");
+        timing.pre_call_250us_ticks = qpc_clock
+            .duration_from_us(250)
+            .expect("test pre-call 250us conversion");
+        timing.pre_call_500us_ticks = qpc_clock
+            .duration_from_us(500)
+            .expect("test pre-call 500us conversion");
+        timing.pre_call_750us_ticks = qpc_clock
+            .duration_from_us(750)
+            .expect("test pre-call 750us conversion");
+        timing.pre_call_1000us_ticks = qpc_clock
+            .duration_from_us(1_000)
+            .expect("test pre-call 1000us conversion");
+        timing.pre_call_1500us_ticks = qpc_clock
+            .duration_from_us(1_500)
+            .expect("test pre-call 1500us conversion");
+        timing.pre_call_2000us_ticks = qpc_clock
+            .duration_from_us(2_000)
+            .expect("test pre-call 2000us conversion");
         timing.effective_spin_threshold_ticks = qpc_clock
             .duration_from_us(20_000)
             .expect("test spin threshold conversion");
@@ -849,6 +867,18 @@ impl ProductionDispatchTestHarness {
     /// Query coordinator chord integrity lost count.
     pub fn chord_integrity_lost_count(&self) -> u64 {
         self.runtime.chord_integrity_lost_count()
+    }
+
+    pub fn fine_pre_call_bucket_counts_for_test(&self) -> [u64; 7] {
+        [
+            self.local_metrics.pre_call_lt_250us,
+            self.local_metrics.pre_call_250_500us,
+            self.local_metrics.pre_call_500_750us,
+            self.local_metrics.pre_call_750_1000us,
+            self.local_metrics.pre_call_1000_1500us,
+            self.local_metrics.pre_call_1500_2000us,
+            self.local_metrics.pre_call_ge_2000us,
+        ]
     }
 
     pub fn backend_active_mask(&self) -> u16 {

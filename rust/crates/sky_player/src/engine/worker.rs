@@ -408,6 +408,12 @@ pub(crate) struct WorkerTimingState {
     /// First QPC tick whose floored public duration is strictly over the
     /// corresponding pre-call lateness bucket.  These are converted once at
     /// worker admission so the physical send path only compares integers.
+    pub(super) pre_call_250us_ticks: DurationTicks,
+    pub(super) pre_call_500us_ticks: DurationTicks,
+    pub(super) pre_call_750us_ticks: DurationTicks,
+    pub(super) pre_call_1000us_ticks: DurationTicks,
+    pub(super) pre_call_1500us_ticks: DurationTicks,
+    pub(super) pre_call_2000us_ticks: DurationTicks,
     pub(super) pre_call_2ms_ticks: DurationTicks,
     pub(super) pre_call_5ms_ticks: DurationTicks,
     pub(super) pre_call_10ms_ticks: DurationTicks,
@@ -432,6 +438,12 @@ impl WorkerTimingState {
             // Test harnesses replace these with the captured clock-domain
             // values when they exercise lateness buckets.  MAX keeps a
             // synthetic timing state from classifying every sample as late.
+            pre_call_250us_ticks: DurationTicks::from_raw(u64::MAX),
+            pre_call_500us_ticks: DurationTicks::from_raw(u64::MAX),
+            pre_call_750us_ticks: DurationTicks::from_raw(u64::MAX),
+            pre_call_1000us_ticks: DurationTicks::from_raw(u64::MAX),
+            pre_call_1500us_ticks: DurationTicks::from_raw(u64::MAX),
+            pre_call_2000us_ticks: DurationTicks::from_raw(u64::MAX),
             pre_call_2ms_ticks: DurationTicks::from_raw(u64::MAX),
             pre_call_5ms_ticks: DurationTicks::from_raw(u64::MAX),
             pre_call_10ms_ticks: DurationTicks::from_raw(u64::MAX),
