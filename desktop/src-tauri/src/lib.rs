@@ -683,17 +683,29 @@ mod ipc_tests {
         body: serde_json::Value,
         callback: u32,
     ) -> tauri::webview::InvokeRequest {
+        request_from_url(
+            command,
+            body,
+            callback,
+            if cfg!(any(windows, target_os = "android")) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            },
+        )
+    }
+
+    fn request_from_url(
+        command: &str,
+        body: serde_json::Value,
+        callback: u32,
+        url: &str,
+    ) -> tauri::webview::InvokeRequest {
         tauri::webview::InvokeRequest {
             cmd: command.into(),
             callback: tauri::ipc::CallbackFn(callback),
             error: tauri::ipc::CallbackFn(callback + 1),
-            url: if cfg!(any(windows, target_os = "android")) {
-                "http://tauri.localhost"
-            } else {
-                "tauri://localhost"
-            }
-            .parse()
-            .expect("test URL"),
+            url: url.parse().expect("test URL"),
             body: tauri::ipc::InvokeBody::Json(body),
             headers: Default::default(),
             invoke_key: tauri::test::INVOKE_KEY.to_string(),
@@ -733,6 +745,48 @@ mod ipc_tests {
             ),
         );
         assert!(wrong.is_err(), "legacy request envelope must fail");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn generated_capability_allows_local_main_and_rejects_unlisted_or_remote_commands() {
+        let (paths, _cleanup) = test_install_root();
+        let app = tauri::test::mock_builder()
+            .manage(AppState::with_test_paths(paths))
+            .invoke_handler(tauri::generate_handler![super::commands::search_songs])
+            .build(tauri::generate_context!())
+            .expect("mock Tauri app with generated capability manifest");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let local = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "search_songs",
+                json!({"params":{"query":"Aurora","offset":0,"limit":200}}),
+                30,
+            ),
+        );
+        assert!(local.is_ok(), "local main command should be authorized");
+
+        let unlisted =
+            tauri::test::get_ipc_response(&webview, request("not_registered", json!({}), 32));
+        assert!(unlisted.is_err(), "unregistered commands must fail closed");
+
+        let remote = tauri::test::get_ipc_response(
+            &webview,
+            request_from_url(
+                "search_songs",
+                json!({"params":{"query":"Aurora","offset":0,"limit":200}}),
+                34,
+                "https://evil.example/",
+            ),
+        );
+        assert!(
+            remote.is_err(),
+            "remote origins must not reach custom commands"
+        );
     }
 
     #[test]

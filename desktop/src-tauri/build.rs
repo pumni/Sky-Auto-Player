@@ -1,5 +1,9 @@
 use std::process::Command;
 
+#[allow(dead_code)]
+#[path = "src/ipc_contract.rs"]
+mod ipc_contract;
+
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program).args(args).output().ok()?;
     if !output.status.success() {
@@ -22,6 +26,7 @@ fn dirty_worktree() -> bool {
 }
 
 fn main() {
+    println!("cargo:rerun-if-changed=src/ipc_contract.rs");
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_DIRTY_WORKTREE");
@@ -53,5 +58,9 @@ fn main() {
         // packaged-assets feature, which owns tauri/custom-protocol.
         println!("cargo:rustc-env=TAURI_CONFIG={{\"build\":{{\"frontendDist\":null}}}}");
     }
-    tauri_build::build();
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(ipc_contract::TAURI_COMMANDS)),
+    )
+    .expect("failed to configure Tauri application command permissions");
 }
