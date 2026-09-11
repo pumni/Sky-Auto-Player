@@ -74,10 +74,7 @@ describe('AppTitleBar', () => {
     });
 
     const indicator = await screen.findByRole('button', { name: 'Update available: 4.0.2' });
-    expect(indicator).toHaveAttribute(
-      'title',
-      'Update available: 4.0.2. Open update details.',
-    );
+    expect(indicator).toHaveAttribute('title', 'Update available: 4.0.2. Open update details.');
     expect(indicator.querySelector('.update-indicator-dot')).toHaveAttribute('aria-hidden', 'true');
 
     fireEvent.click(indicator);
