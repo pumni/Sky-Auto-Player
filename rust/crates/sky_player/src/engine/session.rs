@@ -1,4 +1,4 @@
-use super::config::{DispatchProfile, NativeSessionOptions};
+use super::config::{AdmittedNativeSessionOptions, DispatchProfile, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
 };
@@ -72,7 +72,7 @@ pub(crate) fn validate_native_schedule_timing_with_release_gap(
 }
 
 pub struct NativeDispatchSession {
-    config: Mutex<Option<NativeSessionOptions>>,
+    config: Mutex<Option<AdmittedNativeSessionOptions>>,
     profile: DispatchProfile,
     generation_count: u64,
     shared: Arc<SessionShared>,
@@ -80,7 +80,7 @@ pub struct NativeDispatchSession {
 }
 
 impl NativeDispatchSession {
-    pub fn new(options: NativeSessionOptions) -> Result<Self, String> {
+    pub fn new(mut options: NativeSessionOptions) -> Result<Self, String> {
         validate_timing_constants()?;
         // This is the authoritative native admission boundary.  Python calls
         // the same core validator before crossing into Rust, but direct native
@@ -98,6 +98,14 @@ impl NativeDispatchSession {
         if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }
+        let profile_spec = options
+            .instrument_key_profile
+            .take()
+            .unwrap_or_else(sky_dispatch_win32::input::InstrumentKeyProfileSpec::canonical);
+        let instrument_key_profile =
+            sky_dispatch_win32::input::InstrumentKeyProfile::try_from_spec(profile_spec)
+                .map(sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::from_validated)
+                .map_err(|error| format!("native instrument profile admission failed: {error}"))?;
         let initial_heartbeat_ticks = qpc_clock
             .now()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
@@ -153,9 +161,13 @@ impl NativeDispatchSession {
                 startup_ready: AtomicBool::new(false),
             },
         });
+        let admitted_options = AdmittedNativeSessionOptions {
+            options,
+            instrument_key_profile,
+        };
         Ok(Self {
-            profile: options.profile,
-            config: Mutex::new(Some(options)),
+            profile: admitted_options.options.profile,
+            config: Mutex::new(Some(admitted_options)),
             generation_count,
             shared,
             thread_handle: Mutex::new(None),
@@ -220,7 +232,7 @@ impl NativeDispatchSession {
         };
 
         #[cfg(any(test, feature = "test-support"))]
-        let timer_lifecycle_context = config.timer_lifecycle_context.clone();
+        let timer_lifecycle_context = config.options.timer_lifecycle_context.clone();
 
         let shared = Arc::clone(&self.shared);
         self.shared

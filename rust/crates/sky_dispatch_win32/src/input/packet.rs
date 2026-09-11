@@ -2,6 +2,7 @@ use super::outcome::{
     PacketPreparationError, PacketRetryReason, PhysicalPacket, PlatformSendResult, SendEvidence,
     SendTransactionOutcome, SendTransactionStatus, classify_send_status,
 };
+use super::profile::MaterializedInstrumentKeyProfile;
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
 };
@@ -60,6 +61,20 @@ impl std::fmt::Debug for PreparedPhysicalPacket {
 
 impl PreparedPhysicalPacket {
     pub fn try_new(packet: PhysicalPacket) -> Result<Self, PacketPreparationError> {
+        Self::try_new_internal(packet, None)
+    }
+
+    pub fn try_new_with_profile(
+        packet: PhysicalPacket,
+        profile: &MaterializedInstrumentKeyProfile,
+    ) -> Result<Self, PacketPreparationError> {
+        Self::try_new_internal(packet, Some(profile))
+    }
+
+    fn try_new_internal(
+        packet: PhysicalPacket,
+        profile: Option<&MaterializedInstrumentKeyProfile>,
+    ) -> Result<Self, PacketPreparationError> {
         let overlap_mask = packet.up_mask & packet.down_mask;
         if overlap_mask != 0 {
             return Err(PacketPreparationError::OverlappingDirections { overlap_mask });
@@ -71,7 +86,7 @@ impl PreparedPhysicalPacket {
             return Err(PacketPreparationError::Empty);
         }
         #[cfg(windows)]
-        let (inputs, length) = build_inputs(packet);
+        let (inputs, length) = build_inputs(packet, profile);
         #[cfg(not(windows))]
         let length = packet.event_count() as usize;
         Ok(Self {
@@ -262,7 +277,7 @@ impl PreparedTaggedCalibrationPacket {
 const MAX_SCAN_CODE: usize = 0x36;
 
 #[cfg(windows)]
-const fn create_keyboard_input(
+pub(crate) const fn create_keyboard_input(
     scan_code: u16,
     key_up: bool,
 ) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
@@ -318,6 +333,7 @@ fn valid_packet(packet: PhysicalPacket) -> bool {
 #[cfg(windows)]
 fn build_inputs(
     packet: PhysicalPacket,
+    profile: Option<&MaterializedInstrumentKeyProfile>,
 ) -> (
     [MaybeUninit<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>; MAX_PACKET_EVENTS],
     usize,
@@ -327,16 +343,26 @@ fn build_inputs(
     let mut inputs: [MaybeUninit<INPUT>; MAX_PACKET_EVENTS] =
         [const { MaybeUninit::uninit() }; MAX_PACKET_EVENTS];
     let mut length = 0usize;
-    let mut append_mask = |mut mask: u16, templates: &[INPUT; MAX_SCAN_CODE]| {
+    let mut append_mask = |mut mask: u16, templates: &[INPUT; MAX_SCAN_CODE], down: bool| {
         while mask != 0 {
             let slot = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            inputs[length].write(templates[PHYSICAL_INSTRUMENT_SCAN_CODES[slot] as usize]);
+            let input = match profile {
+                Some(profile) => {
+                    if down {
+                        profile.down_template(slot)
+                    } else {
+                        profile.up_template(slot)
+                    }
+                }
+                None => templates[PHYSICAL_INSTRUMENT_SCAN_CODES[slot] as usize],
+            };
+            inputs[length].write(input);
             length += 1;
         }
     };
-    append_mask(packet.up_mask, &UP_TEMPLATES);
-    append_mask(packet.down_mask, &DOWN_TEMPLATES);
+    append_mask(packet.up_mask, &UP_TEMPLATES, false);
+    append_mask(packet.down_mask, &DOWN_TEMPLATES, true);
     (inputs, length)
 }
 
@@ -1027,21 +1053,6 @@ pub fn send_physical_packet_once_with_clock(
     send_physical_packet_once_impl(packet, |packet| run_send_attempt(packet, clock, None))
 }
 
-/// One packet transaction using a start boundary sampled by the caller after
-/// all control, focus, target, and lease gates have passed.
-pub fn send_physical_packet_once_with_start(
-    packet: PhysicalPacket,
-    clock: QpcClock,
-    started_ticks: QpcTicks,
-) -> SendTransactionOutcome {
-    if packet.event_count() == 0 || !valid_packet(packet) {
-        return invalid_packet_outcome(packet);
-    }
-    send_physical_packet_once_impl(packet, |packet| {
-        run_send_attempt(packet, clock, Some(started_ticks))
-    })
-}
-
 /// One packet transaction using a payload built before the final admission
 /// boundary and a caller-owned authoritative start timestamp.
 pub fn send_prepared_physical_packet_once_with_start(
@@ -1635,7 +1646,7 @@ mod tests {
     fn input_builder_places_all_up_events_before_down_events() {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::KEYEVENTF_KEYUP;
 
-        let (inputs, len) = build_inputs(PhysicalPacket::new(0b1, 0b10));
+        let (inputs, len) = build_inputs(PhysicalPacket::new(0b1, 0b10), None);
         assert_eq!(len, 2);
         unsafe {
             let first = inputs[0].assume_init_ref();
@@ -1644,6 +1655,69 @@ mod tests {
             assert_ne!(first.Anonymous.ki.dwFlags & KEYEVENTF_KEYUP, 0);
             assert_eq!(second.Anonymous.ki.wScan, 0x16);
             assert_eq!(second.Anonymous.ki.dwFlags & KEYEVENTF_KEYUP, 0);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn profile_templates_preserve_default_and_allow_non_canonical_remap() {
+        use super::super::profile::{InstrumentKeyProfile, InstrumentKeyProfileSpec, PhysicalKey};
+
+        let canonical = MaterializedInstrumentKeyProfile::canonical();
+        for slot in 0..MAX_KEYS {
+            let expected_down = DOWN_TEMPLATES[PHYSICAL_INSTRUMENT_SCAN_CODES[slot] as usize];
+            let expected_up = UP_TEMPLATES[PHYSICAL_INSTRUMENT_SCAN_CODES[slot] as usize];
+            let actual_down = canonical.down_template(slot);
+            let actual_up = canonical.up_template(slot);
+            assert_eq!(actual_down.r#type, expected_down.r#type);
+            assert_eq!(actual_up.r#type, expected_up.r#type);
+            unsafe {
+                assert_eq!(actual_down.Anonymous.ki.wVk, expected_down.Anonymous.ki.wVk);
+                assert_eq!(
+                    actual_down.Anonymous.ki.wScan,
+                    expected_down.Anonymous.ki.wScan
+                );
+                assert_eq!(
+                    actual_down.Anonymous.ki.dwFlags,
+                    expected_down.Anonymous.ki.dwFlags
+                );
+                assert_eq!(
+                    actual_down.Anonymous.ki.time,
+                    expected_down.Anonymous.ki.time
+                );
+                assert_eq!(
+                    actual_down.Anonymous.ki.dwExtraInfo,
+                    expected_down.Anonymous.ki.dwExtraInfo
+                );
+                assert_eq!(actual_up.Anonymous.ki.wVk, expected_up.Anonymous.ki.wVk);
+                assert_eq!(actual_up.Anonymous.ki.wScan, expected_up.Anonymous.ki.wScan);
+                assert_eq!(
+                    actual_up.Anonymous.ki.dwFlags,
+                    expected_up.Anonymous.ki.dwFlags
+                );
+                assert_eq!(actual_up.Anonymous.ki.time, expected_up.Anonymous.ki.time);
+                assert_eq!(
+                    actual_up.Anonymous.ki.dwExtraInfo,
+                    expected_up.Anonymous.ki.dwExtraInfo
+                );
+            }
+        }
+
+        let mut spec = InstrumentKeyProfileSpec::canonical();
+        spec.keys[0] = PhysicalKey {
+            scan_code: 0x02,
+            extended: false,
+        };
+        let remapped = MaterializedInstrumentKeyProfile::from_validated(
+            InstrumentKeyProfile::try_from_spec(spec).expect("remapped profile"),
+        );
+        let (inputs, length) = build_inputs(PhysicalPacket::new(0b001, 0b010), Some(&remapped));
+        assert_eq!(length, 2);
+        unsafe {
+            let up = inputs[0].assume_init_ref();
+            let down = inputs[1].assume_init_ref();
+            assert_eq!(up.Anonymous.ki.wScan, 0x02);
+            assert_eq!(down.Anonymous.ki.wScan, 0x16);
         }
     }
 

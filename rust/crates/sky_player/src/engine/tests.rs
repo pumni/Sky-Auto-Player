@@ -23,6 +23,7 @@ use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
     DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
 };
+use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, PhysicalKey};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -67,6 +68,7 @@ fn test_session_options(
         priority: PriorityOptions {
             mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
         },
+        instrument_key_profile: None,
         startup_ordering_hook: None,
         restore_race_hook: None,
         timer_lifecycle_context: None,
@@ -1602,25 +1604,50 @@ fn worker_takes_runtime_schedule_only_once() {
         },
     ))
     .expect("test session admission");
-    let mut worker = Worker::new(
-        test_session_options(
-            startup_boundary_schedule(),
-            1,
-            BackendConfig::Mock {
-                latency_base_us: 0,
-                latency_per_key_us: 0,
-                fault_script: FaultInjectionScript::none(),
-            },
-        ),
-        session.shared_for_test(),
-        QpcTicks::ZERO,
+    let worker_options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
     );
+    let admitted_options = super::config::AdmittedNativeSessionOptions {
+        options: worker_options,
+        instrument_key_profile:
+            sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical(),
+    };
+    let mut worker = Worker::new(admitted_options, session.shared_for_test(), QpcTicks::ZERO);
 
     assert!(worker.take_schedule_for_test().is_ok());
     assert!(matches!(
         worker.take_schedule_for_test(),
         Err("worker runtime schedule was already consumed")
     ));
+}
+
+#[test]
+fn invalid_instrument_profile_is_rejected_before_worker_start() {
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    let mut spec = InstrumentKeyProfileSpec::canonical();
+    spec.keys[0] = PhysicalKey {
+        scan_code: 0x3a,
+        extended: false,
+    };
+    options.instrument_key_profile = Some(spec);
+    let error = NativeDispatchSession::new(options)
+        .err()
+        .expect("invalid profile must fail at admission");
+    assert!(error.contains("native instrument profile admission failed"));
 }
 
 #[test]

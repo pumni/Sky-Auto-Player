@@ -3487,6 +3487,7 @@ impl NativePlaybackService {
             priority: PriorityOptions {
                 mode: PriorityMode::Auto,
             },
+            instrument_key_profile: None,
             #[cfg(feature = "tauri-test")]
             startup_ordering_hook: None,
             #[cfg(feature = "tauri-test")]

@@ -1,5 +1,6 @@
 use super::telemetry::TelemetryMode;
 use sky_dispatch_core::model::RuntimeSchedule;
+use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile};
 use sky_dispatch_win32::mmcss::PriorityMode;
 
 pub(crate) const STARTUP_READINESS_RESERVE_US: u64 = 2_000;
@@ -161,6 +162,9 @@ pub struct NativeSessionOptions {
     pub wait: WaitOptions,
     pub telemetry: TelemetryOptions,
     pub priority: PriorityOptions,
+    /// Optional unvalidated Win32-boundary profile input. `None` selects the
+    /// canonical 15-key profile during native session admission.
+    pub instrument_key_profile: Option<InstrumentKeyProfileSpec>,
     #[cfg(any(test, feature = "test-support"))]
     pub startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     #[cfg(any(test, feature = "test-support"))]
@@ -168,6 +172,11 @@ pub struct NativeSessionOptions {
     #[cfg(any(test, feature = "test-support"))]
     pub timer_lifecycle_context:
         Option<sky_dispatch_win32::timer::test_support::TimerLifecycleContext>,
+}
+
+pub(crate) struct AdmittedNativeSessionOptions {
+    pub(crate) options: NativeSessionOptions,
+    pub(crate) instrument_key_profile: MaterializedInstrumentKeyProfile,
 }
 
 #[cfg(any(test, feature = "test-support"))]

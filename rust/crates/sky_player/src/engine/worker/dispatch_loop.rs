@@ -836,6 +836,7 @@ pub(super) fn dispatch(
                     coordinator: &resources.coordinator,
                     epoch_qpc: resources.playback.epoch,
                     preparation_probe: &core.runtime.preparation_probe,
+                    instrument_key_profile: resources.backend.instrument_key_profile(),
                 },
                 &mut dispatch_plan,
             ) {

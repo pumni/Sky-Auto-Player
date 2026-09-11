@@ -1,5 +1,8 @@
 use super::super::outcome::PhysicalKeyPreflightError;
-use super::super::physical::{InstrumentPhysicalState, instrument_physical_state_for_mask};
+use super::super::physical::{
+    InstrumentPhysicalState, LogicalInstrumentPhysicalState,
+    instrument_logical_physical_state_for_mask,
+};
 use super::super::scan_code::FULL_INSTRUMENT_MASK;
 use super::TrackedKeyState;
 
@@ -22,12 +25,20 @@ impl TrackedKeyState {
         if target_hwnd == 0 {
             return Err(PhysicalKeyPreflightError::VerificationInconclusive);
         }
-        match instrument_physical_state_for_mask(target_hwnd, FULL_INSTRUMENT_MASK) {
-            InstrumentPhysicalState::AllUp => Ok(()),
-            InstrumentPhysicalState::Held(held) => {
-                Err(PhysicalKeyPreflightError::UserHeld(held.into_vec()))
+        match instrument_logical_physical_state_for_mask(
+            &self.instrument_key_profile,
+            target_hwnd,
+            FULL_INSTRUMENT_MASK,
+        ) {
+            LogicalInstrumentPhysicalState::AllUp => Ok(()),
+            LogicalInstrumentPhysicalState::Held(held_mask) => {
+                Err(PhysicalKeyPreflightError::UserHeld(
+                    self.instrument_key_profile
+                        .scan_codes_from_mask(held_mask)
+                        .into_vec(),
+                ))
             }
-            InstrumentPhysicalState::Inconclusive => {
+            LogicalInstrumentPhysicalState::Inconclusive => {
                 Err(PhysicalKeyPreflightError::VerificationInconclusive)
             }
         }
@@ -46,21 +57,37 @@ impl TrackedKeyState {
         target_hwnd: isize,
         unresolved_mask: u16,
         transport_confirmed_mask: u16,
-    ) -> InstrumentPhysicalState {
+    ) -> LogicalInstrumentPhysicalState {
         if let Some(probe) = &self.custom_probe {
-            probe(unresolved_mask, transport_confirmed_mask)
+            match probe(unresolved_mask, transport_confirmed_mask) {
+                InstrumentPhysicalState::AllUp => LogicalInstrumentPhysicalState::AllUp,
+                InstrumentPhysicalState::Held(held) => self
+                    .instrument_key_profile
+                    .logical_mask_for_scan_codes(&held)
+                    .map_or(
+                        LogicalInstrumentPhysicalState::Inconclusive,
+                        LogicalInstrumentPhysicalState::Held,
+                    ),
+                InstrumentPhysicalState::Inconclusive => {
+                    LogicalInstrumentPhysicalState::Inconclusive
+                }
+            }
         } else if self.uses_custom_emitter() {
-            InstrumentPhysicalState::Inconclusive
+            LogicalInstrumentPhysicalState::Inconclusive
         } else {
             #[cfg(windows)]
             {
                 let _ = target_hwnd;
-                instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
+                instrument_logical_physical_state_for_mask(
+                    &self.instrument_key_profile,
+                    target_hwnd,
+                    unresolved_mask,
+                )
             }
             #[cfg(not(windows))]
             {
                 let _ = (target_hwnd, unresolved_mask);
-                InstrumentPhysicalState::Inconclusive
+                LogicalInstrumentPhysicalState::Inconclusive
             }
         }
     }
@@ -72,7 +99,11 @@ impl TrackedKeyState {
         target_hwnd: isize,
         unresolved_mask: u16,
         _transport_confirmed_mask: u16,
-    ) -> InstrumentPhysicalState {
-        instrument_physical_state_for_mask(target_hwnd, unresolved_mask)
+    ) -> LogicalInstrumentPhysicalState {
+        instrument_logical_physical_state_for_mask(
+            &self.instrument_key_profile,
+            target_hwnd,
+            unresolved_mask,
+        )
     }
 }

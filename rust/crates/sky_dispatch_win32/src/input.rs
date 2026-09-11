@@ -4,6 +4,7 @@ mod down_transaction;
 mod outcome;
 mod packet;
 mod physical;
+pub mod profile;
 mod raw;
 mod scan_code;
 mod tracked;
@@ -32,6 +33,10 @@ pub use packet::{
     send_prepared_physical_packet_view_once_with_start_and_cutoff,
 };
 pub use physical::is_scan_code_physically_down;
+pub use profile::{
+    InstrumentKeyProfile, InstrumentKeyProfileError, InstrumentKeyProfileSpec,
+    MaterializedInstrumentKeyProfile, PhysicalKey, SUPPORTED_NON_EXTENDED_SCAN_CODES,
+};
 pub use raw::{send_input_raw, send_input_raw_with_clock};
 pub use scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,

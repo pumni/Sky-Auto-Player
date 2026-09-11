@@ -19,7 +19,9 @@ use super::{AuthoredBatchView, BatchViewResult, DispatchStep, PhysicalCommit, Re
 #[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::coordinator::PreparedAuthoredFrame;
 use sky_dispatch_core::coordinator::{PreparedAuthoredPacket, PreparedBatch};
-use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
+use sky_dispatch_win32::input::{
+    MaterializedInstrumentKeyProfile, PacketRetryReason, PhysicalPacket, SendTransactionStatus,
+};
 
 /// Typed transport/timing evidence shared by DownOnly, Mixed, and UpOnly
 /// dispatch observations.  The observer applies the one canonical predicate
@@ -78,6 +80,7 @@ pub(crate) fn prepare_authored_batch_view(
     coordinator: &RuntimeDispatchCoordinator,
     prepared_batch: PreparedBatch,
     preparation_probe: &DispatchPreparationProbe,
+    instrument_key_profile: &MaterializedInstrumentKeyProfile,
 ) -> BatchViewResult {
     let batch_index = prepared_batch.index;
     let batch_scheduled_ticks = prepared_batch.effective_scheduled_ticks;
@@ -158,7 +161,10 @@ pub(crate) fn prepare_authored_batch_view(
         }
     };
     let prepared_packet =
-        match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(packet_masks) {
+        match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
+            packet_masks,
+            instrument_key_profile,
+        ) {
             Ok(value) => value,
             Err(error) => {
                 return Err(DispatchStep::Terminate(format!(
@@ -213,6 +219,7 @@ pub(crate) fn prepare_authored_frame_view_from_prepared(
     pending_release_mask: u16,
     pending_due_ticks: TimelineTicks,
     preparation_probe: &DispatchPreparationProbe,
+    instrument_key_profile: &MaterializedInstrumentKeyProfile,
 ) -> BatchViewResult {
     let PreparedAuthoredPacket {
         frame,
@@ -232,8 +239,9 @@ pub(crate) fn prepare_authored_frame_view_from_prepared(
     let conflict_mask =
         coordinator.check_packet_down_conflicts(selected_up_mask, selected_down_mask);
     preparation_probe.record_input_build();
-    let prepared_packet = sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(
+    let prepared_packet = sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
         selected_packet,
+        instrument_key_profile,
     )
     .map_err(|error| {
         DispatchStep::Terminate(format!("physical packet preparation failure: {error}"))
@@ -291,6 +299,7 @@ pub(crate) fn prepare_pending_release_view(
     release_mask: u16,
     due_ticks: TimelineTicks,
     preparation_probe: &DispatchPreparationProbe,
+    instrument_key_profile: &MaterializedInstrumentKeyProfile,
 ) -> BatchViewResult {
     if release_mask == 0 {
         return Err(DispatchStep::Terminate(
@@ -298,12 +307,15 @@ pub(crate) fn prepare_pending_release_view(
         ));
     }
     let packet = PhysicalPacket::new(release_mask, 0);
-    let prepared_packet = sky_dispatch_win32::input::PreparedPhysicalPacket::try_new(packet)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "pending release packet preparation failure: {error}"
-            ))
-        })?;
+    let prepared_packet = sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
+        packet,
+        instrument_key_profile,
+    )
+    .map_err(|error| {
+        DispatchStep::Terminate(format!(
+            "pending release packet preparation failure: {error}"
+        ))
+    })?;
     preparation_probe.record_input_build();
     let count = release_mask.count_ones() as usize;
     let source_action_index = coordinator

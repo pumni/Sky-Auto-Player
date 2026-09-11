@@ -4,6 +4,7 @@ use super::super::outcome::{
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::super::physical::InstrumentPhysicalState;
+use super::super::profile::MaterializedInstrumentKeyProfile;
 use super::TrackedKeyState;
 use crate::clock::QpcClock;
 use std::fmt;
@@ -144,6 +145,28 @@ impl TrackedKeyState {
             qpc_clock: Some(clock),
             ..Default::default()
         }
+    }
+
+    pub fn with_qpc_clock_and_profile(
+        clock: QpcClock,
+        instrument_key_profile: MaterializedInstrumentKeyProfile,
+    ) -> Self {
+        Self {
+            instrument_key_profile,
+            qpc_clock: Some(clock),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_profile(instrument_key_profile: MaterializedInstrumentKeyProfile) -> Self {
+        Self {
+            instrument_key_profile,
+            ..Default::default()
+        }
+    }
+
+    pub fn instrument_key_profile(&self) -> &MaterializedInstrumentKeyProfile {
+        &self.instrument_key_profile
     }
 
     #[cfg(any(test, feature = "test-support"))]

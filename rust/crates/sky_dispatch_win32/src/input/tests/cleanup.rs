@@ -1,4 +1,8 @@
 use super::*;
+use crate::input::{
+    InstrumentKeyProfile, InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile, PhysicalKey,
+};
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn partial_transport_plus_physical_all_up_is_inconclusive() {
@@ -138,6 +142,49 @@ fn cleanup_fsm_executes_tracked_then_verifies_physical_all_up() {
     assert!(outcome.released_successfully);
     assert_eq!(state.active_mask, 0);
     assert_eq!(state.failed_release_mask, 0);
+}
+
+#[test]
+fn full_cleanup_emits_custom_profile_keys_from_logical_mask() {
+    let mut spec = InstrumentKeyProfileSpec::canonical();
+    for (slot, scan_code) in super::super::profile::SUPPORTED_NON_EXTENDED_SCAN_CODES
+        .iter()
+        .copied()
+        .take(15)
+        .enumerate()
+    {
+        spec.keys[slot] = PhysicalKey {
+            scan_code,
+            extended: false,
+        };
+    }
+    let profile = MaterializedInstrumentKeyProfile::from_validated(
+        InstrumentKeyProfile::try_from_spec(spec).expect("custom profile"),
+    );
+    let emitted = Arc::new(Mutex::new(Vec::<(Vec<u16>, bool)>::new()));
+    let emitted_copy = Arc::clone(&emitted);
+    let mut state = TrackedKeyState::with_profile(profile);
+    state.set_emitter(move |codes, key_up| {
+        emitted_copy
+            .lock()
+            .expect("emitted lock")
+            .push((codes.to_vec(), key_up));
+        test_send_result(codes.len() as u8, codes.len() as u8, 0)
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+
+    let outcome = state.release_all_full_instrument(0);
+    assert!(outcome.released_successfully);
+    let calls = emitted.lock().expect("emitted lock");
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].1);
+    assert_eq!(
+        calls[0].0,
+        vec![
+            0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x10, 0x11,
+            0x12
+        ]
+    );
 }
 
 #[test]

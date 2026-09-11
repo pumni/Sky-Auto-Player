@@ -4,7 +4,7 @@ use super::super::outcome::{
 };
 use super::super::packet::{
     PreparedPacketView, PreparedPhysicalPacket, invalid_packet_outcome,
-    send_physical_packet_once_with_start,
+    send_prepared_physical_packet_once, send_prepared_physical_packet_once_with_start,
 };
 use super::super::physical::mask_for_scan_codes;
 use super::super::raw::{
@@ -95,18 +95,41 @@ impl TrackedKeyState {
     /// Single-send note-off for operator-owned cleanup retries. The cleanup FSM
     /// bounds the raw `SendInput` count itself; this must never perform an
     /// internal retry.
-    pub(super) fn do_emit_up_once(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
+    pub(super) fn do_emit_up_once(&mut self, logical_mask: u16) -> SendTransactionOutcome {
+        let packet = PhysicalPacket::new(logical_mask, 0);
+        let prepared = match PreparedPhysicalPacket::try_new_with_profile(
+            packet,
+            &self.instrument_key_profile,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return invalid_packet_outcome(packet),
+        };
+
         #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
-            return emit_up_once_with(scan_codes, |sc, key_up| emitter(sc, key_up));
+            let scan_codes = self
+                .instrument_key_profile
+                .scan_codes_from_mask(logical_mask);
+            let mut outcome = emit_up_once_with(&scan_codes, |sc, key_up| emitter(sc, key_up));
+            outcome.evidence.requested_mask = logical_mask;
+            outcome.evidence.skipped_mask = 0;
+            outcome.evidence.confirmed_mask = if outcome.is_success() {
+                logical_mask
+            } else {
+                logical_prefix_mask(logical_mask, outcome.evidence.first_inserted)
+            };
+            return outcome;
         }
-        if let Some(clock) = self.qpc_clock {
-            emit_up_once_with(scan_codes, |sc, key_up| {
-                send_input_raw_with_clock(sc, key_up, clock)
-            })
-        } else {
-            emit_up_once_with(scan_codes, send_input_raw)
+
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(emitter) = self.custom_packet_emitter.as_ref() {
+            return emitter(packet);
         }
+
+        let Some(clock) = self.qpc_clock else {
+            return invalid_packet_outcome(packet);
+        };
+        send_prepared_physical_packet_once(&prepared, clock)
     }
 
     pub fn key_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
@@ -286,10 +309,16 @@ impl TrackedKeyState {
         packet: PhysicalPacket,
         started_ticks: QpcTicks,
     ) -> SendTransactionOutcome {
-        if let Err(error) = PreparedPhysicalPacket::try_new(packet) {
-            self.last_error = Some(format!("physical packet preparation failed: {error}"));
-            return self.apply_packet_outcome(packet, invalid_packet_outcome(packet));
-        }
+        let prepared = match PreparedPhysicalPacket::try_new_with_profile(
+            packet,
+            &self.instrument_key_profile,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.last_error = Some(format!("physical packet preparation failed: {error}"));
+                return self.apply_packet_outcome(packet, invalid_packet_outcome(packet));
+            }
+        };
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
@@ -317,7 +346,7 @@ impl TrackedKeyState {
                         },
                     };
                 };
-                send_physical_packet_once_with_start(packet, clock, started_ticks)
+                send_prepared_physical_packet_once_with_start(&prepared, clock, started_ticks)
             }
             #[cfg(not(any(test, feature = "test-support")))]
             {
@@ -341,7 +370,7 @@ impl TrackedKeyState {
                         },
                     };
                 };
-                send_physical_packet_once_with_start(packet, clock, started_ticks)
+                send_prepared_physical_packet_once_with_start(&prepared, clock, started_ticks)
             }
         };
 
@@ -845,4 +874,18 @@ impl TrackedKeyState {
             },
         }
     }
+}
+
+fn logical_prefix_mask(mask: u16, count: u8) -> u16 {
+    let mut remaining = mask;
+    let mut prefix = 0u16;
+    for _ in 0..count {
+        if remaining == 0 {
+            break;
+        }
+        let bit = 1u16 << remaining.trailing_zeros();
+        prefix |= bit;
+        remaining &= !bit;
+    }
+    prefix
 }

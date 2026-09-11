@@ -989,6 +989,7 @@ impl ProductionDispatchTestHarness {
             self.resources.clock,
             &self.config.timing,
             &self.runtime.preparation_probe,
+            self.resources.backend.instrument_key_profile(),
         )
         .expect("plan_next_dispatch");
         preflight_prepared_plan(
@@ -1018,6 +1019,7 @@ impl ProductionDispatchTestHarness {
                 coordinator: &self.resources.coordinator,
                 epoch_qpc: self.resources.playback.epoch,
                 preparation_probe: &self.runtime.preparation_probe,
+                instrument_key_profile: self.resources.backend.instrument_key_profile(),
             },
             plan,
         )
@@ -1333,7 +1335,11 @@ impl ProductionDispatchTestHarness {
         &mut self,
         packet: PhysicalPacket,
     ) -> (QpcTicks, SendTransactionOutcome) {
-        let prepared = PreparedPhysicalPacket::try_new(packet).expect("prepared benchmark packet");
+        let prepared = PreparedPhysicalPacket::try_new_with_profile(
+            packet,
+            self.resources.backend.instrument_key_profile(),
+        )
+        .expect("prepared benchmark packet");
         self.send_prepared_phase_a_packet_for_test(&prepared)
     }
 
