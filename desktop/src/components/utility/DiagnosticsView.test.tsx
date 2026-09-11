@@ -19,14 +19,34 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     pre_call_late_2ms: 3,
     pre_call_late_5ms: 2,
     pre_call_late_10ms: 1,
+    down_late_grace_us: 500,
+    pre_call_lt_250us: 0,
+    pre_call_250_500us: 0,
+    pre_call_500_750us: 1,
+    pre_call_750_1000us: 0,
+    pre_call_1000_1500us: 0,
+    pre_call_1500_2000us: 0,
+    pre_call_ge_2000us: 0,
     active_keys: 3,
     stuck_keys: 1,
     keys_dropped: 5,
     chord_split_events: 2,
+    missed_down_boundaries: 0,
+    missed_down_keys: 0,
+    missed_backlog_boundaries: 0,
+    missed_hard_late_boundaries: 0,
+    final_gate_cutoff_misses: 0,
+    final_gate_control_rejections: 0,
+    final_gate_target_changes: 0,
+    final_gate_focus_losses: 0,
+    final_gate_lease_expirations: 0,
+    sendinput_partial_events: 0,
+    sendinput_zero_progress_failures: 0,
     backend_status: 'healthy',
     release_max_us: 420,
     release_late_2ms: 1,
     session_id: 'a'.repeat(32),
+    last_error: null,
     ...overrides,
   };
 }
@@ -56,7 +76,23 @@ describe('DiagnosticsView', () => {
       diagnostics: {
         ...store.getState().diagnostics,
         enabled: true,
-        samples: [snapshot({ session_id: sessionId, release_late_2ms: 0 })],
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            release_late_2ms: 0,
+            missed_down_boundaries: 2,
+            missed_down_keys: 3,
+            missed_backlog_boundaries: 1,
+            missed_hard_late_boundaries: 2,
+            final_gate_cutoff_misses: 2,
+            final_gate_control_rejections: 1,
+            final_gate_target_changes: 1,
+            final_gate_focus_losses: 1,
+            final_gate_lease_expirations: 1,
+            sendinput_partial_events: 1,
+            sendinput_zero_progress_failures: 0,
+          }),
+        ],
       },
       playback: {
         ...store.getState().playback,
@@ -73,16 +109,28 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Session max')).toBeInTheDocument();
     expect(screen.getByText('Max pre-call lateness')).toBeInTheDocument();
     expect(screen.getByText('Pre-call > 10 ms')).toBeInTheDocument();
+    expect(screen.getByText('Pre-call 500–750 μs')).toBeInTheDocument();
+    expect(screen.getByText('Down cutoff grace')).toBeInTheDocument();
+    expect(screen.getByText('Hard-late Down boundaries')).toBeInTheDocument();
+    expect(screen.getByText('Missed Down keys')).toBeInTheDocument();
+    expect(screen.getByText('Backlog misses')).toBeInTheDocument();
+    expect(screen.getByText('Focus gate rejections')).toBeInTheDocument();
+    expect(screen.getByText('Target changes')).toBeInTheDocument();
+    expect(screen.getByText('Lease expirations')).toBeInTheDocument();
+    expect(screen.getByText('Control rejections')).toBeInTheDocument();
+    expect(screen.getByText('SendInput zero-progress failures')).toBeInTheDocument();
+    expect(screen.getByText('SendInput partial events')).toBeInTheDocument();
     expect(screen.getByText('Dropped keys')).toBeInTheDocument();
     expect(screen.getByText('Stuck keys')).toBeInTheDocument();
-    expect(screen.getByText('Healthy')).toBeInTheDocument();
+    expect(screen.getByText(/Sender-side status: Attention/)).toBeInTheDocument();
     expect(screen.getByText('Release > 2 ms').parentElement).toHaveTextContent('0');
     expect(screen.queryByText('P50')).toBeNull();
     expect(screen.queryByText('Sigma')).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
-    expect(screen.getByRole('img', { name: /Completion p95 residual/ })).toBeVisible();
-    expect(screen.getByText(/Latest completion p95 residual 1\.10 ms/)).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /SendInput pre-call lateness/ })).toBeVisible();
+    expect(screen.getByText(/Latest sender pre-call max 320 μs/)).toBeInTheDocument();
+    expect(screen.getByText('Down grace 500 μs')).toBeInTheDocument();
   });
 
   it('does not present unavailable distribution metrics as zero', () => {
@@ -127,6 +175,9 @@ describe('DiagnosticsView', () => {
     expect(document.querySelector('.diagnostics-backend-status.is-unavailable')).toHaveTextContent(
       'Unavailable',
     );
+    fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+    expect(screen.getByText('Timing unavailable')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /SendInput pre-call lateness/ })).toBeNull();
     expect(screen.queryByText('No session')).toBeNull();
   });
 
@@ -163,6 +214,8 @@ describe('DiagnosticsView', () => {
     render(<DiagnosticsView useStore={store} />);
 
     expect(screen.getByText('Healthy')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Deadline admission' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Input transport' })).toBeInTheDocument();
     expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent('327 μs');
     expect(screen.getByText('Pre-call > 2 ms').parentElement).toHaveTextContent('4');
     expect(screen.getByText('Pre-call > 5 ms').parentElement).toHaveTextContent('2');
@@ -172,6 +225,11 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Max release lateness').parentElement).toHaveTextContent('Unavailable');
     expect(screen.getByText('Release > 2 ms').parentElement).toHaveTextContent('Unavailable');
     expect(screen.queryByText('0 μs')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+    expect(screen.getByRole('img', { name: /SendInput pre-call lateness/ })).toBeVisible();
+    expect(screen.getByText(/Latest sender pre-call max 327 μs/)).toBeInTheDocument();
+    expect(screen.getByText('Down grace 500 μs')).toBeInTheDocument();
   });
 
   it('uses playback lifecycle to hide a completed session', () => {
@@ -192,7 +250,7 @@ describe('DiagnosticsView', () => {
     expect(screen.queryByText('Completion p50')).toBeNull();
   });
 
-  it('keeps signed completion residuals and shows a zero reference line', () => {
+  it('keeps optional completion residuals and shows a zero reference line', () => {
     const store = createDesktopStore(createMockBridge());
     const sessionId = 'd'.repeat(32);
     store.setState({
@@ -207,7 +265,8 @@ describe('DiagnosticsView', () => {
     render(<DiagnosticsView useStore={store} />);
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
 
-    expect(screen.getByText(/Latest completion p95 residual -1\.50 ms/)).toBeInTheDocument();
+    expect(screen.getByText(/Latest sender pre-call max 320 μs/)).toBeInTheDocument();
+    expect(screen.getByText(/Completion p95 observer value -1\.50 ms/)).toBeInTheDocument();
     expect(document.querySelector('.plot-zero-axis')).not.toBeNull();
   });
 

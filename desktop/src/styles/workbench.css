@@ -854,6 +854,25 @@ body.is-resizing * {
   padding-top: 12px;
 }
 
+.diagnostics-sender-summary {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 9px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-secondary);
+}
+
+.diagnostics-sender-summary strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.diagnostics-sender-summary span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .diagnostics-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -964,7 +983,7 @@ body.is-resizing * {
 .diagnostics-plot svg {
   display: block;
   width: 100%;
-  height: 112px;
+  height: 132px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-secondary);
 }
@@ -979,6 +998,19 @@ body.is-resizing * {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
+}
+
+.plot-threshold {
+  stroke: var(--warning);
+  stroke-dasharray: 5 4;
+  stroke-width: 1.5;
+}
+
+.plot-label {
+  fill: var(--warning);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10px;
+  text-anchor: end;
 }
 
 .diagnostics-plot figcaption {

@@ -515,14 +515,34 @@ describe('desktop store', () => {
           pre_call_late_2ms: 0,
           pre_call_late_5ms: 0,
           pre_call_late_10ms: 0,
+          down_late_grace_us: 500,
+          pre_call_lt_250us: 0,
+          pre_call_250_500us: 0,
+          pre_call_500_750us: 0,
+          pre_call_750_1000us: 0,
+          pre_call_1000_1500us: 0,
+          pre_call_1500_2000us: 0,
+          pre_call_ge_2000us: 0,
           active_keys: 0,
           stuck_keys: 0,
           keys_dropped: 0,
           chord_split_events: 0,
+          missed_down_boundaries: 0,
+          missed_down_keys: 0,
+          missed_backlog_boundaries: 0,
+          missed_hard_late_boundaries: 0,
+          final_gate_cutoff_misses: 0,
+          final_gate_control_rejections: 0,
+          final_gate_target_changes: 0,
+          final_gate_focus_losses: 0,
+          final_gate_lease_expirations: 0,
+          sendinput_partial_events: 0,
+          sendinput_zero_progress_failures: 0,
           backend_status: 'healthy',
           release_max_us: 0,
           release_late_2ms: 0,
           session_id: null,
+          last_error: null,
         },
       });
     }
@@ -571,24 +591,51 @@ describe('desktop store', () => {
         pre_call_late_2ms: 0,
         pre_call_late_5ms: 0,
         pre_call_late_10ms: 0,
+        down_late_grace_us: 500 + seq,
+        pre_call_lt_250us: 0,
+        pre_call_250_500us: 0,
+        pre_call_500_750us: seq,
+        pre_call_750_1000us: 0,
+        pre_call_1000_1500us: 0,
+        pre_call_1500_2000us: 0,
+        pre_call_ge_2000us: 0,
         active_keys: 0,
         stuck_keys: 0,
         keys_dropped: 0,
         chord_split_events: 0,
+        missed_down_boundaries: 0,
+        missed_down_keys: 0,
+        missed_backlog_boundaries: 0,
+        missed_hard_late_boundaries: 0,
+        final_gate_cutoff_misses: 0,
+        final_gate_control_rejections: 0,
+        final_gate_target_changes: 0,
+        final_gate_focus_losses: seq,
+        final_gate_lease_expirations: 0,
+        sendinput_partial_events: 0,
+        sendinput_zero_progress_failures: seq,
         backend_status: 'healthy' as const,
         release_max_us: 0,
         release_late_2ms: 0,
         session_id: sessionId,
+        last_error: null,
       },
     });
 
     store.getState().applyEvent(snapshot('a'.repeat(32), 1));
     store.getState().applyEvent(snapshot('a'.repeat(32), 2));
     expect(store.getState().diagnostics.samples).toHaveLength(2);
+    expect(store.getState().diagnostics.samples[1]).toMatchObject({
+      down_late_grace_us: 502,
+      pre_call_500_750us: 2,
+      final_gate_focus_losses: 2,
+      sendinput_zero_progress_failures: 2,
+    });
 
     store.getState().applyEvent(snapshot('b'.repeat(32), 3));
     expect(store.getState().diagnostics.samples).toHaveLength(1);
     expect(store.getState().diagnostics.samples[0]?.session_id).toBe('b'.repeat(32));
+    expect(store.getState().diagnostics.samples[0]?.pre_call_500_750us).toBe(3);
   });
 
   it('keeps utility presentation state separate from diagnostics data', async () => {
