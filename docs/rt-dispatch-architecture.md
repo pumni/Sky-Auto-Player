@@ -61,7 +61,7 @@ paired baseline comparison instead of being silently reported as green.
 The feature-gated `rt-native-acceptance` binary exercises the existing
 `NativeDispatchSession` and `BackendConfig::Production` path. It is not a raw
 sender or a timing benchmark. Real-input qualification requires the explicit
-`--allow-real-input` flag, an exact target HWND, schema-v2 ready evidence, and
+`--allow-real-input` flag, an exact target HWND, schema-v3 ready evidence, and
 the live project-owned `pwsh.exe` window identity. There is no foreground,
 environment, PID-only, or no-focus fallback.
 
@@ -77,12 +77,27 @@ The physical command is an explicit, feature-gated qualification run:
 
 `cargo run --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance -- run --allow-real-input --run-id <run-id> --sink-ready .benchmarks/sink.json --sink-events .benchmarks/sink-events.json --target-hwnd <sink-hwnd> --scenario <scenario> --evidence .benchmarks/rt-native-acceptance.jsonl`
 
-Each ready record includes a process-generated `event_log_id`. Before publishing
-ready evidence, the helper flushes a schema-v2 `stream_start` header containing
-the run ID, role, and same event-log ID to the exact event file. The harness
-rejects an empty, stale, or mismatched event stream before `arm`; later records
-must retain the same binding. This prevents a wrong empty file from satisfying
-the focus-loss zero-event condition.
+Each ready record includes a process-generated `event_log_id` and explicitly binds
+`event_schema_version = 3`. Before publishing ready evidence, the helper flushes
+a schema-v3 `stream_start` header containing the run ID, role, and same event-log
+ID to the exact event file. Keyboard records are observed synchronously in the
+sink Form's `WndProc`; native scan code (`lParam` bits 16..23), extended bit
+(bit 24), and direction are authoritative. Raw `wParam` VK, including
+`VK_PROCESSKEY`, is diagnostic only. The harness rejects v2, empty, stale, or
+mismatched event streams before `arm`; later records must retain the same
+binding. The receive-side decoder self-test is no-input and runs with:
+
+`pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -SelfTest`
+
+After terminal/join, qualification drains the bound JSONL stream with a 10 ms
+poll and a 1,000 ms maximum observation bound. Positive expected-event scenarios
+require the expected physical set and then 100 ms of quiet before reconciliation.
+The focus probe uses typed `ZeroEventSafety` semantics instead: it cannot
+early-complete on quiet, and any keyboard event anywhere in the full 1,000 ms is
+FAIL. Only a valid, continuously bound, event-free stream through the full
+deadline can satisfy the probe zero-event predicate; truncation, sequence
+corruption, or binding loss is INCONCLUSIVE. These are acceptance-observer
+bounds and do not change production scheduler or timing policy.
 
 The acceptance profile materializes the current default equation without a
 runtime timing override: at 60 FPS, `frame_us = 16,667`, and with 500 us Down
