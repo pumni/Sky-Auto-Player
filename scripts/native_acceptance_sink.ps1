@@ -80,7 +80,21 @@ $state = @{
     key_press = 0
     key_release = 0
     sequence = 0L
+    event_log_id = [guid]::NewGuid().ToString("N")
 }
+
+$header = [ordered]@{
+    schema_version = 2
+    run_id = $RunId
+    role = $role
+    event_log_id = $state.event_log_id
+    sequence = 0L
+    kind = "stream_start"
+    key_code = 0
+    observed_utc = [DateTime]::UtcNow.ToString("O")
+} | ConvertTo-Json -Compress
+$eventWriter.WriteLine($header)
+$eventWriter.Flush()
 
 $record = {
     param([string]$Kind, [System.Windows.Forms.KeyEventArgs]$Event)
@@ -92,7 +106,10 @@ $record = {
         "$title`r`n`r`nThis project-owned window is the only permitted real-input sink.`r`nKeep it as the intended target during SendInput runs.`r`n`r`nObserved key presses: $($state.key_press) | releases: $($state.key_release)"
     }
     $payload = [ordered]@{
+        schema_version = 2
         run_id = $RunId
+        role = $role
+        event_log_id = $state.event_log_id
         sequence = [long]$state.sequence
         kind = $Kind
         key_code = [int]$Event.KeyCode
@@ -126,6 +143,7 @@ $ready = [ordered]@{
     run_id = $RunId
     role = $role
     sink_kind = $sinkKind
+    event_log_id = $state.event_log_id
     pid = [int]$PID
     hwnd = [long]$hwnd
     title = $title

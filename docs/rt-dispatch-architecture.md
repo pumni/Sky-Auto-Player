@@ -73,16 +73,28 @@ emits input and has its own evidence file:
 
 `Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -Mode InertFocusProbe -RunId <run-id> -ReadyFile .benchmarks/focus-probe.json -EventLog .benchmarks/focus-probe-events.json`
 
-The future physical command is an explicit, feature-gated qualification run:
+The physical command is an explicit, feature-gated qualification run:
 
 `cargo run --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance -- run --allow-real-input --run-id <run-id> --sink-ready .benchmarks/sink.json --sink-events .benchmarks/sink-events.json --target-hwnd <sink-hwnd> --scenario <scenario> --evidence .benchmarks/rt-native-acceptance.jsonl`
 
-The `focus-loss` scenario additionally requires the probe ready file, event
-file, and exact HWND. Its target remains the sink while the foreground moves
-to the project-owned probe with the coarse focus hint still true, challenging
-the worker's fresh exact-HWND gate. Sink/probe logs prove controlled Windows
-delivery and wrong-window safety only; they do not prove game receipt, audio
-latency, or the internal QPC timestamp chain.
+Each ready record includes a process-generated `event_log_id`. Before publishing
+ready evidence, the helper flushes a schema-v2 `stream_start` header containing
+the run ID, role, and same event-log ID to the exact event file. The harness
+rejects an empty, stale, or mismatched event stream before `arm`; later records
+must retain the same binding. This prevents a wrong empty file from satisfying
+the focus-loss zero-event condition.
+
+The acceptance profile materializes the current default equation without a
+runtime timing override: at 60 FPS, `frame_us = 16,667`, and with 500 us Down
+grace plus 300 us transport margin, both minimum hold and release gap are
+17,467 us; focus restore grace remains 100,000 us. The `focus-loss` scenario
+first commits a canonical sink Down/Up pair, waits for `startup_ready` and that
+pair's event evidence, then moves foreground to the validated project-owned
+probe with the coarse focus hint still true before a later different-slot Down.
+It observes the existing live pause state and requires the terminal final-gate
+counter afterward. Sink/probe logs prove controlled Windows delivery and
+wrong-window safety only; they do not prove game receipt, audio latency, or the
+internal QPC timestamp chain.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch

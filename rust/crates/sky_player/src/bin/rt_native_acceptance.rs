@@ -42,6 +42,14 @@ const PROBE_TITLE: &str = "Sky Auto Player — Native Acceptance Focus Probe";
 const SCRIPT_MARKER: &str = "native_acceptance_sink.ps1";
 const INPUT_POLICY: &str = concat!("receives_only; benchmark must use ", "Send", "Input");
 const REQUIRED_IMAGE_BASENAME: &str = "pwsh.exe";
+const ACCEPTANCE_FPS: u64 = 60;
+const ACCEPTANCE_FRAME_US: u64 = 1_000_000_u64.div_ceil(ACCEPTANCE_FPS);
+const ACCEPTANCE_HOLD_FRAMES: u64 = 1;
+const ACCEPTANCE_DOWN_LATE_GRACE_US: u64 = 500;
+const ACCEPTANCE_TRANSPORT_MARGIN_US: u64 = 300;
+const ACCEPTANCE_MIN_HOLD_US: u64 = ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + ACCEPTANCE_DOWN_LATE_GRACE_US + ACCEPTANCE_TRANSPORT_MARGIN_US;
+const ACCEPTANCE_MIN_RELEASE_GAP_US: u64 = ACCEPTANCE_FRAME_US + ACCEPTANCE_DOWN_LATE_GRACE_US + ACCEPTANCE_TRANSPORT_MARGIN_US;
+const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scenario {
     CanonicalSingle,
@@ -90,11 +98,13 @@ enum ParsedCommand {
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 struct ReadyRecord {
     schema_version: u32, run_id: String, role: String, sink_kind: String, pid: u32, hwnd: i64,
-    title: String, process: String, input_policy: String, process_start_time_filetime: u64,
+    title: String, process: String, input_policy: String, event_log_id: String,
+    process_start_time_filetime: u64,
 }
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 struct EventRecord {
-    run_id: String, sequence: u64, kind: String, key_code: i32, observed_utc: String,
+    schema_version: u32, run_id: String, role: String, event_log_id: String, sequence: u64,
+    kind: String, key_code: i32, observed_utc: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LogCursor {
@@ -283,17 +293,12 @@ fn validate_ready_record(
     let (expected_kind, expected_title, expected_role) = protocol_expectation(role)?;
     if record.schema_version != READY_SCHEMA_VERSION { return Err("ready-file schema_version must be 2".into()); }
     if record.run_id != run_id { return Err("ready-file run_id does not match --run-id".into()); }
-    if record.role != expected_role
-        || record.sink_kind != expected_kind
-        || record.title != expected_title
-        || record.process != SCRIPT_MARKER
-        || record.input_policy != INPUT_POLICY
-    {
+    if record.role != expected_role || record.sink_kind != expected_kind || record.title != expected_title || record.process != SCRIPT_MARKER || record.input_policy != INPUT_POLICY {
         return Err("ready-file protocol markers do not match the expected project-owned role".into());
     }
     let ready_hwnd = isize::try_from(record.hwnd).map_err(|_| "ready-file HWND is outside the isize range".to_string())?;
     if ready_hwnd <= 0 || ready_hwnd != target_hwnd { return Err("ready-file HWND does not match the explicit target HWND".into()); }
-    if record.pid == 0 || record.process_start_time_filetime == 0 { return Err("ready-file process identity is incomplete".into()); }
+    if record.pid == 0 || record.process_start_time_filetime == 0 || record.event_log_id.is_empty() || record.event_log_id.len() > MAX_RUN_ID_BYTES { return Err("ready-file process/event identity is incomplete".into()); }
     Ok(())
 }
 fn validate_live_identity(record: &ReadyRecord, live: &WindowIdentity) -> Result<(), String> {
@@ -366,46 +371,10 @@ fn w4_profile_spec() -> InstrumentKeyProfileSpec {
 fn scenario_plan(scenario: Scenario) -> Result<ScenarioPlan, String> {
     let (actions, profile, expected_down_slots, expected_up_slots, allow_unpaired_cleanup_ups) =
         match scenario {
-            Scenario::CanonicalSingle | Scenario::W4Noncanonical => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 80_000, &[0]),
-                ],
-                (scenario == Scenario::W4Noncanonical).then_some(w4_profile_spec()),
-                vec![0],
-                vec![0],
-                false,
-            ),
-            Scenario::CanonicalChord => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0, 1]),
-                    action(1, ActionKind::Up, 90_000, &[0, 1]),
-                ],
-                None,
-                vec![0, 1],
-                vec![0, 1],
-                false,
-            ),
-            Scenario::CleanupFullRelease => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0, 1, 2]),
-                    action(1, ActionKind::Up, 500_000, &[0, 1, 2]),
-                ],
-                None,
-                vec![0, 1, 2],
-                (0..MAX_KEYS).collect(),
-                true,
-            ),
-            Scenario::FocusLoss => (
-                vec![
-                    action(0, ActionKind::Down, 250_000, &[0]),
-                    action(1, ActionKind::Up, 350_000, &[0]),
-                ],
-                None,
-                Vec::new(),
-                Vec::new(),
-                false,
-            ),
+            Scenario::CanonicalSingle | Scenario::W4Noncanonical => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 80_000, &[0])], (scenario == Scenario::W4Noncanonical).then_some(w4_profile_spec()), vec![0], vec![0], false),
+            Scenario::CanonicalChord => (vec![action(0, ActionKind::Down, 50_000, &[0, 1]), action(1, ActionKind::Up, 90_000, &[0, 1])], None, vec![0, 1], vec![0, 1], false),
+            Scenario::CleanupFullRelease => (vec![action(0, ActionKind::Down, 50_000, &[0, 1, 2]), action(1, ActionKind::Up, 500_000, &[0, 1, 2])], None, vec![0, 1, 2], (0..MAX_KEYS).collect(), true),
+            Scenario::FocusLoss => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0]), action(2, ActionKind::Down, 1_000_000, &[1]), action(3, ActionKind::Up, 1_100_000, &[1])], None, vec![0], vec![0], false),
         };
     let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
         .map_err(|error| format!("scenario schedule compilation failed: {error}"))?;
@@ -427,17 +396,17 @@ fn production_options(
         profile: DispatchProfile::Production,
         timing: TimingOptions {
             game_fps: 60,
-            min_hold_us: 10_000,
-            min_release_gap_us: 16_667,
-            down_late_grace_us: 500,
+            min_hold_us: ACCEPTANCE_MIN_HOLD_US,
+            min_release_gap_us: ACCEPTANCE_MIN_RELEASE_GAP_US,
+            down_late_grace_us: ACCEPTANCE_DOWN_LATE_GRACE_US,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,
-            input_path_warn_us: 300,
+            input_path_warn_us: ACCEPTANCE_TRANSPORT_MARGIN_US,
         },
         focus: FocusOptions {
             require_focus: true,
-            focus_restore_grace_us: 100_000,
+            focus_restore_grace_us: ACCEPTANCE_FOCUS_RESTORE_GRACE_US,
         },
         wait: WaitOptions {
             enable_waitable_timer: true,
@@ -479,30 +448,40 @@ fn expected_key_codes(
         .map(|slot| virtual_key_for_scan_code(target_hwnd, profile_scan_code(profile, *slot)))
         .collect()
 }
-fn read_log_cursor(path: &Path, run_id: &str) -> Result<LogCursor, String> {
-    let bytes = fs::read(path).map_err(|error| format!("failed to read event log: {error}"))?;
-    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-        return Err("event log does not end at a complete JSONL record".to_string());
-    }
-    let text =
-        String::from_utf8(bytes.clone()).map_err(|_| "event log is not valid UTF-8".to_string())?;
+fn parse_event_log(bytes: &[u8], context: &str) -> Result<Vec<EventRecord>, String> {
+    if !bytes.is_empty() && !bytes.ends_with(b"\n") { return Err(format!("{context} does not end at a complete JSONL record")); }
+    let text = String::from_utf8(bytes.to_vec()).map_err(|_| format!("{context} is not valid UTF-8"))?;
+    text.lines().filter(|line| !line.is_empty()).map(|line| serde_json::from_str(line).map_err(|error| format!("{context} contains non-schema-v2 JSON: {error}"))).collect()
+}
+fn validate_event_stream(records: &[EventRecord], ready: &ReadyRecord, role: &str) -> Result<u64, String> {
+    let mut header = false;
     let mut sequence = 0;
-    for line in text.lines().filter(|line| !line.is_empty()) {
-        let event: EventRecord = serde_json::from_str(line)
-            .map_err(|error| format!("event log contains non-schema-v2 JSON: {error}"))?;
-        if event.run_id == run_id {
-            sequence = sequence.max(event.sequence);
-        }
+    for event in records.iter().filter(|event| event.run_id == ready.run_id) {
+        if event.schema_version != READY_SCHEMA_VERSION || event.role != role || event.event_log_id != ready.event_log_id { return Err("event log is not bound to the ready-file process stream".into()); }
+        if event.kind == "stream_start" {
+            if header || event.sequence != 0 { return Err("event log has an invalid duplicate/start header".into()); }
+            header = true;
+        } else { sequence = sequence.max(event.sequence); }
     }
-    Ok(LogCursor {
-        offset: bytes.len() as u64,
-        sequence,
-    })
+    if !header { return Err("event log binding header is missing".into()); }
+    Ok(sequence)
+}
+fn validate_log_binding(path: &Path, ready: &ReadyRecord, role: &str) -> Result<(), String> {
+    let bytes = fs::read(path).map_err(|error| format!("failed to read event log: {error}"))?;
+    let records = parse_event_log(&bytes, "event log")?;
+    validate_event_stream(&records, ready, role).map(|_| ())
+}
+fn read_log_cursor(path: &Path, ready: &ReadyRecord, role: &str) -> Result<LogCursor, String> {
+    let bytes = fs::read(path).map_err(|error| format!("failed to read event log: {error}"))?;
+    let records = parse_event_log(&bytes, "event log")?;
+    let sequence = validate_event_stream(&records, ready, role)?;
+    Ok(LogCursor { offset: bytes.len() as u64, sequence })
 }
 fn read_log_window(
     path: &Path,
     cursor: LogCursor,
-    run_id: &str,
+    ready: &ReadyRecord,
+    role: &str,
 ) -> Result<Vec<EventRecord>, String> {
     let bytes =
         fs::read(path).map_err(|error| format!("failed to read event log window: {error}"))?;
@@ -516,16 +495,13 @@ fn read_log_window(
     let mut previous_sequence = cursor.sequence;
     let mut events = Vec::new();
     for line in text.lines().filter(|line| !line.is_empty()) {
-        let event: EventRecord = serde_json::from_str(line)
-            .map_err(|error| format!("event log window contains malformed JSON: {error}"))?;
-        if event.run_id != run_id {
-            return Err("event log window contains a different run_id".to_string());
-        }
+        let event: EventRecord = serde_json::from_str(line).map_err(|error| format!("event log window contains malformed JSON: {error}"))?;
+        if event.run_id != ready.run_id || event.role != role || event.event_log_id != ready.event_log_id || event.schema_version != READY_SCHEMA_VERSION { return Err("event log window is not bound to the authorized process stream".into()); }
         if event.sequence != previous_sequence.saturating_add(1) {
             return Err("event log sequence has a duplicate or gap".to_string());
         }
         previous_sequence = event.sequence;
-        events.push(event);
+        if event.kind != "stream_start" { events.push(event); }
     }
     Ok(events)
 }
@@ -572,6 +548,12 @@ fn reconcile_events(
     }
     Ok(())
 }
+fn cleanup_evidence_clean(released: bool, stuck_mask: u16, verification_inconclusive: bool, transport_anomaly: bool) -> bool {
+    released && stuck_mask == 0 && !verification_inconclusive && !transport_anomaly
+}
+fn focus_evidence_clean(paused: bool, final_gate_focus_losses: u64, target_changes: u64, sink_events_clean: bool, probe_events_empty: bool) -> bool {
+    paused && final_gate_focus_losses >= 1 && target_changes == 0 && sink_events_clean && probe_events_empty
+}
 fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
     let release = snapshot.release_outcome.as_ref().map(|outcome| json!({
         "attempted_mask": outcome.attempted_mask, "transport_anomaly": outcome.transport_anomaly,
@@ -606,15 +588,32 @@ fn append_json_line(path: &Path, line: &str) -> io::Result<()> {
     writeln!(file, "{line}")
 }
 #[cfg(windows)]
-fn wait_for_focus_rejection(session: &NativeDispatchSession) -> bool {
+fn wait_for_startup_ready(session: &NativeDispatchSession) -> bool {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if session.snapshot().final_gate_focus_losses > 0 {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
+        let snapshot = session.snapshot();
+        if snapshot.startup_ready { return true; }
+        if snapshot.is_finished || Instant::now() >= deadline { return false; }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+#[cfg(windows)]
+fn wait_for_focus_pause(session: &NativeDispatchSession) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let state = session.poll_state();
+        if state.is_paused { return true; }
+        if state.is_finished || Instant::now() >= deadline { return false; }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+#[cfg(windows)]
+fn wait_for_sink_priming(path: &Path, cursor: LogCursor, ready: &ReadyRecord, expected_down: &[i32], expected_up: &[i32]) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(events) = read_log_window(path, cursor, ready, RECEIVE_ONLY_ROLE)
+            && reconcile_events(&events, expected_down, expected_up, false).is_ok() { return true; }
+        if Instant::now() >= deadline { return false; }
         thread::sleep(Duration::from_millis(5));
     }
 }
@@ -630,17 +629,9 @@ fn run_windows(args: RunArgs) -> i32 {
         Err(error) => inconclusive!(&error, json!({})),
     };
     let sink_hwnd = targets.sink.hwnd as isize;
-    let sink_cursor = match read_log_cursor(&args.sink_events, &args.run_id) {
-        Ok(cursor) => cursor,
-        Err(error) => inconclusive!(&error, json!({})),
-    };
+    if let Err(error) = validate_log_binding(&args.sink_events, &targets.sink, RECEIVE_ONLY_ROLE) { inconclusive!(&error, json!({})); }
     let probe_cursor = match targets.probe.as_ref() {
-        Some(_) => match read_log_cursor(
-            args.focus_probe_events
-                .as_deref()
-                .expect("focus probe event path"),
-            &args.run_id,
-        ) {
+        Some(probe) => match read_log_cursor(args.focus_probe_events.as_deref().expect("focus probe event path"), probe, PROBE_ROLE) {
             Ok(cursor) => Some(cursor),
             Err(error) => inconclusive!(&error, json!({})),
         },
@@ -656,17 +647,43 @@ fn run_windows(args: RunArgs) -> i32 {
     let session = match NativeDispatchSession::new(production_options(plan.schedule, plan.profile)) { Ok(session) => session, Err(error) => inconclusive!(&error, json!({})) };
     session.set_target_hwnd(sink_hwnd);
     session.set_focus_hint(true);
+    let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
+        Ok(record) => record,
+        Err(error) => inconclusive!(&error, json!({})),
+    };
+    if fresh_sink.event_log_id != targets.sink.event_log_id { inconclusive!("sink ready identity changed before arm", json!({})); }
+    let sink_cursor = match read_log_cursor(&args.sink_events, &fresh_sink, RECEIVE_ONLY_ROLE) {
+        Ok(cursor) => cursor,
+        Err(error) => inconclusive!(&error, json!({})),
+    };
     if let Err(error) = session.arm(0) {
         inconclusive!(&error, json!({}));
     }
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
+        if !wait_for_startup_ready(&session) {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("production session did not reach startup_ready before focus challenge", json!({}));
+        }
+        if !wait_for_sink_priming(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &expected_up) {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("priming sink Down/Up evidence was not observed before focus challenge", json!({}));
+        }
         let probe_hwnd = targets.probe.as_ref().expect("focus scenario probe").hwnd as isize;
         if !focus_window_and_verify(probe_hwnd, Duration::from_millis(250)) {
             let _ = session.quit();
             let _ = session.join(Duration::from_secs(5));
             inconclusive!("focus probe could not become the exact foreground HWND", json!({}));
         }
-        let observed = wait_for_focus_rejection(&session);
+        let probe = targets.probe.as_ref().expect("focus scenario probe");
+        let fresh_probe = match validate_target_ready(args.focus_probe_ready.as_deref().expect("focus probe ready path"), &args.run_id, probe_hwnd, PROBE_ROLE) {
+            Ok(record) => record,
+            Err(error) => { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }
+        };
+        if fresh_probe.event_log_id != probe.event_log_id { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("focus probe ready identity changed after focus transition", json!({})); }
+        if let Err(error) = validate_log_binding(args.focus_probe_events.as_deref().expect("focus probe event path"), &fresh_probe, PROBE_ROLE) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }
+        let observed = wait_for_focus_pause(&session);
         let _ = session.quit();
         observed
     } else if args.scenario.cleanup_is_full() {
@@ -679,12 +696,12 @@ fn run_windows(args: RunArgs) -> i32 {
     let joined = session.join(Duration::from_secs(10)).unwrap_or(false);
     let snapshot = session.snapshot();
     if !joined { inconclusive!("production session did not join within the bounded timeout", snapshot_json(&snapshot)); }
-    let sink_events = match read_log_window(&args.sink_events, sink_cursor, &args.run_id) {
+    let sink_events = match read_log_window(&args.sink_events, sink_cursor, &fresh_sink, RECEIVE_ONLY_ROLE) {
         Ok(events) => events,
         Err(error) => inconclusive!(&error, snapshot_json(&snapshot)),
     };
     let probe_events = match (probe_cursor, args.focus_probe_events.as_deref()) {
-        (Some(cursor), Some(path)) => match read_log_window(path, cursor, &args.run_id) {
+        (Some(cursor), Some(path)) => match read_log_window(path, cursor, targets.probe.as_ref().expect("focus probe"), PROBE_ROLE) {
             Ok(events) => events,
             Err(error) => inconclusive!(&error, snapshot_json(&snapshot)),
         },
@@ -706,11 +723,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let Some(outcome) = snapshot.release_outcome.as_ref() else {
         inconclusive!("missing cleanup/release evidence", details);
     };
-    if !outcome.released_successfully
-        || outcome.stuck_mask != 0
-        || outcome.verification_inconclusive
-        || outcome.transport_anomaly
-    {
+    if !cleanup_evidence_clean(outcome.released_successfully, outcome.stuck_mask, outcome.verification_inconclusive, outcome.transport_anomaly) {
         return write_report(
             &args,
             Verdict::Fail,
@@ -733,12 +746,8 @@ fn run_windows(args: RunArgs) -> i32 {
         );
     }
     if args.scenario.needs_focus_probe() {
-        if !focus_gate_observed
-            || snapshot.final_gate_focus_losses == 0
-            || snapshot.final_gate_target_changes != 0
-            || !sink_events.is_empty()
-            || !probe_events.is_empty()
-        {
+        let sink_events_clean = reconcile_events(&sink_events, &expected_down, &expected_up, false).is_ok();
+        if !focus_evidence_clean(focus_gate_observed, snapshot.final_gate_focus_losses, snapshot.final_gate_target_changes, sink_events_clean, probe_events.is_empty()) {
             return write_report(
                 &args,
                 Verdict::Fail,
@@ -788,10 +797,10 @@ mod tests {
     }
     fn ready(role: &str) -> ReadyRecord {
         let (sink_kind, title) = if role == RECEIVE_ONLY_ROLE {(SINK_KIND, SINK_TITLE)} else {(PROBE_KIND, PROBE_TITLE)};
-        ReadyRecord {schema_version: READY_SCHEMA_VERSION, run_id: "test-run".into(), role: role.into(), sink_kind: sink_kind.into(), pid: 7, hwnd: 0x42, title: title.into(), process: SCRIPT_MARKER.into(), input_policy: INPUT_POLICY.into(), process_start_time_filetime: 123}
+        ReadyRecord {schema_version: READY_SCHEMA_VERSION, run_id: "test-run".into(), role: role.into(), sink_kind: sink_kind.into(), pid: 7, hwnd: 0x42, title: title.into(), process: SCRIPT_MARKER.into(), input_policy: INPUT_POLICY.into(), event_log_id: "event-stream-test".into(), process_start_time_filetime: 123}
     }
     fn event(sequence: u64, kind: &str, key_code: i32) -> EventRecord {
-        EventRecord {run_id: "test-run".into(), sequence, kind: kind.into(), key_code, observed_utc: "2026-01-01T00:00:00Z".into()}
+        EventRecord {schema_version: READY_SCHEMA_VERSION, run_id: "test-run".into(), role: RECEIVE_ONLY_ROLE.into(), event_log_id: "event-stream-test".into(), sequence, kind: kind.into(), key_code, observed_utc: "2026-01-01T00:00:00Z".into()}
     }
     #[test]
     fn cli_requires_authorization_target_and_complete_focus_evidence() {
@@ -813,10 +822,7 @@ mod tests {
     }
     #[test]
     fn hwnd_parser_accepts_decimal_and_hex_but_rejects_zero() {
-        assert_eq!(parse_hwnd("66"), Ok(66));
-        assert_eq!(parse_hwnd("0x42"), Ok(66));
-        assert!(parse_hwnd("0").is_err());
-        assert!(parse_hwnd("not-a-hwnd").is_err());
+        assert_eq!(parse_hwnd("66"), Ok(66)); assert_eq!(parse_hwnd("0x42"), Ok(66)); assert!(parse_hwnd("0").is_err()); assert!(parse_hwnd("not-a-hwnd").is_err());
     }
     #[test]
     fn protocol_and_live_identity_require_exact_markers_and_numeric_freshness() {
@@ -847,6 +853,25 @@ mod tests {
         assert_eq!(plan.schedule.packets[0].down_mask, 1);
     }
     #[test]
+    fn focus_plan_primes_then_challenges_a_different_slot() {
+        let plan = scenario_plan(Scenario::FocusLoss).expect("focus plan");
+        assert_eq!(plan.expected_down_slots, vec![0]);
+        assert_eq!(plan.expected_up_slots, vec![0]);
+        assert_eq!(plan.schedule.packets.iter().map(|packet| (packet.scheduled_us, packet.down_mask, packet.up_mask)).collect::<Vec<_>>(), vec![(500_000, 1, 0), (600_000, 0, 1), (1_000_000, 2, 0), (1_100_000, 0, 2)]);
+    }
+    #[test]
+    fn acceptance_timing_materializes_current_default_policy() {
+        assert_eq!(ACCEPTANCE_FRAME_US, 16_667); assert_eq!(ACCEPTANCE_MIN_HOLD_US, 17_467); assert_eq!(ACCEPTANCE_MIN_RELEASE_GAP_US, 17_467); assert_eq!(ACCEPTANCE_DOWN_LATE_GRACE_US, 500); assert_eq!(ACCEPTANCE_FOCUS_RESTORE_GRACE_US, 100_000);
+    }
+    #[test]
+    fn event_stream_requires_ready_bound_header_and_rejects_wrong_or_empty_stream() {
+        let ready = ready(RECEIVE_ONLY_ROLE);
+        let header = event(0, "stream_start", 0);
+        assert_eq!(validate_event_stream(&[header], &ready, RECEIVE_ONLY_ROLE), Ok(0)); assert!(validate_event_stream(&[], &ready, RECEIVE_ONLY_ROLE).is_err());
+        let mut wrong = event(0, "stream_start", 0);
+        wrong.event_log_id = "wrong-stream".into(); assert!(validate_event_stream(&[wrong], &ready, RECEIVE_ONLY_ROLE).is_err());
+    }
+    #[test]
     fn reconciliation_rejects_invalid_order_and_allows_declared_cleanup_ups() {
         assert!(reconcile_events(&[event(1, "key_press", 89), event(2, "key_release", 89)], &[89], &[89], false).is_ok());
         assert!(reconcile_events(&[event(1, "key_press", 89)], &[89], &[89], false).is_err());
@@ -863,6 +888,10 @@ mod tests {
         );
         assert_eq!(profile.physical_key(0).scan_code, 0x02);
         assert!(!profile.physical_key(0).extended);
+    }
+    #[test]
+    fn focus_and_cleanup_verdicts_fail_closed_for_live_or_inconclusive_evidence() {
+        assert!(focus_evidence_clean(true, 1, 0, true, true)); assert!(!focus_evidence_clean(false, 1, 0, true, true)); assert!(!focus_evidence_clean(true, 0, 0, true, true)); assert!(!focus_evidence_clean(true, 1, 0, true, false)); assert!(!cleanup_evidence_clean(true, 0, true, false)); assert!(!cleanup_evidence_clean(true, 0, false, true)); assert!(cleanup_evidence_clean(true, 0, false, false));
     }
 }
 }
