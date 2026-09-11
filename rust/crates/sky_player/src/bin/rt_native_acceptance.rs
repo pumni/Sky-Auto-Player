@@ -34,7 +34,7 @@ const MAX_RUN_ID_BYTES: usize = 128;
 const MAX_PATH_BYTES: usize = 4096;
 const READY_SCHEMA_VERSION: u32 = 3;
 const EVENT_SCHEMA_VERSION: u32 = 3;
-const DRAIN_DEADLINE_MS: u64 = 1_000;
+const DRAIN_DEADLINE_MS: u64 = 1_000; const PRETERMINAL_DEADLINE_MS: u64 = 2_000;
 const DRAIN_QUIET_MS: u64 = 100;
 const DRAIN_POLL_MS: u64 = 10;
 const RECEIVE_ONLY_ROLE: &str = "ReceiveOnly";
@@ -103,6 +103,7 @@ enum ParsedCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] enum DrainMode { ExpectedEvents { allow_unpaired_cleanup_ups: bool }, ZeroEventSafety }
 #[derive(Debug, Clone, PartialEq, Eq)] struct EventWindow { events: Vec<EventRecord>, complete: bool }
 #[derive(Debug, Clone, PartialEq, Eq)] enum DrainResult { Pass(Vec<EventRecord>), Fail(String, Vec<EventRecord>), Inconclusive(String) }
+#[derive(Debug, Clone, PartialEq, Eq)] enum PreTerminalResult { Satisfied, TrustedFailure(String), ObservationInconclusive(String), IncompleteTimeout { complete: bool } }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
     Pass,
@@ -489,16 +490,6 @@ fn read_log_window_status(
     }
     Ok(EventWindow { events, complete })
 }
-fn read_log_window(
-    path: &Path,
-    cursor: LogCursor,
-    ready: &ReadyRecord,
-    role: &str,
-) -> Result<Vec<EventRecord>, String> {
-    let window = read_log_window_status(path, cursor, ready, role)?;
-    if !window.complete { return Err("event log window ends with a truncated record".to_string()); }
-    Ok(window.events)
-}
 fn physical_event(event: &EventRecord) -> PhysicalExpectation {
     PhysicalExpectation { scan_code: event.scan_code, extended: event.extended }
 }
@@ -574,16 +565,17 @@ fn drain_event_window_with<R: EventWindowReader, C: DrainClock>(
         clock.wait_poll();
     }
 }
+fn wait_for_sink_events_with<R: EventWindowReader, C: DrainClock>(reader: &mut R, clock: &mut C, expected_down: &[PhysicalExpectation], expected_up: &[PhysicalExpectation]) -> PreTerminalResult { loop { let now = clock.elapsed_ms(); let sample = match reader.read() { Ok(sample) => sample, Err(error) => return PreTerminalResult::ObservationInconclusive(error) }; match validate_event_prefix(&sample.events, expected_down, expected_up, false) { Ok(true) if sample.complete => return PreTerminalResult::Satisfied, Ok(_) => {}, Err(error) => return PreTerminalResult::TrustedFailure(error) } if now >= PRETERMINAL_DEADLINE_MS { return PreTerminalResult::IncompleteTimeout { complete: sample.complete }; } clock.wait_poll(); } }
 #[cfg(windows)]
 struct FileEventWindowReader<'a> { path: &'a Path, cursor: LogCursor, ready: &'a ReadyRecord, role: &'a str }
 #[cfg(windows)]
 impl EventWindowReader for FileEventWindowReader<'_> { fn read(&mut self) -> Result<EventWindow, String> { read_log_window_status(self.path, self.cursor, self.ready, self.role) } }
 #[cfg(windows)]
-struct RealDrainClock { started: Instant }
+struct RealDrainClock { started: Instant, poll_ms: u64 }
 #[cfg(windows)]
 impl DrainClock for RealDrainClock {
     fn elapsed_ms(&self) -> u64 { self.started.elapsed().as_millis() as u64 }
-    fn wait_poll(&mut self) { thread::sleep(Duration::from_millis(DRAIN_POLL_MS)); }
+    fn wait_poll(&mut self) { thread::sleep(Duration::from_millis(self.poll_ms)); }
 }
 #[cfg(windows)]
 fn drain_event_window(
@@ -595,7 +587,7 @@ fn drain_event_window(
     expected_down: &[PhysicalExpectation],
     expected_up: &[PhysicalExpectation],
 ) -> DrainResult {
-    let mut reader = FileEventWindowReader { path, cursor, ready, role }; let mut clock = RealDrainClock { started: Instant::now() };
+    let mut reader = FileEventWindowReader { path, cursor, ready, role }; let mut clock = RealDrainClock { started: Instant::now(), poll_ms: DRAIN_POLL_MS };
     drain_event_window_with(&mut reader, &mut clock, mode, expected_down, expected_up)
 }
 fn cleanup_evidence_clean(full_mask_required: bool, attempted_mask: u16, attempts: u8, released: bool, stuck_mask: u16, verification_inconclusive: bool, transport_anomaly: bool) -> bool {
@@ -657,16 +649,14 @@ fn wait_for_focus_pause(session: &NativeDispatchSession) -> bool {
         thread::sleep(Duration::from_millis(5));
     }
 }
-#[cfg(windows)]
-fn wait_for_sink_events(path: &Path, cursor: LogCursor, ready: &ReadyRecord, expected_down: &[PhysicalExpectation], expected_up: &[PhysicalExpectation]) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if let Ok(events) = read_log_window(path, cursor, ready, RECEIVE_ONLY_ROLE)
-            && reconcile_events(&events, expected_down, expected_up, false).is_ok() { return true; }
-        if Instant::now() >= deadline { return false; }
-        thread::sleep(Duration::from_millis(5));
-    }
+impl PreTerminalResult {
+    fn verdict(&self) -> Verdict { match self { Self::Satisfied => Verdict::Pass, Self::TrustedFailure(_) | Self::IncompleteTimeout { complete: true } => Verdict::Fail, Self::ObservationInconclusive(_) | Self::IncompleteTimeout { complete: false } => Verdict::Inconclusive } }
+    fn reason(&self) -> &str { match self { Self::Satisfied => "pre-terminal physical evidence is complete", Self::TrustedFailure(reason) | Self::ObservationInconclusive(reason) => reason, Self::IncompleteTimeout { complete: true } => "expected physical evidence did not arrive before the pre-terminal deadline", Self::IncompleteTimeout { complete: false } => "event stream remained truncated at the pre-terminal deadline" } }
 }
+#[cfg(windows)]
+fn wait_for_sink_events(path: &Path, cursor: LogCursor, ready: &ReadyRecord, expected_down: &[PhysicalExpectation], expected_up: &[PhysicalExpectation]) -> PreTerminalResult { let mut reader = FileEventWindowReader { path, cursor, ready, role: RECEIVE_ONLY_ROLE }; let mut clock = RealDrainClock { started: Instant::now(), poll_ms: DRAIN_POLL_MS / 2 }; wait_for_sink_events_with(&mut reader, &mut clock, expected_down, expected_up) }
+#[cfg(windows)]
+fn finish_preterminal(args: &RunArgs, session: &NativeDispatchSession, result: PreTerminalResult) -> Option<i32> { if matches!(result, PreTerminalResult::Satisfied) { return None; } let verdict = result.verdict(); let reason = result.reason().to_string(); let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); Some(write_report(args, verdict, &reason, json!({}))) }
 #[cfg(windows)]
 fn run_windows(args: RunArgs) -> i32 {
     macro_rules! inconclusive {
@@ -716,11 +706,7 @@ fn run_windows(args: RunArgs) -> i32 {
             let _ = session.join(Duration::from_secs(5));
             inconclusive!("production session did not reach startup_ready before focus challenge", json!({}));
         }
-        if !wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &expected_up) {
-            let _ = session.quit();
-            let _ = session.join(Duration::from_secs(5));
-            inconclusive!("priming sink Down/Up evidence was not observed before focus challenge", json!({}));
-        }
+        if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &expected_up)) { return code; }
         let probe_hwnd = targets.probe.as_ref().expect("focus scenario probe").hwnd as isize;
         if !focus_window_and_verify(probe_hwnd, Duration::from_millis(250)) {
             let _ = session.quit();
@@ -740,7 +726,7 @@ fn run_windows(args: RunArgs) -> i32 {
         observed
     } else if args.scenario == Scenario::CleanupFullRelease {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before cleanup proof", json!({})); }
-        if !wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &[]) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("full-mask sink Down evidence was not observed before cleanup", json!({})); }
+        if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &[])) { return code; }
         let _ = session.quit();
         false
     } else {
@@ -879,6 +865,8 @@ mod tests {
     fn event(sequence: u64, kind: &str, scan_code: u16) -> EventRecord { event_with(sequence, kind, scan_code, false, 89) }
     #[derive(Debug)] struct FakeReader { samples: Vec<EventWindow>, index: usize }
     impl EventWindowReader for FakeReader { fn read(&mut self) -> Result<EventWindow, String> { let sample = self.samples.get(self.index).or_else(|| self.samples.last()).cloned().ok_or_else(|| "fake reader has no samples".to_string())?; self.index = self.index.saturating_add(1); Ok(sample) } }
+    struct FailingReader;
+    impl EventWindowReader for FailingReader { fn read(&mut self) -> Result<EventWindow, String> { Err("event log sequence has a duplicate or gap".into()) } }
     #[derive(Debug)] struct FakeClock { now_ms: u64, step_ms: u64 }
     impl DrainClock for FakeClock { fn elapsed_ms(&self) -> u64 { self.now_ms } fn wait_poll(&mut self) { self.now_ms = self.now_ms.saturating_add(self.step_ms); } }
     fn complete_window(events: Vec<EventRecord>) -> EventWindow { EventWindow { events, complete: true } }
@@ -889,6 +877,7 @@ mod tests {
     #[test] fn physical_reconciliation_rejects_extended_duplicate_direction_and_syskey() { let e = [physical(0x15)]; assert!(reconcile_events(&[event_with(1, "key_press", 0x15, true, 0xE5), event_with(2, "key_release", 0x15, true, 0x59)], &e, &e, false).is_err()); assert!(reconcile_events(&[event(1, "key_press", 0x15), event(2, "key_press", 0x15), event(3, "key_release", 0x15)], &e, &e, false).is_err()); assert!(reconcile_events(&[event_with(1, "sys_key_press", 0x15, false, 0xE5)], &e, &[], false).is_err()); }
     #[test] fn expected_drain_waits_for_late_event_and_quiet() { let e = [physical(0x15)]; let events = vec![event(1, "key_press", 0x15), event(2, "key_release", 0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new()), complete_window(events.clone())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Pass(events)); }
     #[test] fn expected_drain_missing_fails_and_partial_is_inconclusive() { let e = [physical(0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Fail(_, _))); let mut r = FakeReader { samples: vec![partial_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Inconclusive(_))); }
+    #[test] fn preterminal_classification_is_typed_and_fail_closed() { let e = [physical(0x15)]; let events = vec![event(1, "key_press", 0x15), event(2, "key_release", 0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new()), complete_window(events)], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::Satisfied); let mut r = FakeReader { samples: vec![complete_window(vec![event(1, "key_press", 0x16)])], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::TrustedFailure(_))); let mut r = FakeReader { samples: vec![complete_window(vec![event(1, "sys_key_press", 0x15)])], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::TrustedFailure(_))); let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: PRETERMINAL_DEADLINE_MS, step_ms: 10 }; let result = wait_for_sink_events_with(&mut r, &mut c, &e, &e); assert!(matches!(result, PreTerminalResult::IncompleteTimeout { complete: true })); assert_eq!(result.verdict(), Verdict::Fail); let mut r = FakeReader { samples: vec![partial_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: PRETERMINAL_DEADLINE_MS, step_ms: 10 }; let result = wait_for_sink_events_with(&mut r, &mut c, &e, &e); assert!(matches!(result, PreTerminalResult::IncompleteTimeout { complete: false })); assert_eq!(result.verdict(), Verdict::Inconclusive); let mut r = FailingReader; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::ObservationInconclusive(_))); }
     #[test] fn zero_event_safety_uses_full_deadline_and_catches_delayed_event() { let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(drain_event_window_with(&mut r, &mut c, DrainMode::ZeroEventSafety, &[], &[]), DrainResult::Pass(Vec::new())); assert_eq!(c.now_ms, DRAIN_DEADLINE_MS); let mut s = vec![complete_window(Vec::new()); 20]; s.push(complete_window(vec![event(1, "key_press", 0x15)])); let mut r = FakeReader { samples: s, index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ZeroEventSafety, &[], &[]), DrainResult::Fail(_, _))); }
     #[test] fn cleanup_reconciles_fifteen_down_and_up_records() { let e = (0..MAX_KEYS).map(|slot| physical(PHYSICAL_INSTRUMENT_SCAN_CODES[slot])).collect::<Vec<_>>(); let mut a = Vec::new(); for (i, k) in e.iter().enumerate() { a.push(event_with(i as u64 + 1, "key_press", k.scan_code, k.extended, 0)); } for (i, k) in e.iter().enumerate() { a.push(event_with(MAX_KEYS as u64 + i as u64 + 1, "key_release", k.scan_code, k.extended, 0)); } assert!(reconcile_events(&a, &e, &e, false).is_ok()); }
     #[test] fn w4_profile_and_cleanup_verdicts_remain_valid() { let p = MaterializedInstrumentKeyProfile::from_validated(sky_dispatch_win32::input::InstrumentKeyProfile::try_from_spec(w4_profile_spec()).unwrap()); assert_eq!(p.physical_key(0).scan_code, 0x02); let plan = scenario_plan(Scenario::CleanupFullRelease).unwrap(); assert_eq!(plan.schedule.packets[0].down_mask, FULL_INSTRUMENT_MASK); assert!(cleanup_evidence_clean(true, FULL_INSTRUMENT_MASK, 1, true, 0, false, false)); }
