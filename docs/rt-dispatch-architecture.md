@@ -83,9 +83,15 @@ The supported physical scenario names are `canonical-single`, `canonical-chord`,
 `cleanup-full-release`, and `w4-noncanonical`. Each invocation appends one
 JSONL report with the scenario name and its `PASS`, `FAIL`, or `INCONCLUSIVE`
 verdict. The target-change scenario changes the session target to the invalid
-sentinel `0` before the first authored Down and requires authoritative target
-change rejection with no sink delivery; stop and skip similarly request their
-control action before the first authored input and require clean termination.
+sentinel `0` before the first authored Down and requires the production
+control-plane path to fail closed with no gameplay KeyDown delivery. The
+fail-closed path may emit the bounded full-cleanup KeyUp safety pass; those
+unpaired KeyUps are expected and the report requires zero keys inserted before
+failure. It intentionally does not require `final_gate_target_changes`, which
+belongs to deterministic final-admission race-seam tests. Pause/resume first waits for a physical
+canonical Down/Up pair, pauses the running session, resumes it, and requires a
+later pair to reach the sink. Stop and skip first wait for an active physical
+Down, then require the corresponding cleanup Up and clean terminal release.
 
 Each ready record includes a process-generated `event_log_id` and explicitly binds
 `event_schema_version = 3`. Before publishing ready evidence, the helper flushes
@@ -146,6 +152,14 @@ successful release, no stuck mask, inconclusive verification, or transport
 anomaly) and exactly 15 matching sink KeyDown/KeyUp records. All non-cleanup
 scenarios require their authored/logical and transport evidence only; a zero-mask
 terminal release result is not a fresh physical All-Up probe.
+
+Every report also carries the production hold/retrigger forensics already
+published by the session snapshot: pair sample count, minimum pre-call and
+completion hold ticks, completion-hold-below-frame count, release-gap samples
+and below-policy count, same-call same-key retriggers, anchor/unmatched-Up
+counts, and the aggregate forensics anomaly count. These fields make the
+500/750/1000 us comparison able to check hold, retrigger, and release-gap
+invariants without adding realtime instrumentation.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch
