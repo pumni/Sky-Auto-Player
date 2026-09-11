@@ -69,7 +69,7 @@ describe('DiagnosticsView', () => {
     expect(screen.queryByText('Completion p50')).toBeNull();
   });
 
-  it('uses boundary-accurate labels and a recent completion metric for timing', () => {
+  it('uses boundary-accurate labels and sender-side timing metrics', () => {
     const store = createDesktopStore(createMockBridge());
     const sessionId = 'a'.repeat(32);
     store.setState({
@@ -129,7 +129,15 @@ describe('DiagnosticsView', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
     expect(screen.getByRole('img', { name: /SendInput pre-call lateness/ })).toBeVisible();
-    expect(screen.getByText(/Latest sender pre-call max 320 μs/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Session max pre-call lateness observed at the latest diagnostics snapshot: 320 μs/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/This cumulative value does not decrease after recovery/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Down grace applies only to Down-bearing sends/)).toBeInTheDocument();
     expect(screen.getByText('Down grace 500 μs')).toBeInTheDocument();
   });
 
@@ -228,7 +236,11 @@ describe('DiagnosticsView', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
     expect(screen.getByRole('img', { name: /SendInput pre-call lateness/ })).toBeVisible();
-    expect(screen.getByText(/Latest sender pre-call max 327 μs/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Session max pre-call lateness observed at the latest diagnostics snapshot: 327 μs/,
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText('Down grace 500 μs')).toBeInTheDocument();
   });
 
@@ -265,9 +277,62 @@ describe('DiagnosticsView', () => {
     render(<DiagnosticsView useStore={store} />);
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
 
-    expect(screen.getByText(/Latest sender pre-call max 320 μs/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Session max pre-call lateness observed at the latest diagnostics snapshot: 320 μs/,
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Completion p95 observer value -1\.50 ms/)).toBeInTheDocument();
     expect(document.querySelector('.plot-zero-axis')).not.toBeNull();
+  });
+
+  it('uses backend severity precedence and renders the last error', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'e'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            backend_status: 'error',
+            last_error: 'authored Down send integrity failure',
+            missed_down_boundaries: 0,
+            sendinput_partial_events: 0,
+            sendinput_zero_progress_failures: 0,
+          }),
+        ],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Sender-side status: Error')).toBeInTheDocument();
+    expect(
+      screen.getByText('Last error: authored Down send integrity failure'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Sender-side status: Healthy')).toBeNull();
+  });
+
+  it('does not report degraded backend health as healthy when counters are zero', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'f'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [snapshot({ session_id: sessionId, backend_status: 'degraded' })],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Sender-side status: Attention')).toBeInTheDocument();
+    expect(screen.getByText('Sender-side backend reported degraded health.')).toBeInTheDocument();
+    expect(screen.queryByText('Sender-side status: Healthy')).toBeNull();
   });
 
   it('removes the fabricated Logs view and timestamps human events', () => {

@@ -20,7 +20,7 @@ use sky_player::engine::{
     TelemetryOptions, TimingOptions, WaitOptions,
 };
 use smallvec::SmallVec;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -53,32 +53,13 @@ const ACCEPTANCE_DOWN_LATE_GRACE_US: u64 = 500;
 const ACCEPTANCE_TRANSPORT_MARGIN_US: u64 = 300;
 const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scenario {
-    CanonicalSingle,
-    CanonicalChord,
-    CleanupFullRelease,
-    FocusLoss,
-    W4Noncanonical,
-}
+enum Scenario { CanonicalSingle, CanonicalChord, CanonicalMaxChord, Hold, RapidRetrigger, MixedUpDown, CleanupFullRelease, FocusLoss, TargetHwndChange, PauseResume, StopCleanup, SkipCleanup, W4Noncanonical }
 impl Scenario {
     fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "canonical-single" => Ok(Self::CanonicalSingle),
-            "canonical-chord" => Ok(Self::CanonicalChord),
-            "cleanup-full-release" => Ok(Self::CleanupFullRelease),
-            "focus-loss" => Ok(Self::FocusLoss),
-            "w4-noncanonical" => Ok(Self::W4Noncanonical),
-            _ => Err(format!("unsupported scenario: {value}")),
-        }
+        match value { "canonical-single" => Ok(Self::CanonicalSingle), "canonical-chord" => Ok(Self::CanonicalChord), "canonical-max-chord" => Ok(Self::CanonicalMaxChord), "hold" => Ok(Self::Hold), "rapid-retrigger" => Ok(Self::RapidRetrigger), "mixed-up-down" => Ok(Self::MixedUpDown), "cleanup-full-release" => Ok(Self::CleanupFullRelease), "focus-loss" => Ok(Self::FocusLoss), "target-hwnd-change" => Ok(Self::TargetHwndChange), "pause-resume" => Ok(Self::PauseResume), "stop-cleanup" => Ok(Self::StopCleanup), "skip-cleanup" => Ok(Self::SkipCleanup), "w4-noncanonical" => Ok(Self::W4Noncanonical), _ => Err(format!("unsupported scenario: {value}")) }
     }
     const fn label(self) -> &'static str {
-        match self {
-            Self::CanonicalSingle => "canonical-single",
-            Self::CanonicalChord => "canonical-chord",
-            Self::CleanupFullRelease => "cleanup-full-release",
-            Self::FocusLoss => "focus-loss",
-            Self::W4Noncanonical => "w4-noncanonical",
-        }
+        match self { Self::CanonicalSingle => "canonical-single", Self::CanonicalChord => "canonical-chord", Self::CanonicalMaxChord => "canonical-max-chord", Self::Hold => "hold", Self::RapidRetrigger => "rapid-retrigger", Self::MixedUpDown => "mixed-up-down", Self::CleanupFullRelease => "cleanup-full-release", Self::FocusLoss => "focus-loss", Self::TargetHwndChange => "target-hwnd-change", Self::PauseResume => "pause-resume", Self::StopCleanup => "stop-cleanup", Self::SkipCleanup => "skip-cleanup", Self::W4Noncanonical => "w4-noncanonical" }
     }
     const fn needs_focus_probe(self) -> bool {
         matches!(self, Self::FocusLoss)
@@ -367,8 +348,14 @@ fn scenario_plan(scenario: Scenario) -> Result<ScenarioPlan, String> {
         match scenario {
             Scenario::CanonicalSingle | Scenario::W4Noncanonical => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 80_000, &[0])], (scenario == Scenario::W4Noncanonical).then_some(w4_profile_spec()), vec![0], vec![0], false),
             Scenario::CanonicalChord => (vec![action(0, ActionKind::Down, 50_000, &[0, 1]), action(1, ActionKind::Up, 90_000, &[0, 1])], None, vec![0, 1], vec![0, 1], false),
+            Scenario::CanonicalMaxChord => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 90_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
+            Scenario::Hold => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 500_000, &[0])], None, vec![0], vec![0], false),
+            Scenario::RapidRetrigger => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 80_000, &[0]), action(2, ActionKind::Down, 110_000, &[0]), action(3, ActionKind::Up, 140_000, &[0]), action(4, ActionKind::Down, 170_000, &[0]), action(5, ActionKind::Up, 200_000, &[0])], None, vec![0, 0, 0], vec![0, 0, 0], false),
+            Scenario::MixedUpDown => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 100_000, &[0]), action(2, ActionKind::Down, 100_000, &[1]), action(3, ActionKind::Up, 150_000, &[1])], None, vec![0, 1], vec![0, 1], false),
             Scenario::CleanupFullRelease => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 10_000_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
             Scenario::FocusLoss => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0]), action(2, ActionKind::Down, 1_000_000, &[1]), action(3, ActionKind::Up, 1_100_000, &[1])], None, vec![0], vec![0], false),
+            Scenario::TargetHwndChange | Scenario::StopCleanup | Scenario::SkipCleanup => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0])], None, vec![], vec![], false),
+            Scenario::PauseResume => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0])], None, vec![0], vec![0], false),
         };
     let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
         .map_err(|error| format!("scenario schedule compilation failed: {error}"))?;
@@ -503,19 +490,19 @@ fn validate_event_prefix(
     expected_up: &[PhysicalExpectation],
     allow_unpaired_cleanup_ups: bool,
 ) -> Result<bool, String> {
-    let expected_down = expected_down.iter().copied().collect::<HashSet<_>>();
-    let expected_up = expected_up.iter().copied().collect::<HashSet<_>>();
-    let mut observed_down = HashSet::new();
-    let mut observed_up = HashSet::new();
+    let mut remaining_down = HashMap::new();
+    let mut remaining_up = HashMap::new();
+    for physical in expected_down { *remaining_down.entry(*physical).or_insert(0_usize) += 1; }
+    for physical in expected_up { *remaining_up.entry(*physical).or_insert(0_usize) += 1; }
+    let mut observed_down = HashMap::new();
+    let mut observed_up = HashMap::new();
     for event in events { let physical = physical_event(event); match event.kind.as_str() {
-        "key_press" if expected_down.contains(&physical) && observed_down.insert(physical) => {},
-        "key_press" => return Err(format!("unexpected or duplicate KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)),
-        "key_release" => { if !expected_up.contains(&physical) || !observed_up.insert(physical) { return Err(format!("unexpected or duplicate KeyUp scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }
-            if !allow_unpaired_cleanup_ups && !observed_down.contains(&physical) { return Err(format!("KeyUp arrived before its matching KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); } },
+        "key_press" => { let Some(remaining) = remaining_down.get_mut(&physical) else { return Err(format!("unexpected or duplicate KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }; if *remaining == 0 { return Err(format!("unexpected or duplicate KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); } *remaining -= 1; *observed_down.entry(physical).or_insert(0_usize) += 1; },
+        "key_release" => { let Some(remaining) = remaining_up.get_mut(&physical) else { return Err(format!("unexpected or duplicate KeyUp scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }; if *remaining == 0 { return Err(format!("unexpected or duplicate KeyUp scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }; if !allow_unpaired_cleanup_ups && observed_down.get(&physical).copied().unwrap_or(0) <= observed_up.get(&physical).copied().unwrap_or(0) { return Err(format!("KeyUp arrived before its matching KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }; *remaining -= 1; *observed_up.entry(physical).or_insert(0_usize) += 1; },
         "sys_key_press" | "sys_key_release" => return Err("SYSKEY event cannot satisfy gameplay evidence".into()),
         other => return Err(format!("unexpected event kind {other:?}")),
     } }
-    Ok(observed_down == expected_down && observed_up == expected_up)
+    Ok(remaining_down.values().all(|count| *count == 0) && remaining_up.values().all(|count| *count == 0))
 }
 fn reconcile_events(
     events: &[EventRecord],
@@ -528,6 +515,11 @@ fn reconcile_events(
     } else {
         Err("event log is missing an expected physical KeyDown or KeyUp".into())
     }
+}
+fn reconcile_event_sequence(events: &[EventRecord], expected: &[(&str, PhysicalExpectation)]) -> Result<(), String> {
+    if events.len() != expected.len() { return Err(format!("event count {} does not match expected {}", events.len(), expected.len())); }
+    for (index, (event, (kind, physical))) in events.iter().zip(expected).enumerate() { if event.kind != *kind || physical_event(event) != *physical { return Err(format!("event {index} does not match expected {kind} scan=0x{:02X}", physical.scan_code)); } }
+    Ok(())
 }
 trait EventWindowReader {
     fn read(&mut self) -> Result<EventWindow, String>;
@@ -699,6 +691,7 @@ fn run_windows(args: RunArgs) -> i32 {
         inconclusive!(&error, json!({}));
     }
     let mut final_probe = targets.probe.clone();
+    let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested) = (false, false, false, false, false);
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
         if !wait_for_startup_ready(&session) {
             let _ = session.quit();
@@ -728,6 +721,14 @@ fn run_windows(args: RunArgs) -> i32 {
         if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &[])) { return code; }
         let _ = session.quit();
         false
+    } else if args.scenario == Scenario::PauseResume {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before pause/resume proof", json!({})); }; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit before the pause/resume proof deadline", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
+    } else if args.scenario == Scenario::TargetHwndChange {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
+    } else if args.scenario == Scenario::StopCleanup {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before stop proof", json!({})); }; if let Err(error) = session.quit() { inconclusive!(&error, json!({})); }; stop_requested = true; false
+    } else if args.scenario == Scenario::SkipCleanup {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before skip proof", json!({})); }; if let Err(error) = session.skip() { inconclusive!(&error, json!({})); }; skip_requested = true; false
     } else {
         false
     };
@@ -778,6 +779,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("sink_drain_deadline_ms".to_string(), json!(DRAIN_DEADLINE_MS));
         object.insert("sink_drain_quiet_ms".to_string(), json!(DRAIN_QUIET_MS));
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
+        object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"pause_observed": pause_observed, "resume_requested": resume_requested, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
     }
     let Some(outcome) = snapshot.release_outcome.as_ref() else {
         inconclusive!("missing cleanup/release evidence", details);
@@ -810,6 +812,12 @@ fn run_windows(args: RunArgs) -> i32 {
     if let Some(error) = probe_drain_failure {
         return write_report(&args, Verdict::Fail, &error, details);
     }
+    if args.scenario == Scenario::TargetHwndChange && (snapshot.final_gate_target_changes == 0 || !sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "target HWND transition was not rejected before physical delivery", details); }
+    if args.scenario == Scenario::StopCleanup && (snapshot.outcome.as_deref() != Some("quit") || !sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not terminate before physical delivery", details); }
+    if args.scenario == Scenario::SkipCleanup && (snapshot.outcome.as_deref() != Some("skipped") || !sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not terminate before physical delivery", details); }
+    if args.scenario == Scenario::PauseResume && (!pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
+    if args.scenario == Scenario::RapidRetrigger { let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let expected = [("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
+    if args.scenario == Scenario::MixedUpDown { let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0]; let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", second)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
     if args.scenario.needs_focus_probe() {
         let sink_events_clean = reconcile_events(&sink_events, &expected_down, &expected_up, false).is_ok();
         if !focus_evidence_clean(focus_gate_observed, snapshot.final_gate_focus_losses, snapshot.final_gate_target_changes, sink_events_clean, probe_events.is_empty()) {
@@ -871,9 +879,9 @@ mod tests {
     fn complete_window(events: Vec<EventRecord>) -> EventWindow { EventWindow { events, complete: true } }
     fn partial_window(events: Vec<EventRecord>) -> EventWindow { EventWindow { events, complete: false } }
     #[test] fn schema_v3_rejects_v2_and_requires_bound_header() { let ready = ready(RECEIVE_ONLY_ROLE); let mut old = ready.clone(); old.schema_version = 2; old.event_schema_version = 2; assert!(validate_ready_record(&old, "test-run", 0x42, RECEIVE_ONLY_ROLE).is_err()); assert_eq!(validate_event_stream(&[event(0, "stream_start", 0)], &ready, RECEIVE_ONLY_ROLE), Ok(0)); assert!(validate_event_stream(&[], &ready, RECEIVE_ONLY_ROLE).is_err()); let mut wrong = event(0, "stream_start", 0); wrong.event_log_id = "rebound".into(); assert!(validate_event_stream(&[wrong], &ready, RECEIVE_ONLY_ROLE).is_err()); assert!(validate_event_stream(&[event(0, "stream_start", 0), event(2, "key_press", 0x15)], &ready, RECEIVE_ONLY_ROLE).is_err()); }
-    #[test] fn canonical_and_w4_expectations_are_physical() { assert_eq!(expected_physical_keys(None, &[0]), vec![physical(PHYSICAL_INSTRUMENT_SCAN_CODES[0])]); let profile = w4_profile_spec(); assert_eq!(expected_physical_keys(Some(&profile), &[0]), vec![physical(0x02)]); }
+    #[test] fn canonical_and_w4_expectations_are_physical() { assert_eq!(expected_physical_keys(None, &[0]), vec![physical(PHYSICAL_INSTRUMENT_SCAN_CODES[0])]); let profile = w4_profile_spec(); assert_eq!(expected_physical_keys(Some(&profile), &[0]), vec![physical(0x02)]); for name in ["canonical-max-chord", "hold", "rapid-retrigger", "mixed-up-down", "target-hwnd-change", "pause-resume", "stop-cleanup", "skip-cleanup"] { assert!(scenario_plan(Scenario::parse(name).unwrap()).is_ok(), "scenario {name}"); } }
     #[test] fn processkey_correct_scan_passes_and_wrong_scan_fails() { let e = [physical(0x15)]; assert!(reconcile_events(&[event_with(1, "key_press", 0x15, false, 0xE5), event_with(2, "key_release", 0x15, false, 0x59)], &e, &e, false).is_ok()); assert!(reconcile_events(&[event_with(1, "key_press", 0x16, false, 0xE5), event_with(2, "key_release", 0x16, false, 0x59)], &e, &e, false).is_err()); }
-    #[test] fn physical_reconciliation_rejects_extended_duplicate_direction_and_syskey() { let e = [physical(0x15)]; assert!(reconcile_events(&[event_with(1, "key_press", 0x15, true, 0xE5), event_with(2, "key_release", 0x15, true, 0x59)], &e, &e, false).is_err()); assert!(reconcile_events(&[event(1, "key_press", 0x15), event(2, "key_press", 0x15), event(3, "key_release", 0x15)], &e, &e, false).is_err()); assert!(reconcile_events(&[event_with(1, "sys_key_press", 0x15, false, 0xE5)], &e, &[], false).is_err()); }
+    #[test] fn physical_reconciliation_rejects_extended_duplicate_direction_and_syskey() { let e = [physical(0x15)]; assert!(reconcile_events(&[event_with(1, "key_press", 0x15, true, 0xE5), event_with(2, "key_release", 0x15, true, 0x59)], &e, &e, false).is_err()); assert!(reconcile_events(&[event(1, "key_press", 0x15), event(2, "key_press", 0x15), event(3, "key_release", 0x15)], &e, &e, false).is_err()); assert!(reconcile_events(&[event_with(1, "sys_key_press", 0x15, false, 0xE5)], &e, &[], false).is_err()); let retrigger = [event(1, "key_press", 0x15), event(2, "key_release", 0x15), event(3, "key_press", 0x15), event(4, "key_release", 0x15)]; assert!(reconcile_events(&retrigger, &[e[0], e[0]], &[e[0], e[0]], false).is_ok()); }
     #[test] fn expected_drain_waits_for_late_event_and_quiet() { let e = [physical(0x15)]; let events = vec![event(1, "key_press", 0x15), event(2, "key_release", 0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new()), complete_window(events.clone())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Pass(events)); }
     #[test] fn expected_drain_missing_fails_and_partial_is_inconclusive() { let e = [physical(0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Fail(_, _))); let mut r = FakeReader { samples: vec![partial_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Inconclusive(_))); }
     #[test] fn preterminal_classification_is_typed_and_fail_closed() { let e = [physical(0x15)]; let events = vec![event(1, "key_press", 0x15), event(2, "key_release", 0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new()), complete_window(events)], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::Satisfied); let mut r = FakeReader { samples: vec![complete_window(vec![event(1, "key_press", 0x16)])], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::TrustedFailure(_))); let mut r = FakeReader { samples: vec![complete_window(vec![event(1, "sys_key_press", 0x15)])], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::TrustedFailure(_))); let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: PRETERMINAL_DEADLINE_MS, step_ms: 10 }; let result = wait_for_sink_events_with(&mut r, &mut c, &e, &e); assert!(matches!(result, PreTerminalResult::IncompleteTimeout { complete: true })); assert_eq!(result.verdict(), Verdict::Fail); let mut r = FakeReader { samples: vec![partial_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: PRETERMINAL_DEADLINE_MS, step_ms: 10 }; let result = wait_for_sink_events_with(&mut r, &mut c, &e, &e); assert!(matches!(result, PreTerminalResult::IncompleteTimeout { complete: false })); assert_eq!(result.verdict(), Verdict::Inconclusive); let mut r = FailingReader; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::ObservationInconclusive(_))); }

@@ -96,10 +96,13 @@ function TimingPlot({
         role="img"
         aria-labelledby="timing-plot-title timing-plot-description"
       >
-        <title id="timing-plot-title">SendInput pre-call lateness over recent samples</title>
+        <title id="timing-plot-title">
+          Session max SendInput pre-call lateness observed at each diagnostics snapshot
+        </title>
         <desc id="timing-plot-description">
-          Sender-side maximum lateness before each SendInput call, with the effective Down cutoff
-          grace threshold.
+          Cumulative session maximum observed at each diagnostics snapshot; it does not decrease
+          after recovery. Pre-call timing covers physical sends, while the Down cutoff grace
+          threshold applies only to Down-bearing sends.
         </desc>
         <line x1="0" y1={zeroY} x2={width} y2={zeroY} className="plot-zero-axis" />
         {thresholdY !== null && (
@@ -115,7 +118,7 @@ function TimingPlot({
       <figcaption>
         {latest === null
           ? 'No sender-side timing samples yet.'
-          : `Latest sender pre-call max ${latest} μs across ${values.length} samples.${
+          : `Session max pre-call lateness observed at the latest diagnostics snapshot: ${latest} μs across ${values.length} snapshots. This cumulative value does not decrease after recovery. Down grace applies only to Down-bearing sends.${
               latestSample?.p95_ms === null || latestSample?.p95_ms === undefined
                 ? ''
                 : ` Completion p95 observer value ${number(latestSample.p95_ms)} ms.`
@@ -161,12 +164,27 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
         status: 'Unavailable',
         detail: 'Sender-side diagnostics are unavailable for this dispatch profile.',
       }
-    : senderSuppressionCount === 0 && transportFailureCount === 0
-      ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
-      : {
-          status: 'Attention',
-          detail: `${latest?.missed_hard_late_boundaries ?? 0} hard-late boundaries; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
-        };
+    : latest?.last_error
+      ? {
+          status: 'Error',
+          detail: `Last error: ${latest.last_error}`,
+        }
+      : latest?.backend_status === 'error'
+        ? {
+            status: 'Error',
+            detail: 'Sender-side backend reported an error.',
+          }
+        : latest?.backend_status === 'degraded'
+          ? {
+              status: 'Attention',
+              detail: 'Sender-side backend reported degraded health.',
+            }
+          : senderSuppressionCount === 0 && transportFailureCount === 0
+            ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
+            : {
+                status: 'Attention',
+                detail: `${latest?.missed_hard_late_boundaries ?? 0} hard-late boundaries; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
+              };
   return (
     <div
       ref={scrollRef}

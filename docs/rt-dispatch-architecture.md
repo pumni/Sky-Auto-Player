@@ -77,6 +77,16 @@ The physical command is an explicit, feature-gated qualification run:
 
 `cargo run --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance -- run --allow-real-input --run-id <run-id> --sink-ready .benchmarks/sink.json --sink-events .benchmarks/sink-events.json --target-hwnd <sink-hwnd> --scenario <scenario> --evidence .benchmarks/rt-native-acceptance.jsonl`
 
+The supported physical scenario names are `canonical-single`, `canonical-chord`,
+`canonical-max-chord`, `hold`, `rapid-retrigger`, `mixed-up-down`, `focus-loss`,
+`target-hwnd-change`, `pause-resume`, `stop-cleanup`, `skip-cleanup`,
+`cleanup-full-release`, and `w4-noncanonical`. Each invocation appends one
+JSONL report with the scenario name and its `PASS`, `FAIL`, or `INCONCLUSIVE`
+verdict. The target-change scenario changes the session target to the invalid
+sentinel `0` before the first authored Down and requires authoritative target
+change rejection with no sink delivery; stop and skip similarly request their
+control action before the first authored input and require clean termination.
+
 Each ready record includes a process-generated `event_log_id` and explicitly binds
 `event_schema_version = 3`. Before publishing ready evidence, the helper flushes
 a schema-v3 `stream_start` header containing the run ID, role, and same event-log
@@ -115,15 +125,27 @@ counter afterward. Sink/probe logs prove controlled Windows delivery and
 wrong-window safety only; they do not prove game receipt, audio latency, or the
 internal QPC timestamp chain.
 
+Real `SendInput` cannot deterministically produce a partial or zero-progress
+return. Those transport fault seams remain qualified by the scripted
+test-support paths, which must be run alongside the physical matrix:
+
+`cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --lib --features test-support zero_progress`
+
+`cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --lib --features test-support partial_fault`
+
+`cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --lib --features test-support partial`
+
+`cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --lib --features test-support zero_progress`
+
 The `cleanup-full-release` scenario is the only acceptance scenario that claims
 fresh physical All-Up evidence. It authors one bounded Down chord across all 15
 logical slots, waits for all 15 sink KeyDown records after `startup_ready`, then
 requests normal `quit()` before the authored Up. Its pass evidence requires
 full-mask tracked cleanup (`attempted_mask = 0x7fff`, at least one attempt,
 successful release, no stuck mask, inconclusive verification, or transport
-anomaly) and exactly 15 matching sink KeyDown/KeyUp records. Canonical, W4, and
-focus-loss scenarios require their authored/logical and transport evidence only;
-a zero-mask terminal release result is not a fresh physical All-Up probe.
+anomaly) and exactly 15 matching sink KeyDown/KeyUp records. All non-cleanup
+scenarios require their authored/logical and transport evidence only; a zero-mask
+terminal release result is not a fresh physical All-Up probe.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch

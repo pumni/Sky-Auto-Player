@@ -149,7 +149,7 @@ pub fn target_integrity_compatibility(hwnd: isize) -> TargetIntegrityCompatibili
             return None;
         }
         // SAFETY: GetTokenInformation returned a TOKEN_MANDATORY_LABEL in the
-        // caller-owned buffer and the buffer is aligned by Vec<u8>'s allocator
+        // caller-owned buffer and the buffer is aligned by Vec<u64>'s allocator
         // for the structure's ABI alignment.
         let label = unsafe { &*buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>() };
         let sid = label.Label.Sid;
