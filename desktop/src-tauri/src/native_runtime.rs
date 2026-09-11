@@ -2633,6 +2633,7 @@ struct NativePlaybackService {
 }
 
 const DIAGNOSTICS_INTERVAL: Duration = Duration::from_millis(100);
+const SUPERVISOR_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Default)]
 struct DiagnosticsPublicationState {
@@ -2745,6 +2746,8 @@ struct NativeActivePlayback {
     stop_requested: AtomicBool,
     skip_requested: AtomicBool,
     done: AtomicBool,
+    heartbeat_stop: AtomicBool,
+    heartbeat_thread: Mutex<Option<thread::JoinHandle<()>>>,
     sequence: AtomicU64,
 }
 
@@ -3322,6 +3325,8 @@ impl NativePlaybackService {
                         stop_requested: AtomicBool::new(false),
                         skip_requested: AtomicBool::new(false),
                         done: AtomicBool::new(true),
+                        heartbeat_stop: AtomicBool::new(true),
+                        heartbeat_thread: Mutex::new(None),
                         sequence: AtomicU64::new(0),
                     });
                     let _ = publish_playback_state(
@@ -3362,6 +3367,8 @@ impl NativePlaybackService {
             stop_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
             done: AtomicBool::new(false),
+            heartbeat_stop: AtomicBool::new(false),
+            heartbeat_thread: Mutex::new(None),
             sequence: AtomicU64::new(0),
         });
         let prepared_index = prepared
@@ -3392,12 +3399,34 @@ impl NativePlaybackService {
             }
             return Err(error);
         }
+        if let Err(error) = spawn_supervisor_heartbeat(&active) {
+            stop_supervisor_heartbeat(&active);
+            if let Some(player) = &active.player {
+                let _ = player.panic_release();
+                let _ = player.quit();
+                let _ = player.join(Duration::from_secs(5));
+            }
+            if let Ok(mut slot) = self.active.lock()
+                && slot
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &active))
+            {
+                *slot = None;
+            }
+            if let Ok(mut prepared) = self.prepared.lock() {
+                prepared.push_back((request.prepared_id, record));
+            }
+            return Err(format!(
+                "failed to start native playback heartbeat: {error}"
+            ));
+        }
         let service = Arc::new(self.clone_handle());
         let active_for_thread = active.clone();
         let spawn_result = thread::Builder::new()
             .name("sky-native-playback-supervisor".into())
             .spawn(move || service.monitor(active_for_thread, events));
         if let Err(error) = spawn_result {
+            stop_supervisor_heartbeat(&active);
             if let Some(player) = &active.player {
                 let _ = player.panic_release();
                 let _ = player.quit();
@@ -3516,12 +3545,10 @@ impl NativePlaybackService {
         // terminal and startup-failure paths.
         let _activity_lease = active.activity_lease.as_ref();
         let mut last_snapshot = Instant::now();
-        let mut last_heartbeat = Instant::now()
-            .checked_sub(Duration::from_millis(200))
-            .unwrap_or_else(Instant::now);
         let mut last_event_state = PlaybackEventState::Starting;
         loop {
             if active.stop_requested.load(Ordering::Acquire) {
+                stop_supervisor_heartbeat(&active);
                 if let Some(player) = &active.player {
                     let _ = player.quit();
                     let _ = player.join(Duration::from_secs(5));
@@ -3553,10 +3580,6 @@ impl NativePlaybackService {
                 player.set_focus_hint(focused);
             }
             let (elapsed, pre_roll_remaining, status) = if let Some(player) = &active.player {
-                if last_heartbeat.elapsed() >= Duration::from_millis(200) {
-                    let _ = player.heartbeat();
-                    last_heartbeat = Instant::now();
-                }
                 let state = player.poll_state();
                 (state.elapsed_us, state.pre_roll_remaining_us, state.status)
             } else {
@@ -3637,6 +3660,7 @@ impl NativePlaybackService {
             }
             thread::sleep(Duration::from_millis(20));
         }
+        stop_supervisor_heartbeat(&active);
         if let Ok(mut slot) = self.active.lock()
             && slot
                 .as_ref()
@@ -3938,6 +3962,63 @@ impl NativePlaybackServiceHandle {
     }
 }
 
+fn supervisor_heartbeat_loop<F>(
+    stop: &AtomicBool,
+    done: &AtomicBool,
+    interval: Duration,
+    mut heartbeat: F,
+) where
+    F: FnMut(),
+{
+    while !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
+        heartbeat();
+        thread::sleep(interval);
+    }
+}
+
+fn spawn_supervisor_heartbeat(active: &Arc<NativeActivePlayback>) -> Result<(), String> {
+    let Some(player) = active.player.clone() else {
+        return Ok(());
+    };
+    let heartbeat_active = Arc::clone(active);
+    let handle = thread::Builder::new()
+        .name("sky-native-playback-heartbeat".into())
+        .spawn(move || {
+            supervisor_heartbeat_loop(
+                &heartbeat_active.heartbeat_stop,
+                &heartbeat_active.done,
+                SUPERVISOR_HEARTBEAT_INTERVAL,
+                || {
+                    let _ = player.heartbeat();
+                },
+            );
+        })
+        .map_err(|error| format!("could not spawn supervisor heartbeat: {error}"))?;
+    match active.heartbeat_thread.lock() {
+        Ok(mut slot) => {
+            *slot = Some(handle);
+            Ok(())
+        }
+        Err(_) => {
+            active.heartbeat_stop.store(true, Ordering::Release);
+            let _ = handle.join();
+            Err("supervisor heartbeat state lock poisoned".into())
+        }
+    }
+}
+
+fn stop_supervisor_heartbeat(active: &NativeActivePlayback) {
+    active.heartbeat_stop.store(true, Ordering::Release);
+    let handle = active
+        .heartbeat_thread
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    if let Some(handle) = handle {
+        let _ = handle.join();
+    }
+}
+
 fn playback_event_state(status: EnginePollStatus) -> PlaybackEventState {
     match status {
         EnginePollStatus::Ready | EnginePollStatus::Preroll => PlaybackEventState::Starting,
@@ -4212,6 +4293,7 @@ fn diagnostics_backend_status(
 
 fn cleanup_failed_event_delivery(active: &NativeActivePlayback) {
     active.stop_requested.store(true, Ordering::Release);
+    stop_supervisor_heartbeat(active);
     let _ = set_playback_state(active, PlaybackSessionState::Failed);
     if let Some(player) = &active.player {
         let _ = player.panic_release();
@@ -4827,7 +4909,7 @@ mod tests {
         publish_diagnostics_snapshot_for_active, publish_playback_state,
         publish_stopped_completion, publish_terminal_poll_result, remove_oldest_snapshot,
         resolve_install_root, retain_prepared_capacity, safe_calibration_evidence,
-        settings_fingerprint, validate_playback_start_request,
+        settings_fingerprint, supervisor_heartbeat_loop, validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState};
@@ -4840,8 +4922,9 @@ mod tests {
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
     use sky_native_adapters::{AppPaths, load_calibration_resolution};
     use std::fs;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Barrier, Condvar, Mutex};
+    use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn active_for_control(
@@ -4881,6 +4964,8 @@ mod tests {
             stop_requested: std::sync::atomic::AtomicBool::new(false),
             skip_requested: std::sync::atomic::AtomicBool::new(false),
             done: std::sync::atomic::AtomicBool::new(false),
+            heartbeat_stop: std::sync::atomic::AtomicBool::new(true),
+            heartbeat_thread: Mutex::new(None),
             sequence: std::sync::atomic::AtomicU64::new(0),
         })
     }
@@ -6810,5 +6895,43 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn supervisor_heartbeat_progresses_while_ui_publication_is_stalled() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let heartbeats = Arc::new(AtomicU64::new(0));
+        let publication_started = Arc::new(std::sync::Barrier::new(2));
+        let publication_release = Arc::new(std::sync::Barrier::new(2));
+
+        let ui_started = Arc::clone(&publication_started);
+        let ui_release = Arc::clone(&publication_release);
+        let ui = thread::spawn(move || {
+            ui_started.wait();
+            ui_release.wait();
+        });
+        publication_started.wait();
+
+        let heartbeat_stop = Arc::clone(&stop);
+        let heartbeat_done = Arc::clone(&done);
+        let heartbeat_count = Arc::clone(&heartbeats);
+        let heartbeat = thread::spawn(move || {
+            supervisor_heartbeat_loop(
+                &heartbeat_stop,
+                &heartbeat_done,
+                Duration::from_millis(5),
+                || {
+                    heartbeat_count.fetch_add(1, Ordering::Relaxed);
+                },
+            );
+        });
+
+        thread::sleep(Duration::from_millis(25));
+        assert!(heartbeats.load(Ordering::Relaxed) >= 3);
+        publication_release.wait();
+        ui.join().expect("UI publication seam");
+        stop.store(true, Ordering::Release);
+        heartbeat.join().expect("heartbeat seam");
     }
 }
