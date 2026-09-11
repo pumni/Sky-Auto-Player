@@ -112,7 +112,6 @@ mod tests {
         );
 
         drop(first);
-        let _reacquired =
-            SingleInstanceGuard::acquire_named(&name).expect("reacquired guard");
+        let _reacquired = SingleInstanceGuard::acquire_named(&name).expect("reacquired guard");
     }
 }
