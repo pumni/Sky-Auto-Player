@@ -58,26 +58,53 @@ observation gap makes the scenario and aggregate `acceptance_clean=false`; the
 aggregate is `statistics_eligible` only when every scenario is clean and has at
 least 10,000 iterations. A host-preemption event is therefore retained for
 paired baseline comparison instead of being silently reported as green.
-The native acceptance harness fingerprints a controlled `start_delay_us` so
-paired legs do not put their first authored event at worker startup. Its
-`paired`, `mixed`, and `coalesced` profiles respectively exercise separated
-Down/Up pairs or adjacent Up/Down boundaries; `--require-focus` and
-`--no-require-focus` are explicit matrix dimensions. These profiles only make
-the harness capable of the requested matrix. Real `SendInput` runs still
-require an isolated project-owned target HWND and explicit operator approval;
-they must never use an arbitrary foreground window.
+The feature-gated `rt-native-acceptance` binary exercises the existing
+`NativeDispatchSession` and `BackendConfig::Production` path. It is not a raw
+sender or a timing benchmark. Real-input qualification requires the explicit
+`--allow-real-input` flag, an exact target HWND, schema-v2 ready evidence, and
+the live project-owned `pwsh.exe` window identity. There is no foreground,
+environment, PID-only, or no-focus fallback.
 
-The controlled sink is the receive-only PowerShell WinForms helper
-`scripts/native_acceptance_sink.ps1`. On the isolated Windows host, start it with
-`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -ReadyFile
-.benchmarks/sink.json -EventLog .benchmarks/sink-events.json`, copy its
-printed `hwnd` into `SKY_NATIVE_TARGET_HWND`, and keep that project-owned
-window as the intended foreground target for the explicit
-`--backend sendinput --allow-real-input` command. The harness now requires
-that HWND for both focus modes: `--require-focus` verifies it stays focused;
-`--no-require-focus` disables that timing guard for the matrix but does not
-authorize an unspecified foreground window. The sink records ordinary window
-key events only and never emits input.
+Start the two receive-only project-owned WinForms observers separately. The
+normal sink and the inert focus probe both log KeyDown/KeyUp; the probe never
+emits input and has its own evidence file:
+
+`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -Mode ReceiveOnly -RunId <run-id> -ReadyFile .benchmarks/sink.json -EventLog .benchmarks/sink-events.json`
+
+`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -Mode InertFocusProbe -RunId <run-id> -ReadyFile .benchmarks/focus-probe.json -EventLog .benchmarks/focus-probe-events.json`
+
+The physical command is an explicit, feature-gated qualification run:
+
+`cargo run --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance -- run --allow-real-input --run-id <run-id> --sink-ready .benchmarks/sink.json --sink-events .benchmarks/sink-events.json --target-hwnd <sink-hwnd> --scenario <scenario> --evidence .benchmarks/rt-native-acceptance.jsonl`
+
+Each ready record includes a process-generated `event_log_id`. Before publishing
+ready evidence, the helper flushes a schema-v2 `stream_start` header containing
+the run ID, role, and same event-log ID to the exact event file. The harness
+rejects an empty, stale, or mismatched event stream before `arm`; later records
+must retain the same binding. This prevents a wrong empty file from satisfying
+the focus-loss zero-event condition.
+
+The acceptance profile materializes the current default equation without a
+runtime timing override: at 60 FPS, `frame_us = 16,667`, and with 500 us Down
+grace plus 300 us transport margin, both minimum hold and release gap are
+17,467 us; focus restore grace remains 100,000 us. The `focus-loss` scenario
+first commits a canonical sink Down/Up pair, waits for `startup_ready` and that
+pair's event evidence, then moves foreground to the validated project-owned
+probe with the coarse focus hint still true before a later different-slot Down.
+It observes the existing live pause state and requires the terminal final-gate
+counter afterward. Sink/probe logs prove controlled Windows delivery and
+wrong-window safety only; they do not prove game receipt, audio latency, or the
+internal QPC timestamp chain.
+
+The `cleanup-full-release` scenario is the only acceptance scenario that claims
+fresh physical All-Up evidence. It authors one bounded Down chord across all 15
+logical slots, waits for all 15 sink KeyDown records after `startup_ready`, then
+requests normal `quit()` before the authored Up. Its pass evidence requires
+full-mask tracked cleanup (`attempted_mask = 0x7fff`, at least one attempt,
+successful release, no stuck mask, inconclusive verification, or transport
+anomaly) and exactly 15 matching sink KeyDown/KeyUp records. Canonical, W4, and
+focus-loss scenarios require their authored/logical and transport evidence only;
+a zero-mask terminal release result is not a fresh physical All-Up probe.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch

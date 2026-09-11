@@ -10,6 +10,7 @@ name = "sky_player"
 [features]
 default = []
 test-support = ["sky_dispatch_core/test-support", "sky_dispatch_win32/test-support"]
+real-input-acceptance = []
 
 [dependencies]
 sky_dispatch_core = { path = "../sky_dispatch_core" }
@@ -32,3 +33,8 @@ required-features = ["test-support"]
 [[example]]
 name = "rt_handoff_bench"
 required-features = ["test-support"]
+
+[[bin]]
+name = "rt-native-acceptance"
+path = "src/bin/rt_native_acceptance.rs"
+required-features = ["real-input-acceptance"]
