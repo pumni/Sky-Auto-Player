@@ -1,8 +1,8 @@
 use super::super::outcome::{PacketRetryReason, ReleaseAllOutcome, SendTransactionStatus};
 use super::super::physical::{
-    CleanupVerification, ReconciledRelease, reconcile_release_observation,
+    CleanupVerification, ReconciledRelease, reconcile_logical_release_observation,
 };
-use super::super::scan_code::{FULL_INSTRUMENT_MASK, scan_codes_from_mask};
+use super::super::scan_code::FULL_INSTRUMENT_MASK;
 use super::{ReleaseScope, TrackedKeyState, release_retry_sleep};
 
 impl TrackedKeyState {
@@ -43,8 +43,7 @@ impl TrackedKeyState {
             }
 
             let previous_unresolved = unresolved_mask;
-            let send_codes = scan_codes_from_mask(unresolved_mask);
-            let emitted = self.do_emit_up_once(&send_codes);
+            let emitted = self.do_emit_up_once(unresolved_mask);
             let transport_confirmed_mask = emitted.evidence.confirmed_mask;
 
             transport_anomaly |= !matches!(emitted.status, SendTransactionStatus::Complete)
@@ -55,7 +54,7 @@ impl TrackedKeyState {
 
             let physical_state =
                 self.resolve_release_probe(target_hwnd, unresolved_mask, transport_confirmed_mask);
-            let reconciled = reconcile_release_observation(
+            let reconciled = reconcile_logical_release_observation(
                 unresolved_mask,
                 transport_confirmed_mask,
                 physical_state,
@@ -132,8 +131,12 @@ impl TrackedKeyState {
             ReleaseScope::Tracked => "tracked release incomplete".to_string(),
             ReleaseScope::FullInstrument => format!(
                 "full-instrument release incomplete: {}/{} keys unresolved",
-                scan_codes_from_mask(unresolved_mask).len(),
-                scan_codes_from_mask(requested_mask).len()
+                self.instrument_key_profile
+                    .scan_codes_from_mask(unresolved_mask)
+                    .len(),
+                self.instrument_key_profile
+                    .scan_codes_from_mask(requested_mask)
+                    .len()
             ),
         };
         if !released_successfully {

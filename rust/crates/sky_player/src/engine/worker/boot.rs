@@ -126,19 +126,29 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             return 1;
         }
     };
+    let instrument_key_profile = worker
+        .instrument_key_profile
+        .take()
+        .expect("worker instrument profile is admitted before boot");
     let mut backend = match &worker.config.backend {
         #[cfg(any(test, feature = "test-support"))]
         BackendConfig::Mock {
             latency_base_us,
             latency_per_key_us,
             fault_script,
-        } => create_mock_backend(
-            qpc_clock,
-            *latency_base_us,
-            *latency_per_key_us,
-            fault_script.clone(),
-        ),
-        BackendConfig::Production => TrackedKeyState::with_qpc_clock(qpc_clock),
+        } => {
+            let mut backend = create_mock_backend(
+                qpc_clock,
+                *latency_base_us,
+                *latency_per_key_us,
+                fault_script.clone(),
+            );
+            backend.set_instrument_key_profile(instrument_key_profile);
+            backend
+        }
+        BackendConfig::Production => {
+            TrackedKeyState::with_qpc_clock_and_profile(qpc_clock, instrument_key_profile)
+        }
     };
     let target_hwnd = &shared.target.target_hwnd;
     let priority_acquired = &shared.publication.priority_acquired;
@@ -151,7 +161,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             } else {
                 format!(
                     "{primary_error}; admission cleanup failed: {}",
-                    describe_release_outcome(&cleanup)
+                    describe_release_outcome(backend, &cleanup)
                 )
             };
             *metrics.last_error.lock() = Some(message);

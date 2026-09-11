@@ -525,31 +525,37 @@ pub(super) struct Worker<'a> {
     config: WorkerConfig,
     shared: &'a SessionShared,
     epoch_qpc: QpcTicks,
+    instrument_key_profile: Option<sky_dispatch_win32::input::MaterializedInstrumentKeyProfile>,
     core: WorkerCore,
 }
 
 impl<'a> Worker<'a> {
     pub(super) fn new(
-        options: NativeSessionOptions,
+        admitted: super::config::AdmittedNativeSessionOptions,
         shared: &'a SessionShared,
         epoch_qpc: QpcTicks,
     ) -> Self {
-        let NativeSessionOptions {
-            schedule,
-            backend,
-            profile,
-            timing,
-            focus,
-            wait,
-            telemetry,
-            priority,
-            #[cfg(any(test, feature = "test-support"))]
-            startup_ordering_hook,
-            #[cfg(any(test, feature = "test-support"))]
-            restore_race_hook,
-            #[cfg(any(test, feature = "test-support"))]
-                timer_lifecycle_context: _,
-        } = options;
+        let super::config::AdmittedNativeSessionOptions {
+            options:
+                NativeSessionOptions {
+                    schedule,
+                    backend,
+                    profile,
+                    timing,
+                    focus,
+                    wait,
+                    telemetry,
+                    priority,
+                    #[cfg(any(test, feature = "test-support"))]
+                    startup_ordering_hook,
+                    #[cfg(any(test, feature = "test-support"))]
+                    restore_race_hook,
+                    #[cfg(any(test, feature = "test-support"))]
+                        timer_lifecycle_context: _,
+                    instrument_key_profile: _,
+                },
+            instrument_key_profile,
+        } = admitted;
         #[cfg(any(test, feature = "test-support"))]
         let runtime = WorkerRuntime {
             startup_ordering_hook,
@@ -571,6 +577,7 @@ impl<'a> Worker<'a> {
             },
             shared,
             epoch_qpc,
+            instrument_key_profile: Some(instrument_key_profile),
             core: WorkerCore {
                 runtime,
                 ..WorkerCore::default()

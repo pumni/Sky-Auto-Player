@@ -1,5 +1,9 @@
-use super::scan_code::{FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, key_mask};
+use super::profile::MaterializedInstrumentKeyProfile;
+#[cfg(test)]
+use super::scan_code::PHYSICAL_INSTRUMENT_SCAN_CODES;
+use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask};
 use crate::focus::foreground_window_matches;
+use sky_dispatch_core::model::MAX_KEYS;
 use smallvec::SmallVec;
 
 #[cfg(windows)]
@@ -36,6 +40,7 @@ pub(crate) fn keyboard_context_for_target(target_hwnd: isize) -> Option<TargetKe
 }
 
 #[cfg(windows)]
+#[cfg(test)]
 pub(crate) fn map_instrument_virtual_keys(
     context: &TargetKeyboardContext,
     requested_mask: u16,
@@ -66,6 +71,17 @@ pub(crate) fn map_instrument_virtual_keys(
 pub enum InstrumentPhysicalState {
     AllUp,
     Held(SmallVec<[u16; 15]>),
+    Inconclusive,
+}
+
+/// Logical-mask physical evidence used by an armed session. The legacy
+/// `InstrumentPhysicalState` remains available for canonical-only callers and
+/// for the public preflight error shape; session reconciliation never maps
+/// custom keys through the canonical scan-code registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LogicalInstrumentPhysicalState {
+    AllUp,
+    Held(u16),
     Inconclusive,
 }
 
@@ -102,6 +118,7 @@ impl CleanupVerification {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn reconcile_release_observation(
     requested_mask: u16,
     transport_confirmed_mask: u16,
@@ -127,6 +144,31 @@ pub(crate) fn reconcile_release_observation(
     }
 }
 
+pub(crate) fn reconcile_logical_release_observation(
+    requested_mask: u16,
+    transport_confirmed_mask: u16,
+    physical_state: LogicalInstrumentPhysicalState,
+) -> ReconciledRelease {
+    match physical_state {
+        LogicalInstrumentPhysicalState::AllUp
+            if transport_confirmed_mask & requested_mask == requested_mask =>
+        {
+            ReconciledRelease::VerifiedAllUp
+        }
+        LogicalInstrumentPhysicalState::AllUp => {
+            ReconciledRelease::Inconclusive(requested_mask & !transport_confirmed_mask)
+        }
+        LogicalInstrumentPhysicalState::Held(held_mask) => {
+            ReconciledRelease::Held(held_mask & requested_mask)
+        }
+        LogicalInstrumentPhysicalState::Inconclusive => {
+            let unresolved = requested_mask & !transport_confirmed_mask;
+            ReconciledRelease::Inconclusive(unresolved)
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn classify_async_key_states(
     requested_mask: u16,
     key_states: &[i16; 15],
@@ -150,6 +192,26 @@ pub(crate) fn classify_async_key_states(
     }
 }
 
+pub(crate) fn classify_logical_async_key_states(
+    requested_mask: u16,
+    key_states: &[i16; MAX_KEYS],
+) -> LogicalInstrumentPhysicalState {
+    if requested_mask & !FULL_INSTRUMENT_MASK != 0 {
+        return LogicalInstrumentPhysicalState::Inconclusive;
+    }
+    let mut held_mask = 0u16;
+    for (index, &state) in key_states.iter().enumerate() {
+        if requested_mask & (1u16 << index) != 0 && (state as u16 & 0x8000) != 0 {
+            held_mask |= 1u16 << index;
+        }
+    }
+    if held_mask == 0 {
+        LogicalInstrumentPhysicalState::AllUp
+    } else {
+        LogicalInstrumentPhysicalState::Held(held_mask)
+    }
+}
+
 fn query_async_key_state(_index: usize, virtual_key: i32) -> i16 {
     #[cfg(windows)]
     {
@@ -164,6 +226,7 @@ fn query_async_key_state(_index: usize, virtual_key: i32) -> i16 {
     }
 }
 
+#[cfg(test)]
 fn instrument_physical_state_for_mask_with<
     Context,
     Foreground,
@@ -213,6 +276,114 @@ where
     classify_async_key_states(requested_mask, &key_states)
 }
 
+#[cfg(windows)]
+pub(crate) fn map_profile_virtual_keys(
+    context: &TargetKeyboardContext,
+    profile: &MaterializedInstrumentKeyProfile,
+    requested_mask: u16,
+) -> Option<[i32; MAX_KEYS]> {
+    let mut virtual_keys = [0i32; MAX_KEYS];
+    for (slot, virtual_key_slot) in virtual_keys.iter_mut().enumerate() {
+        if requested_mask & (1u16 << slot) == 0 {
+            continue;
+        }
+        let key = profile.physical_key(slot);
+        if key.extended {
+            return None;
+        }
+        // SAFETY: MapVirtualKeyExW reads only the validated scan-code scalar
+        // and borrowed HKL handle; it does not retain either value.
+        let virtual_key = unsafe {
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyExW(
+                u32::from(key.scan_code),
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::MAPVK_VSC_TO_VK_EX,
+                context.layout,
+            )
+        };
+        if virtual_key == 0 {
+            return None;
+        }
+        *virtual_key_slot = virtual_key as i32;
+    }
+    Some(virtual_keys)
+}
+
+fn instrument_logical_physical_state_for_mask_with<
+    Context,
+    Foreground,
+    ContextResolver,
+    VirtualKeyMapper,
+    KeyStateQuery,
+>(
+    profile: &MaterializedInstrumentKeyProfile,
+    target_hwnd: isize,
+    requested_mask: u16,
+    mut foreground_matches: Foreground,
+    mut context_for_target: ContextResolver,
+    mut map_virtual_keys: VirtualKeyMapper,
+    mut query_key_state: KeyStateQuery,
+) -> LogicalInstrumentPhysicalState
+where
+    Foreground: FnMut(isize) -> bool,
+    ContextResolver: FnMut(isize) -> Option<Context>,
+    VirtualKeyMapper:
+        FnMut(&Context, &MaterializedInstrumentKeyProfile, u16) -> Option<[i32; MAX_KEYS]>,
+    KeyStateQuery: FnMut(usize, i32) -> i16,
+{
+    if target_hwnd == 0 || !foreground_matches(target_hwnd) {
+        return LogicalInstrumentPhysicalState::Inconclusive;
+    }
+    if requested_mask == 0 {
+        return LogicalInstrumentPhysicalState::AllUp;
+    }
+    if requested_mask & !FULL_INSTRUMENT_MASK != 0 {
+        return LogicalInstrumentPhysicalState::Inconclusive;
+    }
+
+    let Some(context) = context_for_target(target_hwnd) else {
+        return LogicalInstrumentPhysicalState::Inconclusive;
+    };
+    let Some(virtual_keys) = map_virtual_keys(&context, profile, requested_mask) else {
+        return LogicalInstrumentPhysicalState::Inconclusive;
+    };
+    let mut key_states = [0i16; MAX_KEYS];
+    for (index, &virtual_key) in virtual_keys.iter().enumerate() {
+        if requested_mask & (1u16 << index) == 0 {
+            continue;
+        }
+        key_states[index] = query_key_state(index, virtual_key);
+    }
+    if !foreground_matches(target_hwnd) {
+        return LogicalInstrumentPhysicalState::Inconclusive;
+    }
+    classify_logical_async_key_states(requested_mask, &key_states)
+}
+
+pub(crate) fn instrument_logical_physical_state_for_mask(
+    profile: &MaterializedInstrumentKeyProfile,
+    target_hwnd: isize,
+    requested_mask: u16,
+) -> LogicalInstrumentPhysicalState {
+    #[cfg(windows)]
+    {
+        instrument_logical_physical_state_for_mask_with(
+            profile,
+            target_hwnd,
+            requested_mask,
+            foreground_window_matches,
+            keyboard_context_for_target,
+            map_profile_virtual_keys,
+            query_async_key_state,
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (profile, target_hwnd, requested_mask);
+        LogicalInstrumentPhysicalState::Inconclusive
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn instrument_physical_state_for_mask(
     target_hwnd: isize,
     requested_mask: u16,
@@ -276,7 +447,10 @@ pub fn is_scan_code_physically_down(scan_code: u16, target_hwnd: isize) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{InstrumentPhysicalState, instrument_physical_state_for_mask_with};
+    use super::{
+        InstrumentPhysicalState, classify_logical_async_key_states,
+        instrument_physical_state_for_mask_with,
+    };
 
     #[test]
     fn focus_transition_after_key_reads_is_inconclusive() {
@@ -302,5 +476,16 @@ mod tests {
         assert_eq!(state, InstrumentPhysicalState::Inconclusive);
         assert_eq!(foreground_checks, 2);
         assert_eq!(key_reads, 1);
+    }
+
+    #[test]
+    fn logical_classification_preserves_profile_slot_identity() {
+        let mut key_states = [0i16; super::MAX_KEYS];
+        key_states[0] = i16::MIN;
+        key_states[14] = i16::MIN;
+        assert_eq!(
+            classify_logical_async_key_states(0x7fff, &key_states),
+            super::LogicalInstrumentPhysicalState::Held((1 << 0) | (1 << 14))
+        );
     }
 }

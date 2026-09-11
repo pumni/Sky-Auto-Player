@@ -115,7 +115,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
                 secondary_errors,
                 format!(
                     "panic cleanup release verification failed: {}",
-                    describe_release_outcome(&panic_release)
+                    describe_release_outcome(backend, &panic_release)
                 ),
             );
         }

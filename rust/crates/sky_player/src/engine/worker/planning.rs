@@ -16,6 +16,7 @@ use crate::engine::config::TimingOptions;
 use sky_dispatch_core::coordinator::{CoordinatorError, RuntimeDispatchCoordinator};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::QpcTicks;
+use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +181,7 @@ pub(crate) fn plan_next_dispatch(
     _qpc_clock: sky_dispatch_win32::clock::QpcClock,
     _timing: &TimingOptions,
     preparation_probe: &DispatchPreparationProbe,
+    instrument_key_profile: &MaterializedInstrumentKeyProfile,
 ) -> Result<NextDispatchPlan, PlanningError> {
     let mut plan = NextDispatchPlan::default();
     plan_next_dispatch_projected(
@@ -187,6 +189,7 @@ pub(crate) fn plan_next_dispatch(
             coordinator,
             epoch_qpc,
             preparation_probe,
+            instrument_key_profile,
         },
         &mut plan,
     )?;
@@ -197,6 +200,7 @@ pub(crate) struct PlanningInput<'a> {
     pub(crate) coordinator: &'a RuntimeDispatchCoordinator,
     pub(crate) epoch_qpc: QpcTicks,
     pub(crate) preparation_probe: &'a DispatchPreparationProbe,
+    pub(crate) instrument_key_profile: &'a MaterializedInstrumentKeyProfile,
 }
 
 /// Write the epoch product into the caller-owned slot so the approximately
@@ -212,6 +216,7 @@ pub(crate) fn plan_next_dispatch_projected(
         coordinator,
         epoch_qpc,
         preparation_probe,
+        instrument_key_profile,
     } = input;
     let authored_packet = coordinator.prepare_current_authored_packet()?;
     #[cfg(any(test, feature = "test-support"))]
@@ -236,6 +241,7 @@ pub(crate) fn plan_next_dispatch_projected(
             release_mask,
             target,
             preparation_probe,
+            instrument_key_profile,
         ))?;
         return physical_plan_from_view(view, epoch_qpc, plan);
     }
@@ -248,6 +254,7 @@ pub(crate) fn plan_next_dispatch_projected(
                 release_mask,
                 target,
                 preparation_probe,
+                instrument_key_profile,
             ))?;
             return physical_plan_from_view(view, epoch_qpc, plan);
         }
@@ -283,6 +290,7 @@ pub(crate) fn plan_next_dispatch_projected(
         coalesced_pending_mask,
         frame.authored_ticks,
         preparation_probe,
+        instrument_key_profile,
     ))?;
     physical_plan_from_view(authored_view, epoch_qpc, plan)
 }

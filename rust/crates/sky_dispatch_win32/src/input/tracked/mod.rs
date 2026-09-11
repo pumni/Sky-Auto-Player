@@ -5,6 +5,8 @@ mod packet_send_test_support;
 mod preflight;
 mod state;
 
+use super::profile::MaterializedInstrumentKeyProfile;
+
 #[cfg(any(test, feature = "test-support"))]
 pub type CustomEmitterFn =
     Box<dyn Fn(&[u16], bool) -> super::outcome::PlatformSendResult + Send + Sync>;
@@ -75,6 +77,7 @@ fn release_retry_sleep(_ms: u64) {
 
 #[derive(Default)]
 pub struct TrackedKeyState {
+    pub(crate) instrument_key_profile: MaterializedInstrumentKeyProfile,
     pub active_mask: u16,
     pub possibly_active_mask: u16,
     pub failed_release_mask: u16,

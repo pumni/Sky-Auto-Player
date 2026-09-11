@@ -1,3 +1,4 @@
+use super::profile::MaterializedInstrumentKeyProfile;
 use super::scan_code::scan_codes_from_mask;
 use crate::clock::QpcTicks;
 use smallvec::SmallVec;
@@ -168,6 +169,14 @@ impl ReleaseAllOutcome {
 
     pub fn stuck_keys(&self) -> Vec<u16> {
         scan_codes_from_mask(self.stuck_mask).into_iter().collect()
+    }
+
+    pub fn attempted_with_profile(&self, profile: &MaterializedInstrumentKeyProfile) -> Vec<u16> {
+        profile.scan_codes_from_mask(self.attempted_mask).into_vec()
+    }
+
+    pub fn stuck_keys_with_profile(&self, profile: &MaterializedInstrumentKeyProfile) -> Vec<u16> {
+        profile.scan_codes_from_mask(self.stuck_mask).into_vec()
     }
 }
 

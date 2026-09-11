@@ -155,7 +155,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
                 &mut secondary_errors,
                 format!(
                     "terminal release verification failed: {}",
-                    describe_release_outcome(outcome)
+                    describe_release_outcome(&backend, outcome)
                 ),
             );
         }
@@ -340,11 +340,14 @@ pub(crate) fn clean_completion_proven(
         && backend.authored_keys_rejected == 0
 }
 
-pub(crate) fn describe_release_outcome(outcome: &ReleaseAllOutcome) -> String {
+pub(crate) fn describe_release_outcome(
+    backend: &TrackedKeyState,
+    outcome: &ReleaseAllOutcome,
+) -> String {
     format!(
         "released_successfully={}, stuck_keys={:?}, verification_inconclusive={}",
         outcome.released_successfully,
-        outcome.stuck_keys(),
+        outcome.stuck_keys_with_profile(backend.instrument_key_profile()),
         outcome.verification_inconclusive
     )
 }
@@ -380,7 +383,7 @@ pub(crate) fn suspend_live_input(
     if !release_state_verified(backend, &release) {
         return Err(format!(
             "release verification failed: {}",
-            describe_release_outcome(&release)
+            describe_release_outcome(backend, &release)
         ));
     }
 
