@@ -49,6 +49,53 @@ describe('AppTitleBar', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it('shows a subtle update indicator only when an update is available', async () => {
+    const { bootstrap, useStore } = await testBootstrap();
+    const controls: WindowControls = {
+      minimize: async () => undefined,
+      toggleMaximize: async () => undefined,
+      close: async () => undefined,
+      isMaximized: async () => false,
+      onResize: async () => () => undefined,
+    };
+
+    render(<AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />);
+    expect(screen.queryByRole('button', { name: /Update available:/ })).toBeNull();
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'available',
+          currentVersion: bootstrap.app_version,
+          availableVersion: '4.0.2',
+        },
+      });
+    });
+
+    const indicator = await screen.findByRole('button', { name: 'Update available: 4.0.2' });
+    expect(indicator).toHaveAttribute(
+      'title',
+      'Update available: 4.0.2. Open update details.',
+    );
+    expect(indicator.querySelector('.update-indicator-dot')).toHaveAttribute('aria-hidden', 'true');
+
+    fireEvent.click(indicator);
+    expect(useStore.getState().update.dialogOpen).toBe(true);
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'current',
+          availableVersion: null,
+          dialogOpen: false,
+        },
+      });
+    });
+    expect(screen.queryByRole('button', { name: /Update available:/ })).toBeNull();
+  });
+
   it('refreshes the maximize state after resize', async () => {
     const { bootstrap, useStore } = await testBootstrap();
     let maximized = false;
