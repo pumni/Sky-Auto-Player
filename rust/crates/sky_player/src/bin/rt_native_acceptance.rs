@@ -89,7 +89,7 @@ impl Scenario {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunArgs {
     run_id: String, sink_ready: PathBuf, sink_events: PathBuf, target_hwnd: isize, scenario: Scenario,
-    evidence: PathBuf, focus_probe_ready: Option<PathBuf>, focus_probe_events: Option<PathBuf>, focus_probe_hwnd: Option<isize>,
+    evidence: PathBuf, down_late_grace_us: u64, focus_probe_ready: Option<PathBuf>, focus_probe_events: Option<PathBuf>, focus_probe_hwnd: Option<isize>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedCommand {
@@ -137,7 +137,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--down-late-grace-us <500|750|1000>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex>]"
 }
 fn validate_run_id(value: &str) -> Result<String, String> {
     if value.is_empty()
@@ -175,6 +175,15 @@ fn parse_hwnd(value: &str) -> Result<isize, String> {
     }
     Ok(parsed as isize)
 }
+fn parse_down_late_grace_us(value: &str) -> Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| "--down-late-grace-us must be 500, 750, or 1000".to_string())?;
+    match parsed {
+        500 | 750 | 1_000 => Ok(parsed),
+        _ => Err("--down-late-grace-us must be 500, 750, or 1000".to_string()),
+    }
+}
 fn parse_args<I>(arguments: I) -> Result<ParsedCommand, String>
 where
     I: IntoIterator<Item = String>,
@@ -196,6 +205,7 @@ where
     let mut target_hwnd = None;
     let mut scenario = None;
     let mut evidence = None;
+    let mut down_late_grace_us = None;
     let mut focus_probe_ready = None;
     let mut focus_probe_events = None;
     let mut focus_probe_hwnd = None;
@@ -229,6 +239,7 @@ where
             "--target-hwnd" => { unique!(target_hwnd, "--target-hwnd"); target_hwnd = Some(parse_hwnd(&next_value!("--target-hwnd"))?); }
             "--scenario" => { unique!(scenario, "--scenario"); scenario = Some(Scenario::parse(&next_value!("--scenario"))?); }
             "--evidence" => { unique!(evidence, "--evidence"); let value = next_value!("--evidence"); evidence = Some(bounded_path(&value, "--evidence")?); }
+            "--down-late-grace-us" => { unique!(down_late_grace_us, "--down-late-grace-us"); down_late_grace_us = Some(parse_down_late_grace_us(&next_value!("--down-late-grace-us"))?); }
             "--focus-probe-ready" => { unique!(focus_probe_ready, "--focus-probe-ready"); let value = next_value!("--focus-probe-ready"); focus_probe_ready = Some(bounded_path(&value, "--focus-probe-ready")?); }
             "--focus-probe-events" => { unique!(focus_probe_events, "--focus-probe-events"); let value = next_value!("--focus-probe-events"); focus_probe_events = Some(bounded_path(&value, "--focus-probe-events")?); }
             "--focus-probe-hwnd" => { unique!(focus_probe_hwnd, "--focus-probe-hwnd"); focus_probe_hwnd = Some(parse_hwnd(&next_value!("--focus-probe-hwnd"))?); }
@@ -247,6 +258,7 @@ where
         target_hwnd: target_hwnd.ok_or_else(|| "--target-hwnd is required".to_string())?,
         scenario,
         evidence: evidence.ok_or_else(|| "--evidence is required".to_string())?,
+        down_late_grace_us: down_late_grace_us.unwrap_or(ACCEPTANCE_DOWN_LATE_GRACE_US),
         focus_probe_ready,
         focus_probe_events,
         focus_probe_hwnd,
@@ -379,9 +391,18 @@ fn scenario_plan(scenario: Scenario) -> Result<ScenarioPlan, String> {
         allow_unpaired_cleanup_ups,
     })
 }
+fn acceptance_min_hold_us(down_late_grace_us: u64) -> u64 {
+    ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US
+        + down_late_grace_us
+        + ACCEPTANCE_TRANSPORT_MARGIN_US
+}
+fn acceptance_min_release_gap_us(down_late_grace_us: u64) -> u64 {
+    ACCEPTANCE_FRAME_US + down_late_grace_us + ACCEPTANCE_TRANSPORT_MARGIN_US
+}
 fn production_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
     profile: Option<InstrumentKeyProfileSpec>,
+    down_late_grace_us: u64,
 ) -> NativeSessionOptions {
     NativeSessionOptions {
         schedule,
@@ -389,9 +410,9 @@ fn production_options(
         profile: DispatchProfile::Production,
         timing: TimingOptions {
             game_fps: 60,
-            min_hold_us: ACCEPTANCE_MIN_HOLD_US,
-            min_release_gap_us: ACCEPTANCE_MIN_RELEASE_GAP_US,
-            down_late_grace_us: ACCEPTANCE_DOWN_LATE_GRACE_US,
+            min_hold_us: acceptance_min_hold_us(down_late_grace_us),
+            min_release_gap_us: acceptance_min_release_gap_us(down_late_grace_us),
+            down_late_grace_us,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,
@@ -613,7 +634,7 @@ fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "max_sendinput_pre_call_lateness_us": snapshot.max_sendinput_pre_call_lateness_us, "release_outcome": release})
 }
 fn write_report(args: &RunArgs, verdict: Verdict, reason: &str, details: Value) -> i32 {
-    let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "reason": reason, "details": details});
+    let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "down_late_grace_us": args.down_late_grace_us, "reason": reason, "details": details});
     let serialized = serde_json::to_string(&report).unwrap_or_else(|_| format!(r#"{{"status":"{}","reason":"report serialization failed"}}"#, verdict.label()));
     println!("{serialized}");
     if let Err(error) = append_json_line(&args.evidence, &serialized) {
@@ -687,7 +708,7 @@ fn run_windows(args: RunArgs) -> i32 {
     };
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
-    let session = match NativeDispatchSession::new(production_options(plan.schedule, plan.profile)) { Ok(session) => session, Err(error) => inconclusive!(&error, json!({})) };
+    let session = match NativeDispatchSession::new(production_options(plan.schedule, plan.profile, args.down_late_grace_us)) { Ok(session) => session, Err(error) => inconclusive!(&error, json!({})) };
     session.set_target_hwnd(sink_hwnd);
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
@@ -885,7 +906,8 @@ mod tests {
     #[test] fn zero_event_safety_uses_full_deadline_and_catches_delayed_event() { let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(drain_event_window_with(&mut r, &mut c, DrainMode::ZeroEventSafety, &[], &[]), DrainResult::Pass(Vec::new())); assert_eq!(c.now_ms, DRAIN_DEADLINE_MS); let mut s = vec![complete_window(Vec::new()); 20]; s.push(complete_window(vec![event(1, "key_press", 0x15)])); let mut r = FakeReader { samples: s, index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ZeroEventSafety, &[], &[]), DrainResult::Fail(_, _))); }
     #[test] fn cleanup_reconciles_fifteen_down_and_up_records() { let e = (0..MAX_KEYS).map(|slot| physical(PHYSICAL_INSTRUMENT_SCAN_CODES[slot])).collect::<Vec<_>>(); let mut a = Vec::new(); for (i, k) in e.iter().enumerate() { a.push(event_with(i as u64 + 1, "key_press", k.scan_code, k.extended, 0)); } for (i, k) in e.iter().enumerate() { a.push(event_with(MAX_KEYS as u64 + i as u64 + 1, "key_release", k.scan_code, k.extended, 0)); } assert!(reconcile_events(&a, &e, &e, false).is_ok()); }
     #[test] fn w4_profile_and_cleanup_verdicts_remain_valid() { let p = MaterializedInstrumentKeyProfile::from_validated(sky_dispatch_win32::input::InstrumentKeyProfile::try_from_spec(w4_profile_spec()).unwrap()); assert_eq!(p.physical_key(0).scan_code, 0x02); let plan = scenario_plan(Scenario::CleanupFullRelease).unwrap(); assert_eq!(plan.schedule.packets[0].down_mask, FULL_INSTRUMENT_MASK); assert!(cleanup_evidence_clean(true, FULL_INSTRUMENT_MASK, 1, true, 0, false, false)); }
-    #[test] fn authorization_and_timing_contracts_remain_bounded() { let mut a = base_arguments("focus-loss"); a.extend(["--focus-probe-ready", "p", "--focus-probe-events", "e", "--focus-probe-hwnd", "0x43"].into_iter().map(str::to_owned)); assert!(parse_args(a).is_ok()); assert_eq!(ACCEPTANCE_MIN_HOLD_US, 17_467); assert_eq!(ACCEPTANCE_MIN_RELEASE_GAP_US, 17_467); assert!(focus_evidence_clean(true, 1, 0, true, true)); }
+    #[test] fn authorization_and_timing_contracts_remain_bounded() { let mut a = base_arguments("focus-loss"); a.extend(["--focus-probe-ready", "p", "--focus-probe-events", "e", "--focus-probe-hwnd", "0x43"].into_iter().map(str::to_owned)); let ParsedCommand::Run(args) = parse_args(a).expect("valid acceptance args") else { panic!("expected run command") }; assert_eq!(args.down_late_grace_us, ACCEPTANCE_DOWN_LATE_GRACE_US); assert_eq!(ACCEPTANCE_MIN_HOLD_US, 17_467); assert_eq!(ACCEPTANCE_MIN_RELEASE_GAP_US, 17_467); assert_eq!(acceptance_min_hold_us(750), 17_717); assert_eq!(acceptance_min_release_gap_us(1_000), 17_967); assert!(focus_evidence_clean(true, 1, 0, true, true)); }
+    #[test] fn grace_override_accepts_only_controlled_ab_values() { for grace in ["500", "750", "1000"] { let mut args = base_arguments("canonical-single"); args.extend(["--down-late-grace-us", grace].into_iter().map(str::to_owned)); let ParsedCommand::Run(run) = parse_args(args).expect("valid grace override") else { panic!("expected run command") }; assert_eq!(run.down_late_grace_us, grace.parse::<u64>().unwrap()); } let mut args = base_arguments("canonical-single"); args.extend(["--down-late-grace-us", "600"].into_iter().map(str::to_owned)); assert!(parse_args(args).is_err()); }
 }
 }
 fn main() {
