@@ -74,6 +74,7 @@ pub(crate) fn validate_native_schedule_timing_with_release_gap(
 pub struct NativeDispatchSession {
     config: Mutex<Option<AdmittedNativeSessionOptions>>,
     profile: DispatchProfile,
+    down_late_grace_us: u64,
     generation_count: u64,
     shared: Arc<SessionShared>,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -165,13 +166,19 @@ impl NativeDispatchSession {
             options,
             instrument_key_profile,
         };
+        let down_late_grace_us = admitted_options.options.timing.down_late_grace_us;
         Ok(Self {
             profile: admitted_options.options.profile,
+            down_late_grace_us,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
             shared,
             thread_handle: Mutex::new(None),
         })
+    }
+
+    pub fn down_late_grace_us(&self) -> u64 {
+        self.down_late_grace_us
     }
 
     fn live_projection(&self) -> ((u64, bool), u64) {

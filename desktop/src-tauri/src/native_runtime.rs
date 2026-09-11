@@ -4006,14 +4006,34 @@ fn publish_diagnostics_snapshot_for_active(
             pre_call_late_2ms: sample.pre_call_late_2ms,
             pre_call_late_5ms: sample.pre_call_late_5ms,
             pre_call_late_10ms: sample.pre_call_late_10ms,
+            down_late_grace_us: sample.down_late_grace_us,
+            pre_call_lt_250us: sample.pre_call_lt_250us,
+            pre_call_250_500us: sample.pre_call_250_500us,
+            pre_call_500_750us: sample.pre_call_500_750us,
+            pre_call_750_1000us: sample.pre_call_750_1000us,
+            pre_call_1000_1500us: sample.pre_call_1000_1500us,
+            pre_call_1500_2000us: sample.pre_call_1500_2000us,
+            pre_call_ge_2000us: sample.pre_call_ge_2000us,
             active_keys: sample.active_keys,
             stuck_keys: sample.stuck_keys,
             keys_dropped: sample.keys_dropped,
             chord_split_events: sample.chord_split_events,
+            missed_down_boundaries: sample.missed_down_boundaries,
+            missed_down_keys: sample.missed_down_keys,
+            missed_backlog_boundaries: sample.missed_backlog_boundaries,
+            missed_hard_late_boundaries: sample.missed_hard_late_boundaries,
+            final_gate_cutoff_misses: sample.final_gate_cutoff_misses,
+            final_gate_control_rejections: sample.final_gate_control_rejections,
+            final_gate_target_changes: sample.final_gate_target_changes,
+            final_gate_focus_losses: sample.final_gate_focus_losses,
+            final_gate_lease_expirations: sample.final_gate_lease_expirations,
+            sendinput_partial_events: sample.sendinput_partial_events,
+            sendinput_zero_progress_failures: sample.sendinput_zero_progress_failures,
             backend_status: sample.backend_status,
             release_max_us: sample.release_max_us,
             release_late_2ms: sample.release_late_2ms,
             session_id: Some(session_id),
+            last_error: sample.last_error.clone(),
         };
         events
             .lock()
@@ -4037,13 +4057,33 @@ struct NativeDiagnosticsSample {
     pre_call_late_2ms: u64,
     pre_call_late_5ms: u64,
     pre_call_late_10ms: u64,
+    down_late_grace_us: u64,
+    pre_call_lt_250us: u64,
+    pre_call_250_500us: u64,
+    pre_call_500_750us: u64,
+    pre_call_750_1000us: u64,
+    pre_call_1000_1500us: u64,
+    pre_call_1500_2000us: u64,
+    pre_call_ge_2000us: u64,
     active_keys: u64,
     stuck_keys: u64,
     keys_dropped: u64,
     chord_split_events: u64,
+    missed_down_boundaries: u64,
+    missed_down_keys: u64,
+    missed_backlog_boundaries: u64,
+    missed_hard_late_boundaries: u64,
+    final_gate_cutoff_misses: u64,
+    final_gate_control_rejections: u64,
+    final_gate_target_changes: u64,
+    final_gate_focus_losses: u64,
+    final_gate_lease_expirations: u64,
+    sendinput_partial_events: u64,
+    sendinput_zero_progress_failures: u64,
     backend_status: DiagnosticsBackendStatus,
     release_max_us: Option<u64>,
     release_late_2ms: Option<u64>,
+    last_error: Option<String>,
 }
 
 impl NativeDiagnosticsSample {
@@ -4059,19 +4099,40 @@ impl NativeDiagnosticsSample {
             pre_call_late_2ms: 0,
             pre_call_late_5ms: 0,
             pre_call_late_10ms: 0,
+            down_late_grace_us: 0,
+            pre_call_lt_250us: 0,
+            pre_call_250_500us: 0,
+            pre_call_500_750us: 0,
+            pre_call_750_1000us: 0,
+            pre_call_1000_1500us: 0,
+            pre_call_1500_2000us: 0,
+            pre_call_ge_2000us: 0,
             active_keys: 0,
             stuck_keys: 0,
             keys_dropped: 0,
             chord_split_events: 0,
+            missed_down_boundaries: 0,
+            missed_down_keys: 0,
+            missed_backlog_boundaries: 0,
+            missed_hard_late_boundaries: 0,
+            final_gate_cutoff_misses: 0,
+            final_gate_control_rejections: 0,
+            final_gate_target_changes: 0,
+            final_gate_focus_losses: 0,
+            final_gate_lease_expirations: 0,
+            sendinput_partial_events: 0,
+            sendinput_zero_progress_failures: 0,
             backend_status: DiagnosticsBackendStatus::Unavailable,
             release_max_us: None,
             release_late_2ms: None,
+            last_error: None,
         }
     }
 
     fn from_player(player: &NativeDispatchSession) -> Self {
         let snapshot = player.snapshot_lite();
         let observer_metrics_available = snapshot.recent_latency_samples_available;
+        let has_last_error = snapshot.last_error.is_some();
         Self {
             max_lateness_us: observer_metrics_available.then_some(snapshot.max_lateness_us),
             recent_latencies_us: snapshot.recent_latencies_us,
@@ -4083,13 +4144,33 @@ impl NativeDiagnosticsSample {
             pre_call_late_2ms: snapshot.pre_call_late_2ms,
             pre_call_late_5ms: snapshot.pre_call_late_5ms,
             pre_call_late_10ms: snapshot.pre_call_late_10ms,
+            down_late_grace_us: player.down_late_grace_us(),
+            pre_call_lt_250us: snapshot.pre_call_lt_250us,
+            pre_call_250_500us: snapshot.pre_call_250_500us,
+            pre_call_500_750us: snapshot.pre_call_500_750us,
+            pre_call_750_1000us: snapshot.pre_call_750_1000us,
+            pre_call_1000_1500us: snapshot.pre_call_1000_1500us,
+            pre_call_1500_2000us: snapshot.pre_call_1500_2000us,
+            pre_call_ge_2000us: snapshot.pre_call_ge_2000us,
             active_keys: snapshot.active_count as u64,
             stuck_keys: snapshot.failed_release_count as u64,
             keys_dropped: snapshot.keys_dropped,
             chord_split_events: snapshot.chord_split_events,
+            missed_down_boundaries: snapshot.missed_down_boundaries,
+            missed_down_keys: snapshot.missed_down_keys,
+            missed_backlog_boundaries: snapshot.missed_backlog_boundaries,
+            missed_hard_late_boundaries: snapshot.missed_hard_late_boundaries,
+            final_gate_cutoff_misses: snapshot.final_gate_cutoff_misses,
+            final_gate_control_rejections: snapshot.final_gate_control_rejections,
+            final_gate_target_changes: snapshot.final_gate_target_changes,
+            final_gate_focus_losses: snapshot.final_gate_focus_losses,
+            final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
+            sendinput_partial_events: snapshot.sendinput_partial_events,
+            sendinput_zero_progress_failures: snapshot.sendinput_zero_progress_failures,
+            last_error: snapshot.last_error,
             backend_status: diagnostics_backend_status(
                 snapshot.has_terminal_error,
-                snapshot.last_error.is_some(),
+                has_last_error,
                 snapshot.failed_release_count,
                 snapshot.keys_dropped,
                 snapshot.chord_split_events,
@@ -5796,12 +5877,32 @@ mod tests {
         assert_eq!(payload.pre_call_late_2ms, 0);
         assert_eq!(payload.pre_call_late_5ms, 0);
         assert_eq!(payload.pre_call_late_10ms, 0);
+        assert_eq!(payload.down_late_grace_us, 0);
+        assert_eq!(payload.pre_call_lt_250us, 0);
+        assert_eq!(payload.pre_call_250_500us, 0);
+        assert_eq!(payload.pre_call_500_750us, 0);
+        assert_eq!(payload.pre_call_750_1000us, 0);
+        assert_eq!(payload.pre_call_1000_1500us, 0);
+        assert_eq!(payload.pre_call_1500_2000us, 0);
+        assert_eq!(payload.pre_call_ge_2000us, 0);
         assert_eq!(payload.active_keys, 0);
         assert_eq!(payload.stuck_keys, 0);
         assert_eq!(payload.keys_dropped, 0);
         assert_eq!(payload.chord_split_events, 0);
+        assert_eq!(payload.missed_down_boundaries, 0);
+        assert_eq!(payload.missed_down_keys, 0);
+        assert_eq!(payload.missed_backlog_boundaries, 0);
+        assert_eq!(payload.missed_hard_late_boundaries, 0);
+        assert_eq!(payload.final_gate_cutoff_misses, 0);
+        assert_eq!(payload.final_gate_control_rejections, 0);
+        assert_eq!(payload.final_gate_target_changes, 0);
+        assert_eq!(payload.final_gate_focus_losses, 0);
+        assert_eq!(payload.final_gate_lease_expirations, 0);
+        assert_eq!(payload.sendinput_partial_events, 0);
+        assert_eq!(payload.sendinput_zero_progress_failures, 0);
         assert_eq!(payload.release_max_us, None);
         assert_eq!(payload.release_late_2ms, None);
+        assert_eq!(payload.last_error, None);
         assert_eq!(payload.seq, 1);
     }
 
