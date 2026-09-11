@@ -6,7 +6,7 @@
 
 use std::fmt;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, SetLastError, WIN32_ERROR,
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, SetLastError,
 };
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -51,10 +51,10 @@ impl SingleInstanceGuard {
             // CreateMutexW documents ERROR_ALREADY_EXISTS on success when the
             // named mutex already existed. Clear the thread-local last-error
             // slot first so a successful new mutex cannot inherit a stale 183.
-            SetLastError(WIN32_ERROR(0));
+            SetLastError(0);
             let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
             if handle.is_null() {
-                return Err(AcquireError::Win32(GetLastError().0));
+                return Err(AcquireError::Win32(GetLastError()));
             }
             if GetLastError() == ERROR_ALREADY_EXISTS {
                 let _ = CloseHandle(handle);
