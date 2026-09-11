@@ -252,7 +252,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\**\*.json
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\candidate-manifest.json
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\candidate-assets\*.json
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\downloaded-manifest.json
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\downloaded-authenticode-verification.json
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\fixture-http-evidence.json
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\post-draft-qualification.json
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\defender-evidence.json
+            ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\release-state.json
 
       - name: Clean runner-local draft rehearsal state
         if: always()

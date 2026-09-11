@@ -440,6 +440,7 @@ foreach ($marker in @(
     'current-user', 'active-playback-install-rejected', 'upload_url',
     'Assert-ImmutableRelease $published', 'repository release is not marked immutable',
     'V4 immutable publication guard self-test', 'immutable=false rejected',
+    'V4 exact public asset-set self-test', 'missing and extra assets rejected',
     'Get-V4ReleaseMakeLatestValue',
     'Get-V4ReleaseDraftMakeLatestValue',
     'make_latest = Get-V4ReleaseDraftMakeLatestValue',
@@ -495,6 +496,67 @@ if (-not $publishDraftBody.Contains('make_latest = Get-V4ReleaseMakeLatestValue 
     $publishDraftBody.Contains('Get-V4ReleaseDraftMakeLatestValue')) {
     Fail "PublishDraft must use the channel-aware publication make_latest helper"
 }
+
+# Public release asset regression contract: the previous v4.0.1 failure uploaded
+# the complete eight-file qualification candidate set. Keep the two sets explicit
+# and make every public boundary consume only the canonical two-record projection.
+foreach ($marker in @(
+    'function Get-QualificationCandidateRecords',
+    'function Get-PublicReleaseRecords',
+    'function Get-CanonicalPublicReleaseNames',
+    'qualification_assets = $candidateAssets',
+    'public_assets = $publicRecords',
+    'Assert-ManifestAssetFiles',
+    'Freeze-CandidateAssets',
+    'Get-StateAssetPath',
+    'Assert-ExactPublicReleaseAssetSet',
+    'candidate manifest must declare qualification_assets and public_assets separately',
+    'downloaded manifest must contain only the public release asset set'
+)) {
+    if (-not $pipeline.Contains($marker)) {
+        Fail "public release asset separation marker is missing: $marker"
+    }
+}
+$createDraftUploadBody = $createDraftBody.Substring(
+    $createDraftBody.IndexOf('foreach ($record in $publicRecords)', [StringComparison]::Ordinal)
+)
+if (-not $createDraftUploadBody.Contains('Invoke-V4ReleaseAssetUpload') -or
+    $createDraftUploadBody.Contains('Get-QualificationCandidateRecords') -or
+    $createDraftUploadBody.Contains('manifest.assets')) {
+    Fail "CreateDraft upload loop is not restricted to public_assets"
+}
+$downloadDraftBody = $pipeline.Substring(
+    $pipeline.IndexOf('function Invoke-DownloadDraft', [StringComparison]::Ordinal),
+    $pipeline.IndexOf('function Invoke-Checked', [StringComparison]::Ordinal) -
+        $pipeline.IndexOf('function Invoke-DownloadDraft', [StringComparison]::Ordinal)
+)
+if (-not $downloadDraftBody.Contains('$publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)') -or
+    -not $downloadDraftBody.Contains('foreach ($expected in $publicRecords)') -or
+    -not $downloadDraftBody.Contains('Get-FileHash') -or
+    -not $downloadDraftBody.Contains('$expected.sha256')) {
+    Fail "DownloadDraft does not digest-check the exact public candidate records"
+}
+$qualifyDownloadedBody = $pipeline.Substring(
+    $pipeline.IndexOf('function Invoke-QualifyDownloaded', [StringComparison]::Ordinal),
+    $pipeline.IndexOf('function Invoke-PublishDraft', [StringComparison]::Ordinal) -
+        $pipeline.IndexOf('function Invoke-QualifyDownloaded', [StringComparison]::Ordinal)
+)
+if (-not $qualifyDownloadedBody.Contains('Assert-CandidateEvidence @($candidateManifest.qualification_assets)') -or
+    -not $qualifyDownloadedBody.Contains('$downloadedPublicRecords[$index].sha256')) {
+    Fail "QualifyDownloaded does not hash-check frozen evidence and downloaded public bytes"
+}
+$finalVerifyBody = $pipeline.Substring(
+    $pipeline.IndexOf('function Invoke-FinalVerify', [StringComparison]::Ordinal),
+    $pipeline.IndexOf('function Invoke-SelfTest', [StringComparison]::Ordinal) -
+        $pipeline.IndexOf('function Invoke-FinalVerify', [StringComparison]::Ordinal)
+)
+if (-not $finalVerifyBody.Contains('Assert-ExactPublicReleaseAssetSet $release') -or
+    -not $finalVerifyBody.Contains('Assert-ExactAssetSet $release $publicRecords') -or
+    -not $finalVerifyBody.Contains('Get-PublicReleaseRecordsFromManifest $candidateManifest') -or
+    -not $finalVerifyBody.Contains('Get-FileHash')) {
+    Fail "FinalVerify does not enforce exact public asset-set and byte equality"
+}
+Write-Host "V4 public release asset regression contract: PASS (8-file qualification set isolated; exact 2-file public set enforced)"
 foreach ($marker in @(
     'function Get-SanitizedReleaseProbeOutput',
     'version-check.log',
@@ -646,6 +708,19 @@ foreach ($marker in @(
     'RecordAttestations', 'PublishDraft', 'PromoteMetadata', 'FinalVerify'
 )) {
     if (-not $workflow.Contains($marker)) { Fail "workflow marker is missing: $marker" }
+}
+foreach ($marker in @(
+    'candidate-manifest.json',
+    'candidate-assets\*.json',
+    'downloaded-manifest.json',
+    'downloaded-authenticode-verification.json',
+    'fixture-http-evidence.json',
+    'post-draft-qualification.json',
+    'defender-evidence.json',
+    'release-state.json'
+)) {
+    if (-not $workflow.Contains($marker)) { Fail "production bounded evidence retention marker is missing: $marker" }
+    if (-not $draftWorkflow.Contains($marker)) { Fail "rehearsal bounded evidence retention marker is missing: $marker" }
 }
 if ($workflow.Contains('inputs:') -or $workflow.Contains('inputs.')) {
     Fail "production release workflow must not expose semantic workflow_dispatch inputs"

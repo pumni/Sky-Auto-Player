@@ -28,8 +28,6 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pipelinePath = Join-Path $PSScriptRoot "v4_release_pipeline.ps1"
 $candidateRoot = [IO.Path]::GetFullPath($CandidateStateRoot)
 $candidateManifestPath = Join-Path $candidateRoot "candidate-manifest.json"
-$canonicalBundleDir = Join-Path $repoRoot "rust/target/dist/bundle/nsis"
-$canonicalEvidenceDir = Join-Path $repoRoot "rust/target/dist"
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
 
 function Fail([string]$Message) {
@@ -54,17 +52,17 @@ function Write-JsonFile([string]$Path, [object]$Value) {
     [IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 }
 
-function Get-SourceAssetPath([object]$Record) {
-    $sourceName = if ($null -ne $Record.PSObject.Properties["source_name"]) {
-        [string]$Record.source_name
-    } else {
-        [string]$Record.name
+function Get-CandidateAssetPath([object]$Record) {
+    $relative = [string]$Record.state_path
+    if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative)) {
+        Fail "candidate manifest contains an invalid frozen asset path"
     }
-    $role = [string]$Record.role
-    if ($role -in @("installer", "updater-signature")) {
-        return Join-Path $canonicalBundleDir $sourceName
+    $full = [IO.Path]::GetFullPath((Join-Path $candidateRoot $relative))
+    $prefix = $candidateRoot.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+    if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Fail "candidate manifest asset path escapes CandidateStateRoot"
     }
-    return Join-Path $canonicalEvidenceDir $sourceName
+    return $full
 }
 
 if ($SourceSha -notmatch "^[0-9a-fA-F]{40}$") { Fail "source SHA must be an exact 40-character commit SHA" }
@@ -101,13 +99,25 @@ if ([string]$manifest.source_sha -ne $SourceSha.ToLowerInvariant() -or
     Fail "candidate manifest identity does not match the rehearsal request"
 }
 
-$records = @($manifest.assets)
-if ($records.Count -eq 0) { Fail "candidate manifest contains no assets" }
+$qualificationRecords = @($manifest.qualification_assets)
+$publicRecords = @($manifest.public_assets)
+if ($qualificationRecords.Count -lt 8) { Fail "candidate manifest omits mandatory qualification inputs" }
+if ($publicRecords.Count -ne 2) { Fail "candidate manifest public asset set must contain exactly two records" }
+$expectedPublicNames = @(
+    Get-V4SafeReleaseAssetName "Sky Auto Player_${Version}_x64-setup.exe"
+    Get-V4SafeReleaseAssetName "Sky Auto Player_${Version}_x64-setup.exe.sig"
+)
+if ((@($publicRecords | ForEach-Object { [string]$_.release_name } | Sort-Object) -join "`n") -ne
+    (@($expectedPublicNames | Sort-Object) -join "`n")) {
+    Fail "candidate manifest public asset set is not the canonical installer/signature pair"
+}
+$manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $effectiveStateRoot "candidate-manifest.json") -Encoding utf8
+$records = $publicRecords
 $downloaded = Join-Path $effectiveStateRoot "downloaded"
 New-Item -ItemType Directory -Path $downloaded -Force | Out-Null
 
 try {
-    foreach ($record in $records) {
+    foreach ($record in $qualificationRecords) {
         $sourceName = if ($null -ne $record.PSObject.Properties["source_name"]) {
             [string]$record.source_name
         } else {
@@ -118,9 +128,9 @@ try {
         } else {
             Get-V4SafeReleaseAssetName $sourceName
         }
-        $sourcePath = Get-SourceAssetPath $record
+        $sourcePath = Get-CandidateAssetPath $record
         if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-            Fail "candidate asset is missing from the BuildCandidate output: $sourcePath"
+            Fail "frozen candidate asset is missing from the BuildCandidate output: $sourcePath"
         }
         $sourceItem = Get-Item -LiteralPath $sourcePath
         $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -128,13 +138,27 @@ try {
             $sourceHash -ne [string]$record.sha256) {
             Fail "candidate asset changed after BuildCandidate: $sourceName"
         }
+        $candidateDestination = Join-Path $effectiveStateRoot $record.state_path
+        New-Item -ItemType Directory -Path (Split-Path -Parent $candidateDestination) -Force | Out-Null
+        Copy-Item -LiteralPath $sourcePath -Destination $candidateDestination -Force
+        $candidateItem = Get-Item -LiteralPath $candidateDestination
+        $candidateHash = (Get-FileHash -LiteralPath $candidateDestination -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([int64]$candidateItem.Length -ne [int64]$record.size -or
+            $candidateHash -ne [string]$record.sha256) {
+            Fail "staged rehearsal qualification asset is not byte-identical: $sourceName"
+        }
+    }
+
+    foreach ($record in $records) {
+        $releaseName = [string]$record.release_name
+        $sourcePath = Get-CandidateAssetPath $record
         $destination = Join-Path $downloaded $releaseName
         Copy-Item -LiteralPath $sourcePath -Destination $destination -Force
         $downloadedItem = Get-Item -LiteralPath $destination
         $downloadedHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
         if ([int64]$downloadedItem.Length -ne [int64]$record.size -or
             $downloadedHash -ne [string]$record.sha256) {
-            Fail "staged rehearsal asset is not byte-identical: $sourceName"
+            Fail "staged rehearsal public asset is not byte-identical: $releaseName"
         }
     }
 
@@ -150,7 +174,8 @@ try {
         immutable = $false
         attested = $false
         qualified_after_download = $false
-        assets = $records
+        qualification_assets = $qualificationRecords
+        public_assets = $records
     }
     Write-JsonFile (Join-Path $effectiveStateRoot "release-state.json") $releaseState
     Write-JsonFile (Join-Path $effectiveStateRoot "downloaded-manifest.json") ([ordered]@{
@@ -158,7 +183,7 @@ try {
         source_sha = $SourceSha.ToLowerInvariant()
         version = $Version
         channel = $Channel
-        assets = $records
+        public_assets = $records
     })
 
     $pipelineArguments = @(

@@ -52,15 +52,28 @@ Sky Auto Player_<version>_x64-setup.exe
 Sky Auto Player_<version>_x64-setup.exe.sig
 ```
 
+The existing release-asset normalization maps spaces to dots for the GitHub Release names:
+
+```text
+Sky.Auto.Player_<version>_x64-setup.exe
+Sky.Auto.Player_<version>_x64-setup.exe.sig
+```
+
 The immutable asset URL is derived from the version and filename in the official repository:
 
 ```text
-https://github.com/pumni/Sky-Auto-Player/releases/download/v<version>/Sky%20Auto%20Player_<version>_x64-setup.exe
+https://github.com/pumni/Sky-Auto-Player/releases/download/v<version>/Sky.Auto.Player_<version>_x64-setup.exe
 ```
 
 Metadata contains the exact `.sig` text and the canonical `windows-x86_64` platform only. Portable
 ZIPs, custom v3 manifests, aliases, non-HTTPS URLs, other repositories, query/fragment state,
 malformed dates, extra platforms, and non-canonical artifact names are invalid v4 metadata.
+
+GitHub Release is the end-user distribution surface and must contain exactly the two canonical
+public assets: the normalized installer filename and its `.sig`. Qualification JSON, Authenticode
+evidence, artifact summaries, and `SBOM.spdx.json` are internal CI evidence. They remain bound by
+the candidate manifest and bounded GitHub Actions artifacts/attestations; they are never uploaded
+as additional GitHub Release downloads.
 
 ## Deterministic metadata commands
 
@@ -100,7 +113,8 @@ The ordering is security-critical:
 2. Build the exact source SHA once and create a draft in the official repository with
    `make_latest="false"`; the channel-specific Latest value is applied only at publication.
 3. Re-download the draft installer and signature, then qualify those exact bytes.
-4. Record SBOM and provenance/attestation evidence bound to the exact source and artifacts.
+4. Record SBOM and provenance/attestation evidence bound to the exact source and the two public
+   assets; retain internal qualification evidence through bounded CI artifacts/attestations.
 5. Snapshot the current GitHub Latest identity, then publish the already-qualified draft
    immutably with `make_latest="true"` for stable or `make_latest="false"` for beta.
 6. Verify the channel-aware Latest policy before minting the metadata App token; stable must be
@@ -126,6 +140,10 @@ The release gate preserves these properties while using one repository:
 - runner-local updater key outside the workspace, with no key-path workflow input;
 - least-privilege permissions and `persist-credentials: false` checkout;
 - fail-closed validation when metadata, release assets, signatures, or public endpoints differ.
+
+`FinalVerify` fails closed unless the published release asset set is exactly the canonical installer
+and updater signature pair. Missing, extra, aliased, or digest/size-mismatched assets are invalid.
+Evidence files and SBOMs are not part of that public release set.
 
 The current Authenticode policy is `unsigned-zero-budget`: updater cryptographic trust remains
 mandatory even while Windows publisher identity is intentionally unsigned. Any future production
