@@ -541,9 +541,46 @@ $qualifyDownloadedBody = $pipeline.Substring(
     $pipeline.IndexOf('function Invoke-PublishDraft', [StringComparison]::Ordinal) -
         $pipeline.IndexOf('function Invoke-QualifyDownloaded', [StringComparison]::Ordinal)
 )
-if (-not $qualifyDownloadedBody.Contains('Assert-CandidateEvidence @($candidateManifest.qualification_assets)') -or
-    -not $qualifyDownloadedBody.Contains('$downloadedPublicRecords[$index].sha256')) {
+if (-not $qualifyDownloadedBody.Contains('Assert-CandidateEvidence $qualificationRecords') -or
+    -not $qualifyDownloadedBody.Contains('$downloadedPublicRecords[$index].sha256') -or
+    -not $qualifyDownloadedBody.Contains('Get-FrozenQualificationAssetPath') -or
+    -not $qualifyDownloadedBody.Contains('$frozenSbom') -or
+    -not $qualifyDownloadedBody.Contains('$frozenArtifactSummary') -or
+    -not $qualifyDownloadedBody.Contains('$frozenAuthenticodeEvidence') -or
+    -not $qualifyDownloadedBody.Contains('$frozenQualificationEvidence')) {
     Fail "QualifyDownloaded does not hash-check frozen evidence and downloaded public bytes"
+}
+$forbiddenDownloadedEvidencePaths = @(
+    '(Join-Path $downloaded $sbomName)',
+    '(Join-Path $downloaded $summaryName)',
+    '(Join-Path $downloaded $authenticodeEvidenceName)',
+    '(Join-Path $downloaded $qualificationEvidenceName)'
+)
+foreach ($forbiddenPath in $forbiddenDownloadedEvidencePaths) {
+    if ($pipeline.Contains($forbiddenPath)) {
+        Fail "internal qualification evidence must not resolve from downloaded/: $forbiddenPath"
+    }
+}
+$promoteMetadataBody = $pipeline.Substring(
+    $pipeline.IndexOf('function Invoke-PromoteMetadata', [StringComparison]::Ordinal),
+    $pipeline.IndexOf('function Invoke-FinalVerify', [StringComparison]::Ordinal) -
+        $pipeline.IndexOf('function Invoke-PromoteMetadata', [StringComparison]::Ordinal)
+)
+if (-not $promoteMetadataBody.Contains('Get-FrozenQualificationAssetPath') -or
+    -not $promoteMetadataBody.Contains('$frozenQualificationEvidence') -or
+    $promoteMetadataBody.Contains('(Join-Path $downloaded $qualificationEvidenceName)')) {
+    Fail "PromoteMetadata must use frozen qualification evidence outside downloaded/"
+}
+foreach ($workflowSource in @(
+    [pscustomobject]@{ Name = 'production release workflow'; Text = $workflow },
+    [pscustomobject]@{ Name = 'controlled rehearsal workflow'; Text = $draftWorkflow }
+)) {
+    if ($workflowSource.Text -match 'sbom-path:\s+\$\{\{ runner\.temp \}\}[^\r\n]*\\downloaded\\SBOM\.spdx\.json') {
+        Fail "$($workflowSource.Name) still attests an SBOM from downloaded/"
+    }
+    if (-not $workflowSource.Text.Contains('candidate-assets\SBOM.spdx.json')) {
+        Fail "$($workflowSource.Name) does not attest the frozen candidate SBOM"
+    }
 }
 $finalVerifyBody = $pipeline.Substring(
     $pipeline.IndexOf('function Invoke-FinalVerify', [StringComparison]::Ordinal),

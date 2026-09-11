@@ -482,6 +482,21 @@ function Get-StateAssetPath([object]$Record) {
     return $full
 }
 
+function Get-FrozenQualificationAssetPath([object[]]$Records, [string]$SourceName) {
+    $matches = @($Records | Where-Object {
+        [string]$_.source_name -eq $SourceName -or
+        ([string]$_.name -eq $SourceName -and $null -eq $_.PSObject.Properties['source_name'])
+    })
+    if ($matches.Count -ne 1) {
+        Fail "candidate manifest must contain exactly one frozen qualification asset: $SourceName"
+    }
+    $path = Get-StateAssetPath $matches[0]
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Fail "frozen qualification asset is missing: $SourceName"
+    }
+    return $path
+}
+
 function Assert-ManifestAssetFiles([object[]]$Records) {
     foreach ($record in @($Records)) {
         $path = Get-StateAssetPath $record
@@ -883,6 +898,7 @@ function Invoke-QualifyDownloaded {
     }
     $candidateManifest = Read-JsonFile (Join-Path $root "candidate-manifest.json")
     $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
+    $qualificationRecords = @($candidateManifest.qualification_assets)
     $downloadedPublicRecords = @($downloadedManifest.public_assets)
     if ($downloadedPublicRecords.Count -ne $publicRecords.Count) {
         Fail "downloaded public manifest does not match the canonical public asset count"
@@ -894,7 +910,11 @@ function Invoke-QualifyDownloaded {
             Fail "downloaded public manifest does not bind the candidate installer/signature bytes"
         }
     }
-    Assert-CandidateEvidence @($candidateManifest.qualification_assets)
+    Assert-CandidateEvidence $qualificationRecords
+    $frozenQualificationEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $qualificationEvidenceName
+    $frozenAuthenticodeEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $authenticodeEvidenceName
+    $frozenArtifactSummary = Get-FrozenQualificationAssetPath $qualificationRecords $summaryName
+    $frozenSbom = Get-FrozenQualificationAssetPath $qualificationRecords $sbomName
     $bundle = Join-Path $root "downloaded-bundle"
     if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
     New-Item -ItemType Directory -Path $bundle -Force | Out-Null
@@ -916,18 +936,18 @@ function Invoke-QualifyDownloaded {
         "--signature", (Join-Path $bundle $sourceSignature)
     ) "downloaded candidate Tauri updater signature verification failed"
     Invoke-Checked "cargo" @(
-        "xtask", "sbom", "verify", "--artifact-dir", $bundle, "--sbom", (Join-Path $downloaded $sbomName)
+        "xtask", "sbom", "verify", "--artifact-dir", $bundle, "--sbom", $frozenSbom
     ) "downloaded candidate SPDX SBOM verification failed"
     Invoke-Checked "cargo" @(
         "xtask", "verify-tauri-bundle", "--bundle-dir", $bundle,
-        "--summary", (Join-Path $downloaded $summaryName),
-        "--authenticode-evidence", (Join-Path $downloaded $authenticodeEvidenceName),
-        "--sbom", (Join-Path $downloaded $sbomName)
+        "--summary", $frozenArtifactSummary,
+        "--authenticode-evidence", $frozenAuthenticodeEvidence,
+        "--sbom", $frozenSbom
     ) "downloaded candidate exact Tauri bundle verification failed"
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "promote_v4_metadata.ps1"),
-        "-ValidateEvidence", (Join-Path $downloaded $qualificationEvidenceName)
+        "-ValidateEvidence", $frozenQualificationEvidence
     ) "downloaded candidate qualification evidence schema validation failed"
 
     # Export the canonical public root through the existing updater-trust
@@ -1172,6 +1192,9 @@ function Invoke-PromoteMetadata {
     }
     Assert-ImmutableRelease $publishedRelease
     $publicationDateUtc = Convert-PublishedAtToMetadataTimestamp $publishedRelease
+    $candidateManifest = Read-JsonFile (Join-Path $root "candidate-manifest.json")
+    $qualificationRecords = @($candidateManifest.qualification_assets)
+    $frozenQualificationEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $qualificationEvidenceName
     $metadataCheckout = Join-Path $root "release-metadata"
     if (Test-Path -LiteralPath $metadataCheckout) { Remove-Item -LiteralPath $metadataCheckout -Recurse -Force }
     Invoke-GitHubApi -Arguments @("repo", "clone", $repository, $metadataCheckout, "--", "--branch", "release-metadata", "--depth", "1") -Raw | Out-Null
@@ -1192,7 +1215,7 @@ function Invoke-PromoteMetadata {
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "promote_v4_metadata.ps1"),
         "-Channel", $Channel, "-Metadata", $metadata,
-        "-QualificationEvidence", (Join-Path $downloaded $qualificationEvidenceName),
+        "-QualificationEvidence", $frozenQualificationEvidence,
         "-MetadataCheckout", $metadataCheckout, "-SourceCheckout", $repoRoot
     ) "post-publication metadata promotion validation failed"
     $destination = Join-Path $metadataCheckout "channels/$Channel/latest.json"

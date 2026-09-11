@@ -194,7 +194,7 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\downloaded\*.exe
-          sbom-path: ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\downloaded\SBOM.spdx.json
+          sbom-path: ${{ runner.temp }}\sky-v4-draft-rehearsal-${{ github.run_id }}\candidate-assets\SBOM.spdx.json
 
       - name: Verify exact-source OIDC attestations
         env:
