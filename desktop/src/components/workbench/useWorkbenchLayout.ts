@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 export const WORKBENCH_STORAGE_KEY = 'sky.ui.workbench.v4';
 export const LEGACY_WORKBENCH_V3_STORAGE_KEY = 'sky.ui.workbench.v3';
@@ -180,6 +180,8 @@ function persistWorkbenchLayout(layout: WorkbenchLayoutStateV4): void {
 
 export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
   const [layout, setLayout] = useState<WorkbenchLayoutStateV4>(() => loadWorkbenchLayout());
+  // Keep queued event updates composable between renders without side effects in the updater.
+  const pendingLayoutRef = useRef(layout);
 
   const utilityWidthMax = getUtilityWidthMax(viewportWidth);
   const effectiveUtilityWidth = utilityOpen
@@ -199,11 +201,10 @@ export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
   });
 
   const update = (patch: Partial<WorkbenchLayoutStateV4>, persist = false) => {
-    setLayout((current) => {
-      const next = normalizedLayout({ ...current, ...patch });
-      if (persist) persistWorkbenchLayout(next);
-      return next;
-    });
+    const next = normalizedLayout({ ...pendingLayoutRef.current, ...patch });
+    pendingLayoutRef.current = next;
+    setLayout(() => next);
+    if (persist) persistWorkbenchLayout(next);
   };
 
   return {

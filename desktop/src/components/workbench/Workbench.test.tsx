@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ResizableSeparator } from './ResizableSeparator';
@@ -130,7 +131,10 @@ describe('ResizableSeparator', () => {
 });
 
 describe('workbench layout persistence', () => {
-  afterEach(() => window.localStorage.clear());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+  });
 
   it('loads valid v4 values and clamps them to current bounds', () => {
     window.localStorage.setItem(
@@ -215,11 +219,17 @@ describe('workbench layout persistence', () => {
   });
 
   it('combines rapid functional updates while persisting only explicit commits', () => {
-    render(<LayoutUpdateHarness />);
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    render(
+      <StrictMode>
+        <LayoutUpdateHarness />
+      </StrictMode>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Update layout' }));
 
     expect(screen.getByTestId('layout-values')).toHaveTextContent('300:400');
+    expect(setItem).not.toHaveBeenCalled();
     expect(window.localStorage.getItem(WORKBENCH_STORAGE_KEY)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Commit utility width' }));
@@ -228,5 +238,6 @@ describe('workbench layout persistence', () => {
       expandedNavigatorWidth: 300,
       utilityWidth: 410,
     });
+    expect(setItem).toHaveBeenCalledTimes(1);
   });
 });
