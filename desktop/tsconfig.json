@@ -17,6 +17,9 @@
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedSideEffectImports": true,
     "forceConsistentCasingInFileNames": true,
     // Third-party Babel/React Compiler declarations currently publish
     // incompatible graphs; source checking remains strict.

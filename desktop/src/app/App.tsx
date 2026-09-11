@@ -136,7 +136,7 @@ export function App({ bridge }: AppProps) {
       }
 
       let calibrationOperationId: string | null = null;
-      let calibrationFinished: Extract<UiEvent, { name: 'calibration.finished' }> | null = null;
+      let calibrationFinished: Extract<UiEvent, { name: 'calibration.finished' }>;
       const earlyCalibrationFinished: Extract<UiEvent, { name: 'calibration.finished' }>[] = [];
       let resolveCalibration!: (event: Extract<UiEvent, { name: 'calibration.finished' }>) => void;
       const calibrationDone = new Promise<Extract<UiEvent, { name: 'calibration.finished' }>>(

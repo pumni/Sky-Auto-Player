@@ -292,6 +292,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
   };
 
   const boundedText = (value: string): string => {
+    // The NUL replacement is intentional: diagnostic lines must remain single-line text.
+    // eslint-disable-next-line no-control-regex
     const normalized = value.replace(/[\u0000\r\n\t]/g, ' ');
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
