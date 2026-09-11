@@ -45,16 +45,20 @@ export function AppTitleBar({ useStore, settingsTriggerRef, windowControls }: Ap
       <GlobalSearch useStore={useStore} />
       <div className="app-titlebar-actions" data-tauri-drag-region="false">
         {update.state === 'available' && (
-          <Button
-            className="update-indicator"
-            aria-label={`Update available: ${updateVersion}`}
+          <span
+            className="update-indicator-shell"
             title={`Update available: ${updateVersion}. Open update details.`}
-            onPress={() => setUpdateDialogOpen(true)}
           >
-            <Download size={15} aria-hidden="true" />
-            <span className="update-indicator-dot" aria-hidden="true" />
-            <span className="visually-hidden">Update available</span>
-          </Button>
+            <Button
+              className="update-indicator"
+              aria-label={`Update available: ${updateVersion}`}
+              onPress={() => setUpdateDialogOpen(true)}
+            >
+              <Download size={15} aria-hidden="true" />
+              <span className="update-indicator-dot" aria-hidden="true" />
+              <span className="visually-hidden">Update available</span>
+            </Button>
+          </span>
         )}
         <Button
           className="icon-button"
