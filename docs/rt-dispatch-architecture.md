@@ -99,10 +99,14 @@ deadline can satisfy the probe zero-event predicate; truncation, sequence
 corruption, or binding loss is INCONCLUSIVE. These are acceptance-observer
 bounds and do not change production scheduler or timing policy.
 
-The acceptance profile materializes the current default equation without a
-runtime timing override: at 60 FPS, `frame_us = 16,667`, and with 500 us Down
-grace plus 300 us transport margin, both minimum hold and release gap are
-17,467 us; focus restore grace remains 100,000 us. The `focus-loss` scenario
+The acceptance profile materializes the current default equation at 60 FPS:
+`frame_us = 16,667`, and with the default 500 us Down grace plus 300 us
+transport margin, both minimum hold and release gap are 17,467 us; focus
+restore grace remains 100,000 us. Controlled A/B runs may pass
+`--down-late-grace-us 500|750|1000`; the harness recomputes both schedule
+constraints from that session-frozen value and records it in every report.
+This override is acceptance-only and does not change the shipped production
+default. The `focus-loss` scenario
 first commits a canonical sink Down/Up pair, waits for `startup_ready` and that
 pair's event evidence, then moves foreground to the validated project-owned
 probe with the coarse focus hint still true before a later different-slot Down.

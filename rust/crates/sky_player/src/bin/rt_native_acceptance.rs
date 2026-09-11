@@ -604,17 +604,9 @@ fn focus_evidence_clean(paused: bool, final_gate_focus_losses: u64, target_chang
     paused && final_gate_focus_losses >= 1 && target_changes == 0 && sink_events_clean && probe_events_empty
 }
 fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
-    let release = snapshot.release_outcome.as_ref().map(|outcome| json!({
-        "attempted_mask": outcome.attempted_mask, "transport_anomaly": outcome.transport_anomaly,
-        "released_successfully": outcome.released_successfully, "stuck_mask": outcome.stuck_mask,
-        "verification_inconclusive": outcome.verification_inconclusive, "attempts": outcome.attempts,
-    }));
-    json!({"status": snapshot.status, "outcome": snapshot.outcome, "active_count": snapshot.active_count,
-        "possibly_active_count": snapshot.possibly_active_count, "failed_release_count": snapshot.failed_release_count,
-        "terminal_error": snapshot.terminal_error, "sendinput_partial_events": snapshot.sendinput_partial_events,
-        "sendinput_zero_progress_failures": snapshot.sendinput_zero_progress_failures,
-        "final_gate_focus_losses": snapshot.final_gate_focus_losses, "final_gate_target_changes": snapshot.final_gate_target_changes,
-        "max_sendinput_pre_call_lateness_us": snapshot.max_sendinput_pre_call_lateness_us, "release_outcome": release})
+    let stuck_keys = snapshot.release_outcome.as_ref().map_or(0, |outcome| u64::from(outcome.stuck_mask.count_ones()));
+    let release = snapshot.release_outcome.as_ref().map(|outcome| json!({"attempted_mask": outcome.attempted_mask, "transport_anomaly": outcome.transport_anomaly, "released_successfully": outcome.released_successfully, "stuck_mask": outcome.stuck_mask, "verification_inconclusive": outcome.verification_inconclusive, "attempts": outcome.attempts}));
+    json!({"status": snapshot.status, "outcome": snapshot.outcome, "last_error": snapshot.last_error, "active_count": snapshot.active_count, "possibly_active_count": snapshot.possibly_active_count, "failed_release_count": snapshot.failed_release_count, "stuck_keys": stuck_keys, "terminal_error": snapshot.terminal_error, "keys_dropped": snapshot.keys_dropped, "chord_split_events": snapshot.chord_split_events, "sendinput_partial_events": snapshot.sendinput_partial_events, "sendinput_zero_progress_failures": snapshot.sendinput_zero_progress_failures, "max_sendinput_pre_call_lateness_us": snapshot.max_sendinput_pre_call_lateness_us, "pre_call_lt_250us": snapshot.pre_call_lt_250us, "pre_call_250_500us": snapshot.pre_call_250_500us, "pre_call_500_750us": snapshot.pre_call_500_750us, "pre_call_750_1000us": snapshot.pre_call_750_1000us, "pre_call_1000_1500us": snapshot.pre_call_1000_1500us, "pre_call_1500_2000us": snapshot.pre_call_1500_2000us, "pre_call_ge_2000us": snapshot.pre_call_ge_2000us, "missed_down_boundaries": snapshot.missed_down_boundaries, "missed_down_keys": snapshot.missed_down_keys, "missed_backlog_boundaries": snapshot.missed_backlog_boundaries, "missed_hard_late_boundaries": snapshot.missed_hard_late_boundaries, "final_gate_cutoff_misses": snapshot.final_gate_cutoff_misses, "final_gate_focus_losses": snapshot.final_gate_focus_losses, "final_gate_target_changes": snapshot.final_gate_target_changes, "final_gate_lease_expirations": snapshot.final_gate_lease_expirations, "release_outcome": release})
 }
 fn write_report(args: &RunArgs, verdict: Verdict, reason: &str, details: Value) -> i32 {
     let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "down_late_grace_us": args.down_late_grace_us, "reason": reason, "details": details});
