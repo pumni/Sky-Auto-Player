@@ -50,6 +50,23 @@ export default [
     ...reactHooks.configs.flat.recommended,
   },
   {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/bridge/**', 'src/platform/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@tauri-apps/*'],
+              message: 'Import Tauri APIs only from src/bridge or src/platform adapters.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['**/*.{js,mjs,cjs}', 'vite.config.ts', 'vitest.config.ts', 'playwright.config.ts'],
     languageOptions: {
       globals: globals.node,

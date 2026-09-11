@@ -2607,6 +2607,16 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     if ci.matches("cargo install cargo-vet").count() != 1 {
         return Err("CI must install cargo-vet exactly once in the supply-chain job".into());
     }
+    if ci
+        .matches("google/osv-scanner-action/osv-scanner-action@")
+        .count()
+        != 1
+    {
+        return Err("CI must run exactly one pinned OSV-Scanner action".into());
+    }
+    if !ci.contains("--lockfile=./desktop/bun.lock") {
+        return Err("CI OSV-Scanner must audit the desktop Bun lockfile".into());
+    }
 
     let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
     for marker in [

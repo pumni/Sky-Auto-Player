@@ -1,7 +1,8 @@
 use super::super::outcome::PhysicalKeyPreflightError;
+#[cfg(any(test, feature = "test-support"))]
+use super::super::physical::InstrumentPhysicalState;
 use super::super::physical::{
-    InstrumentPhysicalState, LogicalInstrumentPhysicalState,
-    instrument_logical_physical_state_for_mask,
+    LogicalInstrumentPhysicalState, instrument_logical_physical_state_for_mask,
 };
 use super::super::scan_code::FULL_INSTRUMENT_MASK;
 use super::TrackedKeyState;

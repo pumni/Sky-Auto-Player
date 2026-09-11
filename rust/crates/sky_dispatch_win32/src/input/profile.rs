@@ -166,6 +166,7 @@ impl MaterializedInstrumentKeyProfile {
         self.keys[slot]
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn logical_mask_for_scan_codes(&self, scan_codes: &[u16]) -> Option<u16> {
         scan_codes.iter().try_fold(0u16, |mask, scan_code| {
             self.keys

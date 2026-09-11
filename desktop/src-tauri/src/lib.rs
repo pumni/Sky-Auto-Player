@@ -6,6 +6,8 @@ mod ipc_contract;
 mod lifecycle;
 mod native_runtime;
 mod native_update;
+#[cfg(windows)]
+mod single_instance;
 mod ui_events;
 #[cfg(windows)]
 mod windows_caption;
@@ -141,6 +143,20 @@ pub fn selftest_update_install_rejection_during_playback() -> i32 {
 }
 
 fn run_inner(gui_smoke: bool, update_smoke: bool) {
+    #[cfg(windows)]
+    let _single_instance_guard = match single_instance::SingleInstanceGuard::acquire() {
+        Ok(guard) => guard,
+        Err(single_instance::AcquireError::AlreadyRunning) => {
+            single_instance::focus_existing_instance();
+            eprintln!("Sky Auto Player is already running");
+            return;
+        }
+        Err(error) => {
+            eprintln!("Sky Auto Player startup refused: {error}");
+            return;
+        }
+    };
+
     let update_marker = update_smoke_marker("--selftest-update-marker");
     let update_safety_marker = update_smoke_marker("--selftest-update-safety-marker");
     let expected_version_file = update_smoke_marker("--selftest-update-expected-version-file");

@@ -34,6 +34,26 @@ updates:
           - major
 
   - package-ecosystem: bun
+    directory: /desktop
+    schedule:
+      interval: weekly
+    groups:
+      desktop-major-technologies:
+        patterns:
+          - react
+          - react-dom
+          - typescript
+          - vite
+        update-types:
+          - major
+      desktop-regular:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: bun
     directory: /site
     schedule:
       interval: weekly

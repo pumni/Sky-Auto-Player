@@ -876,6 +876,7 @@ impl TrackedKeyState {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn logical_prefix_mask(mask: u16, count: u8) -> u16 {
     let mut remaining = mask;
     let mut prefix = 0u16;
