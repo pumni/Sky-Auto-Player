@@ -7,10 +7,11 @@ import type {
 } from 'react';
 
 /**
- * React Aria Components 1.20.0 currently conflicts with TypeScript 7's
- * `exactOptionalPropertyTypes` in its published Group/OverlayArrow types.
- * Keep the runtime package, but type the small headless primitive surface used
- * by this initial shell locally until the upstream declarations catch up.
+ * React Aria Components 1.21.1 still conflicts with TypeScript 7.0.2's
+ * `exactOptionalPropertyTypes` for the headless primitive surface used by the
+ * shell. Keep this narrow shim and re-test removing it when upstream
+ * declarations accept the existing Button/Popover/Tabs call sites without
+ * component or behavior changes.
  */
 declare module 'react-aria-components' {
   export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'> {
