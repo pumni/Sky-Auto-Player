@@ -101,6 +101,11 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
     playbackIsActive &&
     playback.sessionId !== null &&
     latest?.session_id === playback.sessionId;
+  const backendMetricsAvailable = latest?.backend_status !== 'unavailable';
+  const backendMetric = (value: number): string =>
+    backendMetricsAvailable ? String(value) : 'Unavailable';
+  const backendMeasure = (value: number, unit: string): string =>
+    backendMetricsAvailable ? measure(value, unit, 0) : 'Unavailable';
   return (
     <div
       ref={scrollRef}
@@ -146,7 +151,7 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <Metric label="Session max" value={measure(latest.max_lateness_us, 'μs', 0)} />
                 <Metric
                   label="Max pre-call lateness"
-                  value={measure(latest.max_sendinput_pre_call_lateness_us, 'μs', 0)}
+                  value={backendMeasure(latest.max_sendinput_pre_call_lateness_us, 'μs')}
                 />
                 <Metric label="Completion jitter σ" value={measure(latest.sigma_onset_ms, 'ms')} />
               </MetricGroup>
@@ -154,15 +159,15 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <Metric label="Completion > 2 ms" value={count(latest.late_2ms)} />
                 <Metric label="Completion > 5 ms" value={count(latest.late_5ms)} />
                 <Metric label="Completion > 10 ms" value={count(latest.late_10ms)} />
-                <Metric label="Pre-call > 2 ms" value={count(latest.pre_call_late_2ms)} />
-                <Metric label="Pre-call > 5 ms" value={count(latest.pre_call_late_5ms)} />
-                <Metric label="Pre-call > 10 ms" value={count(latest.pre_call_late_10ms)} />
+                <Metric label="Pre-call > 2 ms" value={backendMetric(latest.pre_call_late_2ms)} />
+                <Metric label="Pre-call > 5 ms" value={backendMetric(latest.pre_call_late_5ms)} />
+                <Metric label="Pre-call > 10 ms" value={backendMetric(latest.pre_call_late_10ms)} />
               </MetricGroup>
               <MetricGroup title="Input health">
-                <Metric label="Dropped keys" value={count(latest.keys_dropped)} />
-                <Metric label="Chord splits" value={count(latest.chord_split_events)} />
-                <Metric label="Stuck keys" value={count(latest.stuck_keys)} />
-                <Metric label="Active keys" value={count(latest.active_keys)} />
+                <Metric label="Dropped keys" value={backendMetric(latest.keys_dropped)} />
+                <Metric label="Chord splits" value={backendMetric(latest.chord_split_events)} />
+                <Metric label="Stuck keys" value={backendMetric(latest.stuck_keys)} />
+                <Metric label="Active keys" value={backendMetric(latest.active_keys)} />
               </MetricGroup>
               <MetricGroup title="Release">
                 <Metric

@@ -95,9 +95,19 @@ describe('DiagnosticsView', () => {
         samples: [
           snapshot({
             session_id: sessionId,
+            max_lateness_us: null,
             p50_ms: null,
             p95_ms: null,
             sigma_onset_ms: null,
+            late_2ms: null,
+            late_5ms: null,
+            late_10ms: null,
+            max_sendinput_pre_call_lateness_us: 0,
+            pre_call_late_2ms: 0,
+            pre_call_late_5ms: 0,
+            pre_call_late_10ms: 0,
+            release_max_us: null,
+            release_late_2ms: null,
             backend_status: 'unavailable',
           }),
         ],
@@ -109,6 +119,11 @@ describe('DiagnosticsView', () => {
 
     expect(screen.getAllByText('Unavailable')).not.toHaveLength(0);
     expect(screen.queryByText('0.00 ms')).toBeNull();
+    expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent(
+      'Unavailable',
+    );
+    expect(screen.getByText('Pre-call > 2 ms').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Dropped keys').parentElement).toHaveTextContent('Unavailable');
     expect(document.querySelector('.diagnostics-backend-status.is-unavailable')).toHaveTextContent(
       'Unavailable',
     );
