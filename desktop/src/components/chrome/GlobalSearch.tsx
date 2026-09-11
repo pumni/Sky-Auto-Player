@@ -1,18 +1,20 @@
 import { Search } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
 interface GlobalSearchProps {
+  inputRef?: RefObject<HTMLInputElement | null>;
   useStore: DesktopStoreHook;
 }
 
-export function GlobalSearch({ useStore }: GlobalSearchProps) {
+export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
   const query = useStore((store: DesktopStore) => store.library.query);
   const playlistAddMode = useStore((store: DesktopStore) => store.library.playlistAddMode);
   return (
     <SearchInput
       key={`${query}:${playlistAddMode?.playlistId ?? 'library'}`}
       query={query}
+      {...(inputRef ? { inputRef } : {})}
       useStore={useStore}
       playlistAddMode={playlistAddMode !== null}
     />
@@ -24,7 +26,7 @@ interface SearchInputProps extends GlobalSearchProps {
   playlistAddMode: boolean;
 }
 
-function SearchInput({ query, useStore, playlistAddMode }: SearchInputProps) {
+function SearchInput({ inputRef, query, useStore, playlistAddMode }: SearchInputProps) {
   const search = useStore((store) => store.search);
   const [draft, setDraft] = useState(query);
 
@@ -42,6 +44,7 @@ function SearchInput({ query, useStore, playlistAddMode }: SearchInputProps) {
         {playlistAddMode ? 'Search All Songs' : 'Search library'}
       </span>
       <input
+        ref={inputRef}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         placeholder={playlistAddMode ? 'Search All Songs…' : 'Search library…'}

@@ -1,10 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import { App } from './App';
 
 describe('desktop application shell', () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    delete (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__;
+    cleanup();
+  });
 
   it('renders the navigator, track browser, utility details, and settings', async () => {
     render(<App bridge={createMockBridge()} />);
@@ -63,6 +66,15 @@ describe('desktop application shell', () => {
     );
   });
 
+  it('focuses the global search input from the keyboard shortcut', async () => {
+    render(<App bridge={createMockBridge()} />);
+    const search = await screen.findByRole('searchbox');
+
+    fireEvent.keyDown(window, { key: '/' });
+
+    expect(document.activeElement).toBe(search);
+  });
+
   it('loads and selects a keyboard destination on an unloaded virtualized page', async () => {
     render(<App bridge={createMockBridge()} />);
     const grid = await screen.findByRole('grid', { name: 'Songs' });
@@ -85,6 +97,17 @@ describe('desktop application shell', () => {
     render(<App bridge={bridge} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Native application is unavailable');
     expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull();
+  });
+
+  it('runs the packaged GUI smoke orchestration when requested', async () => {
+    const bridge = createMockBridge();
+    const shutdown = vi.spyOn(bridge, 'shutdown');
+    (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
+
+    render(<App bridge={bridge} />);
+
+    await waitFor(() => expect(shutdown).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    expect(shutdown).toHaveBeenCalledWith();
   });
 
   it('opens the docked utility diagnostics and closes with Escape', async () => {
@@ -114,5 +137,6 @@ describe('desktop application shell', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Timing calibration' })).toBeNull(),
     );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open settings' }));
   });
 });

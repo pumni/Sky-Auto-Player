@@ -1,22 +1,21 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { CheckCircle2, LoaderCircle, XCircle } from 'lucide-react';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
 
 interface CalibrationDialogProps {
+  settingsTriggerRef?: RefObject<HTMLButtonElement | null>;
   useStore: DesktopStoreHook;
 }
 
-export function CalibrationDialog({ useStore }: CalibrationDialogProps) {
+export function CalibrationDialog({ settingsTriggerRef, useStore }: CalibrationDialogProps) {
   const calibration = useStore((store) => store.calibration);
   const setOpen = useStore((store) => store.setCalibrationOpen);
   const start = useStore((store) => store.startCalibration);
   const cancel = useStore((store) => store.cancelCalibration);
   const close = () => {
     setOpen(false);
-    queueMicrotask(() =>
-      document.querySelector<HTMLElement>('[aria-label="Open settings"]')?.focus(),
-    );
+    queueMicrotask(() => settingsTriggerRef?.current?.focus());
   };
   const running = ['starting', 'running', 'cancelling'].includes(calibration.state);
   if (!calibration.open) return null;

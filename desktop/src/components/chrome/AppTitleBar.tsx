@@ -13,12 +13,18 @@ import { WindowCaptionControls } from './WindowCaptionControls';
 
 interface AppTitleBarProps {
   bootstrap: Bootstrap;
+  searchInputRef?: RefObject<HTMLInputElement | null>;
   useStore: DesktopStoreHook;
   settingsTriggerRef?: RefObject<HTMLButtonElement | null>;
   windowControls?: WindowControls;
 }
 
-export function AppTitleBar({ useStore, settingsTriggerRef, windowControls }: AppTitleBarProps) {
+export function AppTitleBar({
+  searchInputRef,
+  useStore,
+  settingsTriggerRef,
+  windowControls,
+}: AppTitleBarProps) {
   const controls = useMemo(() => windowControls ?? createWindowControls(), [windowControls]);
   const reload = useStore((store: DesktopStore) => store.reloadLibrary);
   const setSettingsOpen = useStore((store: DesktopStore) => store.setSettingsOpen);
@@ -42,7 +48,7 @@ export function AppTitleBar({ useStore, settingsTriggerRef, windowControls }: Ap
         <span className="visually-hidden">Sky Auto Player</span>
       </div>
       <div className="titlebar-drag-space" aria-hidden="true" />
-      <GlobalSearch useStore={useStore} />
+      <GlobalSearch {...(searchInputRef ? { inputRef: searchInputRef } : {})} useStore={useStore} />
       <div className="app-titlebar-actions" data-tauri-drag-region="false">
         {update.state === 'available' && (
           <span

@@ -13,7 +13,31 @@ import {
   getUtilityWidthMax,
   solveWorkbenchGeometry,
   WORKBENCH_STORAGE_KEY,
+  useWorkbenchLayout,
 } from './useWorkbenchLayout';
+
+function LayoutUpdateHarness() {
+  const layout = useWorkbenchLayout(1200, true);
+  return (
+    <>
+      <output data-testid="layout-values">
+        {layout.expandedNavigatorWidth}:{layout.utilityWidth}
+      </output>
+      <button
+        type="button"
+        onClick={() => {
+          layout.setNavigatorWidth(300);
+          layout.setUtilityWidth(400);
+        }}
+      >
+        Update layout
+      </button>
+      <button type="button" onClick={() => layout.setUtilityWidth(410, true)}>
+        Commit utility width
+      </button>
+    </>
+  );
+}
 
 describe('ResizableSeparator', () => {
   afterEach(() => window.localStorage.clear());
@@ -188,5 +212,21 @@ describe('workbench layout persistence', () => {
     expect(minimum.fits).toBe(true);
     expect(COMPACT_NAVIGATOR_WIDTH).toBe(56);
     expect(getNavigatorWidthMax(920)).toBeGreaterThanOrEqual(MIN_NAVIGATOR_WIDTH);
+  });
+
+  it('combines rapid functional updates while persisting only explicit commits', () => {
+    render(<LayoutUpdateHarness />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update layout' }));
+
+    expect(screen.getByTestId('layout-values')).toHaveTextContent('300:400');
+    expect(window.localStorage.getItem(WORKBENCH_STORAGE_KEY)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Commit utility width' }));
+
+    expect(JSON.parse(window.localStorage.getItem(WORKBENCH_STORAGE_KEY)!)).toMatchObject({
+      expandedNavigatorWidth: 300,
+      utilityWidth: 410,
+    });
   });
 });
