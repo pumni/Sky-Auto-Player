@@ -644,7 +644,7 @@ test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
   expect(playerBox).not.toBeNull();
   if (panelBox && playerBox) expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(playerBox.y);
   await panel.getByRole('tab', { name: 'Timing' }).click();
-  await expect(panel.getByRole('img', { name: /Completion p95 lateness/ })).toBeVisible();
+  await expect(panel.getByRole('img', { name: /Completion p95 residual/ })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
   await panel.getByRole('button', { name: 'Close utility' }).click();
   await expect(panel).toBeHidden();
@@ -717,7 +717,7 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
   await expectNoSeriousAccessibilityViolations(page);
   await diagnosticsDrawer.getByRole('tab', { name: 'Timing' }).click();
   await expect(
-    diagnosticsDrawer.getByRole('img', { name: /Completion p95 lateness/ }),
+    diagnosticsDrawer.getByRole('img', { name: /Completion p95 residual/ }),
   ).toBeVisible();
   await expect(diagnosticsDrawer).toContainText(
     /No active playback session|No timing samples|Latest completion p95/,

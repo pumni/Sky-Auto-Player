@@ -15,6 +15,10 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     late_2ms: 4,
     late_5ms: 2,
     late_10ms: 1,
+    max_sendinput_pre_call_lateness_us: 320,
+    pre_call_late_2ms: 3,
+    pre_call_late_5ms: 2,
+    pre_call_late_10ms: 1,
     active_keys: 3,
     stuck_keys: 1,
     keys_dropped: 5,
@@ -47,11 +51,17 @@ describe('DiagnosticsView', () => {
 
   it('uses boundary-accurate labels and a recent completion metric for timing', () => {
     const store = createDesktopStore(createMockBridge());
+    const sessionId = 'a'.repeat(32);
     store.setState({
       diagnostics: {
         ...store.getState().diagnostics,
         enabled: true,
-        samples: [snapshot()],
+        samples: [snapshot({ session_id: sessionId, release_late_2ms: 0 })],
+      },
+      playback: {
+        ...store.getState().playback,
+        sessionId,
+        state: 'playing',
       },
     });
 
@@ -61,15 +71,85 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Completion p95')).toBeInTheDocument();
     expect(screen.getByText('Completion jitter σ')).toBeInTheDocument();
     expect(screen.getByText('Session max')).toBeInTheDocument();
+    expect(screen.getByText('Max pre-call lateness')).toBeInTheDocument();
+    expect(screen.getByText('Pre-call > 10 ms')).toBeInTheDocument();
     expect(screen.getByText('Dropped keys')).toBeInTheDocument();
     expect(screen.getByText('Stuck keys')).toBeInTheDocument();
     expect(screen.getByText('Healthy')).toBeInTheDocument();
+    expect(screen.getByText('Release > 2 ms').parentElement).toHaveTextContent('0');
     expect(screen.queryByText('P50')).toBeNull();
     expect(screen.queryByText('Sigma')).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
-    expect(screen.getByRole('img', { name: /Completion p95 lateness/ })).toBeVisible();
-    expect(screen.getByText(/Latest completion p95 1\.10 ms/)).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /Completion p95 residual/ })).toBeVisible();
+    expect(screen.getByText(/Latest completion p95 residual 1\.10 ms/)).toBeInTheDocument();
+  });
+
+  it('does not present unavailable distribution metrics as zero', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'b'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            p50_ms: null,
+            p95_ms: null,
+            sigma_onset_ms: null,
+            backend_status: 'unavailable',
+          }),
+        ],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getAllByText('Unavailable')).not.toHaveLength(0);
+    expect(screen.queryByText('0.00 ms')).toBeNull();
+    expect(document.querySelector('.diagnostics-backend-status.is-unavailable')).toHaveTextContent(
+      'Unavailable',
+    );
+    expect(screen.queryByText('No session')).toBeNull();
+  });
+
+  it('uses playback lifecycle to hide a completed session', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'c'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [snapshot({ session_id: sessionId })],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'finished' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('No active playback session')).toBeInTheDocument();
+    expect(screen.queryByText('Completion p50')).toBeNull();
+  });
+
+  it('keeps signed completion residuals and shows a zero reference line', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'd'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [snapshot({ session_id: sessionId, p95_ms: -1.5 })],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+
+    expect(screen.getByText(/Latest completion p95 residual -1\.50 ms/)).toBeInTheDocument();
+    expect(document.querySelector('.plot-zero-axis')).not.toBeNull();
   });
 
   it('removes the fabricated Logs view and timestamps human events', () => {

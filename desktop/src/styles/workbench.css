@@ -969,7 +969,7 @@ body.is-resizing * {
   background: var(--surface-secondary);
 }
 
-.plot-axis {
+.plot-zero-axis {
   stroke: var(--border-strong);
 }
 

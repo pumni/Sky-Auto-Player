@@ -314,7 +314,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       case 'catalog.changed':
         return `Generation ${event.payload.generation}, ${event.payload.total} songs`;
       case 'diagnostics.snapshot':
-        return `p95 ${event.payload.p95_ms.toFixed(2)} ms; max ${event.payload.max_lateness_us} μs`;
+        return `p95 ${event.payload.p95_ms === null ? 'unavailable' : `${event.payload.p95_ms.toFixed(2)} ms`}; max ${event.payload.max_lateness_us} μs`;
       case 'calibration.progress':
         return `${event.payload.phase}: ${event.payload.completed}/${event.payload.total}`;
       case 'calibration.finished':

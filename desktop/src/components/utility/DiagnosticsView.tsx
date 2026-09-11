@@ -12,6 +12,10 @@ function number(value: number | null | undefined, digits = 2): string {
   return value === null || value === undefined ? 'Unavailable' : value.toFixed(digits);
 }
 
+function measure(value: number | null | undefined, unit: string, digits = 2): string {
+  return value === null || value === undefined ? 'Unavailable' : `${number(value, digits)} ${unit}`;
+}
+
 function formatEventTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], {
     hour: '2-digit',
@@ -37,33 +41,45 @@ function DiagnosticsEmptyState({
   );
 }
 
-function TimingPlot({ samples }: { samples: DesktopStore['diagnostics']['samples'] }) {
+function TimingPlot({
+  samples,
+  hasActiveSession,
+}: {
+  samples: DesktopStore['diagnostics']['samples'];
+  hasActiveSession: boolean;
+}) {
   const width = 560;
   const height = 112;
-  const hasSession = samples.length > 0 && samples.at(-1)?.session_id !== null;
-  const values = hasSession ? samples.map((sample) => Math.max(0, sample.p95_ms)) : [];
-  const maximum = Math.max(1, ...values);
+  const values = samples.flatMap((sample) => (sample.p95_ms === null ? [] : [sample.p95_ms]));
+  const minimum = Math.min(0, ...values);
+  const maximum = Math.max(0, ...values);
+  const range = Math.max(1, maximum - minimum);
+  const plotTop = 4;
+  const plotBottom = height - 4;
+  const yFor = (value: number) => plotBottom - ((value - minimum) / range) * (plotBottom - plotTop);
   const points = values
     .map((value, index) => {
       const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * width;
-      const y = height - (value / maximum) * (height - 8) - 4;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
+      return `${x.toFixed(1)},${yFor(value).toFixed(1)}`;
     })
     .join(' ');
   const latest = values.length ? values[values.length - 1] : null;
+  const zeroY = yFor(0);
   return (
     <figure className="diagnostics-plot">
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="timing-plot-title">
-        <title id="timing-plot-title">Completion p95 lateness over recent samples</title>
-        <line x1="0" y1={height - 4} x2={width} y2={height - 4} className="plot-axis" />
+        <title id="timing-plot-title">Completion p95 residual over recent samples</title>
+        <line x1="0" y1={zeroY} x2={width} y2={zeroY} className="plot-zero-axis" />
         {points && <polyline points={points} className="plot-line" />}
       </svg>
       <figcaption>
         {latest === null
-          ? hasSession
-            ? 'No timing samples yet.'
-            : 'No active playback session.'
-          : `Latest completion p95 ${number(latest)} ms across ${values.length} samples.`}
+          ? !hasActiveSession
+            ? 'No active playback session.'
+            : samples.length === 0
+              ? 'No timing samples yet.'
+              : 'Completion p95 distribution unavailable for this dispatch profile.'
+          : `Latest completion p95 residual ${number(latest)} ms across ${values.length} samples.`}
       </figcaption>
     </figure>
   );
@@ -71,10 +87,21 @@ function TimingPlot({ samples }: { samples: DesktopStore['diagnostics']['samples
 
 export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const diagnostics = useStore((store: DesktopStore) => store.diagnostics);
+  const playback = useStore((store: DesktopStore) => store.playback);
   const scrollRef = useScrollVisibility<HTMLDivElement>();
   const eventsScrollRef = useScrollVisibility<HTMLDivElement>();
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
-  const activeSession = latest?.session_id !== null && latest?.session_id !== undefined;
+  const playbackIsActive = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
+  const activeSession =
+    diagnostics.enabled &&
+    playbackIsActive &&
+    playback.sessionId !== null &&
+    latest?.session_id === playback.sessionId;
+  const backendMetricsAvailable = latest?.backend_status !== 'unavailable';
+  const backendMetric = (value: number): string =>
+    backendMetricsAvailable ? String(value) : 'Unavailable';
+  const backendMeasure = (value: number, unit: string): string =>
+    backendMetricsAvailable ? measure(value, unit, 0) : 'Unavailable';
   return (
     <div
       ref={scrollRef}
@@ -115,39 +142,35 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
           ) : (
             <>
               <MetricGroup title="Timing">
-                <Metric label="Completion p50" value={`${number(latest.p50_ms)} ms`} />
-                <Metric label="Completion p95" value={`${number(latest.p95_ms)} ms`} />
-                <Metric label="Session max" value={`${number(latest.max_lateness_us, 0)} μs`} />
-                <Metric label="Completion jitter σ" value={`${number(latest.sigma_onset_ms)} ms`} />
+                <Metric label="Completion p50" value={measure(latest.p50_ms, 'ms')} />
+                <Metric label="Completion p95" value={measure(latest.p95_ms, 'ms')} />
+                <Metric label="Session max" value={backendMeasure(latest.max_lateness_us, 'μs')} />
+                <Metric
+                  label="Max pre-call lateness"
+                  value={backendMeasure(latest.max_sendinput_pre_call_lateness_us, 'μs')}
+                />
+                <Metric label="Completion jitter σ" value={measure(latest.sigma_onset_ms, 'ms')} />
               </MetricGroup>
               <MetricGroup title="Late events">
-                <Metric label="> 2 ms" value={String(latest.late_2ms)} />
-                <Metric label="> 5 ms" value={String(latest.late_5ms)} />
-                <Metric label="> 10 ms" value={String(latest.late_10ms)} />
+                <Metric label="Completion > 2 ms" value={backendMetric(latest.late_2ms)} />
+                <Metric label="Completion > 5 ms" value={backendMetric(latest.late_5ms)} />
+                <Metric label="Completion > 10 ms" value={backendMetric(latest.late_10ms)} />
+                <Metric label="Pre-call > 2 ms" value={backendMetric(latest.pre_call_late_2ms)} />
+                <Metric label="Pre-call > 5 ms" value={backendMetric(latest.pre_call_late_5ms)} />
+                <Metric label="Pre-call > 10 ms" value={backendMetric(latest.pre_call_late_10ms)} />
               </MetricGroup>
               <MetricGroup title="Input health">
-                <Metric label="Dropped keys" value={String(latest.keys_dropped)} />
-                <Metric label="Chord splits" value={String(latest.chord_split_events)} />
-                <Metric label="Stuck keys" value={String(latest.stuck_keys)} />
-                <Metric label="Active keys" value={String(latest.active_keys)} />
+                <Metric label="Dropped keys" value={backendMetric(latest.keys_dropped)} />
+                <Metric label="Chord splits" value={backendMetric(latest.chord_split_events)} />
+                <Metric label="Stuck keys" value={backendMetric(latest.stuck_keys)} />
+                <Metric label="Active keys" value={backendMetric(latest.active_keys)} />
               </MetricGroup>
               <MetricGroup title="Release">
                 <Metric
                   label="Max release lateness"
-                  value={
-                    latest.release_max_us === null
-                      ? 'Unavailable'
-                      : `${number(latest.release_max_us, 0)} μs`
-                  }
+                  value={backendMeasure(latest.release_max_us, 'μs')}
                 />
-                <Metric
-                  label="Release > 2 ms"
-                  value={
-                    latest.release_late_2ms === null
-                      ? 'Unavailable'
-                      : String(latest.release_late_2ms)
-                  }
-                />
+                <Metric label="Release > 2 ms" value={backendMetric(latest.release_late_2ms)} />
               </MetricGroup>
               <p className="diagnostics-status">
                 <Activity size={14} aria-hidden="true" />
@@ -158,7 +181,10 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
           )}
         </TabPanel>
         <TabPanel id="timing" className="diagnostics-panel">
-          <TimingPlot samples={diagnostics.samples} />
+          <TimingPlot
+            samples={activeSession ? diagnostics.samples : []}
+            hasActiveSession={activeSession}
+          />
         </TabPanel>
         <TabPanel
           ref={eventsScrollRef}
@@ -201,7 +227,7 @@ function BackendStatus({
         ? 'Degraded'
         : status === 'error'
           ? 'Error'
-          : 'No session';
+          : 'Unavailable';
   return <span className={`diagnostics-backend-status is-${status}`}>{label}</span>;
 }
 

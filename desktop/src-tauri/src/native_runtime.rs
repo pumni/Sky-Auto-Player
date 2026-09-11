@@ -3987,16 +3987,25 @@ fn publish_diagnostics_snapshot_for_active(
         .map(|player| NativeDiagnosticsSample::from_player(player))
         .unwrap_or_else(NativeDiagnosticsSample::unavailable);
     let session_id = active.session_id.clone();
+    let completion_samples_available =
+        sample.recent_latency_samples_available && !sample.recent_latencies_us.is_empty();
     let _published = gate.try_publish(Instant::now(), |sequence| {
         let payload = crate::ui_events::DiagnosticsSnapshotDto {
             seq: sequence,
             max_lateness_us: sample.max_lateness_us,
-            p50_ms: percentile_ms(&sample.recent_latencies_us, 0.50),
-            p95_ms: percentile_ms(&sample.recent_latencies_us, 0.95),
-            sigma_onset_ms: population_sigma_ms(&sample.recent_latencies_us),
+            p50_ms: completion_samples_available
+                .then(|| percentile_ms(&sample.recent_latencies_us, 0.50)),
+            p95_ms: completion_samples_available
+                .then(|| percentile_ms(&sample.recent_latencies_us, 0.95)),
+            sigma_onset_ms: completion_samples_available
+                .then(|| population_sigma_ms(&sample.recent_latencies_us)),
             late_2ms: sample.late_2ms,
             late_5ms: sample.late_5ms,
             late_10ms: sample.late_10ms,
+            max_sendinput_pre_call_lateness_us: sample.max_sendinput_pre_call_lateness_us,
+            pre_call_late_2ms: sample.pre_call_late_2ms,
+            pre_call_late_5ms: sample.pre_call_late_5ms,
+            pre_call_late_10ms: sample.pre_call_late_10ms,
             active_keys: sample.active_keys,
             stuck_keys: sample.stuck_keys,
             keys_dropped: sample.keys_dropped,
@@ -4020,16 +4029,21 @@ fn publish_diagnostics_snapshot_for_active(
 struct NativeDiagnosticsSample {
     max_lateness_us: u64,
     recent_latencies_us: Vec<i64>,
+    recent_latency_samples_available: bool,
     late_2ms: u64,
     late_5ms: u64,
     late_10ms: u64,
+    max_sendinput_pre_call_lateness_us: u64,
+    pre_call_late_2ms: u64,
+    pre_call_late_5ms: u64,
+    pre_call_late_10ms: u64,
     active_keys: u64,
     stuck_keys: u64,
     keys_dropped: u64,
     chord_split_events: u64,
     backend_status: DiagnosticsBackendStatus,
-    release_max_us: Option<u64>,
-    release_late_2ms: Option<u64>,
+    release_max_us: u64,
+    release_late_2ms: u64,
 }
 
 impl NativeDiagnosticsSample {
@@ -4037,16 +4051,21 @@ impl NativeDiagnosticsSample {
         Self {
             max_lateness_us: 0,
             recent_latencies_us: Vec::new(),
+            recent_latency_samples_available: false,
             late_2ms: 0,
             late_5ms: 0,
             late_10ms: 0,
+            max_sendinput_pre_call_lateness_us: 0,
+            pre_call_late_2ms: 0,
+            pre_call_late_5ms: 0,
+            pre_call_late_10ms: 0,
             active_keys: 0,
             stuck_keys: 0,
             keys_dropped: 0,
             chord_split_events: 0,
             backend_status: DiagnosticsBackendStatus::Unavailable,
-            release_max_us: None,
-            release_late_2ms: None,
+            release_max_us: 0,
+            release_late_2ms: 0,
         }
     }
 
@@ -4055,9 +4074,14 @@ impl NativeDiagnosticsSample {
         Self {
             max_lateness_us: snapshot.max_lateness_us,
             recent_latencies_us: snapshot.recent_latencies_us,
+            recent_latency_samples_available: snapshot.recent_latency_samples_available,
             late_2ms: snapshot.late_2ms,
             late_5ms: snapshot.late_5ms,
             late_10ms: snapshot.late_10ms,
+            max_sendinput_pre_call_lateness_us: snapshot.max_sendinput_pre_call_lateness_us,
+            pre_call_late_2ms: snapshot.pre_call_late_2ms,
+            pre_call_late_5ms: snapshot.pre_call_late_5ms,
+            pre_call_late_10ms: snapshot.pre_call_late_10ms,
             active_keys: snapshot.active_count as u64,
             stuck_keys: snapshot.failed_release_count as u64,
             keys_dropped: snapshot.keys_dropped,
@@ -4071,8 +4095,8 @@ impl NativeDiagnosticsSample {
                 snapshot.possibly_active_count,
                 snapshot.active_count,
             ),
-            release_max_us: (snapshot.release_max_us > 0).then_some(snapshot.release_max_us),
-            release_late_2ms: (snapshot.release_late_2ms > 0).then_some(snapshot.release_late_2ms),
+            release_max_us: snapshot.release_max_us,
+            release_late_2ms: snapshot.release_late_2ms,
         }
     }
 }
@@ -5760,12 +5784,19 @@ mod tests {
             payload.backend_status,
             DiagnosticsBackendStatus::Unavailable
         );
+        assert_eq!(payload.p50_ms, None);
+        assert_eq!(payload.p95_ms, None);
+        assert_eq!(payload.sigma_onset_ms, None);
+        assert_eq!(payload.max_sendinput_pre_call_lateness_us, 0);
+        assert_eq!(payload.pre_call_late_2ms, 0);
+        assert_eq!(payload.pre_call_late_5ms, 0);
+        assert_eq!(payload.pre_call_late_10ms, 0);
         assert_eq!(payload.active_keys, 0);
         assert_eq!(payload.stuck_keys, 0);
         assert_eq!(payload.keys_dropped, 0);
         assert_eq!(payload.chord_split_events, 0);
-        assert_eq!(payload.release_max_us, None);
-        assert_eq!(payload.release_late_2ms, None);
+        assert_eq!(payload.release_max_us, 0);
+        assert_eq!(payload.release_late_2ms, 0);
         assert_eq!(payload.seq, 1);
     }
 

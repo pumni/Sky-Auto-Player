@@ -112,19 +112,23 @@ pub enum DiagnosticsBackendStatus {
 pub struct DiagnosticsSnapshotDto {
     pub seq: u64,
     pub max_lateness_us: u64,
-    pub p50_ms: f64,
-    pub p95_ms: f64,
-    pub sigma_onset_ms: f64,
+    pub p50_ms: Option<f64>,
+    pub p95_ms: Option<f64>,
+    pub sigma_onset_ms: Option<f64>,
     pub late_2ms: u64,
     pub late_5ms: u64,
     pub late_10ms: u64,
+    pub max_sendinput_pre_call_lateness_us: u64,
+    pub pre_call_late_2ms: u64,
+    pub pre_call_late_5ms: u64,
+    pub pre_call_late_10ms: u64,
     pub active_keys: u64,
     pub stuck_keys: u64,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
     pub backend_status: DiagnosticsBackendStatus,
-    pub release_max_us: Option<u64>,
-    pub release_late_2ms: Option<u64>,
+    pub release_max_us: u64,
+    pub release_late_2ms: u64,
     pub session_id: Option<String>,
 }
 
@@ -435,7 +439,9 @@ impl UiEvent {
             ("p95_ms", payload.p95_ms),
             ("sigma_onset_ms", payload.sigma_onset_ms),
         ] {
-            if !value.is_finite() || !(-60_000.0..=60_000.0).contains(&value) {
+            if let Some(value) = value
+                && (!value.is_finite() || !(-60_000.0..=60_000.0).contains(&value))
+            {
                 return Err(format!("diagnostics {name} is outside bounds"));
             }
         }
