@@ -58,26 +58,31 @@ observation gap makes the scenario and aggregate `acceptance_clean=false`; the
 aggregate is `statistics_eligible` only when every scenario is clean and has at
 least 10,000 iterations. A host-preemption event is therefore retained for
 paired baseline comparison instead of being silently reported as green.
-The native acceptance harness fingerprints a controlled `start_delay_us` so
-paired legs do not put their first authored event at worker startup. Its
-`paired`, `mixed`, and `coalesced` profiles respectively exercise separated
-Down/Up pairs or adjacent Up/Down boundaries; `--require-focus` and
-`--no-require-focus` are explicit matrix dimensions. These profiles only make
-the harness capable of the requested matrix. Real `SendInput` runs still
-require an isolated project-owned target HWND and explicit operator approval;
-they must never use an arbitrary foreground window.
+The feature-gated `rt-native-acceptance` binary exercises the existing
+`NativeDispatchSession` and `BackendConfig::Production` path. It is not a raw
+sender or a timing benchmark. Real-input qualification requires the explicit
+`--allow-real-input` flag, an exact target HWND, schema-v2 ready evidence, and
+the live project-owned `pwsh.exe` window identity. There is no foreground,
+environment, PID-only, or no-focus fallback.
 
-The controlled sink is the receive-only PowerShell WinForms helper
-`scripts/native_acceptance_sink.ps1`. On the isolated Windows host, start it with
-`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -ReadyFile
-.benchmarks/sink.json -EventLog .benchmarks/sink-events.json`, copy its
-printed `hwnd` into `SKY_NATIVE_TARGET_HWND`, and keep that project-owned
-window as the intended foreground target for the explicit
-`--backend sendinput --allow-real-input` command. The harness now requires
-that HWND for both focus modes: `--require-focus` verifies it stays focused;
-`--no-require-focus` disables that timing guard for the matrix but does not
-authorize an unspecified foreground window. The sink records ordinary window
-key events only and never emits input.
+Start the two receive-only project-owned WinForms observers separately. The
+normal sink and the inert focus probe both log KeyDown/KeyUp; the probe never
+emits input and has its own evidence file:
+
+`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -Mode ReceiveOnly -RunId <run-id> -ReadyFile .benchmarks/sink.json -EventLog .benchmarks/sink-events.json`
+
+`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -Mode InertFocusProbe -RunId <run-id> -ReadyFile .benchmarks/focus-probe.json -EventLog .benchmarks/focus-probe-events.json`
+
+The future physical command is an explicit, feature-gated qualification run:
+
+`cargo run --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance -- run --allow-real-input --run-id <run-id> --sink-ready .benchmarks/sink.json --sink-events .benchmarks/sink-events.json --target-hwnd <sink-hwnd> --scenario <scenario> --evidence .benchmarks/rt-native-acceptance.jsonl`
+
+The `focus-loss` scenario additionally requires the probe ready file, event
+file, and exact HWND. Its target remains the sink while the foreground moves
+to the project-owned probe with the coarse focus hint still true, challenging
+the worker's fresh exact-HWND gate. Sink/probe logs prove controlled Windows
+delivery and wrong-window safety only; they do not prove game receipt, audio
+latency, or the internal QPC timestamp chain.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch
