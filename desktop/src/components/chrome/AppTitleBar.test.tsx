@@ -72,7 +72,7 @@ describe('AppTitleBar', () => {
     });
 
     render(<AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />);
-    expect(screen.queryByRole('button', { name: /Update available:/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Open update/ })).toBeNull();
 
     act(() => {
       useStore.setState({
@@ -84,7 +84,7 @@ describe('AppTitleBar', () => {
       });
     });
 
-    const indicator = await screen.findByRole('button', { name: 'Update available: 4.0.2' });
+    const indicator = await screen.findByRole('button', { name: 'Open update 4.0.2' });
     expect(indicator.closest('.update-indicator-shell')).toHaveAttribute(
       'title',
       'Update available: 4.0.2. Open update details.',
@@ -104,7 +104,7 @@ describe('AppTitleBar', () => {
         },
       });
     });
-    expect(screen.queryByRole('button', { name: /Update available:/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Open update/ })).toBeNull();
   });
 
   it('refreshes the maximize state after resize', async () => {
