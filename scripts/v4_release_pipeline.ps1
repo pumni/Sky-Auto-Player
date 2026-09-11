@@ -397,7 +397,7 @@ function Get-ExpectedInstallerName {
     return "Sky Auto Player_${Version}$installerSuffix"
 }
 
-function Get-CandidateRecords {
+function Get-QualificationCandidateRecords {
     $installer = Get-ExpectedInstallerName
     $bundle = Join-Path $repoRoot "rust/target/dist/bundle/nsis"
     $evidence = Join-Path $repoRoot "rust/target/dist"
@@ -413,6 +413,43 @@ function Get-CandidateRecords {
     )
 }
 
+function Get-CanonicalPublicReleaseNames {
+    $installer = Get-V4SafeReleaseAssetName (Get-ExpectedInstallerName)
+    return @(
+        $installer
+        (Get-V4SafeReleaseAssetName "$((Get-ExpectedInstallerName)).sig")
+    )
+}
+
+function Get-PublicReleaseRecords([object[]]$QualificationRecords) {
+    if ($null -eq $QualificationRecords -or @($QualificationRecords).Count -eq 0) {
+        Fail "qualification candidate set is empty"
+    }
+
+    $expectedNames = @(Get-CanonicalPublicReleaseNames)
+    $records = @(
+        foreach ($expectedName in $expectedNames) {
+            $matches = @($QualificationRecords | Where-Object {
+                [string]$_.release_name -eq $expectedName
+            })
+            if ($matches.Count -ne 1) {
+                Fail "qualification candidate set does not contain exactly one canonical public record: $expectedName"
+            }
+            $matches[0]
+        }
+    )
+
+    $expectedRoles = @("installer", "updater-signature")
+    for ($index = 0; $index -lt $records.Count; $index++) {
+        $record = $records[$index]
+        if ([string]$record.role -ne $expectedRoles[$index] -or
+            [string]$record.release_name -ne $expectedNames[$index]) {
+            Fail "canonical public record has an unexpected role or release name: $($record.release_name)"
+        }
+    }
+    return $records
+}
+
 function Get-FileRecord([object]$Candidate) {
     if (-not (Test-Path -LiteralPath $Candidate.path -PathType Leaf)) { Fail "qualified candidate file is missing: $($Candidate.name)" }
     $item = Get-Item -LiteralPath $Candidate.path
@@ -426,7 +463,86 @@ function Get-FileRecord([object]$Candidate) {
         role = [string]$Candidate.role
         size = [int64]$item.Length
         sha256 = (Get-FileHash -LiteralPath $Candidate.path -Algorithm SHA256).Hash.ToLowerInvariant()
+        source_path = [string]$Candidate.path
+        state_path = (Join-Path "candidate-assets" $releaseName).Replace("\", "/")
     }
+}
+
+function Get-StateAssetPath([object]$Record) {
+    $relative = [string]$Record.state_path
+    if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative)) {
+        Fail "candidate manifest contains an invalid state asset path"
+    }
+    $root = Get-EffectiveStateRoot
+    $full = [IO.Path]::GetFullPath((Join-Path $root $relative))
+    $prefix = $root.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+    if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Fail "candidate manifest state asset path escapes the release state root"
+    }
+    return $full
+}
+
+function Get-FrozenQualificationAssetPath([object[]]$Records, [string]$SourceName) {
+    $matches = @($Records | Where-Object {
+        [string]$_.source_name -eq $SourceName -or
+        ([string]$_.name -eq $SourceName -and $null -eq $_.PSObject.Properties['source_name'])
+    })
+    if ($matches.Count -ne 1) {
+        Fail "candidate manifest must contain exactly one frozen qualification asset: $SourceName"
+    }
+    $path = Get-StateAssetPath $matches[0]
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Fail "frozen qualification asset is missing: $SourceName"
+    }
+    return $path
+}
+
+function Assert-ManifestAssetFiles([object[]]$Records) {
+    foreach ($record in @($Records)) {
+        $path = Get-StateAssetPath $record
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            Fail "frozen qualification asset is missing: $($record.release_name)"
+        }
+        $item = Get-Item -LiteralPath $path
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([int64]$item.Length -ne [int64]$record.size -or $hash -ne [string]$record.sha256) {
+            Fail "frozen qualification asset differs from the candidate manifest: $($record.release_name)"
+        }
+    }
+}
+
+function Freeze-CandidateAssets([object[]]$Records) {
+    foreach ($record in @($Records)) {
+        $destination = Get-StateAssetPath $record
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath ([string]$record.source_path) -Destination $destination -Force
+    }
+    Assert-ManifestAssetFiles $Records
+}
+
+function Get-PublicReleaseRecordsFromManifest([object]$Manifest) {
+    if ($null -eq $Manifest.PSObject.Properties['qualification_assets'] -or
+        $null -eq $Manifest.PSObject.Properties['public_assets']) {
+        Fail "candidate manifest must declare qualification_assets and public_assets separately"
+    }
+    $qualificationRecords = @($Manifest.qualification_assets)
+    $derived = @(Get-PublicReleaseRecords $qualificationRecords)
+    $declared = @($Manifest.public_assets)
+    if ($declared.Count -ne $derived.Count) {
+        Fail "candidate manifest public_assets must contain exactly the canonical installer and signature"
+    }
+    for ($index = 0; $index -lt $derived.Count; $index++) {
+        if ([string]$declared[$index].name -ne [string]$derived[$index].name -or
+            [string]$declared[$index].release_name -ne [string]$derived[$index].release_name -or
+            [string]$declared[$index].source_name -ne [string]$derived[$index].source_name -or
+            [string]$declared[$index].role -ne [string]$derived[$index].role -or
+            [string]$declared[$index].state_path -ne [string]$derived[$index].state_path -or
+            [string]$declared[$index].sha256 -ne [string]$derived[$index].sha256 -or
+            [int64]$declared[$index].size -ne [int64]$derived[$index].size) {
+            Fail "candidate manifest public_assets are not an exact projection of qualification_assets"
+        }
+    }
+    return $derived
 }
 
 function Assert-EvidenceIdentity([string]$ProductionPath, [string]$QualificationPath, [object[]]$Records) {
@@ -459,6 +575,9 @@ function Assert-EvidenceIdentity([string]$ProductionPath, [string]$Qualification
     }
     $instRec = $recordsByName[(Get-ExpectedInstallerName)]
     $sigRec = $recordsByName["$((Get-ExpectedInstallerName)).sig"]
+    if ($null -eq $instRec -or $null -eq $sigRec) {
+        Fail "candidate manifest is missing the canonical installer or updater signature record"
+    }
     $instSourceName = if ($null -ne $instRec.PSObject.Properties['source_name']) { [string]$instRec.source_name } else { [string]$instRec.name }
     $sigSourceName = if ($null -ne $sigRec.PSObject.Properties['source_name']) { [string]$sigRec.source_name } else { [string]$sigRec.name }
 
@@ -467,6 +586,7 @@ function Assert-EvidenceIdentity([string]$ProductionPath, [string]$Qualification
         [string]$evidence.authenticode_evidence -ne $authenticodeEvidenceName -or
         [string]$evidence.sbom -ne $sbomName -or
         [string]$evidence.installer -ne $instSourceName -or
+        [string]$evidence.updater_signature -ne $sigSourceName -or
         [int64]$evidence.installer_size -ne [int64]$instRec.size -or
         [string]$evidence.installer_sha256 -ne [string]$instRec.sha256 -or
         [int64]$evidence.signature_size -ne [int64]$sigRec.size -or
@@ -486,9 +606,15 @@ function Assert-EvidenceIdentity([string]$ProductionPath, [string]$Qualification
 }
 
 function Assert-CandidateEvidence([object[]]$Records) {
+    Assert-ManifestAssetFiles $Records
+    $productionRecord = @($Records | Where-Object { [string]$_.source_name -eq $productionEvidenceName })
+    $qualificationRecord = @($Records | Where-Object { [string]$_.source_name -eq $qualificationEvidenceName })
+    if ($productionRecord.Count -ne 1 -or $qualificationRecord.Count -ne 1) {
+        Fail "candidate manifest is missing frozen production or qualification evidence"
+    }
     Assert-EvidenceIdentity `
-        (Join-Path $repoRoot "rust/target/dist/$productionEvidenceName") `
-        (Join-Path $repoRoot "rust/target/dist/$qualificationEvidenceName") `
+        (Get-StateAssetPath $productionRecord[0]) `
+        (Get-StateAssetPath $qualificationRecord[0]) `
         $Records
 }
 
@@ -520,7 +646,7 @@ function Invoke-BuildCandidate {
         if ($LASTEXITCODE -ne 0) { Fail "production orchestrator failed" }
     }
 
-    $records = @(Get-CandidateRecords | ForEach-Object { Get-FileRecord $_ })
+    $records = @(Get-QualificationCandidateRecords | ForEach-Object { Get-FileRecord $_ })
     $releaseNames = @{}
     foreach ($record in $records) {
         $releaseName = [string]$record.release_name
@@ -529,14 +655,28 @@ function Invoke-BuildCandidate {
         }
         $releaseNames[$releaseName] = [string]$record.source_name
     }
-    Assert-CandidateEvidence $records
+    Freeze-CandidateAssets $records
+    $candidateAssets = @($records | ForEach-Object {
+        [pscustomobject]@{
+            name = $_.name
+            source_name = $_.source_name
+            release_name = $_.release_name
+            role = $_.role
+            size = $_.size
+            sha256 = $_.sha256
+            state_path = $_.state_path
+        }
+    })
+    $publicRecords = @(Get-PublicReleaseRecords $candidateAssets)
+    Assert-CandidateEvidence $candidateAssets
     $manifest = [ordered]@{
         schema_version = 1
         source_sha = $SourceSha.ToLowerInvariant()
         version = $Version
         channel = $Channel
         authenticode_mode = "unsigned-zero-budget"
-        assets = $records
+        qualification_assets = $candidateAssets
+        public_assets = $publicRecords
     }
     Write-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json") $manifest
     Write-Host "V4 candidate build: PASS (one orchestrator invocation; exact candidate manifest recorded)"
@@ -623,6 +763,8 @@ function Invoke-CreateDraft {
     $repository = Get-CanonicalRepository
     $manifestPath = Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json"
     $manifest = Read-JsonFile $manifestPath
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
+    Assert-CandidateEvidence @($manifest.qualification_assets)
     Assert-NoExistingReleaseTag
     $notesPath = Assert-ReleaseNotes
     $body = "V4 qualified release candidate`n`nsource_sha: $($SourceSha.ToLowerInvariant())`nchannel: $Channel`nqualification: exact candidate manifest attached`n"
@@ -645,18 +787,18 @@ function Invoke-CreateDraft {
         Fail "repository draft returned an unexpected release asset upload_url"
     }
 
-    foreach ($record in $manifest.assets) {
+    foreach ($record in $publicRecords) {
         $sourceName = if ($null -ne $record.PSObject.Properties['source_name']) { [string]$record.source_name } else { [string]$record.name }
         $releaseName = if ($null -ne $record.PSObject.Properties['release_name']) { [string]$record.release_name } else { Get-V4SafeReleaseAssetName $sourceName }
-        $candidate = (Get-CandidateRecords | Where-Object { $_.name -eq $sourceName })
-        if ($null -eq $candidate) { Fail "candidate manifest contains an unknown asset: $sourceName" }
+        $candidatePath = Get-StateAssetPath $record
+        if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { Fail "frozen public candidate is missing: $sourceName" }
         # GitHub's release-specific upload_url is deliberately used here. The
         # endpoint rejects duplicate names; this path never deletes or
         # replaces an asset after a failed upload.
         $uploaded = Invoke-V4ReleaseAssetUpload `
             -UploadUrl $uploadUrl `
             -AssetName $releaseName `
-            -FilePath ([string]$candidate.path)
+            -FilePath $candidatePath
         if ([string]$uploaded.name -ne $releaseName -or
             [int64]$uploaded.size -ne [int64]$record.size -or
             [string]$uploaded.state -ne "uploaded") {
@@ -675,7 +817,8 @@ function Invoke-CreateDraft {
         immutable = $false
         attested = $false
         qualified_after_download = $false
-        assets = $manifest.assets
+        qualification_assets = @($manifest.qualification_assets)
+        public_assets = $publicRecords
     }
     Write-JsonFile (Get-StatePath) $state
     Write-Host "V4 repository draft: PASS (tag=$Tag; exact qualified asset set uploaded)"
@@ -687,6 +830,14 @@ function Assert-ExactAssetSet([object]$Release, [object[]]$Expected) {
         if ($null -ne $_.PSObject.Properties['release_name']) { [string]$_.release_name } else { [string]$_.name }
     } | Sort-Object)
     if (($actual -join "`n") -ne ($expectedNames -join "`n")) { Fail "repository release asset set differs from the qualified candidate set" }
+}
+
+function Assert-ExactPublicReleaseAssetSet([object]$Release) {
+    $actual = @($Release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
+    $expected = @(Get-CanonicalPublicReleaseNames | Sort-Object)
+    if (($actual -join "`n") -ne ($expected -join "`n")) {
+        Fail "repository release must contain exactly the canonical installer and updater signature"
+    }
 }
 
 function Assert-ImmutableRelease([object]$Release) {
@@ -701,11 +852,14 @@ function Invoke-DownloadDraft {
     $repository = Get-CanonicalRepository
     $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)")
     if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "repository release is not the expected draft" }
-    Assert-ExactAssetSet $release $state.assets
+    $candidateManifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
+    Assert-ExactPublicReleaseAssetSet $release
+    Assert-ExactAssetSet $release $publicRecords
     $downloaded = Join-Path (Get-EffectiveStateRoot) "downloaded"
     if (Test-Path -LiteralPath $downloaded) { Remove-Item -LiteralPath $downloaded -Recurse -Force }
     New-Item -ItemType Directory -Path $downloaded -Force | Out-Null
-    foreach ($expected in $state.assets) {
+    foreach ($expected in $publicRecords) {
         $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
         $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedReleaseName })
         if ($asset.Count -ne 1) { Fail "expected repository asset is missing: $expectedReleaseName" }
@@ -722,9 +876,9 @@ function Invoke-DownloadDraft {
         source_sha = [string]$state.source_sha
         version = [string]$state.version
         channel = [string]$state.channel
-        assets = $state.assets
+        public_assets = $publicRecords
     })
-    Write-Host "V4 draft download: PASS (all qualification inputs re-downloaded and byte-checked)"
+    Write-Host "V4 draft download: PASS (exact public installer and signature re-downloaded and byte-checked)"
 }
 
 function Invoke-Checked([string]$File, [string[]]$Arguments, [string]$Failure) {
@@ -737,12 +891,30 @@ function Invoke-QualifyDownloaded {
     if (-not $state.draft -or $state.published) { Fail "post-draft qualification requires an unpublished draft" }
     $root = Get-EffectiveStateRoot
     $downloaded = Join-Path $root "downloaded"
-    $manifest = Read-JsonFile (Join-Path $root "downloaded-manifest.json")
-    if ([string]$manifest.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "downloaded source binding mismatch" }
-    Assert-EvidenceIdentity `
-        (Join-Path $downloaded $productionEvidenceName) `
-        (Join-Path $downloaded $qualificationEvidenceName) `
-        @($manifest.assets)
+    $downloadedManifest = Read-JsonFile (Join-Path $root "downloaded-manifest.json")
+    if ([string]$downloadedManifest.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "downloaded source binding mismatch" }
+    if ($null -eq $downloadedManifest.PSObject.Properties['public_assets']) {
+        Fail "downloaded manifest must contain only the public release asset set"
+    }
+    $candidateManifest = Read-JsonFile (Join-Path $root "candidate-manifest.json")
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
+    $qualificationRecords = @($candidateManifest.qualification_assets)
+    $downloadedPublicRecords = @($downloadedManifest.public_assets)
+    if ($downloadedPublicRecords.Count -ne $publicRecords.Count) {
+        Fail "downloaded public manifest does not match the canonical public asset count"
+    }
+    for ($index = 0; $index -lt $publicRecords.Count; $index++) {
+        if ([string]$downloadedPublicRecords[$index].release_name -ne [string]$publicRecords[$index].release_name -or
+            [string]$downloadedPublicRecords[$index].sha256 -ne [string]$publicRecords[$index].sha256 -or
+            [int64]$downloadedPublicRecords[$index].size -ne [int64]$publicRecords[$index].size) {
+            Fail "downloaded public manifest does not bind the candidate installer/signature bytes"
+        }
+    }
+    Assert-CandidateEvidence $qualificationRecords
+    $frozenQualificationEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $qualificationEvidenceName
+    $frozenAuthenticodeEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $authenticodeEvidenceName
+    $frozenArtifactSummary = Get-FrozenQualificationAssetPath $qualificationRecords $summaryName
+    $frozenSbom = Get-FrozenQualificationAssetPath $qualificationRecords $sbomName
     $bundle = Join-Path $root "downloaded-bundle"
     if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
     New-Item -ItemType Directory -Path $bundle -Force | Out-Null
@@ -764,18 +936,18 @@ function Invoke-QualifyDownloaded {
         "--signature", (Join-Path $bundle $sourceSignature)
     ) "downloaded candidate Tauri updater signature verification failed"
     Invoke-Checked "cargo" @(
-        "xtask", "sbom", "verify", "--artifact-dir", $bundle, "--sbom", (Join-Path $downloaded $sbomName)
+        "xtask", "sbom", "verify", "--artifact-dir", $bundle, "--sbom", $frozenSbom
     ) "downloaded candidate SPDX SBOM verification failed"
     Invoke-Checked "cargo" @(
         "xtask", "verify-tauri-bundle", "--bundle-dir", $bundle,
-        "--summary", (Join-Path $downloaded $summaryName),
-        "--authenticode-evidence", (Join-Path $downloaded $authenticodeEvidenceName),
-        "--sbom", (Join-Path $downloaded $sbomName)
+        "--summary", $frozenArtifactSummary,
+        "--authenticode-evidence", $frozenAuthenticodeEvidence,
+        "--sbom", $frozenSbom
     ) "downloaded candidate exact Tauri bundle verification failed"
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "promote_v4_metadata.ps1"),
-        "-ValidateEvidence", (Join-Path $downloaded $qualificationEvidenceName)
+        "-ValidateEvidence", $frozenQualificationEvidence
     ) "downloaded candidate qualification evidence schema validation failed"
 
     # Export the canonical public root through the existing updater-trust
@@ -810,7 +982,7 @@ function Invoke-QualifyDownloaded {
         "-Evidence", $defenderEvidencePath
     ) "exact downloaded installer Defender scan failed"
     $defenderEvidence = Read-JsonFile $defenderEvidencePath
-    $installerRecord = @($state.assets | Where-Object {
+    $installerRecord = @($publicRecords | Where-Object {
         [string]$_.name -eq $releaseInstaller -or
         ($null -ne $_.PSObject.Properties['source_name'] -and [string]$_.source_name -eq $sourceInstaller)
     })
@@ -963,8 +1135,11 @@ function Invoke-PublishDraft {
     $repository = Get-CanonicalRepository
     $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)")
     if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "draft is missing or has changed before publication" }
-    Assert-ExactAssetSet $release $state.assets
-    foreach ($expected in $state.assets) {
+    $candidateManifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
+    Assert-ExactPublicReleaseAssetSet $release
+    Assert-ExactAssetSet $release $publicRecords
+    foreach ($expected in $publicRecords) {
         $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
         $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedReleaseName })
         if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne [int64]$expected.size) { Fail "draft asset changed before publication: $expectedReleaseName" }
@@ -1017,6 +1192,9 @@ function Invoke-PromoteMetadata {
     }
     Assert-ImmutableRelease $publishedRelease
     $publicationDateUtc = Convert-PublishedAtToMetadataTimestamp $publishedRelease
+    $candidateManifest = Read-JsonFile (Join-Path $root "candidate-manifest.json")
+    $qualificationRecords = @($candidateManifest.qualification_assets)
+    $frozenQualificationEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $qualificationEvidenceName
     $metadataCheckout = Join-Path $root "release-metadata"
     if (Test-Path -LiteralPath $metadataCheckout) { Remove-Item -LiteralPath $metadataCheckout -Recurse -Force }
     Invoke-GitHubApi -Arguments @("repo", "clone", $repository, $metadataCheckout, "--", "--branch", "release-metadata", "--depth", "1") -Raw | Out-Null
@@ -1037,7 +1215,7 @@ function Invoke-PromoteMetadata {
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "promote_v4_metadata.ps1"),
         "-Channel", $Channel, "-Metadata", $metadata,
-        "-QualificationEvidence", (Join-Path $downloaded $qualificationEvidenceName),
+        "-QualificationEvidence", $frozenQualificationEvidence,
         "-MetadataCheckout", $metadataCheckout, "-SourceCheckout", $repoRoot
     ) "post-publication metadata promotion validation failed"
     $destination = Join-Path $metadataCheckout "channels/$Channel/latest.json"
@@ -1074,8 +1252,11 @@ function Invoke-FinalVerify {
     $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag")
     if ($release.draft -or [string]::IsNullOrWhiteSpace([string]$release.published_at)) { Fail "final release is still draft or unpublished" }
     Assert-ImmutableRelease $release
-    Assert-ExactAssetSet $release $state.assets
-    foreach ($expected in $state.assets) {
+    $candidateManifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
+    Assert-ExactPublicReleaseAssetSet $release
+    Assert-ExactAssetSet $release $publicRecords
+    foreach ($expected in $publicRecords) {
         $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
         $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedReleaseName })
         if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne [int64]$expected.size) { Fail "final public asset identity changed: $expectedReleaseName" }
@@ -1156,6 +1337,37 @@ function Invoke-SelfTest {
     }
     Assert-ImmutableRelease ([pscustomobject]@{ immutable = $true })
     Write-Host "V4 immutable publication guard self-test: PASS (immutable=false rejected; immutable=true accepted)"
+
+    $selfTestVersion = $Version
+    try {
+        $Version = "4.0.0-rc.1"
+        $publicNames = @(Get-CanonicalPublicReleaseNames)
+        $exactPublicRelease = [pscustomobject]@{
+            assets = @(
+                [pscustomobject]@{ name = $publicNames[0] }
+                [pscustomobject]@{ name = $publicNames[1] }
+            )
+        }
+        Assert-ExactPublicReleaseAssetSet $exactPublicRelease
+        foreach ($invalidAssets in @(
+            @([pscustomobject]@{ name = $publicNames[0] }),
+            @(
+                [pscustomobject]@{ name = $publicNames[0] }
+                [pscustomobject]@{ name = $publicNames[1] }
+                [pscustomobject]@{ name = "SBOM.spdx.json" }
+            )
+        )) {
+            try {
+                Assert-ExactPublicReleaseAssetSet ([pscustomobject]@{ assets = $invalidAssets })
+                Fail "FinalVerify public asset-set self-test accepted missing or extra assets"
+            } catch {
+                if ($_.Exception.Message -notmatch "exactly the canonical installer") { throw }
+            }
+        }
+        Write-Host "V4 exact public asset-set self-test: PASS (missing and extra assets rejected)"
+    } finally {
+        $Version = $selfTestVersion
+    }
 
     foreach ($channelCase in @(
         [pscustomobject]@{ Channel = "stable"; PublishExpected = "true" },

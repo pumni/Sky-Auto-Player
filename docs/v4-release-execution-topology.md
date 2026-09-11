@@ -42,8 +42,9 @@ Every release candidate is subject to an immutable invariant:
 - **Zero Rebuild**: Once candidate `.exe` and `.exe.sig` are produced, they are never
   rebuilt, re-bundled, or modified.
 - **Byte-Identity**: The SHA-256 hash recorded during qualification is identical to the hash
-  in `V4_QUALIFICATION_EVIDENCE.json`, `latest.json`, `SBOM.spdx.json`, and the GitHub
-  Release download asset.
+  in `V4_QUALIFICATION_EVIDENCE.json`, `latest.json`, `SBOM.spdx.json`, and the exact GitHub
+  Release installer/signature downloads. The public release contains only that canonical pair;
+  the evidence and SBOM remain internal CI state.
 - **Fail-Closed Verification & Candidate Purge**: If any check (Authenticode state, Ed25519 Minisign,
   SBOM, bundle, smoke test) fails, the candidate binary, signature, and unpromoted evidence are
   purged from the staging directory.
@@ -87,7 +88,7 @@ GitHub Actions runner environment.
 |            |-- Runs `actions/attest` with GitHub OIDC token                     |
 |            |     \-- Generates authentic SLSA provenance & SBOM attestation     |
 |            \-- Runs `scripts/promote_v4_metadata.ps1`                           |
-|                  \-- Publishes release assets and static metadata                |
+|                  \-- Publishes installer + .sig and static metadata              |
 +---------------------------------------------------------------------------------+
 
 +---------------------------------------------------------------------------------+
@@ -338,14 +339,20 @@ acquires the updater key passphrase through the fixed Windows Credential Manager
 session broker (`scripts/v4_updater_credential_broker.ps1`, target `SkyAutoPlayer/V4UpdaterProduction`)
 into process-scoped `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, passing no plaintext password
 CLI arguments, and automatically deletes the session credential in its `finally` block.
-The candidate manifest is the only asset upload authority. The following states download the
-draft assets again and compare names, sizes, and SHA-256 digests before running
+The candidate manifest is the only asset upload authority. It contains a complete
+`qualification_assets` set and an explicit `public_assets` projection. The latter is fail-closed
+to exactly the normalized installer and updater signature names; `CreateDraft` uploads only this
+two-record projection. The following states download the public draft assets again and compare
+names, sizes, and SHA-256 digests before running
 the Authenticode `unsigned-zero-budget`, Tauri updater signature, SPDX SBOM,
 exact-bundle, current-user install/launch/uninstall, GUI/input-safety, and
 active-playback rejection checks. The packaged official Tauri updater fixture
 runs at this post-download boundary: a throwaway previous-v4 bridge consumes
 the exact downloaded installer and `.sig`, while the production candidate is
-never rebuilt. The packaged candidate also proves that update admission is
+never rebuilt. Qualification JSON, Authenticode evidence, artifact summaries, and the SBOM are
+copied into the isolated release state root after `BuildCandidate`, checked against their frozen
+manifest hashes, and retained through bounded GitHub Actions artifacts/attestations. They are not
+uploaded to the GitHub Release. The packaged candidate also proves that update admission is
 rejected while playback is active.
 
 The controlled same-repository draft rehearsal may exercise the GitHub draft
@@ -390,6 +397,11 @@ metadata path. An unpublished draft that fails qualification may be deleted
 and recreated with the same version after the candidate is fixed. Published
 assets, release tags, and metadata remain immutable; fixes then require a new
 SemVer/RC.
+
+`FinalVerify` compares the complete published asset-name set, not just required members. It fails
+for a missing installer or signature, any third asset, an alias/non-canonical name, or a size and
+SHA-256 mismatch. Qualification evidence and SBOM retention is bounded to the workflow artifact
+and attestation surfaces; it is not a second public release download surface.
 
 The production preflight validates the canonical `pumni/Sky-Auto-Player` repository,
 the requested `main` source, immutable-release policy, and readiness of the

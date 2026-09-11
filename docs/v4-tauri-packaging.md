@@ -171,6 +171,13 @@ the governed `unsigned-zero-budget` mode and compares installer/.sig digests to 
 published GitHub asset bytes. It rejects MSI, portable/updater ZIP, missing
 signatures, empty signatures, unexpected files, and version-naming drift.
 
+The GitHub Release is the public distribution surface and contains exactly the canonical NSIS
+installer plus its updater `.sig`. `V4_QUALIFICATION_EVIDENCE.json`, production/evidence JSON,
+Authenticode evidence, artifact summaries, and `SBOM.spdx.json` remain internal qualification
+inputs. The release pipeline freezes and hash-checks those files in the isolated runner state,
+retains bounded copies as GitHub Actions artifacts, and uses GitHub artifact attestations for
+provenance; it does not publish them as Release assets.
+
 That command is the canonical package build: it uses the normal production
 feature set and the generated test updater key/example endpoint only to
 exercise updater artifact signing. The Authenticode certificate is an
