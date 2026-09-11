@@ -181,4 +181,27 @@ describe('Track Browser primitives', () => {
     expect(screen.getByText('No songs found')).toBeInTheDocument();
     expect(screen.queryByRole('grid', { name: 'Songs' })).toBeNull();
   });
+
+  it('renders a real browse CTA for an empty playlist', () => {
+    const store = createDesktopStore(createMockBridge());
+    const playlistId = 'p'.repeat(32);
+    store.setState({
+      library: {
+        ...store.getState().library,
+        source: { kind: 'playlist', id: playlistId },
+        pages: new Map(),
+        resultTotal: 0,
+        loading: false,
+      },
+      libraryNavigation: {
+        ...store.getState().libraryNavigation,
+        playlistsById: new Map([[playlistId, { id: playlistId, name: 'Practice', song_count: 0 }]]),
+      },
+    });
+
+    render(<TrackBrowser useStore={store} />);
+
+    expect(screen.getByRole('heading', { name: 'Practice' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Browse All Songs…' })).toBeInTheDocument();
+  });
 });

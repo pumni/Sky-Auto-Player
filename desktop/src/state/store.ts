@@ -35,7 +35,6 @@ export type UtilityView = 'details' | 'diagnostics';
 
 export const MAX_DIAGNOSTIC_SAMPLES = 600;
 export const MAX_DIAGNOSTIC_EVENTS = 500;
-export const MAX_DIAGNOSTIC_LOGS = 200;
 export const MAX_DIAGNOSTIC_LINE_LENGTH = 4096;
 export const LIBRARY_PAGE_SIZE = 200;
 export const DETAIL_CACHE_LIMIT = 64;
@@ -44,12 +43,7 @@ export interface DiagnosticsEventLine {
   seq: number;
   name: string;
   detail: string;
-}
-
-export interface DiagnosticsLogLine {
-  seq: number;
-  level: 'info' | 'warning' | 'error';
-  message: string;
+  timestamp: number;
 }
 
 export interface LibraryState {
@@ -102,7 +96,6 @@ export interface DesktopStore {
     enabled: boolean;
     samples: DiagnosticsSnapshot[];
     events: DiagnosticsEventLine[];
-    logs: DiagnosticsLogLine[];
     error: string | null;
   };
   calibration: {
@@ -284,7 +277,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
   const pageCache = new Map<string, Map<number, SearchResult>>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
   let diagnosticsEventSeq = 0;
-  let diagnosticsLogSeq = 0;
 
   const sourceKey = (source: LibrarySource) => JSON.stringify(source);
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
@@ -557,7 +549,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
         enabled: false,
         samples: [],
         events: [],
-        logs: [],
         error: null,
       },
       calibration: {
@@ -617,25 +608,40 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
 
       applyEvent(event) {
+        if (event.name === 'diagnostics.snapshot') {
+          const current = get().diagnostics;
+          if (!current.enabled) return;
+          const previous = current.samples.at(-1);
+          const samples =
+            previous && previous.session_id !== event.payload.session_id
+              ? [event.payload]
+              : [...current.samples, event.payload].slice(-MAX_DIAGNOSTIC_SAMPLES);
+          set({ diagnostics: { ...current, samples } });
+          return;
+        }
+
         diagnosticsEventSeq += 1;
-        const detail = boundedText(eventDetail(event));
-        const level: DiagnosticsLogLine['level'] =
-          event.name === 'core.fatal' || event.name === 'playback.failed' ? 'error' : 'info';
-        const diagnostics = get().diagnostics;
-        const eventLine: DiagnosticsEventLine = {
-          seq: diagnosticsEventSeq,
-          name: event.name,
-          detail,
-        };
-        diagnosticsLogSeq += 1;
-        const logLine: DiagnosticsLogLine = { seq: diagnosticsLogSeq, level, message: detail };
-        set({
-          diagnostics: {
-            ...diagnostics,
-            events: [...diagnostics.events, eventLine].slice(-MAX_DIAGNOSTIC_EVENTS),
-            logs: [...diagnostics.logs, logLine].slice(-MAX_DIAGNOSTIC_LOGS),
-          },
-        });
+        const shouldRecordEvent = ![
+          'playback.snapshot',
+          'calibration.progress',
+          'update.progress',
+        ].includes(event.name);
+        if (shouldRecordEvent) {
+          const detail = boundedText(eventDetail(event));
+          const diagnostics = get().diagnostics;
+          const eventLine: DiagnosticsEventLine = {
+            seq: diagnosticsEventSeq,
+            name: event.name,
+            detail,
+            timestamp: Date.now(),
+          };
+          set({
+            diagnostics: {
+              ...diagnostics,
+              events: [...diagnostics.events, eventLine].slice(-MAX_DIAGNOSTIC_EVENTS),
+            },
+          });
+        }
         const eventState = reduceEvent(
           {
             ...initialEventState,
@@ -756,15 +762,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
               pendingCommand: null,
               state: 'failed',
               error: `${event.payload.code}: ${event.payload.message}`,
-            },
-          });
-        } else if (event.name === 'diagnostics.snapshot') {
-          const current = get().diagnostics;
-          if (!current.enabled) return;
-          set({
-            diagnostics: {
-              ...current,
-              samples: [...current.samples, event.payload].slice(-MAX_DIAGNOSTIC_SAMPLES),
             },
           });
         } else if (event.name === 'calibration.progress') {
@@ -1552,7 +1549,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       async setDiagnosticsEnabled(enabled) {
         const epoch = ++diagnosticsToggleEpoch;
         const current = get().diagnostics;
-        set({ diagnostics: { ...current, enabled: false, error: null } });
+        set({ diagnostics: { ...current, enabled: false, samples: [], error: null } });
         try {
           const result = await bridge.setDiagnosticsEnabled({ enabled });
           if (epoch !== diagnosticsToggleEpoch) return;

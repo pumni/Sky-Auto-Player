@@ -15,6 +15,7 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
   const loading = useStore((store: DesktopStore) => store.library.loading);
   const error = useStore((store: DesktopStore) => store.library.error);
   const playlistAddMode = useStore((store: DesktopStore) => store.library.playlistAddMode);
+  const openPlaylistAdd = useStore((store: DesktopStore) => store.openPlaylistAdd);
   const exitPlaylistAdd = useStore((store: DesktopStore) => store.exitPlaylistAdd);
   const sourceName = useStore((store: DesktopStore) => {
     if (store.library.source.kind === 'playlist') {
@@ -24,6 +25,7 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
   });
   const isPlaylist = source.kind === 'playlist';
   const isPlaylistAddMode = isPlaylist && playlistAddMode?.playlistId === source.id;
+  const heading = isPlaylistAddMode ? `Add songs to ${sourceName}` : sourceName;
 
   return (
     <section
@@ -43,12 +45,12 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
               <span>Back to playlist</span>
             </Button>
           )}
-          <h1 id="track-browser-title">{sourceName}</h1>
+          <h1 id="track-browser-title">{heading}</h1>
           <span className="track-browser-count">
             {loading
               ? 'Updating…'
               : isPlaylistAddMode
-                ? 'Adding songs'
+                ? `${formatSongCount(resultTotal)} available in All Songs`
                 : formatSongCount(resultTotal)}
           </span>
         </div>
@@ -73,6 +75,14 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
               ? 'Choose from All Songs or import local files.'
               : 'Try another search or reload the library.'}
           </span>
+          {isPlaylist && !isPlaylistAddMode && (
+            <Button
+              className="button button-primary empty-state-add-songs-button"
+              onPress={() => void openPlaylistAdd(source.id)}
+            >
+              Browse All Songs…
+            </Button>
+          )}
         </div>
       ) : (
         <TrackTable useStore={useStore} />

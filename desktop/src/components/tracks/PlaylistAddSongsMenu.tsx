@@ -1,4 +1,4 @@
-import { FilePlus2, ListMusic, Plus } from 'lucide-react';
+import { ChevronDown, FilePlus2, ListMusic, Plus } from 'lucide-react';
 import { Button, Menu, MenuItem, MenuTrigger, Popover } from 'react-aria-components';
 import type { DesktopStoreHook } from '../../state/store';
 
@@ -18,6 +18,7 @@ export function PlaylistAddSongsMenu({ playlistId, useStore }: PlaylistAddSongsM
       <Button className="button playlist-add-songs-button">
         <Plus size={16} aria-hidden="true" />
         <span>Add songs</span>
+        <ChevronDown size={14} aria-hidden="true" />
       </Button>
       <Popover className="track-menu-popover" placement="bottom end" offset={6}>
         <Menu aria-label="Add songs">

@@ -134,8 +134,8 @@ test('Playlists support create, rename, delete, and membership actions', async (
   await page.getByRole('button', { name: 'More actions for Practice' }).click();
   await expect(page.getByRole('menuitem', { name: 'Add songs' })).toBeVisible();
   await page.getByRole('menuitem', { name: 'Add songs' }).click();
-  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
-  await expect(page.getByText('Adding songs')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
+  await expect(page.getByText(/available in All Songs/)).toBeVisible();
   await expect(navigator.locator('.library-nav-action-row.is-active')).toContainText('Practice');
   await page.getByRole('button', { name: 'Back to playlist' }).click();
 
@@ -169,8 +169,8 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
 
   await page.getByRole('button', { name: 'Add songs' }).click();
   await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
-  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
-  await expect(page.getByText('Adding songs')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
+  await expect(page.getByText(/available in All Songs/)).toBeVisible();
   await expect(page.getByPlaceholder('Search All Songs…')).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
   const existingSong = page.getByRole('row', { name: /Aurora Landing/ });
@@ -644,7 +644,7 @@ test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
   expect(playerBox).not.toBeNull();
   if (panelBox && playerBox) expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(playerBox.y);
   await panel.getByRole('tab', { name: 'Timing' }).click();
-  await expect(panel.getByRole('img', { name: /Maximum timing lateness/ })).toBeVisible();
+  await expect(panel.getByRole('img', { name: /Completion p95 lateness/ })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
   await panel.getByRole('button', { name: 'Close utility' }).click();
   await expect(panel).toBeHidden();
@@ -717,9 +717,11 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
   await expectNoSeriousAccessibilityViolations(page);
   await diagnosticsDrawer.getByRole('tab', { name: 'Timing' }).click();
   await expect(
-    diagnosticsDrawer.getByRole('img', { name: /Maximum timing lateness/ }),
+    diagnosticsDrawer.getByRole('img', { name: /Completion p95 lateness/ }),
   ).toBeVisible();
-  await expect(diagnosticsDrawer).toContainText(/No timing samples|Latest maximum lateness/);
+  await expect(diagnosticsDrawer).toContainText(
+    /No active playback session|No timing samples|Latest completion p95/,
+  );
   await diagnosticsDrawer.getByRole('tab', { name: 'Events' }).click();
   await expectNoSeriousAccessibilityViolations(page);
   await diagnosticsDrawer.getByRole('button', { name: 'Close utility' }).click();
