@@ -490,10 +490,13 @@ describe('desktop store', () => {
     expect(store.getState().playback.songTitle).toBeNull();
   });
 
-  it('keeps diagnostics samples, events, and logs bounded', async () => {
+  it('keeps diagnostic samples and human events bounded without duplicating snapshots', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().setDiagnosticsEnabled(true));
+    store.setState({
+      diagnostics: { ...store.getState().diagnostics, events: [] },
+    });
 
     for (let index = 0; index < 601; index += 1) {
       store.getState().applyEvent({
@@ -508,17 +511,23 @@ describe('desktop store', () => {
           late_2ms: 0,
           late_5ms: 0,
           late_10ms: 0,
+          max_sendinput_pre_call_lateness_us: 0,
+          pre_call_late_2ms: 0,
+          pre_call_late_5ms: 0,
+          pre_call_late_10ms: 0,
           active_keys: 0,
           stuck_keys: 0,
           keys_dropped: 0,
           chord_split_events: 0,
           backend_status: 'healthy',
-          release_max_us: null,
-          release_late_2ms: null,
+          release_max_us: 0,
+          release_late_2ms: 0,
           session_id: null,
         },
       });
     }
+    expect(store.getState().diagnostics.events).toHaveLength(0);
+
     for (let index = 0; index < 501; index += 1) {
       store.getState().applyEvent({
         v: 1,
@@ -536,7 +545,50 @@ describe('desktop store', () => {
 
     expect(store.getState().diagnostics.samples).toHaveLength(600);
     expect(store.getState().diagnostics.events).toHaveLength(500);
-    expect(store.getState().diagnostics.logs).toHaveLength(200);
+    expect(
+      store.getState().diagnostics.events.every((event) => event.name !== 'diagnostics.snapshot'),
+    ).toBe(true);
+  });
+
+  it('starts a new diagnostic sample history when the native session changes', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().setDiagnosticsEnabled(true));
+
+    const snapshot = (sessionId: string, seq: number) => ({
+      v: 1 as const,
+      name: 'diagnostics.snapshot' as const,
+      payload: {
+        seq,
+        max_lateness_us: seq,
+        p50_ms: 0.1,
+        p95_ms: 0.2,
+        sigma_onset_ms: 0.1,
+        late_2ms: 0,
+        late_5ms: 0,
+        late_10ms: 0,
+        max_sendinput_pre_call_lateness_us: 0,
+        pre_call_late_2ms: 0,
+        pre_call_late_5ms: 0,
+        pre_call_late_10ms: 0,
+        active_keys: 0,
+        stuck_keys: 0,
+        keys_dropped: 0,
+        chord_split_events: 0,
+        backend_status: 'healthy' as const,
+        release_max_us: 0,
+        release_late_2ms: 0,
+        session_id: sessionId,
+      },
+    });
+
+    store.getState().applyEvent(snapshot('a'.repeat(32), 1));
+    store.getState().applyEvent(snapshot('a'.repeat(32), 2));
+    expect(store.getState().diagnostics.samples).toHaveLength(2);
+
+    store.getState().applyEvent(snapshot('b'.repeat(32), 3));
+    expect(store.getState().diagnostics.samples).toHaveLength(1);
+    expect(store.getState().diagnostics.samples[0]?.session_id).toBe('b'.repeat(32));
   });
 
   it('keeps utility presentation state separate from diagnostics data', async () => {
@@ -565,11 +617,8 @@ describe('desktop store', () => {
       payload: { code: 'test', message },
     });
 
-    const log = store.getState().diagnostics.logs.at(-1)?.message;
     const event = store.getState().diagnostics.events.at(-1)?.detail;
-    expect(log).toBeDefined();
     expect(event).toBeDefined();
-    expect(new TextEncoder().encode(log).length).toBeLessThanOrEqual(4096);
     expect(new TextEncoder().encode(event).length).toBeLessThanOrEqual(4096);
   });
 
