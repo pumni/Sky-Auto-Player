@@ -4,8 +4,9 @@ use super::fault_injection::{FaultInjectionScript, InjectedSendOutcome};
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_win32::input::{
-    InstrumentPhysicalState, PacketRetryReason, PhysicalPacket, PlatformSendResult, SendEvidence,
-    SendTransactionOutcome, SendTransactionStatus, TrackedKeyState, scan_codes_from_mask,
+    InstrumentPhysicalState, MaterializedInstrumentKeyProfile, PacketRetryReason, PhysicalPacket,
+    PlatformSendResult, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
+    TrackedKeyState, scan_codes_from_mask,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,6 +14,7 @@ use std::time::Duration;
 
 pub(crate) fn create_mock_backend(
     qpc_clock: QpcClock,
+    instrument_key_profile: MaterializedInstrumentKeyProfile,
     latency_base_us: u64,
     latency_per_key_us: u64,
     fault_script: FaultInjectionScript,
@@ -22,7 +24,8 @@ pub(crate) fn create_mock_backend(
     let send_call_count = script.send_call_count.clone();
     let script_emitter = Arc::clone(&script);
     let call_index_emitter = Arc::clone(&call_index);
-    let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
+    let mut backend =
+        TrackedKeyState::with_qpc_clock_and_profile(qpc_clock, instrument_key_profile);
     backend.set_emitter(move |codes, _key_up| {
         if let Some(counter) = &send_call_count {
             counter.fetch_add(1, Ordering::SeqCst);

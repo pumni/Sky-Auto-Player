@@ -136,16 +136,13 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             latency_base_us,
             latency_per_key_us,
             fault_script,
-        } => {
-            let mut backend = create_mock_backend(
-                qpc_clock,
-                *latency_base_us,
-                *latency_per_key_us,
-                fault_script.clone(),
-            );
-            backend.set_instrument_key_profile(instrument_key_profile);
-            backend
-        }
+        } => create_mock_backend(
+            qpc_clock,
+            instrument_key_profile,
+            *latency_base_us,
+            *latency_per_key_us,
+            fault_script.clone(),
+        ),
         BackendConfig::Production => {
             TrackedKeyState::with_qpc_clock_and_profile(qpc_clock, instrument_key_profile)
         }

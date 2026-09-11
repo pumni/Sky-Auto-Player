@@ -169,13 +169,6 @@ impl TrackedKeyState {
         &self.instrument_key_profile
     }
 
-    pub fn set_instrument_key_profile(
-        &mut self,
-        instrument_key_profile: MaterializedInstrumentKeyProfile,
-    ) {
-        self.instrument_key_profile = instrument_key_profile;
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn uses_custom_emitter(&self) -> bool {
         self.custom_emitter.is_some() || self.custom_packet_emitter.is_some()

@@ -342,9 +342,13 @@ fn physical_plan_from_view(
 #[cfg(test)]
 mod layout_tests {
     use super::{AuthoredBatchView, NextDispatchPlan, PhysicalDispatchPlan};
+    use crate::engine::worker::{Worker, WorkerResources};
     use sky_dispatch_core::clock::PlaybackClockState;
     use sky_dispatch_core::coordinator::{ActiveGeneration, PreparedAuthoredCommit};
-    use sky_dispatch_win32::input::PreparedPhysicalPacket;
+    use sky_dispatch_win32::input::{
+        InstrumentKeyProfile, InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile,
+        PhysicalKey, PreparedPhysicalPacket, TrackedKeyState,
+    };
     use std::collections::HashSet;
     use std::mem::size_of;
 
@@ -397,6 +401,28 @@ mod layout_tests {
         println!(
             "size_of::<LegacyPlaybackClockLayout>()={}",
             size_of::<LegacyPlaybackClockLayout>()
+        );
+        println!(
+            "size_of::<TrackedKeyState>()={}",
+            size_of::<TrackedKeyState>()
+        );
+        println!(
+            "size_of::<WorkerResources>()={}",
+            size_of::<WorkerResources>()
+        );
+        println!("size_of::<Worker>()={}", size_of::<Worker<'static>>());
+        println!("size_of::<PhysicalKey>()={}", size_of::<PhysicalKey>());
+        println!(
+            "size_of::<InstrumentKeyProfileSpec>()={}",
+            size_of::<InstrumentKeyProfileSpec>()
+        );
+        println!(
+            "size_of::<InstrumentKeyProfile>()={}",
+            size_of::<InstrumentKeyProfile>()
+        );
+        println!(
+            "size_of::<MaterializedInstrumentKeyProfile>()={}",
+            size_of::<MaterializedInstrumentKeyProfile>()
         );
     }
 }

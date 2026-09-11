@@ -448,8 +448,12 @@ pub fn is_scan_code_physically_down(scan_code: u16, target_hwnd: isize) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        InstrumentPhysicalState, classify_logical_async_key_states,
-        instrument_physical_state_for_mask_with,
+        InstrumentPhysicalState, LogicalInstrumentPhysicalState, classify_logical_async_key_states,
+        instrument_logical_physical_state_for_mask_with, instrument_physical_state_for_mask_with,
+    };
+    use crate::input::{
+        InstrumentKeyProfile, InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile,
+        PhysicalKey,
     };
 
     #[test]
@@ -487,5 +491,75 @@ mod tests {
             classify_logical_async_key_states(0x7fff, &key_states),
             super::LogicalInstrumentPhysicalState::Held((1 << 0) | (1 << 14))
         );
+    }
+
+    #[test]
+    fn profile_aware_snapshot_maps_non_canonical_key_to_logical_slot() {
+        let mut spec = InstrumentKeyProfileSpec::canonical();
+        spec.keys[0] = PhysicalKey {
+            scan_code: 0x02,
+            extended: false,
+        };
+        let profile = MaterializedInstrumentKeyProfile::from_validated(
+            InstrumentKeyProfile::try_from_spec(spec).expect("profile"),
+        );
+        let mut mapped_scan_code = None;
+        let mut queried_virtual_key = None;
+        let state = instrument_logical_physical_state_for_mask_with(
+            &profile,
+            42,
+            1,
+            |_| true,
+            |_| Some(()),
+            |_, profile, requested_mask| {
+                assert_eq!(requested_mask, 1);
+                mapped_scan_code = Some(profile.physical_key(0).scan_code);
+                let mut virtual_keys = [0; super::MAX_KEYS];
+                virtual_keys[0] = 123;
+                Some(virtual_keys)
+            },
+            |index, virtual_key| {
+                assert_eq!(index, 0);
+                queried_virtual_key = Some(virtual_key);
+                i16::MIN
+            },
+        );
+
+        assert_eq!(mapped_scan_code, Some(0x02));
+        assert_eq!(queried_virtual_key, Some(123));
+        assert_eq!(state, LogicalInstrumentPhysicalState::Held(1));
+    }
+
+    #[test]
+    fn profile_aware_snapshot_focus_race_is_inconclusive() {
+        let profile = MaterializedInstrumentKeyProfile::canonical();
+        let mut foreground_checks = 0;
+        let mut key_reads = 0;
+        let state = instrument_logical_physical_state_for_mask_with(
+            &profile,
+            42,
+            1,
+            |target| {
+                assert_eq!(target, 42);
+                foreground_checks += 1;
+                foreground_checks == 1
+            },
+            |_| Some(()),
+            |_, _, _| {
+                let mut virtual_keys = [0; super::MAX_KEYS];
+                virtual_keys[0] = 123;
+                Some(virtual_keys)
+            },
+            |index, virtual_key| {
+                assert_eq!(index, 0);
+                assert_eq!(virtual_key, 123);
+                key_reads += 1;
+                i16::MIN
+            },
+        );
+
+        assert_eq!(state, LogicalInstrumentPhysicalState::Inconclusive);
+        assert_eq!(foreground_checks, 2);
+        assert_eq!(key_reads, 1);
     }
 }
