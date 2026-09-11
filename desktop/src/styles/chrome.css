@@ -86,15 +86,36 @@
 }
 
 .app-titlebar-actions .icon-button,
+.app-titlebar-actions .update-indicator-shell,
 .app-titlebar-actions .update-indicator {
   flex: 0 0 34px;
   width: 34px;
   min-height: 34px;
 }
 
+.app-titlebar-actions .update-indicator-shell {
+  display: inline-flex;
+}
+
 .app-titlebar-actions .icon-button {
   border: 0;
   background: transparent;
+}
+
+.app-titlebar-actions .update-indicator {
+  position: relative;
+}
+
+.update-indicator-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--canvas);
+  pointer-events: none;
 }
 
 .window-caption-controls {
@@ -190,6 +211,11 @@
 }
 
 @media (forced-colors: active) {
+  .update-indicator-dot {
+    background: Highlight;
+    box-shadow: 0 0 0 2px Canvas;
+  }
+
   .caption-button:focus-visible,
   .global-search:focus-within {
     outline: 2px solid Highlight;

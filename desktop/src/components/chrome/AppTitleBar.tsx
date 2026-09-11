@@ -24,6 +24,7 @@ export function AppTitleBar({ useStore, settingsTriggerRef, windowControls }: Ap
   const setSettingsOpen = useStore((store: DesktopStore) => store.setSettingsOpen);
   const update = useStore((store: DesktopStore) => store.update);
   const setUpdateDialogOpen = useStore((store: DesktopStore) => store.setUpdateDialogOpen);
+  const updateVersion = update.availableVersion ?? 'new version';
 
   return (
     <header className="app-titlebar" aria-label="Sky Auto Player" data-tauri-drag-region="deep">
@@ -44,15 +45,20 @@ export function AppTitleBar({ useStore, settingsTriggerRef, windowControls }: Ap
       <GlobalSearch useStore={useStore} />
       <div className="app-titlebar-actions" data-tauri-drag-region="false">
         {update.state === 'available' && (
-          <Button
-            className="update-indicator"
-            aria-label={`Open update ${update.availableVersion}`}
-            title={`Update available: ${update.availableVersion}`}
-            onPress={() => setUpdateDialogOpen(true)}
+          <span
+            className="update-indicator-shell"
+            title={`Update available: ${updateVersion}. Open update details.`}
           >
-            <Download size={15} aria-hidden="true" />
-            <span className="visually-hidden">Update</span>
-          </Button>
+            <Button
+              className="update-indicator"
+              aria-label={`Open update ${updateVersion}`}
+              onPress={() => setUpdateDialogOpen(true)}
+            >
+              <Download size={15} aria-hidden="true" />
+              <span className="update-indicator-dot" aria-hidden="true" />
+              <span className="visually-hidden">Update available</span>
+            </Button>
+          </span>
         )}
         <Button
           className="icon-button"
