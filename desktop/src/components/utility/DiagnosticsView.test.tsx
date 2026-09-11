@@ -115,6 +115,50 @@ describe('DiagnosticsView', () => {
     expect(screen.queryByText('No session')).toBeNull();
   });
 
+  it('keeps production pre-call metrics separate from unavailable observer metrics', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'p'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            max_lateness_us: null,
+            p50_ms: null,
+            p95_ms: null,
+            sigma_onset_ms: null,
+            late_2ms: null,
+            late_5ms: null,
+            late_10ms: null,
+            max_sendinput_pre_call_lateness_us: 327,
+            pre_call_late_2ms: 4,
+            pre_call_late_5ms: 2,
+            pre_call_late_10ms: 1,
+            release_max_us: null,
+            release_late_2ms: null,
+            backend_status: 'healthy',
+          }),
+        ],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Healthy')).toBeInTheDocument();
+    expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent('327 μs');
+    expect(screen.getByText('Pre-call > 2 ms').parentElement).toHaveTextContent('4');
+    expect(screen.getByText('Pre-call > 5 ms').parentElement).toHaveTextContent('2');
+    expect(screen.getByText('Pre-call > 10 ms').parentElement).toHaveTextContent('1');
+    expect(screen.getByText('Session max').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Completion > 2 ms').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Max release lateness').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Release > 2 ms').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.queryByText('0 μs')).toBeNull();
+  });
+
   it('uses playback lifecycle to hide a completed session', () => {
     const store = createDesktopStore(createMockBridge());
     const sessionId = 'c'.repeat(32);

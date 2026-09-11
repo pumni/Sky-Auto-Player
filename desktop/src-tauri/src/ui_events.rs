@@ -111,13 +111,13 @@ pub enum DiagnosticsBackendStatus {
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticsSnapshotDto {
     pub seq: u64,
-    pub max_lateness_us: u64,
+    pub max_lateness_us: Option<u64>,
     pub p50_ms: Option<f64>,
     pub p95_ms: Option<f64>,
     pub sigma_onset_ms: Option<f64>,
-    pub late_2ms: u64,
-    pub late_5ms: u64,
-    pub late_10ms: u64,
+    pub late_2ms: Option<u64>,
+    pub late_5ms: Option<u64>,
+    pub late_10ms: Option<u64>,
     pub max_sendinput_pre_call_lateness_us: u64,
     pub pre_call_late_2ms: u64,
     pub pre_call_late_5ms: u64,
@@ -127,8 +127,8 @@ pub struct DiagnosticsSnapshotDto {
     pub keys_dropped: u64,
     pub chord_split_events: u64,
     pub backend_status: DiagnosticsBackendStatus,
-    pub release_max_us: u64,
-    pub release_late_2ms: u64,
+    pub release_max_us: Option<u64>,
+    pub release_late_2ms: Option<u64>,
     pub session_id: Option<String>,
 }
 
@@ -445,7 +445,9 @@ impl UiEvent {
                 return Err(format!("diagnostics {name} is outside bounds"));
             }
         }
-        if payload.max_lateness_us > 60_000_000 {
+        if let Some(max_lateness_us) = payload.max_lateness_us
+            && max_lateness_us > 60_000_000
+        {
             return Err("diagnostics max lateness is outside bounds".into());
         }
         if let Some(session_id) = &payload.session_id {

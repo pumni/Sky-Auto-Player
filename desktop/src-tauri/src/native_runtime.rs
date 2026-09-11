@@ -4027,12 +4027,12 @@ fn publish_diagnostics_snapshot_for_active(
 }
 
 struct NativeDiagnosticsSample {
-    max_lateness_us: u64,
+    max_lateness_us: Option<u64>,
     recent_latencies_us: Vec<i64>,
     recent_latency_samples_available: bool,
-    late_2ms: u64,
-    late_5ms: u64,
-    late_10ms: u64,
+    late_2ms: Option<u64>,
+    late_5ms: Option<u64>,
+    late_10ms: Option<u64>,
     max_sendinput_pre_call_lateness_us: u64,
     pre_call_late_2ms: u64,
     pre_call_late_5ms: u64,
@@ -4042,19 +4042,19 @@ struct NativeDiagnosticsSample {
     keys_dropped: u64,
     chord_split_events: u64,
     backend_status: DiagnosticsBackendStatus,
-    release_max_us: u64,
-    release_late_2ms: u64,
+    release_max_us: Option<u64>,
+    release_late_2ms: Option<u64>,
 }
 
 impl NativeDiagnosticsSample {
     fn unavailable() -> Self {
         Self {
-            max_lateness_us: 0,
+            max_lateness_us: None,
             recent_latencies_us: Vec::new(),
             recent_latency_samples_available: false,
-            late_2ms: 0,
-            late_5ms: 0,
-            late_10ms: 0,
+            late_2ms: None,
+            late_5ms: None,
+            late_10ms: None,
             max_sendinput_pre_call_lateness_us: 0,
             pre_call_late_2ms: 0,
             pre_call_late_5ms: 0,
@@ -4064,20 +4064,21 @@ impl NativeDiagnosticsSample {
             keys_dropped: 0,
             chord_split_events: 0,
             backend_status: DiagnosticsBackendStatus::Unavailable,
-            release_max_us: 0,
-            release_late_2ms: 0,
+            release_max_us: None,
+            release_late_2ms: None,
         }
     }
 
     fn from_player(player: &NativeDispatchSession) -> Self {
         let snapshot = player.snapshot_lite();
+        let observer_metrics_available = snapshot.recent_latency_samples_available;
         Self {
-            max_lateness_us: snapshot.max_lateness_us,
+            max_lateness_us: observer_metrics_available.then_some(snapshot.max_lateness_us),
             recent_latencies_us: snapshot.recent_latencies_us,
             recent_latency_samples_available: snapshot.recent_latency_samples_available,
-            late_2ms: snapshot.late_2ms,
-            late_5ms: snapshot.late_5ms,
-            late_10ms: snapshot.late_10ms,
+            late_2ms: observer_metrics_available.then_some(snapshot.late_2ms),
+            late_5ms: observer_metrics_available.then_some(snapshot.late_5ms),
+            late_10ms: observer_metrics_available.then_some(snapshot.late_10ms),
             max_sendinput_pre_call_lateness_us: snapshot.max_sendinput_pre_call_lateness_us,
             pre_call_late_2ms: snapshot.pre_call_late_2ms,
             pre_call_late_5ms: snapshot.pre_call_late_5ms,
@@ -4095,8 +4096,8 @@ impl NativeDiagnosticsSample {
                 snapshot.possibly_active_count,
                 snapshot.active_count,
             ),
-            release_max_us: snapshot.release_max_us,
-            release_late_2ms: snapshot.release_late_2ms,
+            release_max_us: observer_metrics_available.then_some(snapshot.release_max_us),
+            release_late_2ms: observer_metrics_available.then_some(snapshot.release_late_2ms),
         }
     }
 }
@@ -5784,9 +5785,13 @@ mod tests {
             payload.backend_status,
             DiagnosticsBackendStatus::Unavailable
         );
+        assert_eq!(payload.max_lateness_us, None);
         assert_eq!(payload.p50_ms, None);
         assert_eq!(payload.p95_ms, None);
         assert_eq!(payload.sigma_onset_ms, None);
+        assert_eq!(payload.late_2ms, None);
+        assert_eq!(payload.late_5ms, None);
+        assert_eq!(payload.late_10ms, None);
         assert_eq!(payload.max_sendinput_pre_call_lateness_us, 0);
         assert_eq!(payload.pre_call_late_2ms, 0);
         assert_eq!(payload.pre_call_late_5ms, 0);
@@ -5795,8 +5800,8 @@ mod tests {
         assert_eq!(payload.stuck_keys, 0);
         assert_eq!(payload.keys_dropped, 0);
         assert_eq!(payload.chord_split_events, 0);
-        assert_eq!(payload.release_max_us, 0);
-        assert_eq!(payload.release_late_2ms, 0);
+        assert_eq!(payload.release_max_us, None);
+        assert_eq!(payload.release_late_2ms, None);
         assert_eq!(payload.seq, 1);
     }
 
