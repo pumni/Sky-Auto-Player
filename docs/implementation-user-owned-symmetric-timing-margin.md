@@ -157,7 +157,7 @@ Properties:
 
 - persisted;
 - exact integer microseconds;
-- default 800;
+- final default 500;
 - range 0..=3000;
 - multiple of 100;
 - session-frozen once prepared/started;
@@ -224,7 +224,7 @@ Primary file:
 Add:
 
 ```rust
-pub const DEFAULT_TIMING_MARGIN_US: u64 = 800;
+pub const DEFAULT_TIMING_MARGIN_US: u64 = 500;
 pub const MIN_TIMING_MARGIN_US: u64 = 0;
 pub const MAX_TIMING_MARGIN_US: u64 = 3_000;
 pub const TIMING_MARGIN_STEP_US: u64 = 100;
@@ -694,7 +694,7 @@ and instead document:
 effective hold = frame base + user Timing Margin
 release gap    = one frame + user Timing Margin
 
-Down late cutoff = independent fixed dispatch policy, currently 500 us
+Late Down tolerance = independent user-owned dispatch policy, default 2000 us
 calibration = recommendation/evidence only
 ```
 
@@ -707,7 +707,7 @@ report. Historical evidence must remain historically accurate.
 
 ### Core settings
 
-- default margin is 800;
+- final default margin is 500;
 - 0 accepted;
 - 3000 accepted;
 - 100-step values accepted;
@@ -897,7 +897,7 @@ Do not force this split if atomic dependencies require a different order.
 Implementation is acceptable only when all are true:
 
 - [ ] Base choices remain 1.0 / 1.25 / 1.5 frames.
-- [ ] Default persisted Timing Margin is 800 us.
+- [x] Default persisted Timing Margin is 500 us.
 - [ ] Range is 0..=3000 us; normal UI step is 100 us.
 - [ ] Hold = base frame hold + exact user margin.
 - [ ] Release gap = one frame + exact same user margin.
@@ -916,7 +916,7 @@ Implementation is acceptable only when all are true:
 - [ ] RT no-allocation and one-`SendInput` invariants remain.
 - [ ] Full local validation passes.
 - [ ] Fresh CI passes on exact implementation head.
-- [ ] Default 800-us real-Windows regression evidence passes.
+- [x] Historical 800-us real-Windows regression evidence is archived; final defaults are 500-us Margin / 2000-us Late Down tolerance.
 - [ ] Focused margin sweep proves no hidden timing addition.
 - [ ] PR remains draft until explicit independent acceptance.
 
@@ -940,4 +940,4 @@ When implementation is complete, report back on the PR #233 with:
 12. any deviation from this handoff;
 13. any unresolved blocker.
 
-Keep the PR #233 in draft until explicit independent acceptance. Do not merge it as part of Codex implementation.
+Independent acceptance is complete. Final exact-head CI is the remaining merge gate for PR #233.
