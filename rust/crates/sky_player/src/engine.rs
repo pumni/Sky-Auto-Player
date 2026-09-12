@@ -27,8 +27,10 @@ pub use telemetry::{
 };
 pub(crate) use telemetry::{
     SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
-    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TraceContext,
-    TraceDelivery, TraceTiming, cpu_metrics_sample_due, trace_outcome_code, try_publish_metrics,
+    TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP,
+    TRACE_SEND_STATUS_DEADLINE_MISSED, TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector,
+    TraceContext, TraceDelivery, TraceTiming, cpu_metrics_sample_due, trace_outcome_code,
+    trace_send_status_code, try_publish_metrics,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use test_support::CommandTimingResult;
@@ -47,8 +49,8 @@ pub mod dispatch_primitives {
     pub use super::test_support::ProductionDispatchTestHarness;
     pub use super::worker::dispatch::DispatchStep;
     pub use super::worker::dispatch::observation::{
-        DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
-        PrecisionHandoffEvidence, UpObservation, UpTraceObservation,
+        DispatchObservation, DownMissObservation, DownObservation, DownTraceObservation,
+        OBSERVATION_QUEUE_CAPACITY, PrecisionHandoffEvidence, UpObservation, UpTraceObservation,
     };
     pub use super::worker::dispatch::observer::PendingObservationQueue;
     pub use super::worker::dispatch::timing::{

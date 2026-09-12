@@ -40,6 +40,7 @@
     "allow-library-remove-songs",
     "allow-library-import-local-files-to-playlist",
     "allow-library-import-local-folder-to-playlist",
+    "allow-export-sender-trace",
     "allow-subscribe-ui-events"
   ]
 }

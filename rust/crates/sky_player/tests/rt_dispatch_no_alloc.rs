@@ -16,9 +16,9 @@
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_player::engine::dispatch_primitives::{
-    DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep, DownObservation,
-    DownTraceObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
-    ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
+    DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep,
+    DownMissObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
+    PendingObservationQueue, ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
     is_clean_dispatch_observation,
 };
 
@@ -168,6 +168,20 @@ fn up_observation(n: u64) -> DispatchObservation {
             deferred_ticks: DurationTicks::ZERO,
             recovery_required: false,
         },
+    })
+}
+
+fn down_miss_observation(n: u64) -> DispatchObservation {
+    DispatchObservation::DownMiss(DownMissObservation {
+        source_action_index: n as u32,
+        authored_ticks: TimelineTicks::from_raw(n),
+        effective_deadline_ticks: TimelineTicks::from_raw(n),
+        wake_ticks: TimelineTicks::from_raw(n),
+        physical_target_qpc: QpcTicks::from_raw(n),
+        observed_qpc: QpcTicks::from_raw(n),
+        up_mask: 0,
+        down_mask: 1,
+        cutoff_miss: true,
     })
 }
 
@@ -341,7 +355,11 @@ fn push_at_capacity_drop_new_no_alloc() {
 fn overflow_drops_newest_for_down_and_up() {
     let _lock = TEST_LOCK.lock();
 
-    for newest in [down_observation(999), up_observation(999)] {
+    for newest in [
+        down_observation(999),
+        up_observation(999),
+        down_miss_observation(999),
+    ] {
         let queue = PendingObservationQueue::default();
         let mut dropped = 0_u64;
         let mut high = 0_u64;
@@ -358,6 +376,7 @@ fn overflow_drops_newest_for_down_and_up() {
             DispatchObservation::Down(observation) => {
                 assert_eq!(observation.trace.event_index, 0);
             }
+            DispatchObservation::DownMiss(_) => panic!("miss observation not expected"),
             DispatchObservation::Up(_) => panic!("unexpected Up observation in seeded queue"),
             DispatchObservation::Wait(_) => panic!("wait observation not expected"),
             DispatchObservation::StaleMetadata(_) => panic!("stale observation not expected"),
@@ -378,6 +397,7 @@ fn overflow_drops_newest_for_down_and_up() {
                     (OBSERVATION_QUEUE_CAPACITY - 1) as u32
                 )
             }
+            DispatchObservation::DownMiss(_) => panic!("newest miss observation must be dropped"),
             DispatchObservation::Up(_) => panic!("newest Up observation must be dropped"),
             DispatchObservation::Wait(_) => panic!("wait observation not expected"),
             DispatchObservation::StaleMetadata(_) => panic!("stale observation not expected"),
@@ -400,7 +420,12 @@ fn burst_push_and_drain_no_alloc() {
 
     enable_counting();
     for i in 0..BURST {
-        queue.push(down_observation(i as u64), &mut dropped, &mut high);
+        let observation = if i % 2 == 0 {
+            down_miss_observation(i as u64)
+        } else {
+            down_observation(i as u64)
+        };
+        queue.push(observation, &mut dropped, &mut high);
     }
     let mut drained = 0usize;
     while queue.pop_front().is_some() {

@@ -14,11 +14,12 @@ use sky_app_core::library::{
     LibraryManifestStore, LibraryManifestV1, LikedSongs,
 };
 use sky_app_core::settings::{
-    ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
-    DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS,
-    HotkeySettings, MAX_TIMING_MARGIN_US, MIN_TIMING_MARGIN_US, SafetySettings, SettingsError,
-    SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences, VALID_FPS,
-    normalize_settings,
+    ApplicationSettings, DEFAULT_DOWN_LATE_GRACE_US, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES,
+    DEFAULT_PROCESS_NAMES, DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S,
+    DOWN_LATE_GRACE_STEP_US, HOLD_FRAME_OPTIONS, HotkeySettings, MAX_DOWN_LATE_GRACE_US,
+    MAX_TIMING_MARGIN_US, MIN_DOWN_LATE_GRACE_US, MIN_TIMING_MARGIN_US, SafetySettings,
+    SettingsError, SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences,
+    VALID_FPS, normalize_settings,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -870,6 +871,11 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
         "default_timing_margin_us",
         sky_app_core::settings::DEFAULT_TIMING_MARGIN_US,
     );
+    settings.playback_defaults.down_late_grace_us = raw_u64(
+        raw,
+        "default_down_late_grace_us",
+        DEFAULT_DOWN_LATE_GRACE_US,
+    );
     settings.playback_defaults.tempo_scale = raw_f64(raw, "default_tempo_scale", 1.0);
     settings.playback_defaults.fps = raw_fps(raw, "game_fps", DEFAULT_GAME_FPS);
     settings.telemetry_enabled = raw_bool(raw, "telemetry_enabled_by_default", false);
@@ -989,6 +995,23 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
     migrated.insert(
         "default_timing_margin_us".into(),
         Value::from(timing_margin_us),
+    );
+    let down_late_grace_us = raw_u64(
+        raw,
+        "default_down_late_grace_us",
+        DEFAULT_DOWN_LATE_GRACE_US,
+    );
+    let down_late_grace_us = if (MIN_DOWN_LATE_GRACE_US..=MAX_DOWN_LATE_GRACE_US)
+        .contains(&down_late_grace_us)
+        && down_late_grace_us.is_multiple_of(DOWN_LATE_GRACE_STEP_US)
+    {
+        down_late_grace_us
+    } else {
+        DEFAULT_DOWN_LATE_GRACE_US
+    };
+    migrated.insert(
+        "default_down_late_grace_us".into(),
+        Value::from(down_late_grace_us),
     );
     for key in [
         "default_timing_profile",
@@ -1232,6 +1255,10 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
         Value::from(settings.playback_defaults.timing_margin_us),
     );
     raw.insert(
+        "default_down_late_grace_us".into(),
+        Value::from(settings.playback_defaults.down_late_grace_us),
+    );
+    raw.insert(
         "default_tempo_scale".into(),
         Value::from(settings.playback_defaults.tempo_scale),
     );
@@ -1427,6 +1454,7 @@ mod tests {
         let settings = store.load().expect("load legacy settings");
         assert_eq!(settings.playback_defaults.hold_frames, 1.5);
         assert_eq!(settings.playback_defaults.timing_margin_us, 800);
+        assert_eq!(settings.playback_defaults.down_late_grace_us, 500);
         store.save(&settings).expect("save migrated settings");
         let raw: Value =
             serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("json");
@@ -1497,6 +1525,44 @@ mod tests {
             );
             assert_eq!(raw["default_timing_margin_us"], DEFAULT_TIMING_MARGIN_US);
 
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn settings_v4_migration_defaults_preserves_and_canonicalizes_down_late_grace() {
+        let cases = [
+            (None, DEFAULT_DOWN_LATE_GRACE_US),
+            (Some(2_000), 2_000),
+            (Some(799), DEFAULT_DOWN_LATE_GRACE_US),
+            (Some(5_001), DEFAULT_DOWN_LATE_GRACE_US),
+        ];
+        for (value, expected) in cases {
+            let root = std::env::temp_dir().join(format!(
+                "sky-v4-down-late-grace-{}-{}",
+                std::process::id(),
+                value.unwrap_or(0)
+            ));
+            let path = root.join("config.json");
+            fs::create_dir_all(&root).expect("temp root");
+            let raw_value = value
+                .map(|value| format!(",\"default_down_late_grace_us\":{value}"))
+                .unwrap_or_default();
+            fs::write(&path, format!("{{\"schema_version\":4{raw_value}}}"))
+                .expect("seed schema v4 settings");
+
+            let settings = JsonSettingsStore::new(&path)
+                .load()
+                .expect("migrate settings");
+            assert_eq!(settings.playback_defaults.down_late_grace_us, expected);
+            let raw: Value =
+                serde_json::from_slice(&fs::read(&path).expect("read migrated config"))
+                    .expect("valid migrated json");
+            assert_eq!(
+                raw["schema_version"],
+                sky_app_core::settings::SCHEMA_VERSION
+            );
+            assert_eq!(raw["default_down_late_grace_us"], expected);
             let _ = fs::remove_dir_all(root);
         }
     }

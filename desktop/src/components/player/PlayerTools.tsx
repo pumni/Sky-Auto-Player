@@ -193,8 +193,8 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
           <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
         </div>
         <div>
-          <dt>Down late cutoff</dt>
-          <dd>500 µs</dd>
+          <dt>Late Down tolerance</dt>
+          <dd>{defaults.down_late_grace_us} µs</dd>
         </div>
       </dl>
     </>

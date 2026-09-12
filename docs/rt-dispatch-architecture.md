@@ -123,9 +123,11 @@ release gap are `17,467 µs`; focus restore grace remains `100,000 µs`.
 Controlled A/B runs may pass `--timing-margin-us 0..3000` in `100 µs` steps;
 the `timing-margin-sweep` scenario authors its Hold and Release Gap targets
 from that exact value and records the packet timestamps in every report.
-The independent acceptance-only `--down-late-grace-us 500|750|1000` changes
-only the cutoff supplied to the native worker. The `focus-loss` scenario
-first commits a canonical sink Down/Up pair, waits for `startup_ready` and that
+The independent acceptance-only `--down-late-grace-us 0..5000` value uses
+100 µs steps and changes only the cutoff supplied to the native worker. The
+physical propagation sweep uses `500`, `1000`, `2000`, and `5000` µs. The
+`focus-loss` scenario first commits a canonical sink Down/Up pair, waits for
+`startup_ready` and that
 pair's event evidence, then moves foreground to the validated project-owned
 probe with the coarse focus hint still true before a later different-slot Down.
 It observes the existing live pause state and requires the terminal final-gate

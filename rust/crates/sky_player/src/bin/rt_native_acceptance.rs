@@ -121,7 +121,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--timing-margin-us <0..3000, step 100>] [--down-late-grace-us <500|750|1000>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--timing-margin-us <0..3000, step 100>] [--down-late-grace-us <0..5000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex>]"
 }
 fn validate_run_id(value: &str) -> Result<String, String> {
     if value.is_empty()
@@ -159,7 +159,7 @@ fn parse_hwnd(value: &str) -> Result<isize, String> {
     }
     Ok(parsed as isize)
 }
-fn parse_down_late_grace_us(value: &str) -> Result<u64, String> { let parsed = value.parse::<u64>().map_err(|_| "--down-late-grace-us must be 500, 750, or 1000".to_string())?; match parsed { 500 | 750 | 1_000 => Ok(parsed), _ => Err("--down-late-grace-us must be 500, 750, or 1000".to_string()) } }
+fn parse_down_late_grace_us(value: &str) -> Result<u64, String> { let parsed = value.parse::<u64>().map_err(|_| "--down-late-grace-us must be 0..5000 in 100 us steps".to_string())?; if parsed <= 5_000 && parsed % 100 == 0 { Ok(parsed) } else { Err("--down-late-grace-us must be 0..5000 in 100 us steps".to_string()) } }
 fn parse_timing_margin_us(value: &str) -> Result<u64, String> {
     let parsed = value.parse::<u64>().map_err(|_| "--timing-margin-us must be 0..3000 in 100 us steps".to_string())?;
     if (ACCEPTANCE_TIMING_MARGIN_MIN_US..=ACCEPTANCE_TIMING_MARGIN_MAX_US).contains(&parsed)

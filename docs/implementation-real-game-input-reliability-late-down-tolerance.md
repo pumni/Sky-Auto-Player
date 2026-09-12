@@ -579,23 +579,31 @@ win32_error
 flags/outcome
 ```
 
+Schema 13 also records raw QPC values for the physical target, SendInput
+pre-call, SendInput completion, and a rejected-boundary observation. Each raw
+value has a fixed-width availability bit; zero is a valid QPC value and must
+not be interpreted as missing evidence. A cutoff/backlog miss has an observed
+QPC and target QPC, but no pre-call or completion QPC because SendInput was not
+attempted for the authored Down.
+
 If `event_index` already exactly equals the source action identity in all
 production paths, document and test that before deciding whether a second field
 is redundant. Packet identity and masks are still required.
 
-Bump `NATIVE_TELEMETRY_SCHEMA_VERSION`.
+Bump `NATIVE_TELEMETRY_SCHEMA_VERSION` when extending the record.
 
 Do not add strings, Vecs, maps, locks, formatting or heap allocation on the RT
 path.
 
 ## Capacity
 
-Desktop production currently configures capacity 1024.
+Desktop production now preallocates 8192 records. The current x64
+`RtTraceRecord` layout is 192 bytes, so the fixed record ring uses 1,572,864
+bytes (1.5 MiB) per physical session before container/export overhead. A native
+test guards the 2 MiB bound if the record grows later.
 
-For this investigation, increase the preallocated desktop capacity to a
-reasonable bounded value that can preserve typical full-song traces, e.g.
-8192 or 16384, after measuring memory impact. The exact value may differ if
-Codex demonstrates a better bound.
+The bounded desktop capacity is fixed at 8192 records to preserve typical
+full-song traces without allocating based on song size.
 
 Requirements:
 

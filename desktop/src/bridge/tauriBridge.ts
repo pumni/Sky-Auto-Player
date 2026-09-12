@@ -76,6 +76,7 @@ export function createTauriBridge(): DesktopBridge {
     skipPlayback: (request: PlaybackSessionCommand) => call(COMMANDS.skipPlayback, request),
     setDiagnosticsEnabled: (request: DiagnosticsSetEnabled) =>
       call(COMMANDS.setDiagnosticsEnabled, request),
+    exportSenderTrace: () => call(COMMANDS.exportSenderTrace),
     startCalibration: (request: CalibrationStart) => call(COMMANDS.startCalibration, request),
     cancelCalibration: (request: CalibrationCancel) => call(COMMANDS.cancelCalibration, request),
     subscribeUiEvents: async (listener): Promise<Unsubscribe> => {

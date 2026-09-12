@@ -698,6 +698,39 @@ body.is-resizing * {
   margin-inline: 16px;
 }
 
+.diagnostics-export {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.diagnostics-export-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  font-size: 12px;
+}
+
+.diagnostics-export-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.diagnostics-export-button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.diagnostics-export > span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
 .song-details-view > .utility-empty {
   margin-inline: 0;
 }

@@ -65,6 +65,8 @@ pub enum SongError {
     InvalidHold,
     #[error("schedule timing margin is invalid")]
     InvalidTimingMargin,
+    #[error("Down late tolerance is invalid")]
+    InvalidDownLateGrace,
     #[error("schedule timing value overflowed")]
     TimingOverflow,
     #[error("same-key repeat is infeasible: {interval_us}us")]
@@ -247,6 +249,7 @@ pub fn build_schedule(
         fps,
         hold_frames,
         crate::settings::DEFAULT_TIMING_MARGIN_US,
+        crate::settings::DEFAULT_DOWN_LATE_GRACE_US,
     )?;
     build_schedule_with_policy(song, tempo_scale, &policy)
 }
@@ -758,10 +761,12 @@ mod tests {
                 },
             ],
         };
-        let margin_800 = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
-            .expect("valid margin");
-        let margin_900 = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 900)
-            .expect("valid margin");
+        let margin_800 =
+            crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, 500)
+                .expect("valid margin");
+        let margin_900 =
+            crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 900, 500)
+                .expect("valid margin");
         let required_cycle_800 = margin_800.min_hold_us + margin_800.min_release_gap_us;
         let required_cycle_900 = margin_900.min_hold_us + margin_900.min_release_gap_us;
         assert_eq!(required_cycle_800, 34_934);

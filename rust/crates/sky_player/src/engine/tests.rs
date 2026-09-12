@@ -1897,14 +1897,27 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
         .try_push(|| {
             builds += 1;
             Ok(RtTraceRecord {
+                packet_index: 0,
+                source_action_index: 0,
                 event_index: 0,
                 kind: TRACE_KIND_DOWN,
                 outcome: 0,
                 polyphony: 1,
                 flags: TRACE_FLAG_SENT_FULL,
+                send_status: 0,
+                up_mask: 0,
+                down_mask: 1,
                 authored_ticks: 0,
                 effective_deadline_ticks: 0,
                 wake_ticks: 0,
+                physical_target_qpc_ticks: 0,
+                physical_target_qpc_available: false,
+                pre_call_qpc_ticks: 0,
+                pre_call_qpc_available: false,
+                sendinput_completion_qpc_ticks: 0,
+                sendinput_completion_qpc_available: false,
+                observation_qpc_ticks: 0,
+                observation_qpc_available: false,
                 send_started_ticks: 0,
                 send_completed_ticks: 0,
                 dispatch_cost_us: 0,
@@ -3491,6 +3504,7 @@ fn future_classification_then_waiter_entry_stall_keeps_exact_boundary_authorized
 #[test]
 fn overdue_down_beyond_rescue_grace_is_committed_missed_without_sendinput() {
     use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::dispatch::observation::DispatchObservation;
 
     let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
     let calls = harness.configure_send_counter();
@@ -3499,6 +3513,10 @@ fn overdue_down_beyond_rescue_grace_is_committed_missed_without_sendinput() {
     assert!(matches!(
         harness.dispatch_at_plan_target_for_test(&first),
         super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::Down(_))
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
@@ -3512,6 +3530,10 @@ fn overdue_down_beyond_rescue_grace_is_committed_missed_without_sendinput() {
         ),
         "missed step: {missed_step:?}"
     );
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::DownMiss(observation)) if !observation.cutoff_miss
+    ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(harness.local_metrics.late_discovery_rescue_attempts, 0);
     assert!(!harness.has_active_generation(0x16));
@@ -3607,6 +3629,7 @@ fn overdue_mixed_packet_beyond_rescue_grace_sends_only_safety_up() {
 #[test]
 fn authorized_down_beyond_hard_cutoff_is_missed_without_down_syscall() {
     use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::dispatch::observation::DispatchObservation;
 
     let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
     let calls = harness.configure_send_counter();
@@ -3614,6 +3637,10 @@ fn authorized_down_beyond_hard_cutoff_is_missed_without_down_syscall() {
     assert!(matches!(
         harness.dispatch_at_plan_target_for_test(&first),
         super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::Down(_))
     ));
 
     let future = harness.plan_current_dispatch();
@@ -3624,6 +3651,10 @@ fn authorized_down_beyond_hard_cutoff_is_missed_without_down_syscall() {
     harness.configure_deadline_missed_packet_sender();
     let hard_late = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&future);
     assert!(matches!(hard_late, super::worker::DispatchStep::Dispatched));
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::DownMiss(observation)) if observation.cutoff_miss
+    ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
     assert!(harness.local_metrics.last_missed_down_valid);
@@ -3792,6 +3823,17 @@ fn hard_late_safety_up_queues_hold_forensics_lifecycle_evidence() {
         harness.dispatch_same_frozen_plan_after_hard_late_for_test(&future),
         super::worker::DispatchStep::Dispatched
     ));
+    let missed_observation = harness.pop_observation();
+    assert!(
+        matches!(
+            missed_observation,
+            Some(DispatchObservation::DownMiss(observation))
+                if observation.up_mask == 1
+                    && observation.down_mask == 2
+                    && observation.cutoff_miss
+        ),
+        "unexpected miss observation: {missed_observation:?}"
+    );
     assert!(matches!(
         harness.pop_observation(),
         Some(DispatchObservation::Lifecycle(
@@ -3878,6 +3920,7 @@ fn outer_and_inner_hard_late_recovery_have_same_backend_health() {
 #[test]
 fn first_musical_down_hard_miss_remains_startup_terminal() {
     use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::dispatch::observation::DispatchObservation;
 
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness.configure_deadline_missed_packet_sender();
@@ -3892,11 +3935,16 @@ fn first_musical_down_hard_miss_remains_startup_terminal() {
     assert_eq!(harness.local_metrics.missed_hard_late_boundaries, 1);
     assert!(harness.local_metrics.last_missed_down_valid);
     assert_eq!(harness.local_metrics.last_missed_down_reason_code, 2);
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::DownMiss(observation)) if observation.cutoff_miss
+    ));
 }
 
 #[test]
 fn strict_pre_admission_down_late_is_classified_before_termination() {
     use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::dispatch::observation::DispatchObservation;
 
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     let calls = harness.configure_send_counter();
@@ -3911,6 +3959,10 @@ fn strict_pre_admission_down_late_is_classified_before_termination() {
     assert_eq!(harness.local_metrics.last_missed_down_reason_code, 2);
     assert!(harness.local_metrics.last_missed_down_valid);
     assert!(harness.local_metrics.last_missed_down_lateness_ticks > 0);
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::DownMiss(observation)) if observation.cutoff_miss
+    ));
 }
 
 #[test]
@@ -4311,16 +4363,24 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     let record = RtTraceRecord::dispatched(
         TraceContext {
             event_index: 7,
+            source_action_index: 7,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 3,
             flags: TRACE_FLAG_SENT_FULL,
+            send_status: 0,
             win32_error: 0,
+            up_mask: 0,
+            down_mask: 0b111,
         },
         TraceTiming {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(13),
+            physical_target_qpc_ticks: Some(100),
+            pre_call_qpc_ticks: Some(120),
+            sendinput_completion_qpc_ticks: Some(125),
+            observation_qpc_ticks: None,
             final_policy_ticks: Some(TimelineTicks::from_raw(20)),
             pre_call_ticks: Some(TimelineTicks::from_raw(22)),
             sendinput_completion_ticks: Some(TimelineTicks::from_raw(25)),
@@ -4346,6 +4406,13 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(record.send_attempts, 2);
     assert_eq!(record.send_started_ticks, 22);
     assert_eq!(record.send_completed_ticks, 25);
+    assert_eq!(record.physical_target_qpc_ticks, 100);
+    assert!(record.physical_target_qpc_available);
+    assert_eq!(record.pre_call_qpc_ticks, 120);
+    assert!(record.pre_call_qpc_available);
+    assert_eq!(record.sendinput_completion_qpc_ticks, 125);
+    assert!(record.sendinput_completion_qpc_available);
+    assert!(!record.observation_qpc_available);
     assert_eq!(record.core_post_send_duration_us, 4);
 
     let mut summary = super::NativeTelemetrySummary::default();
@@ -4360,16 +4427,24 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
     let result = RtTraceRecord::dispatched(
         TraceContext {
             event_index: 0,
+            source_action_index: 0,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 1,
             flags: 0,
+            send_status: 0,
             win32_error: 0,
+            up_mask: 0,
+            down_mask: 1,
         },
         TraceTiming {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
+            physical_target_qpc_ticks: None,
+            pre_call_qpc_ticks: None,
+            sendinput_completion_qpc_ticks: None,
+            observation_qpc_ticks: None,
             final_policy_ticks: None,
             pre_call_ticks: None,
             sendinput_completion_ticks: None,
@@ -4398,16 +4473,24 @@ fn native_summary_ignores_non_backend_trace() {
     let record = RtTraceRecord::dispatched(
         TraceContext {
             event_index: 0,
+            source_action_index: 0,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("blocked_unfocused"),
             polyphony: 3,
             flags: 0,
+            send_status: 8,
             win32_error: 0,
+            up_mask: 0,
+            down_mask: 0b111,
         },
         TraceTiming {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
+            physical_target_qpc_ticks: None,
+            pre_call_qpc_ticks: None,
+            sendinput_completion_qpc_ticks: None,
+            observation_qpc_ticks: None,
             final_policy_ticks: None,
             pre_call_ticks: None,
             sendinput_completion_ticks: None,

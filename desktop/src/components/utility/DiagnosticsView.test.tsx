@@ -125,7 +125,7 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Max pre-call lateness')).toBeInTheDocument();
     expect(screen.getByText('Pre-call > 10 ms')).toBeInTheDocument();
     expect(screen.getByText('Pre-call 500–750 μs')).toBeInTheDocument();
-    expect(screen.getByText('Down late cutoff')).toBeInTheDocument();
+    expect(screen.getByText('Late Down tolerance')).toBeInTheDocument();
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('17.467 ms');
     expect(screen.getByText('Release gap').parentElement).toHaveTextContent('17.467 ms');
@@ -158,10 +158,10 @@ describe('DiagnosticsView', () => {
     expect(
       screen.getAllByText(/fixed Down late cutoff applies only to Down-bearing sends/),
     ).toHaveLength(2);
-    expect(screen.getByText('Down cutoff 500 μs')).toBeInTheDocument();
+    expect(screen.getByText('Late Down tolerance 500 μs')).toBeInTheDocument();
   });
 
-  it('shows the frozen user margin separately from the fixed Down cutoff', () => {
+  it('shows the frozen user margin separately from the Late Down tolerance', () => {
     const store = createDesktopStore(createMockBridge());
     const sessionId = 'd'.repeat(32);
     store.setState({
@@ -191,8 +191,8 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('0 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('16.667 ms');
     expect(screen.getByText('Release gap').parentElement).toHaveTextContent('16.667 ms');
-    expect(screen.getByText('Down late cutoff').parentElement).toHaveTextContent('500 µs');
-    expect(screen.getByText('Recommended Timing Margin').parentElement).toHaveTextContent('800 µs');
+    expect(screen.getByText('Late Down tolerance').parentElement).toHaveTextContent('500 µs');
+    expect(screen.getByText('Recommended sender margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Recommendation source').parentElement).toHaveTextContent(
       'Default fallback (no valid calibration cache)',
     );
@@ -299,7 +299,7 @@ describe('DiagnosticsView', () => {
         /Session max pre-call lateness observed at the latest diagnostics snapshot: 327 μs/,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText('Down cutoff 500 μs')).toBeInTheDocument();
+    expect(screen.getByText('Late Down tolerance 500 μs')).toBeInTheDocument();
   });
 
   it('distinguishes an attached physical player with no sender samples yet', () => {
@@ -327,12 +327,45 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Sender-side status: Waiting')).toBeInTheDocument();
     expect(screen.getByText('Physical session').parentElement).toHaveTextContent('Yes');
     expect(screen.getByText('Player attached').parentElement).toHaveTextContent('Yes');
-    expect(screen.getByText('Sender samples').parentElement).toHaveTextContent('0');
+    expect(screen.getByText('Sender samples').parentElement).toHaveTextContent('No samples');
     expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent('No samples');
     expect(screen.getByText('Pre-call < 250 μs').parentElement).toHaveTextContent('No samples');
 
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
     expect(screen.getByText('No sender samples yet')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /SendInput pre-call lateness/ })).toBeNull();
+  });
+
+  it('keeps backend-unavailable distinct from an attached player with no samples', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'u'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            physical_session: true,
+            player_attached: true,
+            sender_sample_count: 0,
+            max_sendinput_pre_call_lateness_us: null,
+            backend_status: 'unavailable',
+          }),
+        ],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Sender-side status: Unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Sender samples').parentElement).toHaveTextContent('Unavailable');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+    expect(screen.getByText('Timing unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('No sender samples yet')).toBeNull();
     expect(screen.queryByRole('img', { name: /SendInput pre-call lateness/ })).toBeNull();
   });
 

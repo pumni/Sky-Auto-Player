@@ -6,6 +6,7 @@ pub(crate) use metrics::{
 };
 
 use sky_dispatch_core::time::{TimeArithmeticError, TimelineTicks};
+use sky_dispatch_win32::input::SendTransactionStatus;
 use std::collections::VecDeque;
 
 /// Fixed-size record retained on the real-time worker path.
@@ -17,14 +18,33 @@ use std::collections::VecDeque;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct RtTraceRecord {
+    /// Zero-based sequence in the exported session trace.
+    pub packet_index: u32,
+    /// Identity in the compiled source schedule. This remains equal to
+    /// `event_index` today; it is explicit in schema 13 to make that contract
+    /// reviewable by trace consumers.
+    pub source_action_index: u32,
     pub event_index: u32,
     pub kind: u8,
     pub outcome: u8,
     pub polyphony: u8,
     pub flags: u8,
+    pub send_status: u8,
+    pub up_mask: u16,
+    pub down_mask: u16,
     pub authored_ticks: u64,
     pub effective_deadline_ticks: u64,
     pub wake_ticks: u64,
+    /// Raw QPC values must be interpreted only when their paired availability
+    /// field is true; zero is a valid QPC value.
+    pub physical_target_qpc_ticks: u64,
+    pub physical_target_qpc_available: bool,
+    pub pre_call_qpc_ticks: u64,
+    pub pre_call_qpc_available: bool,
+    pub sendinput_completion_qpc_ticks: u64,
+    pub sendinput_completion_qpc_available: bool,
+    pub observation_qpc_ticks: u64,
+    pub observation_qpc_available: bool,
     /// Deprecated compatibility key. Its value is the trusted pre-call QPC
     /// boundary immediately before the prepared SendInput call.
     pub send_started_ticks: u64,
@@ -49,7 +69,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 11;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 13;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -59,11 +79,40 @@ pub(crate) const TRACE_FLAG_RECOVERY: u8 = 1 << 1;
 pub(crate) const TRACE_FLAG_DEFERRED: u8 = 1 << 2;
 pub(crate) const TRACE_FLAG_ANOMALY: u8 = 1 << 3;
 
+pub(crate) const TRACE_SEND_STATUS_COMPLETE: u8 = 0;
+pub(crate) const TRACE_SEND_STATUS_PREPARATION_REJECTED: u8 = 1;
+pub(crate) const TRACE_SEND_STATUS_ZERO_PROGRESS: u8 = 2;
+pub(crate) const TRACE_SEND_STATUS_PARTIAL_PROGRESS: u8 = 3;
+pub(crate) const TRACE_SEND_STATUS_INTEGRITY_LOST: u8 = 4;
+pub(crate) const TRACE_SEND_STATUS_DEADLINE_MISSED: u8 = 5;
+pub(crate) const TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND: u8 = 6;
+pub(crate) const TRACE_SEND_STATUS_CLOCK_FAILURE_AFTER_SEND: u8 = 7;
+pub(crate) const TRACE_SEND_STATUS_NOT_ATTEMPTED: u8 = 8;
+
+pub(crate) const fn trace_send_status_code(status: SendTransactionStatus) -> u8 {
+    match status {
+        SendTransactionStatus::Complete => TRACE_SEND_STATUS_COMPLETE,
+        SendTransactionStatus::PreparationRejected => TRACE_SEND_STATUS_PREPARATION_REJECTED,
+        SendTransactionStatus::ZeroProgress => TRACE_SEND_STATUS_ZERO_PROGRESS,
+        SendTransactionStatus::PartialProgress => TRACE_SEND_STATUS_PARTIAL_PROGRESS,
+        SendTransactionStatus::IntegrityLost => TRACE_SEND_STATUS_INTEGRITY_LOST,
+        SendTransactionStatus::DeadlineMissedBeforeSend => TRACE_SEND_STATUS_DEADLINE_MISSED,
+        SendTransactionStatus::ClockFailureBeforeSend => {
+            TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND
+        }
+        SendTransactionStatus::ClockFailureAfterSend => TRACE_SEND_STATUS_CLOCK_FAILURE_AFTER_SEND,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TraceTiming {
     pub(crate) authored_ticks: TimelineTicks,
     pub(crate) effective_deadline_ticks: TimelineTicks,
     pub(crate) wake_ticks: TimelineTicks,
+    pub(crate) physical_target_qpc_ticks: Option<u64>,
+    pub(crate) pre_call_qpc_ticks: Option<u64>,
+    pub(crate) sendinput_completion_qpc_ticks: Option<u64>,
+    pub(crate) observation_qpc_ticks: Option<u64>,
     /// Final target/focus/control proof, sampled before the pre-call sender
     /// boundary.
     pub(crate) final_policy_ticks: Option<TimelineTicks>,
@@ -92,11 +141,15 @@ pub(crate) struct TraceDelivery {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TraceContext {
     pub(crate) event_index: u32,
+    pub(crate) source_action_index: u32,
     pub(crate) kind: u8,
     pub(crate) outcome: u8,
     pub(crate) polyphony: usize,
     pub(crate) flags: u8,
+    pub(crate) send_status: u8,
     pub(crate) win32_error: u32,
+    pub(crate) up_mask: u16,
+    pub(crate) down_mask: u16,
 }
 
 impl RtTraceRecord {
@@ -123,14 +176,29 @@ impl RtTraceRecord {
         let send_attempts =
             u8::try_from(delivery.send_attempts).map_err(|_| TimeArithmeticError::Overflow)?;
         Ok(Self {
+            packet_index: 0,
+            source_action_index: context.source_action_index,
             event_index: context.event_index,
             kind: context.kind,
             outcome: context.outcome,
             polyphony,
             flags: context.flags,
+            send_status: context.send_status,
+            up_mask: context.up_mask,
+            down_mask: context.down_mask,
             authored_ticks: timing.authored_ticks.as_u64(),
             effective_deadline_ticks: timing.effective_deadline_ticks.as_u64(),
             wake_ticks: timing.wake_ticks.as_u64(),
+            physical_target_qpc_ticks: timing.physical_target_qpc_ticks.unwrap_or_default(),
+            physical_target_qpc_available: timing.physical_target_qpc_ticks.is_some(),
+            pre_call_qpc_ticks: timing.pre_call_qpc_ticks.unwrap_or_default(),
+            pre_call_qpc_available: timing.pre_call_qpc_ticks.is_some(),
+            sendinput_completion_qpc_ticks: timing
+                .sendinput_completion_qpc_ticks
+                .unwrap_or_default(),
+            sendinput_completion_qpc_available: timing.sendinput_completion_qpc_ticks.is_some(),
+            observation_qpc_ticks: timing.observation_qpc_ticks.unwrap_or_default(),
+            observation_qpc_available: timing.observation_qpc_ticks.is_some(),
             send_started_ticks: timing.pre_call_ticks.map_or(0, TimelineTicks::as_u64),
             send_completed_ticks: timing
                 .sendinput_completion_ticks
@@ -162,6 +230,8 @@ pub(crate) fn trace_outcome_code(outcome: &str) -> u8 {
         "strict_completion_slo_exceeded" => 6,
         "chord_integrity_lost" => 7,
         "aborted" => 8,
+        "down_cutoff_miss" => 9,
+        "down_backlog_miss" => 10,
         _ => 255,
     }
 }
@@ -259,6 +329,9 @@ pub struct NativeTelemetryOutput {
     pub attempted: u64,
     pub accepted: u64,
     pub dropped: u64,
+    /// Observations dropped by the bounded producer queue before telemetry
+    /// could inspect them. Kept separate from ring-capacity drops.
+    pub observer_queue_dropped: u64,
     pub truncated: bool,
     pub timing_semantics: TimingSemantics,
 }
@@ -281,6 +354,7 @@ impl NativeTelemetryOutput {
             attempted: 0,
             accepted: 0,
             dropped: 0,
+            observer_queue_dropped: 0,
             truncated: false,
             timing_semantics: TimingSemantics::default(),
         }
@@ -324,7 +398,8 @@ impl TelemetryCollector {
             return Ok(());
         }
 
-        let record = build()?;
+        let mut record = build()?;
+        record.packet_index = u32::try_from(self.output.accepted).unwrap_or(u32::MAX);
         self.output.summary.observe(&record);
 
         match self.mode {
@@ -341,9 +416,9 @@ impl TelemetryCollector {
 #[cfg(test)]
 mod tests {
     use super::{
-        NativeTelemetrySummary, RtTraceRecord, TRACE_FLAG_SENT_FULL, TRACE_KIND_MIXED,
-        TRACE_KIND_UP, TelemetryCollector, TelemetryMode, TraceContext, TraceDelivery, TraceTiming,
-        trace_outcome_code,
+        NativeTelemetrySummary, RtTraceRecord, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
+        TRACE_KIND_MIXED, TRACE_KIND_UP, TRACE_SEND_STATUS_COMPLETE, TelemetryCollector,
+        TelemetryMode, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
     };
     use sky_dispatch_core::time::TimelineTicks;
 
@@ -356,16 +431,34 @@ mod tests {
         RtTraceRecord::dispatched(
             TraceContext {
                 event_index,
+                source_action_index: event_index,
                 kind,
                 outcome: trace_outcome_code("sent"),
                 polyphony: requested,
                 flags: TRACE_FLAG_SENT_FULL,
+                send_status: TRACE_SEND_STATUS_COMPLETE,
                 win32_error: 0,
+                up_mask: if kind == TRACE_KIND_UP {
+                    (1_u16 << requested) - 1
+                } else if kind == TRACE_KIND_MIXED {
+                    1
+                } else {
+                    0
+                },
+                down_mask: if kind == TRACE_KIND_UP {
+                    0
+                } else {
+                    (1_u16 << requested) - 1
+                },
             },
             TraceTiming {
                 authored_ticks: TimelineTicks::ZERO,
                 effective_deadline_ticks: TimelineTicks::ZERO,
                 wake_ticks: TimelineTicks::ZERO,
+                physical_target_qpc_ticks: None,
+                pre_call_qpc_ticks: None,
+                sendinput_completion_qpc_ticks: None,
+                observation_qpc_ticks: None,
                 final_policy_ticks: Some(TimelineTicks::from_raw(1)),
                 pre_call_ticks: Some(TimelineTicks::from_raw(1)),
                 sendinput_completion_ticks: Some(TimelineTicks::from_raw(2)),
@@ -439,11 +532,37 @@ mod tests {
         summary.observe(&record);
 
         assert_eq!(record.kind, TRACE_KIND_MIXED);
+        assert_eq!(record.up_mask, 1);
+        assert_eq!(record.down_mask, 0b11);
+        assert_ne!(record.up_mask & record.down_mask, 0, "same-key retrigger");
         assert_eq!(record.requested_count, 2);
         assert_eq!(record.sent_count, 2);
         assert_eq!(summary.dispatch_count, 1);
         assert_eq!(summary.requested_key_count, 2);
         assert_eq!(summary.sent_key_count, 2);
+    }
+
+    #[test]
+    fn packet_masks_classify_single_chord_and_up_only_records() {
+        let single = record(TRACE_KIND_DOWN, 1, 1);
+        let chord = record(TRACE_KIND_DOWN, 3, 3);
+        let up_only = record(TRACE_KIND_UP, 2, 2);
+
+        assert_eq!(
+            (single.kind, single.down_mask.count_ones()),
+            (TRACE_KIND_DOWN, 1)
+        );
+        assert_eq!(
+            (chord.kind, chord.down_mask.count_ones()),
+            (TRACE_KIND_DOWN, 3)
+        );
+        assert_eq!(
+            (up_only.kind, up_only.up_mask.count_ones()),
+            (TRACE_KIND_UP, 2)
+        );
+        assert_eq!(single.source_action_index, single.event_index);
+        assert_eq!(chord.source_action_index, chord.event_index);
+        assert_eq!(up_only.source_action_index, up_only.event_index);
     }
 
     #[test]
@@ -470,6 +589,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             (0..304_u32).collect::<Vec<_>>()
         );
+        assert_eq!(
+            output
+                .records
+                .iter()
+                .map(|record| record.packet_index)
+                .collect::<Vec<_>>(),
+            (0..304_u32).collect::<Vec<_>>()
+        );
+        assert!(
+            output
+                .records
+                .iter()
+                .all(|record| record.source_action_index == record.event_index)
+        );
     }
 
     #[test]
@@ -494,5 +627,6 @@ mod tests {
                 .map(|record| record.event_index),
             Some(303)
         );
+        assert!(collector.output.truncated);
     }
 }

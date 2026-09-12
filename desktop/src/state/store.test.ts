@@ -421,7 +421,14 @@ describe('desktop store', () => {
         prepared_id: request.preparedId,
         song_id: songId,
         state: 'starting' as const,
-        config: { hold_frames: 2, timing_margin_us: 800, tempo_scale: 1, fps: 60, dry_run: true },
+        config: {
+          hold_frames: 2,
+          timing_margin_us: 800,
+          down_late_grace_us: 500,
+          tempo_scale: 1,
+          fps: 60,
+          dry_run: true,
+        },
         plan_fingerprint: 'mock-plan',
       };
       listener?.({

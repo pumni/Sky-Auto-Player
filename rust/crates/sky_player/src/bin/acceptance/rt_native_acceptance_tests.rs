@@ -561,8 +561,8 @@ fn authorization_and_timing_contracts_remain_bounded() {
     assert!(focus_evidence_clean(true, 1, 0, true, true));
 }
 #[test]
-fn grace_override_accepts_only_controlled_ab_values() {
-    for grace in ["500", "750", "1000"] {
+fn down_late_tolerance_override_accepts_the_user_setting_range_and_step() {
+    for grace in ["0", "500", "1000", "2000", "5000"] {
         let mut args = base_arguments("canonical-single");
         args.extend(
             ["--down-late-grace-us", grace]
@@ -574,13 +574,15 @@ fn grace_override_accepts_only_controlled_ab_values() {
         };
         assert_eq!(run.down_late_grace_us, grace.parse::<u64>().unwrap());
     }
-    let mut args = base_arguments("canonical-single");
-    args.extend(
-        ["--down-late-grace-us", "600"]
-            .into_iter()
-            .map(str::to_owned),
-    );
-    assert!(parse_args(args).is_err());
+    for grace in ["1", "99", "101", "5001"] {
+        let mut args = base_arguments("canonical-single");
+        args.extend(
+            ["--down-late-grace-us", grace]
+                .into_iter()
+                .map(str::to_owned),
+        );
+        assert!(parse_args(args).is_err(), "invalid tolerance {grace}");
+    }
 }
 #[test]
 fn timing_margin_override_accepts_only_bounded_hundred_microsecond_values() {
@@ -631,7 +633,7 @@ fn changing_down_grace_changes_only_the_cutoff_not_authored_timing() {
     let authored_hold = acceptance_min_hold_us(ACCEPTANCE_TIMING_MARGIN_US);
     let authored_gap = acceptance_min_release_gap_us(ACCEPTANCE_TIMING_MARGIN_US);
     let plan = scenario_plan(Scenario::CanonicalSingle, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
-    for grace in [500, 750, 1_000] {
+    for grace in [0, 500, 1_000, 2_000, 5_000] {
         let options = production_options(
             plan.schedule.clone(),
             None,

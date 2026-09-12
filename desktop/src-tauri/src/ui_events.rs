@@ -481,7 +481,11 @@ impl UiEvent {
         {
             return Err("diagnostics max lateness is outside bounds".into());
         }
-        if payload.down_late_grace_us > 60_000_000 {
+        if payload.down_late_grace_us > sky_app_core::settings::MAX_DOWN_LATE_GRACE_US
+            || !payload
+                .down_late_grace_us
+                .is_multiple_of(sky_app_core::settings::DOWN_LATE_GRACE_STEP_US)
+        {
             return Err("diagnostics Down grace is outside bounds".into());
         }
         if let Some(last_error) = &payload.last_error {
@@ -517,7 +521,7 @@ impl UiEvent {
         }
         if payload
             .recommended_timing_margin_us
-            .is_some_and(|value| value > sky_app_core::settings::MAX_TIMING_MARGIN_US)
+            .is_some_and(|value| value > sky_app_core::settings::MAX_DOWN_LATE_GRACE_US + 100_000)
         {
             return Err("calibration recommendation is outside bounds".into());
         }

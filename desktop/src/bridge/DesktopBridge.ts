@@ -101,9 +101,13 @@ export type Settings = Omit<SettingsDto, 'theme' | 'update_preferences'> & {
   update_preferences: UpdatePreferences;
 };
 export type PlaybackPatch = Partial<
-  Omit<GeneratedPlaybackPatch, 'holdFrames' | 'timingMarginUs' | 'tempoScale' | 'fps'> & {
+  Omit<
+    GeneratedPlaybackPatch,
+    'holdFrames' | 'timingMarginUs' | 'downLateGraceUs' | 'tempoScale' | 'fps'
+  > & {
     holdFrames: number;
     timingMarginUs: number;
+    downLateGraceUs: number;
     tempoScale: number;
     fps: number;
   }
@@ -184,6 +188,7 @@ export interface DesktopBridge {
   resumePlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
   skipPlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
   setDiagnosticsEnabled(request: DiagnosticsSetEnabled): Promise<DiagnosticsEnabled>;
+  exportSenderTrace(): Promise<string>;
   startCalibration(request: CalibrationStart): Promise<CalibrationStartAck>;
   cancelCalibration(request: CalibrationCancel): Promise<CalibrationCancelAck>;
   subscribeUiEvents(listener: (event: UiEvent) => void): Promise<Unsubscribe>;

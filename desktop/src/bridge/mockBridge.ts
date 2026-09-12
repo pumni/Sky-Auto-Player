@@ -89,6 +89,7 @@ function initialSettings(): Settings {
     playback_defaults: {
       hold_frames: 1,
       timing_margin_us: 800,
+      down_late_grace_us: 500,
       tempo_scale: 1,
       fps: 60,
       dry_run: false,
@@ -159,7 +160,7 @@ export function createMockBridge(): DesktopBridge {
         timing_margin_us: config.timing_margin_us,
         min_hold_us: frameBaseHoldUs + config.timing_margin_us,
         min_release_gap_us: frameUs + config.timing_margin_us,
-        down_late_grace_us: 500,
+        down_late_grace_us: config.down_late_grace_us,
         timing_margin_recommendation: settings.timing_margin_recommendation,
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
@@ -192,11 +193,15 @@ export function createMockBridge(): DesktopBridge {
     });
   };
   const emitCalibrationFinished = (operationId: string, outcome: 'succeeded' | 'cancelled') => {
+    const recommendedTimingMarginUs =
+      outcome === 'succeeded'
+        ? Math.ceil((settings.playback_defaults.down_late_grace_us + 300) / 100) * 100
+        : null;
     if (outcome === 'succeeded') {
       settings = {
         ...settings,
         timing_margin_recommendation: {
-          recommended_timing_margin_us: 900,
+          recommended_timing_margin_us: recommendedTimingMarginUs!,
           qualified: true,
           source: 'qualified_calibration',
         },
@@ -209,7 +214,7 @@ export function createMockBridge(): DesktopBridge {
         operation_id: operationId,
         outcome,
         status: outcome === 'succeeded' ? 'ready' : 'cancelled',
-        recommended_timing_margin_us: outcome === 'succeeded' ? 900 : null,
+        recommended_timing_margin_us: recommendedTimingMarginUs,
         recommendation_qualified: outcome === 'succeeded',
         sample_count: outcome === 'succeeded' ? 24 : 0,
         source: outcome === 'succeeded' ? 'qualified_calibration' : 'unavailable',
@@ -275,6 +280,9 @@ export function createMockBridge(): DesktopBridge {
           timing_margin_min_us: 0,
           timing_margin_max_us: 3_000,
           timing_margin_step_us: 100,
+          down_late_grace_min_us: 0,
+          down_late_grace_max_us: 5_000,
+          down_late_grace_step_us: 100,
         },
         theme: settings.theme,
         telemetry_enabled: settings.telemetry_enabled,
@@ -443,6 +451,9 @@ export function createMockBridge(): DesktopBridge {
                 ...(playback.timingMarginUs === undefined
                   ? {}
                   : { timing_margin_us: playback.timingMarginUs }),
+                ...(playback.downLateGraceUs === undefined
+                  ? {}
+                  : { down_late_grace_us: playback.downLateGraceUs }),
                 ...(playback.tempoScale === undefined ? {} : { tempo_scale: playback.tempoScale }),
                 ...(playback.fps === undefined ? {} : { fps: playback.fps }),
               },
@@ -462,8 +473,18 @@ export function createMockBridge(): DesktopBridge {
                   ? {}
                   : { skip_version: patch.updatePreferences.skipVersion }),
               },
-            }),
+        }),
       };
+      if (playback?.downLateGraceUs !== undefined) {
+        settings = {
+          ...settings,
+          timing_margin_recommendation: {
+            ...settings.timing_margin_recommendation,
+            recommended_timing_margin_us:
+              Math.ceil((playback.downLateGraceUs + 300) / 100) * 100,
+          },
+        };
+      }
       return settings;
     },
     async checkForUpdate(): Promise<UpdateCheck> {
@@ -713,6 +734,33 @@ export function createMockBridge(): DesktopBridge {
         diagnosticsTimer = setInterval(emitDiagnostics, 100);
       }
       return { enabled: diagnosticsEnabled };
+    },
+    async exportSenderTrace(): Promise<string> {
+      return JSON.stringify({
+        export_schema_version: 1,
+        session_id: 'a'.repeat(32),
+        song_id: 'fixture-song',
+        plan_fingerprint: 'b'.repeat(64),
+        timing_policy: {
+          fps: 60,
+          frame_period_us: 16_667,
+          frame_base_hold_us: 16_667,
+          timing_margin_us: 800,
+          target_hold_us: 17_467,
+          release_gap_us: 17_467,
+          late_down_tolerance_us: 500,
+        },
+        telemetry: {
+          schema_version: 12,
+          qpc_frequency_hz: 10_000_000,
+          records: [],
+          attempted: 0,
+          accepted: 0,
+          dropped: 0,
+          observer_queue_dropped: 0,
+          truncated: false,
+        },
+      });
     },
     async startCalibration(request: CalibrationStart): Promise<CalibrationStartAck> {
       if (activeSession) throw new Error('calibration conflicts with active playback');

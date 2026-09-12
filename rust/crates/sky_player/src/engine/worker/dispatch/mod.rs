@@ -16,6 +16,7 @@ mod authored;
 pub(crate) mod hold_forensics;
 pub(crate) mod observation;
 pub(crate) mod observer;
+mod observer_trace;
 mod observer_wake;
 mod recovery;
 pub(crate) mod timing;

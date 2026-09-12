@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Bootstrap, SettingsPatch, ThemeId } from '../../bridge/DesktopBridge';
 import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
+import { LateDownToleranceControl } from './LateDownToleranceControl';
 import { TimingMarginControl } from './TimingMarginControl';
 
 interface SettingsPanelProps {
@@ -182,8 +183,8 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                       <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
                     </div>
                     <div>
-                      <dt>Down late cutoff</dt>
-                      <dd>500 µs</dd>
+                      <dt>Late Down tolerance</dt>
+                      <dd>{defaults.down_late_grace_us} µs</dd>
                     </div>
                   </dl>
                   <p className="settings-note">
@@ -285,7 +286,17 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                     Native timing, input and security policy remain owned by the local Rust runtime.
                   </p>
                   <div className="settings-subsection">
-                    <h3>Native timing</h3>
+                    <h3>Advanced timing</h3>
+                    <LateDownToleranceControl
+                      value={defaults.down_late_grace_us}
+                      options={bootstrap.option_sets}
+                      onChange={(value) =>
+                        patchSettings({ playbackDefaults: { downLateGraceUs: value } }).then(
+                          (authoritative) =>
+                            authoritative?.playback_defaults.down_late_grace_us ?? null,
+                        )
+                      }
+                    />
                     <p className="settings-note">
                       Run a safe, testable timing calibration for this machine.
                     </p>

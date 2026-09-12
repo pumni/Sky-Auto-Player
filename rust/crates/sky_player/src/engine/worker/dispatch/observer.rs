@@ -1,7 +1,6 @@
 use super::super::super::{
-    DurationTicks, QpcClock, RtTraceRecord, RuntimeDispatchCoordinator, SharedMetrics,
-    TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_UP, TelemetryCollector, TimelineTicks,
-    TraceContext, TraceDelivery, TraceTiming, trace_outcome_code, try_publish_metrics,
+    DurationTicks, QpcClock, RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector,
+    TimelineTicks, try_publish_metrics,
 };
 use super::super::health::build_dispatch_budget;
 use super::super::wait::WaitObservation;
@@ -13,11 +12,10 @@ use super::super::{
 use super::authored::resolve_slo_terminal_step;
 pub(crate) use super::hold_forensics::HoldForensics;
 use super::observation::{
-    BlockedUnfocusedObservation, DispatchObservation, DownObservation, DownTraceObservation,
-    OBSERVATION_QUEUE_CAPACITY, PrecisionHandoffEvidence, StaleMetadataObservation, UpObservation,
-    down_effective_ticks, down_observer_evidence, record_down_recovery_metrics,
-    record_down_send_telemetry, record_release_telemetry, up_dispatch_evidence,
-    up_transport_counts,
+    DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
+    PrecisionHandoffEvidence, StaleMetadataObservation, UpObservation, down_effective_ticks,
+    down_observer_evidence, record_down_recovery_metrics, record_down_send_telemetry,
+    record_release_telemetry, up_dispatch_evidence, up_transport_counts,
 };
 use super::observer_wake::take_deadline_wake_qpc;
 use super::timing::{DownSendTiming, is_clean_dispatch_observation};
@@ -152,91 +150,6 @@ pub(crate) fn dispatch_stale_packet(
         );
     }
     DispatchStep::Dispatched
-}
-fn drain_stale_metadata_observation(
-    observation: &StaleMetadataObservation,
-    telemetry: &mut TelemetryCollector,
-) -> Result<(), DispatchStep> {
-    if let Err(error) = telemetry.try_push(|| {
-        RtTraceRecord::dispatched(
-            TraceContext {
-                event_index: observation.source_action_index,
-                kind: TRACE_KIND_UP,
-                outcome: trace_outcome_code("suppressed_stale_up"),
-                polyphony: observation.suppressed_intent_count,
-                flags: TRACE_FLAG_ANOMALY,
-                win32_error: 0,
-            },
-            TraceTiming {
-                authored_ticks: observation.effective_scheduled_ticks,
-                effective_deadline_ticks: observation.effective_scheduled_ticks,
-                wake_ticks: observation.effective_now_ticks,
-                final_policy_ticks: None,
-                pre_call_ticks: None,
-                sendinput_completion_ticks: None,
-                completion_residual_us: 0,
-                core_post_send_duration_us: 0,
-                post_send_metrics_available: false,
-                dispatch_start_error_ticks: 0,
-                completion_error_ticks: 0,
-                authored_completion_error_ticks: 0,
-            },
-            TraceDelivery {
-                requested: 0,
-                sent: 0,
-                skipped: 0,
-                send_attempts: 0,
-            },
-        )
-    }) {
-        return Err(DispatchStep::Terminate(format!(
-            "native telemetry record overflow: {error}"
-        )));
-    }
-    Ok(())
-}
-
-fn drain_blocked_unfocused_observation(
-    observation: &BlockedUnfocusedObservation,
-    telemetry: &mut TelemetryCollector,
-) -> Result<(), DispatchStep> {
-    if let Err(error) = telemetry.try_push(|| {
-        RtTraceRecord::dispatched(
-            TraceContext {
-                event_index: observation.event_index,
-                kind: TRACE_KIND_DOWN,
-                outcome: trace_outcome_code("blocked_unfocused"),
-                polyphony: observation.polyphony,
-                flags: TRACE_FLAG_ANOMALY,
-                win32_error: 0,
-            },
-            TraceTiming {
-                authored_ticks: observation.authored_ticks,
-                effective_deadline_ticks: observation.effective_deadline_ticks,
-                wake_ticks: observation.effective_now_ticks,
-                final_policy_ticks: None,
-                pre_call_ticks: None,
-                sendinput_completion_ticks: None,
-                completion_residual_us: 0,
-                core_post_send_duration_us: 0,
-                post_send_metrics_available: false,
-                dispatch_start_error_ticks: 0,
-                completion_error_ticks: 0,
-                authored_completion_error_ticks: 0,
-            },
-            TraceDelivery {
-                requested: 0,
-                sent: 0,
-                skipped: 0,
-                send_attempts: 0,
-            },
-        )
-    }) {
-        return Err(DispatchStep::Terminate(format!(
-            "native telemetry record overflow: {error}"
-        )));
-    }
-    Ok(())
 }
 #[derive(Clone, Debug)]
 pub struct PendingObservationQueue {
@@ -832,6 +745,9 @@ pub(crate) fn drain_one_observer(
             timing,
             hold_forensics,
         )?,
+        DispatchObservation::DownMiss(miss) => {
+            super::observer_trace::drain_down_miss(miss, telemetry)?;
+        }
         DispatchObservation::Up(up) => drain_up_send_outcome(
             up,
             health,
@@ -845,10 +761,10 @@ pub(crate) fn drain_one_observer(
             super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
         }
         DispatchObservation::StaleMetadata(stale) => {
-            drain_stale_metadata_observation(stale, telemetry)?;
+            super::observer_trace::drain_stale_metadata_observation(stale, telemetry)?;
         }
         DispatchObservation::BlockedUnfocused(blocked) => {
-            drain_blocked_unfocused_observation(blocked, telemetry)?;
+            super::observer_trace::drain_blocked_unfocused_observation(blocked, telemetry)?;
         }
         DispatchObservation::Lifecycle(lifecycle) => {
             hold_forensics.observe_lifecycle(*lifecycle);
@@ -888,6 +804,7 @@ pub(crate) fn drain_one_observer(
         observation,
         DispatchObservation::Wait(_)
             | DispatchObservation::StaleMetadata(_)
+            | DispatchObservation::DownMiss(_)
             | DispatchObservation::BlockedUnfocused(_)
     ) {
         try_publish_metrics(local_metrics, metrics, qpc_clock, now_us, false);
