@@ -18,7 +18,7 @@ pub const KEY_NAMES: [&str; 15] = [
 ];
 pub const VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240];
 pub const HOLD_FRAMES: [f64; 3] = [1.0, 1.25, 1.5];
-pub const DOWN_LATE_GRACE_US: u64 = 500;
+pub const DOWN_LATE_GRACE_US: u64 = crate::settings::DEFAULT_DOWN_LATE_GRACE_US;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
@@ -796,7 +796,7 @@ mod tests {
         )
         .expect("empty songs produce an empty schedule");
         assert!(schedule.actions.is_empty());
-        assert_eq!(schedule.source_duration_us, 17_467);
+        assert_eq!(schedule.source_duration_us, 17_167);
     }
 
     #[test]
