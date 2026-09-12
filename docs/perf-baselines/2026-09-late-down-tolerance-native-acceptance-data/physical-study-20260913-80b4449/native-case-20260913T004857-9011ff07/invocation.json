@@ -1,0 +1,22 @@
+﻿{
+    "run_id":  "native-case-20260913T004857-9011ff07",
+    "source_revision":  "80b444908a6be2553f6ddbb9e15f388962cbb78c",
+    "source_tree_clean":  true,
+    "scenario":  "release-gap-stress",
+    "timing_margin_us":  800,
+    "late_down_tolerance_us":  500,
+    "started_utc":  "2026-09-12T17:48:59.4791539+00:00",
+    "ended_utc":  "2026-09-12T17:49:17.6440601+00:00",
+    "exit_code":  1,
+    "status":  "FAIL",
+    "reason":  "observed completion hold or release gap fell below the fixed one-frame floor",
+    "event_log_id":  "246c6c3695aa457d8eb1036433d6c8c3",
+    "cursor_sequence_before_arm":  2,
+    "cursor_offset_before_arm":  845,
+    "first_authorized_sequence":  3,
+    "last_authorized_sequence":  1028,
+    "expected_event_count":  1026,
+    "observed_event_count":  1026,
+    "report_window_match":  true,
+    "report_path":  "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-native-cases\\native-case-20260913T004857-9011ff07\\rt-native-acceptance.jsonl"
+}

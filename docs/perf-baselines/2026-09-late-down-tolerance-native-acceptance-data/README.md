@@ -166,6 +166,26 @@ cursor-bounded event window, invocation metadata, runner copy, and SHA-256
 checksums. These tests target only the test HWND and make no claim about Sky
 game consumption.
 
+## Cursor-bounded physical study (2026-09-13)
+
+The updated harness and runner completed all four cutoff cases on clean source
+head `f8c0921a01303274c862d126187874874ed4ffcc`, then the three sender-margin
+stress cases on clean runner head
+`80b444908a6be2553f6ddbb9e15f388962cbb78c`. One fresh receive-only sink was
+used per run. All seven raw event windows matched their report, cursor,
+event-log ID, and expected event count. Cutoffs 500, 1,000, and 5,000 µs passed
+their short four-event cases; 2,000 µs failed because one of only two
+completion-hold samples fell below one frame. That sweep is too sparse to
+compare cutoff reliability.
+
+At fixed 500 µs cutoff, the 512-gap stress failed at margins 800 µs (4 hold and
+14 gap floor violations) and 1,200 µs (0 hold and 2 gap violations). At 1,500
+µs it passed with 513 hold and 512 gap samples and no floor violations. This is
+one controlled sender workload, not a basis for silently changing the product
+default and not evidence of Sky game consumption. Full metrics and raw evidence
+are in
+[`physical-study-20260913-80b4449/`](physical-study-20260913-80b4449/).
+
 ## Exact-head Windows regression follow-up
 
 The official Windows runner was rebuilt and run on the clean exact source
