@@ -10,7 +10,7 @@ Implementation / investigation handoff for Codex on draft PR #233.
 - Handoff base/head before this document: `3d9cf56fd2b3f4672b1036bfda19573ccbaabcd7`
 - Predecessor scheduler PR: #232, merged into `main`
 - Current Timing Margin implementation/evidence in #233 remains valid sender-side work.
-- Do not mark PR ready and do not merge as part of this handoff.
+- Mark ready and merge only after the final defaults/docs commit passes exact-head CI.
 
 This handoff is a follow-up to real-game testing. It does **not** declare the
 existing Timing Margin architecture wrong. It changes the investigation
@@ -81,7 +81,7 @@ sender-side floors at >=800 us in that run.
 
 Therefore:
 
-- keep Timing Margin default at **800 us**;
+- use Timing Margin default **500 us**;
 - keep its current range/step unless a later product decision changes it;
 - do not silently raise it because of the game symptom;
 - do not remove current calibration/recommendation evidence;
@@ -120,7 +120,7 @@ Release gap = one_frame       + timing_margin_us
 
 2. Late Down tolerance is independent from both equations.
 3. Late Down tolerance becomes a user-owned persisted setting.
-4. Initial default remains **500 us**.
+4. Final accepted default is **2000 us**.
 5. User-adjustable range: **0..=5000 us**.
 6. Normal UI step: **100 us**.
 7. `0 us` is valid but should be described as strict/diagnostic behavior.
@@ -137,7 +137,7 @@ Release gap = one_frame       + timing_margin_us
 15. Do not change production input batching, scan-code encoding, dwExtraInfo,
     chord shape, or mixed packet semantics in the main path without new
     evidence.
-16. PR #233 remains draft until independent acceptance.
+16. Independent acceptance is complete; merge is gated only by final exact-head CI.
 
 ---
 
@@ -328,7 +328,7 @@ conventions.
 In `sky_app_core::settings` add:
 
 ```rust
-pub const DEFAULT_DOWN_LATE_GRACE_US: u64 = 500;
+pub const DEFAULT_DOWN_LATE_GRACE_US: u64 = 2_000;
 pub const MIN_DOWN_LATE_GRACE_US: u64 = 0;
 pub const MAX_DOWN_LATE_GRACE_US: u64 = 5_000;
 pub const DOWN_LATE_GRACE_STEP_US: u64 = 100;
@@ -364,9 +364,9 @@ Explicit invalid API patches must be rejected atomically.
 Migration v4 -> v5:
 
 ```text
-missing field -> 500
+missing field -> 2000
 valid existing field (if any compatible legacy source exists) -> preserve
-invalid persisted field -> canonical 500 before writing v5
+invalid persisted field -> canonical 2000 before writing v5
 ```
 
 Do not infer the user's value from calibration.
@@ -442,7 +442,7 @@ Example:
 Advanced timing
 
 Late Down tolerance
-[ - ]   500 us   [ + ]
+[ - ]   2000 us   [ + ]
 
 A Down later than this is dropped instead of being sent late.
 ```
@@ -489,7 +489,7 @@ Example:
 Late Down tolerance       5000 us
 Transport reserve          300 us
 Sender recommendation     5300 us
-Current margin             800 us
+Current margin             500 us
 Maximum configurable      3000 us
 ```
 
@@ -798,14 +798,14 @@ to establish whether the position-specific tendency is stable.
 
 ## Settings
 
-- default = 500;
+- default = 2000;
 - 0 accepted;
 - 500 accepted;
 - 1000 accepted;
 - 5000 accepted;
 - 1/499/501/5001 rejected as appropriate;
-- v4 missing field migrates to 500;
-- invalid persisted value canonicalizes to 500 in memory and raw v5 file;
+- v4 missing field migrates to 2000;
+- invalid persisted value canonicalizes to 2000 in memory and raw v5 file;
 - patch remains atomic.
 
 ## Timing independence
