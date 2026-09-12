@@ -122,9 +122,11 @@ deadline can satisfy the probe zero-event predicate; truncation, sequence
 corruption, or binding loss is INCONCLUSIVE. These are acceptance-observer
 bounds and do not change production scheduler or timing policy.
 
-The acceptance profile materializes a default `800 µs` user Timing Margin at
-60 FPS: `frame_us = 16,667`, so both the 1-frame minimum hold and minimum
-release gap are `17,467 µs`; focus restore grace remains `100,000 µs`.
+The current application default is a `500 µs` user Timing Margin at 60 FPS:
+`frame_us = 16,667`, so both the 1-frame minimum hold and minimum release gap
+are `17,167 µs`; focus restore grace remains `100,000 µs`. Historical
+acceptance runs retain the exact margin/cutoff values recorded in their
+artifacts and are not rewritten when product defaults change.
 Controlled A/B runs may pass `--timing-margin-us 0..3000` in `100 µs` steps;
 the `timing-margin-sweep` scenario authors its Hold and Release Gap targets
 from that exact value and records the packet timestamps in every report.
@@ -334,7 +336,7 @@ frame_base_hold_us = ceil(hold_frames * frame_us)
 timing_margin_us = persisted_user_value
 effective_min_hold_us = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
-down_late_cutoff_us = 500
+down_late_cutoff_us = 2000
 ```
 
 Native admission checked tick arithmetic enforces before worker start:
@@ -356,8 +358,8 @@ deadline/overdue policy handles a late boundary; recovery-only pending
 releases are stored in a fixed `[Option; 15]` per-key table with mask and
 generation ownership. There is no transport retry state.
 
-The session-fixed `down_late_grace_us` is the independent sender cutoff,
-currently `500 µs`, converted once to QPC ticks at admission. It bounds
+The session-fixed `down_late_grace_us` is the independent user-owned sender
+cutoff, defaulting to `2,000 µs`, converted once to QPC ticks at admission. It bounds
 authorized Down lateness only. It is never derived from Timing Margin,
 calibration, or dispatch lead, and never changes an authored target. The
 trusted sender repeats the same cutoff check immediately before `SendInput`,
