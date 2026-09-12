@@ -2633,6 +2633,7 @@ struct NativePlaybackService {
 }
 
 const DIAGNOSTICS_INTERVAL: Duration = Duration::from_millis(100);
+const SUPERVISOR_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Default)]
 struct DiagnosticsPublicationState {
@@ -2745,6 +2746,8 @@ struct NativeActivePlayback {
     stop_requested: AtomicBool,
     skip_requested: AtomicBool,
     done: AtomicBool,
+    heartbeat_stop: AtomicBool,
+    heartbeat_thread: Mutex<Option<thread::JoinHandle<()>>>,
     sequence: AtomicU64,
 }
 
@@ -3322,6 +3325,8 @@ impl NativePlaybackService {
                         stop_requested: AtomicBool::new(false),
                         skip_requested: AtomicBool::new(false),
                         done: AtomicBool::new(true),
+                        heartbeat_stop: AtomicBool::new(true),
+                        heartbeat_thread: Mutex::new(None),
                         sequence: AtomicU64::new(0),
                     });
                     let _ = publish_playback_state(
@@ -3362,6 +3367,8 @@ impl NativePlaybackService {
             stop_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
             done: AtomicBool::new(false),
+            heartbeat_stop: AtomicBool::new(false),
+            heartbeat_thread: Mutex::new(None),
             sequence: AtomicU64::new(0),
         });
         let prepared_index = prepared
@@ -3392,12 +3399,34 @@ impl NativePlaybackService {
             }
             return Err(error);
         }
+        if let Err(error) = spawn_supervisor_heartbeat(&active) {
+            stop_supervisor_heartbeat(&active);
+            if let Some(player) = &active.player {
+                let _ = player.panic_release();
+                let _ = player.quit();
+                let _ = player.join(Duration::from_secs(5));
+            }
+            if let Ok(mut slot) = self.active.lock()
+                && slot
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &active))
+            {
+                *slot = None;
+            }
+            if let Ok(mut prepared) = self.prepared.lock() {
+                prepared.push_back((request.prepared_id, record));
+            }
+            return Err(format!(
+                "failed to start native playback heartbeat: {error}"
+            ));
+        }
         let service = Arc::new(self.clone_handle());
         let active_for_thread = active.clone();
         let spawn_result = thread::Builder::new()
             .name("sky-native-playback-supervisor".into())
             .spawn(move || service.monitor(active_for_thread, events));
         if let Err(error) = spawn_result {
+            stop_supervisor_heartbeat(&active);
             if let Some(player) = &active.player {
                 let _ = player.panic_release();
                 let _ = player.quit();
@@ -3449,6 +3478,15 @@ impl NativePlaybackService {
             settings.allow_title_fallback,
         )
         .ok_or_else(|| "no admissible visible Sky window was found".to_string())?;
+        if matches!(
+            sky_dispatch_win32::focus::target_integrity_compatibility(target),
+            sky_dispatch_win32::focus::TargetIntegrityCompatibility::Mismatch
+        ) {
+            return Err(
+                "target Sky process has higher integrity than Sky Auto Player; Windows UIPI can block SendInput"
+                    .to_string(),
+            );
+        }
         if !sky_dispatch_win32::focus::focus_window_and_verify(target, Duration::from_millis(100)) {
             return Err("validated Sky window could not be focused".into());
         }
@@ -3507,12 +3545,10 @@ impl NativePlaybackService {
         // terminal and startup-failure paths.
         let _activity_lease = active.activity_lease.as_ref();
         let mut last_snapshot = Instant::now();
-        let mut last_heartbeat = Instant::now()
-            .checked_sub(Duration::from_millis(200))
-            .unwrap_or_else(Instant::now);
         let mut last_event_state = PlaybackEventState::Starting;
         loop {
             if active.stop_requested.load(Ordering::Acquire) {
+                stop_supervisor_heartbeat(&active);
                 if let Some(player) = &active.player {
                     let _ = player.quit();
                     let _ = player.join(Duration::from_secs(5));
@@ -3544,10 +3580,6 @@ impl NativePlaybackService {
                 player.set_focus_hint(focused);
             }
             let (elapsed, pre_roll_remaining, status) = if let Some(player) = &active.player {
-                if last_heartbeat.elapsed() >= Duration::from_millis(200) {
-                    let _ = player.heartbeat();
-                    last_heartbeat = Instant::now();
-                }
                 let state = player.poll_state();
                 (state.elapsed_us, state.pre_roll_remaining_us, state.status)
             } else {
@@ -3628,6 +3660,7 @@ impl NativePlaybackService {
             }
             thread::sleep(Duration::from_millis(20));
         }
+        stop_supervisor_heartbeat(&active);
         if let Ok(mut slot) = self.active.lock()
             && slot
                 .as_ref()
@@ -3929,6 +3962,63 @@ impl NativePlaybackServiceHandle {
     }
 }
 
+fn supervisor_heartbeat_loop<F>(
+    stop: &AtomicBool,
+    done: &AtomicBool,
+    interval: Duration,
+    mut heartbeat: F,
+) where
+    F: FnMut(),
+{
+    while !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
+        heartbeat();
+        thread::sleep(interval);
+    }
+}
+
+fn spawn_supervisor_heartbeat(active: &Arc<NativeActivePlayback>) -> Result<(), String> {
+    let Some(player) = active.player.clone() else {
+        return Ok(());
+    };
+    let heartbeat_active = Arc::clone(active);
+    let handle = thread::Builder::new()
+        .name("sky-native-playback-heartbeat".into())
+        .spawn(move || {
+            supervisor_heartbeat_loop(
+                &heartbeat_active.heartbeat_stop,
+                &heartbeat_active.done,
+                SUPERVISOR_HEARTBEAT_INTERVAL,
+                || {
+                    let _ = player.heartbeat();
+                },
+            );
+        })
+        .map_err(|error| format!("could not spawn supervisor heartbeat: {error}"))?;
+    match active.heartbeat_thread.lock() {
+        Ok(mut slot) => {
+            *slot = Some(handle);
+            Ok(())
+        }
+        Err(_) => {
+            active.heartbeat_stop.store(true, Ordering::Release);
+            let _ = handle.join();
+            Err("supervisor heartbeat state lock poisoned".into())
+        }
+    }
+}
+
+fn stop_supervisor_heartbeat(active: &NativeActivePlayback) {
+    active.heartbeat_stop.store(true, Ordering::Release);
+    let handle = active
+        .heartbeat_thread
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    if let Some(handle) = handle {
+        let _ = handle.join();
+    }
+}
+
 fn playback_event_state(status: EnginePollStatus) -> PlaybackEventState {
     match status {
         EnginePollStatus::Ready | EnginePollStatus::Preroll => PlaybackEventState::Starting,
@@ -4006,21 +4096,41 @@ fn publish_diagnostics_snapshot_for_active(
             pre_call_late_2ms: sample.pre_call_late_2ms,
             pre_call_late_5ms: sample.pre_call_late_5ms,
             pre_call_late_10ms: sample.pre_call_late_10ms,
+            down_late_grace_us: sample.down_late_grace_us,
+            pre_call_lt_250us: sample.pre_call_lt_250us,
+            pre_call_250_500us: sample.pre_call_250_500us,
+            pre_call_500_750us: sample.pre_call_500_750us,
+            pre_call_750_1000us: sample.pre_call_750_1000us,
+            pre_call_1000_1500us: sample.pre_call_1000_1500us,
+            pre_call_1500_2000us: sample.pre_call_1500_2000us,
+            pre_call_ge_2000us: sample.pre_call_ge_2000us,
             active_keys: sample.active_keys,
             stuck_keys: sample.stuck_keys,
             keys_dropped: sample.keys_dropped,
             chord_split_events: sample.chord_split_events,
+            missed_down_boundaries: sample.missed_down_boundaries,
+            missed_down_keys: sample.missed_down_keys,
+            missed_backlog_boundaries: sample.missed_backlog_boundaries,
+            missed_hard_late_boundaries: sample.missed_hard_late_boundaries,
+            final_gate_cutoff_misses: sample.final_gate_cutoff_misses,
+            final_gate_control_rejections: sample.final_gate_control_rejections,
+            final_gate_target_changes: sample.final_gate_target_changes,
+            final_gate_focus_losses: sample.final_gate_focus_losses,
+            final_gate_lease_expirations: sample.final_gate_lease_expirations,
+            sendinput_partial_events: sample.sendinput_partial_events,
+            sendinput_zero_progress_failures: sample.sendinput_zero_progress_failures,
             backend_status: sample.backend_status,
             release_max_us: sample.release_max_us,
             release_late_2ms: sample.release_late_2ms,
             session_id: Some(session_id),
+            last_error: sample.last_error.clone(),
         };
         events
             .lock()
             .map_err(|_| "native event hub lock poisoned".to_string())?
             .publish(UiEvent::DiagnosticsSnapshot {
                 v: crate::DESKTOP_PROTOCOL_VERSION,
-                payload,
+                payload: Box::new(payload),
             })
     })?;
     Ok(())
@@ -4037,13 +4147,33 @@ struct NativeDiagnosticsSample {
     pre_call_late_2ms: u64,
     pre_call_late_5ms: u64,
     pre_call_late_10ms: u64,
+    down_late_grace_us: u64,
+    pre_call_lt_250us: u64,
+    pre_call_250_500us: u64,
+    pre_call_500_750us: u64,
+    pre_call_750_1000us: u64,
+    pre_call_1000_1500us: u64,
+    pre_call_1500_2000us: u64,
+    pre_call_ge_2000us: u64,
     active_keys: u64,
     stuck_keys: u64,
     keys_dropped: u64,
     chord_split_events: u64,
+    missed_down_boundaries: u64,
+    missed_down_keys: u64,
+    missed_backlog_boundaries: u64,
+    missed_hard_late_boundaries: u64,
+    final_gate_cutoff_misses: u64,
+    final_gate_control_rejections: u64,
+    final_gate_target_changes: u64,
+    final_gate_focus_losses: u64,
+    final_gate_lease_expirations: u64,
+    sendinput_partial_events: u64,
+    sendinput_zero_progress_failures: u64,
     backend_status: DiagnosticsBackendStatus,
     release_max_us: Option<u64>,
     release_late_2ms: Option<u64>,
+    last_error: Option<String>,
 }
 
 impl NativeDiagnosticsSample {
@@ -4059,19 +4189,40 @@ impl NativeDiagnosticsSample {
             pre_call_late_2ms: 0,
             pre_call_late_5ms: 0,
             pre_call_late_10ms: 0,
+            down_late_grace_us: 0,
+            pre_call_lt_250us: 0,
+            pre_call_250_500us: 0,
+            pre_call_500_750us: 0,
+            pre_call_750_1000us: 0,
+            pre_call_1000_1500us: 0,
+            pre_call_1500_2000us: 0,
+            pre_call_ge_2000us: 0,
             active_keys: 0,
             stuck_keys: 0,
             keys_dropped: 0,
             chord_split_events: 0,
+            missed_down_boundaries: 0,
+            missed_down_keys: 0,
+            missed_backlog_boundaries: 0,
+            missed_hard_late_boundaries: 0,
+            final_gate_cutoff_misses: 0,
+            final_gate_control_rejections: 0,
+            final_gate_target_changes: 0,
+            final_gate_focus_losses: 0,
+            final_gate_lease_expirations: 0,
+            sendinput_partial_events: 0,
+            sendinput_zero_progress_failures: 0,
             backend_status: DiagnosticsBackendStatus::Unavailable,
             release_max_us: None,
             release_late_2ms: None,
+            last_error: None,
         }
     }
 
     fn from_player(player: &NativeDispatchSession) -> Self {
         let snapshot = player.snapshot_lite();
         let observer_metrics_available = snapshot.recent_latency_samples_available;
+        let has_last_error = snapshot.last_error.is_some();
         Self {
             max_lateness_us: observer_metrics_available.then_some(snapshot.max_lateness_us),
             recent_latencies_us: snapshot.recent_latencies_us,
@@ -4083,13 +4234,33 @@ impl NativeDiagnosticsSample {
             pre_call_late_2ms: snapshot.pre_call_late_2ms,
             pre_call_late_5ms: snapshot.pre_call_late_5ms,
             pre_call_late_10ms: snapshot.pre_call_late_10ms,
+            down_late_grace_us: player.down_late_grace_us(),
+            pre_call_lt_250us: snapshot.pre_call_lt_250us,
+            pre_call_250_500us: snapshot.pre_call_250_500us,
+            pre_call_500_750us: snapshot.pre_call_500_750us,
+            pre_call_750_1000us: snapshot.pre_call_750_1000us,
+            pre_call_1000_1500us: snapshot.pre_call_1000_1500us,
+            pre_call_1500_2000us: snapshot.pre_call_1500_2000us,
+            pre_call_ge_2000us: snapshot.pre_call_ge_2000us,
             active_keys: snapshot.active_count as u64,
             stuck_keys: snapshot.failed_release_count as u64,
             keys_dropped: snapshot.keys_dropped,
             chord_split_events: snapshot.chord_split_events,
+            missed_down_boundaries: snapshot.missed_down_boundaries,
+            missed_down_keys: snapshot.missed_down_keys,
+            missed_backlog_boundaries: snapshot.missed_backlog_boundaries,
+            missed_hard_late_boundaries: snapshot.missed_hard_late_boundaries,
+            final_gate_cutoff_misses: snapshot.final_gate_cutoff_misses,
+            final_gate_control_rejections: snapshot.final_gate_control_rejections,
+            final_gate_target_changes: snapshot.final_gate_target_changes,
+            final_gate_focus_losses: snapshot.final_gate_focus_losses,
+            final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
+            sendinput_partial_events: snapshot.sendinput_partial_events,
+            sendinput_zero_progress_failures: snapshot.sendinput_zero_progress_failures,
+            last_error: snapshot.last_error,
             backend_status: diagnostics_backend_status(
                 snapshot.has_terminal_error,
-                snapshot.last_error.is_some(),
+                has_last_error,
                 snapshot.failed_release_count,
                 snapshot.keys_dropped,
                 snapshot.chord_split_events,
@@ -4122,6 +4293,7 @@ fn diagnostics_backend_status(
 
 fn cleanup_failed_event_delivery(active: &NativeActivePlayback) {
     active.stop_requested.store(true, Ordering::Release);
+    stop_supervisor_heartbeat(active);
     let _ = set_playback_state(active, PlaybackSessionState::Failed);
     if let Some(player) = &active.player {
         let _ = player.panic_release();
@@ -4737,7 +4909,7 @@ mod tests {
         publish_diagnostics_snapshot_for_active, publish_playback_state,
         publish_stopped_completion, publish_terminal_poll_result, remove_oldest_snapshot,
         resolve_install_root, retain_prepared_capacity, safe_calibration_evidence,
-        settings_fingerprint, validate_playback_start_request,
+        settings_fingerprint, supervisor_heartbeat_loop, validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState};
@@ -4750,8 +4922,9 @@ mod tests {
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
     use sky_native_adapters::{AppPaths, load_calibration_resolution};
     use std::fs;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Barrier, Condvar, Mutex};
+    use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn active_for_control(
@@ -4791,6 +4964,8 @@ mod tests {
             stop_requested: std::sync::atomic::AtomicBool::new(false),
             skip_requested: std::sync::atomic::AtomicBool::new(false),
             done: std::sync::atomic::AtomicBool::new(false),
+            heartbeat_stop: std::sync::atomic::AtomicBool::new(true),
+            heartbeat_thread: Mutex::new(None),
             sequence: std::sync::atomic::AtomicU64::new(0),
         })
     }
@@ -5796,12 +5971,32 @@ mod tests {
         assert_eq!(payload.pre_call_late_2ms, 0);
         assert_eq!(payload.pre_call_late_5ms, 0);
         assert_eq!(payload.pre_call_late_10ms, 0);
+        assert_eq!(payload.down_late_grace_us, 0);
+        assert_eq!(payload.pre_call_lt_250us, 0);
+        assert_eq!(payload.pre_call_250_500us, 0);
+        assert_eq!(payload.pre_call_500_750us, 0);
+        assert_eq!(payload.pre_call_750_1000us, 0);
+        assert_eq!(payload.pre_call_1000_1500us, 0);
+        assert_eq!(payload.pre_call_1500_2000us, 0);
+        assert_eq!(payload.pre_call_ge_2000us, 0);
         assert_eq!(payload.active_keys, 0);
         assert_eq!(payload.stuck_keys, 0);
         assert_eq!(payload.keys_dropped, 0);
         assert_eq!(payload.chord_split_events, 0);
+        assert_eq!(payload.missed_down_boundaries, 0);
+        assert_eq!(payload.missed_down_keys, 0);
+        assert_eq!(payload.missed_backlog_boundaries, 0);
+        assert_eq!(payload.missed_hard_late_boundaries, 0);
+        assert_eq!(payload.final_gate_cutoff_misses, 0);
+        assert_eq!(payload.final_gate_control_rejections, 0);
+        assert_eq!(payload.final_gate_target_changes, 0);
+        assert_eq!(payload.final_gate_focus_losses, 0);
+        assert_eq!(payload.final_gate_lease_expirations, 0);
+        assert_eq!(payload.sendinput_partial_events, 0);
+        assert_eq!(payload.sendinput_zero_progress_failures, 0);
         assert_eq!(payload.release_max_us, None);
         assert_eq!(payload.release_late_2ms, None);
+        assert_eq!(payload.last_error, None);
         assert_eq!(payload.seq, 1);
     }
 
@@ -6700,5 +6895,43 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn supervisor_heartbeat_progresses_while_ui_publication_is_stalled() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let heartbeats = Arc::new(AtomicU64::new(0));
+        let publication_started = Arc::new(std::sync::Barrier::new(2));
+        let publication_release = Arc::new(std::sync::Barrier::new(2));
+
+        let ui_started = Arc::clone(&publication_started);
+        let ui_release = Arc::clone(&publication_release);
+        let ui = thread::spawn(move || {
+            ui_started.wait();
+            ui_release.wait();
+        });
+        publication_started.wait();
+
+        let heartbeat_stop = Arc::clone(&stop);
+        let heartbeat_done = Arc::clone(&done);
+        let heartbeat_count = Arc::clone(&heartbeats);
+        let heartbeat = thread::spawn(move || {
+            supervisor_heartbeat_loop(
+                &heartbeat_stop,
+                &heartbeat_done,
+                Duration::from_millis(5),
+                || {
+                    heartbeat_count.fetch_add(1, Ordering::Relaxed);
+                },
+            );
+        });
+
+        thread::sleep(Duration::from_millis(25));
+        assert!(heartbeats.load(Ordering::Relaxed) >= 3);
+        publication_release.wait();
+        ui.join().expect("UI publication seam");
+        stop.store(true, Ordering::Release);
+        heartbeat.join().expect("heartbeat seam");
     }
 }

@@ -32,6 +32,28 @@ impl MaterializedTimingPolicy {
         transport_margin_us: u64,
         transport_margin_source: impl Into<String>,
     ) -> Result<Self, SongError> {
+        Self::from_calibration_with_down_late_grace(
+            fps,
+            hold_frames,
+            transport_margin_us,
+            transport_margin_source,
+            DEFAULT_DOWN_LATE_GRACE_US,
+        )
+    }
+
+    /// Materialize a session policy with an explicit Down grace.
+    ///
+    /// This is intentionally an internal/acceptance seam rather than a
+    /// user-facing setting. The grace is folded into both schedule timing
+    /// constraints at the same point that it is stored for native execution,
+    /// so a session cannot validate one value and dispatch with another.
+    pub fn from_calibration_with_down_late_grace(
+        fps: u16,
+        hold_frames: f64,
+        transport_margin_us: u64,
+        transport_margin_source: impl Into<String>,
+        down_late_grace_us: u64,
+    ) -> Result<Self, SongError> {
         let frame_us = crate::song::frame_us(fps)?;
         if !hold_frames.is_finite() || !crate::settings::HOLD_FRAME_OPTIONS.contains(&hold_frames) {
             return Err(SongError::InvalidHold);
@@ -42,14 +64,14 @@ impl MaterializedTimingPolicy {
             frame_us,
             hold_frames,
             frame_base_hold_us,
-            down_late_grace_us: DEFAULT_DOWN_LATE_GRACE_US,
+            down_late_grace_us,
             transport_margin_us,
             transport_margin_source: transport_margin_source.into(),
             min_hold_us: frame_base_hold_us
-                .saturating_add(DEFAULT_DOWN_LATE_GRACE_US)
+                .saturating_add(down_late_grace_us)
                 .saturating_add(transport_margin_us),
             min_release_gap_us: frame_us
-                .saturating_add(DEFAULT_DOWN_LATE_GRACE_US)
+                .saturating_add(down_late_grace_us)
                 .saturating_add(transport_margin_us),
             focus_restore_grace_us: DEFAULT_FOCUS_RESTORE_GRACE_US,
         })
@@ -74,5 +96,23 @@ mod tests {
 
         let cloned = policy.clone();
         assert_eq!(cloned, policy);
+    }
+
+    #[test]
+    fn explicit_grace_recomputes_all_schedule_constraints_for_ab_values() {
+        for (grace_us, expected_min_us) in [(500, 17_467), (750, 17_717), (1_000, 17_967)] {
+            let policy = MaterializedTimingPolicy::from_calibration_with_down_late_grace(
+                60,
+                1.0,
+                300,
+                "acceptance_ab",
+                grace_us,
+            )
+            .expect("valid A/B policy");
+
+            assert_eq!(policy.down_late_grace_us, grace_us);
+            assert_eq!(policy.min_hold_us, expected_min_us);
+            assert_eq!(policy.min_release_gap_us, expected_min_us);
+        }
     }
 }

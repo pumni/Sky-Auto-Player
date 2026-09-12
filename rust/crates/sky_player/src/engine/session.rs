@@ -74,6 +74,7 @@ pub(crate) fn validate_native_schedule_timing_with_release_gap(
 pub struct NativeDispatchSession {
     config: Mutex<Option<AdmittedNativeSessionOptions>>,
     profile: DispatchProfile,
+    down_late_grace_us: u64,
     generation_count: u64,
     shared: Arc<SessionShared>,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -165,13 +166,19 @@ impl NativeDispatchSession {
             options,
             instrument_key_profile,
         };
+        let down_late_grace_us = admitted_options.options.timing.down_late_grace_us;
         Ok(Self {
             profile: admitted_options.options.profile,
+            down_late_grace_us,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
             shared,
             thread_handle: Mutex::new(None),
         })
+    }
+
+    pub fn down_late_grace_us(&self) -> u64 {
+        self.down_late_grace_us
     }
 
     fn live_projection(&self) -> ((u64, bool), u64) {
@@ -605,6 +612,13 @@ impl NativeDispatchSession {
             late_5ms: local.late_5ms,
             late_10ms: local.late_10ms,
             max_sendinput_pre_call_lateness_us: local.max_sendinput_pre_call_lateness_us,
+            pre_call_lt_250us: local.pre_call_lt_250us,
+            pre_call_250_500us: local.pre_call_250_500us,
+            pre_call_500_750us: local.pre_call_500_750us,
+            pre_call_750_1000us: local.pre_call_750_1000us,
+            pre_call_1000_1500us: local.pre_call_1000_1500us,
+            pre_call_1500_2000us: local.pre_call_1500_2000us,
+            pre_call_ge_2000us: local.pre_call_ge_2000us,
             pre_call_late_2ms: local.pre_call_late_2ms,
             pre_call_late_5ms: local.pre_call_late_5ms,
             pre_call_late_10ms: local.pre_call_late_10ms,
@@ -739,6 +753,13 @@ impl NativeDispatchSession {
             late_5ms: local.late_5ms,
             late_10ms: local.late_10ms,
             max_sendinput_pre_call_lateness_us: local.max_sendinput_pre_call_lateness_us,
+            pre_call_lt_250us: local.pre_call_lt_250us,
+            pre_call_250_500us: local.pre_call_250_500us,
+            pre_call_500_750us: local.pre_call_500_750us,
+            pre_call_750_1000us: local.pre_call_750_1000us,
+            pre_call_1000_1500us: local.pre_call_1000_1500us,
+            pre_call_1500_2000us: local.pre_call_1500_2000us,
+            pre_call_ge_2000us: local.pre_call_ge_2000us,
             pre_call_late_2ms: local.pre_call_late_2ms,
             pre_call_late_5ms: local.pre_call_late_5ms,
             pre_call_late_10ms: local.pre_call_late_10ms,

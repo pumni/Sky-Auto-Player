@@ -260,7 +260,7 @@ pub(crate) fn record_lateness(
     local_metrics.recent_latencies.push(lateness_us);
 }
 
-/// Record the only per-send timing evidence retained by the production
+/// Record the fixed per-send timing evidence retained by the production
 /// profile. Diagnostic profiles derive richer histograms and traces on the
 /// deferred observer instead.
 pub(crate) fn record_sendinput_pre_call_lateness(
@@ -275,6 +275,21 @@ pub(crate) fn record_sendinput_pre_call_lateness(
     local_metrics.max_sendinput_pre_call_lateness_ticks = local_metrics
         .max_sendinput_pre_call_lateness_ticks
         .max(lateness_ticks.as_u64());
+    if lateness_ticks < timing.pre_call_250us_ticks {
+        local_metrics.pre_call_lt_250us = local_metrics.pre_call_lt_250us.saturating_add(1);
+    } else if lateness_ticks < timing.pre_call_500us_ticks {
+        local_metrics.pre_call_250_500us = local_metrics.pre_call_250_500us.saturating_add(1);
+    } else if lateness_ticks < timing.pre_call_750us_ticks {
+        local_metrics.pre_call_500_750us = local_metrics.pre_call_500_750us.saturating_add(1);
+    } else if lateness_ticks < timing.pre_call_1000us_ticks {
+        local_metrics.pre_call_750_1000us = local_metrics.pre_call_750_1000us.saturating_add(1);
+    } else if lateness_ticks < timing.pre_call_1500us_ticks {
+        local_metrics.pre_call_1000_1500us = local_metrics.pre_call_1000_1500us.saturating_add(1);
+    } else if lateness_ticks < timing.pre_call_2000us_ticks {
+        local_metrics.pre_call_1500_2000us = local_metrics.pre_call_1500_2000us.saturating_add(1);
+    } else {
+        local_metrics.pre_call_ge_2000us = local_metrics.pre_call_ge_2000us.saturating_add(1);
+    }
     if lateness_ticks >= timing.pre_call_10ms_ticks {
         local_metrics.pre_call_late_10ms = local_metrics.pre_call_late_10ms.saturating_add(1);
     }
@@ -509,6 +524,12 @@ mod tests {
     #[test]
     fn sendinput_pre_call_buckets_compare_ticks_and_keep_public_max_lazy() {
         let mut timing = WorkerTimingState::create_test_timing();
+        timing.pre_call_250us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(4);
+        timing.pre_call_500us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(5);
+        timing.pre_call_750us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(6);
+        timing.pre_call_1000us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(7);
+        timing.pre_call_1500us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(8);
+        timing.pre_call_2000us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(9);
         timing.pre_call_2ms_ticks = sky_dispatch_core::time::DurationTicks::from_raw(3);
         timing.pre_call_5ms_ticks = sky_dispatch_core::time::DurationTicks::from_raw(5);
         timing.pre_call_10ms_ticks = sky_dispatch_core::time::DurationTicks::from_raw(7);
@@ -527,6 +548,13 @@ mod tests {
         assert_eq!(metrics.pre_call_late_2ms, 1);
         assert_eq!(metrics.pre_call_late_5ms, 0);
         assert_eq!(metrics.pre_call_late_10ms, 0);
+        assert_eq!(metrics.pre_call_lt_250us, 1);
+        assert_eq!(metrics.pre_call_250_500us, 0);
+        assert_eq!(metrics.pre_call_500_750us, 0);
+        assert_eq!(metrics.pre_call_750_1000us, 0);
+        assert_eq!(metrics.pre_call_1000_1500us, 0);
+        assert_eq!(metrics.pre_call_1500_2000us, 0);
+        assert_eq!(metrics.pre_call_ge_2000us, 0);
 
         let clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(1_000_000).unwrap());
         assert_eq!(
@@ -535,6 +563,75 @@ mod tests {
             )),
             Ok(3)
         );
+    }
+
+    #[test]
+    fn fine_pre_call_buckets_are_mutually_exclusive_at_exact_boundaries() {
+        let mut timing = WorkerTimingState::create_test_timing();
+        timing.pre_call_250us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(250);
+        timing.pre_call_500us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(500);
+        timing.pre_call_750us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(750);
+        timing.pre_call_1000us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(1_000);
+        timing.pre_call_1500us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(1_500);
+        timing.pre_call_2000us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(2_000);
+
+        let cases = [
+            (0, 0),
+            (249, 0),
+            (250, 1),
+            (499, 1),
+            (500, 2),
+            (749, 2),
+            (750, 3),
+            (999, 3),
+            (1_000, 4),
+            (1_499, 4),
+            (1_500, 5),
+            (1_999, 5),
+            (2_000, 6),
+        ];
+
+        for (lateness_us, expected_bucket) in cases {
+            let mut metrics = WorkerMetricsLocal::default();
+            record_sendinput_pre_call_lateness(
+                QpcTicks::ZERO,
+                QpcTicks::from_raw(lateness_us),
+                &timing,
+                &mut metrics,
+            )
+            .expect("valid lateness");
+            let buckets = [
+                metrics.pre_call_lt_250us,
+                metrics.pre_call_250_500us,
+                metrics.pre_call_500_750us,
+                metrics.pre_call_750_1000us,
+                metrics.pre_call_1000_1500us,
+                metrics.pre_call_1500_2000us,
+                metrics.pre_call_ge_2000us,
+            ];
+            assert_eq!(buckets.iter().sum::<u64>(), 1, "lateness={lateness_us}");
+            assert_eq!(buckets[expected_bucket], 1, "lateness={lateness_us}");
+        }
+    }
+
+    #[test]
+    fn fine_pre_call_bucket_saturates() {
+        let mut timing = WorkerTimingState::create_test_timing();
+        timing.pre_call_250us_ticks = sky_dispatch_core::time::DurationTicks::from_raw(250);
+        let mut metrics = WorkerMetricsLocal {
+            pre_call_lt_250us: u64::MAX,
+            ..WorkerMetricsLocal::default()
+        };
+
+        record_sendinput_pre_call_lateness(
+            QpcTicks::ZERO,
+            QpcTicks::from_raw(249),
+            &timing,
+            &mut metrics,
+        )
+        .expect("valid lateness");
+
+        assert_eq!(metrics.pre_call_lt_250us, u64::MAX);
     }
 
     #[test]

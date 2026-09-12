@@ -5241,6 +5241,12 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
         },
     );
     options.profile = DispatchProfile::Production;
+    // This integration test verifies that the scripted sender deadline miss
+    // leaves a clean session. Keep the real worker/QPC path, but give CI host
+    // preemption enough test-only margin that the real sender cutoff cannot
+    // consume the scripted packet index first. Exact cutoff behavior is
+    // covered by deterministic dispatch tests; production remains at 500 us.
+    options.timing.down_late_grace_us = 20_000;
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
     start_with_test_wall_clock_slack(&session);

@@ -1,4 +1,5 @@
 #![cfg(feature = "real-input-acceptance")]
+#![recursion_limit = "256"]
 #[rustfmt::skip]
 mod acceptance {
 use serde::Deserialize;
@@ -20,7 +21,7 @@ use sky_player::engine::{
     TelemetryOptions, TimingOptions, WaitOptions,
 };
 use smallvec::SmallVec;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -51,36 +52,15 @@ const ACCEPTANCE_FRAME_US: u64 = 1_000_000_u64.div_ceil(ACCEPTANCE_FPS);
 const ACCEPTANCE_HOLD_FRAMES: u64 = 1;
 const ACCEPTANCE_DOWN_LATE_GRACE_US: u64 = 500;
 const ACCEPTANCE_TRANSPORT_MARGIN_US: u64 = 300;
-const ACCEPTANCE_MIN_HOLD_US: u64 = ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + ACCEPTANCE_DOWN_LATE_GRACE_US + ACCEPTANCE_TRANSPORT_MARGIN_US;
-const ACCEPTANCE_MIN_RELEASE_GAP_US: u64 = ACCEPTANCE_FRAME_US + ACCEPTANCE_DOWN_LATE_GRACE_US + ACCEPTANCE_TRANSPORT_MARGIN_US;
 const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scenario {
-    CanonicalSingle,
-    CanonicalChord,
-    CleanupFullRelease,
-    FocusLoss,
-    W4Noncanonical,
-}
+enum Scenario { CanonicalSingle, CanonicalChord, CanonicalMaxChord, Hold, RapidRetrigger, MixedUpDown, CleanupFullRelease, FocusLoss, TargetHwndChange, PauseResume, StopCleanup, SkipCleanup, W4Noncanonical }
 impl Scenario {
     fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "canonical-single" => Ok(Self::CanonicalSingle),
-            "canonical-chord" => Ok(Self::CanonicalChord),
-            "cleanup-full-release" => Ok(Self::CleanupFullRelease),
-            "focus-loss" => Ok(Self::FocusLoss),
-            "w4-noncanonical" => Ok(Self::W4Noncanonical),
-            _ => Err(format!("unsupported scenario: {value}")),
-        }
+        match value { "canonical-single" => Ok(Self::CanonicalSingle), "canonical-chord" => Ok(Self::CanonicalChord), "canonical-max-chord" => Ok(Self::CanonicalMaxChord), "hold" => Ok(Self::Hold), "rapid-retrigger" => Ok(Self::RapidRetrigger), "mixed-up-down" => Ok(Self::MixedUpDown), "cleanup-full-release" => Ok(Self::CleanupFullRelease), "focus-loss" => Ok(Self::FocusLoss), "target-hwnd-change" => Ok(Self::TargetHwndChange), "pause-resume" => Ok(Self::PauseResume), "stop-cleanup" => Ok(Self::StopCleanup), "skip-cleanup" => Ok(Self::SkipCleanup), "w4-noncanonical" => Ok(Self::W4Noncanonical), _ => Err(format!("unsupported scenario: {value}")) }
     }
     const fn label(self) -> &'static str {
-        match self {
-            Self::CanonicalSingle => "canonical-single",
-            Self::CanonicalChord => "canonical-chord",
-            Self::CleanupFullRelease => "cleanup-full-release",
-            Self::FocusLoss => "focus-loss",
-            Self::W4Noncanonical => "w4-noncanonical",
-        }
+        match self { Self::CanonicalSingle => "canonical-single", Self::CanonicalChord => "canonical-chord", Self::CanonicalMaxChord => "canonical-max-chord", Self::Hold => "hold", Self::RapidRetrigger => "rapid-retrigger", Self::MixedUpDown => "mixed-up-down", Self::CleanupFullRelease => "cleanup-full-release", Self::FocusLoss => "focus-loss", Self::TargetHwndChange => "target-hwnd-change", Self::PauseResume => "pause-resume", Self::StopCleanup => "stop-cleanup", Self::SkipCleanup => "skip-cleanup", Self::W4Noncanonical => "w4-noncanonical" }
     }
     const fn needs_focus_probe(self) -> bool {
         matches!(self, Self::FocusLoss)
@@ -89,7 +69,7 @@ impl Scenario {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunArgs {
     run_id: String, sink_ready: PathBuf, sink_events: PathBuf, target_hwnd: isize, scenario: Scenario,
-    evidence: PathBuf, focus_probe_ready: Option<PathBuf>, focus_probe_events: Option<PathBuf>, focus_probe_hwnd: Option<isize>,
+    evidence: PathBuf, down_late_grace_us: u64, focus_probe_ready: Option<PathBuf>, focus_probe_events: Option<PathBuf>, focus_probe_hwnd: Option<isize>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedCommand {
@@ -137,7 +117,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--down-late-grace-us <500|750|1000>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex>]"
 }
 fn validate_run_id(value: &str) -> Result<String, String> {
     if value.is_empty()
@@ -175,6 +155,7 @@ fn parse_hwnd(value: &str) -> Result<isize, String> {
     }
     Ok(parsed as isize)
 }
+fn parse_down_late_grace_us(value: &str) -> Result<u64, String> { let parsed = value.parse::<u64>().map_err(|_| "--down-late-grace-us must be 500, 750, or 1000".to_string())?; match parsed { 500 | 750 | 1_000 => Ok(parsed), _ => Err("--down-late-grace-us must be 500, 750, or 1000".to_string()) } }
 fn parse_args<I>(arguments: I) -> Result<ParsedCommand, String>
 where
     I: IntoIterator<Item = String>,
@@ -195,7 +176,7 @@ where
     let mut sink_events = None;
     let mut target_hwnd = None;
     let mut scenario = None;
-    let mut evidence = None;
+    let mut evidence = None; let mut down_late_grace_us = None;
     let mut focus_probe_ready = None;
     let mut focus_probe_events = None;
     let mut focus_probe_hwnd = None;
@@ -229,6 +210,7 @@ where
             "--target-hwnd" => { unique!(target_hwnd, "--target-hwnd"); target_hwnd = Some(parse_hwnd(&next_value!("--target-hwnd"))?); }
             "--scenario" => { unique!(scenario, "--scenario"); scenario = Some(Scenario::parse(&next_value!("--scenario"))?); }
             "--evidence" => { unique!(evidence, "--evidence"); let value = next_value!("--evidence"); evidence = Some(bounded_path(&value, "--evidence")?); }
+            "--down-late-grace-us" => { unique!(down_late_grace_us, "--down-late-grace-us"); down_late_grace_us = Some(parse_down_late_grace_us(&next_value!("--down-late-grace-us"))?); }
             "--focus-probe-ready" => { unique!(focus_probe_ready, "--focus-probe-ready"); let value = next_value!("--focus-probe-ready"); focus_probe_ready = Some(bounded_path(&value, "--focus-probe-ready")?); }
             "--focus-probe-events" => { unique!(focus_probe_events, "--focus-probe-events"); let value = next_value!("--focus-probe-events"); focus_probe_events = Some(bounded_path(&value, "--focus-probe-events")?); }
             "--focus-probe-hwnd" => { unique!(focus_probe_hwnd, "--focus-probe-hwnd"); focus_probe_hwnd = Some(parse_hwnd(&next_value!("--focus-probe-hwnd"))?); }
@@ -247,6 +229,7 @@ where
         target_hwnd: target_hwnd.ok_or_else(|| "--target-hwnd is required".to_string())?,
         scenario,
         evidence: evidence.ok_or_else(|| "--evidence is required".to_string())?,
+        down_late_grace_us: down_late_grace_us.unwrap_or(ACCEPTANCE_DOWN_LATE_GRACE_US),
         focus_probe_ready,
         focus_probe_events,
         focus_probe_hwnd,
@@ -366,8 +349,15 @@ fn scenario_plan(scenario: Scenario) -> Result<ScenarioPlan, String> {
         match scenario {
             Scenario::CanonicalSingle | Scenario::W4Noncanonical => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 80_000, &[0])], (scenario == Scenario::W4Noncanonical).then_some(w4_profile_spec()), vec![0], vec![0], false),
             Scenario::CanonicalChord => (vec![action(0, ActionKind::Down, 50_000, &[0, 1]), action(1, ActionKind::Up, 90_000, &[0, 1])], None, vec![0, 1], vec![0, 1], false),
+            Scenario::CanonicalMaxChord => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 90_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
+            Scenario::Hold => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 500_000, &[0])], None, vec![0], vec![0], false),
+            Scenario::RapidRetrigger => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 80_000, &[0]), action(2, ActionKind::Down, 110_000, &[0]), action(3, ActionKind::Up, 140_000, &[0]), action(4, ActionKind::Down, 170_000, &[0]), action(5, ActionKind::Up, 200_000, &[0])], None, vec![0, 0, 0], vec![0, 0, 0], false),
+            Scenario::MixedUpDown => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 100_000, &[0]), action(2, ActionKind::Down, 100_000, &[1]), action(3, ActionKind::Up, 150_000, &[1])], None, vec![0, 1], vec![0, 1], false),
             Scenario::CleanupFullRelease => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 10_000_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
             Scenario::FocusLoss => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0]), action(2, ActionKind::Down, 1_000_000, &[1]), action(3, ActionKind::Up, 1_100_000, &[1])], None, vec![0], vec![0], false),
+            Scenario::TargetHwndChange => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0])], None, vec![], (0..MAX_KEYS).collect(), true),
+            Scenario::StopCleanup | Scenario::SkipCleanup => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 10_000_000, &[0])], None, vec![0], vec![0], false),
+            Scenario::PauseResume => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 120_000, &[0]), action(2, ActionKind::Down, 500_000, &[1]), action(3, ActionKind::Up, 570_000, &[1])], None, vec![0, 1], vec![0, 1].into_iter().chain(0..MAX_KEYS).collect(), true),
         };
     let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
         .map_err(|error| format!("scenario schedule compilation failed: {error}"))?;
@@ -379,9 +369,12 @@ fn scenario_plan(scenario: Scenario) -> Result<ScenarioPlan, String> {
         allow_unpaired_cleanup_ups,
     })
 }
+fn acceptance_min_hold_us(down_late_grace_us: u64) -> u64 { ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + down_late_grace_us + ACCEPTANCE_TRANSPORT_MARGIN_US }
+fn acceptance_min_release_gap_us(down_late_grace_us: u64) -> u64 { ACCEPTANCE_FRAME_US + down_late_grace_us + ACCEPTANCE_TRANSPORT_MARGIN_US }
 fn production_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
     profile: Option<InstrumentKeyProfileSpec>,
+    down_late_grace_us: u64,
 ) -> NativeSessionOptions {
     NativeSessionOptions {
         schedule,
@@ -389,9 +382,9 @@ fn production_options(
         profile: DispatchProfile::Production,
         timing: TimingOptions {
             game_fps: 60,
-            min_hold_us: ACCEPTANCE_MIN_HOLD_US,
-            min_release_gap_us: ACCEPTANCE_MIN_RELEASE_GAP_US,
-            down_late_grace_us: ACCEPTANCE_DOWN_LATE_GRACE_US,
+            min_hold_us: acceptance_min_hold_us(down_late_grace_us),
+            min_release_gap_us: acceptance_min_release_gap_us(down_late_grace_us),
+            down_late_grace_us,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,
@@ -499,19 +492,19 @@ fn validate_event_prefix(
     expected_up: &[PhysicalExpectation],
     allow_unpaired_cleanup_ups: bool,
 ) -> Result<bool, String> {
-    let expected_down = expected_down.iter().copied().collect::<HashSet<_>>();
-    let expected_up = expected_up.iter().copied().collect::<HashSet<_>>();
-    let mut observed_down = HashSet::new();
-    let mut observed_up = HashSet::new();
+    let mut remaining_down = HashMap::new();
+    let mut remaining_up = HashMap::new();
+    for physical in expected_down { *remaining_down.entry(*physical).or_insert(0_usize) += 1; }
+    for physical in expected_up { *remaining_up.entry(*physical).or_insert(0_usize) += 1; }
+    let mut observed_down = HashMap::new();
+    let mut observed_up = HashMap::new();
     for event in events { let physical = physical_event(event); match event.kind.as_str() {
-        "key_press" if expected_down.contains(&physical) && observed_down.insert(physical) => {},
-        "key_press" => return Err(format!("unexpected or duplicate KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)),
-        "key_release" => { if !expected_up.contains(&physical) || !observed_up.insert(physical) { return Err(format!("unexpected or duplicate KeyUp scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }
-            if !allow_unpaired_cleanup_ups && !observed_down.contains(&physical) { return Err(format!("KeyUp arrived before its matching KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); } },
+        "key_press" => { let Some(remaining) = remaining_down.get_mut(&physical) else { return Err(format!("unexpected or duplicate KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }; if *remaining == 0 { return Err(format!("unexpected or duplicate KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); } *remaining -= 1; *observed_down.entry(physical).or_insert(0_usize) += 1; },
+        "key_release" => { let Some(remaining) = remaining_up.get_mut(&physical) else { return Err(format!("unexpected or duplicate KeyUp scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }; if *remaining == 0 { return Err(format!("unexpected or duplicate KeyUp scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }; if !allow_unpaired_cleanup_ups && observed_down.get(&physical).copied().unwrap_or(0) <= observed_up.get(&physical).copied().unwrap_or(0) { return Err(format!("KeyUp arrived before its matching KeyDown scan=0x{:02X} extended={}", physical.scan_code, physical.extended)); }; *remaining -= 1; *observed_up.entry(physical).or_insert(0_usize) += 1; },
         "sys_key_press" | "sys_key_release" => return Err("SYSKEY event cannot satisfy gameplay evidence".into()),
         other => return Err(format!("unexpected event kind {other:?}")),
     } }
-    Ok(observed_down == expected_down && observed_up == expected_up)
+    Ok(remaining_down.values().all(|count| *count == 0) && remaining_up.values().all(|count| *count == 0))
 }
 fn reconcile_events(
     events: &[EventRecord],
@@ -524,6 +517,11 @@ fn reconcile_events(
     } else {
         Err("event log is missing an expected physical KeyDown or KeyUp".into())
     }
+}
+fn reconcile_event_sequence(events: &[EventRecord], expected: &[(&str, PhysicalExpectation)]) -> Result<(), String> {
+    if events.len() != expected.len() { return Err(format!("event count {} does not match expected {}", events.len(), expected.len())); }
+    for (index, (event, (kind, physical))) in events.iter().zip(expected).enumerate() { if event.kind != *kind || physical_event(event) != *physical { return Err(format!("event {index} does not match expected {kind} scan=0x{:02X}", physical.scan_code)); } }
+    Ok(())
 }
 trait EventWindowReader {
     fn read(&mut self) -> Result<EventWindow, String>;
@@ -599,21 +597,15 @@ fn preterminal_verdict(observer: Verdict, cleanup_anomaly: bool) -> Verdict { if
 fn focus_evidence_clean(paused: bool, final_gate_focus_losses: u64, target_changes: u64, sink_events_clean: bool, probe_events_empty: bool) -> bool {
     paused && final_gate_focus_losses >= 1 && target_changes == 0 && sink_events_clean && probe_events_empty
 }
+fn target_change_preflight_error(snapshot: &EngineSnapshot) -> bool { snapshot.outcome.as_deref() == Some("error") && snapshot.terminal_error.as_deref().is_some_and(|error| error.contains("instrument key preflight failed")) }
+fn target_change_cleanup_exception(snapshot: &EngineSnapshot) -> bool { target_change_preflight_error(snapshot) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.release_outcome.as_ref().is_some_and(|outcome| outcome.verification_inconclusive && !outcome.transport_anomaly) }
 fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
-    let release = snapshot.release_outcome.as_ref().map(|outcome| json!({
-        "attempted_mask": outcome.attempted_mask, "transport_anomaly": outcome.transport_anomaly,
-        "released_successfully": outcome.released_successfully, "stuck_mask": outcome.stuck_mask,
-        "verification_inconclusive": outcome.verification_inconclusive, "attempts": outcome.attempts,
-    }));
-    json!({"status": snapshot.status, "outcome": snapshot.outcome, "active_count": snapshot.active_count,
-        "possibly_active_count": snapshot.possibly_active_count, "failed_release_count": snapshot.failed_release_count,
-        "terminal_error": snapshot.terminal_error, "sendinput_partial_events": snapshot.sendinput_partial_events,
-        "sendinput_zero_progress_failures": snapshot.sendinput_zero_progress_failures,
-        "final_gate_focus_losses": snapshot.final_gate_focus_losses, "final_gate_target_changes": snapshot.final_gate_target_changes,
-        "max_sendinput_pre_call_lateness_us": snapshot.max_sendinput_pre_call_lateness_us, "release_outcome": release})
+    let stuck_keys = snapshot.release_outcome.as_ref().map_or(0, |outcome| u64::from(outcome.stuck_mask.count_ones()));
+    let release = snapshot.release_outcome.as_ref().map(|outcome| json!({"attempted_mask": outcome.attempted_mask, "transport_anomaly": outcome.transport_anomaly, "released_successfully": outcome.released_successfully, "stuck_mask": outcome.stuck_mask, "verification_inconclusive": outcome.verification_inconclusive, "attempts": outcome.attempts}));
+    json!({"status": snapshot.status, "outcome": snapshot.outcome, "last_error": snapshot.last_error, "active_count": snapshot.active_count, "possibly_active_count": snapshot.possibly_active_count, "failed_release_count": snapshot.failed_release_count, "keys_inserted_before_failure": snapshot.keys_inserted_before_failure, "stuck_keys": stuck_keys, "terminal_error": snapshot.terminal_error, "keys_dropped": snapshot.keys_dropped, "chord_split_events": snapshot.chord_split_events, "sendinput_partial_events": snapshot.sendinput_partial_events, "sendinput_zero_progress_failures": snapshot.sendinput_zero_progress_failures, "max_sendinput_pre_call_lateness_us": snapshot.max_sendinput_pre_call_lateness_us, "pre_call_lt_250us": snapshot.pre_call_lt_250us, "pre_call_250_500us": snapshot.pre_call_250_500us, "pre_call_500_750us": snapshot.pre_call_500_750us, "pre_call_750_1000us": snapshot.pre_call_750_1000us, "pre_call_1000_1500us": snapshot.pre_call_1000_1500us, "pre_call_1500_2000us": snapshot.pre_call_1500_2000us, "pre_call_ge_2000us": snapshot.pre_call_ge_2000us, "missed_down_boundaries": snapshot.missed_down_boundaries, "missed_down_keys": snapshot.missed_down_keys, "missed_backlog_boundaries": snapshot.missed_backlog_boundaries, "missed_hard_late_boundaries": snapshot.missed_hard_late_boundaries, "final_gate_cutoff_misses": snapshot.final_gate_cutoff_misses, "final_gate_focus_losses": snapshot.final_gate_focus_losses, "final_gate_target_changes": snapshot.final_gate_target_changes, "final_gate_lease_expirations": snapshot.final_gate_lease_expirations, "production_forensics_available": snapshot.production_forensics_available, "production_forensics_version": snapshot.production_forensics_version, "production_hold_pair_samples": snapshot.production_hold_pair_samples, "production_min_pre_call_hold_ticks": snapshot.production_min_pre_call_hold_ticks, "production_min_completion_hold_ticks": snapshot.production_min_completion_hold_ticks, "production_max_pre_call_shrink_ticks": snapshot.production_max_pre_call_shrink_ticks, "production_max_completion_shrink_ticks": snapshot.production_max_completion_shrink_ticks, "production_completion_hold_below_frame_count": snapshot.production_completion_hold_below_frame_count, "production_release_gap_samples": snapshot.production_release_gap_samples, "production_min_release_gap_ticks": snapshot.production_min_release_gap_ticks, "production_release_gap_below_policy_count": snapshot.production_release_gap_below_policy_count, "production_same_call_same_key_retrigger_count": snapshot.production_same_call_same_key_retrigger_count, "production_anchor_overwrite_count": snapshot.production_anchor_overwrite_count, "production_unmatched_up_count": snapshot.production_unmatched_up_count, "production_forensics_anomaly_count": snapshot.production_forensics_anomaly_count, "release_outcome": release})
 }
 fn write_report(args: &RunArgs, verdict: Verdict, reason: &str, details: Value) -> i32 {
-    let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "reason": reason, "details": details});
+    let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "down_late_grace_us": args.down_late_grace_us, "reason": reason, "details": details});
     let serialized = serde_json::to_string(&report).unwrap_or_else(|_| format!(r#"{{"status":"{}","reason":"report serialization failed"}}"#, verdict.label()));
     println!("{serialized}");
     if let Err(error) = append_json_line(&args.evidence, &serialized) {
@@ -687,7 +679,7 @@ fn run_windows(args: RunArgs) -> i32 {
     };
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
-    let session = match NativeDispatchSession::new(production_options(plan.schedule, plan.profile)) { Ok(session) => session, Err(error) => inconclusive!(&error, json!({})) };
+    let session = match NativeDispatchSession::new(production_options(plan.schedule, plan.profile, args.down_late_grace_us)) { Ok(session) => session, Err(error) => inconclusive!(&error, json!({})) };
     session.set_target_hwnd(sink_hwnd);
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
@@ -703,6 +695,7 @@ fn run_windows(args: RunArgs) -> i32 {
         inconclusive!(&error, json!({}));
     }
     let mut final_probe = targets.probe.clone();
+    let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
         if !wait_for_startup_ready(&session) {
             let _ = session.quit();
@@ -732,6 +725,14 @@ fn run_windows(args: RunArgs) -> i32 {
         if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &[])) { return code; }
         let _ = session.quit();
         false
+    } else if args.scenario == Scenario::PauseResume {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
+    } else if args.scenario == Scenario::TargetHwndChange {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
+    } else if args.scenario == Scenario::StopCleanup {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before stop proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.quit() { inconclusive!(&error, json!({})); }; stop_requested = true; false
+    } else if args.scenario == Scenario::SkipCleanup {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before skip proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.skip() { inconclusive!(&error, json!({})); }; skip_requested = true; false
     } else {
         false
     };
@@ -782,11 +783,12 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("sink_drain_deadline_ms".to_string(), json!(DRAIN_DEADLINE_MS));
         object.insert("sink_drain_quiet_ms".to_string(), json!(DRAIN_QUIET_MS));
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
+        object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
     }
     let Some(outcome) = snapshot.release_outcome.as_ref() else {
         inconclusive!("missing cleanup/release evidence", details);
     };
-    if !cleanup_evidence_clean(args.scenario == Scenario::CleanupFullRelease, outcome.attempted_mask, outcome.attempts, outcome.released_successfully, outcome.stuck_mask, outcome.verification_inconclusive, outcome.transport_anomaly) {
+    if !cleanup_evidence_clean(args.scenario == Scenario::CleanupFullRelease, outcome.attempted_mask, outcome.attempts, outcome.released_successfully, outcome.stuck_mask, outcome.verification_inconclusive, outcome.transport_anomaly) && !target_change_cleanup_exception(&snapshot) {
         return write_report(
             &args,
             Verdict::Fail,
@@ -794,12 +796,9 @@ fn run_windows(args: RunArgs) -> i32 {
             details,
         );
     }
-    if snapshot.active_count != 0
-        || snapshot.possibly_active_count != 0
-        || snapshot.failed_release_count != 0
-        || snapshot.sendinput_partial_events != 0
-        || snapshot.sendinput_zero_progress_failures != 0
-        || snapshot.terminal_error.is_some()
+    let expected_target_preflight_failure = args.scenario == Scenario::TargetHwndChange && target_change_preflight_error(&snapshot);
+    let target_cleanup_exception = target_change_cleanup_exception(&snapshot);
+    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception) || snapshot.sendinput_partial_events != 0 || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure)
     {
         return write_report(
             &args,
@@ -814,6 +813,12 @@ fn run_windows(args: RunArgs) -> i32 {
     if let Some(error) = probe_drain_failure {
         return write_report(&args, Verdict::Fail, &error, details);
     }
+    if args.scenario == Scenario::TargetHwndChange && (!target_changed || !target_change_cleanup_exception(&snapshot) || sink_events.iter().any(|event| event.kind == "key_press")) { return write_report(&args, Verdict::Fail, "target HWND transition did not fail closed before gameplay delivery", details); }
+    if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
+    if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
+    if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
+    if args.scenario == Scenario::RapidRetrigger { let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let expected = [("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
+    if args.scenario == Scenario::MixedUpDown { let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0]; let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", second)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
     if args.scenario.needs_focus_probe() {
         let sink_events_clean = reconcile_events(&sink_events, &expected_down, &expected_up, false).is_ok();
         if !focus_evidence_clean(focus_gate_observed, snapshot.final_gate_focus_losses, snapshot.final_gate_target_changes, sink_events_clean, probe_events.is_empty()) {
@@ -875,9 +880,10 @@ mod tests {
     fn complete_window(events: Vec<EventRecord>) -> EventWindow { EventWindow { events, complete: true } }
     fn partial_window(events: Vec<EventRecord>) -> EventWindow { EventWindow { events, complete: false } }
     #[test] fn schema_v3_rejects_v2_and_requires_bound_header() { let ready = ready(RECEIVE_ONLY_ROLE); let mut old = ready.clone(); old.schema_version = 2; old.event_schema_version = 2; assert!(validate_ready_record(&old, "test-run", 0x42, RECEIVE_ONLY_ROLE).is_err()); assert_eq!(validate_event_stream(&[event(0, "stream_start", 0)], &ready, RECEIVE_ONLY_ROLE), Ok(0)); assert!(validate_event_stream(&[], &ready, RECEIVE_ONLY_ROLE).is_err()); let mut wrong = event(0, "stream_start", 0); wrong.event_log_id = "rebound".into(); assert!(validate_event_stream(&[wrong], &ready, RECEIVE_ONLY_ROLE).is_err()); assert!(validate_event_stream(&[event(0, "stream_start", 0), event(2, "key_press", 0x15)], &ready, RECEIVE_ONLY_ROLE).is_err()); }
-    #[test] fn canonical_and_w4_expectations_are_physical() { assert_eq!(expected_physical_keys(None, &[0]), vec![physical(PHYSICAL_INSTRUMENT_SCAN_CODES[0])]); let profile = w4_profile_spec(); assert_eq!(expected_physical_keys(Some(&profile), &[0]), vec![physical(0x02)]); }
+    #[test] fn canonical_and_w4_expectations_are_physical() { assert_eq!(expected_physical_keys(None, &[0]), vec![physical(PHYSICAL_INSTRUMENT_SCAN_CODES[0])]); let profile = w4_profile_spec(); assert_eq!(expected_physical_keys(Some(&profile), &[0]), vec![physical(0x02)]); for name in ["canonical-max-chord", "hold", "rapid-retrigger", "mixed-up-down", "target-hwnd-change", "pause-resume", "stop-cleanup", "skip-cleanup"] { assert!(scenario_plan(Scenario::parse(name).unwrap()).is_ok(), "scenario {name}"); } }
+    #[test] fn pause_resume_expects_the_full_instrument_suspension_sweep() { let plan = scenario_plan(Scenario::PauseResume).unwrap(); let mut expected_up = vec![0, 1]; expected_up.extend(0..MAX_KEYS); assert_eq!(plan.expected_down_slots, vec![0, 1]); assert_eq!(plan.expected_up_slots, expected_up); assert!(plan.allow_unpaired_cleanup_ups); }
     #[test] fn processkey_correct_scan_passes_and_wrong_scan_fails() { let e = [physical(0x15)]; assert!(reconcile_events(&[event_with(1, "key_press", 0x15, false, 0xE5), event_with(2, "key_release", 0x15, false, 0x59)], &e, &e, false).is_ok()); assert!(reconcile_events(&[event_with(1, "key_press", 0x16, false, 0xE5), event_with(2, "key_release", 0x16, false, 0x59)], &e, &e, false).is_err()); }
-    #[test] fn physical_reconciliation_rejects_extended_duplicate_direction_and_syskey() { let e = [physical(0x15)]; assert!(reconcile_events(&[event_with(1, "key_press", 0x15, true, 0xE5), event_with(2, "key_release", 0x15, true, 0x59)], &e, &e, false).is_err()); assert!(reconcile_events(&[event(1, "key_press", 0x15), event(2, "key_press", 0x15), event(3, "key_release", 0x15)], &e, &e, false).is_err()); assert!(reconcile_events(&[event_with(1, "sys_key_press", 0x15, false, 0xE5)], &e, &[], false).is_err()); }
+    #[test] fn physical_reconciliation_rejects_extended_duplicate_direction_and_syskey() { let e = [physical(0x15)]; assert!(reconcile_events(&[event_with(1, "key_press", 0x15, true, 0xE5), event_with(2, "key_release", 0x15, true, 0x59)], &e, &e, false).is_err()); assert!(reconcile_events(&[event(1, "key_press", 0x15), event(2, "key_press", 0x15), event(3, "key_release", 0x15)], &e, &e, false).is_err()); assert!(reconcile_events(&[event_with(1, "sys_key_press", 0x15, false, 0xE5)], &e, &[], false).is_err()); let retrigger = [event(1, "key_press", 0x15), event(2, "key_release", 0x15), event(3, "key_press", 0x15), event(4, "key_release", 0x15)]; assert!(reconcile_events(&retrigger, &[e[0], e[0]], &[e[0], e[0]], false).is_ok()); }
     #[test] fn expected_drain_waits_for_late_event_and_quiet() { let e = [physical(0x15)]; let events = vec![event(1, "key_press", 0x15), event(2, "key_release", 0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new()), complete_window(events.clone())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Pass(events)); }
     #[test] fn expected_drain_missing_fails_and_partial_is_inconclusive() { let e = [physical(0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Fail(_, _))); let mut r = FakeReader { samples: vec![partial_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: false }, &e, &e), DrainResult::Inconclusive(_))); }
     #[test] fn preterminal_classification_is_typed_and_fail_closed() { let e = [physical(0x15)]; let events = vec![event(1, "key_press", 0x15), event(2, "key_release", 0x15)]; let mut r = FakeReader { samples: vec![complete_window(Vec::new()), complete_window(events)], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::Satisfied); let mut r = FakeReader { samples: vec![complete_window(vec![event(1, "key_press", 0x16)])], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::TrustedFailure(_))); let mut r = FakeReader { samples: vec![complete_window(vec![event(1, "sys_key_press", 0x15)])], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::TrustedFailure(_))); let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: PRETERMINAL_DEADLINE_MS, step_ms: 10 }; let result = wait_for_sink_events_with(&mut r, &mut c, &e, &e); assert!(matches!(result, PreTerminalResult::IncompleteTimeout { complete: true })); assert_eq!(result.verdict(), Verdict::Fail); let mut r = FakeReader { samples: vec![partial_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: PRETERMINAL_DEADLINE_MS, step_ms: 10 }; let result = wait_for_sink_events_with(&mut r, &mut c, &e, &e); assert!(matches!(result, PreTerminalResult::IncompleteTimeout { complete: false })); assert_eq!(result.verdict(), Verdict::Inconclusive); let mut r = FailingReader; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(wait_for_sink_events_with(&mut r, &mut c, &e, &e), PreTerminalResult::ObservationInconclusive(_))); }
@@ -885,7 +891,8 @@ mod tests {
     #[test] fn zero_event_safety_uses_full_deadline_and_catches_delayed_event() { let mut r = FakeReader { samples: vec![complete_window(Vec::new())], index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert_eq!(drain_event_window_with(&mut r, &mut c, DrainMode::ZeroEventSafety, &[], &[]), DrainResult::Pass(Vec::new())); assert_eq!(c.now_ms, DRAIN_DEADLINE_MS); let mut s = vec![complete_window(Vec::new()); 20]; s.push(complete_window(vec![event(1, "key_press", 0x15)])); let mut r = FakeReader { samples: s, index: 0 }; let mut c = FakeClock { now_ms: 0, step_ms: 10 }; assert!(matches!(drain_event_window_with(&mut r, &mut c, DrainMode::ZeroEventSafety, &[], &[]), DrainResult::Fail(_, _))); }
     #[test] fn cleanup_reconciles_fifteen_down_and_up_records() { let e = (0..MAX_KEYS).map(|slot| physical(PHYSICAL_INSTRUMENT_SCAN_CODES[slot])).collect::<Vec<_>>(); let mut a = Vec::new(); for (i, k) in e.iter().enumerate() { a.push(event_with(i as u64 + 1, "key_press", k.scan_code, k.extended, 0)); } for (i, k) in e.iter().enumerate() { a.push(event_with(MAX_KEYS as u64 + i as u64 + 1, "key_release", k.scan_code, k.extended, 0)); } assert!(reconcile_events(&a, &e, &e, false).is_ok()); }
     #[test] fn w4_profile_and_cleanup_verdicts_remain_valid() { let p = MaterializedInstrumentKeyProfile::from_validated(sky_dispatch_win32::input::InstrumentKeyProfile::try_from_spec(w4_profile_spec()).unwrap()); assert_eq!(p.physical_key(0).scan_code, 0x02); let plan = scenario_plan(Scenario::CleanupFullRelease).unwrap(); assert_eq!(plan.schedule.packets[0].down_mask, FULL_INSTRUMENT_MASK); assert!(cleanup_evidence_clean(true, FULL_INSTRUMENT_MASK, 1, true, 0, false, false)); }
-    #[test] fn authorization_and_timing_contracts_remain_bounded() { let mut a = base_arguments("focus-loss"); a.extend(["--focus-probe-ready", "p", "--focus-probe-events", "e", "--focus-probe-hwnd", "0x43"].into_iter().map(str::to_owned)); assert!(parse_args(a).is_ok()); assert_eq!(ACCEPTANCE_MIN_HOLD_US, 17_467); assert_eq!(ACCEPTANCE_MIN_RELEASE_GAP_US, 17_467); assert!(focus_evidence_clean(true, 1, 0, true, true)); }
+    #[test] fn authorization_and_timing_contracts_remain_bounded() { let mut a = base_arguments("focus-loss"); a.extend(["--focus-probe-ready", "p", "--focus-probe-events", "e", "--focus-probe-hwnd", "0x43"].into_iter().map(str::to_owned)); let ParsedCommand::Run(args) = parse_args(a).expect("valid acceptance args") else { panic!("expected run command") }; assert_eq!(args.down_late_grace_us, ACCEPTANCE_DOWN_LATE_GRACE_US); assert_eq!(acceptance_min_hold_us(500), 17_467); assert_eq!(acceptance_min_release_gap_us(500), 17_467); assert_eq!(acceptance_min_hold_us(750), 17_717); assert_eq!(acceptance_min_release_gap_us(1_000), 17_967); assert!(focus_evidence_clean(true, 1, 0, true, true)); }
+    #[test] fn grace_override_accepts_only_controlled_ab_values() { for grace in ["500", "750", "1000"] { let mut args = base_arguments("canonical-single"); args.extend(["--down-late-grace-us", grace].into_iter().map(str::to_owned)); let ParsedCommand::Run(run) = parse_args(args).expect("valid grace override") else { panic!("expected run command") }; assert_eq!(run.down_late_grace_us, grace.parse::<u64>().unwrap()); } let mut args = base_arguments("canonical-single"); args.extend(["--down-late-grace-us", "600"].into_iter().map(str::to_owned)); assert!(parse_args(args).is_err()); }
 }
 }
 fn main() {

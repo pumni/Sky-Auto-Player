@@ -86,6 +86,144 @@ pub struct WindowIdentity {
     pub process_image_basename: String,
 }
 
+/// Result of the control-plane integrity comparison used to identify a
+/// likely Windows UIPI block before a physical session is armed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetIntegrityCompatibility {
+    Compatible,
+    Mismatch,
+    Unknown,
+}
+
+fn compare_integrity_rids(
+    current_integrity_rid: u32,
+    target_integrity_rid: u32,
+) -> TargetIntegrityCompatibility {
+    if target_integrity_rid > current_integrity_rid {
+        TargetIntegrityCompatibility::Mismatch
+    } else {
+        TargetIntegrityCompatibility::Compatible
+    }
+}
+
+/// Compare the current process token with the exact target window owner's
+/// token. This is a read-only, control-plane preflight; it does not authorize
+/// input and it never runs on the realtime dispatch thread.
+#[cfg(windows)]
+pub fn target_integrity_compatibility(hwnd: isize) -> TargetIntegrityCompatibility {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND};
+    use windows_sys::Win32::Security::{
+        GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL,
+        TOKEN_QUERY, TokenIntegrityLevel,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    fn token_integrity_rid(token: windows_sys::Win32::Foundation::HANDLE) -> Option<u32> {
+        let mut required = 0u32;
+        // SAFETY: The first call intentionally supplies a null output buffer
+        // to obtain the required TOKEN_MANDATORY_LABEL size.
+        unsafe {
+            GetTokenInformation(token, TokenIntegrityLevel, null_mut(), 0, &mut required);
+        }
+        if required < std::mem::size_of::<TOKEN_MANDATORY_LABEL>() as u32 {
+            return None;
+        }
+        let word_count = (required as usize).div_ceil(std::mem::size_of::<u64>());
+        let mut buffer = vec![0u64; word_count];
+        // SAFETY: `buffer` is writable and sized by the preceding Win32 query;
+        // the returned structure is read only while `buffer` remains alive.
+        let success = unsafe {
+            GetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                buffer.as_mut_ptr().cast(),
+                required,
+                &mut required,
+            )
+        };
+        if success == 0 {
+            return None;
+        }
+        // SAFETY: GetTokenInformation returned a TOKEN_MANDATORY_LABEL in the
+        // caller-owned buffer and the buffer is aligned by Vec<u64>'s allocator
+        // for the structure's ABI alignment.
+        let label = unsafe { &*buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>() };
+        let sid = label.Label.Sid;
+        if sid.is_null() {
+            return None;
+        }
+        // SAFETY: The SID pointer belongs to the token information buffer and
+        // is valid for the duration of this read-only query.
+        let count = unsafe { GetSidSubAuthorityCount(sid).as_ref().copied()? };
+        if count == 0 {
+            return None;
+        }
+        // SAFETY: The final subauthority is the integrity RID for a valid
+        // mandatory-label SID.
+        unsafe {
+            GetSidSubAuthority(sid, u32::from(count - 1))
+                .as_ref()
+                .copied()
+        }
+    }
+
+    if hwnd == 0 {
+        return TargetIntegrityCompatibility::Unknown;
+    }
+    let mut target_pid = 0u32;
+    // SAFETY: The HWND is supplied by the existing target discovery boundary;
+    // this call only resolves its owner PID into caller-owned storage.
+    if unsafe { GetWindowThreadProcessId(hwnd as HWND, &mut target_pid) } == 0 || target_pid == 0 {
+        return TargetIntegrityCompatibility::Unknown;
+    }
+    // SAFETY: Only PROCESS_QUERY_LIMITED_INFORMATION is requested for the
+    // target process; no process memory or execution rights are acquired.
+    let target_process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, target_pid) };
+    if target_process.is_null() {
+        return TargetIntegrityCompatibility::Unknown;
+    }
+    let mut current_token = null_mut();
+    let mut target_token = null_mut();
+    // SAFETY: Both process handles are valid for the duration of these token
+    // queries and TOKEN_QUERY is the minimum required token right.
+    let current_opened =
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut current_token) } != 0;
+    let target_opened = current_opened
+        && unsafe { OpenProcessToken(target_process, TOKEN_QUERY, &mut target_token) } != 0;
+    let result = if target_opened {
+        match (
+            token_integrity_rid(current_token),
+            token_integrity_rid(target_token),
+        ) {
+            (Some(current), Some(target)) => compare_integrity_rids(current, target),
+            _ => TargetIntegrityCompatibility::Unknown,
+        }
+    } else {
+        TargetIntegrityCompatibility::Unknown
+    };
+    // SAFETY: OpenProcessToken returned owned token handles when successful;
+    // the pseudo-handle from GetCurrentProcess is never closed here.
+    unsafe {
+        if !target_token.is_null() {
+            CloseHandle(target_token);
+        }
+        if !current_token.is_null() {
+            CloseHandle(current_token);
+        }
+        CloseHandle(target_process);
+    }
+    result
+}
+
+#[cfg(not(windows))]
+pub fn target_integrity_compatibility(_hwnd: isize) -> TargetIntegrityCompatibility {
+    TargetIntegrityCompatibility::Unknown
+}
+
 #[cfg(windows)]
 fn filetime_ticks(value: windows_sys::Win32::Foundation::FILETIME) -> u64 {
     (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)
@@ -372,5 +510,26 @@ pub fn focus_window_and_verify(hwnd: isize, budget: std::time::Duration) -> bool
             return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TargetIntegrityCompatibility, compare_integrity_rids};
+
+    #[test]
+    fn higher_target_integrity_is_the_only_mismatch() {
+        assert_eq!(
+            compare_integrity_rids(0x2000, 0x1000),
+            TargetIntegrityCompatibility::Compatible
+        );
+        assert_eq!(
+            compare_integrity_rids(0x2000, 0x2000),
+            TargetIntegrityCompatibility::Compatible
+        );
+        assert_eq!(
+            compare_integrity_rids(0x2000, 0x3000),
+            TargetIntegrityCompatibility::Mismatch
+        );
     }
 }

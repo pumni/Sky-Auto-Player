@@ -309,6 +309,66 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
+    let pre_call_250us_ticks = match qpc_clock.duration_from_us(250) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 250us threshold conversion failed: {error:?}"),
+            );
+        }
+    };
+    let pre_call_500us_ticks = match qpc_clock.duration_from_us(500) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 500us threshold conversion failed: {error:?}"),
+            );
+        }
+    };
+    let pre_call_750us_ticks = match qpc_clock.duration_from_us(750) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 750us threshold conversion failed: {error:?}"),
+            );
+        }
+    };
+    let pre_call_1000us_ticks = match qpc_clock.duration_from_us(1_000) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 1000us threshold conversion failed: {error:?}"),
+            );
+        }
+    };
+    let pre_call_1500us_ticks = match qpc_clock.duration_from_us(1_500) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 1500us threshold conversion failed: {error:?}"),
+            );
+        }
+    };
+    let pre_call_2000us_ticks = match qpc_clock.duration_from_us(2_000) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("SendInput 2000us threshold conversion failed: {error:?}"),
+            );
+        }
+    };
     // The old producer-side rule converted lateness to floored microseconds
     // and then tested `> 2/5/10 ms`.  Convert the first strictly-over value
     // once so the tick comparisons below preserve that exact boundary.
@@ -539,6 +599,12 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         paused_poll_ticks,
         lease_timeout_ticks,
         effective_spin_threshold_ticks,
+        pre_call_250us_ticks,
+        pre_call_500us_ticks,
+        pre_call_750us_ticks,
+        pre_call_1000us_ticks,
+        pre_call_1500us_ticks,
+        pre_call_2000us_ticks,
         pre_call_2ms_ticks,
         pre_call_5ms_ticks,
         pre_call_10ms_ticks,

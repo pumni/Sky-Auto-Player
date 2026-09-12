@@ -462,6 +462,14 @@ fn production_down_only_hard_path_no_alloc() {
     );
     assert!(harness.has_active_generation(0x15));
     assert_eq!(harness.chord_integrity_lost_count(), 0);
+    assert_eq!(
+        harness
+            .fine_pre_call_bucket_counts_for_test()
+            .iter()
+            .sum::<u64>(),
+        1,
+        "successful production SendInput dispatch must record one fine pre-call bucket"
+    );
 }
 
 /// Mixed production dispatch hard-path makes ZERO heap allocations.

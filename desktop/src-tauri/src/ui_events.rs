@@ -122,14 +122,34 @@ pub struct DiagnosticsSnapshotDto {
     pub pre_call_late_2ms: u64,
     pub pre_call_late_5ms: u64,
     pub pre_call_late_10ms: u64,
+    pub down_late_grace_us: u64,
+    pub pre_call_lt_250us: u64,
+    pub pre_call_250_500us: u64,
+    pub pre_call_500_750us: u64,
+    pub pre_call_750_1000us: u64,
+    pub pre_call_1000_1500us: u64,
+    pub pre_call_1500_2000us: u64,
+    pub pre_call_ge_2000us: u64,
     pub active_keys: u64,
     pub stuck_keys: u64,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
+    pub missed_down_boundaries: u64,
+    pub missed_down_keys: u64,
+    pub missed_backlog_boundaries: u64,
+    pub missed_hard_late_boundaries: u64,
+    pub final_gate_cutoff_misses: u64,
+    pub final_gate_control_rejections: u64,
+    pub final_gate_target_changes: u64,
+    pub final_gate_focus_losses: u64,
+    pub final_gate_lease_expirations: u64,
+    pub sendinput_partial_events: u64,
+    pub sendinput_zero_progress_failures: u64,
     pub backend_status: DiagnosticsBackendStatus,
     pub release_max_us: Option<u64>,
     pub release_late_2ms: Option<u64>,
     pub session_id: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
@@ -321,7 +341,7 @@ pub enum UiEvent {
     #[serde(rename = "diagnostics.snapshot")]
     DiagnosticsSnapshot {
         v: u64,
-        payload: DiagnosticsSnapshotDto,
+        payload: Box<DiagnosticsSnapshotDto>,
     },
     #[serde(rename = "calibration.progress")]
     CalibrationProgress {
@@ -449,6 +469,12 @@ impl UiEvent {
             && max_lateness_us > 60_000_000
         {
             return Err("diagnostics max lateness is outside bounds".into());
+        }
+        if payload.down_late_grace_us > 60_000_000 {
+            return Err("diagnostics Down grace is outside bounds".into());
+        }
+        if let Some(last_error) = &payload.last_error {
+            validate_text("last_error", last_error)?;
         }
         if let Some(session_id) = &payload.session_id {
             validate_session_id(session_id)?;

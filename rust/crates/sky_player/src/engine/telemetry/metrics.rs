@@ -52,6 +52,15 @@ pub struct WorkerMetricsLocal {
     /// tick-domain companion below and publication derives this value once.
     pub max_sendinput_pre_call_lateness_us: u64,
     pub(crate) max_sendinput_pre_call_lateness_ticks: u64,
+    /// Mutually-exclusive production pre-call lateness buckets. These are
+    /// scalar-only and use the same QPC domain as the legacy thresholds.
+    pub pre_call_lt_250us: u64,
+    pub pre_call_250_500us: u64,
+    pub pre_call_500_750us: u64,
+    pub pre_call_750_1000us: u64,
+    pub pre_call_1000_1500us: u64,
+    pub pre_call_1500_2000us: u64,
+    pub pre_call_ge_2000us: u64,
     pub pre_call_late_2ms: u64,
     pub pre_call_late_5ms: u64,
     pub pre_call_late_10ms: u64,
