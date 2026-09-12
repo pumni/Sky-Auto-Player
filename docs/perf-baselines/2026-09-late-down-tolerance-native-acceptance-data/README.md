@@ -81,3 +81,41 @@ does not send input to Sky. A real-game A/B at the repeatable missed note and
 export of that session's packet-identified sender trace remain necessary to
 decide whether the game rejects a packet shape or whether late-Down admission
 is implicated. Production batching and keyboard encoding were not changed.
+
+## Review follow-up: desktop Diagnostics and release-gap stress
+
+The desktop physical smoke at the reviewed implementation source verified the
+previously missing Diagnostics wiring. During a 12-second playback to a separate
+`ReceiveOnly` sink, the UI showed `Physical session: Yes`, `Player attached:
+Yes`, `Sender samples: 20`, `Sender backend: Healthy`, and a measured maximum
+pre-call lateness of `96 µs`. The ready record and 20-event log are archived in
+[`diagnostics-desktop-smoke-20260912T225520/`](diagnostics-desktop-smoke-20260912T225520/),
+with the live UI capture. The app was launched from the worktree immediately
+before those exact source files were committed as `bb30148c404146821bbd9ef6b44a55b5cc258051`;
+the report records the parent Git head present at launch and the commit that
+contains the captured source. This smoke is a wiring check, not a gameplay
+reliability test.
+
+The focused `release-gap-stress` run used that exact implementation commit,
+60 FPS, 1.0-frame Base Hold, 800 µs Timing Margin, and 500 µs Late Down
+tolerance. It completed 512 release-gap observations but **failed
+qualification**: four observed Up-completion-to-next-Down-pre-call gaps fell
+below the fixed one-frame floor. At a 10 MHz QPC frequency, the smallest gap was
+16.2742 ms against the 16.667 ms floor. The observed count was `4/512`
+(`0.78125%`). The sink also recorded one extra KeyDown (`1,027` events in the
+authorized window against `1,026` expected); the harness correctly failed on
+that event. SendInput partial/zero-progress counts, dropped keys, stuck keys,
+and focus losses were all zero. The report, full ready record, and raw event log
+are archived in
+[`release-gap-stress-20260912T231500-bb30148c/`](release-gap-stress-20260912T231500-bb30148c/).
+
+An earlier run stayed paused and did not join; it collected zero release-gap
+samples and is preserved separately as
+[`release-gap-stress-inconclusive-20260912T230900-be9c1d68/`](release-gap-stress-inconclusive-20260912T230900-be9c1d68/).
+It is excluded from the observed anomaly count. All stress runs used the same
+500 µs tolerance and 800 µs Timing Margin; these results say nothing about
+whether changing the cutoff improves the release-gap observations. They do
+establish that a below-floor observation is no longer reported as a clean
+`PASS`, and that the current stress workload is **not qualifying** for release.
+The original 17-scenario and cutoff-sweep evidence above remains historical
+evidence from its separately identified source revision.

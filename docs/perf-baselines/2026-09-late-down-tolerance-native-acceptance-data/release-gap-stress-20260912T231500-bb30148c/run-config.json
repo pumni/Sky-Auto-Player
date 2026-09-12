@@ -1,0 +1,32 @@
+{
+  "source_revision": "bb30148c404146821bbd9ef6b44a55b5cc258051",
+  "source_tree_clean": true,
+  "harness": "rust/target/release/rt-native-acceptance.exe",
+  "harness_sha256": "3118e69ff1565af4a6a7a4ece9b9fbe201af91ac3b7503d609cc48dc9414b364",
+  "qpc_frequency_hz": 10000000,
+  "invocation": {
+    "command": "rt-native-acceptance run --allow-real-input",
+    "down_late_grace_us": 500,
+    "minimum_qualifying_release_gap_samples": 512,
+    "timing_margin_us": 800,
+    "scenario": "release-gap-stress"
+  },
+  "sink": {
+    "event_log_id": "472e6c3a578d45fc85e77b6de5cf371d",
+    "input_policy": "receives_only; benchmark must use SendInput",
+    "pid": 6396,
+    "title": "Sky Auto Player — Native Acceptance Sink",
+    "hwnd": 1050594,
+    "run_id": "release-gap-stress-20260912T231500-bb30148c"
+  },
+  "result": {
+    "release_gap_samples": 512,
+    "exit_code": 1,
+    "reason": "unexpected or duplicate KeyDown scan=0x4B extended=true",
+    "below_frame_floor": 4,
+    "sink_event_count": 1027,
+    "status": "FAIL",
+    "production_forensics_anomaly_count": 4,
+    "minimum_release_gap_ticks": 162742
+  }
+}
