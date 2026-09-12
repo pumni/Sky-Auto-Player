@@ -20,7 +20,8 @@ use crate::engine::worker::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitResult, WaitSignals,
     WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
     WorkerTimingState, dispatch_due_from_plan, plan_next_dispatch, plan_next_dispatch_projected,
-    preflight_prepared_plan, wait_for_next_boundary,
+    preflight_prepared_plan, publish_backend_counters, publish_live_metrics_after_dispatch,
+    wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, physical_packet_kind};
@@ -879,6 +880,48 @@ impl ProductionDispatchTestHarness {
             self.local_metrics.pre_call_1500_2000us,
             self.local_metrics.pre_call_ge_2000us,
         ]
+    }
+
+    pub fn set_live_diagnostics_enabled_for_test(&self, enabled: bool) {
+        if enabled {
+            self.metrics.last_publish_us.store(0, Ordering::Relaxed);
+        }
+        self.metrics
+            .live_diagnostics_enabled
+            .store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn publish_live_diagnostics_for_test(&mut self) {
+        if !self
+            .metrics
+            .live_diagnostics_enabled
+            .load(Ordering::Relaxed)
+        {
+            return;
+        }
+        publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
+        let now_qpc = self
+            .resources
+            .clock
+            .duration_from_us(50_000)
+            .expect("diagnostics test QPC conversion");
+        publish_live_metrics_after_dispatch(
+            &self.local_metrics,
+            &self.metrics,
+            self.resources.clock,
+            QpcTicks::from_raw(now_qpc.as_u64()),
+        );
+    }
+
+    pub fn published_sender_sample_count_for_test(&self) -> u64 {
+        let snapshot = self.metrics.snapshot.load();
+        snapshot.pre_call_lt_250us
+            + snapshot.pre_call_250_500us
+            + snapshot.pre_call_500_750us
+            + snapshot.pre_call_750_1000us
+            + snapshot.pre_call_1000_1500us
+            + snapshot.pre_call_1500_2000us
+            + snapshot.pre_call_ge_2000us
     }
 
     pub fn backend_active_mask(&self) -> u16 {

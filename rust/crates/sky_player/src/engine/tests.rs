@@ -1897,7 +1897,9 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
         .try_push(|| {
             builds += 1;
             Ok(RtTraceRecord {
-                packet_index: 0,
+                trace_record_index: 0,
+                compiled_packet_index: 0,
+                compiled_packet_index_available: false,
                 source_action_index: 0,
                 event_index: 0,
                 kind: TRACE_KIND_DOWN,
@@ -4364,6 +4366,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
         TraceContext {
             event_index: 7,
             source_action_index: 7,
+            compiled_packet_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 3,
@@ -4428,6 +4431,7 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
+            compiled_packet_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 1,
@@ -4474,6 +4478,7 @@ fn native_summary_ignores_non_backend_trace() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
+            compiled_packet_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("blocked_unfocused"),
             polyphony: 3,

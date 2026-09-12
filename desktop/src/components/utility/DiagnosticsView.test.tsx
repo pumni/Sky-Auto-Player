@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsSnapshot } from '../../bridge/DesktopBridge';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -67,7 +67,11 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
 }
 
 describe('DiagnosticsView', () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it('distinguishes enabled diagnostics with no active session', () => {
     const store = createDesktopStore(createMockBridge());
@@ -434,6 +438,40 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Physical session').parentElement).toHaveTextContent('Yes');
     expect(screen.getByText('Player attached').parentElement).toHaveTextContent('No');
     expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Error');
+    for (const label of [
+      'Missed Down boundaries',
+      'Final cutoff misses',
+      'SendInput partial events',
+      'Dropped keys',
+      'Active keys',
+      'Release > 2 ms',
+    ]) {
+      expect(screen.getByText(label).nextElementSibling).toHaveTextContent('Unavailable');
+    }
+  });
+
+  it('labels an exported trace with its song and owning session', async () => {
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:sender-trace'),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const store = createDesktopStore(createMockBridge());
+    render(<DiagnosticsView useStore={store} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export last sender trace' }));
+
+    expect(
+      await screen.findByText(`Trace available: Song Fixture Song · Session ${'a'.repeat(32)}`),
+    ).toBeInTheDocument();
+    await act(async () => {
+      store.setState({
+        playback: { ...store.getState().playback, sessionId: 'b'.repeat(32), state: 'playing' },
+      });
+    });
+    expect(
+      screen.getByText('Available after a completed physical playback session.'),
+    ).toBeInTheDocument();
   });
 
   it('uses playback lifecycle to hide a completed session', () => {
@@ -506,6 +544,7 @@ describe('DiagnosticsView', () => {
       screen.getByText('Last error: authored Down send integrity failure'),
     ).toBeInTheDocument();
     expect(screen.queryByText('Sender-side status: Healthy')).toBeNull();
+    expect(screen.getByText('Missed Down boundaries').nextElementSibling).toHaveTextContent('0');
   });
 
   it('does not report degraded backend health as healthy when counters are zero', () => {

@@ -316,6 +316,7 @@ fn admit_authored_down(
                 super::observation::DispatchObservation::BlockedUnfocused(
                     BlockedUnfocusedObservation {
                         event_index: view.batch_source_action_index,
+                        compiled_packet_index: u64::try_from(view.prepared_batch.packet_index).ok(),
                         authored_ticks: view.authored_batch_scheduled_ticks,
                         effective_deadline_ticks: view.batch_scheduled_ticks,
                         effective_now_ticks,

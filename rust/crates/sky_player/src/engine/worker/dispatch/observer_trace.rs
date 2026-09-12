@@ -19,6 +19,7 @@ pub(super) fn drain_stale_metadata_observation(
             TraceContext {
                 event_index: observation.source_action_index,
                 source_action_index: observation.source_action_index,
+                compiled_packet_index: None,
                 kind: TRACE_KIND_UP,
                 outcome: trace_outcome_code("suppressed_stale_up"),
                 polyphony: observation.suppressed_intent_count,
@@ -91,6 +92,7 @@ pub(super) fn drain_down_miss(
             TraceContext {
                 event_index: observation.source_action_index,
                 source_action_index: observation.source_action_index,
+                compiled_packet_index: observation.compiled_packet_index,
                 kind,
                 outcome: trace_outcome_code(outcome),
                 polyphony: down_count,
@@ -148,6 +150,7 @@ pub(super) fn drain_blocked_unfocused_observation(
             TraceContext {
                 event_index: observation.event_index,
                 source_action_index: observation.event_index,
+                compiled_packet_index: observation.compiled_packet_index,
                 kind,
                 outcome: trace_outcome_code("blocked_unfocused"),
                 polyphony: observation.polyphony,
@@ -203,6 +206,7 @@ mod tests {
     fn cutoff_trace_preserves_mixed_same_key_boundary_and_zero_attempts() {
         let observation = DownMissObservation {
             source_action_index: 41,
+            compiled_packet_index: Some(37),
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(20),
@@ -217,7 +221,9 @@ mod tests {
         drain_down_miss(&observation, &mut collector).expect("record cutoff miss");
 
         let record = collector.output.records.front().expect("trace record");
-        assert_eq!(record.packet_index, 0);
+        assert_eq!(record.trace_record_index, 0);
+        assert_eq!(record.compiled_packet_index, 37);
+        assert!(record.compiled_packet_index_available);
         assert_eq!(record.source_action_index, 41);
         assert_eq!(record.event_index, 41);
         assert_eq!(record.kind, TRACE_KIND_MIXED);
@@ -246,6 +252,7 @@ mod tests {
     fn backlog_trace_is_distinct_and_records_unattempted_down() {
         let observation = DownMissObservation {
             source_action_index: 8,
+            compiled_packet_index: Some(52),
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(20),
@@ -261,6 +268,8 @@ mod tests {
 
         let record = collector.output.records.front().expect("trace record");
         assert_eq!(record.source_action_index, 8);
+        assert_eq!(record.compiled_packet_index, 52);
+        assert!(record.compiled_packet_index_available);
         assert_eq!(record.kind, TRACE_KIND_DOWN);
         assert_eq!(record.outcome, trace_outcome_code("down_backlog_miss"));
         assert_eq!(record.send_status, TRACE_SEND_STATUS_NOT_ATTEMPTED);

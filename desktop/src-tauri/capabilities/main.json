@@ -5,6 +5,8 @@
   "windows": ["main"],
   "platforms": ["windows"],
   "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:default",
     "core:window:allow-close",
     "core:window:allow-minimize",

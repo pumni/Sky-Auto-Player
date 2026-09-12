@@ -2692,11 +2692,54 @@ struct NativePlaybackService {
     prepared: Mutex<VecDeque<(String, NativePreparedPlan)>>,
     active: Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: Arc<Mutex<Option<(String, PlaybackSessionState)>>>,
-    last_sender_trace: Arc<Mutex<Option<String>>>,
+    sender_trace_state: Arc<Mutex<SenderTraceState>>,
     diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     activity: ActivityCoordinator,
     #[cfg(test)]
     settings_invalidation_count: AtomicU64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CompletedSenderTrace {
+    session_id: String,
+    song_id: String,
+    song_title: String,
+    plan_fingerprint: String,
+    trace_json: String,
+}
+
+#[derive(Default)]
+struct SenderTraceState {
+    collecting_session_id: Option<String>,
+    completed: Option<CompletedSenderTrace>,
+}
+
+impl SenderTraceState {
+    fn begin_physical_session(&mut self, session_id: &str) {
+        self.collecting_session_id = Some(session_id.to_string());
+        self.completed = None;
+    }
+
+    fn finish_physical_session(
+        &mut self,
+        session_id: &str,
+        song_id: &str,
+        song_title: &str,
+        plan_fingerprint: &str,
+        trace_json: Option<String>,
+    ) {
+        if self.collecting_session_id.as_deref() != Some(session_id) {
+            return;
+        }
+        self.completed = trace_json.map(|trace_json| CompletedSenderTrace {
+            session_id: session_id.to_string(),
+            song_id: song_id.to_string(),
+            song_title: song_title.to_string(),
+            plan_fingerprint: plan_fingerprint.to_string(),
+            trace_json,
+        });
+        self.collecting_session_id = None;
+    }
 }
 
 const DIAGNOSTICS_INTERVAL: Duration = Duration::from_millis(100);
@@ -2723,6 +2766,13 @@ impl Default for DiagnosticsPublicationGate {
 }
 
 impl DiagnosticsPublicationGate {
+    fn is_enabled(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.enabled)
+            .unwrap_or(false)
+    }
+
     fn set_enabled(&self, enabled: bool) -> Result<bool, String> {
         let mut state = self
             .state
@@ -3135,7 +3185,7 @@ impl NativePlaybackService {
             prepared: Mutex::new(VecDeque::new()),
             active: Arc::new(Mutex::new(None)),
             last_terminal: Arc::new(Mutex::new(None)),
-            last_sender_trace: Arc::new(Mutex::new(None)),
+            sender_trace_state: Arc::new(Mutex::new(SenderTraceState::default())),
             diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
             activity,
             #[cfg(test)]
@@ -3148,16 +3198,38 @@ impl NativePlaybackService {
         enabled: bool,
         _events: Arc<Mutex<NativeEventHub>>,
     ) -> Result<(), String> {
-        self.diagnostics_gate.set_enabled(enabled)?;
+        let enabled = self.diagnostics_gate.set_enabled(enabled)?;
+        let active_player = self
+            .active
+            .lock()
+            .map_err(|_| "active playback lock poisoned".to_string())?
+            .as_ref()
+            .and_then(|active| active.player.clone());
+        if let Some(player) = active_player {
+            player.set_live_diagnostics_enabled(enabled);
+        }
         Ok(())
     }
 
     fn export_sender_trace(&self) -> Result<String, String> {
-        self.last_sender_trace
+        let trace_state = self
+            .sender_trace_state
             .lock()
-            .map_err(|_| "sender trace state lock poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "no completed physical sender trace is available".to_string())
+            .map_err(|_| "sender trace state lock poisoned".to_string())?;
+        let completed = trace_state
+            .completed
+            .as_ref()
+            .ok_or_else(|| "no completed physical sender trace is available".to_string())?;
+        let document: Value = serde_json::from_str(&completed.trace_json)
+            .map_err(|_| "completed sender trace is malformed".to_string())?;
+        if document["session_id"] != completed.session_id
+            || document["song_id"] != completed.song_id
+            || document["song_title"] != completed.song_title
+            || document["plan_fingerprint"] != completed.plan_fingerprint
+        {
+            return Err("completed sender trace identity does not match its owner".to_string());
+        }
+        Ok(completed.trace_json.clone())
     }
 
     fn prepare(&self, input: NativePreparedInput) -> Result<PreparedPlaybackDto, String> {
@@ -3473,12 +3545,31 @@ impl NativePlaybackService {
             .position(|(id, _)| id == &request.prepared_id)
             .expect("prepared record was found above");
         prepared.remove(prepared_index);
+        if let Some(player) = &active.player {
+            player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());
+        }
         *active_slot = Some(active.clone());
         drop(prepared);
         drop(active_slot);
+        if active.physical
+            && let Ok(mut trace_state) = self.sender_trace_state.lock()
+        {
+            trace_state.begin_physical_session(&active.session_id);
+        }
         if let Err(error) =
             publish_playback_state(&events, &active, PlaybackEventState::Starting, None, None)
         {
+            if active.physical
+                && let Ok(mut trace_state) = self.sender_trace_state.lock()
+            {
+                trace_state.finish_physical_session(
+                    &active.session_id,
+                    &active.song_id,
+                    &active.title,
+                    &active.plan_fingerprint,
+                    None,
+                );
+            }
             if let Some(player) = &active.player {
                 let _ = player.panic_release();
                 let _ = player.quit();
@@ -3498,6 +3589,17 @@ impl NativePlaybackService {
         }
         if let Err(error) = spawn_supervisor_heartbeat(&active) {
             stop_supervisor_heartbeat(&active);
+            if active.physical
+                && let Ok(mut trace_state) = self.sender_trace_state.lock()
+            {
+                trace_state.finish_physical_session(
+                    &active.session_id,
+                    &active.song_id,
+                    &active.title,
+                    &active.plan_fingerprint,
+                    None,
+                );
+            }
             if let Some(player) = &active.player {
                 let _ = player.panic_release();
                 let _ = player.quit();
@@ -3524,6 +3626,17 @@ impl NativePlaybackService {
             .spawn(move || service.monitor(active_for_thread, events));
         if let Err(error) = spawn_result {
             stop_supervisor_heartbeat(&active);
+            if active.physical
+                && let Ok(mut trace_state) = self.sender_trace_state.lock()
+            {
+                trace_state.finish_physical_session(
+                    &active.session_id,
+                    &active.song_id,
+                    &active.title,
+                    &active.plan_fingerprint,
+                    None,
+                );
+            }
             if let Some(player) = &active.player {
                 let _ = player.panic_release();
                 let _ = player.quit();
@@ -3557,7 +3670,7 @@ impl NativePlaybackService {
         NativePlaybackServiceHandle {
             active: self.active.clone(),
             last_terminal: self.last_terminal.clone(),
-            last_sender_trace: self.last_sender_trace.clone(),
+            sender_trace_state: self.sender_trace_state.clone(),
             diagnostics_gate: self.diagnostics_gate.clone(),
             activity: self.activity.clone(),
         }
@@ -3635,6 +3748,7 @@ impl NativePlaybackService {
         })?);
         player.set_target_hwnd(target);
         player.set_focus_hint(true);
+        player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());
         player.arm(0)?;
         Ok((player, target))
     }
@@ -3761,10 +3875,16 @@ impl NativePlaybackService {
             thread::sleep(Duration::from_millis(20));
         }
         stop_supervisor_heartbeat(&active);
-        if let Some(trace) = completed_sender_trace(&active)
-            && let Ok(mut last_sender_trace) = self.last_sender_trace.lock()
+        if active.physical
+            && let Ok(mut trace_state) = self.sender_trace_state.lock()
         {
-            *last_sender_trace = Some(trace);
+            trace_state.finish_physical_session(
+                &active.session_id,
+                &active.song_id,
+                &active.title,
+                &active.plan_fingerprint,
+                completed_sender_trace(&active),
+            );
         }
         if let Ok(mut slot) = self.active.lock()
             && slot
@@ -4048,7 +4168,7 @@ impl NativePlaybackService {
 struct NativePlaybackServiceHandle {
     active: Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: Arc<Mutex<Option<(String, PlaybackSessionState)>>>,
-    last_sender_trace: Arc<Mutex<Option<String>>>,
+    sender_trace_state: Arc<Mutex<SenderTraceState>>,
     diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     activity: ActivityCoordinator,
 }
@@ -4059,7 +4179,7 @@ impl NativePlaybackServiceHandle {
             prepared: Mutex::new(VecDeque::new()),
             active: self.active.clone(),
             last_terminal: self.last_terminal.clone(),
-            last_sender_trace: self.last_sender_trace.clone(),
+            sender_trace_state: self.sender_trace_state.clone(),
             diagnostics_gate: self.diagnostics_gate.clone(),
             activity: self.activity.clone(),
             #[cfg(test)]
@@ -4086,6 +4206,7 @@ fn sender_trace_export_json(
         "export_schema_version": 1,
         "session_id": active.session_id,
         "song_id": active.song_id,
+        "song_title": active.title,
         "plan_fingerprint": active.plan_fingerprint,
         "timing_policy": {
             "fps": active.timing_policy.fps,
@@ -5135,13 +5256,14 @@ mod tests {
         MAX_DECISION_COUNT, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS, MaterializedTimingPolicy,
         NativeActivePlayback, NativeCalibrationOperation, NativeCalibrationService,
         NativeDesktopRuntime, NativeDiagnosticsSample, NativeEventHub, NativePlaybackService,
-        PlaybackPendingControl, TestSeams, calibration_budget, diagnostics_backend_status,
-        opaque_native_id, percentile_ms, plan_fingerprint, population_sigma_ms,
-        publish_calibration_cache, publish_diagnostics_snapshot_for_active, publish_playback_state,
-        publish_stopped_completion, publish_terminal_poll_result, remove_oldest_snapshot,
-        resolve_install_root, retain_prepared_capacity, safe_calibration_evidence,
-        sender_sample_summary, sender_trace_export_json, settings_fingerprint,
-        supervisor_heartbeat_loop, timing_margin_recommendation, validate_playback_start_request,
+        PlaybackPendingControl, SenderTraceState, TestSeams, calibration_budget,
+        diagnostics_backend_status, opaque_native_id, percentile_ms, plan_fingerprint,
+        population_sigma_ms, publish_calibration_cache, publish_diagnostics_snapshot_for_active,
+        publish_playback_state, publish_stopped_completion, publish_terminal_poll_result,
+        remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
+        safe_calibration_evidence, sender_sample_summary, sender_trace_export_json,
+        settings_fingerprint, supervisor_heartbeat_loop, timing_margin_recommendation,
+        validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState};
@@ -5215,7 +5337,7 @@ mod tests {
     fn sender_trace_export_includes_session_identity_and_frozen_policy() {
         let active = active_for_control_with_physical(PlaybackSessionState::Finished, None, true);
         let telemetry = serde_json::json!({
-            "schema_version": 13,
+            "schema_version": 14,
             "qpc_frequency_hz": 10_000_000,
             "records": [],
             "attempted": 0,
@@ -5230,6 +5352,7 @@ mod tests {
         assert_eq!(document["export_schema_version"], 1);
         assert_eq!(document["session_id"], "a".repeat(32));
         assert_eq!(document["song_id"], "c".repeat(32));
+        assert_eq!(document["song_title"], "Fixture");
         assert_eq!(document["plan_fingerprint"], "d".repeat(64));
         assert_eq!(document["timing_policy"]["fps"], 60);
         assert_eq!(document["timing_policy"]["frame_base_hold_us"], 16_667);
@@ -5238,6 +5361,51 @@ mod tests {
         assert_eq!(document["timing_policy"]["release_gap_us"], 17_467);
         assert_eq!(document["timing_policy"]["down_late_cutoff_us"], 500);
         assert_eq!(document["telemetry"], telemetry);
+    }
+
+    #[test]
+    fn sender_trace_beginning_physical_session_b_clears_session_a_and_rejects_late_a_completion() {
+        let mut state = SenderTraceState::default();
+        state.begin_physical_session("session-a");
+        state.finish_physical_session(
+            "session-a",
+            "song-a",
+            "Song A",
+            "fingerprint-a",
+            Some(r#"{"session_id":"session-a","song_id":"song-a","song_title":"Song A","plan_fingerprint":"fingerprint-a"}"#.into()),
+        );
+        assert!(state.completed.is_some());
+
+        state.begin_physical_session("session-b");
+        assert!(state.completed.is_none());
+        state.finish_physical_session(
+            "session-a",
+            "song-a",
+            "Song A",
+            "fingerprint-a",
+            Some("late trace A".into()),
+        );
+
+        assert!(state.completed.is_none());
+        assert_eq!(state.collecting_session_id.as_deref(), Some("session-b"));
+    }
+
+    #[test]
+    fn sender_trace_failed_session_b_extraction_does_not_restore_session_a() {
+        let mut state = SenderTraceState::default();
+        state.begin_physical_session("session-a");
+        state.finish_physical_session(
+            "session-a",
+            "song-a",
+            "Song A",
+            "fingerprint-a",
+            Some(r#"{"session_id":"session-a","song_id":"song-a","song_title":"Song A","plan_fingerprint":"fingerprint-a"}"#.into()),
+        );
+        state.begin_physical_session("session-b");
+        state.finish_physical_session("session-b", "song-b", "Song B", "fingerprint-b", None);
+
+        assert!(state.completed.is_none());
+        assert!(state.collecting_session_id.is_none());
     }
 
     #[test]

@@ -555,7 +555,9 @@ How late was sender entry?
 Add fixed-width fields sufficient to identify the physical boundary. Suggested:
 
 ```rust
-packet_index: u32,
+trace_record_index: u32,
+compiled_packet_index: u64,
+compiled_packet_index_available: bool,
 source_action_index: u32,
 up_mask: u16,
 down_mask: u16,
@@ -590,7 +592,9 @@ If `event_index` already exactly equals the source action identity in all
 production paths, document and test that before deciding whether a second field
 is redundant. Packet identity and masks are still required.
 
-Bump `NATIVE_TELEMETRY_SCHEMA_VERSION` when extending the record.
+Bump `NATIVE_TELEMETRY_SCHEMA_VERSION` when extending the record. The trace
+sequence is distinct from the compiled schedule packet identity; consumers
+must check `compiled_packet_index_available` before interpreting that field.
 
 Do not add strings, Vecs, maps, locks, formatting or heap allocation on the RT
 path.

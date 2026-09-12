@@ -739,6 +739,7 @@ export function createMockBridge(): DesktopBridge {
         export_schema_version: 1,
         session_id: 'a'.repeat(32),
         song_id: 'fixture-song',
+        song_title: 'Fixture Song',
         plan_fingerprint: 'b'.repeat(64),
         timing_policy: {
           fps: 60,
@@ -750,7 +751,7 @@ export function createMockBridge(): DesktopBridge {
           late_down_tolerance_us: 500,
         },
         telemetry: {
-          schema_version: 12,
+          schema_version: 14,
           qpc_frequency_hz: 10_000_000,
           records: [],
           attempted: 0,

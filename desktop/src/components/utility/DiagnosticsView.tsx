@@ -16,10 +16,6 @@ function measure(value: number | null | undefined, unit: string, digits = 2): st
   return value === null || value === undefined ? 'Unavailable' : `${number(value, digits)} ${unit}`;
 }
 
-function count(value: number | null | undefined): string {
-  return value === null || value === undefined ? 'Unavailable' : String(value);
-}
-
 function formatEventTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], {
     hour: '2-digit',
@@ -172,6 +168,10 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const exportSenderTrace = useStore((store: DesktopStore) => store.exportSenderTrace);
   const [traceExporting, setTraceExporting] = useState(false);
   const [traceExportError, setTraceExportError] = useState<string | null>(null);
+  const [traceExportIdentity, setTraceExportIdentity] = useState<{
+    song: string;
+    session: string;
+  } | null>(null);
   const scrollRef = useScrollVisibility<HTMLDivElement>();
   const eventsScrollRef = useScrollVisibility<HTMLDivElement>();
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
@@ -182,16 +182,23 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
     playback.sessionId !== null &&
     latest?.session_id === playback.sessionId;
   const backendMetricsAvailable = latest !== undefined && latest.backend_status !== 'unavailable';
-  const backendMetric = (value: number): string =>
-    backendMetricsAvailable ? String(value) : 'Unavailable';
-  const senderSampleMetric = (value: number): string =>
+  const visibleTraceExportIdentity =
+    traceExportIdentity !== null &&
+    (playback.sessionId === null || playback.sessionId === traceExportIdentity.session)
+      ? traceExportIdentity
+      : null;
+  const playerMetric = (value: number): string =>
+    !backendMetricsAvailable || latest?.player_attached !== true ? 'Unavailable' : String(value);
+  const senderSampleMetric = (value: number | null | undefined): string =>
     !backendMetricsAvailable
       ? 'Unavailable'
       : latest?.player_attached !== true
         ? 'Unavailable'
         : latest?.sender_sample_count === 0
           ? 'No samples'
-          : String(value);
+          : value === null || value === undefined
+            ? 'Unavailable'
+            : String(value);
   const backendMeasure = (value: number | null, unit: string): string =>
     !backendMetricsAvailable
       ? 'Unavailable'
@@ -254,8 +261,24 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const handleExportSenderTrace = async () => {
     setTraceExporting(true);
     setTraceExportError(null);
+    setTraceExportIdentity(null);
     try {
       const content = await exportSenderTrace();
+      const trace = JSON.parse(content) as {
+        session_id?: unknown;
+        song_id?: unknown;
+        song_title?: unknown;
+      };
+      if (typeof trace.session_id !== 'string' || typeof trace.song_id !== 'string') {
+        throw new Error('Sender trace export is missing session identity.');
+      }
+      setTraceExportIdentity({
+        song:
+          typeof trace.song_title === 'string' && trace.song_title.length > 0
+            ? trace.song_title
+            : trace.song_id,
+        session: trace.session_id,
+      });
       const objectUrl = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
@@ -291,7 +314,11 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
         >
           {traceExporting ? 'Preparing sender trace…' : 'Export last sender trace'}
         </button>
-        <span>Available after a completed physical playback session.</span>
+        <span role="status">
+          {visibleTraceExportIdentity
+            ? `Trace available: Song ${visibleTraceExportIdentity.song} · Session ${visibleTraceExportIdentity.session}`
+            : 'Available after a completed physical playback session.'}
+        </span>
       </div>
       {traceExportError && (
         <p className="inline-error" role="alert">
@@ -337,14 +364,17 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <Metric label="Sender backend" value={backendStatusLabel(latest.backend_status)} />
               </MetricGroup>
               <MetricGroup title="Timing">
-                <Metric label="Completion p50" value={measure(latest.p50_ms, 'ms')} />
-                <Metric label="Completion p95" value={measure(latest.p95_ms, 'ms')} />
-                <Metric label="Session max" value={measure(latest.max_lateness_us, 'μs', 0)} />
+                <Metric label="Completion p50" value={backendMeasure(latest.p50_ms, 'ms')} />
+                <Metric label="Completion p95" value={backendMeasure(latest.p95_ms, 'ms')} />
+                <Metric label="Session max" value={backendMeasure(latest.max_lateness_us, 'μs')} />
                 <Metric
                   label="Max pre-call lateness"
                   value={backendMeasure(latest.max_sendinput_pre_call_lateness_us, 'μs')}
                 />
-                <Metric label="Completion jitter σ" value={measure(latest.sigma_onset_ms, 'ms')} />
+                <Metric
+                  label="Completion jitter σ"
+                  value={backendMeasure(latest.sigma_onset_ms, 'ms')}
+                />
               </MetricGroup>
               <MetricGroup title="Frozen session timing">
                 <Metric label="FPS" value={String(latest.fps)} />
@@ -375,9 +405,9 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 />
               </MetricGroup>
               <MetricGroup title="Late events">
-                <Metric label="Completion > 2 ms" value={count(latest.late_2ms)} />
-                <Metric label="Completion > 5 ms" value={count(latest.late_5ms)} />
-                <Metric label="Completion > 10 ms" value={count(latest.late_10ms)} />
+                <Metric label="Completion > 2 ms" value={senderSampleMetric(latest.late_2ms)} />
+                <Metric label="Completion > 5 ms" value={senderSampleMetric(latest.late_5ms)} />
+                <Metric label="Completion > 10 ms" value={senderSampleMetric(latest.late_10ms)} />
                 <Metric
                   label="Pre-call > 2 ms"
                   value={senderSampleMetric(latest.pre_call_late_2ms)}
@@ -424,58 +454,61 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
               <MetricGroup title="Deadline admission">
                 <Metric
                   label="Missed Down boundaries"
-                  value={backendMetric(latest.missed_down_boundaries)}
+                  value={playerMetric(latest.missed_down_boundaries)}
                 />
                 <Metric
                   label="Hard-late Down boundaries"
-                  value={backendMetric(latest.missed_hard_late_boundaries)}
+                  value={playerMetric(latest.missed_hard_late_boundaries)}
                 />
-                <Metric label="Missed Down keys" value={backendMetric(latest.missed_down_keys)} />
+                <Metric label="Missed Down keys" value={playerMetric(latest.missed_down_keys)} />
                 <Metric
                   label="Backlog misses"
-                  value={backendMetric(latest.missed_backlog_boundaries)}
+                  value={playerMetric(latest.missed_backlog_boundaries)}
                 />
                 <Metric
                   label="Final cutoff misses"
-                  value={backendMetric(latest.final_gate_cutoff_misses)}
+                  value={playerMetric(latest.final_gate_cutoff_misses)}
                 />
                 <Metric
                   label="Focus gate rejections"
-                  value={backendMetric(latest.final_gate_focus_losses)}
+                  value={playerMetric(latest.final_gate_focus_losses)}
                 />
                 <Metric
                   label="Target changes"
-                  value={backendMetric(latest.final_gate_target_changes)}
+                  value={playerMetric(latest.final_gate_target_changes)}
                 />
                 <Metric
                   label="Lease expirations"
-                  value={backendMetric(latest.final_gate_lease_expirations)}
+                  value={playerMetric(latest.final_gate_lease_expirations)}
                 />
                 <Metric
                   label="Control rejections"
-                  value={backendMetric(latest.final_gate_control_rejections)}
+                  value={playerMetric(latest.final_gate_control_rejections)}
                 />
               </MetricGroup>
               <MetricGroup title="Input transport">
                 <Metric
                   label="SendInput zero-progress failures"
-                  value={backendMetric(latest.sendinput_zero_progress_failures)}
+                  value={playerMetric(latest.sendinput_zero_progress_failures)}
                 />
                 <Metric
                   label="SendInput partial events"
-                  value={backendMetric(latest.sendinput_partial_events)}
+                  value={playerMetric(latest.sendinput_partial_events)}
                 />
-                <Metric label="Dropped keys" value={backendMetric(latest.keys_dropped)} />
-                <Metric label="Chord splits" value={backendMetric(latest.chord_split_events)} />
-                <Metric label="Stuck keys" value={backendMetric(latest.stuck_keys)} />
-                <Metric label="Active keys" value={backendMetric(latest.active_keys)} />
+                <Metric label="Dropped keys" value={playerMetric(latest.keys_dropped)} />
+                <Metric label="Chord splits" value={playerMetric(latest.chord_split_events)} />
+                <Metric label="Stuck keys" value={playerMetric(latest.stuck_keys)} />
+                <Metric label="Active keys" value={playerMetric(latest.active_keys)} />
               </MetricGroup>
               <MetricGroup title="Release">
                 <Metric
                   label="Max release lateness"
-                  value={measure(latest.release_max_us, 'μs', 0)}
+                  value={backendMeasure(latest.release_max_us, 'μs')}
                 />
-                <Metric label="Release > 2 ms" value={count(latest.release_late_2ms)} />
+                <Metric
+                  label="Release > 2 ms"
+                  value={senderSampleMetric(latest.release_late_2ms)}
+                />
               </MetricGroup>
             </>
           )}

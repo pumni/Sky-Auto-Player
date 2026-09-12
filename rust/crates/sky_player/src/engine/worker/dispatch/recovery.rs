@@ -73,6 +73,7 @@ pub(super) fn queue_down_miss_observation(
     observer.push(
         DispatchObservation::DownMiss(DownMissObservation {
             source_action_index: view.batch_source_action_index,
+            compiled_packet_index: u64::try_from(view.prepared_batch.packet_index).ok(),
             authored_ticks: view.authored_batch_scheduled_ticks,
             effective_deadline_ticks: view.batch_scheduled_ticks,
             wake_ticks,

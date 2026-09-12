@@ -98,6 +98,7 @@ pub(crate) fn publisher_down_send_outcome(
             skipped_mask: result_skipped_mask,
             trace: DownTraceObservation {
                 event_index: view.batch_source_action_index,
+                compiled_packet_index: u64::try_from(view.prepared_batch.packet_index).ok(),
                 trace_kind,
                 result_status,
                 send_attempts: result_send_attempts,

@@ -80,9 +80,14 @@ The physical command is an explicit, feature-gated qualification run:
 The supported physical scenario names are `canonical-single`, `canonical-chord`,
 `canonical-max-chord`, `hold`, `rapid-retrigger`, `mixed-up-down`, `focus-loss`,
 `target-hwnd-change`, `pause-resume`, `stop-cleanup`, `skip-cleanup`,
-`cleanup-full-release`, `w4-noncanonical`, and `timing-margin-sweep`. Each
-invocation appends one JSONL report with the scenario name and its `PASS`,
-`FAIL`, or `INCONCLUSIVE` verdict. The target-change scenario changes the session target to the invalid
+`cleanup-full-release`, `w4-noncanonical`, `timing-margin-sweep`, and
+`release-gap-stress`. Each invocation appends one JSONL report with the
+scenario name and its `PASS`, `NON_QUALIFYING`, `FAIL`, or `INCONCLUSIVE`
+verdict. A release gap below the fixed one-frame sender floor is `FAIL`; the
+stress scenario is `NON_QUALIFYING` when it collects fewer than 512 release-gap
+samples. It authors 513 same-key Down/Up cycles at the configured Hold and
+Release Gap and keeps the supervisor heartbeat alive while the approximately
+18-second workload runs at the default margin. The target-change scenario changes the session target to the invalid
 sentinel `0` before the first authored Down and requires the production
 control-plane path to fail closed with no gameplay KeyDown delivery. The
 fail-closed path may emit the bounded full-cleanup KeyUp safety pass; those

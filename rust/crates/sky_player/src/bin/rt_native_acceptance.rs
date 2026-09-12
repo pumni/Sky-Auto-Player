@@ -2,6 +2,8 @@
 #![recursion_limit = "256"]
 #[rustfmt::skip]
 mod acceptance {
+#[path = "release_gap_stress.rs"] mod release_gap_stress;
+use release_gap_stress::{release_gap_qualification, scenario_plan as release_gap_scenario_plan, RELEASE_GAP_STRESS_MIN_SAMPLES};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, MAX_KEYS};
@@ -58,13 +60,13 @@ const ACCEPTANCE_TIMING_MARGIN_STEP_US: u64 = 100;
 const ACCEPTANCE_INPUT_PATH_WARN_US: u64 = 300;
 const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scenario { CanonicalSingle, CanonicalChord, CanonicalMaxChord, Hold, RapidRetrigger, MixedUpDown, CleanupFullRelease, FocusLoss, TargetHwndChange, PauseResume, StopCleanup, SkipCleanup, W4Noncanonical, TimingMarginSweep }
+enum Scenario { CanonicalSingle, CanonicalChord, CanonicalMaxChord, Hold, RapidRetrigger, ReleaseGapStress, MixedUpDown, CleanupFullRelease, FocusLoss, TargetHwndChange, PauseResume, StopCleanup, SkipCleanup, W4Noncanonical, TimingMarginSweep }
 impl Scenario {
     fn parse(value: &str) -> Result<Self, String> {
-        match value { "canonical-single" => Ok(Self::CanonicalSingle), "canonical-chord" => Ok(Self::CanonicalChord), "canonical-max-chord" => Ok(Self::CanonicalMaxChord), "hold" => Ok(Self::Hold), "rapid-retrigger" => Ok(Self::RapidRetrigger), "mixed-up-down" => Ok(Self::MixedUpDown), "cleanup-full-release" => Ok(Self::CleanupFullRelease), "focus-loss" => Ok(Self::FocusLoss), "target-hwnd-change" => Ok(Self::TargetHwndChange), "pause-resume" => Ok(Self::PauseResume), "stop-cleanup" => Ok(Self::StopCleanup), "skip-cleanup" => Ok(Self::SkipCleanup), "w4-noncanonical" => Ok(Self::W4Noncanonical), "timing-margin-sweep" => Ok(Self::TimingMarginSweep), _ => Err(format!("unsupported scenario: {value}")) }
+        match value { "canonical-single" => Ok(Self::CanonicalSingle), "canonical-chord" => Ok(Self::CanonicalChord), "canonical-max-chord" => Ok(Self::CanonicalMaxChord), "hold" => Ok(Self::Hold), "rapid-retrigger" => Ok(Self::RapidRetrigger), "release-gap-stress" => Ok(Self::ReleaseGapStress), "mixed-up-down" => Ok(Self::MixedUpDown), "cleanup-full-release" => Ok(Self::CleanupFullRelease), "focus-loss" => Ok(Self::FocusLoss), "target-hwnd-change" => Ok(Self::TargetHwndChange), "pause-resume" => Ok(Self::PauseResume), "stop-cleanup" => Ok(Self::StopCleanup), "skip-cleanup" => Ok(Self::SkipCleanup), "w4-noncanonical" => Ok(Self::W4Noncanonical), "timing-margin-sweep" => Ok(Self::TimingMarginSweep), _ => Err(format!("unsupported scenario: {value}")) }
     }
     const fn label(self) -> &'static str {
-        match self { Self::CanonicalSingle => "canonical-single", Self::CanonicalChord => "canonical-chord", Self::CanonicalMaxChord => "canonical-max-chord", Self::Hold => "hold", Self::RapidRetrigger => "rapid-retrigger", Self::MixedUpDown => "mixed-up-down", Self::CleanupFullRelease => "cleanup-full-release", Self::FocusLoss => "focus-loss", Self::TargetHwndChange => "target-hwnd-change", Self::PauseResume => "pause-resume", Self::StopCleanup => "stop-cleanup", Self::SkipCleanup => "skip-cleanup", Self::W4Noncanonical => "w4-noncanonical", Self::TimingMarginSweep => "timing-margin-sweep" }
+        match self { Self::CanonicalSingle => "canonical-single", Self::CanonicalChord => "canonical-chord", Self::CanonicalMaxChord => "canonical-max-chord", Self::Hold => "hold", Self::RapidRetrigger => "rapid-retrigger", Self::ReleaseGapStress => "release-gap-stress", Self::MixedUpDown => "mixed-up-down", Self::CleanupFullRelease => "cleanup-full-release", Self::FocusLoss => "focus-loss", Self::TargetHwndChange => "target-hwnd-change", Self::PauseResume => "pause-resume", Self::StopCleanup => "stop-cleanup", Self::SkipCleanup => "skip-cleanup", Self::W4Noncanonical => "w4-noncanonical", Self::TimingMarginSweep => "timing-margin-sweep" }
     }
     const fn needs_focus_probe(self) -> bool {
         matches!(self, Self::FocusLoss)
@@ -89,26 +91,10 @@ enum ParsedCommand {
 #[derive(Debug, Clone, PartialEq, Eq)] enum DrainResult { Pass(Vec<EventRecord>), Fail(String, Vec<EventRecord>), Inconclusive(String) }
 #[derive(Debug, Clone, PartialEq, Eq)] enum PreTerminalResult { Satisfied, TrustedFailure(String), ObservationInconclusive(String), IncompleteTimeout { complete: bool } }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Verdict {
-    Pass,
-    Fail,
-    Inconclusive,
-}
+enum Verdict { Pass, NonQualifying, Fail, Inconclusive }
 impl Verdict {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Pass => "PASS",
-            Self::Fail => "FAIL",
-            Self::Inconclusive => "INCONCLUSIVE",
-        }
-    }
-    const fn exit_code(self) -> i32 {
-        match self {
-            Self::Pass => 0,
-            Self::Fail => 1,
-            Self::Inconclusive => 2,
-        }
-    }
+    const fn label(self) -> &'static str { match self { Self::Pass => "PASS", Self::NonQualifying => "NON_QUALIFYING", Self::Fail => "FAIL", Self::Inconclusive => "INCONCLUSIVE" } }
+    const fn exit_code(self) -> i32 { match self { Self::Pass => 0, Self::NonQualifying => 3, Self::Fail => 1, Self::Inconclusive => 2 } }
 }
 #[derive(Debug, Clone)]
 struct ScenarioPlan {
@@ -368,6 +354,7 @@ fn scenario_plan(scenario: Scenario, timing_margin_us: u64) -> Result<ScenarioPl
             Scenario::CanonicalMaxChord => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 90_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
             Scenario::Hold => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 500_000, &[0])], None, vec![0], vec![0], false),
             Scenario::RapidRetrigger => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 80_000, &[0]), action(2, ActionKind::Down, 110_000, &[0]), action(3, ActionKind::Up, 140_000, &[0]), action(4, ActionKind::Down, 170_000, &[0]), action(5, ActionKind::Up, 200_000, &[0])], None, vec![0, 0, 0], vec![0, 0, 0], false),
+            Scenario::ReleaseGapStress => return release_gap_scenario_plan(timing_margin_us),
             Scenario::MixedUpDown => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 100_000, &[0]), action(2, ActionKind::Down, 100_000, &[1]), action(3, ActionKind::Up, 150_000, &[1])], None, vec![0, 1], vec![0, 1], false),
             Scenario::CleanupFullRelease => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 10_000_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
             Scenario::FocusLoss => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0]), action(2, ActionKind::Down, 1_000_000, &[1]), action(3, ActionKind::Up, 1_100_000, &[1])], None, vec![0], vec![0], false),
@@ -704,7 +691,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
-    let session = match NativeDispatchSession::new(production_options(plan.schedule, plan.profile, args.down_late_grace_us, args.timing_margin_us)) { Ok(session) => session, Err(error) => inconclusive!(&error, json!({})) };
+    let session = match NativeDispatchSession::new(production_options(plan.schedule, plan.profile, args.down_late_grace_us, args.timing_margin_us)) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
     session.set_target_hwnd(sink_hwnd);
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
@@ -719,6 +706,7 @@ fn run_windows(args: RunArgs) -> i32 {
     if let Err(error) = session.arm(0) {
         inconclusive!(&error, json!({}));
     }
+    if args.scenario == Scenario::ReleaseGapStress { if let Err(error) = release_gap_stress::start_heartbeat(Arc::clone(&session)) { inconclusive!(&error, json!({})); } }
     let mut final_probe = targets.probe.clone();
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
@@ -761,7 +749,7 @@ fn run_windows(args: RunArgs) -> i32 {
     } else {
         false
     };
-    let joined = session.join(Duration::from_secs(10)).unwrap_or(false);
+    let joined = session.join(Duration::from_secs(if args.scenario == Scenario::ReleaseGapStress { 60 } else { 10 })).unwrap_or(false);
     let snapshot = session.snapshot();
     if !joined { inconclusive!("production session did not join within the bounded timeout", snapshot_json(&snapshot)); }
     let (sink_events, sink_drain_failure) = match drain_event_window(
@@ -810,6 +798,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
         object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
         object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
+        if args.scenario == Scenario::ReleaseGapStress { object.insert("minimum_qualifying_release_gap_samples".to_string(), json!(RELEASE_GAP_STRESS_MIN_SAMPLES)); }
     }
     let Some(outcome) = snapshot.release_outcome.as_ref() else {
         inconclusive!("missing cleanup/release evidence", details);
@@ -863,6 +852,8 @@ fn run_windows(args: RunArgs) -> i32 {
     ) {
         return write_report(&args, Verdict::Fail, &error, details);
     }
+    let (release_verdict, release_reason) = release_gap_qualification(args.scenario, snapshot.production_release_gap_samples, snapshot.production_release_gap_below_policy_count);
+    if release_verdict != Verdict::Pass { return write_report(&args, release_verdict, release_reason, details); }
     write_report(
         &args,
         Verdict::Pass,

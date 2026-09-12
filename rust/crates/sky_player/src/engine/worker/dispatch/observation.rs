@@ -47,6 +47,7 @@ pub struct StaleMetadataObservation {
 #[derive(Clone, Copy, Debug)]
 pub struct BlockedUnfocusedObservation {
     pub event_index: u32,
+    pub compiled_packet_index: Option<u64>,
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub effective_now_ticks: TimelineTicks,
@@ -60,6 +61,7 @@ pub struct BlockedUnfocusedObservation {
 #[derive(Clone, Copy, Debug)]
 pub struct DownMissObservation {
     pub source_action_index: u32,
+    pub compiled_packet_index: Option<u64>,
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub wake_ticks: TimelineTicks,
@@ -73,6 +75,7 @@ pub struct DownMissObservation {
 #[derive(Clone, Copy, Debug)]
 pub struct DownTraceObservation {
     pub event_index: u32,
+    pub compiled_packet_index: Option<u64>,
     pub trace_kind: u8,
     pub result_status: SendTransactionStatus,
     pub send_attempts: u8,
@@ -248,6 +251,7 @@ pub(super) fn record_down_recovery_metrics(
 #[derive(Clone, Copy, Debug)]
 pub struct UpTraceObservation {
     pub event_index: u32,
+    pub compiled_packet_index: Option<u64>,
     pub trace_kind: u8,
     pub retry_reason: PacketRetryReason,
     pub send_attempts: u8,
@@ -338,6 +342,7 @@ pub(super) fn record_down_send_telemetry(
             TraceContext {
                 event_index: trace.event_index,
                 source_action_index: trace.event_index,
+                compiled_packet_index: trace.compiled_packet_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(down_outcome),
                 polyphony: observation.requested_count(),
@@ -419,6 +424,7 @@ pub(super) fn record_release_telemetry(
             TraceContext {
                 event_index: trace.event_index,
                 source_action_index: trace.event_index,
+                compiled_packet_index: trace.compiled_packet_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(release_outcome),
                 polyphony: scan_count,

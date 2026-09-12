@@ -4,10 +4,12 @@ use super::{
     EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY, MAX_KEYS,
     MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
     PRETERMINAL_DEADLINE_MS, PROBE_KIND, PROBE_TITLE, ParsedCommand, PhysicalExpectation,
+    RELEASE_GAP_STRESS_CYCLES, RELEASE_GAP_STRESS_MIN_SAMPLES,
     PreTerminalResult, READY_SCHEMA_VERSION, RECEIVE_ONLY_ROLE, ReadyRecord, SCRIPT_MARKER,
     SINK_KIND, SINK_TITLE, Scenario, Verdict, acceptance_min_hold_us,
     acceptance_min_release_gap_us, cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
+    release_gap_qualification,
     production_options, reconcile_events, scenario_plan,
     validate_event_stream, validate_ready_record, w4_profile_spec, wait_for_sink_events_with,
 };
@@ -178,6 +180,7 @@ fn canonical_and_w4_expectations_are_physical() {
         "canonical-max-chord",
         "hold",
         "rapid-retrigger",
+        "release-gap-stress",
         "mixed-up-down",
         "target-hwnd-change",
         "pause-resume",
@@ -627,6 +630,40 @@ fn timing_margin_sweep_authors_exact_hold_and_release_targets() {
         assert_eq!(plan.expected_down_slots, vec![0, 0]);
         assert_eq!(plan.expected_up_slots, vec![0, 0]);
     }
+}
+
+#[test]
+fn release_gap_stress_authors_hundreds_of_exact_hold_and_gap_pairs() {
+    let plan = scenario_plan(Scenario::ReleaseGapStress, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    let hold = acceptance_min_hold_us(ACCEPTANCE_TIMING_MARGIN_US);
+    let gap = acceptance_min_release_gap_us(ACCEPTANCE_TIMING_MARGIN_US);
+
+    assert_eq!(plan.schedule.packets.len(), RELEASE_GAP_STRESS_CYCLES * 2);
+    assert_eq!(plan.expected_down_slots.len(), RELEASE_GAP_STRESS_CYCLES);
+    assert_eq!(plan.expected_up_slots.len(), RELEASE_GAP_STRESS_CYCLES);
+    for pair in plan.schedule.packets.chunks_exact(2) {
+        assert_eq!(pair[1].scheduled_us - pair[0].scheduled_us, hold);
+    }
+    for pair in plan.schedule.packets.windows(2).skip(1).step_by(2) {
+        assert_eq!(pair[1].scheduled_us - pair[0].scheduled_us, gap);
+    }
+    assert_eq!(RELEASE_GAP_STRESS_CYCLES - 1, RELEASE_GAP_STRESS_MIN_SAMPLES as usize);
+}
+
+#[test]
+fn release_gap_floor_violation_never_qualifies_and_low_sample_stress_is_explicit() {
+    assert_eq!(
+        release_gap_qualification(Scenario::TimingMarginSweep, 1, 1).0,
+        Verdict::Fail
+    );
+    assert_eq!(
+        release_gap_qualification(Scenario::ReleaseGapStress, 511, 0).0,
+        Verdict::NonQualifying
+    );
+    assert_eq!(
+        release_gap_qualification(Scenario::ReleaseGapStress, 512, 0).0,
+        Verdict::Pass
+    );
 }
 #[test]
 fn changing_down_grace_changes_only_the_cutoff_not_authored_timing() {

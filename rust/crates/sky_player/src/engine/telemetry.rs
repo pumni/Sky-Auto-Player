@@ -18,10 +18,16 @@ use std::collections::VecDeque;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct RtTraceRecord {
-    /// Zero-based sequence in the exported session trace.
-    pub packet_index: u32,
+    /// Zero-based sequence in the exported session trace. This is not a
+    /// compiled schedule packet identity.
+    pub trace_record_index: u32,
+    /// Compiled schedule packet identity when the observation came from an
+    /// authored packet. Zero is a valid packet index, so consumers must check
+    /// the availability field.
+    pub compiled_packet_index: u64,
+    pub compiled_packet_index_available: bool,
     /// Identity in the compiled source schedule. This remains equal to
-    /// `event_index` today; it is explicit in schema 13 to make that contract
+    /// `event_index` today; it is explicit in schema 14 to make that contract
     /// reviewable by trace consumers.
     pub source_action_index: u32,
     pub event_index: u32,
@@ -69,7 +75,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 13;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 14;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -142,6 +148,7 @@ pub(crate) struct TraceDelivery {
 pub(crate) struct TraceContext {
     pub(crate) event_index: u32,
     pub(crate) source_action_index: u32,
+    pub(crate) compiled_packet_index: Option<u64>,
     pub(crate) kind: u8,
     pub(crate) outcome: u8,
     pub(crate) polyphony: usize,
@@ -176,7 +183,9 @@ impl RtTraceRecord {
         let send_attempts =
             u8::try_from(delivery.send_attempts).map_err(|_| TimeArithmeticError::Overflow)?;
         Ok(Self {
-            packet_index: 0,
+            trace_record_index: 0,
+            compiled_packet_index: context.compiled_packet_index.unwrap_or_default(),
+            compiled_packet_index_available: context.compiled_packet_index.is_some(),
             source_action_index: context.source_action_index,
             event_index: context.event_index,
             kind: context.kind,
@@ -399,7 +408,7 @@ impl TelemetryCollector {
         }
 
         let mut record = build()?;
-        record.packet_index = u32::try_from(self.output.accepted).unwrap_or(u32::MAX);
+        record.trace_record_index = u32::try_from(self.output.accepted).unwrap_or(u32::MAX);
         self.output.summary.observe(&record);
 
         match self.mode {
@@ -428,10 +437,21 @@ mod tests {
         requested: usize,
         sent: usize,
     ) -> RtTraceRecord {
+        record_with_packet_index(event_index, kind, requested, sent, None)
+    }
+
+    fn record_with_packet_index(
+        event_index: u32,
+        kind: u8,
+        requested: usize,
+        sent: usize,
+        compiled_packet_index: Option<u64>,
+    ) -> RtTraceRecord {
         RtTraceRecord::dispatched(
             TraceContext {
                 event_index,
                 source_action_index: event_index,
+                compiled_packet_index,
                 kind,
                 outcome: trace_outcome_code("sent"),
                 polyphony: requested,
@@ -593,7 +613,7 @@ mod tests {
             output
                 .records
                 .iter()
-                .map(|record| record.packet_index)
+                .map(|record| record.trace_record_index)
                 .collect::<Vec<_>>(),
             (0..304_u32).collect::<Vec<_>>()
         );
@@ -603,6 +623,34 @@ mod tests {
                 .iter()
                 .all(|record| record.source_action_index == record.event_index)
         );
+    }
+
+    #[test]
+    fn trace_sequence_is_distinct_from_compiled_packet_identity() {
+        let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 4);
+        let first = record_with_packet_index(12, TRACE_KIND_UP, 1, 1, Some(37));
+        let second = record_with_packet_index(13, TRACE_KIND_UP, 1, 1, Some(41));
+        let zero_packet = record_with_packet_index(14, TRACE_KIND_UP, 1, 1, Some(0));
+        collector
+            .try_push(|| Ok(first))
+            .expect("first trace record");
+        collector
+            .try_push(|| Ok(second))
+            .expect("second trace record");
+        collector
+            .try_push(|| Ok(zero_packet))
+            .expect("zero-valued compiled packet id");
+
+        let records = collector.output.records;
+        assert_eq!(records[0].trace_record_index, 0);
+        assert_eq!(records[0].compiled_packet_index, 37);
+        assert!(records[0].compiled_packet_index_available);
+        assert_eq!(records[1].trace_record_index, 1);
+        assert_eq!(records[1].compiled_packet_index, 41);
+        assert!(records[1].compiled_packet_index_available);
+        assert_eq!(records[2].trace_record_index, 2);
+        assert_eq!(records[2].compiled_packet_index, 0);
+        assert!(records[2].compiled_packet_index_available);
     }
 
     #[test]

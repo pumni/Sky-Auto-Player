@@ -120,6 +120,7 @@ fn down_observation(n: u64) -> DispatchObservation {
         skipped_mask: 0,
         trace: DownTraceObservation {
             event_index: n as u32,
+            compiled_packet_index: Some(n),
             trace_kind: 0,
             result_status: SendTransactionStatus::Complete,
             send_attempts: 1,
@@ -153,6 +154,7 @@ fn up_observation(n: u64) -> DispatchObservation {
         recovery_pause_ticks: None,
         trace: UpTraceObservation {
             event_index: 0,
+            compiled_packet_index: None,
             trace_kind: 1,
             retry_reason: PacketRetryReason::None,
             send_attempts: 1,
@@ -174,6 +176,7 @@ fn up_observation(n: u64) -> DispatchObservation {
 fn down_miss_observation(n: u64) -> DispatchObservation {
     DispatchObservation::DownMiss(DownMissObservation {
         source_action_index: n as u32,
+        compiled_packet_index: None,
         authored_ticks: TimelineTicks::from_raw(n),
         effective_deadline_ticks: TimelineTicks::from_raw(n),
         wake_ticks: TimelineTicks::from_raw(n),
@@ -466,6 +469,7 @@ fn pop_empty_no_alloc() {
 fn production_down_only_hard_path_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.set_live_diagnostics_enabled_for_test(true);
     harness.align_next_plan_to_future_for_test(100_000);
 
     enable_counting();
@@ -475,6 +479,7 @@ fn production_down_only_hard_path_no_alloc() {
         DispatchPath::DownOnly { down_count: 1 }
     );
     let step = harness.dispatch_authored_with_plan(&plan);
+    harness.publish_live_diagnostics_for_test();
     let allocs = disable_counting();
 
     assert_eq!(
@@ -495,6 +500,7 @@ fn production_down_only_hard_path_no_alloc() {
         1,
         "successful production SendInput dispatch must record one fine pre-call bucket"
     );
+    assert_eq!(harness.published_sender_sample_count_for_test(), 1);
 }
 
 /// Mixed production dispatch hard-path makes ZERO heap allocations.

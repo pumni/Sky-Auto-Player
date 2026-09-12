@@ -297,6 +297,12 @@ mod tests {
         let permissions = capability["permissions"]
             .as_array()
             .expect("capability permissions");
+        for permission in ["core:event:allow-listen", "core:event:allow-unlisten"] {
+            assert!(
+                permissions.contains(&serde_json::json!(permission)),
+                "main capability must explicitly grant {permission}"
+            );
+        }
         let expected_command_permissions = crate::ipc_contract::TAURI_COMMANDS
             .iter()
             .map(|command| format!("allow-{}", command.replace('_', "-")))
