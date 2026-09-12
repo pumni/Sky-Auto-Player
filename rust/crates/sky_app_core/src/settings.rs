@@ -577,8 +577,14 @@ mod tests {
         let settings = normalize_settings(ApplicationSettings::default());
         assert_eq!(settings.theme, "aurora");
         assert_eq!(settings.playback_defaults.fps, 60);
-        assert_eq!(settings.playback_defaults.timing_margin_us, DEFAULT_TIMING_MARGIN_US);
-        assert_eq!(settings.playback_defaults.down_late_grace_us, DEFAULT_DOWN_LATE_GRACE_US);
+        assert_eq!(
+            settings.playback_defaults.timing_margin_us,
+            DEFAULT_TIMING_MARGIN_US
+        );
+        assert_eq!(
+            settings.playback_defaults.down_late_grace_us,
+            DEFAULT_DOWN_LATE_GRACE_US
+        );
         assert_eq!(settings.update.channel, UpdateChannel::Stable);
 
         let mut invalid_persisted = ApplicationSettings::default();
