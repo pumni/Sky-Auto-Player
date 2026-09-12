@@ -582,6 +582,7 @@ pub fn selftest_packaged_shell() -> i32 {
                         "generation": search.generation,
                         "config": {
                             "hold_frames": settings.playback_defaults.hold_frames,
+                            "timing_margin_us": settings.playback_defaults.timing_margin_us,
                             "tempo_scale": settings.playback_defaults.tempo_scale,
                             "fps": settings.playback_defaults.fps,
                             "dry_run": true
