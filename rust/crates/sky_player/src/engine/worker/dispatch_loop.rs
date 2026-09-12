@@ -1114,9 +1114,11 @@ mod tests {
         shared
             .live_diagnostics_enabled
             .store(true, Ordering::Relaxed);
-        let mut local = WorkerMetricsLocal::default();
-        local.pre_call_lt_250us = 1;
-        local.max_sendinput_pre_call_lateness_ticks = 25;
+        let local = WorkerMetricsLocal {
+            pre_call_lt_250us: 1,
+            max_sendinput_pre_call_lateness_ticks: 25,
+            ..WorkerMetricsLocal::default()
+        };
 
         publish_live_metrics_after_dispatch(&local, &shared, qpc_clock, QpcTicks::from_raw(50_000));
 

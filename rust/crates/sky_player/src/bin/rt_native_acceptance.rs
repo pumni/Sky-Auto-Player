@@ -4,6 +4,8 @@
 mod acceptance {
 #[path = "release_gap_stress.rs"] mod release_gap_stress;
 use release_gap_stress::{release_gap_qualification, scenario_plan as release_gap_scenario_plan, RELEASE_GAP_STRESS_MIN_SAMPLES};
+#[cfg(test)]
+use release_gap_stress::RELEASE_GAP_STRESS_CYCLES;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, MAX_KEYS};
@@ -706,7 +708,11 @@ fn run_windows(args: RunArgs) -> i32 {
     if let Err(error) = session.arm(0) {
         inconclusive!(&error, json!({}));
     }
-    if args.scenario == Scenario::ReleaseGapStress { if let Err(error) = release_gap_stress::start_heartbeat(Arc::clone(&session)) { inconclusive!(&error, json!({})); } }
+    if args.scenario == Scenario::ReleaseGapStress
+        && let Err(error) = release_gap_stress::start_heartbeat(Arc::clone(&session))
+    {
+        inconclusive!(&error, json!({}));
+    }
     let mut final_probe = targets.probe.clone();
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     let focus_gate_observed = if args.scenario.needs_focus_probe() {

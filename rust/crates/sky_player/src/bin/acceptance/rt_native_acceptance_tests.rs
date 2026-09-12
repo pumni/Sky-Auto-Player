@@ -641,7 +641,7 @@ fn release_gap_stress_authors_hundreds_of_exact_hold_and_gap_pairs() {
     assert_eq!(plan.schedule.packets.len(), RELEASE_GAP_STRESS_CYCLES * 2);
     assert_eq!(plan.expected_down_slots.len(), RELEASE_GAP_STRESS_CYCLES);
     assert_eq!(plan.expected_up_slots.len(), RELEASE_GAP_STRESS_CYCLES);
-    for pair in plan.schedule.packets.chunks_exact(2) {
+    for pair in plan.schedule.packets.as_chunks::<2>().0 {
         assert_eq!(pair[1].scheduled_us - pair[0].scheduled_us, hold);
     }
     for pair in plan.schedule.packets.windows(2).skip(1).step_by(2) {
