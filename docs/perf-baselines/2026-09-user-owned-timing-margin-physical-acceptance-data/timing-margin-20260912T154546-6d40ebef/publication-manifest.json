@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "run_id": "timing-margin-20260912T154546-6d40ebef",
+  "source": {
+    "branch": "docs/user-owned-timing-margin-handoff-2026-09",
+    "commit": "3d069b3603c162793d642ae1fde4756639f66e35",
+    "pull_request": 233,
+    "pull_request_state_at_publication": "open-draft",
+    "exact_head_ci_run_id": "34683625571",
+    "exact_head_ci_url": "https://github.com/pumni/Sky-Auto-Player/actions/runs/34683625571"
+  },
+  "harness": {
+    "path_as_recorded_in_run_config": "D:\\Dev\\Sky-Auto-Player\\rust\\target\\release\\rt-native-acceptance.exe",
+    "sha256_at_publication": "A288CC517F3771E36477B6A7DC6A32FF5FC796332A2F7311C907745464C63746"
+  },
+  "run_configuration": {
+    "default_timing_margin_us": 800,
+    "fixed_down_late_grace_us": 500,
+    "hold_frames": 1.0,
+    "requested_cases": 18,
+    "completed_passes": 18
+  },
+  "sink": {
+    "role": "ReceiveOnly",
+    "process_image": "pwsh.exe",
+    "pid": 8512,
+    "hwnd": 4064996,
+    "event_log_id": "ecfb727fe42043a0829861ec4579e74d"
+  },
+  "focus_probe": {
+    "role": "InertFocusProbe",
+    "process_image": "pwsh.exe",
+    "pid": 6580,
+    "hwnd": 592332,
+    "event_log_id": "61ec3369fac6458099de729778deadee"
+  },
+  "raw_artifacts": [
+    "focus-probe-events.jsonl",
+    "focus-probe-ready.json",
+    "focus-probe.stderr.log",
+    "focus-probe.stdout.log",
+    "harness-output.log",
+    "invocations.jsonl",
+    "rt-native-acceptance.jsonl",
+    "run-config.json",
+    "runner.ps1",
+    "sink-events.jsonl",
+    "sink-ready.json",
+    "sink.stderr.log",
+    "sink.stdout.log",
+    "summary.json"
+  ],
+  "integrity": {
+    "checksum_file": "checksums.sha256",
+    "checksum_scope": "The checksum file covers the 14 copied raw artifacts; it does not hash publication-manifest.json or checksums.sha256.",
+    "raw_files_copied_without_modification": true,
+    "original_local_artifacts_retained": true
+  }
+}
