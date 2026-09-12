@@ -1,5 +1,9 @@
 # Late Down tolerance native physical acceptance
 
+## Current product defaults vs historical runs
+
+PR #233 is being finalized with fresh-config defaults of **500 µs Timing Margin** and **2,000 µs Late Down tolerance**. The evidence below is historical acceptance data collected with the exact settings recorded by each run (most notably 800/500 in the original regression). Those artifacts and their numeric results are intentionally preserved unchanged; changing the product defaults does not retroactively change the evidence.
+
 This evidence records Windows interactive runs of the project's production
 `sky_player` dispatch path against the project-owned `ReceiveOnly` native
 acceptance sink. It qualifies the sender, cutoff propagation, authored packet
