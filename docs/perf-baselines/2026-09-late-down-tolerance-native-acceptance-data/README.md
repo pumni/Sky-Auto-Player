@@ -119,3 +119,25 @@ establish that a below-floor observation is no longer reported as a clean
 `PASS`, and that the current stress workload is **not qualifying** for release.
 The original 17-scenario and cutoff-sweep evidence above remains historical
 evidence from its separately identified source revision.
+
+## Exact-head Windows regression follow-up
+
+The official Windows runner was rebuilt and run on the clean exact source
+head `b8bbe42d84837c440dd2e51cc90b490298aaa760`. Its fail-fast run passed the
+12 default scenarios and the 500 µs sweep case, then correctly stopped at the
+1,000 µs sweep case: that case had one release-gap sample, and it was below the
+fixed one-frame floor (`15.1804 ms` observed against `16.667 ms`). The full
+runner report, invocation ledger, raw sink and probe logs, ready records, and
+summary are archived in
+[`input-reliability-20260912T235553-7daf4359/`](input-reliability-20260912T235553-7daf4359/).
+
+The remaining default `focus-loss` regression was run separately on the same
+exact head and passed; its inert focus probe received zero keyboard events.
+Its complete raw evidence is in
+[`input-reliability-focus-loss-20260912T235844-465b29a6/`](input-reliability-focus-loss-20260912T235844-465b29a6/).
+Together, all 13 default Windows regression scenarios have exact-head PASS
+evidence. The 2,000 and 5,000 µs sweep cases were not reached after the
+1,000 µs qualification failure. The 500 and 1,000 µs cases each had only one
+release-gap sample, so their different verdicts do not show that changing the
+cutoff improves or worsens reliability. The 512-sample stress result above is
+the relevant release-gap qualification evidence, and it fails.

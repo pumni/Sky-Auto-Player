@@ -1,0 +1,41 @@
+{
+  "run_id": "input-reliability-20260912T235844-465b29a6",
+  "run_dir": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T235844-465b29a6",
+  "source_revision": "b8bbe42d84837c440dd2e51cc90b490298aaa760",
+  "source_tree_clean": true,
+  "harness_sha256": "29584882ad65350972bf226eab59cc455e721a811a95f815fcac33356e990460",
+  "runner_sha256": "23c6d133da5ba1c6ae4dbeec72f85bef12d52edb1a0e57c8d67f846568fc84f5",
+  "harness": "D:\\Dev\\Sky-Auto-Player\\rust\\target\\release\\rt-native-acceptance.exe",
+  "sink": {
+    "ready": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T235844-465b29a6\\sink-ready.json",
+    "events": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T235844-465b29a6\\sink-events.jsonl",
+    "hwnd": 788352,
+    "pid": 16052,
+    "process_image": "pwsh.exe",
+    "event_log_id": "7f3edeccb6d445dca62119195a792fe4"
+  },
+  "focus_probe": {
+    "ready": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T235844-465b29a6\\focus-probe-ready.json",
+    "events": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T235844-465b29a6\\focus-probe-events.jsonl",
+    "hwnd": 1770618,
+    "pid": 2688,
+    "process_image": "pwsh.exe",
+    "event_log_id": "d01c0af1e9904913ba619de746cd6131"
+  },
+  "default_margin_us": 800,
+  "default_late_down_tolerance_us": 500,
+  "cutoff_sweep_us": [
+    500,
+    1000,
+    2000,
+    5000
+  ],
+  "hold_frames": 1.0,
+  "scenarios": [
+    {
+      "scenario": "focus-loss",
+      "margin": 800,
+      "tolerance": 500
+    }
+  ]
+}
