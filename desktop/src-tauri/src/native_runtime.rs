@@ -5936,7 +5936,7 @@ mod tests {
         assert_eq!(settings["playback_defaults"]["timing_margin_us"], 1_200);
         assert_eq!(
             settings["timing_margin_recommendation"]["recommended_timing_margin_us"],
-            1_300
+            2_800
         );
         assert_eq!(settings["timing_margin_recommendation"]["qualified"], true);
         let persisted: Value =

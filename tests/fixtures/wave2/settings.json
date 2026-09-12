@@ -19,7 +19,7 @@
     "current_v3": {
       "input": {
         "schema_version": 3,
-        "default_hold_frames": 1,
+        "default_hold_frames": 1.0,
         "theme": " SLATE ",
         "future_field": {
           "keep": [
@@ -47,10 +47,10 @@
           "theme": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
-            "hold_frames": 1,
+            "hold_frames": 1.0,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -87,7 +87,7 @@
           "schema_version": 5,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
-          "default_hold_frames": 1
+          "default_hold_frames": 1.0
         }
       },
       {
@@ -97,10 +97,10 @@
           "theme": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
-            "hold_frames": 1,
+            "hold_frames": 1.0,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -137,7 +137,7 @@
           "schema_version": 5,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
-          "default_hold_frames": 1
+          "default_hold_frames": 1.0
         }
       },
       {
@@ -147,10 +147,10 @@
           "theme": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
-            "hold_frames": 1,
+            "hold_frames": 1.0,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -187,7 +187,7 @@
           "schema_version": 5,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
-          "default_hold_frames": 1
+          "default_hold_frames": 1.0
         }
       },
       {
@@ -200,10 +200,10 @@
           "theme": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
-            "hold_frames": 1,
+            "hold_frames": 1.0,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -240,7 +240,7 @@
           "schema_version": 5,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
-          "default_hold_frames": 1
+          "default_hold_frames": 1.0
         }
       },
       {
@@ -261,7 +261,7 @@
             "hold_frames": 1.5,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -320,7 +320,7 @@
             "hold_frames": 1.25,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -378,7 +378,7 @@
             "hold_frames": 1.25,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -437,7 +437,7 @@
             "hold_frames": 1.5,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 120
           },
           "telemetry_enabled": false,
@@ -497,7 +497,7 @@
             "hold_frames": 1.25,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 90
           },
           "telemetry_enabled": false,
@@ -559,10 +559,10 @@
           "theme": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
-            "hold_frames": 1,
+            "hold_frames": 1.0,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -600,7 +600,7 @@
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "future_field": "preserve",
-          "default_hold_frames": 1
+          "default_hold_frames": 1.0
         }
       },
       {
@@ -641,7 +641,7 @@
           "theme": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
-            "hold_frames": 1,
+            "hold_frames": 1.0,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
             "tempo_scale": 0.95,
@@ -683,7 +683,7 @@
           "schema_version": 5,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
-          "default_hold_frames": 1,
+          "default_hold_frames": 1.0,
           "default_tempo_scale": "0.95",
           "game_fps": "120",
           "songs_dir": {
@@ -718,7 +718,7 @@
         "name": "v3_unknown_nested_fields",
         "input": {
           "schema_version": 3,
-          "default_hold_frames": 1,
+          "default_hold_frames": 1.0,
           "theme": " SLATE ",
           "future_field": {
             "keep": [
@@ -738,10 +738,10 @@
           "theme": "slate",
           "ui_background_mode": "transparent",
           "playback_defaults": {
-            "hold_frames": 1,
+            "hold_frames": 1.0,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -778,7 +778,7 @@
           "schema_version": 5,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
-          "default_hold_frames": 1,
+          "default_hold_frames": 1.0,
           "theme": " SLATE ",
           "future_field": {
             "keep": [
@@ -812,10 +812,10 @@
           "theme": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
-            "hold_frames": 1,
+            "hold_frames": 1.0,
             "timing_margin_us": 500,
             "down_late_grace_us": 2000,
-            "tempo_scale": 1,
+            "tempo_scale": 1.0,
             "fps": 60
           },
           "telemetry_enabled": false,
@@ -852,7 +852,7 @@
           "schema_version": 5,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
-          "default_hold_frames": 1,
+          "default_hold_frames": 1.0,
           "default_tempo_scale": null,
           "game_fps": null,
           "theme": null,
@@ -867,8 +867,8 @@
   "default_normalized": {
     "theme": "aurora",
     "ui_background_mode": "transparent",
-    "default_hold_frames": 1,
-    "default_tempo_scale": 1,
+    "default_hold_frames": 1.0,
+    "default_tempo_scale": 1.0,
     "game_fps": 60,
     "telemetry_enabled": false,
     "verbose_hud": false,
@@ -935,8 +935,8 @@
       "theme": "slate",
       "ui_background_mode": "transparent",
       "default_hold_frames": 1.25,
-      "default_timing_margin_us": 1200,
-      "default_down_late_grace_us": 500,
+    "default_timing_margin_us": 1200,
+    "default_down_late_grace_us": 500,
       "default_tempo_scale": 0.95,
       "game_fps": 120,
       "telemetry_enabled": true,
