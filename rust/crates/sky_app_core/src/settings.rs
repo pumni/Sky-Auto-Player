@@ -13,11 +13,11 @@ pub const DEFAULT_GAME_FPS: u16 = 60;
 pub const VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240];
 pub const DEFAULT_HOLD_FRAMES: f64 = 1.0;
 pub const HOLD_FRAME_OPTIONS: [f64; 3] = [1.0, 1.25, 1.5];
-pub const DEFAULT_TIMING_MARGIN_US: u64 = 800;
+pub const DEFAULT_TIMING_MARGIN_US: u64 = 500;
 pub const MIN_TIMING_MARGIN_US: u64 = 0;
 pub const MAX_TIMING_MARGIN_US: u64 = 3_000;
 pub const TIMING_MARGIN_STEP_US: u64 = 100;
-pub const DEFAULT_DOWN_LATE_GRACE_US: u64 = 500;
+pub const DEFAULT_DOWN_LATE_GRACE_US: u64 = 2_000;
 pub const MIN_DOWN_LATE_GRACE_US: u64 = 0;
 pub const MAX_DOWN_LATE_GRACE_US: u64 = 5_000;
 pub const DOWN_LATE_GRACE_STEP_US: u64 = 100;
@@ -577,8 +577,8 @@ mod tests {
         let settings = normalize_settings(ApplicationSettings::default());
         assert_eq!(settings.theme, "aurora");
         assert_eq!(settings.playback_defaults.fps, 60);
-        assert_eq!(settings.playback_defaults.timing_margin_us, 800);
-        assert_eq!(settings.playback_defaults.down_late_grace_us, 500);
+        assert_eq!(settings.playback_defaults.timing_margin_us, DEFAULT_TIMING_MARGIN_US);
+        assert_eq!(settings.playback_defaults.down_late_grace_us, DEFAULT_DOWN_LATE_GRACE_US);
         assert_eq!(settings.update.channel, UpdateChannel::Stable);
 
         let mut invalid_persisted = ApplicationSettings::default();
@@ -587,7 +587,7 @@ mod tests {
             normalize_settings(invalid_persisted)
                 .playback_defaults
                 .timing_margin_us,
-            800
+            DEFAULT_TIMING_MARGIN_US
         );
     }
 
