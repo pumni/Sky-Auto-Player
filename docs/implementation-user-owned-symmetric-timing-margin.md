@@ -5,6 +5,7 @@
 Implementation handoff for Codex.
 
 - Repository: `pumni/Sky-Auto-Player`
+- Implementation PR: #233, `feat: add user-owned symmetric timing margin`
 - Predecessor scheduler PR: #232, merged into `main` as `0a428cd1e2c5da93890e81c46feb6b5c7f514fca`
 - Work branch: `docs/user-owned-timing-margin-handoff-2026-09`
 - Handoff base: `0a428cd1e2c5da93890e81c46feb6b5c7f514fca` (`main` after PR #232 merge)
@@ -909,7 +910,7 @@ Implementation is acceptable only when all are true:
 
 ## Codex completion report contract
 
-When implementation is complete, report back on the implementation PR created for this handoff with:
+When implementation is complete, report back on the PR #233 with:
 
 1. exact implementation head SHA;
 2. exact commit list added for this handoff;
@@ -925,4 +926,4 @@ When implementation is complete, report back on the implementation PR created fo
 12. any deviation from this handoff;
 13. any unresolved blocker.
 
-Keep the implementation PR created for this handoff in draft until explicit independent acceptance. Do not merge it as part of Codex implementation.
+Keep the PR #233 in draft until explicit independent acceptance. Do not merge it as part of Codex implementation.
