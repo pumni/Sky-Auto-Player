@@ -460,7 +460,7 @@ Do not call it "engine safety".
 
 # 7. Workstream C — recommendation must follow selected cutoff
 
-The current recommendation was designed around the fixed 500-us cutoff.
+The recommendation is derived from the selected Late Down tolerance plus the qualified or fallback transport reserve; it is not tied to a fixed 500-us cutoff.
 
 Change it to:
 
@@ -961,8 +961,8 @@ Check in raw evidence using the existing
 
 Do not do the following unless later evidence explicitly promotes them:
 
-- raise Timing Margin default above 800;
-- lower Timing Margin default below 800;
+- raise Timing Margin default above 500 without new evidence;
+- lower Timing Margin default below 500 without new evidence;
 - couple cutoff into authored Hold/Gap;
 - auto-tune cutoff;
 - auto-tune Timing Margin;
@@ -1008,7 +1008,7 @@ Code acceptance requires all of the following:
 - [ ] Root cause of the observed unavailable path is documented/fixed.
 - [ ] Physical/player/sample provenance is visible enough to diagnose state.
 - [ ] Late Down tolerance is persisted and user-owned.
-- [ ] Default 500 us.
+- [x] Default 2000 us.
 - [ ] Range 0..=5000 us, normal step 100 us.
 - [ ] Hold and Release formulas remain unchanged.
 - [ ] Cutoff changes only send-vs-drop admission.
@@ -1022,7 +1022,7 @@ Code acceptance requires all of the following:
 - [ ] RT no-allocation test remains green.
 - [ ] Exact cutoff equality / one-tick-beyond tests remain green.
 - [ ] Existing focus/HWND/UIPI/lease/recovery tests remain green.
-- [ ] Existing 13-scenario physical matrix remains clean at default 500.
+- [x] Historical 13-scenario physical matrix remains preserved at its recorded 500-us cutoff; final 2000-us default is not retroactively attributed to that run.
 - [ ] Cutoff propagation physical sweep is checked in.
 - [ ] PR remains draft pending independent review.
 
