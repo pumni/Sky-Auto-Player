@@ -37,6 +37,7 @@ import type {
   PlaybackStartRequest,
   PlaybackDefaultsDto,
   PlaybackOptionSetsDto,
+  TimingMarginRecommendationDto,
   PlaybackPatch as GeneratedPlaybackPatch,
   PlaybackRecommendationDto,
   RiskSummaryDto,
@@ -59,6 +60,7 @@ export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
 export type NativeBuild = NativeBuildDto;
 export type PlaybackDefaults = PlaybackDefaultsDto;
 export type PlaybackOptionSets = PlaybackOptionSetsDto;
+export type TimingMarginRecommendation = TimingMarginRecommendationDto;
 export type UpdatePreferences = Omit<UpdatePreferencesDto, 'channel'> & {
   channel: GeneratedUpdateChannel;
 };
@@ -99,8 +101,9 @@ export type Settings = Omit<SettingsDto, 'theme' | 'update_preferences'> & {
   update_preferences: UpdatePreferences;
 };
 export type PlaybackPatch = Partial<
-  Omit<GeneratedPlaybackPatch, 'holdFrames' | 'tempoScale' | 'fps'> & {
+  Omit<GeneratedPlaybackPatch, 'holdFrames' | 'timingMarginUs' | 'tempoScale' | 'fps'> & {
     holdFrames: number;
+    timingMarginUs: number;
     tempoScale: number;
     fps: number;
   }

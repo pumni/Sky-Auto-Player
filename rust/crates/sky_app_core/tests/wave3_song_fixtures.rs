@@ -48,11 +48,10 @@ fn schedule_and_risk_cases_match_python_oracle_fields() {
     for case in cases {
         let bytes = serde_json::to_vec(&case["raw"]).unwrap();
         let song = parse_song_json(&bytes, "fixture").expect("valid schedule fixture");
-        let policy = MaterializedTimingPolicy::from_calibration(
+        let policy = MaterializedTimingPolicy::from_user_margin(
             case["fps"].as_u64().unwrap() as u16,
             case["hold_frames"].as_f64().unwrap(),
-            case["transport_margin_us"].as_u64().unwrap(),
-            case["transport_margin_source"].as_str().unwrap(),
+            case["timing_margin_us"].as_u64().unwrap(),
         )
         .expect("timing policy oracle case");
         let schedule =
@@ -120,18 +119,17 @@ fn action_kind_wire_names_remain_stable() {
 }
 
 #[test]
-fn calibrated_policy_cases_match_the_python_production_resolver() {
+fn timing_policy_cases_match_the_authored_timing_contract() {
     let raw = fixture();
     let cases = raw["timing_policy_cases"]
         .as_array()
         .expect("timing policy oracle cases");
     assert!(cases.len() >= 4);
     for case in cases {
-        let policy = MaterializedTimingPolicy::from_calibration(
+        let policy = MaterializedTimingPolicy::from_user_margin(
             case["fps"].as_u64().unwrap() as u16,
             case["hold_frames"].as_f64().unwrap(),
-            case["transport_margin_us"].as_u64().unwrap(),
-            case["transport_margin_source"].as_str().unwrap(),
+            case["timing_margin_us"].as_u64().unwrap(),
         )
         .expect("materialized policy oracle case");
         assert_eq!(
@@ -165,9 +163,8 @@ fn calibrated_policy_cases_match_the_python_production_resolver() {
             "{case}"
         );
         assert_eq!(
-            policy.transport_margin_source,
-            case["transport_margin_source"].as_str().unwrap(),
-            "{case}"
+            policy.timing_margin_us,
+            case["timing_margin_us"].as_u64().unwrap()
         );
     }
 }

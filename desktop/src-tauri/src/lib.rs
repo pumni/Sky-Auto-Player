@@ -846,7 +846,7 @@ mod ipc_tests {
             &webview,
             request(
                 "prepare_playback",
-                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 10,
             ),
         )
@@ -878,7 +878,7 @@ mod ipc_tests {
             &webview,
             request(
                 "prepare_playback",
-                json!({"request":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                json!({"request":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 14,
             ),
         );
@@ -926,7 +926,7 @@ mod ipc_tests {
             &webview,
             request(
                 "prepare_playback",
-                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 64,
             ),
         )

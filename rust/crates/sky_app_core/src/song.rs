@@ -18,7 +18,6 @@ pub const KEY_NAMES: [&str; 15] = [
 ];
 pub const VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240];
 pub const HOLD_FRAMES: [f64; 3] = [1.0, 1.25, 1.5];
-pub const MIN_TRANSPORT_MARGIN_US: u64 = 300;
 pub const DOWN_LATE_GRACE_US: u64 = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +63,10 @@ pub enum SongError {
     InvalidFps,
     #[error("schedule hold frame value is unsupported")]
     InvalidHold,
+    #[error("schedule timing margin is invalid")]
+    InvalidTimingMargin,
+    #[error("schedule timing value overflowed")]
+    TimingOverflow,
     #[error("same-key repeat is infeasible: {interval_us}us")]
     ImpossibleRepeat { interval_us: u64 },
     #[error("schedule contains no actions")]
@@ -240,11 +243,10 @@ pub fn build_schedule(
     tempo_scale: f64,
     fps: u16,
 ) -> Result<ScheduleMetadata, SongError> {
-    let policy = crate::timing::MaterializedTimingPolicy::from_calibration(
+    let policy = crate::timing::MaterializedTimingPolicy::from_user_margin(
         fps,
         hold_frames,
-        MIN_TRANSPORT_MARGIN_US,
-        "default_transport_300",
+        crate::settings::DEFAULT_TIMING_MARGIN_US,
     )?;
     build_schedule_with_policy(song, tempo_scale, &policy)
 }
@@ -737,6 +739,43 @@ mod tests {
         };
         let schedule = build_schedule(&song, 1.0, 1.0, 60).unwrap();
         assert_eq!(schedule.actions[0].scan_codes, vec![0x16, 0x15]);
+    }
+
+    #[test]
+    fn user_margin_is_symmetric_and_never_compresses_an_infeasible_repeat() {
+        let song = Song {
+            name: "Repeated key".into(),
+            notes: vec![
+                Note {
+                    time_ms: 0,
+                    key: "Key0".into(),
+                    source_index: 0,
+                },
+                Note {
+                    time_ms: 35,
+                    key: "Key0".into(),
+                    source_index: 1,
+                },
+            ],
+        };
+        let margin_800 = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
+            .expect("valid margin");
+        let margin_900 = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 900)
+            .expect("valid margin");
+        let required_cycle_800 = margin_800.min_hold_us + margin_800.min_release_gap_us;
+        let required_cycle_900 = margin_900.min_hold_us + margin_900.min_release_gap_us;
+        assert_eq!(required_cycle_800, 34_934);
+        assert_eq!(required_cycle_900 - required_cycle_800, 200);
+
+        let feasible = build_schedule_with_policy(&song, 1.0, &margin_800).expect("schedule");
+        assert_eq!(feasible.impossible_same_key_repeats, 0);
+        assert_eq!(feasible.actions[1].at_us, margin_800.min_hold_us);
+        assert_eq!(feasible.compressed_holds, 0);
+
+        let infeasible = build_schedule_with_policy(&song, 1.0, &margin_900).expect("reported");
+        assert_eq!(infeasible.impossible_same_key_repeats, 1);
+        assert_eq!(infeasible.actions[1].at_us, margin_900.min_hold_us);
+        assert_eq!(infeasible.compressed_holds, 0);
     }
 
     #[test]

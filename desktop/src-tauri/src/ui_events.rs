@@ -122,7 +122,15 @@ pub struct DiagnosticsSnapshotDto {
     pub pre_call_late_2ms: u64,
     pub pre_call_late_5ms: u64,
     pub pre_call_late_10ms: u64,
+    pub fps: u16,
+    pub frame_us: u64,
+    pub hold_frames: f64,
+    pub frame_base_hold_us: u64,
+    pub timing_margin_us: u64,
+    pub min_hold_us: u64,
+    pub min_release_gap_us: u64,
     pub down_late_grace_us: u64,
+    pub timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub pre_call_lt_250us: u64,
     pub pre_call_250_500us: u64,
     pub pre_call_500_750us: u64,
@@ -202,11 +210,11 @@ pub struct CalibrationFinishedPayload {
     pub operation_id: String,
     pub outcome: CalibrationOutcome,
     pub status: String,
-    pub margin_us: Option<u64>,
+    pub recommended_timing_margin_us: Option<u64>,
+    pub recommendation_qualified: bool,
     pub sample_count: u64,
     pub source: String,
     pub message: String,
-    pub applied: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
@@ -504,8 +512,14 @@ impl UiEvent {
         if payload.sample_count > 5_000 {
             return Err("calibration sample count exceeds bounds".into());
         }
-        if payload.margin_us.is_some_and(|value| value > 60_000_000) {
-            return Err("calibration margin is outside bounds".into());
+        if payload
+            .recommended_timing_margin_us
+            .is_some_and(|value| value > sky_app_core::settings::MAX_TIMING_MARGIN_US)
+        {
+            return Err("calibration recommendation is outside bounds".into());
+        }
+        if payload.recommendation_qualified && payload.recommended_timing_margin_us.is_none() {
+            return Err("qualified calibration is missing its recommendation".into());
         }
         Ok(())
     }

@@ -1,5 +1,6 @@
 import type {
   Bootstrap,
+  PlaybackConfig,
   CalibrationCancel,
   CalibrationCancelAck,
   CalibrationStart,
@@ -85,7 +86,18 @@ function initialSettings(): Settings {
   return {
     theme: 'aurora',
     ui_background_mode: 'opaque',
-    playback_defaults: { hold_frames: 2, tempo_scale: 1, fps: 60, dry_run: false },
+    playback_defaults: {
+      hold_frames: 1,
+      timing_margin_us: 800,
+      tempo_scale: 1,
+      fps: 60,
+      dry_run: false,
+    },
+    timing_margin_recommendation: {
+      recommended_timing_margin_us: 800,
+      qualified: false,
+      source: 'default_fallback',
+    },
     telemetry_enabled: true,
     verbose_hud: false,
     update_preferences: { auto_check: true, channel: 'stable', skip_version: '' },
@@ -95,7 +107,8 @@ function initialSettings(): Settings {
 export function createMockBridge(): DesktopBridge {
   let generation = 1;
   let settings = initialSettings();
-  let activeSession: { sessionId: string; songId: string } | null = null;
+  let activeSession: { sessionId: string; songId: string; config: PlaybackConfig } | null = null;
+  const preparedConfigs = new Map<string, PlaybackConfig>();
   let diagnosticsEnabled = false;
   let diagnosticsSeq = 0;
   let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
@@ -114,6 +127,12 @@ export function createMockBridge(): DesktopBridge {
   const emitDiagnostics = () => {
     if (!diagnosticsEnabled) return;
     diagnosticsSeq += 1;
+    const config = activeSession?.config ?? {
+      ...settings.playback_defaults,
+      dry_run: false,
+    };
+    const frameUs = Math.ceil(1_000_000 / config.fps);
+    const frameBaseHoldUs = Math.ceil(config.hold_frames * frameUs);
     emit({
       v: 1,
       name: 'diagnostics.snapshot',
@@ -130,7 +149,15 @@ export function createMockBridge(): DesktopBridge {
         pre_call_late_2ms: 0,
         pre_call_late_5ms: 0,
         pre_call_late_10ms: 0,
+        fps: config.fps,
+        frame_us: frameUs,
+        hold_frames: config.hold_frames,
+        frame_base_hold_us: frameBaseHoldUs,
+        timing_margin_us: config.timing_margin_us,
+        min_hold_us: frameBaseHoldUs + config.timing_margin_us,
+        min_release_gap_us: frameUs + config.timing_margin_us,
         down_late_grace_us: 500,
+        timing_margin_recommendation: settings.timing_margin_recommendation,
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
         pre_call_500_750us: 1,
@@ -162,6 +189,16 @@ export function createMockBridge(): DesktopBridge {
     });
   };
   const emitCalibrationFinished = (operationId: string, outcome: 'succeeded' | 'cancelled') => {
+    if (outcome === 'succeeded') {
+      settings = {
+        ...settings,
+        timing_margin_recommendation: {
+          recommended_timing_margin_us: 900,
+          qualified: true,
+          source: 'qualified_calibration',
+        },
+      };
+    }
     emit({
       v: 1,
       name: 'calibration.finished',
@@ -169,11 +206,11 @@ export function createMockBridge(): DesktopBridge {
         operation_id: operationId,
         outcome,
         status: outcome === 'succeeded' ? 'ready' : 'cancelled',
-        margin_us: outcome === 'succeeded' ? 850 : null,
+        recommended_timing_margin_us: outcome === 'succeeded' ? 900 : null,
+        recommendation_qualified: outcome === 'succeeded',
         sample_count: outcome === 'succeeded' ? 24 : 0,
-        source: 'mock',
+        source: outcome === 'succeeded' ? 'qualified_calibration' : 'unavailable',
         message: outcome === 'succeeded' ? 'Calibration completed.' : 'Calibration cancelled.',
-        applied: outcome === 'succeeded',
       },
     });
   };
@@ -227,10 +264,14 @@ export function createMockBridge(): DesktopBridge {
         protocol_version: 1,
         native_build: MOCK_NATIVE,
         playback_defaults: settings.playback_defaults,
+        timing_margin_recommendation: settings.timing_margin_recommendation,
         option_sets: {
-          hold_frames: [1, 2, 3, 4],
+          hold_frames: [1, 1.25, 1.5],
           tempo_scales: [0.75, 0.9, 1, 1.1],
           fps: [30, 60, 120],
+          timing_margin_min_us: 0,
+          timing_margin_max_us: 3_000,
+          timing_margin_step_us: 100,
         },
         theme: settings.theme,
         telemetry_enabled: settings.telemetry_enabled,
@@ -396,6 +437,9 @@ export function createMockBridge(): DesktopBridge {
               playback_defaults: {
                 ...settings.playback_defaults,
                 ...(playback.holdFrames === undefined ? {} : { hold_frames: playback.holdFrames }),
+                ...(playback.timingMarginUs === undefined
+                  ? {}
+                  : { timing_margin_us: playback.timingMarginUs }),
                 ...(playback.tempoScale === undefined ? {} : { tempo_scale: playback.tempoScale }),
                 ...(playback.fps === undefined ? {} : { fps: playback.fps }),
               },
@@ -492,8 +536,10 @@ export function createMockBridge(): DesktopBridge {
       const found = allRows().find((item) => item.song_id === request.songId);
       if (!found) throw new Error('song was not found');
       const risk = found.risk_level === 'low' ? 'low' : 'medium';
+      const preparedId = `prepared-${found.song_id}`;
+      preparedConfigs.set(preparedId, request.config);
       return {
-        prepared_id: `prepared-${found.song_id}`,
+        prepared_id: preparedId,
         song: {
           song_id: found.song_id,
           title: found.title,
@@ -570,9 +616,17 @@ export function createMockBridge(): DesktopBridge {
       };
     },
     async startPlayback(request) {
+      const baseConfig = preparedConfigs.get(request.preparedId) ?? {
+        ...settings.playback_defaults,
+        dry_run: false,
+      };
+      const config = request.decisions.some((item) => item.decision === 'dry_run')
+        ? { ...baseConfig, dry_run: true }
+        : baseConfig;
       const session = {
         sessionId: 'b'.repeat(32),
         songId: request.preparedId.replace('prepared-', ''),
+        config,
       };
       activeSession = session;
       setTimeout(() => emitPlaybackState(session, 'playing'), 0);
@@ -581,7 +635,7 @@ export function createMockBridge(): DesktopBridge {
         prepared_id: request.preparedId,
         song_id: session.songId,
         state: 'starting',
-        config: { hold_frames: 2, tempo_scale: 1, fps: 60, dry_run: false },
+        config,
         plan_fingerprint: request.decisions.some((item) => item.decision === 'use_recommended')
           ? 'mock-recommended-plan'
           : request.decisions.some((item) => item.decision === 'dry_run')

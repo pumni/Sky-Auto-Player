@@ -41,7 +41,7 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
     );
     assert_eq!(
         raw["config_layouts"]["legacy_v2"]["migrated_schema_version"],
-        3
+        4
     );
     assert_eq!(
         raw["config_layouts"]["current_v3"]["normalized_theme"],
@@ -56,6 +56,7 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
             verbose_hud: Some(valid["verbose_hud"].as_bool().unwrap()),
             playback_defaults: Some(PlaybackDefaultsPatch {
                 hold_frames: Some(valid["default_hold_frames"].as_f64().unwrap()),
+                timing_margin_us: Some(valid["default_timing_margin_us"].as_u64().unwrap()),
                 tempo_scale: Some(valid["default_tempo_scale"].as_f64().unwrap()),
                 fps: Some(valid["game_fps"].as_u64().unwrap() as u16),
             }),
@@ -73,6 +74,10 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
         .expect("valid patch");
     assert_eq!(patched.theme, "slate");
     assert_eq!(patched.playback_defaults.fps, 120);
+    assert_eq!(
+        patched.playback_defaults.timing_margin_us,
+        valid["default_timing_margin_us"].as_u64().unwrap()
+    );
     assert_eq!(patched.update.channel, UpdateChannel::Beta);
     assert_eq!(patched.update.skip_version, "3.6.0");
     let before = service.snapshot().clone();

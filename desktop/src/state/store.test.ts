@@ -404,7 +404,7 @@ describe('desktop store', () => {
         prepared_id: request.preparedId,
         song_id: songId,
         state: 'starting' as const,
-        config: { hold_frames: 2, tempo_scale: 1, fps: 60, dry_run: true },
+        config: { hold_frames: 2, timing_margin_us: 800, tempo_scale: 1, fps: 60, dry_run: true },
         plan_fingerprint: 'mock-plan',
       };
       listener?.({
@@ -515,7 +515,19 @@ describe('desktop store', () => {
           pre_call_late_2ms: 0,
           pre_call_late_5ms: 0,
           pre_call_late_10ms: 0,
+          fps: 60,
+          frame_us: 16_667,
+          hold_frames: 1,
+          frame_base_hold_us: 16_667,
+          timing_margin_us: 800,
+          min_hold_us: 17_467,
+          min_release_gap_us: 17_467,
           down_late_grace_us: 500,
+          timing_margin_recommendation: {
+            recommended_timing_margin_us: 800,
+            qualified: false,
+            source: 'default_fallback',
+          },
           pre_call_lt_250us: 0,
           pre_call_250_500us: 0,
           pre_call_500_750us: 0,
@@ -591,7 +603,19 @@ describe('desktop store', () => {
         pre_call_late_2ms: 0,
         pre_call_late_5ms: 0,
         pre_call_late_10ms: 0,
-        down_late_grace_us: 500 + seq,
+        fps: 60,
+        frame_us: 16_667,
+        hold_frames: 1,
+        frame_base_hold_us: 16_667,
+        timing_margin_us: 800,
+        min_hold_us: 17_467,
+        min_release_gap_us: 17_467,
+        down_late_grace_us: 500,
+        timing_margin_recommendation: {
+          recommended_timing_margin_us: 800,
+          qualified: false,
+          source: 'default_fallback',
+        },
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
         pre_call_500_750us: seq,
@@ -626,7 +650,7 @@ describe('desktop store', () => {
     store.getState().applyEvent(snapshot('a'.repeat(32), 2));
     expect(store.getState().diagnostics.samples).toHaveLength(2);
     expect(store.getState().diagnostics.samples[1]).toMatchObject({
-      down_late_grace_us: 502,
+      down_late_grace_us: 500,
       pre_call_500_750us: 2,
       final_gate_focus_losses: 2,
       sendinput_zero_progress_failures: 2,
@@ -676,6 +700,6 @@ describe('desktop store', () => {
     await waitFor(() => expect(store.getState().calibration.state).toBe('succeeded'));
     expect(store.getState().calibration.operationId).toMatch(/^[0-9a-f]{32}$/);
     expect(store.getState().calibration.result?.outcome).toBe('succeeded');
-    expect(store.getState().calibration.result?.source).toBe('mock');
+    expect(store.getState().calibration.result?.source).toBe('qualified_calibration');
   });
 });

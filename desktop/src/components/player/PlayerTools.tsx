@@ -1,6 +1,7 @@
 import { PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
+import { TimingMarginControl } from '../settings/TimingMarginControl';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
 interface PlayerToolsProps {
@@ -9,7 +10,8 @@ interface PlayerToolsProps {
 }
 
 export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
-  const defaults = useStore((store) => store.settings?.playback_defaults);
+  const settings = useStore((store) => store.settings);
+  const defaults = settings?.playback_defaults;
   const bootstrap = useStore((store) => store.bootstrap);
   const utility = useStore((store) => store.utility);
   const patchSettings = useStore((store) => store.patchSettings);
@@ -28,7 +30,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
     pendingCommand === null &&
     !hasPreparedPlayback;
   const profileSummary = defaults
-    ? `${defaults.hold_frames}f · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS`
+    ? `${defaults.hold_frames}f + ${(defaults.timing_margin_us / 1_000).toFixed(1)}ms · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS`
     : 'Unavailable';
 
   const prepareAndMaybeStart = async () => {
@@ -67,6 +69,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                 <ProfileFields
                   defaults={defaults}
                   bootstrap={bootstrap}
+                  recommendation={settings?.timing_margin_recommendation}
                   patchSettings={patchSettings}
                 />
               </div>
@@ -103,11 +106,18 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
 interface ProfileFieldsProps {
   defaults: NonNullable<DesktopStore['settings']>['playback_defaults'] | undefined;
   bootstrap: DesktopStore['bootstrap'];
+  recommendation: NonNullable<DesktopStore['settings']>['timing_margin_recommendation'] | undefined;
   patchSettings: DesktopStore['patchSettings'];
 }
 
-function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProps) {
-  if (!defaults || !bootstrap) return <span className="muted">Profile unavailable</span>;
+function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: ProfileFieldsProps) {
+  if (!defaults || !bootstrap || !recommendation) {
+    return <span className="muted">Profile unavailable</span>;
+  }
+  const frameUs = Math.ceil(1_000_000 / defaults.fps);
+  const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
+  const minHoldUs = frameBaseHoldUs + defaults.timing_margin_us;
+  const minReleaseGapUs = frameUs + defaults.timing_margin_us;
   return (
     <>
       <label>
@@ -155,6 +165,34 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
           ))}
         </select>
       </label>
+      <TimingMarginControl
+        value={defaults.timing_margin_us}
+        options={bootstrap.option_sets}
+        recommendation={recommendation}
+        onChange={(value) => void patchSettings({ playbackDefaults: { timingMarginUs: value } })}
+      />
+      <dl className="profile-timing-summary">
+        <div>
+          <dt>1 frame</dt>
+          <dd>{(frameUs / 1_000).toFixed(3)} ms</dd>
+        </div>
+        <div>
+          <dt>Base hold</dt>
+          <dd>{(frameBaseHoldUs / 1_000).toFixed(3)} ms</dd>
+        </div>
+        <div>
+          <dt>Target hold</dt>
+          <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
+        </div>
+        <div>
+          <dt>Release gap</dt>
+          <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
+        </div>
+        <div>
+          <dt>Down late cutoff</dt>
+          <dd>500 µs</dd>
+        </div>
+      </dl>
     </>
   );
 }

@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Bootstrap, SettingsPatch, ThemeId } from '../../bridge/DesktopBridge';
 import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
+import { TimingMarginControl } from './TimingMarginControl';
 
 interface SettingsPanelProps {
   bootstrap: Bootstrap;
@@ -56,6 +57,10 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
 
   const patch = (value: SettingsPatch) => void patchSettings(value);
   const defaults = settings.playback_defaults;
+  const frameUs = Math.ceil(1_000_000 / defaults.fps);
+  const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
+  const minHoldUs = frameBaseHoldUs + defaults.timing_margin_us;
+  const minReleaseGapUs = frameUs + defaults.timing_margin_us;
   return (
     <ModalOverlay
       className="modal-backdrop"
@@ -148,8 +153,41 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                       </select>
                     </label>
                   </div>
+                  <TimingMarginControl
+                    value={defaults.timing_margin_us}
+                    options={bootstrap.option_sets}
+                    recommendation={settings.timing_margin_recommendation}
+                    onChange={(value) => patch({ playbackDefaults: { timingMarginUs: value } })}
+                  />
+                  <dl className="settings-timing-summary">
+                    <div>
+                      <dt>1 frame</dt>
+                      <dd>{(frameUs / 1_000).toFixed(3)} ms</dd>
+                    </div>
+                    <div>
+                      <dt>Base hold</dt>
+                      <dd>{(frameBaseHoldUs / 1_000).toFixed(3)} ms</dd>
+                    </div>
+                    <div>
+                      <dt>Target hold</dt>
+                      <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
+                    </div>
+                    <div>
+                      <dt>Release gap</dt>
+                      <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
+                    </div>
+                  </dl>
                   <p className="settings-note">
-                    These defaults are used when preparing a new playback session.
+                    Recommendation:{' '}
+                    {settings.timing_margin_recommendation.recommended_timing_margin_us} µs ·{' '}
+                    {settings.timing_margin_recommendation.qualified
+                      ? 'qualified calibration'
+                      : 'fallback evidence'}
+                    .
+                  </p>
+                  <p className="settings-note">
+                    Playback changes apply when preparing the next session. An active session keeps
+                    its frozen timing values.
                   </p>
                 </section>
               )}

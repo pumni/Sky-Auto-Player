@@ -101,15 +101,15 @@ function TimingPlot({
         </title>
         <desc id="timing-plot-description">
           Cumulative session maximum observed at each diagnostics snapshot; it does not decrease
-          after recovery. Pre-call timing covers physical sends, while the Down cutoff grace
-          threshold applies only to Down-bearing sends.
+          after recovery. Pre-call timing covers physical sends, while the fixed Down late cutoff
+          applies only to Down-bearing sends.
         </desc>
         <line x1="0" y1={zeroY} x2={width} y2={zeroY} className="plot-zero-axis" />
         {thresholdY !== null && (
           <>
             <line x1="0" y1={thresholdY} x2={width} y2={thresholdY} className="plot-threshold" />
             <text x={width - 4} y={Math.max(plotTop + 10, thresholdY - 4)} className="plot-label">
-              Down grace {threshold} μs
+              Down cutoff {threshold} μs
             </text>
           </>
         )}
@@ -118,7 +118,7 @@ function TimingPlot({
       <figcaption>
         {latest === null
           ? 'No sender-side timing samples yet.'
-          : `Session max pre-call lateness observed at the latest diagnostics snapshot: ${latest} μs across ${values.length} snapshots. This cumulative value does not decrease after recovery. Down grace applies only to Down-bearing sends.${
+          : `Session max pre-call lateness observed at the latest diagnostics snapshot: ${latest} μs across ${values.length} snapshots. This cumulative value does not decrease after recovery. The fixed Down late cutoff applies only to Down-bearing sends.${
               latestSample?.p95_ms === null || latestSample?.p95_ms === undefined
                 ? ''
                 : ` Completion p95 observer value ${number(latestSample.p95_ms)} ms.`
@@ -238,6 +238,28 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 />
                 <Metric label="Completion jitter σ" value={measure(latest.sigma_onset_ms, 'ms')} />
               </MetricGroup>
+              <MetricGroup title="Frozen session timing">
+                <Metric label="FPS" value={String(latest.fps)} />
+                <Metric label="Frame period" value={`${(latest.frame_us / 1_000).toFixed(3)} ms`} />
+                <Metric
+                  label="Base hold"
+                  value={`${(latest.frame_base_hold_us / 1_000).toFixed(3)} ms`}
+                />
+                <Metric label="Configured Timing Margin" value={`${latest.timing_margin_us} µs`} />
+                <Metric
+                  label="Target hold"
+                  value={`${(latest.min_hold_us / 1_000).toFixed(3)} ms`}
+                />
+                <Metric
+                  label="Release gap"
+                  value={`${(latest.min_release_gap_us / 1_000).toFixed(3)} ms`}
+                />
+                <Metric label="Down late cutoff" value={`${latest.down_late_grace_us} µs`} />
+                <Metric
+                  label="Recommended Timing Margin"
+                  value={`${latest.timing_margin_recommendation.recommended_timing_margin_us} µs · ${latest.timing_margin_recommendation.qualified ? 'qualified' : 'fallback'}`}
+                />
+              </MetricGroup>
               <MetricGroup title="Late events">
                 <Metric label="Completion > 2 ms" value={count(latest.late_2ms)} />
                 <Metric label="Completion > 5 ms" value={count(latest.late_5ms)} />
@@ -271,10 +293,6 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <Metric
                   label="Pre-call ≥ 2.0 ms"
                   value={backendMetric(latest.pre_call_ge_2000us)}
-                />
-                <Metric
-                  label="Down cutoff grace"
-                  value={backendMeasure(latest.down_late_grace_us, 'μs')}
                 />
               </MetricGroup>
               <MetricGroup title="Deadline admission">

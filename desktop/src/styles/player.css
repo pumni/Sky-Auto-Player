@@ -318,6 +318,17 @@
   justify-content: space-between;
 }
 
+.profile-popover .timing-margin-control {
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 2px;
+}
+
+.profile-popover .profile-timing-summary {
+  grid-column: 1 / -1;
+  gap: 3px 10px;
+  margin-top: 2px;
+}
+
 .profile-test-action {
   width: 100%;
   margin-top: 2px;

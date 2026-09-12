@@ -303,8 +303,7 @@
       "hold_frames": 1.0,
       "tempo_scale": 1.0,
       "fps": 60,
-      "transport_margin_us": 300,
-      "transport_margin_source": "default_transport_300",
+      "timing_margin_us": 800,
       "schedule": {
         "actions": [
           {
@@ -399,8 +398,7 @@
       "hold_frames": 1.25,
       "tempo_scale": 0.95,
       "fps": 120,
-      "transport_margin_us": 300,
-      "transport_margin_source": "default_transport_300",
+      "timing_margin_us": 800,
       "schedule": {
         "actions": [
           {
@@ -479,7 +477,7 @@
       }
     },
     {
-      "name": "calibrated_margin",
+      "name": "user_margin_default",
       "raw": {
         "name": "Demo",
         "songNotes": [
@@ -496,8 +494,7 @@
       "hold_frames": 1.0,
       "tempo_scale": 1.0,
       "fps": 60,
-      "transport_margin_us": 777,
-      "transport_margin_source": "device_cache",
+      "timing_margin_us": 800,
       "schedule": {
         "actions": [
           {
@@ -509,7 +506,7 @@
             "reason": "onset"
           },
           {
-            "at_us": 17944,
+            "at_us": 17467,
             "scan_codes": [
               21
             ],
@@ -525,7 +522,7 @@
             "reason": "onset"
           },
           {
-            "at_us": 37944,
+            "at_us": 37467,
             "scan_codes": [
               22
             ],
@@ -533,9 +530,9 @@
             "reason": "release"
           }
         ],
-        "source_duration_us": 37944,
-        "playback_duration_us": 37944,
-        "duration_us": 37944,
+        "source_duration_us": 37467,
+        "playback_duration_us": 37467,
+        "duration_us": 37467,
         "note_count": 2,
         "deduplicated_note_count": 2,
         "duplicate_note_count": 0,
@@ -560,7 +557,7 @@
         "recommendations": [
           "No timing conflicts detected. Keep the selected hold."
         ],
-        "average_notes_per_second": 52.70925574530888,
+        "average_notes_per_second": 53.380308004377184,
         "peak_notes_per_second_1s": 2.0,
         "suggested_hold_frames": 1.0,
         "suggested_tempo_scale": 1.0,
@@ -579,8 +576,7 @@
       "hold_frames": 1.0,
       "tempo_scale": 1.0,
       "fps": 60,
-      "transport_margin_us": 300,
-      "transport_margin_source": "default_transport_300",
+      "timing_margin_us": 800,
       "schedule": {
         "actions": [],
         "source_duration_us": 17467,
@@ -658,8 +654,7 @@
       "hold_frames": 1.0,
       "tempo_scale": 1.0,
       "fps": 60,
-      "transport_margin_us": 300,
-      "transport_margin_source": "default_transport_300",
+      "timing_margin_us": 800,
       "schedule": {
         "actions": [
           {
@@ -821,11 +816,10 @@
   ],
   "timing_policy_cases": [
     {
-      "name": "no_cache_fallback",
+      "name": "default_user_margin",
       "hold_frames": 1.25,
       "fps": 120,
-      "transport_margin_us": 300,
-      "transport_margin_source": "default_transport_300",
+      "timing_margin_us": 800,
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "down_late_grace_us": 500,
@@ -837,21 +831,19 @@
       "name": "valid_device_cache",
       "hold_frames": 1.25,
       "fps": 120,
-      "transport_margin_us": 777,
-      "transport_margin_source": "device_cache",
+      "timing_margin_us": 1300,
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "down_late_grace_us": 500,
-      "min_hold_us": 11695,
-      "min_release_gap_us": 9611,
+      "min_hold_us": 11718,
+      "min_release_gap_us": 9634,
       "focus_restore_grace_us": 100000
     },
     {
-      "name": "unhealthy_cache_fallback",
+      "name": "user_selected_margin",
       "hold_frames": 1.25,
       "fps": 120,
-      "transport_margin_us": 300,
-      "transport_margin_source": "invalid_cache_transport_300",
+      "timing_margin_us": 800,
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "down_late_grace_us": 500,
@@ -863,8 +855,7 @@
       "name": "stale_cache_fallback",
       "hold_frames": 1.25,
       "fps": 120,
-      "transport_margin_us": 300,
-      "transport_margin_source": "incompatible_host_transport_300",
+      "timing_margin_us": 800,
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "down_late_grace_us": 500,

@@ -20,6 +20,18 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     pre_call_late_5ms: 2,
     pre_call_late_10ms: 1,
     down_late_grace_us: 500,
+    fps: 60,
+    frame_us: 16_667,
+    hold_frames: 1,
+    frame_base_hold_us: 16_667,
+    timing_margin_us: 800,
+    min_hold_us: 17_467,
+    min_release_gap_us: 17_467,
+    timing_margin_recommendation: {
+      recommended_timing_margin_us: 800,
+      qualified: false,
+      source: 'default_fallback',
+    },
     pre_call_lt_250us: 0,
     pre_call_250_500us: 0,
     pre_call_500_750us: 1,
@@ -110,7 +122,10 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Max pre-call lateness')).toBeInTheDocument();
     expect(screen.getByText('Pre-call > 10 ms')).toBeInTheDocument();
     expect(screen.getByText('Pre-call 500–750 μs')).toBeInTheDocument();
-    expect(screen.getByText('Down cutoff grace')).toBeInTheDocument();
+    expect(screen.getByText('Down late cutoff')).toBeInTheDocument();
+    expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
+    expect(screen.getByText('Target hold').parentElement).toHaveTextContent('17.467 ms');
+    expect(screen.getByText('Release gap').parentElement).toHaveTextContent('17.467 ms');
     expect(screen.getByText('Hard-late Down boundaries')).toBeInTheDocument();
     expect(screen.getByText('Missed Down keys')).toBeInTheDocument();
     expect(screen.getByText('Backlog misses')).toBeInTheDocument();
@@ -137,8 +152,46 @@ describe('DiagnosticsView', () => {
     expect(
       screen.getByText(/This cumulative value does not decrease after recovery/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Down grace applies only to Down-bearing sends/)).toBeInTheDocument();
-    expect(screen.getByText('Down grace 500 μs')).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/fixed Down late cutoff applies only to Down-bearing sends/),
+    ).toHaveLength(2);
+    expect(screen.getByText('Down cutoff 500 μs')).toBeInTheDocument();
+  });
+
+  it('shows the frozen user margin separately from the fixed Down cutoff', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'd'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            timing_margin_us: 0,
+            min_hold_us: 16_667,
+            min_release_gap_us: 16_667,
+            down_late_grace_us: 500,
+            timing_margin_recommendation: {
+              recommended_timing_margin_us: 800,
+              qualified: false,
+              source: 'default_fallback',
+            },
+          }),
+        ],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('0 µs');
+    expect(screen.getByText('Target hold').parentElement).toHaveTextContent('16.667 ms');
+    expect(screen.getByText('Release gap').parentElement).toHaveTextContent('16.667 ms');
+    expect(screen.getByText('Down late cutoff').parentElement).toHaveTextContent('500 µs');
+    expect(screen.getByText('Recommended Timing Margin').parentElement).toHaveTextContent(
+      '800 µs · fallback',
+    );
   });
 
   it('does not present unavailable distribution metrics as zero', () => {
@@ -241,7 +294,7 @@ describe('DiagnosticsView', () => {
         /Session max pre-call lateness observed at the latest diagnostics snapshot: 327 μs/,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText('Down grace 500 μs')).toBeInTheDocument();
+    expect(screen.getByText('Down cutoff 500 μs')).toBeInTheDocument();
   });
 
   it('uses playback lifecycle to hide a completed session', () => {

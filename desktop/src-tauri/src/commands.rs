@@ -80,6 +80,7 @@ pub struct CatalogSetLikedRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackPatch {
     pub hold_frames: Option<f64>,
+    pub timing_margin_us: Option<u64>,
     pub tempo_scale: Option<f64>,
     pub fps: Option<u16>,
 }
@@ -124,6 +125,7 @@ pub struct PlaybackPrepareRequest {
 #[serde(deny_unknown_fields)]
 pub struct PlaybackConfigDto {
     pub hold_frames: f64,
+    pub timing_margin_us: u64,
     pub tempo_scale: f64,
     pub fps: u16,
     pub dry_run: bool,
@@ -237,6 +239,7 @@ pub struct NativeBuildDto {
 #[ts(export)]
 pub struct PlaybackDefaultsDto {
     pub hold_frames: f64,
+    pub timing_margin_us: u64,
     pub tempo_scale: f64,
     pub fps: u16,
     pub dry_run: bool,
@@ -248,6 +251,17 @@ pub struct PlaybackOptionSetsDto {
     pub hold_frames: Vec<f64>,
     pub tempo_scales: Vec<f64>,
     pub fps: Vec<u16>,
+    pub timing_margin_min_us: u64,
+    pub timing_margin_max_us: u64,
+    pub timing_margin_step_us: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+pub struct TimingMarginRecommendationDto {
+    pub recommended_timing_margin_us: u64,
+    pub qualified: bool,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -287,6 +301,7 @@ pub struct BootstrapDto {
     pub protocol_version: u64,
     pub native_build: NativeBuildDto,
     pub playback_defaults: PlaybackDefaultsDto,
+    pub timing_margin_recommendation: TimingMarginRecommendationDto,
     pub option_sets: PlaybackOptionSetsDto,
     pub theme: String,
     pub telemetry_enabled: bool,
@@ -409,6 +424,7 @@ pub struct SettingsDto {
     pub theme: String,
     pub ui_background_mode: String,
     pub playback_defaults: PlaybackDefaultsDto,
+    pub timing_margin_recommendation: TimingMarginRecommendationDto,
     pub telemetry_enabled: bool,
     pub verbose_hud: bool,
     pub update_preferences: UpdatePreferencesDto,

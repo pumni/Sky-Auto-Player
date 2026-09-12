@@ -20,10 +20,11 @@ microsecond conversions.
 | `pre_call_qpc` | True sender-owned QPC sample taken after payload resolution and immediately before `SendInput`; only the Down late-grace cutoff comparison follows it. |
 | `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
-| `effective_min_hold` | Fixed materialized hold floor passed into the native worker. |
-| `down_late_grace` | Independent fixed sender correctness grace for authorized Down admission; production is `500 µs`. |
-| `transport_margin` | Calibrated sender transport component; default/fallback is `300 µs` and calibration never changes the Down grace. |
-| `min_release_gap` | One frame period plus the same static sender headroom reserved for the hold floor, between a same-key Up and the next same-key Down. |
+| `timing_margin` | User-owned persisted value, from `0` through `3,000 µs` in `100 µs` steps; frozen into each prepared session. |
+| `min_hold` | Fixed materialized floor equal to the selected frame-based hold plus the exact user Timing Margin. |
+| `down_late_cutoff` | Independent production cutoff for authorized Down admission; fixed at `500 µs` after the physical target. |
+| `min_release_gap` | One frame period plus the same exact user Timing Margin between a same-key Up and the next same-key Down. |
+| `timing_margin_recommendation` | Advisory value derived from calibration evidence; it changes a setting only after an explicit user action. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
@@ -39,75 +40,60 @@ described as having the same latency as `require_focus=false`.
 ## 2. Hold and release contract
 
 The native application validates `hold_frames` as one of `1.0`, `1.25`, or `1.5`, computes the
-requested hold, and passes:
+frame-based hold and applies the persisted user margin symmetrically:
 
 ```text
 frame_us = ceil(1_000_000 / game_fps)
 frame_base_hold_us = ceil(hold_frames * frame_us)
-down_late_grace_us = policy.down_late_grace_us
-transport_margin_us = max(0, calibrated_or_default_transport_margin_us)
-effective_min_hold = (
-    frame_base_hold_us + down_late_grace_us + transport_margin_us
-)
-sender_headroom_us = down_late_grace_us + transport_margin_us
-min_release_gap_us = frame_us + sender_headroom_us
+timing_margin_us = persisted_user_value
+min_hold_us = frame_base_hold_us + timing_margin_us
+min_release_gap_us = frame_us + timing_margin_us
+down_late_cutoff_us = 500
 ```
 
 For every authored same-key Down→Up pair:
 
 ```text
-authored_up >= authored_down + effective_min_hold
+authored_up >= authored_down + min_hold_us
 next_same_key_down - previous_same_key_up >= min_release_gap_us
 ```
 
-The static margin is applied once while materializing the authored schedule.
-The native desktop adapter receives that materialized value verbatim; the native admission validator
-checks this relationship before worker start in
-the same QPC tick domain used by dispatch. If the interval is invalid, native
-admission fails before any musical packet can be sent; the worker never
-reschedules the Up target.
+The user margin is applied once while materializing the authored schedule.
+The native desktop adapter receives that materialized value verbatim; the native admission
+validator checks this relationship before worker start in the same QPC tick domain used by
+dispatch. If the interval is invalid, native admission fails before any musical packet can be
+sent; the worker never reschedules the Up target.
 
-The release gap is authored statically and uses the same bounded sender-side
-headroom as the hold floor. Runtime never delays the next Down to repair a
-boundary. Sender completion evidence can verify the sender-side interval, but
-it does not prove that the game sampled either transition.
+The release gap is authored statically and uses the same user-owned margin as
+the hold floor. Runtime never delays the next Down to repair a boundary. Sender
+completion evidence can verify the sender-side interval, but it does not prove
+that the game sampled either transition. The margin is never added to a target,
+used as dispatch lead, adapted during playback, or compressed automatically.
 
-`FrameTimingPolicy.min_hold_margin_us` remains a compatibility aggregate of the
-Down grace and transport component. The explicit policy fields are
-`frame_base_hold_us`, `down_late_grace_us`, `transport_margin_us`, and
-`min_release_gap_us`; `min_hold_margin_source` preserves transport provenance.
-The policy enforces:
+Independently, production applies a fixed `500 µs` Down late cutoff at the
+sender boundary. It affects only whether a Down is sent; it is not part of
+either authored duration. For a Down sent at the latest permitted cutoff:
 
 ```text
-transport_margin_us >= 0
-effective_min_hold_us = frame_base_hold_us + down_late_grace_us + transport_margin_us
-```
-
-The effective margin affects only the authored effective minimum hold. It is
-never added to the authored target, never used as dispatch lead, and never
-adapted during playback. Independently, production uses the fixed
-`down_late_grace_us = 500` sender policy, materialized once as
-`down_late_grace_ticks` at admission. For the tightest valid authored hold:
-
-```text
-authored_up - authored_down = effective_min_hold
-actual_down_pre_call <= authored_down + down_late_grace
+authored_up - authored_down = min_hold
+actual_down_pre_call <= authored_down + down_late_cutoff
 
 therefore:
 authored_up - actual_down_pre_call
-    >= effective_min_hold - down_late_grace
+    >= min_hold - down_late_cutoff
 ```
 
-Because the effective static margin is at least the Down grace, every
-production-accepted Down preserves at least the selected frame-base hold at
-the authoritative pre-call boundary.
+The default `800 µs` margin exceeds the fixed cutoff by `300 µs`. A user may
+select a smaller value, including zero; at those settings, an unusually late
+Down can reduce the sender-observed hold below the frame-based floor. The
+authored target remains unchanged and valid by its configured margin.
 
 Equality at the cutoff is permitted; a pre-call QPC one tick beyond it makes
 zero Down `SendInput` syscalls and follows the existing missed-Down recovery
-path. Calibration never changes this grace.
+path. Changing Timing Margin or calibration evidence never changes this cutoff.
 
 Before a native session starts, the boundary validator rejects every authored
-same-key Down→Up interval below `effective_min_hold_us`, including intervals
+same-key Down→Up interval below `min_hold_us`, including intervals
 that share one authored timestamp. Runtime completion lateness is evidence for
 sender-side telemetry and ownership accounting only. Runtime deadline/overdue
 policy never invents a completion-relative hold deadline, moves an authored
@@ -160,21 +146,25 @@ For each bucket, qualification uses the maximum positive SendInput shrink:
 
 ```text
 transport_worst_positive = max(0, maximum required-bucket sendinput_shrink_us.max)
-candidate_transport_margin_us = transport_worst_positive + 100
+candidate_transport_reserve_us = transport_worst_positive + 100
 
-candidate <= 2,000 µs -> VALID, applied = max(300 µs, candidate)
-candidate > 2,000 µs  -> OUT_OF_ENVELOPE, applied = none,
-                         playback transport margin = 300 µs
+candidate <= 2,000 µs -> VALID, reserve = max(300 µs, candidate)
+candidate > 2,000 µs  -> OUT_OF_ENVELOPE, use fallback reserve = 300 µs
 ```
 
-The correction is applied exactly once to the authored minimum hold. It does
-not change Note-On timestamps, physical Down targets, `down_late_grace_us`
-(`500 µs`), or runtime scheduling. Protocol 10, native schema 15, artifact
+The user-facing recommendation is `ceil_to_100us(500 µs + reserve)`. A valid
+calibration may therefore recommend a value other than the unqualified
+`800 µs` fallback. It never changes a saved user setting or an active/prepared
+session; the user must explicitly choose **Use recommended**. An invalid,
+missing, or out-of-envelope cache recommends the unqualified `800 µs` fallback.
+Qualification status and source remain visible. Calibration does not change
+Note-On timestamps, physical Down targets, the fixed `500 µs` Down late cutoff,
+or runtime scheduling. Protocol 10, native schema 15, artifact
 schema 11, cache version 8, source formula version 6, and evidence kind
 `sender_completion_hold_shrink` are mutually incompatible with protocol-9 /
 cache-v5/v6/v7 Raw Input or old sender-formula evidence. A failed or invalid
-measurement preserves the previous compatible cache; an old cache falls back
-to the explicit `300 µs` transport margin and is not timing-qualified.
+measurement preserves the previous compatible cache; an old cache does not
+qualify a recommendation and uses the `800 µs` fallback recommendation.
 
 Before warm-up, sender calibration performs a sender-only preflight: it proves
 physical All-Up, sends one prepared full All-Up packet through the production

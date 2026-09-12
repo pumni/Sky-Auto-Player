@@ -48,7 +48,8 @@ pub const CALIBRATION_REQUIRED_BUCKETS: [&str; 6] =
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalibrationResolution {
-    pub margin_us: u64,
+    pub transport_reserve_us: u64,
+    pub qualified: bool,
     pub source: String,
 }
 
@@ -58,7 +59,8 @@ pub struct CalibrationResolution {
 /// valid applied margin are accepted.
 pub fn load_calibration_resolution(path: impl AsRef<Path>) -> CalibrationResolution {
     let fallback = |source: &str| CalibrationResolution {
-        margin_us: DEFAULT_TRANSPORT_MARGIN_US,
+        transport_reserve_us: DEFAULT_TRANSPORT_MARGIN_US,
+        qualified: false,
         source: source.into(),
     };
     let Ok(text) = fs::read_to_string(path) else {
@@ -140,7 +142,8 @@ pub fn load_calibration_resolution(path: impl AsRef<Path>) -> CalibrationResolut
         return fallback(CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE);
     }
     CalibrationResolution {
-        margin_us: margin,
+        transport_reserve_us: margin,
+        qualified: true,
         source: CALIBRATION_MARGIN_SOURCE_DEVICE.into(),
     }
 }
@@ -861,6 +864,11 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
         raw_string(raw, "ui_background_mode", &settings.ui_background_mode);
     settings.playback_defaults.hold_frames =
         raw_f64(raw, "default_hold_frames", DEFAULT_HOLD_FRAMES);
+    settings.playback_defaults.timing_margin_us = raw_u64(
+        raw,
+        "default_timing_margin_us",
+        sky_app_core::settings::DEFAULT_TIMING_MARGIN_US,
+    );
     settings.playback_defaults.tempo_scale = raw_f64(raw, "default_tempo_scale", 1.0);
     settings.playback_defaults.fps = raw_fps(raw, "game_fps", DEFAULT_GAME_FPS);
     settings.telemetry_enabled = raw_bool(raw, "telemetry_enabled_by_default", false);
@@ -956,7 +964,10 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
         .and_then(numeric_float)
         .and_then(nearest_supported_hold)
         .unwrap_or(DEFAULT_HOLD_FRAMES);
-    migrated.insert("schema_version".into(), Value::from(3_u32));
+    migrated.insert(
+        "schema_version".into(),
+        Value::from(sky_app_core::settings::SCHEMA_VERSION),
+    );
     migrated.insert(
         "default_hold_frames".into(),
         Value::from(if raw.contains_key("default_hold_frames") {
@@ -965,6 +976,9 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
             candidate
         }),
     );
+    migrated
+        .entry("default_timing_margin_us")
+        .or_insert_with(|| Value::from(sky_app_core::settings::DEFAULT_TIMING_MARGIN_US));
     for key in [
         "default_timing_profile",
         "timing_profiles",
@@ -1036,6 +1050,10 @@ fn raw_f64(raw: &Map<String, Value>, key: &str, default: f64) -> f64 {
         .and_then(python_float)
         .filter(|value| value.is_finite())
         .unwrap_or(default)
+}
+
+fn raw_u64(raw: &Map<String, Value>, key: &str, default: u64) -> u64 {
+    raw.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
 
 fn raw_fps(raw: &Map<String, Value>, key: &str, default: u16) -> u16 {
@@ -1197,6 +1215,10 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
     raw.insert(
         "default_hold_frames".into(),
         Value::from(settings.playback_defaults.hold_frames),
+    );
+    raw.insert(
+        "default_timing_margin_us".into(),
+        Value::from(settings.playback_defaults.timing_margin_us),
     );
     raw.insert(
         "default_tempo_scale".into(),
@@ -1393,11 +1415,44 @@ mod tests {
         let store = JsonSettingsStore::new(&path);
         let settings = store.load().expect("load legacy settings");
         assert_eq!(settings.playback_defaults.hold_frames, 1.5);
+        assert_eq!(settings.playback_defaults.timing_margin_us, 800);
         store.save(&settings).expect("save migrated settings");
         let raw: Value =
             serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("json");
         assert_eq!(raw["future"], true);
+        assert_eq!(
+            raw["schema_version"],
+            sky_app_core::settings::SCHEMA_VERSION
+        );
+        assert_eq!(raw["default_timing_margin_us"], 800);
         assert!(raw.get("default_timing_profile").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_store_round_trips_exact_timing_margin() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-w3-timing-margin-settings-{}",
+            std::process::id()
+        ));
+        let path = root.join("config.json");
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            &path,
+            br#"{"schema_version":3,"default_timing_margin_us":1200}"#,
+        )
+        .expect("seed prior schema with margin");
+        let store = JsonSettingsStore::new(&path);
+        let settings = store.load().expect("load settings");
+        assert_eq!(settings.playback_defaults.timing_margin_us, 1_200);
+        store.save(&settings).expect("save settings");
+        let raw: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read")).expect("valid JSON");
+        assert_eq!(raw["default_timing_margin_us"], 1_200);
+        assert_eq!(
+            raw["schema_version"],
+            sky_app_core::settings::SCHEMA_VERSION
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1411,7 +1466,8 @@ mod tests {
         assert_eq!(
             load_calibration_resolution(&path),
             CalibrationResolution {
-                margin_us: 777,
+                transport_reserve_us: 777,
+                qualified: true,
                 source: CALIBRATION_MARGIN_SOURCE_DEVICE.into()
             }
         );
