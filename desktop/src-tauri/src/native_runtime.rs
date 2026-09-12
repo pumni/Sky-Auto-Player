@@ -4365,17 +4365,11 @@ impl NativeDiagnosticsSample {
             final_gate_lease_expirations: 0,
             sendinput_partial_events: 0,
             sendinput_zero_progress_failures: 0,
-            backend_status: diagnostics_backend_status(
+            backend_status: diagnostics_backend_status(DiagnosticsBackendHealth {
                 physical_session,
                 player_attached,
-                false,
-                false,
-                0,
-                0,
-                0,
-                0,
-                0,
-            ),
+                ..DiagnosticsBackendHealth::default()
+            }),
             release_max_us: None,
             release_late_2ms: None,
             last_error: (physical_session != player_attached)
@@ -4434,17 +4428,17 @@ impl NativeDiagnosticsSample {
             sendinput_partial_events: snapshot.sendinput_partial_events,
             sendinput_zero_progress_failures: snapshot.sendinput_zero_progress_failures,
             last_error: snapshot.last_error,
-            backend_status: diagnostics_backend_status(
+            backend_status: diagnostics_backend_status(DiagnosticsBackendHealth {
                 physical_session,
-                true,
-                snapshot.has_terminal_error,
+                player_attached: true,
+                has_terminal_error: snapshot.has_terminal_error,
                 has_last_error,
-                snapshot.failed_release_count,
-                snapshot.keys_dropped,
-                snapshot.chord_split_events,
-                snapshot.possibly_active_count,
-                snapshot.active_count,
-            ),
+                failed_release_count: snapshot.failed_release_count,
+                keys_dropped: snapshot.keys_dropped,
+                chord_split_events: snapshot.chord_split_events,
+                possibly_active_count: snapshot.possibly_active_count,
+                active_count: snapshot.active_count,
+            }),
             release_max_us: observer_metrics_available.then_some(snapshot.release_max_us),
             release_late_2ms: observer_metrics_available.then_some(snapshot.release_late_2ms),
         }
@@ -4456,7 +4450,8 @@ fn sender_sample_summary(buckets: [u64; 7], max_lateness_us: u64) -> (u64, Optio
     (sample_count, (sample_count > 0).then_some(max_lateness_us))
 }
 
-fn diagnostics_backend_status(
+#[derive(Clone, Copy, Debug, Default)]
+struct DiagnosticsBackendHealth {
     physical_session: bool,
     player_attached: bool,
     has_terminal_error: bool,
@@ -4466,14 +4461,22 @@ fn diagnostics_backend_status(
     chord_split_events: u64,
     possibly_active_count: usize,
     active_count: usize,
+}
+
+fn diagnostics_backend_status(
+    health: DiagnosticsBackendHealth,
 ) -> crate::ui_events::DiagnosticsBackendStatus {
-    if physical_session != player_attached {
+    if health.physical_session != health.player_attached {
         crate::ui_events::DiagnosticsBackendStatus::Error
-    } else if !player_attached {
+    } else if !health.player_attached {
         crate::ui_events::DiagnosticsBackendStatus::Unavailable
-    } else if has_terminal_error || has_last_error || failed_release_count > 0 {
+    } else if health.has_terminal_error || health.has_last_error || health.failed_release_count > 0
+    {
         crate::ui_events::DiagnosticsBackendStatus::Error
-    } else if keys_dropped > 0 || chord_split_events > 0 || possibly_active_count > active_count {
+    } else if health.keys_dropped > 0
+        || health.chord_split_events > 0
+        || health.possibly_active_count > health.active_count
+    {
         crate::ui_events::DiagnosticsBackendStatus::Degraded
     } else {
         crate::ui_events::DiagnosticsBackendStatus::Healthy
@@ -5128,13 +5131,13 @@ mod tests {
     use super::{
         CALIBRATION_DEFAULT_TIMEOUT_SECONDS, CALIBRATION_MIN_FULL_TIMEOUT_SECONDS,
         CALIBRATION_MIN_NATIVE_TOTAL_SECONDS, CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS,
-        CalibrationRunError, DiagnosticsPublicationGate, MAX_DECISION_COUNT, MAX_NATIVE_EVENTS,
-        MAX_PREPARED_PLANS, MaterializedTimingPolicy, NativeActivePlayback,
-        NativeCalibrationOperation, NativeCalibrationService, NativeDesktopRuntime,
-        NativeDiagnosticsSample, NativeEventHub, NativePlaybackService, PlaybackPendingControl,
-        TestSeams, calibration_budget, diagnostics_backend_status, opaque_native_id, percentile_ms,
-        plan_fingerprint, population_sigma_ms, publish_calibration_cache,
-        publish_diagnostics_snapshot_for_active, publish_playback_state,
+        CalibrationRunError, DiagnosticsBackendHealth, DiagnosticsPublicationGate,
+        MAX_DECISION_COUNT, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS, MaterializedTimingPolicy,
+        NativeActivePlayback, NativeCalibrationOperation, NativeCalibrationService,
+        NativeDesktopRuntime, NativeDiagnosticsSample, NativeEventHub, NativePlaybackService,
+        PlaybackPendingControl, TestSeams, calibration_budget, diagnostics_backend_status,
+        opaque_native_id, percentile_ms, plan_fingerprint, population_sigma_ms,
+        publish_calibration_cache, publish_diagnostics_snapshot_for_active, publish_playback_state,
         publish_stopped_completion, publish_terminal_poll_result, remove_oldest_snapshot,
         resolve_install_root, retain_prepared_capacity, safe_calibration_evidence,
         sender_sample_summary, sender_trace_export_json, settings_fingerprint,
@@ -6177,28 +6180,58 @@ mod tests {
     fn diagnostics_status_matches_native_observer_contract() {
         use crate::ui_events::DiagnosticsBackendStatus;
 
+        let healthy = DiagnosticsBackendHealth {
+            physical_session: true,
+            player_attached: true,
+            active_count: 1,
+            possibly_active_count: 1,
+            ..DiagnosticsBackendHealth::default()
+        };
         assert_eq!(
-            diagnostics_backend_status(true, true, false, false, 0, 0, 0, 1, 1),
+            diagnostics_backend_status(healthy),
             DiagnosticsBackendStatus::Healthy
         );
         assert_eq!(
-            diagnostics_backend_status(true, true, false, false, 0, 1, 0, 1, 1),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                keys_dropped: 1,
+                ..healthy
+            }),
             DiagnosticsBackendStatus::Degraded
         );
         assert_eq!(
-            diagnostics_backend_status(true, true, false, false, 0, 0, 1, 2, 1),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                chord_split_events: 1,
+                possibly_active_count: 2,
+                ..healthy
+            }),
             DiagnosticsBackendStatus::Degraded
         );
         assert_eq!(
-            diagnostics_backend_status(true, true, false, false, 0, 0, 0, 2, 1),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                possibly_active_count: 2,
+                ..healthy
+            }),
             DiagnosticsBackendStatus::Degraded
         );
         assert_eq!(
-            diagnostics_backend_status(true, true, false, true, 0, 0, 0, 1, 1),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                has_last_error: true,
+                ..healthy
+            }),
             DiagnosticsBackendStatus::Error
         );
         assert_eq!(
-            diagnostics_backend_status(true, true, false, false, 1, 0, 0, 1, 1),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                failed_release_count: 1,
+                ..healthy
+            }),
+            DiagnosticsBackendStatus::Error
+        );
+        assert_eq!(
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                has_terminal_error: true,
+                ..healthy
+            }),
             DiagnosticsBackendStatus::Error
         );
     }
@@ -6208,15 +6241,21 @@ mod tests {
         use crate::ui_events::DiagnosticsBackendStatus;
 
         assert_eq!(
-            diagnostics_backend_status(false, false, false, false, 0, 0, 0, 0, 0),
+            diagnostics_backend_status(DiagnosticsBackendHealth::default()),
             DiagnosticsBackendStatus::Unavailable
         );
         assert_eq!(
-            diagnostics_backend_status(true, false, false, false, 0, 0, 0, 0, 0),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                physical_session: true,
+                ..DiagnosticsBackendHealth::default()
+            }),
             DiagnosticsBackendStatus::Error
         );
         assert_eq!(
-            diagnostics_backend_status(false, true, false, false, 0, 0, 0, 0, 0),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                player_attached: true,
+                ..DiagnosticsBackendHealth::default()
+            }),
             DiagnosticsBackendStatus::Error
         );
     }
@@ -6239,7 +6278,11 @@ mod tests {
             (u64::MAX, Some(0))
         );
         assert_eq!(
-            diagnostics_backend_status(true, true, false, false, 0, 0, 0, 0, 0),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                physical_session: true,
+                player_attached: true,
+                ..DiagnosticsBackendHealth::default()
+            }),
             DiagnosticsBackendStatus::Healthy
         );
     }
@@ -6443,7 +6486,11 @@ mod tests {
         use crate::ui_events::DiagnosticsBackendStatus;
 
         assert_eq!(
-            diagnostics_backend_status(true, true, false, false, 0, 0, 0, 0, 0),
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                physical_session: true,
+                player_attached: true,
+                ..DiagnosticsBackendHealth::default()
+            }),
             DiagnosticsBackendStatus::Healthy
         );
         assert_eq!(

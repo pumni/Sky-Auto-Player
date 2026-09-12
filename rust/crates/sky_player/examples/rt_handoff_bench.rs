@@ -498,6 +498,10 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 value.trace.effective_deadline_ticks,
             ));
         }
+        DispatchObservation::DownMiss(value) => {
+            let _ = value;
+            samples.record_failure("down_missed");
+        }
         DispatchObservation::Up(value) => {
             record_precision_handoff(
                 samples,
