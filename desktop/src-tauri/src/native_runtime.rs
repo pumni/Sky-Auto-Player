@@ -4120,14 +4120,18 @@ fn publish_diagnostics_snapshot_for_active(
     let sample = active
         .player
         .as_ref()
-        .map(|player| NativeDiagnosticsSample::from_player(player))
-        .unwrap_or_else(NativeDiagnosticsSample::unavailable);
+        .map(|player| NativeDiagnosticsSample::from_player(player, active.physical))
+        .unwrap_or_else(|| NativeDiagnosticsSample::unavailable(active.physical));
+    let player_attached = active.player.is_some();
     let session_id = active.session_id.clone();
     let completion_samples_available =
         sample.recent_latency_samples_available && !sample.recent_latencies_us.is_empty();
     let _published = gate.try_publish(Instant::now(), |sequence| {
         let payload = crate::ui_events::DiagnosticsSnapshotDto {
             seq: sequence,
+            physical_session: active.physical,
+            player_attached,
+            sender_sample_count: sample.sender_sample_count,
             max_lateness_us: sample.max_lateness_us,
             p50_ms: completion_samples_available
                 .then(|| percentile_ms(&sample.recent_latencies_us, 0.50)),
@@ -4197,7 +4201,8 @@ struct NativeDiagnosticsSample {
     late_2ms: Option<u64>,
     late_5ms: Option<u64>,
     late_10ms: Option<u64>,
-    max_sendinput_pre_call_lateness_us: u64,
+    sender_sample_count: u64,
+    max_sendinput_pre_call_lateness_us: Option<u64>,
     pre_call_late_2ms: u64,
     pre_call_late_5ms: u64,
     pre_call_late_10ms: u64,
@@ -4230,7 +4235,8 @@ struct NativeDiagnosticsSample {
 }
 
 impl NativeDiagnosticsSample {
-    fn unavailable() -> Self {
+    fn unavailable(physical_session: bool) -> Self {
+        let player_attached = false;
         Self {
             max_lateness_us: None,
             recent_latencies_us: Vec::new(),
@@ -4238,7 +4244,8 @@ impl NativeDiagnosticsSample {
             late_2ms: None,
             late_5ms: None,
             late_10ms: None,
-            max_sendinput_pre_call_lateness_us: 0,
+            sender_sample_count: 0,
+            max_sendinput_pre_call_lateness_us: None,
             pre_call_late_2ms: 0,
             pre_call_late_5ms: 0,
             pre_call_late_10ms: 0,
@@ -4264,17 +4271,40 @@ impl NativeDiagnosticsSample {
             final_gate_lease_expirations: 0,
             sendinput_partial_events: 0,
             sendinput_zero_progress_failures: 0,
-            backend_status: DiagnosticsBackendStatus::Unavailable,
+            backend_status: diagnostics_backend_status(
+                physical_session,
+                player_attached,
+                false,
+                false,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
             release_max_us: None,
             release_late_2ms: None,
-            last_error: None,
+            last_error: (physical_session != player_attached)
+                .then(|| "physical session has no attached native player".into()),
         }
     }
 
-    fn from_player(player: &NativeDispatchSession) -> Self {
+    fn from_player(player: &NativeDispatchSession, physical_session: bool) -> Self {
         let snapshot = player.snapshot_lite();
         let observer_metrics_available = snapshot.recent_latency_samples_available;
         let has_last_error = snapshot.last_error.is_some();
+        let (sender_sample_count, max_sendinput_pre_call_lateness_us) = sender_sample_summary(
+            [
+                snapshot.pre_call_lt_250us,
+                snapshot.pre_call_250_500us,
+                snapshot.pre_call_500_750us,
+                snapshot.pre_call_750_1000us,
+                snapshot.pre_call_1000_1500us,
+                snapshot.pre_call_1500_2000us,
+                snapshot.pre_call_ge_2000us,
+            ],
+            snapshot.max_sendinput_pre_call_lateness_us,
+        );
         Self {
             max_lateness_us: observer_metrics_available.then_some(snapshot.max_lateness_us),
             recent_latencies_us: snapshot.recent_latencies_us,
@@ -4282,7 +4312,8 @@ impl NativeDiagnosticsSample {
             late_2ms: observer_metrics_available.then_some(snapshot.late_2ms),
             late_5ms: observer_metrics_available.then_some(snapshot.late_5ms),
             late_10ms: observer_metrics_available.then_some(snapshot.late_10ms),
-            max_sendinput_pre_call_lateness_us: snapshot.max_sendinput_pre_call_lateness_us,
+            sender_sample_count,
+            max_sendinput_pre_call_lateness_us,
             pre_call_late_2ms: snapshot.pre_call_late_2ms,
             pre_call_late_5ms: snapshot.pre_call_late_5ms,
             pre_call_late_10ms: snapshot.pre_call_late_10ms,
@@ -4310,6 +4341,8 @@ impl NativeDiagnosticsSample {
             sendinput_zero_progress_failures: snapshot.sendinput_zero_progress_failures,
             last_error: snapshot.last_error,
             backend_status: diagnostics_backend_status(
+                physical_session,
+                true,
                 snapshot.has_terminal_error,
                 has_last_error,
                 snapshot.failed_release_count,
@@ -4324,7 +4357,14 @@ impl NativeDiagnosticsSample {
     }
 }
 
+fn sender_sample_summary(buckets: [u64; 7], max_lateness_us: u64) -> (u64, Option<u64>) {
+    let sample_count = buckets.into_iter().fold(0_u64, u64::saturating_add);
+    (sample_count, (sample_count > 0).then_some(max_lateness_us))
+}
+
 fn diagnostics_backend_status(
+    physical_session: bool,
+    player_attached: bool,
     has_terminal_error: bool,
     has_last_error: bool,
     failed_release_count: usize,
@@ -4333,7 +4373,11 @@ fn diagnostics_backend_status(
     possibly_active_count: usize,
     active_count: usize,
 ) -> crate::ui_events::DiagnosticsBackendStatus {
-    if has_terminal_error || has_last_error || failed_release_count > 0 {
+    if physical_session != player_attached {
+        crate::ui_events::DiagnosticsBackendStatus::Error
+    } else if !player_attached {
+        crate::ui_events::DiagnosticsBackendStatus::Unavailable
+    } else if has_terminal_error || has_last_error || failed_release_count > 0 {
         crate::ui_events::DiagnosticsBackendStatus::Error
     } else if keys_dropped > 0 || chord_split_events > 0 || possibly_active_count > active_count {
         crate::ui_events::DiagnosticsBackendStatus::Degraded
@@ -4995,8 +5039,8 @@ mod tests {
         publish_diagnostics_snapshot_for_active, publish_playback_state,
         publish_stopped_completion, publish_terminal_poll_result, remove_oldest_snapshot,
         resolve_install_root, retain_prepared_capacity, safe_calibration_evidence,
-        settings_fingerprint, supervisor_heartbeat_loop, timing_margin_recommendation,
-        validate_playback_start_request,
+        sender_sample_summary, settings_fingerprint, supervisor_heartbeat_loop,
+        timing_margin_recommendation, validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState};
@@ -5980,28 +6024,69 @@ mod tests {
         use crate::ui_events::DiagnosticsBackendStatus;
 
         assert_eq!(
-            diagnostics_backend_status(false, false, 0, 0, 0, 1, 1),
+            diagnostics_backend_status(true, true, false, false, 0, 0, 0, 1, 1),
             DiagnosticsBackendStatus::Healthy
         );
         assert_eq!(
-            diagnostics_backend_status(false, false, 0, 1, 0, 1, 1),
+            diagnostics_backend_status(true, true, false, false, 0, 1, 0, 1, 1),
             DiagnosticsBackendStatus::Degraded
         );
         assert_eq!(
-            diagnostics_backend_status(false, false, 0, 0, 1, 2, 1),
+            diagnostics_backend_status(true, true, false, false, 0, 0, 1, 2, 1),
             DiagnosticsBackendStatus::Degraded
         );
         assert_eq!(
-            diagnostics_backend_status(false, false, 0, 0, 0, 2, 1),
+            diagnostics_backend_status(true, true, false, false, 0, 0, 0, 2, 1),
             DiagnosticsBackendStatus::Degraded
         );
         assert_eq!(
-            diagnostics_backend_status(false, true, 0, 0, 0, 1, 1),
+            diagnostics_backend_status(true, true, false, true, 0, 0, 0, 1, 1),
             DiagnosticsBackendStatus::Error
         );
         assert_eq!(
-            diagnostics_backend_status(false, false, 1, 0, 0, 1, 1),
+            diagnostics_backend_status(true, true, false, false, 1, 0, 0, 1, 1),
             DiagnosticsBackendStatus::Error
+        );
+    }
+
+    #[test]
+    fn diagnostics_status_distinguishes_unavailable_and_inconsistent_attachment() {
+        use crate::ui_events::DiagnosticsBackendStatus;
+
+        assert_eq!(
+            diagnostics_backend_status(false, false, false, false, 0, 0, 0, 0, 0),
+            DiagnosticsBackendStatus::Unavailable
+        );
+        assert_eq!(
+            diagnostics_backend_status(true, false, false, false, 0, 0, 0, 0, 0),
+            DiagnosticsBackendStatus::Error
+        );
+        assert_eq!(
+            diagnostics_backend_status(false, true, false, false, 0, 0, 0, 0, 0),
+            DiagnosticsBackendStatus::Error
+        );
+    }
+
+    #[test]
+    fn diagnostics_sender_samples_distinguish_empty_zero_and_nonzero_measurements() {
+        use crate::ui_events::DiagnosticsBackendStatus;
+
+        assert_eq!(sender_sample_summary([0; 7], 0), (0, None));
+        assert_eq!(
+            sender_sample_summary([1, 0, 0, 0, 0, 0, 0], 0),
+            (1, Some(0))
+        );
+        assert_eq!(
+            sender_sample_summary([0, 0, 2, 0, 0, 0, 0], 177),
+            (2, Some(177))
+        );
+        assert_eq!(
+            sender_sample_summary([u64::MAX, 1, 0, 0, 0, 0, 0], 0),
+            (u64::MAX, Some(0))
+        );
+        assert_eq!(
+            diagnostics_backend_status(true, true, false, false, 0, 0, 0, 0, 0),
+            DiagnosticsBackendStatus::Healthy
         );
     }
 
@@ -6105,6 +6190,9 @@ mod tests {
             panic!("expected diagnostics snapshot");
         };
         assert_eq!(payload.session_id.as_deref(), Some("a".repeat(32).as_str()));
+        assert!(!payload.physical_session);
+        assert!(!payload.player_attached);
+        assert_eq!(payload.sender_sample_count, 0);
         assert_eq!(
             payload.backend_status,
             DiagnosticsBackendStatus::Unavailable
@@ -6116,7 +6204,7 @@ mod tests {
         assert_eq!(payload.late_2ms, None);
         assert_eq!(payload.late_5ms, None);
         assert_eq!(payload.late_10ms, None);
-        assert_eq!(payload.max_sendinput_pre_call_lateness_us, 0);
+        assert_eq!(payload.max_sendinput_pre_call_lateness_us, None);
         assert_eq!(payload.pre_call_late_2ms, 0);
         assert_eq!(payload.pre_call_late_5ms, 0);
         assert_eq!(payload.pre_call_late_10ms, 0);
@@ -6198,14 +6286,20 @@ mod tests {
 
     #[test]
     fn diagnostics_physical_healthy_status_remains_healthy() {
+        use crate::ui_events::DiagnosticsBackendStatus;
+
         assert_eq!(
-            diagnostics_backend_status(false, false, 0, 0, 0, 0, 0),
+            diagnostics_backend_status(true, true, false, false, 0, 0, 0, 0, 0),
             DiagnosticsBackendStatus::Healthy
         );
         assert_eq!(
-            NativeDiagnosticsSample::unavailable().backend_status,
+            NativeDiagnosticsSample::unavailable(false).backend_status,
             DiagnosticsBackendStatus::Unavailable
         );
+        let inconsistent = NativeDiagnosticsSample::unavailable(true);
+        assert_eq!(inconsistent.backend_status, DiagnosticsBackendStatus::Error);
+        assert_eq!(inconsistent.sender_sample_count, 0);
+        assert_eq!(inconsistent.max_sendinput_pre_call_lateness_us, None);
     }
 
     #[test]

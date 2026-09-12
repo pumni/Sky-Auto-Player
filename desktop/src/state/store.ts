@@ -613,6 +613,16 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (event.name === 'diagnostics.snapshot') {
           const current = get().diagnostics;
           if (!current.enabled) return;
+          const playback = get().playback;
+          const sessionId = event.payload.session_id;
+          if (
+            !sessionId ||
+            playback.sessionId !== sessionId ||
+            retiredSessionIds.has(sessionId) ||
+            !['starting', 'playing', 'paused', 'stopping'].includes(playback.state)
+          ) {
+            return;
+          }
           const previous = current.samples.at(-1);
           const samples =
             previous && previous.session_id !== event.payload.session_id

@@ -8,6 +8,9 @@ import { DiagnosticsView } from './DiagnosticsView';
 function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnapshot {
   return {
     seq: 1,
+    physical_session: true,
+    player_attached: true,
+    sender_sample_count: 1,
     max_lateness_us: 850,
     p50_ms: 0.4,
     p95_ms: 1.1,
@@ -212,7 +215,10 @@ describe('DiagnosticsView', () => {
             late_2ms: null,
             late_5ms: null,
             late_10ms: null,
-            max_sendinput_pre_call_lateness_us: 0,
+            physical_session: false,
+            player_attached: false,
+            sender_sample_count: 0,
+            max_sendinput_pre_call_lateness_us: null,
             pre_call_late_2ms: 0,
             pre_call_late_5ms: 0,
             pre_call_late_10ms: 0,
@@ -234,9 +240,7 @@ describe('DiagnosticsView', () => {
     );
     expect(screen.getByText('Pre-call > 2 ms').parentElement).toHaveTextContent('Unavailable');
     expect(screen.getByText('Dropped keys').parentElement).toHaveTextContent('Unavailable');
-    expect(document.querySelector('.diagnostics-backend-status.is-unavailable')).toHaveTextContent(
-      'Unavailable',
-    );
+    expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Unavailable');
     fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
     expect(screen.getByText('Timing unavailable')).toBeInTheDocument();
     expect(screen.queryByRole('img', { name: /SendInput pre-call lateness/ })).toBeNull();
@@ -296,6 +300,107 @@ describe('DiagnosticsView', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText('Down cutoff 500 μs')).toBeInTheDocument();
+  });
+
+  it('distinguishes an attached physical player with no sender samples yet', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'n'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            sender_sample_count: 0,
+            max_sendinput_pre_call_lateness_us: null,
+            pre_call_lt_250us: 0,
+            pre_call_500_750us: 0,
+          }),
+        ],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Sender-side status: Waiting')).toBeInTheDocument();
+    expect(screen.getByText('Physical session').parentElement).toHaveTextContent('Yes');
+    expect(screen.getByText('Player attached').parentElement).toHaveTextContent('Yes');
+    expect(screen.getByText('Sender samples').parentElement).toHaveTextContent('0');
+    expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent('No samples');
+    expect(screen.getByText('Pre-call < 250 μs').parentElement).toHaveTextContent('No samples');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+    expect(screen.getByText('No sender samples yet')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /SendInput pre-call lateness/ })).toBeNull();
+  });
+
+  it('reports a sampled zero-microsecond sender lateness as a real measurement', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'z'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            sender_sample_count: 1,
+            max_sendinput_pre_call_lateness_us: 0,
+            pre_call_lt_250us: 1,
+            pre_call_500_750us: 0,
+          }),
+        ],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Sender samples').parentElement).toHaveTextContent('1');
+    expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent('0 μs');
+    expect(screen.getByText('Pre-call < 250 μs').parentElement).toHaveTextContent('1');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+    expect(screen.getByRole('img', { name: /SendInput pre-call lateness/ })).toBeVisible();
+    expect(
+      screen.getByText(
+        /Session max pre-call lateness observed at the latest diagnostics snapshot: 0 μs/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('reports a physical session without an attached player as an error', () => {
+    const store = createDesktopStore(createMockBridge());
+    const sessionId = 'x'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            physical_session: true,
+            player_attached: false,
+            sender_sample_count: 0,
+            max_sendinput_pre_call_lateness_us: null,
+            backend_status: 'error',
+          }),
+        ],
+      },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Sender-side status: Error')).toBeInTheDocument();
+    expect(
+      screen.getByText('The physical session is active, but no native player is attached.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Physical session').parentElement).toHaveTextContent('Yes');
+    expect(screen.getByText('Player attached').parentElement).toHaveTextContent('No');
+    expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Error');
   });
 
   it('uses playback lifecycle to hide a completed session', () => {

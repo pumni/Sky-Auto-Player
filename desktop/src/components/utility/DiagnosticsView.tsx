@@ -1,4 +1,3 @@
-import { Activity } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
@@ -55,7 +54,12 @@ function TimingPlot({
 }) {
   const width = 560;
   const height = 132;
-  const availableSamples = samples.filter((sample) => sample.backend_status !== 'unavailable');
+  const availableSamples = samples.filter(
+    (sample) =>
+      sample.backend_status !== 'unavailable' &&
+      sample.sender_sample_count > 0 &&
+      sample.max_sendinput_pre_call_lateness_us !== null,
+  );
   if (!hasActiveSession) {
     return (
       <DiagnosticsEmptyState
@@ -65,14 +69,26 @@ function TimingPlot({
     );
   }
   if (availableSamples.length === 0) {
+    const latest = samples.at(-1);
+    const playerAttached = latest?.player_attached === true;
     return (
       <DiagnosticsEmptyState
-        title="Timing unavailable"
-        detail="Sender-side backend metrics are unavailable for this dispatch profile."
+        title={
+          playerAttached && latest.sender_sample_count === 0
+            ? 'No sender samples yet'
+            : 'Timing unavailable'
+        }
+        detail={
+          playerAttached && latest.sender_sample_count === 0
+            ? 'The physical player is attached; no SendInput call has been sampled yet.'
+            : latest?.physical_session && !latest.player_attached
+              ? 'A physical session is active, but its native player is not attached.'
+              : 'Sender-side backend metrics are unavailable for this dispatch profile.'
+        }
       />
     );
   }
-  const values = availableSamples.map((sample) => sample.max_sendinput_pre_call_lateness_us);
+  const values = availableSamples.map((sample) => sample.max_sendinput_pre_call_lateness_us!);
   const threshold = availableSamples.at(-1)?.down_late_grace_us ?? null;
   const minimum = 0;
   const maximum = Math.max(0, ...values, threshold ?? 0);
@@ -144,8 +160,22 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const backendMetricsAvailable = latest !== undefined && latest.backend_status !== 'unavailable';
   const backendMetric = (value: number): string =>
     backendMetricsAvailable ? String(value) : 'Unavailable';
-  const backendMeasure = (value: number, unit: string): string =>
-    backendMetricsAvailable ? measure(value, unit, 0) : 'Unavailable';
+  const senderSampleMetric = (value: number): string =>
+    !backendMetricsAvailable
+      ? 'Unavailable'
+      : latest?.player_attached !== true
+        ? 'Unavailable'
+        : latest?.sender_sample_count === 0
+          ? 'No samples'
+          : String(value);
+  const backendMeasure = (value: number | null, unit: string): string =>
+    !backendMetricsAvailable
+      ? 'Unavailable'
+      : latest?.player_attached !== true
+        ? 'Unavailable'
+        : latest?.sender_sample_count === 0
+          ? 'No samples'
+          : measure(value, unit, 0);
   const senderSuppressionCount = latest
     ? latest.missed_down_boundaries +
       latest.missed_down_keys +
@@ -165,27 +195,38 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
         status: 'Unavailable',
         detail: 'Sender-side diagnostics are unavailable for this dispatch profile.',
       }
-    : latest?.last_error
+    : latest?.physical_session && !latest.player_attached
       ? {
           status: 'Error',
-          detail: `Last error: ${latest.last_error}`,
+          detail: 'The physical session is active, but no native player is attached.',
         }
-      : latest?.backend_status === 'error'
+      : latest?.last_error
         ? {
             status: 'Error',
-            detail: 'Sender-side backend reported an error.',
+            detail: `Last error: ${latest.last_error}`,
           }
-        : latest?.backend_status === 'degraded'
+        : latest?.backend_status === 'error'
           ? {
-              status: 'Attention',
-              detail: 'Sender-side backend reported degraded health.',
+              status: 'Error',
+              detail: 'Sender-side backend reported an error.',
             }
-          : senderSuppressionCount === 0 && transportFailureCount === 0
-            ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
-            : {
+          : latest?.backend_status === 'degraded'
+            ? {
                 status: 'Attention',
-                detail: `${latest?.missed_hard_late_boundaries ?? 0} hard-late boundaries; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
-              };
+                detail: 'Sender-side backend reported degraded health.',
+              }
+            : latest?.player_attached && latest.sender_sample_count === 0
+              ? {
+                  status: 'Waiting',
+                  detail:
+                    'The physical player is attached; no SendInput call has been sampled yet.',
+                }
+              : senderSuppressionCount === 0 && transportFailureCount === 0
+                ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
+                : {
+                    status: 'Attention',
+                    detail: `${latest?.missed_hard_late_boundaries ?? 0} hard-late boundaries; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
+                  };
   return (
     <div
       ref={scrollRef}
@@ -229,6 +270,12 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <strong>Sender-side status: {senderSummary.status}</strong>
                 <span>{senderSummary.detail}</span>
               </section>
+              <MetricGroup title="Sender availability">
+                <Metric label="Physical session" value={latest.physical_session ? 'Yes' : 'No'} />
+                <Metric label="Player attached" value={latest.player_attached ? 'Yes' : 'No'} />
+                <Metric label="Sender samples" value={String(latest.sender_sample_count)} />
+                <Metric label="Sender backend" value={backendStatusLabel(latest.backend_status)} />
+              </MetricGroup>
               <MetricGroup title="Timing">
                 <Metric label="Completion p50" value={measure(latest.p50_ms, 'ms')} />
                 <Metric label="Completion p95" value={measure(latest.p95_ms, 'ms')} />
@@ -271,35 +318,47 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <Metric label="Completion > 2 ms" value={count(latest.late_2ms)} />
                 <Metric label="Completion > 5 ms" value={count(latest.late_5ms)} />
                 <Metric label="Completion > 10 ms" value={count(latest.late_10ms)} />
-                <Metric label="Pre-call > 2 ms" value={backendMetric(latest.pre_call_late_2ms)} />
-                <Metric label="Pre-call > 5 ms" value={backendMetric(latest.pre_call_late_5ms)} />
-                <Metric label="Pre-call > 10 ms" value={backendMetric(latest.pre_call_late_10ms)} />
+                <Metric
+                  label="Pre-call > 2 ms"
+                  value={senderSampleMetric(latest.pre_call_late_2ms)}
+                />
+                <Metric
+                  label="Pre-call > 5 ms"
+                  value={senderSampleMetric(latest.pre_call_late_5ms)}
+                />
+                <Metric
+                  label="Pre-call > 10 ms"
+                  value={senderSampleMetric(latest.pre_call_late_10ms)}
+                />
               </MetricGroup>
               <MetricGroup title="Pre-call distribution">
-                <Metric label="Pre-call < 250 μs" value={backendMetric(latest.pre_call_lt_250us)} />
+                <Metric
+                  label="Pre-call < 250 μs"
+                  value={senderSampleMetric(latest.pre_call_lt_250us)}
+                />
                 <Metric
                   label="Pre-call 250–500 μs"
-                  value={backendMetric(latest.pre_call_250_500us)}
+                  value={senderSampleMetric(latest.pre_call_250_500us)}
                 />
                 <Metric
                   label="Pre-call 500–750 μs"
-                  value={backendMetric(latest.pre_call_500_750us)}
+                  value={senderSampleMetric(latest.pre_call_500_750us)}
                 />
                 <Metric
                   label="Pre-call 750–1000 μs"
-                  value={backendMetric(latest.pre_call_750_1000us)}
+                  value={senderSampleMetric(latest.pre_call_750_1000us)}
                 />
                 <Metric
                   label="Pre-call 1.0–1.5 ms"
-                  value={backendMetric(latest.pre_call_1000_1500us)}
+                  value={senderSampleMetric(latest.pre_call_1000_1500us)}
                 />
                 <Metric
                   label="Pre-call 1.5–2.0 ms"
-                  value={backendMetric(latest.pre_call_1500_2000us)}
+                  value={senderSampleMetric(latest.pre_call_1500_2000us)}
                 />
                 <Metric
                   label="Pre-call ≥ 2.0 ms"
-                  value={backendMetric(latest.pre_call_ge_2000us)}
+                  value={senderSampleMetric(latest.pre_call_ge_2000us)}
                 />
               </MetricGroup>
               <MetricGroup title="Deadline admission">
@@ -358,11 +417,6 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 />
                 <Metric label="Release > 2 ms" value={count(latest.release_late_2ms)} />
               </MetricGroup>
-              <p className="diagnostics-status">
-                <Activity size={14} aria-hidden="true" />
-                <span>Backend</span>
-                <BackendStatus status={latest.backend_status} />
-              </p>
             </>
           )}
         </TabPanel>
@@ -401,20 +455,16 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   );
 }
 
-function BackendStatus({
-  status,
-}: {
-  status: DesktopStore['diagnostics']['samples'][number]['backend_status'];
-}) {
-  const label =
-    status === 'healthy'
-      ? 'Healthy'
-      : status === 'degraded'
-        ? 'Degraded'
-        : status === 'error'
-          ? 'Error'
-          : 'Unavailable';
-  return <span className={`diagnostics-backend-status is-${status}`}>{label}</span>;
+function backendStatusLabel(
+  status: DesktopStore['diagnostics']['samples'][number]['backend_status'],
+): string {
+  return status === 'healthy'
+    ? 'Healthy'
+    : status === 'degraded'
+      ? 'Degraded'
+      : status === 'error'
+        ? 'Error'
+        : 'Unavailable';
 }
 
 function MetricGroup({ title, children }: { title: string; children: ReactNode }) {

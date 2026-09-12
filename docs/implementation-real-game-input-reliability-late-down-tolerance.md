@@ -255,6 +255,28 @@ cause.
 Diagnostics must remain observational. Do not enable
 `StrictTimingDiagnostic` merely to obtain metrics.
 
+## Investigation result (2026-09-12)
+
+The successful physical-start path creates the native player, stores it in
+`NativeActivePlayback`, and attaches it before the supervisor starts publishing
+nonterminal diagnostics snapshots. A fresh snapshot from that attached path
+therefore cannot be `Unavailable`; the no-player branch is the nonphysical or
+inconsistent-attachment path. A failed physical start can temporarily have
+`physical_session=true` without a player, but it publishes its terminal start
+failure rather than entering the recurring diagnostics monitor. The old
+numeric `0` was independently confirmed to be ambiguous: the worker counters
+start at zero before the first `SendInput` call, and the old DTO had no sample
+count.
+
+The original reported `Unavailable` snapshot cannot be assigned to one of
+those paths without its raw session-matched event record. The revised DTO now
+publishes physical/player attachment and the sender sample count; it derives
+the count from the seven mutually exclusive pre-call buckets and makes the
+maximum nullable. The store accepts diagnostics only for the current active
+session, and the UI distinguishes unavailable backend, attached-with-no-sample,
+and a measured zero. No sender or dispatch policy is enabled to obtain these
+metrics.
+
 ## Tests
 
 Add tests for:

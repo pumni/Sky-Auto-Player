@@ -511,8 +511,10 @@ describe('desktop store', () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().setDiagnosticsEnabled(true));
+    const sessionId = 'a'.repeat(32);
     store.setState({
       diagnostics: { ...store.getState().diagnostics, events: [] },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
     });
 
     for (let index = 0; index < 601; index += 1) {
@@ -521,6 +523,9 @@ describe('desktop store', () => {
         name: 'diagnostics.snapshot',
         payload: {
           seq: index,
+          physical_session: true,
+          player_attached: true,
+          sender_sample_count: index + 1,
           max_lateness_us: index,
           p50_ms: 0.1,
           p95_ms: 0.2,
@@ -570,7 +575,7 @@ describe('desktop store', () => {
           backend_status: 'healthy',
           release_max_us: 0,
           release_late_2ms: 0,
-          session_id: null,
+          session_id: sessionId,
           last_error: null,
         },
       });
@@ -603,12 +608,19 @@ describe('desktop store', () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().setDiagnosticsEnabled(true));
+    const firstSessionId = 'a'.repeat(32);
+    store.setState({
+      playback: { ...store.getState().playback, sessionId: firstSessionId, state: 'playing' },
+    });
 
     const snapshot = (sessionId: string, seq: number) => ({
       v: 1 as const,
       name: 'diagnostics.snapshot' as const,
       payload: {
         seq,
+        physical_session: true,
+        player_attached: true,
+        sender_sample_count: 1,
         max_lateness_us: seq,
         p50_ms: 0.1,
         p95_ms: 0.2,
@@ -673,10 +685,29 @@ describe('desktop store', () => {
       sendinput_zero_progress_failures: 2,
     });
 
-    store.getState().applyEvent(snapshot('b'.repeat(32), 3));
+    const secondSessionId = 'b'.repeat(32);
+    store.setState({
+      playback: { ...store.getState().playback, sessionId: secondSessionId, state: 'playing' },
+    });
+    store.getState().applyEvent(snapshot(secondSessionId, 3));
     expect(store.getState().diagnostics.samples).toHaveLength(1);
-    expect(store.getState().diagnostics.samples[0]?.session_id).toBe('b'.repeat(32));
+    expect(store.getState().diagnostics.samples[0]?.session_id).toBe(secondSessionId);
     expect(store.getState().diagnostics.samples[0]?.pre_call_500_750us).toBe(3);
+
+    store.getState().applyEvent({
+      ...snapshot(firstSessionId, 4),
+      payload: {
+        ...snapshot(firstSessionId, 4).payload,
+        physical_session: false,
+        player_attached: false,
+        sender_sample_count: 0,
+        max_sendinput_pre_call_lateness_us: null,
+        backend_status: 'unavailable',
+      },
+    });
+    expect(store.getState().diagnostics.samples).toHaveLength(1);
+    expect(store.getState().diagnostics.samples[0]?.session_id).toBe(secondSessionId);
+    expect(store.getState().diagnostics.samples[0]?.backend_status).toBe('healthy');
   });
 
   it('keeps utility presentation state separate from diagnostics data', async () => {

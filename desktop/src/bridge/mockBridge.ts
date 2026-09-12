@@ -138,6 +138,9 @@ export function createMockBridge(): DesktopBridge {
       name: 'diagnostics.snapshot',
       payload: {
         seq: diagnosticsSeq,
+        physical_session: true,
+        player_attached: true,
+        sender_sample_count: diagnosticsSeq,
         max_lateness_us: diagnosticsSeq * 10,
         p50_ms: 0.4,
         p95_ms: 1.1,

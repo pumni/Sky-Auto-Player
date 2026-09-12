@@ -111,6 +111,9 @@ pub enum DiagnosticsBackendStatus {
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticsSnapshotDto {
     pub seq: u64,
+    pub physical_session: bool,
+    pub player_attached: bool,
+    pub sender_sample_count: u64,
     pub max_lateness_us: Option<u64>,
     pub p50_ms: Option<f64>,
     pub p95_ms: Option<f64>,
@@ -118,7 +121,7 @@ pub struct DiagnosticsSnapshotDto {
     pub late_2ms: Option<u64>,
     pub late_5ms: Option<u64>,
     pub late_10ms: Option<u64>,
-    pub max_sendinput_pre_call_lateness_us: u64,
+    pub max_sendinput_pre_call_lateness_us: Option<u64>,
     pub pre_call_late_2ms: u64,
     pub pre_call_late_5ms: u64,
     pub pre_call_late_10ms: u64,
