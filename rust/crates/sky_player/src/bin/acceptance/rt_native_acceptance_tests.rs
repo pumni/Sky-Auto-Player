@@ -4,15 +4,16 @@ use super::{
     EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY, MAX_KEYS,
     MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
     PRETERMINAL_DEADLINE_MS, PROBE_KIND, PROBE_TITLE, ParsedCommand, PhysicalExpectation,
-    RELEASE_GAP_STRESS_CYCLES, RELEASE_GAP_STRESS_MIN_SAMPLES,
+    RELEASE_GAP_STRESS_CYCLES,
     PreTerminalResult, READY_SCHEMA_VERSION, RECEIVE_ONLY_ROLE, ReadyRecord, SCRIPT_MARKER,
     SINK_KIND, SINK_TITLE, Scenario, Verdict, acceptance_min_hold_us,
     acceptance_min_release_gap_us, cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
-    release_gap_qualification,
+    production_visibility_qualification,
     production_options, reconcile_events, scenario_plan,
     validate_event_stream, validate_ready_record, w4_profile_spec, wait_for_sink_events_with,
 };
+use super::release_gap_stress::RELEASE_GAP_STRESS_MIN_SAMPLES;
 
 fn base_arguments(scenario: &str) -> Vec<String> {
     [
@@ -651,17 +652,29 @@ fn release_gap_stress_authors_hundreds_of_exact_hold_and_gap_pairs() {
 }
 
 #[test]
-fn release_gap_floor_violation_never_qualifies_and_low_sample_stress_is_explicit() {
+fn either_production_visibility_floor_violation_fails_qualification() {
     assert_eq!(
-        release_gap_qualification(Scenario::TimingMarginSweep, 1, 1).0,
+        production_visibility_qualification(Scenario::TimingMarginSweep, 4, 0, 1, 1).0,
         Verdict::Fail
     );
     assert_eq!(
-        release_gap_qualification(Scenario::ReleaseGapStress, 511, 0).0,
+        production_visibility_qualification(Scenario::TimingMarginSweep, 4, 1, 1, 0).0,
+        Verdict::Fail
+    );
+}
+
+#[test]
+fn stress_qualification_requires_enough_hold_and_release_samples() {
+    assert_eq!(
+        production_visibility_qualification(Scenario::ReleaseGapStress, 511, 0, 512, 0).0,
         Verdict::NonQualifying
     );
     assert_eq!(
-        release_gap_qualification(Scenario::ReleaseGapStress, 512, 0).0,
+        production_visibility_qualification(Scenario::ReleaseGapStress, 512, 0, 511, 0).0,
+        Verdict::NonQualifying
+    );
+    assert_eq!(
+        production_visibility_qualification(Scenario::ReleaseGapStress, 512, 0, 512, 0).0,
         Verdict::Pass
     );
 }

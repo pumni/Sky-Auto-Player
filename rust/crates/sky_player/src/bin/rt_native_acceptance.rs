@@ -3,7 +3,7 @@
 #[rustfmt::skip]
 mod acceptance {
 #[path = "release_gap_stress.rs"] mod release_gap_stress;
-use release_gap_stress::{release_gap_qualification, scenario_plan as release_gap_scenario_plan, RELEASE_GAP_STRESS_MIN_SAMPLES};
+use release_gap_stress::{attach_sink_window_provenance, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
 #[cfg(test)]
 use release_gap_stress::RELEASE_GAP_STRESS_CYCLES;
 use serde::Deserialize;
@@ -788,9 +788,8 @@ fn run_windows(args: RunArgs) -> i32 {
         (None, None, None) => (Vec::new(), None),
         _ => inconclusive!("focus probe evidence paths are incomplete", snapshot_json(&snapshot)),
     };
-    let mut details = snapshot_json(&snapshot);
+    let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, expected_down.len() + expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
-        object.insert("sink_event_count".to_string(), json!(sink_events.len()));
         object.insert(
             "focus_probe_event_count".to_string(),
             json!(probe_events.len()),
@@ -804,11 +803,8 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
         object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
         object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
-        if args.scenario == Scenario::ReleaseGapStress { object.insert("minimum_qualifying_release_gap_samples".to_string(), json!(RELEASE_GAP_STRESS_MIN_SAMPLES)); }
     }
-    let Some(outcome) = snapshot.release_outcome.as_ref() else {
-        inconclusive!("missing cleanup/release evidence", details);
-    };
+    let Some(outcome) = snapshot.release_outcome.as_ref() else { inconclusive!("missing cleanup/release evidence", details); };
     if !cleanup_evidence_clean(args.scenario == Scenario::CleanupFullRelease, outcome.attempted_mask, outcome.attempts, outcome.released_successfully, outcome.stuck_mask, outcome.verification_inconclusive, outcome.transport_anomaly) && !target_change_cleanup_exception(&snapshot) {
         return write_report(
             &args,
@@ -858,8 +854,14 @@ fn run_windows(args: RunArgs) -> i32 {
     ) {
         return write_report(&args, Verdict::Fail, &error, details);
     }
-    let (release_verdict, release_reason) = release_gap_qualification(args.scenario, snapshot.production_release_gap_samples, snapshot.production_release_gap_below_policy_count);
-    if release_verdict != Verdict::Pass { return write_report(&args, release_verdict, release_reason, details); }
+    let (visibility_verdict, visibility_reason) = production_visibility_qualification(
+        args.scenario,
+        snapshot.production_hold_pair_samples,
+        snapshot.production_completion_hold_below_frame_count,
+        snapshot.production_release_gap_samples,
+        snapshot.production_release_gap_below_policy_count,
+    );
+    if visibility_verdict != Verdict::Pass { return write_report(&args, visibility_verdict, visibility_reason, details); }
     write_report(
         &args,
         Verdict::Pass,

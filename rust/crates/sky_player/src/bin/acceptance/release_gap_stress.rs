@@ -3,6 +3,7 @@ use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_player::adapter_support::compile_runtime_intents;
 use sky_player::engine::NativeDispatchSession;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,17 +33,48 @@ pub(super) fn scenario_plan(timing_margin_us: u64) -> Result<ScenarioPlan, Strin
     })
 }
 
-pub(super) fn release_gap_qualification(
+pub(super) fn production_visibility_qualification(
     scenario: Scenario,
-    samples: u64,
-    below_frame_floor: u64,
+    hold_samples: u64,
+    hold_below_frame_floor: u64,
+    release_samples: u64,
+    release_below_frame_floor: u64,
 ) -> (Verdict, &'static str) {
-    if below_frame_floor > 0 {
-        (Verdict::Fail, "observed release gap fell below the fixed one-frame floor")
-    } else if scenario == Scenario::ReleaseGapStress && samples < RELEASE_GAP_STRESS_MIN_SAMPLES {
-        (Verdict::NonQualifying, "release-gap stress collected fewer than 512 qualifying samples")
+    if hold_below_frame_floor > 0 || release_below_frame_floor > 0 {
+        (Verdict::Fail, "observed completion hold or release gap fell below the fixed one-frame floor")
+    } else if scenario == Scenario::ReleaseGapStress
+        && (hold_samples < RELEASE_GAP_STRESS_MIN_SAMPLES
+            || release_samples < RELEASE_GAP_STRESS_MIN_SAMPLES)
+    {
+        (Verdict::NonQualifying, "stress collected fewer than 512 qualifying hold or release samples")
     } else {
-        (Verdict::Pass, "release-gap forensics meet the scenario qualification threshold")
+        (Verdict::Pass, "production hold and release forensics meet the scenario qualification threshold")
+    }
+}
+
+pub(super) fn attach_sink_window_provenance(
+    details: &mut Value,
+    sink: &super::ReadyRecord,
+    cursor: super::LogCursor,
+    events: &[super::EventRecord],
+    expected_event_count: usize,
+    scenario: Scenario,
+) {
+    let Some(object) = details.as_object_mut() else { return; };
+    object.insert("sink_event_log_id".to_string(), json!(sink.event_log_id));
+    object.insert("sink_pid".to_string(), json!(sink.pid));
+    object.insert("sink_hwnd".to_string(), json!(sink.hwnd));
+    object.insert("sink_process_start_time_filetime".to_string(), json!(sink.process_start_time_filetime));
+    object.insert("sink_cursor_sequence_before_arm".to_string(), json!(cursor.sequence));
+    object.insert("sink_cursor_offset_before_arm".to_string(), json!(cursor.offset));
+    object.insert("first_authorized_sequence".to_string(), json!(events.first().map(|event| event.sequence)));
+    object.insert("last_authorized_sequence".to_string(), json!(events.last().map(|event| event.sequence)));
+    object.insert("sink_event_count".to_string(), json!(events.len()));
+    object.insert("expected_sink_event_count".to_string(), json!(expected_event_count));
+    object.insert("observed_sink_event_count".to_string(), json!(events.len()));
+    if scenario == Scenario::ReleaseGapStress {
+        object.insert("minimum_qualifying_hold_pair_samples".to_string(), json!(RELEASE_GAP_STRESS_MIN_SAMPLES));
+        object.insert("minimum_qualifying_release_gap_samples".to_string(), json!(RELEASE_GAP_STRESS_MIN_SAMPLES));
     }
 }
 

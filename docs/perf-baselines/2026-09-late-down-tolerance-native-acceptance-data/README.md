@@ -102,23 +102,69 @@ tolerance. It completed 512 release-gap observations but **failed
 qualification**: four observed Up-completion-to-next-Down-pre-call gaps fell
 below the fixed one-frame floor. At a 10 MHz QPC frequency, the smallest gap was
 16.2742 ms against the 16.667 ms floor. The observed count was `4/512`
-(`0.78125%`). The sink also recorded one extra KeyDown (`1,027` events in the
-authorized window against `1,026` expected); the harness correctly failed on
-that event. SendInput partial/zero-progress counts, dropped keys, stuck keys,
-and focus losses were all zero. The report, full ready record, and raw event log
-are archived in
+(`0.78125%`). A later independent read also found one completion-hold floor
+violation among 513 hold-pair samples: minimum completion hold `16.3889 ms`,
+below the same `16.667 ms` floor. These two production forensics findings
+independently invalidate the run. SendInput partial/zero-progress counts,
+dropped keys, stuck keys, and focus losses were all zero. The report, full ready
+record, and raw event log are archived in
 [`release-gap-stress-20260912T231500-bb30148c/`](release-gap-stress-20260912T231500-bb30148c/).
+
+The original report's reason string attributes an extra event to a KeyDown on
+scan `0x4B` extended. Independent sequence review does not support that
+attribution: the full stream has 1,031 events, sequences 1–4 are Left Arrow
+activity before the apparent stress stream, and the 1,027-event suffix starts
+at sequence 5; its extra `0x4B` record at sequence 7 is a KeyUp. The old archive
+did not retain the sink cursor captured immediately before arm, so the event's
+source cannot be determined and it is not attributed to the production engine.
+See the correction in the run archive README. The new single-case runner records
+the pre-arm sequence and byte cursor, event-log ID, first/last observed sequence,
+and expected/observed event counts for each invocation.
 
 An earlier run stayed paused and did not join; it collected zero release-gap
 samples and is preserved separately as
 [`release-gap-stress-inconclusive-20260912T230900-be9c1d68/`](release-gap-stress-inconclusive-20260912T230900-be9c1d68/).
 It is excluded from the observed anomaly count. All stress runs used the same
 500 µs tolerance and 800 µs Timing Margin; these results say nothing about
-whether changing the cutoff improves the release-gap observations. They do
-establish that a below-floor observation is no longer reported as a clean
-`PASS`, and that the current stress workload is **not qualifying** for release.
+whether changing the cutoff improves the release-gap observations. The release
+floor fail was already enforced, but the previous harness omitted the analogous
+completion-hold floor. The updated qualification fails on either floor and
+requires at least 512 samples from both counters for a qualifying stress run.
+The current stress workload is **not qualifying** for release.
 The original 17-scenario and cutoff-sweep evidence above remains historical
 evidence from its separately identified source revision.
+
+## Independent physical case runner
+
+`scripts/run_native_acceptance_case.ps1` starts and validates a fresh
+project-owned receive-only sink for each invocation. It records the exact
+pre-arm cursor sequence and byte offset, event-log ID, first/last observed
+sequence, and expected/observed event counts, then verifies the archived raw
+window against the harness report. A qualification failure is preserved as an
+artifact and does not prevent a later independently launched case.
+
+Run the complete cutoff sweep at fixed 800 µs Timing Margin:
+
+```powershell
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario timing-margin-sweep -TimingMarginUs 800 -LateDownToleranceUs 500
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario timing-margin-sweep -TimingMarginUs 800 -LateDownToleranceUs 1000
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario timing-margin-sweep -TimingMarginUs 800 -LateDownToleranceUs 2000
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario timing-margin-sweep -TimingMarginUs 800 -LateDownToleranceUs 5000
+```
+
+Then isolate sender visibility headroom at fixed 500 µs Late Down tolerance:
+
+```powershell
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario release-gap-stress -TimingMarginUs 800 -LateDownToleranceUs 500
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario release-gap-stress -TimingMarginUs 1200 -LateDownToleranceUs 500
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario release-gap-stress -TimingMarginUs 1500 -LateDownToleranceUs 500
+```
+
+Each run writes a self-contained artifact directory under
+`.benchmarks/physical-native-cases/`, including the raw report, full sink log,
+cursor-bounded event window, invocation metadata, runner copy, and SHA-256
+checksums. These tests target only the test HWND and make no claim about Sky
+game consumption.
 
 ## Exact-head Windows regression follow-up
 
