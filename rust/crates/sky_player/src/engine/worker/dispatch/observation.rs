@@ -1,7 +1,7 @@
 use super::super::super::{
     QpcClock, RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
     TRACE_FLAG_SENT_FULL, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
-    trace_outcome_code,
+    trace_outcome_code, trace_send_status_code,
 };
 use super::super::wait::WaitObservation;
 use super::super::{
@@ -25,6 +25,7 @@ pub enum ObserverLifecycle {
 #[derive(Clone, Copy, Debug)]
 pub enum DispatchObservation {
     Down(DownObservation),
+    DownMiss(DownMissObservation),
     // Retained for the observer schema and test/support scenarios; the
     // production path currently does not construct this variant.
     #[allow(dead_code)]
@@ -46,15 +47,35 @@ pub struct StaleMetadataObservation {
 #[derive(Clone, Copy, Debug)]
 pub struct BlockedUnfocusedObservation {
     pub event_index: u32,
+    pub compiled_packet_index: Option<u64>,
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub effective_now_ticks: TimelineTicks,
+    pub physical_target_qpc: QpcTicks,
+    pub observed_qpc: QpcTicks,
     pub polyphony: usize,
+    pub up_mask: u16,
+    pub down_mask: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DownMissObservation {
+    pub source_action_index: u32,
+    pub compiled_packet_index: Option<u64>,
+    pub authored_ticks: TimelineTicks,
+    pub effective_deadline_ticks: TimelineTicks,
+    pub wake_ticks: TimelineTicks,
+    pub physical_target_qpc: QpcTicks,
+    pub observed_qpc: QpcTicks,
+    pub up_mask: u16,
+    pub down_mask: u16,
+    pub cutoff_miss: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct DownTraceObservation {
     pub event_index: u32,
+    pub compiled_packet_index: Option<u64>,
     pub trace_kind: u8,
     pub result_status: SendTransactionStatus,
     pub send_attempts: u8,
@@ -230,6 +251,7 @@ pub(super) fn record_down_recovery_metrics(
 #[derive(Clone, Copy, Debug)]
 pub struct UpTraceObservation {
     pub event_index: u32,
+    pub compiled_packet_index: Option<u64>,
     pub trace_kind: u8,
     pub retry_reason: PacketRetryReason,
     pub send_attempts: u8,
@@ -319,16 +341,25 @@ pub(super) fn record_down_send_telemetry(
         RtTraceRecord::dispatched(
             TraceContext {
                 event_index: trace.event_index,
+                source_action_index: trace.event_index,
+                compiled_packet_index: trace.compiled_packet_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(down_outcome),
                 polyphony: observation.requested_count(),
                 flags: trace_flags,
+                send_status: trace_send_status_code(trace.result_status),
                 win32_error: trace.last_win32_error,
+                up_mask: observation.requested_packet.up_mask,
+                down_mask: observation.requested_packet.down_mask,
             },
             TraceTiming {
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks,
+                physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
+                pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
+                sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),
+                observation_qpc_ticks: None,
                 final_policy_ticks,
                 pre_call_ticks,
                 sendinput_completion_ticks,
@@ -392,16 +423,25 @@ pub(super) fn record_release_telemetry(
         RtTraceRecord::dispatched(
             TraceContext {
                 event_index: trace.event_index,
+                source_action_index: trace.event_index,
+                compiled_packet_index: trace.compiled_packet_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(release_outcome),
                 polyphony: scan_count,
                 flags: trace_flags,
+                send_status: trace_send_status_code(observation.result_status),
                 win32_error: trace.last_win32_error,
+                up_mask: observation.requested_mask,
+                down_mask: 0,
             },
             TraceTiming {
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: trace.wake_ticks,
+                physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
+                pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
+                sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),
+                observation_qpc_ticks: None,
                 final_policy_ticks: trace.final_policy_ticks,
                 pre_call_ticks: None,
                 sendinput_completion_ticks: trace.sendinput_completion_ticks,

@@ -1,0 +1,23 @@
+{
+  "source_revision": "bb30148c404146821bbd9ef6b44a55b5cc258051",
+  "harness": "rust/target/release/rt-native-acceptance.exe",
+  "invocation": {
+    "down_late_grace_us": 500,
+    "timing_margin_us": 800,
+    "scenario": "release-gap-stress"
+  },
+  "sink": {
+    "hwnd": 985058,
+    "run_id": "release-gap-stress-20260912T230900-be9c1d68",
+    "event_log_id": "4f702daa77124213be0659a172a8b94f",
+    "pid": 19196
+  },
+  "result": {
+    "reason": "production session did not join within the bounded timeout",
+    "exit_code": 2,
+    "session_status": "paused",
+    "release_gap_samples": 0,
+    "status": "INCONCLUSIVE",
+    "sink_event_lines": 26
+  }
+}

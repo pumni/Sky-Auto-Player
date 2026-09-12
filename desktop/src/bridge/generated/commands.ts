@@ -56,6 +56,7 @@ export interface CommandRequestMap {
   resume_playback: PlaybackSessionCommand;
   skip_playback: PlaybackSessionCommand;
   set_diagnostics_enabled: DiagnosticsSetEnabled;
+  export_sender_trace: undefined;
   start_calibration: CalibrationStart;
   cancel_calibration: CalibrationCancel;
   library_list_playlists: undefined;
@@ -89,6 +90,7 @@ export interface CommandResponseMap {
   resume_playback: PlaybackCommandAck;
   skip_playback: PlaybackCommandAck;
   set_diagnostics_enabled: DiagnosticsEnabled;
+  export_sender_trace: string;
   start_calibration: CalibrationStartAck;
   cancel_calibration: CalibrationCancelAck;
   library_list_playlists: LibraryNavigation;

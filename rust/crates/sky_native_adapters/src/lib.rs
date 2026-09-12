@@ -14,10 +14,12 @@ use sky_app_core::library::{
     LibraryManifestStore, LibraryManifestV1, LikedSongs,
 };
 use sky_app_core::settings::{
-    ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
-    DEFAULT_SONGS_DIR, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS, HotkeySettings,
-    SafetySettings, SettingsError, SettingsStore, UpdateChannel, UpdatePreferences, VALID_FPS,
-    normalize_settings,
+    ApplicationSettings, DEFAULT_DOWN_LATE_GRACE_US, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES,
+    DEFAULT_PROCESS_NAMES, DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S,
+    DOWN_LATE_GRACE_STEP_US, HOLD_FRAME_OPTIONS, HotkeySettings, MAX_DOWN_LATE_GRACE_US,
+    MAX_TIMING_MARGIN_US, MIN_DOWN_LATE_GRACE_US, MIN_TIMING_MARGIN_US, SafetySettings,
+    SettingsError, SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences,
+    VALID_FPS, normalize_settings,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -48,7 +50,8 @@ pub const CALIBRATION_REQUIRED_BUCKETS: [&str; 6] =
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalibrationResolution {
-    pub margin_us: u64,
+    pub transport_reserve_us: u64,
+    pub qualified: bool,
     pub source: String,
 }
 
@@ -58,7 +61,8 @@ pub struct CalibrationResolution {
 /// valid applied margin are accepted.
 pub fn load_calibration_resolution(path: impl AsRef<Path>) -> CalibrationResolution {
     let fallback = |source: &str| CalibrationResolution {
-        margin_us: DEFAULT_TRANSPORT_MARGIN_US,
+        transport_reserve_us: DEFAULT_TRANSPORT_MARGIN_US,
+        qualified: false,
         source: source.into(),
     };
     let Ok(text) = fs::read_to_string(path) else {
@@ -140,7 +144,8 @@ pub fn load_calibration_resolution(path: impl AsRef<Path>) -> CalibrationResolut
         return fallback(CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE);
     }
     CalibrationResolution {
-        margin_us: margin,
+        transport_reserve_us: margin,
+        qualified: true,
         source: CALIBRATION_MARGIN_SOURCE_DEVICE.into(),
     }
 }
@@ -861,6 +866,16 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
         raw_string(raw, "ui_background_mode", &settings.ui_background_mode);
     settings.playback_defaults.hold_frames =
         raw_f64(raw, "default_hold_frames", DEFAULT_HOLD_FRAMES);
+    settings.playback_defaults.timing_margin_us = raw_u64(
+        raw,
+        "default_timing_margin_us",
+        sky_app_core::settings::DEFAULT_TIMING_MARGIN_US,
+    );
+    settings.playback_defaults.down_late_grace_us = raw_u64(
+        raw,
+        "default_down_late_grace_us",
+        DEFAULT_DOWN_LATE_GRACE_US,
+    );
     settings.playback_defaults.tempo_scale = raw_f64(raw, "default_tempo_scale", 1.0);
     settings.playback_defaults.fps = raw_fps(raw, "game_fps", DEFAULT_GAME_FPS);
     settings.telemetry_enabled = raw_bool(raw, "telemetry_enabled_by_default", false);
@@ -956,7 +971,10 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
         .and_then(numeric_float)
         .and_then(nearest_supported_hold)
         .unwrap_or(DEFAULT_HOLD_FRAMES);
-    migrated.insert("schema_version".into(), Value::from(3_u32));
+    migrated.insert(
+        "schema_version".into(),
+        Value::from(sky_app_core::settings::SCHEMA_VERSION),
+    );
     migrated.insert(
         "default_hold_frames".into(),
         Value::from(if raw.contains_key("default_hold_frames") {
@@ -964,6 +982,36 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
         } else {
             candidate
         }),
+    );
+    let timing_margin_us = raw_u64(raw, "default_timing_margin_us", DEFAULT_TIMING_MARGIN_US);
+    let timing_margin_us = if (MIN_TIMING_MARGIN_US..=MAX_TIMING_MARGIN_US)
+        .contains(&timing_margin_us)
+        && timing_margin_us.is_multiple_of(TIMING_MARGIN_STEP_US)
+    {
+        timing_margin_us
+    } else {
+        DEFAULT_TIMING_MARGIN_US
+    };
+    migrated.insert(
+        "default_timing_margin_us".into(),
+        Value::from(timing_margin_us),
+    );
+    let down_late_grace_us = raw_u64(
+        raw,
+        "default_down_late_grace_us",
+        DEFAULT_DOWN_LATE_GRACE_US,
+    );
+    let down_late_grace_us = if (MIN_DOWN_LATE_GRACE_US..=MAX_DOWN_LATE_GRACE_US)
+        .contains(&down_late_grace_us)
+        && down_late_grace_us.is_multiple_of(DOWN_LATE_GRACE_STEP_US)
+    {
+        down_late_grace_us
+    } else {
+        DEFAULT_DOWN_LATE_GRACE_US
+    };
+    migrated.insert(
+        "default_down_late_grace_us".into(),
+        Value::from(down_late_grace_us),
     );
     for key in [
         "default_timing_profile",
@@ -1036,6 +1084,10 @@ fn raw_f64(raw: &Map<String, Value>, key: &str, default: f64) -> f64 {
         .and_then(python_float)
         .filter(|value| value.is_finite())
         .unwrap_or(default)
+}
+
+fn raw_u64(raw: &Map<String, Value>, key: &str, default: u64) -> u64 {
+    raw.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
 
 fn raw_fps(raw: &Map<String, Value>, key: &str, default: u16) -> u16 {
@@ -1197,6 +1249,14 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
     raw.insert(
         "default_hold_frames".into(),
         Value::from(settings.playback_defaults.hold_frames),
+    );
+    raw.insert(
+        "default_timing_margin_us".into(),
+        Value::from(settings.playback_defaults.timing_margin_us),
+    );
+    raw.insert(
+        "default_down_late_grace_us".into(),
+        Value::from(settings.playback_defaults.down_late_grace_us),
     );
     raw.insert(
         "default_tempo_scale".into(),
@@ -1393,12 +1453,124 @@ mod tests {
         let store = JsonSettingsStore::new(&path);
         let settings = store.load().expect("load legacy settings");
         assert_eq!(settings.playback_defaults.hold_frames, 1.5);
+        assert_eq!(
+            settings.playback_defaults.timing_margin_us,
+            DEFAULT_TIMING_MARGIN_US
+        );
+        assert_eq!(
+            settings.playback_defaults.down_late_grace_us,
+            DEFAULT_DOWN_LATE_GRACE_US
+        );
         store.save(&settings).expect("save migrated settings");
         let raw: Value =
             serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("json");
         assert_eq!(raw["future"], true);
+        assert_eq!(
+            raw["schema_version"],
+            sky_app_core::settings::SCHEMA_VERSION
+        );
+        assert_eq!(raw["default_timing_margin_us"], DEFAULT_TIMING_MARGIN_US);
         assert!(raw.get("default_timing_profile").is_none());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_store_round_trips_exact_timing_margin() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-w3-timing-margin-settings-{}",
+            std::process::id()
+        ));
+        let path = root.join("config.json");
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            &path,
+            br#"{"schema_version":3,"default_timing_margin_us":1200}"#,
+        )
+        .expect("seed prior schema with margin");
+        let store = JsonSettingsStore::new(&path);
+        let settings = store.load().expect("load settings");
+        assert_eq!(settings.playback_defaults.timing_margin_us, 1_200);
+        store.save(&settings).expect("save settings");
+        let raw: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read")).expect("valid JSON");
+        assert_eq!(raw["default_timing_margin_us"], 1_200);
+        assert_eq!(
+            raw["schema_version"],
+            sky_app_core::settings::SCHEMA_VERSION
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_migration_canonicalizes_invalid_timing_margin_in_persisted_file() {
+        for invalid_margin in [799_u64, 3_001_u64] {
+            let root = std::env::temp_dir().join(format!(
+                "sky-invalid-timing-margin-{}-{invalid_margin}",
+                std::process::id()
+            ));
+            let path = root.join("config.json");
+            fs::create_dir_all(&root).expect("temp root");
+            fs::write(
+                &path,
+                format!("{{\"schema_version\":3,\"default_timing_margin_us\":{invalid_margin}}}"),
+            )
+            .expect("seed invalid persisted margin");
+
+            let store = JsonSettingsStore::new(&path);
+            let settings = store.load().expect("load settings");
+            assert_eq!(
+                settings.playback_defaults.timing_margin_us,
+                DEFAULT_TIMING_MARGIN_US
+            );
+            let raw: Value =
+                serde_json::from_slice(&fs::read(&path).expect("read migrated config"))
+                    .expect("valid migrated json");
+            assert_eq!(
+                raw["schema_version"],
+                sky_app_core::settings::SCHEMA_VERSION
+            );
+            assert_eq!(raw["default_timing_margin_us"], DEFAULT_TIMING_MARGIN_US);
+
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn settings_v4_migration_defaults_preserves_and_canonicalizes_down_late_grace() {
+        let cases = [
+            (None, DEFAULT_DOWN_LATE_GRACE_US),
+            (Some(2_000), 2_000),
+            (Some(799), DEFAULT_DOWN_LATE_GRACE_US),
+            (Some(5_001), DEFAULT_DOWN_LATE_GRACE_US),
+        ];
+        for (value, expected) in cases {
+            let root = std::env::temp_dir().join(format!(
+                "sky-v4-down-late-grace-{}-{}",
+                std::process::id(),
+                value.unwrap_or(0)
+            ));
+            let path = root.join("config.json");
+            fs::create_dir_all(&root).expect("temp root");
+            let raw_value = value
+                .map(|value| format!(",\"default_down_late_grace_us\":{value}"))
+                .unwrap_or_default();
+            fs::write(&path, format!("{{\"schema_version\":4{raw_value}}}"))
+                .expect("seed schema v4 settings");
+
+            let settings = JsonSettingsStore::new(&path)
+                .load()
+                .expect("migrate settings");
+            assert_eq!(settings.playback_defaults.down_late_grace_us, expected);
+            let raw: Value =
+                serde_json::from_slice(&fs::read(&path).expect("read migrated config"))
+                    .expect("valid migrated json");
+            assert_eq!(
+                raw["schema_version"],
+                sky_app_core::settings::SCHEMA_VERSION
+            );
+            assert_eq!(raw["default_down_late_grace_us"], expected);
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]
@@ -1411,7 +1583,8 @@ mod tests {
         assert_eq!(
             load_calibration_resolution(&path),
             CalibrationResolution {
-                margin_us: 777,
+                transport_reserve_us: 777,
+                qualified: true,
                 source: CALIBRATION_MARGIN_SOURCE_DEVICE.into()
             }
         );

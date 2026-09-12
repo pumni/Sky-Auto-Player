@@ -56,6 +56,8 @@ pub(crate) use dispatch_loop::dispatch_due_from_plan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::preflight_prepared_plan;
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::publish_live_metrics_after_dispatch;
+#[cfg(any(test, feature = "test-support"))]
 #[allow(unused_imports)]
 pub(crate) use dispatch_loop::{preroll_manual_pause_cancels, startup_focus_loss_is_terminal};
 
@@ -67,7 +69,8 @@ pub(crate) use health::record_input_path_health;
 pub(crate) use health::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, HEALTH_WINDOW_CAPACITY,
     HealthWindow, focus_gate_matches, observe_dispatch_health, observe_wait_health,
-    publish_backend_metrics, record_lateness, record_sendinput_pre_call_lateness,
+    publish_backend_counters, publish_backend_metrics, record_lateness,
+    record_sendinput_pre_call_lateness,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use planning::NextDispatchPlan;

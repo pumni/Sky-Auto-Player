@@ -332,6 +332,23 @@ describe('desktop store', () => {
     expect(store.getState().settings?.verbose_hud).toBe(true);
   });
 
+  it('returns authoritative settings when a settings patch fails', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    bridge.patchSettings = async () => {
+      throw new Error('settings IPC failed');
+    };
+
+    const authoritative = await store
+      .getState()
+      .patchSettings({ playbackDefaults: { timingMarginUs: 900 } });
+
+    expect(authoritative?.playback_defaults.timing_margin_us).toBe(500);
+    expect(store.getState().settings?.playback_defaults.timing_margin_us).toBe(500);
+    expect(store.getState().settingsState).toBe('fatal');
+  });
+
   it('detaches a prepared plan when the selected song changes', async () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
@@ -404,7 +421,14 @@ describe('desktop store', () => {
         prepared_id: request.preparedId,
         song_id: songId,
         state: 'starting' as const,
-        config: { hold_frames: 2, tempo_scale: 1, fps: 60, dry_run: true },
+        config: {
+          hold_frames: 2,
+          timing_margin_us: 800,
+          down_late_grace_us: 500,
+          tempo_scale: 1,
+          fps: 60,
+          dry_run: true,
+        },
         plan_fingerprint: 'mock-plan',
       };
       listener?.({
@@ -494,8 +518,10 @@ describe('desktop store', () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().setDiagnosticsEnabled(true));
+    const sessionId = 'a'.repeat(32);
     store.setState({
       diagnostics: { ...store.getState().diagnostics, events: [] },
+      playback: { ...store.getState().playback, sessionId, state: 'playing' },
     });
 
     for (let index = 0; index < 601; index += 1) {
@@ -504,6 +530,9 @@ describe('desktop store', () => {
         name: 'diagnostics.snapshot',
         payload: {
           seq: index,
+          physical_session: true,
+          player_attached: true,
+          sender_sample_count: index + 1,
           max_lateness_us: index,
           p50_ms: 0.1,
           p95_ms: 0.2,
@@ -515,7 +544,19 @@ describe('desktop store', () => {
           pre_call_late_2ms: 0,
           pre_call_late_5ms: 0,
           pre_call_late_10ms: 0,
+          fps: 60,
+          frame_us: 16_667,
+          hold_frames: 1,
+          frame_base_hold_us: 16_667,
+          timing_margin_us: 800,
+          min_hold_us: 17_467,
+          min_release_gap_us: 17_467,
           down_late_grace_us: 500,
+          timing_margin_recommendation: {
+            recommended_timing_margin_us: 800,
+            qualified: false,
+            source: 'default_fallback',
+          },
           pre_call_lt_250us: 0,
           pre_call_250_500us: 0,
           pre_call_500_750us: 0,
@@ -541,7 +582,7 @@ describe('desktop store', () => {
           backend_status: 'healthy',
           release_max_us: 0,
           release_late_2ms: 0,
-          session_id: null,
+          session_id: sessionId,
           last_error: null,
         },
       });
@@ -574,12 +615,19 @@ describe('desktop store', () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     await act(async () => store.getState().setDiagnosticsEnabled(true));
+    const firstSessionId = 'a'.repeat(32);
+    store.setState({
+      playback: { ...store.getState().playback, sessionId: firstSessionId, state: 'playing' },
+    });
 
     const snapshot = (sessionId: string, seq: number) => ({
       v: 1 as const,
       name: 'diagnostics.snapshot' as const,
       payload: {
         seq,
+        physical_session: true,
+        player_attached: true,
+        sender_sample_count: 1,
         max_lateness_us: seq,
         p50_ms: 0.1,
         p95_ms: 0.2,
@@ -591,7 +639,19 @@ describe('desktop store', () => {
         pre_call_late_2ms: 0,
         pre_call_late_5ms: 0,
         pre_call_late_10ms: 0,
-        down_late_grace_us: 500 + seq,
+        fps: 60,
+        frame_us: 16_667,
+        hold_frames: 1,
+        frame_base_hold_us: 16_667,
+        timing_margin_us: 800,
+        min_hold_us: 17_467,
+        min_release_gap_us: 17_467,
+        down_late_grace_us: 500,
+        timing_margin_recommendation: {
+          recommended_timing_margin_us: 800,
+          qualified: false,
+          source: 'default_fallback',
+        },
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
         pre_call_500_750us: seq,
@@ -626,16 +686,35 @@ describe('desktop store', () => {
     store.getState().applyEvent(snapshot('a'.repeat(32), 2));
     expect(store.getState().diagnostics.samples).toHaveLength(2);
     expect(store.getState().diagnostics.samples[1]).toMatchObject({
-      down_late_grace_us: 502,
+      down_late_grace_us: 500,
       pre_call_500_750us: 2,
       final_gate_focus_losses: 2,
       sendinput_zero_progress_failures: 2,
     });
 
-    store.getState().applyEvent(snapshot('b'.repeat(32), 3));
+    const secondSessionId = 'b'.repeat(32);
+    store.setState({
+      playback: { ...store.getState().playback, sessionId: secondSessionId, state: 'playing' },
+    });
+    store.getState().applyEvent(snapshot(secondSessionId, 3));
     expect(store.getState().diagnostics.samples).toHaveLength(1);
-    expect(store.getState().diagnostics.samples[0]?.session_id).toBe('b'.repeat(32));
+    expect(store.getState().diagnostics.samples[0]?.session_id).toBe(secondSessionId);
     expect(store.getState().diagnostics.samples[0]?.pre_call_500_750us).toBe(3);
+
+    store.getState().applyEvent({
+      ...snapshot(firstSessionId, 4),
+      payload: {
+        ...snapshot(firstSessionId, 4).payload,
+        physical_session: false,
+        player_attached: false,
+        sender_sample_count: 0,
+        max_sendinput_pre_call_lateness_us: null,
+        backend_status: 'unavailable',
+      },
+    });
+    expect(store.getState().diagnostics.samples).toHaveLength(1);
+    expect(store.getState().diagnostics.samples[0]?.session_id).toBe(secondSessionId);
+    expect(store.getState().diagnostics.samples[0]?.backend_status).toBe('healthy');
   });
 
   it('keeps utility presentation state separate from diagnostics data', async () => {
@@ -676,6 +755,6 @@ describe('desktop store', () => {
     await waitFor(() => expect(store.getState().calibration.state).toBe('succeeded'));
     expect(store.getState().calibration.operationId).toMatch(/^[0-9a-f]{32}$/);
     expect(store.getState().calibration.result?.outcome).toBe('succeeded');
-    expect(store.getState().calibration.result?.source).toBe('mock');
+    expect(store.getState().calibration.result?.source).toBe('qualified_calibration');
   });
 });

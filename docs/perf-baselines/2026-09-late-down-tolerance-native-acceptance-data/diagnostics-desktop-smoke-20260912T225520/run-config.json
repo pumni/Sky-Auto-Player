@@ -1,0 +1,31 @@
+{
+  "source_revision_at_app_launch": "be9c1d68bf408fb75330c4501691e1834328164e",
+  "source_tree_had_uncommitted_changes_at_capture": true,
+  "source_revision_committed_after_capture": "bb30148c404146821bbd9ef6b44a55b5cc258051",
+  "smoke": {
+    "max_pre_call_lateness_us": 96,
+    "sender_backend": "Healthy",
+    "physical_session": "Yes",
+    "song": "Alen Walker - On My Way",
+    "started_at": "2026-09-12T16:00:48.14Z",
+    "player_attached": "Yes",
+    "ended_at": "2026-09-12T16:01:01.364Z",
+    "stop_requested": true,
+    "sender_samples": 20,
+    "app_url": "http://127.0.0.1:1420/"
+  },
+  "sink": {
+    "pid": 19068,
+    "input_policy": "receives_only; benchmark must use SendInput",
+    "title": "Sky Auto Player — Native Acceptance Sink",
+    "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+    "hwnd": 11930054,
+    "run_id": "diagnostics-desktop-smoke-20260912T225520"
+  },
+  "event_log": {
+    "first_sequence": 1,
+    "last_sequence": 20,
+    "events": 20,
+    "baseline_lines": 1
+  }
+}

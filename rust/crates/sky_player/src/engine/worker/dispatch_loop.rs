@@ -6,8 +6,9 @@ use super::{
     CommandControlRuntime, CommandControlSignals, PlanningInput, WaitBoundary, WaitBoundaryInput,
     WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker, ensure_preflight_for_target,
     enter_focus_pause, focus_matches, focus_matches_hwnd, lease_bounded_ticks, load_target_stamp,
-    plan_next_dispatch_projected, process_command_control, publish_backend_metrics,
-    record_wait_failure, suspend_live_input, target_stamp_still_current, wait_for_next_boundary,
+    plan_next_dispatch_projected, process_command_control, publish_backend_counters,
+    publish_backend_metrics, record_wait_failure, suspend_live_input, target_stamp_still_current,
+    wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
@@ -40,6 +41,19 @@ fn physical_boundary_stamp(
         down_mask: physical.authored_view.packet_masks.down_mask,
         physical_target_qpc,
     })
+}
+
+#[inline]
+pub(crate) fn publish_live_metrics_after_dispatch(
+    local: &super::WorkerMetricsLocal,
+    shared: &super::SharedMetrics,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+) {
+    let Ok(now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(now_qpc.as_u64())) else {
+        return;
+    };
+    let _ = try_publish_metrics(local, shared, qpc_clock, now_us, false);
 }
 
 #[inline]
@@ -898,6 +912,12 @@ pub(super) fn dispatch(
                 #[cfg(any(test, feature = "test-support"))]
                 false,
             );
+            if matches!(&authored_step, super::DispatchStep::Dispatched)
+                && metrics.live_diagnostics_enabled.load(Ordering::Relaxed)
+            {
+                publish_backend_counters(&resources.backend, &mut core.metrics);
+                publish_live_metrics_after_dispatch(&core.metrics, metrics, qpc_clock, now_ticks);
+            }
             match authored_step {
                 super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
                 super::DispatchStep::NoWork => {}
@@ -993,7 +1013,7 @@ pub(super) fn dispatch(
                             break;
                         }
                     };
-                    match dispatch_due_from_plan(
+                    let authored_step = dispatch_due_from_plan(
                         &dispatch_plan,
                         dispatch_effective_now,
                         dispatch_now_ticks,
@@ -1021,7 +1041,19 @@ pub(super) fn dispatch(
                         None,
                         #[cfg(any(test, feature = "test-support"))]
                         false,
-                    ) {
+                    );
+                    if matches!(&authored_step, super::DispatchStep::Dispatched)
+                        && metrics.live_diagnostics_enabled.load(Ordering::Relaxed)
+                    {
+                        publish_backend_counters(&resources.backend, &mut core.metrics);
+                        publish_live_metrics_after_dispatch(
+                            &core.metrics,
+                            metrics,
+                            qpc_clock,
+                            dispatch_now_ticks,
+                        );
+                    }
+                    match authored_step {
                         super::DispatchStep::Terminate(error) => {
                             core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(error);
@@ -1067,9 +1099,33 @@ pub(super) fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::physical_target_qpc_for_work;
+    use super::{physical_target_qpc_for_work, publish_live_metrics_after_dispatch};
+    use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::worker::{DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime};
     use sky_dispatch_core::time::QpcTicks;
+    use sky_dispatch_win32::clock::QpcClock;
+    use std::num::NonZeroU64;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn live_dispatch_publication_exposes_production_sender_samples() {
+        let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+        let shared = SharedMetrics::default();
+        shared
+            .live_diagnostics_enabled
+            .store(true, Ordering::Relaxed);
+        let local = WorkerMetricsLocal {
+            pre_call_lt_250us: 1,
+            max_sendinput_pre_call_lateness_ticks: 25,
+            ..WorkerMetricsLocal::default()
+        };
+
+        publish_live_metrics_after_dispatch(&local, &shared, qpc_clock, QpcTicks::from_raw(50_000));
+
+        let snapshot = shared.snapshot.load();
+        assert_eq!(snapshot.pre_call_lt_250us, 1);
+        assert_eq!(snapshot.max_sendinput_pre_call_lateness_us, 25);
+    }
 
     #[test]
     fn exact_future_authorization_survives_waiter_entry_stall() {

@@ -111,6 +111,9 @@ pub enum DiagnosticsBackendStatus {
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticsSnapshotDto {
     pub seq: u64,
+    pub physical_session: bool,
+    pub player_attached: bool,
+    pub sender_sample_count: u64,
     pub max_lateness_us: Option<u64>,
     pub p50_ms: Option<f64>,
     pub p95_ms: Option<f64>,
@@ -118,11 +121,19 @@ pub struct DiagnosticsSnapshotDto {
     pub late_2ms: Option<u64>,
     pub late_5ms: Option<u64>,
     pub late_10ms: Option<u64>,
-    pub max_sendinput_pre_call_lateness_us: u64,
+    pub max_sendinput_pre_call_lateness_us: Option<u64>,
     pub pre_call_late_2ms: u64,
     pub pre_call_late_5ms: u64,
     pub pre_call_late_10ms: u64,
+    pub fps: u16,
+    pub frame_us: u64,
+    pub hold_frames: f64,
+    pub frame_base_hold_us: u64,
+    pub timing_margin_us: u64,
+    pub min_hold_us: u64,
+    pub min_release_gap_us: u64,
     pub down_late_grace_us: u64,
+    pub timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub pre_call_lt_250us: u64,
     pub pre_call_250_500us: u64,
     pub pre_call_500_750us: u64,
@@ -202,11 +213,11 @@ pub struct CalibrationFinishedPayload {
     pub operation_id: String,
     pub outcome: CalibrationOutcome,
     pub status: String,
-    pub margin_us: Option<u64>,
+    pub recommended_timing_margin_us: Option<u64>,
+    pub recommendation_qualified: bool,
     pub sample_count: u64,
     pub source: String,
     pub message: String,
-    pub applied: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
@@ -470,7 +481,11 @@ impl UiEvent {
         {
             return Err("diagnostics max lateness is outside bounds".into());
         }
-        if payload.down_late_grace_us > 60_000_000 {
+        if payload.down_late_grace_us > sky_app_core::settings::MAX_DOWN_LATE_GRACE_US
+            || !payload
+                .down_late_grace_us
+                .is_multiple_of(sky_app_core::settings::DOWN_LATE_GRACE_STEP_US)
+        {
             return Err("diagnostics Down grace is outside bounds".into());
         }
         if let Some(last_error) = &payload.last_error {
@@ -504,8 +519,14 @@ impl UiEvent {
         if payload.sample_count > 5_000 {
             return Err("calibration sample count exceeds bounds".into());
         }
-        if payload.margin_us.is_some_and(|value| value > 60_000_000) {
-            return Err("calibration margin is outside bounds".into());
+        if payload
+            .recommended_timing_margin_us
+            .is_some_and(|value| value > sky_app_core::settings::MAX_DOWN_LATE_GRACE_US + 100_000)
+        {
+            return Err("calibration recommendation is outside bounds".into());
+        }
+        if payload.recommendation_qualified && payload.recommended_timing_margin_us.is_none() {
+            return Err("qualified calibration is missing its recommendation".into());
         }
         Ok(())
     }

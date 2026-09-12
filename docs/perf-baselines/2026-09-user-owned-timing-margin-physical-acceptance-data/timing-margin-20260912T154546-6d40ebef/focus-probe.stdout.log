@@ -1,0 +1,14 @@
+{
+  "schema_version": 3,
+  "event_schema_version": 3,
+  "run_id": "timing-margin-20260912T154546-6d40ebef",
+  "role": "InertFocusProbe",
+  "sink_kind": "SkyAutoPlayer.NativeAcceptanceFocusProbe",
+  "event_log_id": "61ec3369fac6458099de729778deadee",
+  "pid": 6580,
+  "hwnd": 592332,
+  "title": "Sky Auto Player — Native Acceptance Focus Probe",
+  "process": "native_acceptance_sink.ps1",
+  "input_policy": "receives_only; benchmark must use SendInput",
+  "process_start_time_filetime": 134336763468996605
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 3,
+  "event_schema_version": 3,
+  "run_id": "input-reliability-20260912T235553-7daf4359",
+  "role": "ReceiveOnly",
+  "sink_kind": "SkyAutoPlayer.NativeAcceptanceSink",
+  "event_log_id": "9556f58cfeb14054867a4ec1abcead07",
+  "pid": 5624,
+  "hwnd": 199212,
+  "title": "Sky Auto Player — Native Acceptance Sink",
+  "process": "native_acceptance_sink.ps1",
+  "input_policy": "receives_only; benchmark must use SendInput",
+  "process_start_time_filetime": 134337057557605818
+}

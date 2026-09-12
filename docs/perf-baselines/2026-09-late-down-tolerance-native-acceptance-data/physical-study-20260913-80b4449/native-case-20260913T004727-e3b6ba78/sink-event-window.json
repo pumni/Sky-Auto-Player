@@ -1,0 +1,68 @@
+﻿{
+    "event_log_id":  "3bb052e3bcc2442084b903bfbc379785",
+    "sink_pid":  17792,
+    "sink_hwnd":  919454,
+    "cursor_sequence_before_arm":  0,
+    "cursor_offset_before_arm":  281,
+    "first_authorized_sequence":  1,
+    "last_authorized_sequence":  4,
+    "expected_event_count":  4,
+    "observed_event_count":  4,
+    "harness_observed_event_count":  4,
+    "sequence_contiguous":  true,
+    "report_window_match":  true,
+    "raw_events":  [
+                       {
+                           "schema_version":  3,
+                           "run_id":  "native-case-20260913T004727-e3b6ba78",
+                           "role":  "ReceiveOnly",
+                           "event_log_id":  "3bb052e3bcc2442084b903bfbc379785",
+                           "sequence":  1,
+                           "kind":  "key_press",
+                           "scan_code":  21,
+                           "extended":  false,
+                           "virtual_key":  229,
+                           "message":  256,
+                           "observed_utc":  "2026-09-12T17:47:29.7565150Z"
+                       },
+                       {
+                           "schema_version":  3,
+                           "run_id":  "native-case-20260913T004727-e3b6ba78",
+                           "role":  "ReceiveOnly",
+                           "event_log_id":  "3bb052e3bcc2442084b903bfbc379785",
+                           "sequence":  2,
+                           "kind":  "key_release",
+                           "scan_code":  21,
+                           "extended":  false,
+                           "virtual_key":  89,
+                           "message":  257,
+                           "observed_utc":  "2026-09-12T17:47:29.7719398Z"
+                       },
+                       {
+                           "schema_version":  3,
+                           "run_id":  "native-case-20260913T004727-e3b6ba78",
+                           "role":  "ReceiveOnly",
+                           "event_log_id":  "3bb052e3bcc2442084b903bfbc379785",
+                           "sequence":  3,
+                           "kind":  "key_press",
+                           "scan_code":  21,
+                           "extended":  false,
+                           "virtual_key":  229,
+                           "message":  256,
+                           "observed_utc":  "2026-09-12T17:47:29.7828996Z"
+                       },
+                       {
+                           "schema_version":  3,
+                           "run_id":  "native-case-20260913T004727-e3b6ba78",
+                           "role":  "ReceiveOnly",
+                           "event_log_id":  "3bb052e3bcc2442084b903bfbc379785",
+                           "sequence":  4,
+                           "kind":  "key_release",
+                           "scan_code":  21,
+                           "extended":  false,
+                           "virtual_key":  89,
+                           "message":  257,
+                           "observed_utc":  "2026-09-12T17:47:29.7883584Z"
+                       }
+                   ]
+}

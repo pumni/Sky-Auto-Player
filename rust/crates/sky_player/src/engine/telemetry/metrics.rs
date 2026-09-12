@@ -447,6 +447,7 @@ impl SnapshotBuffer {
 pub(crate) struct SharedMetrics {
     pub(crate) snapshot: SnapshotBuffer,
     pub(crate) last_publish_us: AtomicU64,
+    pub(crate) live_diagnostics_enabled: AtomicBool,
     pub(crate) is_paused: AtomicBool,
     pub(crate) panicked: AtomicBool,
     pub(crate) last_error: Mutex<Option<String>>,

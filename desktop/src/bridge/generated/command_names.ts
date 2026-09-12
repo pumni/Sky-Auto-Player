@@ -32,6 +32,7 @@ export const COMMANDS = {
   libraryRemoveSongs: 'library_remove_songs',
   libraryImportLocalFilesToPlaylist: 'library_import_local_files_to_playlist',
   libraryImportLocalFolderToPlaylist: 'library_import_local_folder_to_playlist',
+  exportSenderTrace: 'export_sender_trace',
 } as const;
 
 export const UI_EVENTS_COMMAND = 'subscribe_ui_events' as const;

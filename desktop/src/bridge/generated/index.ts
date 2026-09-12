@@ -33,6 +33,7 @@ export type { DiagnosticsSnapshotDto } from './DiagnosticsSnapshotDto';
 export type { NativeBuildDto } from './NativeBuildDto';
 export type { PlaybackDefaultsDto } from './PlaybackDefaultsDto';
 export type { PlaybackConfigDto } from './PlaybackConfigDto';
+export type { TimingMarginRecommendationDto } from './TimingMarginRecommendationDto';
 export type { PlaybackDecisionAcceptanceDto } from './PlaybackDecisionAcceptanceDto';
 export type { PlaybackAdmission } from './PlaybackAdmission';
 export type { PlaybackCommandAckDto } from './PlaybackCommandAckDto';

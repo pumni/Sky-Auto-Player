@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-09-12T16:00:48.14Z",
+  "ended_at": "2026-09-12T16:01:01.364Z",
+  "app_git_head": "be9c1d68bf408fb75330c4501691e1834328164e",
+  "app_url": "http://127.0.0.1:1420/",
+  "sink": {
+    "run_id": "diagnostics-desktop-smoke-20260912T225520",
+    "pid": 19068,
+    "hwnd": 11930054,
+    "title": "Sky Auto Player — Native Acceptance Sink",
+    "process": "native_acceptance_sink.ps1",
+    "event_log_id": "b039c61cd3de4d308a92cdf947ba689b"
+  },
+  "event_log": {
+    "path": "sink-events.jsonl",
+    "baseline_lines": 1,
+    "live_lines": 21,
+    "new_events_during_smoke": 20,
+    "tail": [
+      {
+        "schema_version": 3,
+        "run_id": "diagnostics-desktop-smoke-20260912T225520",
+        "role": "ReceiveOnly",
+        "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+        "sequence": 13,
+        "kind": "sys_key_press",
+        "scan_code": 39,
+        "extended": false,
+        "virtual_key": 186,
+        "message": 260,
+        "observed_utc": "2026-09-12T16:00:50.1821706Z"
+      },
+      {
+        "schema_version": 3,
+        "run_id": "diagnostics-desktop-smoke-20260912T225520",
+        "role": "ReceiveOnly",
+        "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+        "sequence": 14,
+        "kind": "sys_key_release",
+        "scan_code": 39,
+        "extended": false,
+        "virtual_key": 186,
+        "message": 261,
+        "observed_utc": "2026-09-12T16:00:50.1994766Z"
+      },
+      {
+        "schema_version": 3,
+        "run_id": "diagnostics-desktop-smoke-20260912T225520",
+        "role": "ReceiveOnly",
+        "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+        "sequence": 15,
+        "kind": "sys_key_press",
+        "scan_code": 25,
+        "extended": false,
+        "virtual_key": 80,
+        "message": 260,
+        "observed_utc": "2026-09-12T16:00:50.5155846Z"
+      },
+      {
+        "schema_version": 3,
+        "run_id": "diagnostics-desktop-smoke-20260912T225520",
+        "role": "ReceiveOnly",
+        "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+        "sequence": 16,
+        "kind": "sys_key_release",
+        "scan_code": 25,
+        "extended": false,
+        "virtual_key": 80,
+        "message": 261,
+        "observed_utc": "2026-09-12T16:00:50.5323867Z"
+      },
+      {
+        "schema_version": 3,
+        "run_id": "diagnostics-desktop-smoke-20260912T225520",
+        "role": "ReceiveOnly",
+        "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+        "sequence": 17,
+        "kind": "sys_key_press",
+        "scan_code": 25,
+        "extended": false,
+        "virtual_key": 80,
+        "message": 260,
+        "observed_utc": "2026-09-12T16:00:50.8481639Z"
+      },
+      {
+        "schema_version": 3,
+        "run_id": "diagnostics-desktop-smoke-20260912T225520",
+        "role": "ReceiveOnly",
+        "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+        "sequence": 18,
+        "kind": "sys_key_release",
+        "scan_code": 25,
+        "extended": false,
+        "virtual_key": 80,
+        "message": 261,
+        "observed_utc": "2026-09-12T16:00:50.8657633Z"
+      },
+      {
+        "schema_version": 3,
+        "run_id": "diagnostics-desktop-smoke-20260912T225520",
+        "role": "ReceiveOnly",
+        "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+        "sequence": 19,
+        "kind": "sys_key_press",
+        "scan_code": 38,
+        "extended": false,
+        "virtual_key": 76,
+        "message": 260,
+        "observed_utc": "2026-09-12T16:00:51.1812057Z"
+      },
+      {
+        "schema_version": 3,
+        "run_id": "diagnostics-desktop-smoke-20260912T225520",
+        "role": "ReceiveOnly",
+        "event_log_id": "b039c61cd3de4d308a92cdf947ba689b",
+        "sequence": 20,
+        "kind": "sys_key_release",
+        "scan_code": 38,
+        "extended": false,
+        "virtual_key": 76,
+        "message": 261,
+        "observed_utc": "2026-09-12T16:00:51.1985384Z"
+      }
+    ]
+  },
+  "stop_requested": true,
+  "diagnostics_live_text": "Sky Auto Player\nSearch library\n/\nYour Library\nLiked Songs\n0\nAll Songs\n96\nPLAYLISTS\nAll Songs\n96 songs\n#\nTITLE\nNOTES\nDURATION\n1\nAlen Walker - On My Way\n♡\n1529\n3:01\n2\nAlen Walker - The Spectre\n♡\n1235\n2:48\n3\nAll Of Me\n♡\n637\n3:10\n4\nArthur Warrell - We Wish You A Merry Christmas\n♡\n180\n0:37\n5\nAs It Was\n♡\n557\n2:49\n6\nAvicii - Wake Me Up\n♡\n2040\n4:08\n7\nBillie Eilish ft. Khalid - Lovely\n♡\n425\n3:56\n8\nblue\n♡\n1030\n3:26\n9\nBruno Mars - Lazy Song\n♡\n1259\n3:53\n10\nCareless Whisper\n♡\n626\n1:39\n11\nChúc bé ngủ ngon (Minh Châu 2906)\n♡\n84\n0:36\n12\nComedy\n♡\n477\n1:25\n13\nComedy easy ver\n♡\n346\n1:29\n14\nCounting Star\n♡\n847\n1:20\n15\nCupid - FIFTY FIFTY\n♡\n569\n2:50\n16\nDandelions\n♡\n885\n3:44\n17\nDeath bed\n♡\n1095\n3:47\n18\nDespacito\n♡\n483\n1:40\n19\nDiamonds\n♡\n664\n3:03\n20\nDie For You\n♡\n430\n2:02\n21\nDie with a smile\n♡\n519\n1:39\n22\nĐợi 52hz\n♡\n663\n2:34\nDiagnostics\nDetails\nRuntime\nRuntime diagnostics\nExport last sender trace\nAvailable after a completed physical playback session.\nPerformance\nTiming\nEvents\nSender-side status: Healthy\nNo Down suppression recorded this session.\nSENDER AVAILABILITY\nPhysical session\nYes\nPlayer attached\nYes\nSender samples\n20\nSender backend\nHealthy\nTIMING\nCompletion p50\nUnavailable\nCompletion p95\nUnavailable\nSession max\nUnavailable\nMax pre-call lateness\n96 μs\nCompletion jitter σ\nUnavailable\nFROZEN SESSION TIMING\nFPS\n60\nFrame period\n16.667 ms\nBase hold\n16.667 ms\nConfigured Timing Margin\n800 µs\nTarget hold\n17.467 ms\nRelease gap\n17.467 ms\nLate Down tolerance\n500 µs\nRecommended sender margin\n800 µs\nRecommendation source\nDefault fallback (no valid calibration cache)\nLATE EVENTS\nCompletion > 2 ms\nUnavailable\nCompletion > 5 ms\nUnavailable\nCompletion > 10 ms\nUnavailable\nPre-call > 2 ms\n0\nPre-call > 5 ms\n0\nPre-call > 10 ms\n0\nPRE-CALL DISTRIBUTION\nPre-call < 250 μs\n20\nPre-call 250–500 μs\n0\nPre-call 500–750 μs\n0\nPre-call 750–1000 μs\n0\nPre-call 1.0–1.5 ms\n0\nPre-call 1.5–2.0 ms\n0\nPre-call ≥ 2.0 ms\n0\nDEADLINE ADMISSION\nMissed Down boundaries\n0\nHard-late Down boundaries\n0\nMissed Down keys\n0\nBacklog misses\n0\nFinal cutoff misses\n0\nFocus gate rejections\n0\nTarget changes\n0\nLease expirations\n0\nControl rejections\n0\nINPUT TRANSPORT\nSendInput zero-progress failures\n0\nSendInput partial events\n0\nDropped keys\n0\nChord splits\n0\nStuck keys\n0\nActive keys\n0\nRELEASE\nMax release lateness\nUnavailable\nRelease > 2 ms\nUnavailable\nOn My Way\nPaused\n0:03\n3:01",
+  "diagnostics_terminal_text": "Sky Auto Player\nSearch library\n/\nYour Library\nLiked Songs\n0\nAll Songs\n96\nPLAYLISTS\nAll Songs\n96 songs\n#\nTITLE\nNOTES\nDURATION\n1\nAlen Walker - On My Way\n♡\n1529\n3:01\n2\nAlen Walker - The Spectre\n♡\n1235\n2:48\n3\nAll Of Me\n♡\n637\n3:10\n4\nArthur Warrell - We Wish You A Merry Christmas\n♡\n180\n0:37\n5\nAs It Was\n♡\n557\n2:49\n6\nAvicii - Wake Me Up\n♡\n2040\n4:08\n7\nBillie Eilish ft. Khalid - Lovely\n♡\n425\n3:56\n8\nblue\n♡\n1030\n3:26\n9\nBruno Mars - Lazy Song\n♡\n1259\n3:53\n10\nCareless Whisper\n♡\n626\n1:39\n11\nChúc bé ngủ ngon (Minh Châu 2906)\n♡\n84\n0:36\n12\nComedy\n♡\n477\n1:25\n13\nComedy easy ver\n♡\n346\n1:29\n14\nCounting Star\n♡\n847\n1:20\n15\nCupid - FIFTY FIFTY\n♡\n569\n2:50\n16\nDandelions\n♡\n885\n3:44\n17\nDeath bed\n♡\n1095\n3:47\n18\nDespacito\n♡\n483\n1:40\n19\nDiamonds\n♡\n664\n3:03\n20\nDie For You\n♡\n430\n2:02\n21\nDie with a smile\n♡\n519\n1:39\n22\nĐợi 52hz\n♡\n663\n2:34\nDiagnostics\nDetails\nRuntime\nRuntime diagnostics\nExport last sender trace\nAvailable after a completed physical playback session.\nPerformance\nTiming\nEvents\nNo active playback session\nRuntime timing and input-health metrics appear when playback starts.\nOn My Way\nJSON · 3:01 · 1529 notes\n0:03\n3:01",
+  "source_revision_committed_after_capture": "bb30148c404146821bbd9ef6b44a55b5cc258051",
+  "source_tree_had_uncommitted_changes_at_capture": true
+}

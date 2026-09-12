@@ -8,11 +8,19 @@ use crate::library::{LibraryError, LikedSongs};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 5;
 pub const DEFAULT_GAME_FPS: u16 = 60;
 pub const VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240];
 pub const DEFAULT_HOLD_FRAMES: f64 = 1.0;
 pub const HOLD_FRAME_OPTIONS: [f64; 3] = [1.0, 1.25, 1.5];
+pub const DEFAULT_TIMING_MARGIN_US: u64 = 500;
+pub const MIN_TIMING_MARGIN_US: u64 = 0;
+pub const MAX_TIMING_MARGIN_US: u64 = 3_000;
+pub const TIMING_MARGIN_STEP_US: u64 = 100;
+pub const DEFAULT_DOWN_LATE_GRACE_US: u64 = 2_000;
+pub const MIN_DOWN_LATE_GRACE_US: u64 = 0;
+pub const MAX_DOWN_LATE_GRACE_US: u64 = 5_000;
+pub const DOWN_LATE_GRACE_STEP_US: u64 = 100;
 pub const TEMPO_SCALE_OPTIONS: [f64; 5] = [0.90, 0.95, 1.00, 1.05, 1.10];
 pub const DEFAULT_SONGS_DIR: &str = "songs";
 pub const DEFAULT_UPDATE_INTERVAL_S: i64 = 86_400;
@@ -113,6 +121,10 @@ impl Default for UpdatePreferences {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackDefaults {
     pub hold_frames: f64,
+    #[serde(default = "default_timing_margin_us")]
+    pub timing_margin_us: u64,
+    #[serde(default = "default_down_late_grace_us")]
+    pub down_late_grace_us: u64,
     pub tempo_scale: f64,
     pub fps: u16,
 }
@@ -121,6 +133,8 @@ impl Default for PlaybackDefaults {
     fn default() -> Self {
         Self {
             hold_frames: DEFAULT_HOLD_FRAMES,
+            timing_margin_us: DEFAULT_TIMING_MARGIN_US,
+            down_late_grace_us: DEFAULT_DOWN_LATE_GRACE_US,
             tempo_scale: 1.0,
             fps: DEFAULT_GAME_FPS,
         }
@@ -170,6 +184,8 @@ impl Default for ApplicationSettings {
 #[serde(deny_unknown_fields)]
 pub struct PlaybackDefaultsPatch {
     pub hold_frames: Option<f64>,
+    pub timing_margin_us: Option<u64>,
+    pub down_late_grace_us: Option<u64>,
     pub tempo_scale: Option<f64>,
     pub fps: Option<u16>,
 }
@@ -284,6 +300,10 @@ pub fn normalize_settings(mut settings: ApplicationSettings) -> ApplicationSetti
     settings.ui_background_mode = normalized_background(&settings.ui_background_mode);
     settings.playback_defaults.hold_frames =
         normalize_hold_frames(settings.playback_defaults.hold_frames);
+    settings.playback_defaults.timing_margin_us =
+        normalize_timing_margin(settings.playback_defaults.timing_margin_us);
+    settings.playback_defaults.down_late_grace_us =
+        normalize_down_late_grace(settings.playback_defaults.down_late_grace_us);
     settings.playback_defaults.tempo_scale =
         normalize_tempo(settings.playback_defaults.tempo_scale);
     settings.playback_defaults.fps = normalize_fps(settings.playback_defaults.fps);
@@ -310,6 +330,12 @@ pub fn apply_patch(
     if let Some(playback) = &patch.playback_defaults {
         if let Some(value) = playback.hold_frames {
             next.playback_defaults.hold_frames = validate_hold_frames(value)?;
+        }
+        if let Some(value) = playback.timing_margin_us {
+            next.playback_defaults.timing_margin_us = validate_timing_margin(value)?;
+        }
+        if let Some(value) = playback.down_late_grace_us {
+            next.playback_defaults.down_late_grace_us = validate_down_late_grace(value)?;
         }
         if let Some(value) = playback.tempo_scale {
             next.playback_defaults.tempo_scale = validate_tempo(value)?;
@@ -356,6 +382,34 @@ fn normalize_hold_frames(value: f64) -> f64 {
         value
     } else {
         DEFAULT_HOLD_FRAMES
+    }
+}
+
+fn default_timing_margin_us() -> u64 {
+    DEFAULT_TIMING_MARGIN_US
+}
+
+fn default_down_late_grace_us() -> u64 {
+    DEFAULT_DOWN_LATE_GRACE_US
+}
+
+fn normalize_timing_margin(value: u64) -> u64 {
+    if (MIN_TIMING_MARGIN_US..=MAX_TIMING_MARGIN_US).contains(&value)
+        && value.is_multiple_of(TIMING_MARGIN_STEP_US)
+    {
+        value
+    } else {
+        DEFAULT_TIMING_MARGIN_US
+    }
+}
+
+fn normalize_down_late_grace(value: u64) -> u64 {
+    if (MIN_DOWN_LATE_GRACE_US..=MAX_DOWN_LATE_GRACE_US).contains(&value)
+        && value.is_multiple_of(DOWN_LATE_GRACE_STEP_US)
+    {
+        value
+    } else {
+        DEFAULT_DOWN_LATE_GRACE_US
     }
 }
 
@@ -409,6 +463,32 @@ fn validate_hold_frames(value: f64) -> Result<f64, SettingsError> {
         Err(SettingsError::InvalidField {
             field: "hold_frames".into(),
             message: "must be one of 1.0, 1.25, or 1.5".into(),
+        })
+    }
+}
+
+fn validate_timing_margin(value: u64) -> Result<u64, SettingsError> {
+    if (MIN_TIMING_MARGIN_US..=MAX_TIMING_MARGIN_US).contains(&value)
+        && value.is_multiple_of(TIMING_MARGIN_STEP_US)
+    {
+        Ok(value)
+    } else {
+        Err(SettingsError::InvalidField {
+            field: "timing_margin_us".into(),
+            message: "must be between 0 and 3000 us in 100 us steps".into(),
+        })
+    }
+}
+
+fn validate_down_late_grace(value: u64) -> Result<u64, SettingsError> {
+    if (MIN_DOWN_LATE_GRACE_US..=MAX_DOWN_LATE_GRACE_US).contains(&value)
+        && value.is_multiple_of(DOWN_LATE_GRACE_STEP_US)
+    {
+        Ok(value)
+    } else {
+        Err(SettingsError::InvalidField {
+            field: "down_late_grace_us".into(),
+            message: "must be between 0 and 5000 us in 100 us steps".into(),
         })
     }
 }
@@ -497,6 +577,140 @@ mod tests {
         let settings = normalize_settings(ApplicationSettings::default());
         assert_eq!(settings.theme, "aurora");
         assert_eq!(settings.playback_defaults.fps, 60);
+        assert_eq!(
+            settings.playback_defaults.timing_margin_us,
+            DEFAULT_TIMING_MARGIN_US
+        );
+        assert_eq!(
+            settings.playback_defaults.down_late_grace_us,
+            DEFAULT_DOWN_LATE_GRACE_US
+        );
         assert_eq!(settings.update.channel, UpdateChannel::Stable);
+
+        let mut invalid_persisted = ApplicationSettings::default();
+        invalid_persisted.playback_defaults.timing_margin_us = 799;
+        assert_eq!(
+            normalize_settings(invalid_persisted)
+                .playback_defaults
+                .timing_margin_us,
+            DEFAULT_TIMING_MARGIN_US
+        );
+    }
+
+    #[test]
+    fn down_late_grace_patch_validates_bounds_steps_and_atomicity() {
+        let defaults = ApplicationSettings::default();
+        for value in [0, 100, 500, 5_000] {
+            let patched = apply_patch(
+                &defaults,
+                &SettingsPatch {
+                    playback_defaults: Some(PlaybackDefaultsPatch {
+                        down_late_grace_us: Some(value),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .expect("valid cutoff");
+            assert_eq!(patched.playback_defaults.down_late_grace_us, value);
+        }
+        for value in [1, 99, 5_001] {
+            let error = apply_patch(
+                &defaults,
+                &SettingsPatch {
+                    theme: Some("slate".into()),
+                    playback_defaults: Some(PlaybackDefaultsPatch {
+                        down_late_grace_us: Some(value),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .expect_err("invalid cutoff");
+            assert!(
+                matches!(error, SettingsError::InvalidField { field, .. } if field == "down_late_grace_us")
+            );
+            assert_eq!(defaults.theme, "aurora");
+        }
+
+        let mut invalid_persisted = ApplicationSettings::default();
+        invalid_persisted.playback_defaults.down_late_grace_us = 5_001;
+        assert_eq!(
+            normalize_settings(invalid_persisted)
+                .playback_defaults
+                .down_late_grace_us,
+            DEFAULT_DOWN_LATE_GRACE_US
+        );
+
+        let mut service = SettingsService::load(MemoryStore::default()).expect("load settings");
+        let before = service.snapshot().clone();
+        let error = service
+            .patch(&SettingsPatch {
+                theme: Some("slate".into()),
+                playback_defaults: Some(PlaybackDefaultsPatch {
+                    down_late_grace_us: Some(799),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .expect_err("invalid cutoff patch");
+        assert!(
+            matches!(error, SettingsError::InvalidField { field, .. } if field == "down_late_grace_us")
+        );
+        assert_eq!(*service.snapshot(), before);
+    }
+
+    #[test]
+    fn timing_margin_patch_accepts_boundaries_and_steps_but_rejects_other_values_atomically() {
+        let defaults = ApplicationSettings::default();
+        for value in [0, 100, 800, 3_000] {
+            let patched = apply_patch(
+                &defaults,
+                &SettingsPatch {
+                    playback_defaults: Some(PlaybackDefaultsPatch {
+                        timing_margin_us: Some(value),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .expect("valid margin");
+            assert_eq!(patched.playback_defaults.timing_margin_us, value);
+        }
+        for value in [1, 799, 801, 3_001] {
+            let error = apply_patch(
+                &defaults,
+                &SettingsPatch {
+                    theme: Some("slate".into()),
+                    playback_defaults: Some(PlaybackDefaultsPatch {
+                        timing_margin_us: Some(value),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .expect_err("invalid margin");
+            assert!(
+                matches!(error, SettingsError::InvalidField { field, .. } if field == "timing_margin_us")
+            );
+            assert_eq!(defaults.theme, "aurora");
+        }
+
+        let mut service = SettingsService::load(MemoryStore::default()).expect("load settings");
+        let before = service.snapshot().clone();
+        let error = service
+            .patch(&SettingsPatch {
+                theme: Some("slate".into()),
+                playback_defaults: Some(PlaybackDefaultsPatch {
+                    timing_margin_us: Some(799),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .expect_err("invalid margin patch");
+        assert!(
+            matches!(error, SettingsError::InvalidField { field, .. } if field == "timing_margin_us")
+        );
+        assert_eq!(*service.snapshot(), before);
     }
 }

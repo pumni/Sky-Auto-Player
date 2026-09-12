@@ -17,8 +17,8 @@ use super::DownBoundaryAdmission;
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
 use super::recovery::{
-    DownMissReason, record_missed_down_classification, record_rescue_admission, record_rescue_send,
-    recover_missed_down_boundary,
+    DownMissReason, queue_down_miss_observation, record_missed_down_classification,
+    record_rescue_admission, record_rescue_send, recover_missed_down_boundary,
 };
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
@@ -208,6 +208,7 @@ fn commit_down_send_outcome(
             clock_state,
             physical_target_qpc,
             now_ticks,
+            effective_now_ticks,
             DownMissReason::Backlog,
             observer,
         );
@@ -315,10 +316,15 @@ fn admit_authored_down(
                 super::observation::DispatchObservation::BlockedUnfocused(
                     BlockedUnfocusedObservation {
                         event_index: view.batch_source_action_index,
+                        compiled_packet_index: u64::try_from(view.prepared_batch.packet_index).ok(),
                         authored_ticks: view.authored_batch_scheduled_ticks,
                         effective_deadline_ticks: view.batch_scheduled_ticks,
                         effective_now_ticks,
+                        physical_target_qpc,
+                        observed_qpc: now_ticks,
                         polyphony: view.batch_intent_count,
+                        up_mask: view.packet_masks.up_mask,
+                        down_mask: view.packet_masks.down_mask,
                     },
                 ),
                 &mut local_metrics.observer_dropped_samples,
@@ -357,6 +363,15 @@ fn admit_authored_down(
             .checked_duration_since(view.authored_batch_scheduled_ticks)
             .is_ok_and(|late| late > timing.down_late_grace_ticks)
     {
+        queue_down_miss_observation(
+            view,
+            local_metrics,
+            observer,
+            effective_now_ticks,
+            physical_target_qpc,
+            now_ticks,
+            DownMissReason::HardLate,
+        );
         record_missed_down_classification(
             local_metrics,
             view.batch_source_action_index,
@@ -642,6 +657,15 @@ fn record_down_send_outcome(
             );
         };
         if !runtime.musical_physical_commit_started {
+            queue_down_miss_observation(
+                view,
+                local_metrics,
+                observer,
+                effective_now_ticks,
+                physical_target_qpc,
+                observed_qpc,
+                DownMissReason::HardLate,
+            );
             record_missed_down_classification(
                 local_metrics,
                 view.batch_source_action_index,
@@ -662,6 +686,7 @@ fn record_down_send_outcome(
             clock_state,
             physical_target_qpc,
             observed_qpc,
+            effective_now_ticks,
             DownMissReason::HardLate,
             observer,
         );

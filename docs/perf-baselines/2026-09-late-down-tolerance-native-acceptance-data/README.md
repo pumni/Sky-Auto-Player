@@ -1,0 +1,213 @@
+# Late Down tolerance native physical acceptance
+
+## Current product defaults vs historical runs
+
+PR #233 is being finalized with fresh-config defaults of **500 µs Timing Margin** and **2,000 µs Late Down tolerance**. The evidence below is historical acceptance data collected with the exact settings recorded by each run (most notably 800/500 in the original regression). Those artifacts and their numeric results are intentionally preserved unchanged; changing the product defaults does not retroactively change the evidence.
+
+This evidence records Windows interactive runs of the project's production
+`sky_player` dispatch path against the project-owned `ReceiveOnly` native
+acceptance sink. It qualifies the sender, cutoff propagation, authored packet
+timing, focus safety, and cleanup behavior. It does **not** qualify Sky game
+consumption or prove that a suspected song-position miss is fixed.
+
+The primary run below was rebuilt and executed on the exact implementation
+head. This evidence archive is a documentation-only commit after that run; the
+earlier implementation-point run remains archived in its sibling directory.
+
+## Run identity
+
+| Field | Value |
+| --- | --- |
+| Run ID | `input-reliability-20260912T210236-153c82dc` |
+| Source revision | `713d999e0698a77b2a9a11fb6936038d2f22aa47` |
+| Tracked source tree clean | Yes |
+| Release harness | `rust/target/release/rt-native-acceptance.exe` |
+| Harness SHA-256 | `f81684f69b3e96e0eaba946a5d98d91017314c401e0c1d2a13981a30bc3f21f2` |
+| Runner SHA-256 | `8d2c77330ad8c8ced886f4a9059565b321effcf53f1cd5fb5b73c8dc039af237` |
+| Scenarios | 17 requested, 17 PASS |
+| ReceiveOnly sink events | 136 keyboard events; sequence 1–136, continuous |
+| Focus probe | 0 keyboard events |
+
+`summary.json`, all 17 native reports, per-scenario invocation ledgers, both
+ready records, both raw event logs, runner output, configuration, and their
+checksums are preserved in
+`input-reliability-20260912T210236-153c82dc/`. Each invocation ledger
+binds its report to the exact `ReceiveOnly` event-log ID and contiguous sink
+sequence range; the full sink log was independently checked for run ID,
+event-log ID, and sequence continuity.
+Text artifacts are stored with LF line endings, so `SHA256SUMS.txt` applies to
+the same bytes on Windows and non-Windows checkouts.
+
+## Scenario results
+
+All 13 established physical scenarios passed at 60 FPS, 1.0-frame Base Hold,
+800 µs Timing Margin, and 500 µs Late Down tolerance:
+
+```text
+canonical-single       canonical-chord       canonical-max-chord
+hold                   rapid-retrigger       mixed-up-down
+target-hwnd-change     pause-resume          stop-cleanup
+skip-cleanup           cleanup-full-release  w4-noncanonical
+focus-loss
+```
+
+The four focused cutoff cases held Timing Margin at 800 µs and varied only
+Late Down tolerance:
+
+| Late Down tolerance | Authored Hold | Authored Release Gap | Authored packet targets (µs) | Result |
+| ---: | ---: | ---: | --- | --- |
+| 500 µs | 17,467 µs | 17,467 µs | 50,000 → 67,467 → 84,934 → 102,401 | PASS |
+| 1,000 µs | 17,467 µs | 17,467 µs | 50,000 → 67,467 → 84,934 → 102,401 | PASS |
+| 2,000 µs | 17,467 µs | 17,467 µs | 50,000 → 67,467 → 84,934 → 102,401 | PASS |
+| 5,000 µs | 17,467 µs | 17,467 µs | 50,000 → 67,467 → 84,934 → 102,401 | PASS |
+
+Every report returned the selected cutoff unchanged. All reports ended with no
+active or stuck keys, no missed Down/backlog/hard-late boundaries, no partial
+SendInput calls, and no zero-progress SendInput failures. The intentional
+focus-loss case recorded its expected focus rejection; the inert probe still
+received no keyboard events.
+
+## Reproduction
+
+From the repository root on an interactive Windows desktop, build the release
+acceptance runner and execute the archived `runner.ps1` from this directory.
+The runner creates a fresh `.benchmarks/physical-input-reliability/<run-id>`
+folder, starts and validates a project-owned receive-only sink and inert focus
+probe, runs the matrix and sweep, and stops both windows afterward.
+
+```powershell
+cargo build --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance
+pwsh.exe -NoProfile -File docs/perf-baselines/2026-09-late-down-tolerance-native-acceptance-data/input-reliability-20260912T210236-153c82dc/runner.ps1
+```
+
+The runner uses real Windows `SendInput` against the validated test HWND. It
+does not send input to Sky. A real-game A/B at the repeatable missed note and
+export of that session's packet-identified sender trace remain necessary to
+decide whether the game rejects a packet shape or whether late-Down admission
+is implicated. Production batching and keyboard encoding were not changed.
+
+## Review follow-up: desktop Diagnostics and release-gap stress
+
+The desktop physical smoke at the reviewed implementation source verified the
+previously missing Diagnostics wiring. During a 12-second playback to a separate
+`ReceiveOnly` sink, the UI showed `Physical session: Yes`, `Player attached:
+Yes`, `Sender samples: 20`, `Sender backend: Healthy`, and a measured maximum
+pre-call lateness of `96 µs`. The ready record and 20-event log are archived in
+[`diagnostics-desktop-smoke-20260912T225520/`](diagnostics-desktop-smoke-20260912T225520/),
+with the live UI capture. The app was launched from the worktree immediately
+before those exact source files were committed as `bb30148c404146821bbd9ef6b44a55b5cc258051`;
+the report records the parent Git head present at launch and the commit that
+contains the captured source. This smoke is a wiring check, not a gameplay
+reliability test.
+
+The focused `release-gap-stress` run used that exact implementation commit,
+60 FPS, 1.0-frame Base Hold, 800 µs Timing Margin, and 500 µs Late Down
+tolerance. It completed 512 release-gap observations but **failed
+qualification**: four observed Up-completion-to-next-Down-pre-call gaps fell
+below the fixed one-frame floor. At a 10 MHz QPC frequency, the smallest gap was
+16.2742 ms against the 16.667 ms floor. The observed count was `4/512`
+(`0.78125%`). A later independent read also found one completion-hold floor
+violation among 513 hold-pair samples: minimum completion hold `16.3889 ms`,
+below the same `16.667 ms` floor. These two production forensics findings
+independently invalidate the run. SendInput partial/zero-progress counts,
+dropped keys, stuck keys, and focus losses were all zero. The report, full ready
+record, and raw event log are archived in
+[`release-gap-stress-20260912T231500-bb30148c/`](release-gap-stress-20260912T231500-bb30148c/).
+
+The original report's reason string attributes an extra event to a KeyDown on
+scan `0x4B` extended. Independent sequence review does not support that
+attribution: the full stream has 1,031 events, sequences 1–4 are Left Arrow
+activity before the apparent stress stream, and the 1,027-event suffix starts
+at sequence 5; its extra `0x4B` record at sequence 7 is a KeyUp. The old archive
+did not retain the sink cursor captured immediately before arm, so the event's
+source cannot be determined and it is not attributed to the production engine.
+See the correction in the run archive README. The new single-case runner records
+the pre-arm sequence and byte cursor, event-log ID, first/last observed sequence,
+and expected/observed event counts for each invocation.
+
+An earlier run stayed paused and did not join; it collected zero release-gap
+samples and is preserved separately as
+[`release-gap-stress-inconclusive-20260912T230900-be9c1d68/`](release-gap-stress-inconclusive-20260912T230900-be9c1d68/).
+It is excluded from the observed anomaly count. All stress runs used the same
+500 µs tolerance and 800 µs Timing Margin; these results say nothing about
+whether changing the cutoff improves the release-gap observations. The release
+floor fail was already enforced, but the previous harness omitted the analogous
+completion-hold floor. The updated qualification fails on either floor and
+requires at least 512 samples from both counters for a qualifying stress run.
+The current stress workload is **not qualifying** for release.
+The original 17-scenario and cutoff-sweep evidence above remains historical
+evidence from its separately identified source revision.
+
+## Independent physical case runner
+
+`scripts/run_native_acceptance_case.ps1` starts and validates a fresh
+project-owned receive-only sink for each invocation. It records the exact
+pre-arm cursor sequence and byte offset, event-log ID, first/last observed
+sequence, and expected/observed event counts, then verifies the archived raw
+window against the harness report. A qualification failure is preserved as an
+artifact and does not prevent a later independently launched case.
+
+Run the complete cutoff sweep at fixed 800 µs Timing Margin:
+
+```powershell
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario timing-margin-sweep -TimingMarginUs 800 -LateDownToleranceUs 500
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario timing-margin-sweep -TimingMarginUs 800 -LateDownToleranceUs 1000
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario timing-margin-sweep -TimingMarginUs 800 -LateDownToleranceUs 2000
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario timing-margin-sweep -TimingMarginUs 800 -LateDownToleranceUs 5000
+```
+
+Then isolate sender visibility headroom at fixed 500 µs Late Down tolerance:
+
+```powershell
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario release-gap-stress -TimingMarginUs 800 -LateDownToleranceUs 500
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario release-gap-stress -TimingMarginUs 1200 -LateDownToleranceUs 500
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario release-gap-stress -TimingMarginUs 1500 -LateDownToleranceUs 500
+```
+
+Each run writes a self-contained artifact directory under
+`.benchmarks/physical-native-cases/`, including the raw report, full sink log,
+cursor-bounded event window, invocation metadata, runner copy, and SHA-256
+checksums. These tests target only the test HWND and make no claim about Sky
+game consumption.
+
+## Cursor-bounded physical study (2026-09-13)
+
+The updated harness and runner completed all four cutoff cases on clean source
+head `f8c0921a01303274c862d126187874874ed4ffcc`, then the three sender-margin
+stress cases on clean runner head
+`80b444908a6be2553f6ddbb9e15f388962cbb78c`. One fresh receive-only sink was
+used per run. All seven raw event windows matched their report, cursor,
+event-log ID, and expected event count. Cutoffs 500, 1,000, and 5,000 µs passed
+their short four-event cases; 2,000 µs failed because one of only two
+completion-hold samples fell below one frame. That sweep is too sparse to
+compare cutoff reliability.
+
+At fixed 500 µs cutoff, the 512-gap stress failed at margins 800 µs (4 hold and
+14 gap floor violations) and 1,200 µs (0 hold and 2 gap violations). At 1,500
+µs it passed with 513 hold and 512 gap samples and no floor violations. This is
+one controlled sender workload, not a basis for silently changing the product
+default and not evidence of Sky game consumption. Full metrics and raw evidence
+are in
+[`physical-study-20260913-80b4449/`](physical-study-20260913-80b4449/).
+
+## Exact-head Windows regression follow-up
+
+The official Windows runner was rebuilt and run on the clean exact source
+head `b8bbe42d84837c440dd2e51cc90b490298aaa760`. Its fail-fast run passed the
+12 default scenarios and the 500 µs sweep case, then correctly stopped at the
+1,000 µs sweep case: that case had one release-gap sample, and it was below the
+fixed one-frame floor (`15.1804 ms` observed against `16.667 ms`). The full
+runner report, invocation ledger, raw sink and probe logs, ready records, and
+summary are archived in
+[`input-reliability-20260912T235553-7daf4359/`](input-reliability-20260912T235553-7daf4359/).
+
+The remaining default `focus-loss` regression was run separately on the same
+exact head and passed; its inert focus probe received zero keyboard events.
+Its complete raw evidence is in
+[`input-reliability-focus-loss-20260912T235844-465b29a6/`](input-reliability-focus-loss-20260912T235844-465b29a6/).
+Together, all 13 default Windows regression scenarios have exact-head PASS
+evidence. The 2,000 and 5,000 µs sweep cases were not reached after the
+1,000 µs qualification failure. The 500 and 1,000 µs cases each had only one
+release-gap sample, so their different verdicts do not show that changing the
+cutoff improves or worsens reliability. The 512-sample stress result above is
+the relevant release-gap qualification evidence, and it fails.

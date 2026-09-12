@@ -1,0 +1,22 @@
+﻿{
+    "run_id":  "native-case-20260913T004752-6a1075a7",
+    "source_revision":  "f8c0921a01303274c862d126187874874ed4ffcc",
+    "source_tree_clean":  true,
+    "scenario":  "timing-margin-sweep",
+    "timing_margin_us":  800,
+    "late_down_tolerance_us":  5000,
+    "started_utc":  "2026-09-12T17:47:54.3035712+00:00",
+    "ended_utc":  "2026-09-12T17:47:54.5988540+00:00",
+    "exit_code":  0,
+    "status":  "PASS",
+    "reason":  "controlled production-path evidence is clean",
+    "event_log_id":  "c2c1a04c8796452887cbeb646afde46d",
+    "cursor_sequence_before_arm":  0,
+    "cursor_offset_before_arm":  281,
+    "first_authorized_sequence":  1,
+    "last_authorized_sequence":  4,
+    "expected_event_count":  4,
+    "observed_event_count":  4,
+    "report_window_match":  true,
+    "report_path":  "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-native-cases\\native-case-20260913T004752-6a1075a7\\rt-native-acceptance.jsonl"
+}

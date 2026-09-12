@@ -265,6 +265,10 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     };
     let mut telemetry = telemetry;
     telemetry.output.qpc_frequency_hz = qpc_clock.frequency_hz().get();
+    telemetry.output.observer_queue_dropped = local_metrics.observer_dropped_samples;
+    if telemetry.output.observer_queue_dropped > 0 {
+        telemetry.output.truncated = true;
+    }
     *telemetry_output.lock() = Some(std::mem::take(&mut telemetry.output));
     drop(scheduling);
     *priority_acquired.lock() = "off".to_string();

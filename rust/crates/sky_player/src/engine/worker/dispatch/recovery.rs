@@ -1,7 +1,7 @@
 use super::super::super::{PlaybackClockState, QpcTicks};
 use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime};
 use super::DownBoundaryAdmission;
-use super::observation::{DispatchObservation, ObserverLifecycle};
+use super::observation::{DispatchObservation, DownMissObservation, ObserverLifecycle};
 use super::{
     AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalCommit, RecoveryDescriptor,
 };
@@ -56,6 +56,36 @@ pub(super) fn record_rescue_send(
 pub(super) enum DownMissReason {
     Backlog,
     HardLate,
+}
+
+pub(super) fn queue_down_miss_observation(
+    view: &AuthoredBatchView,
+    local_metrics: &mut WorkerMetricsLocal,
+    observer: Option<&PendingObservationQueue>,
+    wake_ticks: sky_dispatch_core::time::TimelineTicks,
+    physical_target_qpc: QpcTicks,
+    observed_qpc: QpcTicks,
+    reason: DownMissReason,
+) {
+    let Some(observer) = observer else {
+        return;
+    };
+    observer.push(
+        DispatchObservation::DownMiss(DownMissObservation {
+            source_action_index: view.batch_source_action_index,
+            compiled_packet_index: u64::try_from(view.prepared_batch.packet_index).ok(),
+            authored_ticks: view.authored_batch_scheduled_ticks,
+            effective_deadline_ticks: view.batch_scheduled_ticks,
+            wake_ticks,
+            physical_target_qpc,
+            observed_qpc,
+            up_mask: view.packet_masks.up_mask,
+            down_mask: view.packet_masks.down_mask,
+            cutoff_miss: matches!(reason, DownMissReason::HardLate),
+        }),
+        &mut local_metrics.observer_dropped_samples,
+        &mut local_metrics.observer_queue_high_watermark,
+    );
 }
 
 fn record_last_missed_down_sample(
@@ -126,9 +156,19 @@ pub(super) fn recover_missed_down_boundary(
     clock_state: &mut PlaybackClockState,
     physical_target_qpc: QpcTicks,
     observed_qpc: QpcTicks,
+    wake_ticks: sky_dispatch_core::time::TimelineTicks,
     reason: DownMissReason,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
+    queue_down_miss_observation(
+        view,
+        local_metrics,
+        observer,
+        wake_ticks,
+        physical_target_qpc,
+        observed_qpc,
+        reason,
+    );
     record_missed_down_classification(
         local_metrics,
         view.batch_source_action_index,

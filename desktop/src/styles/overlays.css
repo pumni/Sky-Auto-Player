@@ -161,6 +161,71 @@
   font-size: 12px;
 }
 
+.timing-margin-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 12px;
+  margin-top: 12px;
+}
+
+.timing-margin-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.timing-margin-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.timing-margin-step {
+  min-width: 32px;
+  min-height: 30px;
+  padding: 0 8px;
+}
+
+.timing-margin-step:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.timing-margin-recommendation,
+.timing-margin-control .settings-note {
+  grid-column: 1 / -1;
+}
+
+.settings-timing-summary,
+.profile-timing-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 14px;
+  margin: 10px 0 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-timing-summary div,
+.profile-timing-summary div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings-timing-summary dt,
+.profile-timing-summary dt {
+  color: var(--text-tertiary);
+}
+
+.settings-timing-summary dd,
+.profile-timing-summary dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
 .about-intro {
   max-width: 520px;
   color: var(--text-secondary);

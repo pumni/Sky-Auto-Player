@@ -1,0 +1,98 @@
+{
+  "run_id": "timing-margin-20260912T154546-6d40ebef",
+  "run_dir": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-timing-margin\\timing-margin-20260912T154546-6d40ebef",
+  "harness": "D:\\Dev\\Sky-Auto-Player\\rust\\target\\release\\rt-native-acceptance.exe",
+  "sink": {
+    "ready": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-timing-margin\\timing-margin-20260912T154546-6d40ebef\\sink-ready.json",
+    "events": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-timing-margin\\timing-margin-20260912T154546-6d40ebef\\sink-events.jsonl",
+    "hwnd": 4064996,
+    "pid": 8512,
+    "process_image": "pwsh.exe",
+    "event_log_id": "ecfb727fe42043a0829861ec4579e74d"
+  },
+  "focus_probe": {
+    "ready": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-timing-margin\\timing-margin-20260912T154546-6d40ebef\\focus-probe-ready.json",
+    "events": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-timing-margin\\timing-margin-20260912T154546-6d40ebef\\focus-probe-events.jsonl",
+    "hwnd": 592332,
+    "pid": 6580,
+    "process_image": "pwsh.exe",
+    "event_log_id": "61ec3369fac6458099de729778deadee"
+  },
+  "default_margin_us": 800,
+  "fixed_down_late_grace_us": 500,
+  "hold_frames": 1.0,
+  "scenarios": [
+    {
+      "scenario": "canonical-single",
+      "margin": 800
+    },
+    {
+      "scenario": "canonical-chord",
+      "margin": 800
+    },
+    {
+      "scenario": "canonical-max-chord",
+      "margin": 800
+    },
+    {
+      "scenario": "hold",
+      "margin": 800
+    },
+    {
+      "scenario": "rapid-retrigger",
+      "margin": 800
+    },
+    {
+      "scenario": "mixed-up-down",
+      "margin": 800
+    },
+    {
+      "scenario": "target-hwnd-change",
+      "margin": 800
+    },
+    {
+      "scenario": "pause-resume",
+      "margin": 800
+    },
+    {
+      "scenario": "stop-cleanup",
+      "margin": 800
+    },
+    {
+      "scenario": "skip-cleanup",
+      "margin": 800
+    },
+    {
+      "scenario": "cleanup-full-release",
+      "margin": 800
+    },
+    {
+      "scenario": "w4-noncanonical",
+      "margin": 800
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 0
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 500
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 800
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 1000
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 3000
+    },
+    {
+      "scenario": "focus-loss",
+      "margin": 800
+    }
+  ]
+}

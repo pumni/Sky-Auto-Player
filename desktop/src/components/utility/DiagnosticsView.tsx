@@ -1,8 +1,8 @@
-import { Activity } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
+import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 
 interface DiagnosticsViewProps {
   useStore: DesktopStoreHook;
@@ -14,10 +14,6 @@ function number(value: number | null | undefined, digits = 2): string {
 
 function measure(value: number | null | undefined, unit: string, digits = 2): string {
   return value === null || value === undefined ? 'Unavailable' : `${number(value, digits)} ${unit}`;
-}
-
-function count(value: number | null | undefined): string {
-  return value === null || value === undefined ? 'Unavailable' : String(value);
 }
 
 function formatEventTime(timestamp: number): string {
@@ -54,7 +50,12 @@ function TimingPlot({
 }) {
   const width = 560;
   const height = 132;
-  const availableSamples = samples.filter((sample) => sample.backend_status !== 'unavailable');
+  const availableSamples = samples.filter(
+    (sample) =>
+      sample.backend_status !== 'unavailable' &&
+      sample.sender_sample_count > 0 &&
+      sample.max_sendinput_pre_call_lateness_us !== null,
+  );
   if (!hasActiveSession) {
     return (
       <DiagnosticsEmptyState
@@ -64,14 +65,47 @@ function TimingPlot({
     );
   }
   if (availableSamples.length === 0) {
+    const latest = samples.at(-1);
+    const playerAttached = latest?.player_attached === true;
+    const backendUnavailable = latest === undefined || latest.backend_status === 'unavailable';
+    const physicalPlayerMissing = latest?.physical_session === true && !playerAttached;
+    const backendError = latest?.backend_status === 'error';
+    const noSenderSamples =
+      !backendUnavailable &&
+      !physicalPlayerMissing &&
+      !backendError &&
+      playerAttached &&
+      latest.sender_sample_count === 0;
     return (
       <DiagnosticsEmptyState
-        title="Timing unavailable"
-        detail="Sender-side backend metrics are unavailable for this dispatch profile."
+        title={
+          backendUnavailable
+            ? 'Timing unavailable'
+            : physicalPlayerMissing
+              ? 'Player not attached'
+              : backendError
+                ? 'Sender timing error'
+                : noSenderSamples
+                  ? 'No sender samples yet'
+                  : 'Timing unavailable'
+        }
+        detail={
+          backendUnavailable
+            ? latest === undefined
+              ? 'No sender diagnostics snapshot is available for this session yet.'
+              : 'Sender-side backend metrics are unavailable for this dispatch profile.'
+            : physicalPlayerMissing
+              ? 'A physical session is active, but its native player is not attached.'
+              : backendError
+                ? `The sender backend reported an error: ${latest?.last_error ?? 'no sender sample is available.'}`
+                : noSenderSamples
+                  ? 'The physical player is attached; no SendInput call has been sampled yet.'
+                  : 'Sender-side timing measurements are unavailable for this session.'
+        }
       />
     );
   }
-  const values = availableSamples.map((sample) => sample.max_sendinput_pre_call_lateness_us);
+  const values = availableSamples.map((sample) => sample.max_sendinput_pre_call_lateness_us!);
   const threshold = availableSamples.at(-1)?.down_late_grace_us ?? null;
   const minimum = 0;
   const maximum = Math.max(0, ...values, threshold ?? 0);
@@ -101,15 +135,15 @@ function TimingPlot({
         </title>
         <desc id="timing-plot-description">
           Cumulative session maximum observed at each diagnostics snapshot; it does not decrease
-          after recovery. Pre-call timing covers physical sends, while the Down cutoff grace
-          threshold applies only to Down-bearing sends.
+          after recovery. Pre-call timing covers physical sends, while the fixed Down late cutoff
+          applies only to Down-bearing sends.
         </desc>
         <line x1="0" y1={zeroY} x2={width} y2={zeroY} className="plot-zero-axis" />
         {thresholdY !== null && (
           <>
             <line x1="0" y1={thresholdY} x2={width} y2={thresholdY} className="plot-threshold" />
             <text x={width - 4} y={Math.max(plotTop + 10, thresholdY - 4)} className="plot-label">
-              Down grace {threshold} μs
+              Late Down tolerance {threshold} μs
             </text>
           </>
         )}
@@ -118,7 +152,7 @@ function TimingPlot({
       <figcaption>
         {latest === null
           ? 'No sender-side timing samples yet.'
-          : `Session max pre-call lateness observed at the latest diagnostics snapshot: ${latest} μs across ${values.length} snapshots. This cumulative value does not decrease after recovery. Down grace applies only to Down-bearing sends.${
+          : `Session max pre-call lateness observed at the latest diagnostics snapshot: ${latest} μs across ${values.length} snapshots. This cumulative value does not decrease after recovery. The fixed Down late cutoff applies only to Down-bearing sends.${
               latestSample?.p95_ms === null || latestSample?.p95_ms === undefined
                 ? ''
                 : ` Completion p95 observer value ${number(latestSample.p95_ms)} ms.`
@@ -131,6 +165,13 @@ function TimingPlot({
 export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const diagnostics = useStore((store: DesktopStore) => store.diagnostics);
   const playback = useStore((store: DesktopStore) => store.playback);
+  const exportSenderTrace = useStore((store: DesktopStore) => store.exportSenderTrace);
+  const [traceExporting, setTraceExporting] = useState(false);
+  const [traceExportError, setTraceExportError] = useState<string | null>(null);
+  const [traceExportIdentity, setTraceExportIdentity] = useState<{
+    song: string;
+    session: string;
+  } | null>(null);
   const scrollRef = useScrollVisibility<HTMLDivElement>();
   const eventsScrollRef = useScrollVisibility<HTMLDivElement>();
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
@@ -141,10 +182,31 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
     playback.sessionId !== null &&
     latest?.session_id === playback.sessionId;
   const backendMetricsAvailable = latest !== undefined && latest.backend_status !== 'unavailable';
-  const backendMetric = (value: number): string =>
-    backendMetricsAvailable ? String(value) : 'Unavailable';
-  const backendMeasure = (value: number, unit: string): string =>
-    backendMetricsAvailable ? measure(value, unit, 0) : 'Unavailable';
+  const visibleTraceExportIdentity =
+    traceExportIdentity !== null &&
+    (playback.sessionId === null || playback.sessionId === traceExportIdentity.session)
+      ? traceExportIdentity
+      : null;
+  const playerMetric = (value: number): string =>
+    !backendMetricsAvailable || latest?.player_attached !== true ? 'Unavailable' : String(value);
+  const senderSampleMetric = (value: number | null | undefined): string =>
+    !backendMetricsAvailable
+      ? 'Unavailable'
+      : latest?.player_attached !== true
+        ? 'Unavailable'
+        : latest?.sender_sample_count === 0
+          ? 'No samples'
+          : value === null || value === undefined
+            ? 'Unavailable'
+            : String(value);
+  const backendMeasure = (value: number | null, unit: string): string =>
+    !backendMetricsAvailable
+      ? 'Unavailable'
+      : latest?.player_attached !== true
+        ? 'Unavailable'
+        : latest?.sender_sample_count === 0
+          ? 'No samples'
+          : measure(value, unit, 0);
   const senderSuppressionCount = latest
     ? latest.missed_down_boundaries +
       latest.missed_down_keys +
@@ -164,27 +226,71 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
         status: 'Unavailable',
         detail: 'Sender-side diagnostics are unavailable for this dispatch profile.',
       }
-    : latest?.last_error
+    : latest?.physical_session && !latest.player_attached
       ? {
           status: 'Error',
-          detail: `Last error: ${latest.last_error}`,
+          detail: 'The physical session is active, but no native player is attached.',
         }
-      : latest?.backend_status === 'error'
+      : latest?.last_error
         ? {
             status: 'Error',
-            detail: 'Sender-side backend reported an error.',
+            detail: `Last error: ${latest.last_error}`,
           }
-        : latest?.backend_status === 'degraded'
+        : latest?.backend_status === 'error'
           ? {
-              status: 'Attention',
-              detail: 'Sender-side backend reported degraded health.',
+              status: 'Error',
+              detail: 'Sender-side backend reported an error.',
             }
-          : senderSuppressionCount === 0 && transportFailureCount === 0
-            ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
-            : {
+          : latest?.backend_status === 'degraded'
+            ? {
                 status: 'Attention',
-                detail: `${latest?.missed_hard_late_boundaries ?? 0} hard-late boundaries; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
-              };
+                detail: 'Sender-side backend reported degraded health.',
+              }
+            : latest?.player_attached && latest.sender_sample_count === 0
+              ? {
+                  status: 'Waiting',
+                  detail:
+                    'The physical player is attached; no SendInput call has been sampled yet.',
+                }
+              : senderSuppressionCount === 0 && transportFailureCount === 0
+                ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
+                : {
+                    status: 'Attention',
+                    detail: `${latest?.missed_hard_late_boundaries ?? 0} hard-late boundaries; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
+                  };
+  const handleExportSenderTrace = async () => {
+    setTraceExporting(true);
+    setTraceExportError(null);
+    setTraceExportIdentity(null);
+    try {
+      const content = await exportSenderTrace();
+      const trace = JSON.parse(content) as {
+        session_id?: unknown;
+        song_id?: unknown;
+        song_title?: unknown;
+      };
+      if (typeof trace.session_id !== 'string' || typeof trace.song_id !== 'string') {
+        throw new Error('Sender trace export is missing session identity.');
+      }
+      setTraceExportIdentity({
+        song:
+          typeof trace.song_title === 'string' && trace.song_title.length > 0
+            ? trace.song_title
+            : trace.song_id,
+        session: trace.session_id,
+      });
+      const objectUrl = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = 'sky-sender-trace.json';
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    } catch (error) {
+      setTraceExportError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setTraceExporting(false);
+    }
+  };
   return (
     <div
       ref={scrollRef}
@@ -197,6 +303,26 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
       {diagnostics.error && (
         <p className="inline-error" role="alert">
           {diagnostics.error}
+        </p>
+      )}
+      <div className="diagnostics-export">
+        <button
+          className="diagnostics-export-button"
+          type="button"
+          disabled={traceExporting}
+          onClick={() => void handleExportSenderTrace()}
+        >
+          {traceExporting ? 'Preparing sender trace…' : 'Export last sender trace'}
+        </button>
+        <span role="status">
+          {visibleTraceExportIdentity
+            ? `Trace available: Song ${visibleTraceExportIdentity.song} · Session ${visibleTraceExportIdentity.session}`
+            : 'Available after a completed physical playback session.'}
+        </span>
+      </div>
+      {traceExportError && (
+        <p className="inline-error" role="alert">
+          {traceExportError}
         </p>
       )}
       <Tabs className="diagnostics-tabs" defaultSelectedKey="performance">
@@ -228,116 +354,162 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <strong>Sender-side status: {senderSummary.status}</strong>
                 <span>{senderSummary.detail}</span>
               </section>
+              <MetricGroup title="Sender availability">
+                <Metric label="Physical session" value={latest.physical_session ? 'Yes' : 'No'} />
+                <Metric label="Player attached" value={latest.player_attached ? 'Yes' : 'No'} />
+                <Metric
+                  label="Sender samples"
+                  value={senderSampleMetric(latest.sender_sample_count)}
+                />
+                <Metric label="Sender backend" value={backendStatusLabel(latest.backend_status)} />
+              </MetricGroup>
               <MetricGroup title="Timing">
-                <Metric label="Completion p50" value={measure(latest.p50_ms, 'ms')} />
-                <Metric label="Completion p95" value={measure(latest.p95_ms, 'ms')} />
-                <Metric label="Session max" value={measure(latest.max_lateness_us, 'μs', 0)} />
+                <Metric label="Completion p50" value={backendMeasure(latest.p50_ms, 'ms')} />
+                <Metric label="Completion p95" value={backendMeasure(latest.p95_ms, 'ms')} />
+                <Metric label="Session max" value={backendMeasure(latest.max_lateness_us, 'μs')} />
                 <Metric
                   label="Max pre-call lateness"
                   value={backendMeasure(latest.max_sendinput_pre_call_lateness_us, 'μs')}
                 />
-                <Metric label="Completion jitter σ" value={measure(latest.sigma_onset_ms, 'ms')} />
+                <Metric
+                  label="Completion jitter σ"
+                  value={backendMeasure(latest.sigma_onset_ms, 'ms')}
+                />
+              </MetricGroup>
+              <MetricGroup title="Frozen session timing">
+                <Metric label="FPS" value={String(latest.fps)} />
+                <Metric label="Frame period" value={`${(latest.frame_us / 1_000).toFixed(3)} ms`} />
+                <Metric
+                  label="Base hold"
+                  value={`${(latest.frame_base_hold_us / 1_000).toFixed(3)} ms`}
+                />
+                <Metric label="Configured Timing Margin" value={`${latest.timing_margin_us} µs`} />
+                <Metric
+                  label="Target hold"
+                  value={`${(latest.min_hold_us / 1_000).toFixed(3)} ms`}
+                />
+                <Metric
+                  label="Release gap"
+                  value={`${(latest.min_release_gap_us / 1_000).toFixed(3)} ms`}
+                />
+                <Metric label="Late Down tolerance" value={`${latest.down_late_grace_us} µs`} />
+                <Metric
+                  label="Recommended sender margin"
+                  value={`${latest.timing_margin_recommendation.recommended_timing_margin_us} µs`}
+                />
+                <Metric
+                  label="Recommendation source"
+                  value={timingMarginRecommendationSourceLabel(
+                    latest.timing_margin_recommendation.source,
+                  )}
+                />
               </MetricGroup>
               <MetricGroup title="Late events">
-                <Metric label="Completion > 2 ms" value={count(latest.late_2ms)} />
-                <Metric label="Completion > 5 ms" value={count(latest.late_5ms)} />
-                <Metric label="Completion > 10 ms" value={count(latest.late_10ms)} />
-                <Metric label="Pre-call > 2 ms" value={backendMetric(latest.pre_call_late_2ms)} />
-                <Metric label="Pre-call > 5 ms" value={backendMetric(latest.pre_call_late_5ms)} />
-                <Metric label="Pre-call > 10 ms" value={backendMetric(latest.pre_call_late_10ms)} />
+                <Metric label="Completion > 2 ms" value={senderSampleMetric(latest.late_2ms)} />
+                <Metric label="Completion > 5 ms" value={senderSampleMetric(latest.late_5ms)} />
+                <Metric label="Completion > 10 ms" value={senderSampleMetric(latest.late_10ms)} />
+                <Metric
+                  label="Pre-call > 2 ms"
+                  value={senderSampleMetric(latest.pre_call_late_2ms)}
+                />
+                <Metric
+                  label="Pre-call > 5 ms"
+                  value={senderSampleMetric(latest.pre_call_late_5ms)}
+                />
+                <Metric
+                  label="Pre-call > 10 ms"
+                  value={senderSampleMetric(latest.pre_call_late_10ms)}
+                />
               </MetricGroup>
               <MetricGroup title="Pre-call distribution">
-                <Metric label="Pre-call < 250 μs" value={backendMetric(latest.pre_call_lt_250us)} />
+                <Metric
+                  label="Pre-call < 250 μs"
+                  value={senderSampleMetric(latest.pre_call_lt_250us)}
+                />
                 <Metric
                   label="Pre-call 250–500 μs"
-                  value={backendMetric(latest.pre_call_250_500us)}
+                  value={senderSampleMetric(latest.pre_call_250_500us)}
                 />
                 <Metric
                   label="Pre-call 500–750 μs"
-                  value={backendMetric(latest.pre_call_500_750us)}
+                  value={senderSampleMetric(latest.pre_call_500_750us)}
                 />
                 <Metric
                   label="Pre-call 750–1000 μs"
-                  value={backendMetric(latest.pre_call_750_1000us)}
+                  value={senderSampleMetric(latest.pre_call_750_1000us)}
                 />
                 <Metric
                   label="Pre-call 1.0–1.5 ms"
-                  value={backendMetric(latest.pre_call_1000_1500us)}
+                  value={senderSampleMetric(latest.pre_call_1000_1500us)}
                 />
                 <Metric
                   label="Pre-call 1.5–2.0 ms"
-                  value={backendMetric(latest.pre_call_1500_2000us)}
+                  value={senderSampleMetric(latest.pre_call_1500_2000us)}
                 />
                 <Metric
                   label="Pre-call ≥ 2.0 ms"
-                  value={backendMetric(latest.pre_call_ge_2000us)}
-                />
-                <Metric
-                  label="Down cutoff grace"
-                  value={backendMeasure(latest.down_late_grace_us, 'μs')}
+                  value={senderSampleMetric(latest.pre_call_ge_2000us)}
                 />
               </MetricGroup>
               <MetricGroup title="Deadline admission">
                 <Metric
                   label="Missed Down boundaries"
-                  value={backendMetric(latest.missed_down_boundaries)}
+                  value={playerMetric(latest.missed_down_boundaries)}
                 />
                 <Metric
                   label="Hard-late Down boundaries"
-                  value={backendMetric(latest.missed_hard_late_boundaries)}
+                  value={playerMetric(latest.missed_hard_late_boundaries)}
                 />
-                <Metric label="Missed Down keys" value={backendMetric(latest.missed_down_keys)} />
+                <Metric label="Missed Down keys" value={playerMetric(latest.missed_down_keys)} />
                 <Metric
                   label="Backlog misses"
-                  value={backendMetric(latest.missed_backlog_boundaries)}
+                  value={playerMetric(latest.missed_backlog_boundaries)}
                 />
                 <Metric
                   label="Final cutoff misses"
-                  value={backendMetric(latest.final_gate_cutoff_misses)}
+                  value={playerMetric(latest.final_gate_cutoff_misses)}
                 />
                 <Metric
                   label="Focus gate rejections"
-                  value={backendMetric(latest.final_gate_focus_losses)}
+                  value={playerMetric(latest.final_gate_focus_losses)}
                 />
                 <Metric
                   label="Target changes"
-                  value={backendMetric(latest.final_gate_target_changes)}
+                  value={playerMetric(latest.final_gate_target_changes)}
                 />
                 <Metric
                   label="Lease expirations"
-                  value={backendMetric(latest.final_gate_lease_expirations)}
+                  value={playerMetric(latest.final_gate_lease_expirations)}
                 />
                 <Metric
                   label="Control rejections"
-                  value={backendMetric(latest.final_gate_control_rejections)}
+                  value={playerMetric(latest.final_gate_control_rejections)}
                 />
               </MetricGroup>
               <MetricGroup title="Input transport">
                 <Metric
                   label="SendInput zero-progress failures"
-                  value={backendMetric(latest.sendinput_zero_progress_failures)}
+                  value={playerMetric(latest.sendinput_zero_progress_failures)}
                 />
                 <Metric
                   label="SendInput partial events"
-                  value={backendMetric(latest.sendinput_partial_events)}
+                  value={playerMetric(latest.sendinput_partial_events)}
                 />
-                <Metric label="Dropped keys" value={backendMetric(latest.keys_dropped)} />
-                <Metric label="Chord splits" value={backendMetric(latest.chord_split_events)} />
-                <Metric label="Stuck keys" value={backendMetric(latest.stuck_keys)} />
-                <Metric label="Active keys" value={backendMetric(latest.active_keys)} />
+                <Metric label="Dropped keys" value={playerMetric(latest.keys_dropped)} />
+                <Metric label="Chord splits" value={playerMetric(latest.chord_split_events)} />
+                <Metric label="Stuck keys" value={playerMetric(latest.stuck_keys)} />
+                <Metric label="Active keys" value={playerMetric(latest.active_keys)} />
               </MetricGroup>
               <MetricGroup title="Release">
                 <Metric
                   label="Max release lateness"
-                  value={measure(latest.release_max_us, 'μs', 0)}
+                  value={backendMeasure(latest.release_max_us, 'μs')}
                 />
-                <Metric label="Release > 2 ms" value={count(latest.release_late_2ms)} />
+                <Metric
+                  label="Release > 2 ms"
+                  value={senderSampleMetric(latest.release_late_2ms)}
+                />
               </MetricGroup>
-              <p className="diagnostics-status">
-                <Activity size={14} aria-hidden="true" />
-                <span>Backend</span>
-                <BackendStatus status={latest.backend_status} />
-              </p>
             </>
           )}
         </TabPanel>
@@ -376,20 +548,16 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   );
 }
 
-function BackendStatus({
-  status,
-}: {
-  status: DesktopStore['diagnostics']['samples'][number]['backend_status'];
-}) {
-  const label =
-    status === 'healthy'
-      ? 'Healthy'
-      : status === 'degraded'
-        ? 'Degraded'
-        : status === 'error'
-          ? 'Error'
-          : 'Unavailable';
-  return <span className={`diagnostics-backend-status is-${status}`}>{label}</span>;
+function backendStatusLabel(
+  status: DesktopStore['diagnostics']['samples'][number]['backend_status'],
+): string {
+  return status === 'healthy'
+    ? 'Healthy'
+    : status === 'degraded'
+      ? 'Degraded'
+      : status === 'error'
+        ? 'Error'
+        : 'Unavailable';
 }
 
 function MetricGroup({ title, children }: { title: string; children: ReactNode }) {

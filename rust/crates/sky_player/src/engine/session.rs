@@ -517,6 +517,16 @@ impl NativeDispatchSession {
         Ok(())
     }
 
+    pub fn set_live_diagnostics_enabled(&self, enabled: bool) {
+        let metrics = &self.shared.publication.metrics;
+        if enabled {
+            metrics.last_publish_us.store(0, Ordering::Relaxed);
+        }
+        metrics
+            .live_diagnostics_enabled
+            .store(enabled, Ordering::Release);
+    }
+
     pub fn set_target_hwnd(&self, hwnd: isize) {
         if self.shared.target.target_hwnd.swap(hwnd, Ordering::AcqRel) != hwnd {
             self.shared

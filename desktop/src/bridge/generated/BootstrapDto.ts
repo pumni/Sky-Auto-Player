@@ -2,6 +2,7 @@
 import type { NativeBuildDto } from "./NativeBuildDto";
 import type { PlaybackDefaultsDto } from "./PlaybackDefaultsDto";
 import type { PlaybackOptionSetsDto } from "./PlaybackOptionSetsDto";
+import type { TimingMarginRecommendationDto } from "./TimingMarginRecommendationDto";
 import type { UpdatePreferencesDto } from "./UpdatePreferencesDto";
 
-export type BootstrapDto = { app_version: string, protocol_version: number, native_build: NativeBuildDto, playback_defaults: PlaybackDefaultsDto, option_sets: PlaybackOptionSetsDto, theme: string, telemetry_enabled: boolean, update_preferences: UpdatePreferencesDto, catalog_generation: number, };
+export type BootstrapDto = { app_version: string, protocol_version: number, native_build: NativeBuildDto, playback_defaults: PlaybackDefaultsDto, timing_margin_recommendation: TimingMarginRecommendationDto, option_sets: PlaybackOptionSetsDto, theme: string, telemetry_enabled: boolean, update_preferences: UpdatePreferencesDto, catalog_generation: number, };

@@ -80,9 +80,14 @@ The physical command is an explicit, feature-gated qualification run:
 The supported physical scenario names are `canonical-single`, `canonical-chord`,
 `canonical-max-chord`, `hold`, `rapid-retrigger`, `mixed-up-down`, `focus-loss`,
 `target-hwnd-change`, `pause-resume`, `stop-cleanup`, `skip-cleanup`,
-`cleanup-full-release`, and `w4-noncanonical`. Each invocation appends one
-JSONL report with the scenario name and its `PASS`, `FAIL`, or `INCONCLUSIVE`
-verdict. The target-change scenario changes the session target to the invalid
+`cleanup-full-release`, `w4-noncanonical`, `timing-margin-sweep`, and
+`release-gap-stress`. Each invocation appends one JSONL report with the
+scenario name and its `PASS`, `NON_QUALIFYING`, `FAIL`, or `INCONCLUSIVE`
+verdict. A release gap below the fixed one-frame sender floor is `FAIL`; the
+stress scenario is `NON_QUALIFYING` when it collects fewer than 512 release-gap
+samples. It authors 513 same-key Down/Up cycles at the configured Hold and
+Release Gap and keeps the supervisor heartbeat alive while the approximately
+18-second workload runs at the default margin. The target-change scenario changes the session target to the invalid
 sentinel `0` before the first authored Down and requires the production
 control-plane path to fail closed with no gameplay KeyDown delivery. The
 fail-closed path may emit the bounded full-cleanup KeyUp safety pass; those
@@ -117,15 +122,19 @@ deadline can satisfy the probe zero-event predicate; truncation, sequence
 corruption, or binding loss is INCONCLUSIVE. These are acceptance-observer
 bounds and do not change production scheduler or timing policy.
 
-The acceptance profile materializes the current default equation at 60 FPS:
-`frame_us = 16,667`, and with the default 500 us Down grace plus 300 us
-transport margin, both minimum hold and release gap are 17,467 us; focus
-restore grace remains 100,000 us. Controlled A/B runs may pass
-`--down-late-grace-us 500|750|1000`; the harness recomputes both schedule
-constraints from that session-frozen value and records it in every report.
-This override is acceptance-only and does not change the shipped production
-default. The `focus-loss` scenario
-first commits a canonical sink Down/Up pair, waits for `startup_ready` and that
+The current application default is a `500 µs` user Timing Margin at 60 FPS:
+`frame_us = 16,667`, so both the 1-frame minimum hold and minimum release gap
+are `17,167 µs`; focus restore grace remains `100,000 µs`. Historical
+acceptance runs retain the exact margin/cutoff values recorded in their
+artifacts and are not rewritten when product defaults change.
+Controlled A/B runs may pass `--timing-margin-us 0..3000` in `100 µs` steps;
+the `timing-margin-sweep` scenario authors its Hold and Release Gap targets
+from that exact value and records the packet timestamps in every report.
+The independent acceptance-only `--down-late-grace-us 0..5000` value uses
+100 µs steps and changes only the cutoff supplied to the native worker. The
+physical propagation sweep uses `500`, `1000`, `2000`, and `5000` µs. The
+`focus-loss` scenario first commits a canonical sink Down/Up pair, waits for
+`startup_ready` and that
 pair's event evidence, then moves foreground to the validated project-owned
 probe with the coarse focus hint still true before a later different-slot Down.
 It observes the existing live pause state and requires the terminal final-gate
@@ -324,11 +333,10 @@ The native application materializes the fixed floor before worker startup:
 ```text
 frame_us = ceil(1_000_000 / game_fps)
 frame_base_hold_us = ceil(hold_frames * frame_us)
-down_late_grace_us = policy.down_late_grace_us
-transport_margin_us = max(0, calibrated_or_default_transport_margin_us)
-effective_min_hold_us = frame_base_hold_us + down_late_grace_us + transport_margin_us
-sender_headroom_us = down_late_grace_us + transport_margin_us
-min_release_gap_us = frame_us + sender_headroom_us
+timing_margin_us = persisted_user_value
+effective_min_hold_us = frame_base_hold_us + timing_margin_us
+min_release_gap_us = frame_us + timing_margin_us
+down_late_cutoff_us = 2000
 ```
 
 Native admission checked tick arithmetic enforces before worker start:
@@ -338,11 +346,8 @@ authored_up >= authored_down + effective_min_hold
 next_same_key_down - previous_same_key_up >= min_release_gap_us
 ```
 
-The static components are materialized once into the authored schedule. The
-`FrameTimingPolicy.min_hold_margin_us` compatibility field contains the
-Down-grace-plus-transport aggregate; explicit fields retain the frame base,
-grace, transport margin, release gap, and transport provenance. The release
-gap reserves one frame plus the same bounded sender headroom; it is sender-side
+The user margin is materialized once into the authored schedule. The release
+gap reserves one frame plus the exact same user margin; it is sender-side
 visibility policy, not evidence that the game sampled the Up transition.
 An invalid
 interval fails native admission before any musical SendInput. The worker never
@@ -353,13 +358,14 @@ deadline/overdue policy handles a late boundary; recovery-only pending
 releases are stored in a fixed `[Option; 15]` per-key table with mask and
 generation ownership. There is no transport retry state.
 
-The session-fixed `down_late_grace_us` is an independent sender correctness
-policy, currently `500 µs`, converted once to QPC ticks at admission. The
-transport margin defaults/falls back to `300 µs` and is not part of this grace.
-The grace bounds authorized Down lateness only. It is never derived from the hold margin,
+The session-fixed `down_late_grace_us` is the independent user-owned sender
+cutoff, defaulting to `2,000 µs`, converted once to QPC ticks at admission. It bounds
+authorized Down lateness only. It is never derived from Timing Margin,
 calibration, or dispatch lead, and never changes an authored target. The
 trusted sender repeats the same cutoff check immediately before `SendInput`,
-while Up-only safety releases remain exempt.
+while Up-only safety releases remain exempt. Calibration supplies a
+recommendation only; its result cannot mutate a prepared schedule or setting
+without an explicit user action.
 
 ## 5. Wait and interrupt ordering
 

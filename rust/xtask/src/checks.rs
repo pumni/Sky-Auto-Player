@@ -3263,6 +3263,7 @@ const CANONICAL_DISPATCH_FILES: &[&str] = &[
     "timing.rs",
     "hold_forensics.rs",
     "observer_wake.rs",
+    "observer_trace.rs",
 ];
 const ALLOWED_UNSAFE_MODULES: &[&str] = &[
     "rust/crates/sky_dispatch_win32/src/calibration.rs",
@@ -3830,9 +3831,9 @@ fn command_names_source(root: &Path) -> Result<String> {
         };
         commands.push(rest[..end].to_owned());
     }
-    if commands.len() != 30 {
+    if commands.len() != 31 {
         return Err(format!(
-            "IPC registry contains {} commands; expected 30",
+            "IPC registry contains {} commands; expected 31",
             commands.len()
         )
         .into());

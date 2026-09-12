@@ -482,10 +482,7 @@ pub(crate) fn publish_backend_metrics(
     shared_metrics: &SharedMetrics,
     last_published_error: &mut Option<String>,
 ) {
-    local_metrics.active_count = backend.active_mask.count_ones() as u64;
-    local_metrics.keys_dropped = backend.keys_dropped;
-    local_metrics.possibly_active_count = backend.possibly_active_mask.count_ones() as u64;
-    local_metrics.failed_release_count = backend.failed_release_mask.count_ones() as u64;
+    publish_backend_counters(backend, local_metrics);
     // The healthy dispatch path never takes this lock. Error text is
     // published only when the backend error state changes, including the
     // transition back to None after a successful recovery.
@@ -494,6 +491,16 @@ pub(crate) fn publish_backend_metrics(
         *published = backend.last_error.clone();
         *last_published_error = backend.last_error.clone();
     }
+}
+
+pub(crate) fn publish_backend_counters(
+    backend: &TrackedKeyState,
+    local_metrics: &mut WorkerMetricsLocal,
+) {
+    local_metrics.active_count = backend.active_mask.count_ones() as u64;
+    local_metrics.keys_dropped = backend.keys_dropped;
+    local_metrics.possibly_active_count = backend.possibly_active_mask.count_ones() as u64;
+    local_metrics.failed_release_count = backend.failed_release_mask.count_ones() as u64;
     local_metrics.chord_split_events = backend.chord_split_events;
     local_metrics.sendinput_partial_events = backend.sendinput_partial_events;
     local_metrics.sendinput_zero_progress_failures = backend.sendinput_zero_progress_failures;
