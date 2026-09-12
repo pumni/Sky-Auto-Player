@@ -7198,7 +7198,7 @@ mod tests {
             settings_fingerprint(&settings).expect("settings fingerprint");
         assert_eq!(
             default_settings_fingerprint,
-            "619644588a5e7a794d941a7f9709a6f9e7871d48491045744d3ffb79046d29c2"
+            "074db50e188b209a66a4aa757e6178a55e821dcec364c89e672cf8ce7ef2bfb7"
         );
         let mut changed_settings = settings.clone();
         changed_settings.playback_defaults.timing_margin_us = 900;
@@ -7206,7 +7206,8 @@ mod tests {
             default_settings_fingerprint,
             settings_fingerprint(&changed_settings).expect("changed margin fingerprint")
         );
-        changed_settings.playback_defaults.timing_margin_us = 800;
+        changed_settings.playback_defaults.timing_margin_us =
+            sky_app_core::settings::DEFAULT_TIMING_MARGIN_US;
         changed_settings.playback_defaults.down_late_grace_us = 1_000;
         assert_ne!(
             default_settings_fingerprint,
