@@ -1,0 +1,121 @@
+{
+  "run_id": "input-reliability-20260912T202600-16eb9d20",
+  "run_dir": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T202600-16eb9d20",
+  "source_revision": "c4763dac140e62325c8cb8e659a0b225d62a553f",
+  "source_tree_clean": true,
+  "harness_sha256": "f81684f69b3e96e0eaba946a5d98d91017314c401e0c1d2a13981a30bc3f21f2",
+  "runner_sha256": "8d2c77330ad8c8ced886f4a9059565b321effcf53f1cd5fb5b73c8dc039af237",
+  "harness": "D:\\Dev\\Sky-Auto-Player\\rust\\target\\release\\rt-native-acceptance.exe",
+  "sink": {
+    "ready": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T202600-16eb9d20\\sink-ready.json",
+    "events": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T202600-16eb9d20\\sink-events.jsonl",
+    "hwnd": 1575296,
+    "pid": 19368,
+    "process_image": "pwsh.exe",
+    "event_log_id": "d3417afae8614e52ab73a6f124ad1574"
+  },
+  "focus_probe": {
+    "ready": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T202600-16eb9d20\\focus-probe-ready.json",
+    "events": "D:\\Dev\\Sky-Auto-Player\\.benchmarks\\physical-input-reliability\\input-reliability-20260912T202600-16eb9d20\\focus-probe-events.jsonl",
+    "hwnd": 5179642,
+    "pid": 18956,
+    "process_image": "pwsh.exe",
+    "event_log_id": "a96aac66764b48d3a4c8737eb8e7c6c6"
+  },
+  "default_margin_us": 800,
+  "default_late_down_tolerance_us": 500,
+  "cutoff_sweep_us": [
+    500,
+    1000,
+    2000,
+    5000
+  ],
+  "hold_frames": 1.0,
+  "scenarios": [
+    {
+      "scenario": "canonical-single",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "canonical-chord",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "canonical-max-chord",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "hold",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "rapid-retrigger",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "mixed-up-down",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "target-hwnd-change",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "pause-resume",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "stop-cleanup",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "skip-cleanup",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "cleanup-full-release",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "w4-noncanonical",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 800,
+      "tolerance": 500
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 800,
+      "tolerance": 1000
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 800,
+      "tolerance": 2000
+    },
+    {
+      "scenario": "timing-margin-sweep",
+      "margin": 800,
+      "tolerance": 5000
+    },
+    {
+      "scenario": "focus-loss",
+      "margin": 800,
+      "tolerance": 500
+    }
+  ]
+}

@@ -1028,6 +1028,30 @@ position.
 
 ---
 
+# Execution record (2026-09-12)
+
+Implementation is committed at `c4763dac140e62325c8cb8e659a0b225d62a553f`.
+The controlled Windows physical run passed 17/17: the established 13-scenario
+matrix at 800 us Timing Margin / 500 us Late Down tolerance, plus the 500 / 1000
+/ 2000 / 5000 us cutoff propagation sweep with authored Hold and Release Gap
+fixed at 17,467 us. The report is bound to 136 continuous ReceiveOnly sink
+events; the focus probe received zero keyboard events. Raw reports, invocation
+ledgers, ready records, sink/probe logs, runner, and SHA-256 list are checked in
+at `docs/perf-baselines/2026-09-late-down-tolerance-native-acceptance-data/`.
+
+This physical run exercises the controlled project-owned sink. It does not
+exercise the Diagnostics UI in Sky or identify the user's original
+session-matched `Unavailable` event. The implementation now represents
+unavailable backend, attached player without samples, and measured zero
+separately, with UI regression coverage. The original unavailable observation
+still cannot be assigned to one runtime state without its raw session event.
+The suspected in-game song position also has not been A/B tested. Export the
+sender trace from a real Sky session at that position before drawing a game
+reliability or packet-semantics conclusion. Production batching remains
+unchanged.
+
+---
+
 # 18. Codex completion report contract
 
 When the mandatory workstreams are complete, report on PR #233 with:
