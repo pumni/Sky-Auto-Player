@@ -121,7 +121,7 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
   return (
     <>
       <label>
-        Hold
+        Base Hold
         <select
           value={defaults.hold_frames}
           onChange={(event) =>
@@ -169,7 +169,11 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
         value={defaults.timing_margin_us}
         options={bootstrap.option_sets}
         recommendation={recommendation}
-        onChange={(value) => void patchSettings({ playbackDefaults: { timingMarginUs: value } })}
+        onChange={(value) =>
+          patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
+            (authoritative) => authoritative?.playback_defaults.timing_margin_us ?? null,
+          )
+        }
       />
       <dl className="profile-timing-summary">
         <div>

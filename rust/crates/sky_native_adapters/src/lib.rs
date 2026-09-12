@@ -15,8 +15,9 @@ use sky_app_core::library::{
 };
 use sky_app_core::settings::{
     ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
-    DEFAULT_SONGS_DIR, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS, HotkeySettings,
-    SafetySettings, SettingsError, SettingsStore, UpdateChannel, UpdatePreferences, VALID_FPS,
+    DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS,
+    HotkeySettings, MAX_TIMING_MARGIN_US, MIN_TIMING_MARGIN_US, SafetySettings, SettingsError,
+    SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences, VALID_FPS,
     normalize_settings,
 };
 use std::collections::{BTreeSet, HashMap};
@@ -976,9 +977,19 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
             candidate
         }),
     );
-    migrated
-        .entry("default_timing_margin_us")
-        .or_insert_with(|| Value::from(sky_app_core::settings::DEFAULT_TIMING_MARGIN_US));
+    let timing_margin_us = raw_u64(raw, "default_timing_margin_us", DEFAULT_TIMING_MARGIN_US);
+    let timing_margin_us = if (MIN_TIMING_MARGIN_US..=MAX_TIMING_MARGIN_US)
+        .contains(&timing_margin_us)
+        && timing_margin_us.is_multiple_of(TIMING_MARGIN_STEP_US)
+    {
+        timing_margin_us
+    } else {
+        DEFAULT_TIMING_MARGIN_US
+    };
+    migrated.insert(
+        "default_timing_margin_us".into(),
+        Value::from(timing_margin_us),
+    );
     for key in [
         "default_timing_profile",
         "timing_profiles",
@@ -1454,6 +1465,40 @@ mod tests {
             sky_app_core::settings::SCHEMA_VERSION
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_migration_canonicalizes_invalid_timing_margin_in_persisted_file() {
+        for invalid_margin in [799_u64, 3_001_u64] {
+            let root = std::env::temp_dir().join(format!(
+                "sky-invalid-timing-margin-{}-{invalid_margin}",
+                std::process::id()
+            ));
+            let path = root.join("config.json");
+            fs::create_dir_all(&root).expect("temp root");
+            fs::write(
+                &path,
+                format!("{{\"schema_version\":3,\"default_timing_margin_us\":{invalid_margin}}}"),
+            )
+            .expect("seed invalid persisted margin");
+
+            let store = JsonSettingsStore::new(&path);
+            let settings = store.load().expect("load settings");
+            assert_eq!(
+                settings.playback_defaults.timing_margin_us,
+                DEFAULT_TIMING_MARGIN_US
+            );
+            let raw: Value =
+                serde_json::from_slice(&fs::read(&path).expect("read migrated config"))
+                    .expect("valid migrated json");
+            assert_eq!(
+                raw["schema_version"],
+                sky_app_core::settings::SCHEMA_VERSION
+            );
+            assert_eq!(raw["default_timing_margin_us"], DEFAULT_TIMING_MARGIN_US);
+
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]

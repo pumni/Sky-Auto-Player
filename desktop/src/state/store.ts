@@ -148,7 +148,7 @@ export interface DesktopStore {
   removeSongFromPlaylist: (playlistId: string, songId: string) => Promise<void>;
   setSongLiked: (songId: string, liked: boolean) => Promise<void>;
   reloadLibrary: () => Promise<void>;
-  patchSettings: (patch: SettingsPatch) => Promise<void>;
+  patchSettings: (patch: SettingsPatch) => Promise<Settings | null>;
   checkForUpdate: () => Promise<void>;
   setUpdateDialogOpen: (open: boolean) => void;
   beginUpdateHandoff: () => Promise<void>;
@@ -1311,9 +1311,11 @@ export function createDesktopStore(bridge: DesktopBridge) {
             });
             prepareRequestEpoch += 1;
             document.documentElement.dataset.theme = settings.theme;
+            return settings;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             set({ settingsState: 'fatal', fatal: message });
+            return get().settings;
           }
         });
         // Keep the queue alive after an individual mutation fails. Later user

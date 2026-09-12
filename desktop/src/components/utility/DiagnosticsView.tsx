@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
+import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 
 interface DiagnosticsViewProps {
   useStore: DesktopStoreHook;
@@ -257,7 +258,13 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <Metric label="Down late cutoff" value={`${latest.down_late_grace_us} µs`} />
                 <Metric
                   label="Recommended Timing Margin"
-                  value={`${latest.timing_margin_recommendation.recommended_timing_margin_us} µs · ${latest.timing_margin_recommendation.qualified ? 'qualified' : 'fallback'}`}
+                  value={`${latest.timing_margin_recommendation.recommended_timing_margin_us} µs`}
+                />
+                <Metric
+                  label="Recommendation source"
+                  value={timingMarginRecommendationSourceLabel(
+                    latest.timing_margin_recommendation.source,
+                  )}
                 />
               </MetricGroup>
               <MetricGroup title="Late events">

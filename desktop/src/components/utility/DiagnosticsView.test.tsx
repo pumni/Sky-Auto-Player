@@ -189,8 +189,9 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('16.667 ms');
     expect(screen.getByText('Release gap').parentElement).toHaveTextContent('16.667 ms');
     expect(screen.getByText('Down late cutoff').parentElement).toHaveTextContent('500 µs');
-    expect(screen.getByText('Recommended Timing Margin').parentElement).toHaveTextContent(
-      '800 µs · fallback',
+    expect(screen.getByText('Recommended Timing Margin').parentElement).toHaveTextContent('800 µs');
+    expect(screen.getByText('Recommendation source').parentElement).toHaveTextContent(
+      'Default fallback (no valid calibration cache)',
     );
   });
 

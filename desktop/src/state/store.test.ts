@@ -332,6 +332,23 @@ describe('desktop store', () => {
     expect(store.getState().settings?.verbose_hud).toBe(true);
   });
 
+  it('returns authoritative settings when a settings patch fails', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    bridge.patchSettings = async () => {
+      throw new Error('settings IPC failed');
+    };
+
+    const authoritative = await store
+      .getState()
+      .patchSettings({ playbackDefaults: { timingMarginUs: 900 } });
+
+    expect(authoritative?.playback_defaults.timing_margin_us).toBe(800);
+    expect(store.getState().settings?.playback_defaults.timing_margin_us).toBe(800);
+    expect(store.getState().settingsState).toBe('fatal');
+  });
+
   it('detaches a prepared plan when the selected song changes', async () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);

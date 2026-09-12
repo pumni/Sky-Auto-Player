@@ -108,7 +108,7 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                   <h3 id="playback-settings-title">Playback defaults</h3>
                   <div className="settings-grid">
                     <label>
-                      Hold
+                      Base Hold
                       <select
                         value={defaults.hold_frames}
                         onChange={(event) =>
@@ -157,7 +157,12 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                     value={defaults.timing_margin_us}
                     options={bootstrap.option_sets}
                     recommendation={settings.timing_margin_recommendation}
-                    onChange={(value) => patch({ playbackDefaults: { timingMarginUs: value } })}
+                    onChange={(value) =>
+                      patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
+                        (authoritative) =>
+                          authoritative?.playback_defaults.timing_margin_us ?? null,
+                      )
+                    }
                   />
                   <dl className="settings-timing-summary">
                     <div>
@@ -176,15 +181,11 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                       <dt>Release gap</dt>
                       <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
                     </div>
+                    <div>
+                      <dt>Down late cutoff</dt>
+                      <dd>500 µs</dd>
+                    </div>
                   </dl>
-                  <p className="settings-note">
-                    Recommendation:{' '}
-                    {settings.timing_margin_recommendation.recommended_timing_margin_us} µs ·{' '}
-                    {settings.timing_margin_recommendation.qualified
-                      ? 'qualified calibration'
-                      : 'fallback evidence'}
-                    .
-                  </p>
                   <p className="settings-note">
                     Playback changes apply when preparing the next session. An active session keeps
                     its frozen timing values.

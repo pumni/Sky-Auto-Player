@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { PlaybackOptionSets, TimingMarginRecommendation } from '../../bridge/DesktopBridge';
 import { TimingMarginControl } from './TimingMarginControl';
@@ -28,7 +28,10 @@ describe('TimingMarginControl', () => {
         value={800}
         options={options}
         recommendation={recommendation}
-        onChange={(value) => changes.push(value)}
+        onChange={async (value) => {
+          changes.push(value);
+          return value;
+        }}
       />,
     );
 
@@ -36,6 +39,7 @@ describe('TimingMarginControl', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use recommended (1300 µs)' }));
 
     expect(changes).toEqual([900, 1_300]);
+    expect(screen.getByText(/Source: Qualified calibration/)).toBeInTheDocument();
   });
 
   it('disables steps at the configured endpoints', () => {
@@ -44,7 +48,7 @@ describe('TimingMarginControl', () => {
         value={0}
         options={options}
         recommendation={recommendation}
-        onChange={() => undefined}
+        onChange={async () => 0}
       />,
     );
 
@@ -56,11 +60,58 @@ describe('TimingMarginControl', () => {
         value={3_000}
         options={options}
         recommendation={recommendation}
-        onChange={() => undefined}
+        onChange={async () => 3_000}
       />,
     );
 
     expect(screen.getByRole('button', { name: 'Decrease Timing Margin' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Increase Timing Margin' })).toBeDisabled();
+  });
+
+  it('preserves every rapid step while earlier settings writes are pending', async () => {
+    const changes: number[] = [];
+    const confirmations: Array<(value: number) => void> = [];
+    render(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        onChange={(value) => {
+          changes.push(value);
+          return new Promise<number>((resolve) => confirmations.push(resolve));
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+
+    expect(changes).toEqual([900, 1_000, 1_100]);
+    expect(screen.getByText('1100 µs')).toBeInTheDocument();
+
+    await act(async () => {
+      confirmations[0]?.(900);
+      confirmations[1]?.(1_000);
+      confirmations[2]?.(1_100);
+    });
+    await waitFor(() => expect(screen.getByText('1100 µs')).toBeInTheDocument());
+  });
+
+  it('resynchronizes to the authoritative value when a settings write fails', async () => {
+    render(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        onChange={async () => {
+          throw new Error('settings IPC failed');
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+
+    await waitFor(() => expect(screen.getByText('800 µs')).toBeInTheDocument());
   });
 });

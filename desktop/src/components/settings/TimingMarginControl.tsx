@@ -1,10 +1,12 @@
+import { useEffect, useRef, useState } from 'react';
 import type { PlaybackOptionSets, TimingMarginRecommendation } from '../../bridge/DesktopBridge';
+import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 
 interface TimingMarginControlProps {
   value: number;
   options: PlaybackOptionSets;
   recommendation: TimingMarginRecommendation;
-  onChange: (value: number) => void;
+  onChange: (value: number) => Promise<number | null>;
 }
 
 export function TimingMarginControl({
@@ -16,6 +18,29 @@ export function TimingMarginControl({
   const min = options.timing_margin_min_us;
   const max = options.timing_margin_max_us;
   const step = options.timing_margin_step_us;
+  const [requestedValue, setRequestedValue] = useState(value);
+  const authoritativeValue = useRef(value);
+  const pendingWrites = useRef(0);
+
+  useEffect(() => {
+    authoritativeValue.current = value;
+    if (pendingWrites.current === 0) setRequestedValue(value);
+  }, [value]);
+
+  const requestValue = (nextValue: number) => {
+    pendingWrites.current += 1;
+    setRequestedValue(nextValue);
+    void onChange(nextValue)
+      .then((confirmedValue) => {
+        if (confirmedValue !== null) authoritativeValue.current = confirmedValue;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        pendingWrites.current -= 1;
+        if (pendingWrites.current === 0) setRequestedValue(authoritativeValue.current);
+      });
+  };
+
   return (
     <div className="timing-margin-control" aria-label="Timing Margin">
       <span className="timing-margin-label">Timing Margin</span>
@@ -24,33 +49,37 @@ export function TimingMarginControl({
           className="button timing-margin-step"
           type="button"
           aria-label="Decrease Timing Margin"
-          disabled={value <= min}
-          onClick={() => onChange(Math.max(min, value - step))}
+          disabled={requestedValue <= min}
+          onClick={() => requestValue(Math.max(min, requestedValue - step))}
         >
           −
         </button>
-        <output aria-live="polite">{value} µs</output>
+        <output aria-live="polite">{requestedValue} µs</output>
         <button
           className="button timing-margin-step"
           type="button"
           aria-label="Increase Timing Margin"
-          disabled={value >= max}
-          onClick={() => onChange(Math.min(max, value + step))}
+          disabled={requestedValue >= max}
+          onClick={() => requestValue(Math.min(max, requestedValue + step))}
         >
           +
         </button>
       </div>
-      {value !== recommendation.recommended_timing_margin_us && (
+      {requestedValue !== recommendation.recommended_timing_margin_us && (
         <button
           className="button timing-margin-recommendation"
           type="button"
-          onClick={() => onChange(recommendation.recommended_timing_margin_us)}
+          onClick={() => requestValue(recommendation.recommended_timing_margin_us)}
         >
           Use recommended ({recommendation.recommended_timing_margin_us} µs)
         </button>
       )}
       <span className="settings-note">
         Applies to Hold and Release Gap. Changes take effect in the next prepared session.
+      </span>
+      <span className="settings-note">
+        Recommendation: {recommendation.recommended_timing_margin_us} µs · Source:{' '}
+        {timingMarginRecommendationSourceLabel(recommendation.source)}.
       </span>
     </div>
   );
