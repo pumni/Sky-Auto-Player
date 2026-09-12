@@ -89,8 +89,8 @@ export function TimingMarginControl({
       </span>
       <span className="settings-note">
         Recommended sender margin: {recommendation.recommended_timing_margin_us} µs · Source:{' '}
-        {timingMarginRecommendationSourceLabel(recommendation.source)}. This is sender evidence,
-        not proof that the game accepted a note.
+        {timingMarginRecommendationSourceLabel(recommendation.source)}. This is sender evidence, not
+        proof that the game accepted a note.
       </span>
     </div>
   );

@@ -129,8 +129,9 @@ describe('TimingMarginControl', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Use recommended (5300 µs)' })).toBeDisabled();
-    expect(screen.getByText('Recommendation exceeds the current Timing Margin range.'))
-      .toBeInTheDocument();
+    expect(
+      screen.getByText('Recommendation exceeds the current Timing Margin range.'),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Recommended sender margin: 5300 µs/)).toBeInTheDocument();
   });
 });

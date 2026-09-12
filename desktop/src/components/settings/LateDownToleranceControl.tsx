@@ -39,7 +39,10 @@ export function LateDownToleranceControl({
   };
 
   return (
-    <div className="timing-margin-control late-down-tolerance-control" aria-label="Late Down tolerance">
+    <div
+      className="timing-margin-control late-down-tolerance-control"
+      aria-label="Late Down tolerance"
+    >
       <span className="timing-margin-label">Late Down tolerance</span>
       <div className="timing-margin-stepper">
         <button
@@ -62,7 +65,9 @@ export function LateDownToleranceControl({
           +
         </button>
       </div>
-      <span className="settings-note">A Down later than this is dropped instead of being sent late.</span>
+      <span className="settings-note">
+        A Down later than this is dropped instead of being sent late.
+      </span>
       {requestedValue === min && (
         <span className="settings-note">
           At 0 µs, any measured lateness beyond the exact target may drop a Down.

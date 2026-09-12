@@ -69,8 +69,9 @@ describe('LateDownToleranceControl', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Decrease Late Down tolerance' })).toBeDisabled();
-    expect(screen.getByText(/any measured lateness beyond the exact target may drop a Down/))
-      .toBeInTheDocument();
+    expect(
+      screen.getByText(/any measured lateness beyond the exact target may drop a Down/),
+    ).toBeInTheDocument();
 
     rerender(
       <LateDownToleranceControl value={5_000} options={options} onChange={async () => 5_000} />,

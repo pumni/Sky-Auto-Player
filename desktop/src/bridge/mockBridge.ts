@@ -473,15 +473,14 @@ export function createMockBridge(): DesktopBridge {
                   ? {}
                   : { skip_version: patch.updatePreferences.skipVersion }),
               },
-        }),
+            }),
       };
       if (playback?.downLateGraceUs !== undefined) {
         settings = {
           ...settings,
           timing_margin_recommendation: {
             ...settings.timing_margin_recommendation,
-            recommended_timing_margin_us:
-              Math.ceil((playback.downLateGraceUs + 300) / 100) * 100,
+            recommended_timing_margin_us: Math.ceil((playback.downLateGraceUs + 300) / 100) * 100,
           },
         };
       }
