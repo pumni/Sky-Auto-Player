@@ -1453,8 +1453,14 @@ mod tests {
         let store = JsonSettingsStore::new(&path);
         let settings = store.load().expect("load legacy settings");
         assert_eq!(settings.playback_defaults.hold_frames, 1.5);
-        assert_eq!(settings.playback_defaults.timing_margin_us, DEFAULT_TIMING_MARGIN_US);
-        assert_eq!(settings.playback_defaults.down_late_grace_us, DEFAULT_DOWN_LATE_GRACE_US);
+        assert_eq!(
+            settings.playback_defaults.timing_margin_us,
+            DEFAULT_TIMING_MARGIN_US
+        );
+        assert_eq!(
+            settings.playback_defaults.down_late_grace_us,
+            DEFAULT_DOWN_LATE_GRACE_US
+        );
         store.save(&settings).expect("save migrated settings");
         let raw: Value =
             serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("json");
