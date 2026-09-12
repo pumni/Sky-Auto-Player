@@ -344,8 +344,8 @@ describe('desktop store', () => {
       .getState()
       .patchSettings({ playbackDefaults: { timingMarginUs: 900 } });
 
-    expect(authoritative?.playback_defaults.timing_margin_us).toBe(800);
-    expect(store.getState().settings?.playback_defaults.timing_margin_us).toBe(800);
+    expect(authoritative?.playback_defaults.timing_margin_us).toBe(500);
+    expect(store.getState().settings?.playback_defaults.timing_margin_us).toBe(500);
     expect(store.getState().settingsState).toBe('fatal');
   });
 
