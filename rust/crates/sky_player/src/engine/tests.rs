@@ -5333,7 +5333,8 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
     // leaves a clean session. Keep the real worker/QPC path, but give CI host
     // preemption enough test-only margin that the real sender cutoff cannot
     // consume the scripted packet index first. Exact cutoff behavior is
-    // covered by deterministic dispatch tests; production remains at 500 us.
+    // covered by deterministic dispatch tests; the product default is supplied
+    // by the application/session policy, not this test-only override.
     options.timing.down_late_grace_us = 20_000;
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
