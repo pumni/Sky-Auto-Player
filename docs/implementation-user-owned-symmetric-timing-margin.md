@@ -1,5 +1,19 @@
 # User-owned symmetric Timing Margin implementation handoff
 
+## Final PR #233 resolution
+
+Status: **implementation complete; superseded as an active handoff**.
+
+The merge defaults accepted by the user are:
+
+- Timing Margin: **500 us**.
+- Late Down tolerance: **2000 us**.
+- Base Hold choices remain **1.0 / 1.25 / 1.5 frames**.
+- The two controls remain independent; the cutoff is never added to authored Hold or Release Gap.
+- Calibration remains advisory only. With the default cutoff and unqualified 300-us transport reserve, the fallback recommendation is **2300 us**.
+
+The remainder of this document preserves the implementation history of the original Timing Margin work. Older examples that mention 800-us margin or a 500-us fixed cutoff are historical design context, not current product defaults. The Late Down work and final closure are documented in `implementation-real-game-input-reliability-late-down-tolerance.md`.
+
 ## Status
 
 Implementation handoff for Codex.
@@ -12,7 +26,7 @@ Implementation handoff for Codex.
 - Target platform: Windows 11 x86_64
 - Rust workspace: Edition 2024, Rust 1.98 / pinned toolchain 1.98.1
 - Physical input boundary: Windows `SendInput`
-- PR must remain draft until an independent review explicitly clears it.
+- Independent review has completed; PR #233 may leave draft once exact-head CI is green.
 
 Before editing, read `AGENTS.md`, `SECURITY.md`, `docs/hold-frame-model.md`,
 `docs/timing-principles.md`, `docs/rt-dispatch-architecture.md`, the existing
@@ -37,11 +51,11 @@ implementation contradiction is found and documented.
 4. The Timing Margin applies symmetrically:
    - Down -> Up hold
    - Up -> next same-key Down release gap
-5. Initial default Timing Margin is **800 us**.
+5. Final accepted default Timing Margin is **500 us**.
 6. UI adjustment step is **100 us**.
 7. Initial supported range is **0..=3000 us**.
 8. `0 us` is valid. Do not silently clamp it upward.
-9. Production Down late cutoff remains **500 us**.
+9. Production Late Down tolerance is user-owned and defaults to **2000 us**.
 10. Down late cutoff is not part of Timing Margin and must not change when the
     user changes Timing Margin.
 11. Calibration may recommend a Timing Margin but must never silently change
