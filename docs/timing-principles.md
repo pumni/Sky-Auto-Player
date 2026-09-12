@@ -22,7 +22,7 @@ microsecond conversions.
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `timing_margin` | User-owned persisted value, from `0` through `3,000 µs` in `100 µs` steps; frozen into each prepared session. |
 | `min_hold` | Fixed materialized floor equal to the selected frame-based hold plus the exact user Timing Margin. |
-| `down_late_cutoff` | Independent production cutoff for authorized Down admission; fixed at `500 µs` after the physical target. |
+| `down_late_cutoff` | Independent user-owned production cutoff for authorized Down admission; default `2,000 µs` after the physical target, range `0..=5,000 µs` in `100 µs` steps, frozen per prepared session. |
 | `min_release_gap` | One frame period plus the same exact user Timing Margin between a same-key Up and the next same-key Down. |
 | `timing_margin_recommendation` | Advisory value derived from calibration evidence; it changes a setting only after an explicit user action. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
@@ -48,7 +48,7 @@ frame_base_hold_us = ceil(hold_frames * frame_us)
 timing_margin_us = persisted_user_value
 min_hold_us = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
-down_late_cutoff_us = 500
+down_late_cutoff_us = 2000
 ```
 
 For every authored same-key Down→Up pair:
@@ -70,8 +70,8 @@ completion evidence can verify the sender-side interval, but it does not prove
 that the game sampled either transition. The margin is never added to a target,
 used as dispatch lead, adapted during playback, or compressed automatically.
 
-Independently, production applies a fixed `500 µs` Down late cutoff at the
-sender boundary. It affects only whether a Down is sent; it is not part of
+Independently, production applies the session-frozen user-owned Down late
+cutoff at the sender boundary; the current default is `2,000 µs`. It affects only whether a Down is sent; it is not part of
 either authored duration. For a Down sent at the latest permitted cutoff:
 
 ```text
@@ -83,10 +83,12 @@ authored_up - actual_down_pre_call
     >= min_hold - down_late_cutoff
 ```
 
-The default `800 µs` margin exceeds the fixed cutoff by `300 µs`. A user may
-select a smaller value, including zero; at those settings, an unusually late
-Down can reduce the sender-observed hold below the frame-based floor. The
-authored target remains unchanged and valid by its configured margin.
+The current defaults are intentionally decoupled: Timing Margin is `500 µs`
+while Late Down tolerance is `2,000 µs`. A sufficiently late but still
+admissible Down can therefore reduce sender-observed hold below the frame-based
+floor. The authored target remains unchanged and valid by its configured
+margin, and sender forensics remains the acceptance evidence for that physical
+compression.
 
 Equality at the cutoff is permitted; a pre-call QPC one tick beyond it makes
 zero Down `SendInput` syscalls and follows the existing missed-Down recovery
@@ -152,19 +154,22 @@ candidate <= 2,000 µs -> VALID, reserve = max(300 µs, candidate)
 candidate > 2,000 µs  -> OUT_OF_ENVELOPE, use fallback reserve = 300 µs
 ```
 
-The user-facing recommendation is `ceil_to_100us(500 µs + reserve)`. A valid
-calibration may therefore recommend a value other than the unqualified
-`800 µs` fallback. It never changes a saved user setting or an active/prepared
-session; the user must explicitly choose **Use recommended**. An invalid,
-missing, or out-of-envelope cache recommends the unqualified `800 µs` fallback.
-Qualification status and source remain visible. Calibration does not change
-Note-On timestamps, physical Down targets, the fixed `500 µs` Down late cutoff,
+The user-facing recommendation is
+`ceil_to_100us(selected_down_late_tolerance + reserve)`. With the default
+`2,000 µs` cutoff and fallback `300 µs` reserve, the unqualified advisory value
+is `2,300 µs`. A valid calibration may therefore recommend another value. It
+never changes a saved user setting or an active/prepared session; the user must
+explicitly choose **Use recommended**. An invalid, missing, or out-of-envelope
+cache uses the unqualified transport reserve and recomputes the advisory value
+from the selected cutoff. Qualification status and source remain visible.
+Calibration does not change Note-On timestamps, physical Down targets, the
+selected Late Down cutoff,
 or runtime scheduling. Protocol 10, native schema 15, artifact
 schema 11, cache version 8, source formula version 6, and evidence kind
 `sender_completion_hold_shrink` are mutually incompatible with protocol-9 /
 cache-v5/v6/v7 Raw Input or old sender-formula evidence. A failed or invalid
 measurement preserves the previous compatible cache; an old cache does not
-qualify a recommendation and uses the `800 µs` fallback recommendation.
+qualify a recommendation and uses the selected-cutoff plus fallback-reserve recommendation.
 
 Before warm-up, sender calibration performs a sender-only preflight: it proves
 physical All-Up, sends one prepared full All-Up packet through the production
@@ -280,8 +285,9 @@ candidate > 2,000 µs
 ```
 
 An out-of-envelope measurement is complete evidence, is written as unhealthy
-cache v5, and playback falls back to the explicit 500 µs hold margin. A
-measurement/integrity failure preserves the previous cache. The correction is
+cache v5, and playback retains the user's selected Timing Margin (`500 µs`
+for a fresh default configuration). A measurement/integrity failure preserves
+the previous cache. The correction is
 applied only to the hold floor; it never leads the playback target, changes
 `down_late_grace`, or claims game-observed timing. Full-calibration checkpoints use plain-text SHA256
 sidecars and a stable common provenance manifest. Resume and finalization
