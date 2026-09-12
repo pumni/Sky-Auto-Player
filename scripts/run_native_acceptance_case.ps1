@@ -60,8 +60,14 @@ function Assert-SinkIdentity {
         throw 'live sink HWND/process identity mismatch'
     }
     $records = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
-    if ($records.Count -ne 1 -or $records[0].kind -ne 'stream_start' -or $records[0].sequence -ne 0 -or $records[0].run_id -ne $runId -or $records[0].event_log_id -ne $Record.event_log_id) {
-        throw 'fresh sink event log is not bound to its ready record'
+    if ($records.Count -lt 1 -or $records[0].kind -ne 'stream_start' -or $records[0].sequence -ne 0) {
+        throw 'fresh sink event log is missing its stream header'
+    }
+    for ($index = 0; $index -lt $records.Count; $index++) {
+        $event = $records[$index]
+        if ($event.schema_version -ne 3 -or $event.run_id -ne $runId -or $event.role -ne 'ReceiveOnly' -or $event.event_log_id -ne $Record.event_log_id -or $event.sequence -ne $index -or ($index -gt 0 -and $event.kind -eq 'stream_start')) {
+            throw ('pre-arm sink stream identity or sequence mismatch at record ' + $index)
+        }
     }
 }
 
