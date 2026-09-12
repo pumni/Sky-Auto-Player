@@ -17,8 +17,8 @@ describe('SettingsPanel playback timing', () => {
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
 
     expect(screen.getByLabelText('Base Hold')).toBeInTheDocument();
-    expect(screen.getByText('Late Down tolerance').parentElement).toHaveTextContent('500 µs');
-    expect(screen.getByText(/Recommended sender margin: 800 µs · Source:/)).toHaveTextContent(
+    expect(screen.getByText('Late Down tolerance').parentElement).toHaveTextContent('2000 µs');
+    expect(screen.getByText(/Recommended sender margin: 2300 µs · Source:/)).toHaveTextContent(
       'Default fallback (no valid calibration cache)',
     );
   });
