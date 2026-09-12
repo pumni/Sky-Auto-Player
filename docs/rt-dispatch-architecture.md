@@ -90,8 +90,10 @@ unpaired KeyUps are expected and the report requires zero keys inserted before
 failure. It intentionally does not require `final_gate_target_changes`, which
 belongs to deterministic final-admission race-seam tests. Pause/resume first waits for a physical
 canonical Down/Up pair, pauses the running session, resumes it, and requires a
-later pair to reach the sink. Stop and skip first wait for an active physical
-Down, then require the corresponding cleanup Up and clean terminal release.
+later pair to reach the sink. Manual pause performs a fail-closed full
+15-key Up sweep; the report reconciles that sweep alongside authored Up events
+and the post-resume pair. Stop and skip first wait for an active physical Down,
+then require the corresponding cleanup Up and clean terminal release.
 
 Each ready record includes a process-generated `event_log_id` and explicitly binds
 `event_schema_version = 3`. Before publishing ready evidence, the helper flushes
