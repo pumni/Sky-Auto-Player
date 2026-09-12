@@ -1,7 +1,7 @@
 //! Materialized playback timing policy shared by planning and execution.
 //!
 //! User-owned Timing Margin is applied to authored hold and same-key release
-//! timing. The fixed Down late cutoff is a separate dispatch policy.
+//! timing. The user-owned Late Down tolerance is a separate session-frozen dispatch policy.
 
 use crate::song::SongError;
 
