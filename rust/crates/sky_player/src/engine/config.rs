@@ -232,8 +232,8 @@ impl Default for WorkerConfig {
                 game_fps: 60,
                 min_hold_us: 10_000,
                 min_release_gap_us: 16_667,
-                // Production's public default is 500 us. Test-support
-                // sessions supply their own explicit timing policy.
+                // Test-support baseline only. Production sessions receive
+                // the user-owned cutoff from their explicit timing policy.
                 down_late_grace_us: 500,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
