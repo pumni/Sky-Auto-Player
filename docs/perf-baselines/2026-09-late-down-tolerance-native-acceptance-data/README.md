@@ -1,17 +1,21 @@
 # Late Down tolerance native physical acceptance
 
-This evidence records a Windows interactive run of the project's production
+This evidence records Windows interactive runs of the project's production
 `sky_player` dispatch path against the project-owned `ReceiveOnly` native
 acceptance sink. It qualifies the sender, cutoff propagation, authored packet
 timing, focus safety, and cleanup behavior. It does **not** qualify Sky game
 consumption or prove that a suspected song-position miss is fixed.
 
+The primary run below was rebuilt and executed on the exact implementation
+head. This evidence archive is a documentation-only commit after that run; the
+earlier implementation-point run remains archived in its sibling directory.
+
 ## Run identity
 
 | Field | Value |
 | --- | --- |
-| Run ID | `input-reliability-20260912T202600-16eb9d20` |
-| Source revision | `c4763dac140e62325c8cb8e659a0b225d62a553f` |
+| Run ID | `input-reliability-20260912T210236-153c82dc` |
+| Source revision | `713d999e0698a77b2a9a11fb6936038d2f22aa47` |
 | Tracked source tree clean | Yes |
 | Release harness | `rust/target/release/rt-native-acceptance.exe` |
 | Harness SHA-256 | `f81684f69b3e96e0eaba946a5d98d91017314c401e0c1d2a13981a30bc3f21f2` |
@@ -22,7 +26,8 @@ consumption or prove that a suspected song-position miss is fixed.
 
 `summary.json`, all 17 native reports, per-scenario invocation ledgers, both
 ready records, both raw event logs, runner output, configuration, and their
-checksums are preserved in the sibling run directory. Each invocation ledger
+checksums are preserved in
+`input-reliability-20260912T210236-153c82dc/`. Each invocation ledger
 binds its report to the exact `ReceiveOnly` event-log ID and contiguous sink
 sequence range; the full sink log was independently checked for run ID,
 event-log ID, and sequence continuity.
@@ -68,7 +73,7 @@ probe, runs the matrix and sweep, and stops both windows afterward.
 
 ```powershell
 cargo build --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance
-pwsh.exe -NoProfile -File docs/perf-baselines/2026-09-late-down-tolerance-native-acceptance-data/input-reliability-20260912T202600-16eb9d20/runner.ps1
+pwsh.exe -NoProfile -File docs/perf-baselines/2026-09-late-down-tolerance-native-acceptance-data/input-reliability-20260912T210236-153c82dc/runner.ps1
 ```
 
 The runner uses real Windows `SendInput` against the validated test HWND. It

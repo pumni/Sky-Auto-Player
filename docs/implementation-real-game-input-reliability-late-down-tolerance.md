@@ -1030,14 +1030,19 @@ position.
 
 # Execution record (2026-09-12)
 
-Implementation is committed at `c4763dac140e62325c8cb8e659a0b225d62a553f`.
-The controlled Windows physical run passed 17/17: the established 13-scenario
-matrix at 800 us Timing Margin / 500 us Late Down tolerance, plus the 500 / 1000
-/ 2000 / 5000 us cutoff propagation sweep with authored Hold and Release Gap
-fixed at 17,467 us. The report is bound to 136 continuous ReceiveOnly sink
-events; the focus probe received zero keyboard events. Raw reports, invocation
-ledgers, ready records, sink/probe logs, runner, and SHA-256 list are checked in
-at `docs/perf-baselines/2026-09-late-down-tolerance-native-acceptance-data/`.
+Implementation began at `c4763dac140e62325c8cb8e659a0b225d62a553f` and the
+controlled Windows physical acceptance was repeated on exact implementation
+head `713d999e0698a77b2a9a11fb6936038d2f22aa47`; the subsequent commit only
+archives this run and updates its execution record. Run
+`input-reliability-20260912T210236-153c82dc` passed 17/17: the established
+13-scenario matrix at 800 us Timing Margin / 500 us Late Down tolerance, plus
+the 500 / 1000 / 2000 / 5000 us cutoff propagation sweep with authored Hold
+and Release Gap fixed at 17,467 us. The report is bound to 136 continuous
+ReceiveOnly sink events; the focus probe received zero keyboard events. Raw
+reports, invocation ledgers, ready records, sink/probe logs, runner, and
+SHA-256 list are checked in at
+`docs/perf-baselines/2026-09-late-down-tolerance-native-acceptance-data/input-reliability-20260912T210236-153c82dc/`.
+The earlier run at the implementation commit remains archived alongside it.
 
 This physical run exercises the controlled project-owned sink. It does not
 exercise the Diagnostics UI in Sky or identify the user's original
