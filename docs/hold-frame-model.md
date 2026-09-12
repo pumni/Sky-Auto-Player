@@ -32,15 +32,18 @@ frame_base_hold_us = ceil(hold_frames * frame_us)
 timing_margin_us = persisted_user_value
 effective_min_hold_us = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
-down_late_cutoff_us = 500
+down_late_cutoff_us = 2000
 ```
 
-The user-owned Timing Margin defaults to `800 µs`, ranges from `0` through
+The user-owned Timing Margin defaults to `500 µs`, ranges from `0` through
 `3,000 µs` in `100 µs` steps, and applies equally to Hold and Release Gap.
+The independent Late Down tolerance defaults to `2,000 µs`, ranges from `0`
+through `5,000 µs` in `100 µs` steps, and is frozen per prepared session.
 Calibration never supplies part of the authored timing equation. It may
-produce an advisory recommendation using the fixed `500 µs` Down late cutoff
-and measured transport-reserve evidence; the fallback recommendation is
-`800 µs`. Calibration is never shown as qualified when fallback is used.
+produce an advisory recommendation from the selected Late Down tolerance plus
+measured transport-reserve evidence; with the default cutoff and the
+unqualified `300 µs` reserve, the fallback recommendation is `2,300 µs`.
+Calibration is never shown as qualified when fallback is used.
 Production calibration uses one pair metric per Down/Up SendInput
 packet, based on `T_D/P_D/C_D` and `T_U/P_U/C_U`; Raw Input receipt timing is
 not part of qualification. It uses exactly the six `1/5/15 × hot/cold`
@@ -49,8 +52,10 @@ bucket. Its transport-reserve candidate is the maximum positive
 `sendinput_shrink_us.max` across required buckets plus a `100 µs` guard. A
 candidate at or below `2,000 µs` qualifies and reserves at least `300 µs`; a
 candidate above `2,000 µs` is out of the trusted envelope and uses the
-unqualified `800 µs` recommendation. A qualified recommendation is rounded
-up to the next `100 µs` after adding the fixed `500 µs` cutoff. Applying it
+unqualified transport reserve. A qualified recommendation is rounded up to
+the next `100 µs` after adding the currently selected Late Down tolerance.
+With the default `2,000 µs` cutoff and fallback `300 µs` reserve, that advisory
+value is `2,300 µs`. Applying it
 requires the user's explicit **Use recommended** action and affects only the
 next prepared session.
 
@@ -84,8 +89,9 @@ The native worker receives the materialized `effective_min_hold_us` and
 `min_release_gap_us` values and uses them as fixed durations. The native desktop
 adapter does not add another frame-relative floor; Rust only range-checks and
 validates these values in QPC ticks. It does not learn or subtract SendInput
-cost. The independent fixed `down_late_grace_us` sender cutoff is `500 µs` and
-is converted once to QPC ticks. It never participates in the authored policy,
+cost. The independent user-owned `down_late_grace_us` sender cutoff defaults to
+`2,000 µs` and is converted once to QPC ticks for each prepared session. It
+never participates in the authored policy,
 which enforces:
 
 ```text
@@ -93,10 +99,13 @@ effective_min_hold_us = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
 ```
 
-The default margin leaves `300 µs` beyond the fixed cutoff. A margin below
-`500 µs` can let an authorized late Down reduce sender-observed hold below the
-selected frame base; zero is a valid user choice. The cutoff is never added to
-an authored target or adapted during playback. Equality at the cutoff is
+The two defaults are intentionally decoupled: the `500 µs` authored margin
+is smaller than the `2,000 µs` sender cutoff. An authorized late Down can
+therefore reduce sender-observed hold below the selected frame base even though
+the authored schedule remains valid. This is an explicit user-owned timing
+trade-off and remains observable in sender forensics. Zero is also a valid
+margin choice. The cutoff is never added to an authored target or adapted
+during playback. Equality at the cutoff is
 allowed; the first QPC tick beyond it is a missed Down. Up-only releases
 remain exempt.
 
@@ -104,12 +113,12 @@ At 60 FPS with the default margin:
 
 | Hold | Requested | Effective hold | Release gap |
 |---:|---:|---:|---:|
-| 1.0 frame | 16,667 µs | 17,467 µs | 17,467 µs |
-| 1.25 frames | 20,834 µs | 21,634 µs | 17,467 µs |
-| 1.5 frames | 25,001 µs | 25,801 µs | 17,467 µs |
+| 1.0 frame | 16,667 µs | 17,167 µs | 17,167 µs |
+| 1.25 frames | 20,834 µs | 21,334 µs | 17,167 µs |
+| 1.5 frames | 25,001 µs | 25,501 µs | 17,167 µs |
 
 At 60 FPS with the default 1.0-frame selection, the exact same-key minimum
-cycle is `17,467 + 17,467 = 34,934 µs` (about 28.63 repeated presses per
+cycle is `17,167 + 17,167 = 34,334 µs` (about 29.13 repeated presses per
 second per key). This is a deliberate sender-side reliability tradeoff; it is
 not a claim about game frame registration.
 
