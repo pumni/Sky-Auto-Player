@@ -11,6 +11,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
   const playbackError = useStore((store) => store.playback.error);
   const transportOperation = useStore((store) => store.playback.transportOperation);
   const start = useStore((store) => store.startPreparedPlayback);
+  const cancel = useStore((store) => store.cancelPreparedPlayback);
   const admissionActionRef = useRef<HTMLButtonElement>(null);
   const admissionRequired = prepared?.admission === 'confirmation_required';
   const errorMessage =
@@ -50,6 +51,15 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
               {admissionDecisionLabel(decision.decision, decision.label)}
             </button>
           ))}
+          <button
+            className="button"
+            type="button"
+            aria-label="Cancel playback confirmation"
+            disabled={transportOperation !== null}
+            onClick={cancel}
+          >
+            Cancel
+          </button>
         </div>
       </section>
     );

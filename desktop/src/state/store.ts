@@ -58,6 +58,8 @@ export interface PlaybackContext {
   currentIndex: number;
   currentSongId: string;
   dryRun: boolean;
+  membershipRevision: number;
+  valid: boolean;
 }
 type CalibrationUiState =
   'idle' | 'starting' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled';
@@ -158,6 +160,7 @@ export interface DesktopStore {
     context: PlaybackContext | null;
     preparedIdentity: PlaybackSongIdentity | null;
     preparedContext: PlaybackContext | null;
+    startRequestId: number | null;
     transportOperation: TransportOperation;
     prepared: PreparedPlayback | null;
     snapshot: Extract<UiEvent, { name: 'playback.snapshot' }>['payload'] | null;
@@ -187,6 +190,7 @@ export interface DesktopStore {
   beginUpdateHandoff: () => Promise<void>;
   prepareSelectedPlayback: (overrides?: Partial<PlaybackConfig>) => Promise<void>;
   startPreparedPlayback: (decision?: PlaybackDecisionId) => Promise<void>;
+  cancelPreparedPlayback: () => void;
   stopPlayback: () => Promise<void>;
   pausePlayback: () => Promise<void>;
   resumePlayback: () => Promise<void>;
@@ -314,9 +318,14 @@ export function createDesktopStore(bridge: DesktopBridge) {
   const pageSize = LIBRARY_PAGE_SIZE;
   const pageCache = new Map<string, Map<number, SearchResult>>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
+  const sourceMembershipRevisions = new Map<string, number>();
   let diagnosticsEventSeq = 0;
 
   const sourceKey = (source: LibrarySource) => JSON.stringify(source);
+  const membershipRevisionFor = (source: LibrarySource) =>
+    sourceMembershipRevisions.get(sourceKey(source)) ?? 0;
+  const playbackContextIsCurrent = (context: PlaybackContext) =>
+    context.valid && context.membershipRevision === membershipRevisionFor(context.source);
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
     `${generation}\u0000${sourceKey(source)}\u0000${query}`;
   const invalidateSourceCache = (source: LibrarySource): void => {
@@ -377,6 +386,39 @@ export function createDesktopStore(bridge: DesktopBridge) {
   };
 
   return create<DesktopStore>((set, get) => {
+    const invalidatePlaybackMembershipContext = (source: LibrarySource): void => {
+      const key = sourceKey(source);
+      sourceMembershipRevisions.set(key, (sourceMembershipRevisions.get(key) ?? 0) + 1);
+      const playback = get().playback;
+      const contextMatches =
+        playback.context !== null && sourceKey(playback.context.source) === key;
+      const context =
+        playback.context && sourceKey(playback.context.source) === key
+          ? { ...playback.context, valid: false }
+          : playback.context;
+      const preparedMatches =
+        playback.preparedContext !== null && sourceKey(playback.preparedContext.source) === key;
+      const cancelConfirmation =
+        preparedMatches &&
+        playback.prepared?.admission === 'confirmation_required' &&
+        playback.transportOperation === null;
+      if (!contextMatches && !preparedMatches) return;
+      set({
+        playback: {
+          ...playback,
+          context,
+          prepared: cancelConfirmation ? null : playback.prepared,
+          preparedIdentity: cancelConfirmation ? null : playback.preparedIdentity,
+          preparedContext: preparedMatches
+            ? { ...playback.preparedContext!, valid: false }
+            : playback.preparedContext,
+          error: cancelConfirmation
+            ? 'The Library changed while playback was awaiting confirmation. Prepare the song again.'
+            : playback.error,
+        },
+      });
+    };
+
     const setLibraryMutationPending = (key: string, pending: boolean): boolean => {
       const current = get().libraryNavigation;
       if (pending && current.pendingMutations.has(key)) return false;
@@ -599,9 +641,16 @@ export function createDesktopStore(bridge: DesktopBridge) {
       transportOperationTimer = null;
     };
 
-    const beginOperation = (operation: Exclude<TransportOperation, null>): number | null => {
+    const beginOperation = (
+      operation: Exclude<TransportOperation, null>,
+      preemptStarting = false,
+    ): number | null => {
       const current = get().playback;
-      if (current.transportOperation !== null) return null;
+      if (
+        current.transportOperation !== null &&
+        !(preemptStarting && operation === 'stopping' && current.transportOperation === 'starting')
+      )
+        return null;
       clearTransportTimer();
       const epoch = ++transportOperationEpoch;
       set({ playback: { ...current, transportOperation: operation, error: null } });
@@ -642,7 +691,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
       const cancelPreparing = playback.transportOperation === 'preparing';
       if (cancelPreparing) clearOperationFromEvent();
       const preserveIdentity =
-        playback.sessionId !== null || (!cancelPreparing && playback.transportOperation !== null);
+        playback.sessionId !== null ||
+        playback.startRequestId !== null ||
+        (!cancelPreparing && playback.transportOperation !== null);
       return {
         ...playback,
         prepared: null,
@@ -680,14 +731,16 @@ export function createDesktopStore(bridge: DesktopBridge) {
         currentIndex,
         currentSongId: songId,
         dryRun: false,
+        membershipRevision: membershipRevisionFor(library.searchSource),
+        valid: true,
       };
     };
 
     const resolveContextRow = async (context: PlaybackContext, index: number): Promise<SongRow> => {
       const library = get().library;
-      if (context.generation !== library.generation) {
+      if (context.generation !== library.generation || !playbackContextIsCurrent(context)) {
         throw new Error(
-          'The Library changed after this playback context was created. Select a song to start a new context.',
+          'The Library context changed after playback started. Select a song to create a new playback context.',
         );
       }
       if (!Number.isInteger(index) || index < 0 || index >= context.total) {
@@ -741,15 +794,20 @@ export function createDesktopStore(bridge: DesktopBridge) {
       overrides: Partial<PlaybackConfig> | undefined,
       operationEpoch: number,
     ): Promise<PreparedPlayback | null> => {
+      if (!playbackContextIsCurrent(context)) {
+        throw new Error(
+          'The Library source changed. Select a song to create a new playback context.',
+        );
+      }
       const config = makePlaybackConfig(overrides, context.dryRun);
       const prepared = await bridge.preparePlayback({
         songId: identity.songId,
         generation: context.generation,
         config,
       });
-      if (context.generation !== get().library.generation) {
+      if (context.generation !== get().library.generation || !playbackContextIsCurrent(context)) {
         throw new Error(
-          'The Library changed while playback was being prepared. Select a song to start a new context.',
+          'The Library context changed while playback was being prepared. Select a song to create a new context.',
         );
       }
       if (!operationIsCurrent(operationEpoch)) return null;
@@ -789,6 +847,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       set({
         playback: {
           ...get().playback,
+          startRequestId: startEpoch,
           transportOperation: 'starting',
           error: null,
         },
@@ -800,15 +859,68 @@ export function createDesktopStore(bridge: DesktopBridge) {
         })
         .catch((error: unknown) => {
           if (pendingStart?.epoch === startEpoch) pendingStart = null;
+          const current = get().playback;
+          if (current.startRequestId === startEpoch) {
+            set({ playback: { ...current, startRequestId: null } });
+          }
           throw error;
         });
       if (!operationIsCurrent(operationEpoch) || retiredSessions.has(session.session_id)) {
         if (pendingStart?.epoch === startEpoch) pendingStart = null;
+        const current = get().playback;
+        const ownsRequest = current.startRequestId === startEpoch;
+        if (retiredSessions.has(session.session_id)) {
+          if (ownsRequest) set({ playback: { ...current, startRequestId: null } });
+          return;
+        }
+        if (current.sessionId === session.session_id) {
+          if (ownsRequest) set({ playback: { ...current, startRequestId: null } });
+          return;
+        }
+        if (current.sessionId === null) {
+          set({
+            playback: {
+              ...current,
+              sessionId: session.session_id,
+              currentSong: identity,
+              context,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              startRequestId: ownsRequest ? null : current.startRequestId,
+              state: 'starting',
+              snapshot: null,
+            },
+          });
+          const stopEpoch = beginOperation('stopping');
+          try {
+            await bridge.stopPlayback({ sessionId: session.session_id });
+          } catch (error) {
+            if (stopEpoch !== null) finishOperation(stopEpoch, errorMessage(error));
+          }
+        } else {
+          if (ownsRequest) set({ playback: { ...current, startRequestId: null } });
+          void bridge.stopPlayback({ sessionId: session.session_id }).catch(() => undefined);
+        }
         return;
       }
       if (pendingStart?.epoch === startEpoch) pendingStart = null;
+      if (!playbackContextIsCurrent(context)) {
+        const current = get().playback;
+        if (current.startRequestId === startEpoch) {
+          set({ playback: { ...current, startRequestId: null } });
+        }
+        void bridge.stopPlayback({ sessionId: session.session_id }).catch(() => undefined);
+        throw new Error('The Library source changed while playback was starting.');
+      }
       const current = get().playback;
-      if (current.sessionId !== null && current.sessionId !== session.session_id) return;
+      if (current.sessionId !== null && current.sessionId !== session.session_id) {
+        if (current.startRequestId === startEpoch) {
+          set({ playback: { ...current, startRequestId: null } });
+        }
+        void bridge.stopPlayback({ sessionId: session.session_id }).catch(() => undefined);
+        return;
+      }
       const earlyEventBound = current.sessionId === session.session_id;
       set({
         playback: {
@@ -816,6 +928,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           prepared: null,
           preparedIdentity: null,
           preparedContext: null,
+          startRequestId: null,
           sessionId: session.session_id,
           currentSong: identity,
           context,
@@ -835,9 +948,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
       const epoch = beginOperation(operation);
       if (epoch === null) return;
       try {
-        if (context.generation !== get().library.generation) {
+        if (context.generation !== get().library.generation || !playbackContextIsCurrent(context)) {
           throw new Error(
-            'The Library changed after this playback context was created. Select a song to start a new context.',
+            'The Library context changed after playback started. Select a song to create a new playback context.',
           );
         }
         if (sessionId) {
@@ -950,6 +1063,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         context: null,
         preparedIdentity: null,
         preparedContext: null,
+        startRequestId: null,
         transportOperation: null,
         prepared: null,
         snapshot: null,
@@ -1042,6 +1156,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             playback: {
               ...get().playback,
               state: 'failed',
+              startRequestId: null,
               transportOperation: null,
               error: eventState.fatal,
             },
@@ -1156,6 +1271,15 @@ export function createDesktopStore(bridge: DesktopBridge) {
           const continueOperation =
             current.transportOperation === 'advancing' ||
             current.transportOperation === 'restarting';
+          const autoAdvance =
+            event.payload.outcome === 'finished' &&
+            current.transportOperation !== 'stopping' &&
+            !continueOperation &&
+            context !== null &&
+            context.currentSongId === event.payload.song_id &&
+            playbackContextIsCurrent(context) &&
+            context.generation === get().library.generation &&
+            context.currentIndex + 1 < context.total;
           if (!continueOperation) clearOperationFromEvent();
           set({
             playback: {
@@ -1166,12 +1290,17 @@ export function createDesktopStore(bridge: DesktopBridge) {
               prepared: null,
               preparedIdentity: null,
               preparedContext: null,
+              startRequestId:
+                current.sessionId === event.payload.session_id ? null : current.startRequestId,
               transportOperation: continueOperation ? current.transportOperation : null,
               state: 'idle',
               snapshot: null,
               error: null,
             },
           });
+          if (autoAdvance && context) {
+            void transitionContextPlayback(context, context.currentIndex + 1, 'advancing', null);
+          }
         } else if (event.name === 'playback.failed') {
           const current = get().playback;
           if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
@@ -1192,6 +1321,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
               prepared: null,
               preparedIdentity: null,
               preparedContext: null,
+              startRequestId:
+                current.sessionId === event.payload.session_id ? null : current.startRequestId,
               transportOperation: null,
               state: 'failed',
               snapshot: null,
@@ -1526,6 +1657,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
         const active = get().library.source;
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const removed = await bridge.deletePlaylist(playlistId);
           if (removed) {
@@ -1555,6 +1687,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const key = `playlist:${playlistId}:import:file`;
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const result = await bridge.importLocalFilesToPlaylist(playlistId);
           set({
@@ -1574,6 +1707,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const key = `playlist:${playlistId}:import:folder`;
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const result = await bridge.importLocalFolderToPlaylist(playlistId);
           set({
@@ -1593,6 +1727,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const key = `playlist:${playlistId}:song:${songId}:add`;
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const summary = await bridge.addSongsToPlaylist(playlistId, [songId]);
           set({
@@ -1613,6 +1748,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const key = `playlist:${playlistId}:song:${songId}:remove`;
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const summary = await bridge.removeSongsFromPlaylist(playlistId, [songId]);
           set({
@@ -1689,6 +1825,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (!previous && !currentPlaybackSong) return;
         const previousLiked = previous?.liked ?? currentPlaybackSong?.liked ?? false;
         if (previousLiked === liked) return;
+        invalidatePlaybackMembershipContext({ kind: 'smart', id: 'liked' });
         const optimistic = previous ? { ...previous, liked } : null;
         const likedDelta = liked ? 1 : -1;
         pageCache.clear();
@@ -1698,8 +1835,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
             likedTotal: Math.max(0, current.likedTotal + likedDelta),
           },
           playback: currentPlaybackSong
-            ? { ...playback, currentSong: { ...currentPlaybackSong, liked } }
-            : playback,
+            ? { ...get().playback, currentSong: { ...currentPlaybackSong, liked } }
+            : get().playback,
         });
         const targetGeneration = currentPlaybackSong?.generation ?? current.generation;
         const generation = targetGeneration > 0 ? targetGeneration : undefined;
@@ -1854,14 +1991,19 @@ export function createDesktopStore(bridge: DesktopBridge) {
       async prepareSelectedPlayback(overrides) {
         const current = get();
         const playback = current.playback;
+        if (playback.prepared?.admission === 'confirmation_required') return;
         if (
+          playback.startRequestId !== null ||
           playback.transportOperation !== null ||
           playback.sessionId !== null ||
           ['starting', 'playing', 'paused', 'stopping'].includes(playback.state)
         ) {
           return;
         }
-        const selectedSongId = playback.currentSong?.songId ?? current.library.selectedSongId;
+        const selectedSongId =
+          playback.context && !playbackContextIsCurrent(playback.context)
+            ? current.library.selectedSongId
+            : (playback.currentSong?.songId ?? current.library.selectedSongId);
         if (!selectedSongId || !current.settings) {
           set({
             playback: { ...playback, error: 'Select a song before preparing playback.' },
@@ -1869,7 +2011,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
           return;
         }
         const reuseCurrentContext =
-          playback.currentSong?.songId === selectedSongId && playback.context !== null;
+          playback.currentSong?.songId === selectedSongId &&
+          playback.context !== null &&
+          playbackContextIsCurrent(playback.context);
         const context = reuseCurrentContext
           ? playback.context!
           : contextForSong(current.library, selectedSongId);
@@ -1914,6 +2058,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const prepared = playback.prepared;
         const identity = playback.preparedIdentity;
         const context = playback.preparedContext;
+        if (playback.startRequestId !== null) return;
         if (playback.transportOperation !== null) return;
         if (
           playback.sessionId !== null ||
@@ -1925,6 +2070,24 @@ export function createDesktopStore(bridge: DesktopBridge) {
           set({ playback: { ...playback, error: 'Prepare playback before starting.' } });
           return;
         }
+        if (prepared.admission === 'blocked') return;
+        if (
+          prepared.admission === 'confirmation_required' &&
+          (!decision || !prepared.decisions.some((item) => item.decision === decision))
+        )
+          return;
+        if (!playbackContextIsCurrent(context)) {
+          set({
+            playback: {
+              ...playback,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              error: 'The Library source changed. Select a song and prepare playback again.',
+            },
+          });
+          return;
+        }
         const operationEpoch = beginOperation('starting');
         if (operationEpoch === null) return;
         try {
@@ -1934,16 +2097,35 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
       },
 
+      cancelPreparedPlayback() {
+        const playback = get().playback;
+        if (
+          playback.transportOperation !== null ||
+          playback.prepared?.admission !== 'confirmation_required'
+        )
+          return;
+        set({
+          playback: {
+            ...playback,
+            prepared: null,
+            preparedIdentity: null,
+            preparedContext: null,
+            error: null,
+          },
+        });
+      },
+
       async stopPlayback() {
         const playback = get().playback;
         const sessionId = playback.sessionId;
+        const preemptStarting = playback.transportOperation === 'starting';
         if (
           !sessionId ||
-          playback.transportOperation !== null ||
+          (playback.transportOperation !== null && !preemptStarting) ||
           !['starting', 'playing', 'paused'].includes(playback.state)
         )
           return;
-        const operationEpoch = beginOperation('stopping');
+        const operationEpoch = beginOperation('stopping', preemptStarting);
         if (operationEpoch === null) return;
         try {
           await bridge.stopPlayback({ sessionId });
@@ -1983,7 +2165,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
       async previousPlayback() {
         const playback = get().playback;
         const context = playback.context;
-        if (!context || playback.transportOperation !== null) return;
+        if (
+          !context ||
+          !playbackContextIsCurrent(context) ||
+          playback.prepared?.admission === 'confirmation_required' ||
+          playback.transportOperation !== null
+        )
+          return;
         const currentUs =
           playback.snapshot?.session_id === playback.sessionId ? playback.snapshot.current_us : 0;
         const targetIndex =
@@ -1994,7 +2182,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
       async nextPlayback() {
         const playback = get().playback;
         const context = playback.context;
-        if (!context || playback.transportOperation !== null) return;
+        if (
+          !context ||
+          !playbackContextIsCurrent(context) ||
+          playback.prepared?.admission === 'confirmation_required' ||
+          playback.transportOperation !== null
+        )
+          return;
         const targetIndex = context.currentIndex + 1;
         if (targetIndex >= context.total) return;
         await transitionContextPlayback(context, targetIndex, 'advancing', playback.sessionId);

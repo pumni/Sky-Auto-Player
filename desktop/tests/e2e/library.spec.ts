@@ -388,21 +388,19 @@ test('Player transport geometry stays fixed when song timing labels appear', asy
   expect(Math.abs(selectedGeometry.timelineY - idleGeometry.timelineY)).toBeLessThanOrEqual(1);
 });
 
-test('natural finish retires the session and allows an immediate replay', async ({ page }) => {
+test('natural finish retires the old session and starts the next context song', async ({
+  page,
+}) => {
   await page.goto('/?mockPlaybackDurationMs=350&mockStartDelayMs=20');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
-  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible({
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
     timeout: 5_000,
   });
-  await expect(player.getByText('Starting playback', { exact: true })).toHaveCount(0);
-  await expect(player.getByText('Stopping', { exact: true })).toHaveCount(0);
-  await expect(player.getByRole('progressbar')).toHaveAttribute('value', '0');
-
-  await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
 });
 
 test('browsing and liking another Library row keeps Player Bar identity on Now Playing', async ({
@@ -457,14 +455,15 @@ test('starting never exposes Pause and transport fits the supported narrow viewp
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
   await expect(player.getByRole('button', { name: 'Pause' })).toHaveCount(0);
-  await expect(player.getByRole('button', { name: 'Stop' })).toBeDisabled();
+  await expect(player.getByRole('button', { name: 'Stop' })).toBeEnabled();
 
   const dimensions = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
   }));
   expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
-  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await player.getByRole('button', { name: 'Stop' }).click();
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
 });
 
 test('Titlebar search and Player primary control share the application center axis', async ({
@@ -625,6 +624,11 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   await idlePrimary.click();
   const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
   await expect(confirmation).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  await expect(player.getByRole('button', { name: 'Next' })).toBeDisabled();
+  await expect(
+    confirmation.getByRole('button', { name: 'Cancel playback confirmation' }),
+  ).toBeEnabled();
   const transportStatus = player.locator('.player-transport-status');
   await expect(transportStatus).toHaveText('Awaiting confirmation');
   const playerBox = await player.boundingBox();
@@ -641,6 +645,12 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   await expect(
     confirmation.getByRole('button', { name: 'Test playback (no input)' }),
   ).toBeVisible();
+
+  await confirmation.getByRole('button', { name: 'Cancel playback confirmation' }).click();
+  await expect(page.getByRole('group', { name: 'Playback confirmation' })).toHaveCount(0);
+  await idlePrimary.waitFor({ state: 'visible' });
+  await idlePrimary.click();
+  await expect(confirmation).toBeVisible();
   await confirmation.getByRole('button', { name: 'Proceed with current settings' }).click();
 
   const activePrimary = page.getByRole('button', { name: 'Pause' });

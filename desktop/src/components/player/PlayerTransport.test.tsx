@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
-import { createDesktopStore, selectRowAtIndex } from '../../state/store';
+import { createDesktopStore, selectRowAtIndex, type DesktopStore } from '../../state/store';
 import { PlayerTransport } from './PlayerTransport';
 
 async function setupTransport() {
@@ -28,6 +28,8 @@ async function setupTransport() {
     currentIndex: 0,
     currentSongId: row.song_id,
     dryRun: false,
+    membershipRevision: 0,
+    valid: true,
   };
   const sessionId = 'c'.repeat(32);
   const setPlayback = (patch: Partial<ReturnType<typeof store.getState>['playback']>) => {
@@ -52,7 +54,28 @@ describe('PlayerTransport', () => {
 
     expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+  });
+
+  it('locks Previous and Next while a risk confirmation owns the prepared song', async () => {
+    const { setPlayback, currentSong, context } = await setupTransport();
+    act(() =>
+      setPlayback({
+        currentSong,
+        context: { ...context, total: 2 },
+        prepared: {
+          admission: 'confirmation_required',
+          decisions: [
+            { decision: 'proceed', label: 'Proceed with current settings' },
+            { decision: 'use_recommended', label: 'Use recommended settings' },
+            { decision: 'dry_run', label: 'Test playback (no input)' },
+          ],
+        } as unknown as NonNullable<DesktopStore['playback']['prepared']>,
+      }),
+    );
+
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   });
 
   it('maps playing to Pause, paused to Resume, and keeps Stop discoverable', async () => {

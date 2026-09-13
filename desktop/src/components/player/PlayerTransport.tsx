@@ -21,12 +21,15 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
   const next = useStore((store) => store.nextPlayback);
 
   const operationPending = playback.transportOperation !== null;
+  const confirmationPending = playback.prepared?.admission === 'confirmation_required';
   const hasSession = playback.sessionId !== null;
   const active =
     hasSession &&
     ['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(playback.state);
   const contextCurrent =
-    playback.context !== null && playback.context.generation === libraryGeneration;
+    playback.context !== null &&
+    playback.context.valid &&
+    playback.context.generation === libraryGeneration;
   const canPrevious = contextCurrent;
   const canNext = contextCurrent && playback.context!.currentIndex + 1 < playback.context!.total;
   const timelineSongExists = Boolean(playback.currentSong || selectedSongId);
@@ -64,8 +67,10 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
       case 'restarting':
         return 'Restarting song';
       default:
-        return playback.prepared?.admission === 'confirmation_required'
-          ? 'Awaiting confirmation'
+        if (playback.prepared?.admission === 'confirmation_required')
+          return 'Awaiting confirmation';
+        return playback.startRequestId !== null && ['idle', 'starting'].includes(playback.state)
+          ? 'Waiting for native playback session'
           : null;
     }
   })();
@@ -76,8 +81,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     if (current.playback.prepared?.admission === 'ready') await start();
   };
 
-  const startingOrTransitioning =
-    operationPending || ['starting', 'stopping', 'finished', 'failed'].includes(playback.state);
+  const otherTransportOwnsControls = operationPending || confirmationPending;
 
   return (
     <div className="player-transport">
@@ -88,7 +92,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             type="button"
             aria-label="Previous"
             title="Previous"
-            disabled={!canPrevious || operationPending}
+            disabled={!canPrevious || otherTransportOwnsControls}
             onClick={() => void previous()}
           >
             <SkipBack size={16} aria-hidden="true" />
@@ -101,7 +105,11 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
               type="button"
               aria-label="Play"
               title="Play"
-              disabled={(!playback.currentSong && !selectedSongId) || operationPending}
+              disabled={
+                playback.startRequestId !== null ||
+                (!selectedSongId && (!playback.currentSong || !contextCurrent)) ||
+                operationPending
+              }
               onClick={() => void prepareAndMaybeStart(false)}
             >
               <Play size={18} aria-hidden="true" />
@@ -153,7 +161,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             type="button"
             aria-label="Next"
             title="Next"
-            disabled={!canNext || operationPending}
+            disabled={!canNext || otherTransportOwnsControls}
             onClick={() => void next()}
           >
             <SkipForward size={16} aria-hidden="true" />
@@ -166,7 +174,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
               type="button"
               aria-label="Stop"
               title="Stop"
-              disabled={operationPending || startingOrTransitioning}
+              disabled={operationPending && playback.transportOperation !== 'starting'}
               onClick={() => void stop()}
             >
               <CircleStop size={16} aria-hidden="true" />
