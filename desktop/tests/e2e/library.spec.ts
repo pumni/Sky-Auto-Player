@@ -388,6 +388,85 @@ test('Player transport geometry stays fixed when song timing labels appear', asy
   expect(Math.abs(selectedGeometry.timelineY - idleGeometry.timelineY)).toBeLessThanOrEqual(1);
 });
 
+test('natural finish retires the session and allows an immediate replay', async ({ page }) => {
+  await page.goto('/?mockPlaybackDurationMs=350&mockStartDelayMs=20');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible({
+    timeout: 5_000,
+  });
+  await expect(player.getByText('Starting playback', { exact: true })).toHaveCount(0);
+  await expect(player.getByText('Stopping', { exact: true })).toHaveCount(0);
+  await expect(player.getByRole('progressbar')).toHaveAttribute('value', '0');
+
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+});
+
+test('browsing and liking another Library row keeps Player Bar identity on Now Playing', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=5_000');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+
+  await page.getByRole('row', { name: /Candle Run/ }).click();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await player.getByRole('button', { name: 'Add to Liked Songs' }).click();
+  await expect(player.getByRole('button', { name: 'Remove from Liked Songs' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Candle Run/ })).toBeVisible();
+});
+
+test('Next waits for retirement and starts the next context song', async ({ page }) => {
+  await page.goto('/?mockPlaybackDurationMs=5_000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+
+  await player.getByRole('button', { name: 'Next' }).click();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
+});
+
+test('rapid Play and risk confirmation clicks create only one active session', async ({ page }) => {
+  await page.goto('/?mockPlaybackDurationMs=5_000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).dblclick();
+  const proceed = page.getByRole('button', { name: 'Proceed with current settings' });
+  await expect(proceed).toBeVisible();
+  await proceed.dblclick();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Stop' })).toHaveCount(1);
+  await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
+});
+
+test('starting never exposes Pause and transport fits the supported narrow viewport', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/?mockPlaybackDurationMs=5_000&mockStartDelayMs=600');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
+  await expect(player.getByRole('button', { name: 'Pause' })).toHaveCount(0);
+  await expect(player.getByRole('button', { name: 'Stop' })).toBeDisabled();
+
+  const dimensions = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+});
+
 test('Titlebar search and Player primary control share the application center axis', async ({
   page,
 }) => {

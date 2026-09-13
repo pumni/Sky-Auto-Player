@@ -23,7 +23,20 @@ const isTauri =
   'isTauri' in window ||
   window.location.protocol === 'tauri:' ||
   window.location.hostname === 'tauri.localhost';
-const bridge = isTauri ? createTauriBridge() : createMockBridge();
+const mockDuration = Number(
+  new URLSearchParams(window.location.search).get('mockPlaybackDurationMs'),
+);
+const mockStartDelay = Number(new URLSearchParams(window.location.search).get('mockStartDelayMs'));
+const bridge = isTauri
+  ? createTauriBridge()
+  : createMockBridge({
+      ...(Number.isFinite(mockDuration) && mockDuration > 0
+        ? { playbackDurationMs: Math.min(mockDuration, 120_000) }
+        : {}),
+      ...(Number.isFinite(mockStartDelay) && mockStartDelay > 0
+        ? { startDelayMs: Math.min(mockStartDelay, 15_000) }
+        : {}),
+    });
 const root = document.getElementById('root');
 
 if (!root) throw new Error('desktop root element is missing');

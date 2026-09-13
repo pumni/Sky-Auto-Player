@@ -9,6 +9,7 @@ interface PlaybackAdmissionProps {
 export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
   const prepared = useStore((store) => store.playback.prepared);
   const playbackError = useStore((store) => store.playback.error);
+  const transportOperation = useStore((store) => store.playback.transportOperation);
   const start = useStore((store) => store.startPreparedPlayback);
   const admissionActionRef = useRef<HTMLButtonElement>(null);
   const admissionRequired = prepared?.admission === 'confirmation_required';
@@ -42,6 +43,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
               key={decision.decision}
               className={`button${decision.decision === 'proceed' ? ' button-primary' : ''}`}
               type="button"
+              disabled={transportOperation !== null}
               ref={index === 0 ? admissionActionRef : undefined}
               onClick={() => void start(decision.decision)}
             >

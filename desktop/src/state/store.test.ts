@@ -402,7 +402,415 @@ describe('desktop store', () => {
     await act(async () => store.getState().prepareSelectedPlayback());
     await act(async () => store.getState().startPreparedPlayback());
     await act(async () => store.getState().selectSong(songB.song_id));
-    expect(store.getState().playback.songTitle).toBe(songA.title);
+    expect(store.getState().playback.currentSong?.title).toBe(songA.title);
+  });
+
+  it('keeps an explicit Now Playing identity when Library selection changes', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const songA = rowAt(store, 0);
+    const songB = rowAt(store, 1);
+    if (!songA || !songB) throw new Error('mock library is too small');
+
+    await act(async () => store.getState().selectSong(songA.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await act(async () => store.getState().selectSong(songB.song_id));
+
+    const currentSong = (
+      store.getState().playback as unknown as { currentSong?: { songId: string; title: string } }
+    ).currentSong;
+    expect(currentSong).toMatchObject({ songId: songA.song_id, title: songA.title });
+    expect(store.getState().library.selectedSongId).toBe(songB.song_id);
+  });
+
+  it('coalesces concurrent prepare requests for the selected song', async () => {
+    const bridge = createMockBridge();
+    const originalPrepare = bridge.preparePlayback;
+    let prepareCalls = 0;
+    let releasePrepare: (() => void) | undefined;
+    bridge.preparePlayback = async (request) => {
+      prepareCalls += 1;
+      await new Promise<void>((resolve) => {
+        releasePrepare = resolve;
+      });
+      return originalPrepare(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    const firstPrepare = store.getState().prepareSelectedPlayback();
+    const duplicatePrepare = store.getState().prepareSelectedPlayback();
+    await act(async () => Promise.resolve());
+    expect(prepareCalls).toBe(1);
+    expect(
+      (store.getState().playback as unknown as { transportOperation?: string }).transportOperation,
+    ).toBe('preparing');
+
+    releasePrepare?.();
+    await act(async () => Promise.all([firstPrepare, duplicatePrepare]));
+  });
+
+  it('coalesces repeated starts of the same prepared playback', async () => {
+    const bridge = createMockBridge();
+    const originalStart = bridge.startPlayback;
+    let startCalls = 0;
+    let releaseStart: (() => void) | undefined;
+    bridge.startPlayback = async (request) => {
+      startCalls += 1;
+      await new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      });
+      return originalStart(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+
+    const firstStart = store.getState().startPreparedPlayback();
+    const duplicateStart = store.getState().startPreparedPlayback();
+    await act(async () => Promise.resolve());
+    expect(startCalls).toBe(1);
+    expect(
+      (store.getState().playback as unknown as { transportOperation?: string }).transportOperation,
+    ).toBe('starting');
+
+    releaseStart?.();
+    await act(async () => Promise.all([firstStart, duplicateStart]));
+  });
+
+  it('does not issue Pause while playback is still starting', async () => {
+    const bridge = createMockBridge();
+    const originalPause = bridge.pausePlayback;
+    let pauseCalls = 0;
+    bridge.pausePlayback = async (request) => {
+      pauseCalls += 1;
+      return originalPause(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    expect(store.getState().playback.state).toBe('starting');
+
+    await act(async () => store.getState().pausePlayback());
+    expect(pauseCalls).toBe(0);
+  });
+
+  it('clears Pause and Resume operation state only after matching lifecycle events', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 });
+    const originalPause = bridge.pausePlayback;
+    const originalResume = bridge.resumePlayback;
+    let releasePause: (() => void) | undefined;
+    let releaseResume: (() => void) | undefined;
+    let pauseCalls = 0;
+    let resumeCalls = 0;
+    bridge.pausePlayback = async (request) => {
+      pauseCalls += 1;
+      await new Promise<void>((resolve) => {
+        releasePause = resolve;
+      });
+      return originalPause(request);
+    };
+    bridge.resumePlayback = async (request) => {
+      resumeCalls += 1;
+      await new Promise<void>((resolve) => {
+        releaseResume = resolve;
+      });
+      return originalResume(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    const pausing = store.getState().pausePlayback();
+    expect(store.getState().playback.transportOperation).toBe('pausing');
+    await act(async () => store.getState().resumePlayback());
+    expect(resumeCalls).toBe(0);
+    releasePause?.();
+    await act(async () => pausing);
+    expect(store.getState().playback.state).toBe('paused');
+    expect(store.getState().playback.transportOperation).toBeNull();
+
+    const resuming = store.getState().resumePlayback();
+    expect(store.getState().playback.transportOperation).toBe('resuming');
+    await act(async () => store.getState().pausePlayback());
+    expect(pauseCalls).toBe(1);
+    releaseResume?.();
+    await act(async () => resuming);
+    expect(store.getState().playback.state).toBe('playing');
+    expect(store.getState().playback.transportOperation).toBeNull();
+  });
+
+  it('retires terminal ownership and does not treat a normal finish message as an error', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    const sessionId = store.getState().playback.sessionId;
+    if (!sessionId) throw new Error('mock session did not start');
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        snapshot: {
+          session_id: sessionId,
+          song_id: first.song_id,
+          title: first.title,
+          state: 'playing',
+          current_us: 1_000_000,
+          total_us: first.duration_us ?? 1_000_000,
+          physical: false,
+          message: null,
+        } as unknown as NonNullable<ReturnType<typeof store.getState>['playback']['snapshot']>,
+      },
+    });
+
+    store.getState().applyEvent({
+      v: 1,
+      name: 'playback.state_changed',
+      payload: {
+        session_id: sessionId,
+        song_id: first.song_id,
+        state: 'finished',
+        physical: false,
+        message: 'Playback finished',
+        outcome: 'finished',
+      },
+    });
+    expect(store.getState().playback.error).toBeNull();
+    store.getState().applyEvent({
+      v: 1,
+      name: 'playback.finished',
+      payload: {
+        session_id: sessionId,
+        song_id: first.song_id,
+        outcome: 'finished',
+        total_us: first.duration_us ?? 1_000_000,
+        message: 'Playback finished',
+      },
+    });
+
+    expect(store.getState().playback.sessionId).toBeNull();
+    expect(store.getState().playback.snapshot).toBeNull();
+    expect(store.getState().playback.error).toBeNull();
+  });
+
+  it('naturally finishes into a replayable idle state with a new session identity', async () => {
+    const store = createDesktopStore(createMockBridge({ playbackDurationMs: 80, startDelayMs: 5 }));
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    const firstSession = store.getState().playback.sessionId;
+    if (!firstSession) throw new Error('mock session did not start');
+
+    await waitFor(() => {
+      expect(store.getState().playback.state).toBe('idle');
+      expect(store.getState().playback.sessionId).toBeNull();
+      expect(store.getState().playback.snapshot).toBeNull();
+    });
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+    expect(store.getState().playback.transportOperation).toBeNull();
+
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    expect(store.getState().playback.sessionId).not.toBe(firstSession);
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+  });
+
+  it('Next retires the active session before starting its context neighbor', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 1);
+    const nextSong = rowAt(store, 2);
+    if (!first || !nextSong) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    const oldSession = store.getState().playback.sessionId;
+    if (!oldSession) throw new Error('mock session did not start');
+
+    await act(async () => store.getState().nextPlayback());
+
+    expect(store.getState().playback.currentSong?.title).toBe(nextSong.title);
+    expect(store.getState().playback.sessionId).not.toBeNull();
+    expect(store.getState().playback.sessionId).not.toBe(oldSession);
+    expect(store.getState().playback.error).toBeNull();
+    expect(store.getState().playback.context?.currentIndex).toBe(2);
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+  });
+
+  it('keeps dry-run isolation when Previous and Next replace the active session', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 });
+    const playbackConfigs: boolean[] = [];
+    const originalPrepare = bridge.preparePlayback;
+    bridge.preparePlayback = async (request) => {
+      playbackConfigs.push(request.config.dry_run);
+      return originalPrepare(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback({ dry_run: true }));
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    await act(async () => store.getState().nextPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    await act(async () => store.getState().previousPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    expect(playbackConfigs).toEqual([true, true, true]);
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+  });
+
+  it('resolves Next from the frozen source and query without rewriting the current Library view', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    await act(async () => store.getState().search('Aurora'));
+    expect(store.getState().library.resultTotal).toBe(1);
+    await act(async () => store.getState().nextPlayback());
+
+    expect(store.getState().playback.currentSong?.title).toBe('Candle Run');
+    expect(store.getState().playback.context?.query).toBe('');
+    expect(store.getState().library.query).toBe('Aurora');
+    expect(store.getState().library.resultTotal).toBe(1);
+    expect(rowAt(store, 0)?.title).toBe('Aurora Landing');
+  });
+
+  it('lazily loads a context page for Next and keeps risk confirmation before starting it', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 });
+    const searchOffsets: number[] = [];
+    const originalSearch = bridge.searchSongs;
+    bridge.searchSongs = async (request) => {
+      searchOffsets.push(request.offset);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 199);
+    if (!first) throw new Error('last row in first page was not loaded');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    await act(async () => store.getState().nextPlayback());
+
+    expect(searchOffsets).toContain(200);
+    expect(store.getState().playback.preparedIdentity?.title).toBe('Song 201');
+    expect(store.getState().playback.prepared?.admission).toBe('confirmation_required');
+    expect(store.getState().playback.sessionId).toBeNull();
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    expect(store.getState().playback.currentSong?.title).toBe('Song 201');
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+  });
+
+  it('Previous restarts after three seconds and selects the prior item near the beginning', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 20_000, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const third = rowAt(store, 2);
+    const second = rowAt(store, 1);
+    if (!third || !second) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(third.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    const oldSession = store.getState().playback.sessionId;
+    if (!oldSession) throw new Error('mock session did not start');
+    const snapshotAt = (sessionId: string, currentUs: number) => ({
+      session_id: sessionId,
+      seq: 1,
+      state: 'playing' as const,
+      song_id: third.song_id,
+      title: third.title,
+      current_us: currentUs,
+      total_us: third.duration_us ?? 1_000_000,
+      pre_roll_remaining_us: 0,
+      focus_state: 'focused' as const,
+      health: 'healthy' as const,
+      input_path_degraded: false,
+      message: null,
+    });
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        snapshot: snapshotAt(oldSession, 3_000_001),
+      },
+    });
+
+    await act(async () => store.getState().previousPlayback());
+    expect(store.getState().playback.currentSong?.songId).toBe(third.song_id);
+    expect(store.getState().playback.sessionId).not.toBe(oldSession);
+    expect(store.getState().playback.context?.currentIndex).toBe(2);
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    const restartedSession = store.getState().playback.sessionId;
+    if (!restartedSession) throw new Error('restarted mock session did not start');
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        snapshot: snapshotAt(restartedSession, 3_000_000),
+      },
+    });
+    await act(async () => store.getState().previousPlayback());
+    expect(store.getState().playback.currentSong?.songId).toBe(second.song_id);
+    expect(store.getState().playback.sessionId).not.toBe(restartedSession);
+    expect(store.getState().playback.context?.currentIndex).toBe(1);
+  });
+
+  it('explicit Stop retires the session without advancing the frozen context', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    await act(async () => store.getState().stopPlayback());
+    await waitFor(() => expect(store.getState().playback.sessionId).toBeNull());
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+    expect(store.getState().playback.context?.currentIndex).toBe(0);
+    expect(store.getState().playback.transportOperation).toBeNull();
   });
 
   it('binds a short session whose events arrive before start resolves', async () => {
@@ -465,8 +873,9 @@ describe('desktop store', () => {
     await act(async () => store.getState().prepareSelectedPlayback());
     await act(async () => store.getState().startPreparedPlayback());
 
-    expect(store.getState().playback.sessionId).toBe(sessionId);
-    expect(store.getState().playback.state).toBe('finished');
+    expect(store.getState().playback.sessionId).toBeNull();
+    expect(store.getState().playback.state).toBe('idle');
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
   });
 
   it('rejects late events from a retired session after browsing another song', async () => {
@@ -496,7 +905,7 @@ describe('desktop store', () => {
       },
     });
     await act(async () => store.getState().selectSong(songB.song_id));
-    expect(store.getState().playback.songTitle).toBeNull();
+    expect(store.getState().playback.currentSong).toBeNull();
 
     store.getState().applyEvent({
       v: 1,
@@ -510,8 +919,8 @@ describe('desktop store', () => {
         outcome: null,
       },
     });
-    expect(store.getState().playback.state).toBe('finished');
-    expect(store.getState().playback.songTitle).toBeNull();
+    expect(store.getState().playback.state).toBe('idle');
+    expect(store.getState().playback.currentSong).toBeNull();
   });
 
   it('keeps diagnostic samples and human events bounded without duplicating snapshots', async () => {

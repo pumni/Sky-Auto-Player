@@ -96,12 +96,21 @@
 }
 
 .transport-actions {
+  position: relative;
   display: grid;
   grid-template-columns: 34px 40px 34px;
   align-items: center;
   justify-content: center;
   min-width: 0;
   gap: 8px;
+}
+
+.transport-stop-slot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 34px;
+  height: 40px;
 }
 
 .transport-slot {
@@ -125,6 +134,16 @@
   color: var(--text-tertiary);
   border-color: var(--border-subtle);
   background: var(--surface-raised);
+}
+
+.player-primary-action.is-pending svg {
+  animation: player-transport-spin 900ms linear infinite;
+}
+
+@keyframes player-transport-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .player-secondary-action {
@@ -459,6 +478,10 @@
 @media (prefers-reduced-motion: reduce) {
   .resizable-separator span {
     transition: none;
+  }
+
+  .player-primary-action.is-pending svg {
+    animation: none;
   }
 }
 

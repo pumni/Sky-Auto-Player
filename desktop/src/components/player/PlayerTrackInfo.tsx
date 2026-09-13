@@ -12,7 +12,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const selectedRow = useStore((store) =>
     selectSongById(store.library, store.library.selectedSongId),
   );
-  const playbackTitle = useStore((store) => store.playback.songTitle);
+  const currentSong = useStore((store) => store.playback.currentSong);
   const preparedSong = useStore((store) => store.playback.prepared?.song);
   const preparedRisk = useStore((store) => store.playback.prepared?.risk);
   const active = useStore((store) =>
@@ -22,20 +22,32 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const playbackError = useStore((store) => store.playback.error);
   const setSongLiked = useStore((store) => store.setSongLiked);
 
-  const selectedTitle =
-    playbackTitle ?? preparedSong?.title ?? selectedRow?.title ?? 'No song selected';
-  const selectedMetadata = selectedRow
-    ? `${selectedRow.format_label} · ${
-        selectedRow.duration_us === null ? '…' : formatPlayerDuration(selectedRow.duration_us)
-      } · ${selectedRow.note_count === null ? '…' : selectedRow.note_count} notes`
-    : 'Preparing metadata…';
-  const trackSubtitle = !selectedSongId
-    ? 'Select a song from your Library'
-    : playbackError
-      ? 'Playback error'
-      : active
-        ? playerStateLabel(playbackState)
-        : selectedMetadata;
+  const fallbackIdentity = selectedRow;
+  const title =
+    currentSong?.title ?? preparedSong?.title ?? fallbackIdentity?.title ?? 'No song selected';
+  const liked = currentSong?.liked ?? fallbackIdentity?.liked ?? false;
+  const likeSongId = currentSong?.songId ?? selectedSongId;
+  const metadata = currentSong
+    ? `${currentSong.formatLabel} · ${
+        currentSong.durationUs === null ? '…' : formatPlayerDuration(currentSong.durationUs)
+      } · ${currentSong.noteCount === null ? '…' : currentSong.noteCount} notes`
+    : fallbackIdentity
+      ? `${fallbackIdentity.format_label} · ${
+          fallbackIdentity.duration_us === null
+            ? '…'
+            : formatPlayerDuration(fallbackIdentity.duration_us)
+        } · ${fallbackIdentity.note_count === null ? '…' : fallbackIdentity.note_count} notes`
+      : 'Preparing metadata…';
+  const trackSubtitle =
+    !currentSong && !selectedSongId
+      ? 'Select a song from your Library'
+      : playbackError
+        ? 'Playback error'
+        : active
+          ? playerStateLabel(playbackState)
+          : currentSong && playbackState === 'idle'
+            ? 'Ready to play'
+            : metadata;
 
   return (
     <div className="player-track-info">
@@ -43,19 +55,19 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
         <Music2 size={17} />
       </span>
       <div className="player-track-copy">
-        <strong title={selectedTitle}>{selectedTitle}</strong>
+        <strong title={title}>{title}</strong>
         <span className="muted">{trackSubtitle}</span>
       </div>
-      {selectedSongId && selectedRow && (
+      {likeSongId && (currentSong || fallbackIdentity) && (
         <button
-          className={`icon-button player-like-button${selectedRow.liked ? ' is-liked' : ''}`}
+          className={`icon-button player-like-button${liked ? ' is-liked' : ''}`}
           type="button"
-          aria-label={selectedRow.liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-          aria-pressed={selectedRow.liked}
-          title={selectedRow.liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-          onClick={() => void setSongLiked(selectedSongId, !selectedRow.liked)}
+          aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+          aria-pressed={liked}
+          title={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+          onClick={() => void setSongLiked(likeSongId, !liked)}
         >
-          <Heart size={16} fill={selectedRow.liked ? 'currentColor' : 'none'} aria-hidden="true" />
+          <Heart size={16} fill={liked ? 'currentColor' : 'none'} aria-hidden="true" />
         </button>
       )}
       {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (

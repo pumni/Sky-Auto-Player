@@ -19,15 +19,14 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const prepare = useStore((store) => store.prepareSelectedPlayback);
   const start = useStore((store) => store.startPreparedPlayback);
   const selectedSongId = useStore((store) => store.library.selectedSongId);
-  const playbackState = useStore((store) => store.playback.state);
-  const pendingCommand = useStore((store) => store.playback.pendingCommand);
-  const hasPreparedPlayback = useStore((store) => store.playback.prepared !== null);
+  const playback = useStore((store) => store.playback);
+  const hasPreparedPlayback = playback.prepared !== null;
   const [profileOpen, setProfileOpen] = useState(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
   const canPreparePlayback =
-    Boolean(selectedSongId) &&
-    !['starting', 'playing', 'paused', 'stopping'].includes(playbackState) &&
-    pendingCommand === null &&
+    Boolean(playback.currentSong || selectedSongId) &&
+    playback.sessionId === null &&
+    playback.transportOperation === null &&
     !hasPreparedPlayback;
   const profileSummary = defaults
     ? `${defaults.hold_frames}f + ${(defaults.timing_margin_us / 1_000).toFixed(1)}ms · ${defaults.tempo_scale.toFixed(2)}× · ${defaults.fps} FPS`
@@ -37,7 +36,6 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
     await prepare({ dry_run: true });
     const current = useStore.getState();
     const prepared = current.playback.prepared;
-    if (prepared?.song.song_id !== current.library.selectedSongId) return;
     if (prepared?.admission === 'ready') await start();
   };
 
