@@ -1,0 +1,785 @@
+[
+  {
+    "name": "idle-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": true,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Play",
+        "disabled": true,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": true,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": true,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "right": 880,
+        "centerY": 562.4000244140625
+      },
+      "profile": {
+        "x": 884,
+        "right": 916,
+        "centerY": 562.4000244140625
+      },
+      "utility": {
+        "x": 920,
+        "right": 952,
+        "centerY": 562.4000244140625
+      }
+    },
+    "primaryCenterX": 480,
+    "shuffle": "false",
+    "autoPlay": "true",
+    "primaryLabel": "Play"
+  },
+  {
+    "name": "playing-shuffle-off-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "right": 880,
+        "centerY": 562.4000244140625
+      },
+      "profile": {
+        "x": 884,
+        "right": 916,
+        "centerY": 562.4000244140625
+      },
+      "utility": {
+        "x": 920,
+        "right": 952,
+        "centerY": 562.4000244140625
+      }
+    },
+    "primaryCenterX": 480,
+    "shuffle": "false",
+    "autoPlay": "true",
+    "primaryLabel": "Pause"
+  },
+  {
+    "name": "playing-shuffle-on-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "right": 880,
+        "centerY": 562.4000244140625
+      },
+      "profile": {
+        "x": 884,
+        "right": 916,
+        "centerY": 562.4000244140625
+      },
+      "utility": {
+        "x": 920,
+        "right": 952,
+        "centerY": 562.4000244140625
+      }
+    },
+    "primaryCenterX": 480,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "primaryLabel": "Pause"
+  },
+  {
+    "name": "playing-auto-play-off-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "right": 880,
+        "centerY": 562.4000244140625
+      },
+      "profile": {
+        "x": 884,
+        "right": 916,
+        "centerY": 562.4000244140625
+      },
+      "utility": {
+        "x": 920,
+        "right": 952,
+        "centerY": 562.4000244140625
+      }
+    },
+    "primaryCenterX": 480,
+    "shuffle": "true",
+    "autoPlay": "false",
+    "primaryLabel": "Pause"
+  },
+  {
+    "name": "playing-auto-play-on-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "right": 880,
+        "centerY": 562.4000244140625
+      },
+      "profile": {
+        "x": 884,
+        "right": 916,
+        "centerY": 562.4000244140625
+      },
+      "utility": {
+        "x": 920,
+        "right": 952,
+        "centerY": 562.4000244140625
+      }
+    },
+    "primaryCenterX": 480,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "primaryLabel": "Pause"
+  },
+  {
+    "name": "quick-profile-no-autoplay-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "right": 880,
+        "centerY": 562.4000244140625
+      },
+      "profile": {
+        "x": 884,
+        "right": 916,
+        "centerY": 562.4000244140625
+      },
+      "utility": {
+        "x": 920,
+        "right": 952,
+        "centerY": 562.4000244140625
+      }
+    },
+    "primaryCenterX": 480,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "primaryLabel": "Pause"
+  },
+  {
+    "name": "settings-playback-autoplay-on-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "right": 880,
+        "centerY": 562.4000244140625
+      },
+      "profile": {
+        "x": 884,
+        "right": 916,
+        "centerY": 562.4000244140625
+      },
+      "utility": {
+        "x": 920,
+        "right": 952,
+        "centerY": 562.4000244140625
+      }
+    },
+    "primaryCenterX": 480,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "primaryLabel": "Pause"
+  },
+  {
+    "name": "idle-800x560",
+    "clientPixels": "800x560",
+    "pngPixels": "800x560",
+    "viewport": {
+      "width": 640,
+      "height": 448,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 640,
+      "height": 448
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 215,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 256.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Play",
+        "disabled": false,
+        "x": 298.9875183105469,
+        "y": 368.3999938964844,
+        "width": 42,
+        "height": 42,
+        "centerY": 389.3999938964844
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 348.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": true,
+        "x": 386.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 527.9874877929688,
+        "right": 559.9874877929688,
+        "centerY": 402.3999938964844
+      },
+      "profile": {
+        "x": 563.9874877929688,
+        "right": 595.9874877929688,
+        "centerY": 402.3999938964844
+      },
+      "utility": {
+        "x": 599.9874877929688,
+        "right": 631.9874877929688,
+        "centerY": 402.3999938964844
+      }
+    },
+    "primaryCenterX": 319.9875183105469,
+    "shuffle": "false",
+    "autoPlay": "true",
+    "primaryLabel": "Play"
+  },
+  {
+    "name": "playing-800x560",
+    "clientPixels": "800x560",
+    "pngPixels": "800x560",
+    "viewport": {
+      "width": 640,
+      "height": 448,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 640,
+      "height": 448
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 215,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 256.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 298.9875183105469,
+        "y": 368.3999938964844,
+        "width": 42,
+        "height": 42,
+        "centerY": 389.3999938964844
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 348.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 386.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 527.9874877929688,
+        "right": 559.9874877929688,
+        "centerY": 402.3999938964844
+      },
+      "profile": {
+        "x": 563.9874877929688,
+        "right": 595.9874877929688,
+        "centerY": 402.3999938964844
+      },
+      "utility": {
+        "x": 599.9874877929688,
+        "right": 631.9874877929688,
+        "centerY": 402.3999938964844
+      }
+    },
+    "primaryCenterX": 319.9875183105469,
+    "shuffle": "false",
+    "autoPlay": "true",
+    "primaryLabel": "Pause"
+  }
+]
