@@ -40,10 +40,19 @@ async function setupTransport() {
   return { store, currentSong, context, sessionId, setPlayback, ...view };
 }
 
+function expectFiveTransportButtons(primaryName: string) {
+  expect(screen.getByRole('button', { name: 'Shuffle' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Previous' })).toBeVisible();
+  expect(screen.getByRole('button', { name: primaryName })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Next' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible();
+  expect(document.querySelectorAll('.player-controls-row button')).toHaveLength(5);
+}
+
 describe('PlayerTransport', () => {
   afterEach(cleanup);
 
-  it('does not expose Pause during starting and keeps Stop tied to a real session', async () => {
+  it('keeps all five controls visible and allows Stop during starting with a session', async () => {
     const { setPlayback, sessionId } = await setupTransport();
     act(() =>
       setPlayback({
@@ -55,19 +64,21 @@ describe('PlayerTransport', () => {
 
     expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
+    expectFiveTransportButtons('Starting playback');
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
     expect(
       screen.getByRole('button', { name: 'Stop' }).querySelector('svg.lucide-square'),
     ).toBeInTheDocument();
   });
 
-  it('shows a stable pending control while the start request has no session id yet', async () => {
+  it('shows all five controls while starting before a session id exists', async () => {
     const { setPlayback } = await setupTransport();
     act(() => setPlayback({ startRequestId: 7, transportOperation: 'starting' }));
 
     expect(screen.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Play' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    expectFiveTransportButtons('Starting playback');
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
   });
 
   it('locks Previous and Next while a risk confirmation owns the prepared song', async () => {
@@ -89,6 +100,8 @@ describe('PlayerTransport', () => {
 
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    expectFiveTransportButtons('Play');
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
     expect(screen.getByTestId('player-controls-row')).toBeInTheDocument();
     expect(screen.getByTestId('player-primary-slot')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
@@ -97,10 +110,12 @@ describe('PlayerTransport', () => {
   it('maps playing to Pause, paused to Resume, and keeps Stop discoverable', async () => {
     const { setPlayback, sessionId } = await setupTransport();
     act(() => setPlayback({ state: 'playing', sessionId }));
+    expectFiveTransportButtons('Pause');
     expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
 
     act(() => setPlayback({ state: 'paused' }));
+    expectFiveTransportButtons('Resume');
     expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
   });
@@ -110,7 +125,41 @@ describe('PlayerTransport', () => {
     act(() => setPlayback({ state: 'stopping', sessionId, transportOperation: null }));
 
     expect(screen.getByRole('button', { name: 'Playback transition pending' })).toBeDisabled();
+    expectFiveTransportButtons('Playback transition pending');
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+  });
+
+  it('keeps the five-button layout in idle, failed, and stopping-operation states', async () => {
+    const { setPlayback, sessionId } = await setupTransport();
+    expectFiveTransportButtons('Play');
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+
+    act(() => setPlayback({ state: 'failed', sessionId: null, error: 'native failure' }));
+    expectFiveTransportButtons('Play');
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+
+    act(() =>
+      setPlayback({
+        prepared: { admission: 'blocked' } as NonNullable<DesktopStore['playback']['prepared']>,
+      }),
+    );
+    expectFiveTransportButtons('Play');
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+
+    act(() => setPlayback({ state: 'stopping', sessionId, transportOperation: 'stopping' }));
+    expectFiveTransportButtons('Stopping playback');
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+  });
+
+  it('keeps a disabled primary pending control while playback ownership is uncertain', async () => {
+    const { setPlayback } = await setupTransport();
+    act(() =>
+      setPlayback({ error: 'Playback status is unavailable: bridge timed out', state: 'idle' }),
+    );
+
+    expectFiveTransportButtons('Playback transition pending');
+    expect(screen.getByRole('button', { name: 'Playback transition pending' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
   });
 
   it('locks navigation while an operation is pending but keeps Stop as a safety control', async () => {

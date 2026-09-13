@@ -1,8 +1,7 @@
-import { PanelRight, SlidersHorizontal } from 'lucide-react';
+import { ListEnd, PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
-import { AutoPlaySwitch } from '../settings/AutoPlaySwitch';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
 interface PlayerToolsProps {
@@ -12,6 +11,7 @@ interface PlayerToolsProps {
 
 export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const settings = useStore((store) => store.settings);
+  const autoPlayEnabled = settings?.auto_play ?? true;
   const defaults = settings?.playback_defaults;
   const bootstrap = useStore((store) => store.bootstrap);
   const utility = useStore((store) => store.utility);
@@ -23,6 +23,8 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const playback = useStore((store) => store.playback);
   const hasPreparedPlayback = playback.prepared !== null;
   const [profileOpen, setProfileOpen] = useState(false);
+  const [autoPlayPending, setAutoPlayPending] = useState(false);
+  const autoPlayMutationPending = useRef(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
   const canPreparePlayback =
     Boolean(playback.currentSong || selectedSongId) &&
@@ -40,8 +42,31 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
     if (prepared?.admission === 'ready') await start();
   };
 
+  const toggleAutoPlay = async () => {
+    if (!settings || autoPlayMutationPending.current) return;
+    autoPlayMutationPending.current = true;
+    setAutoPlayPending(true);
+    try {
+      await patchSettings({ autoPlay: !settings.auto_play });
+    } finally {
+      autoPlayMutationPending.current = false;
+      setAutoPlayPending(false);
+    }
+  };
+
   return (
     <div className="player-tools">
+      <button
+        className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
+        type="button"
+        aria-label="Auto Play"
+        aria-pressed={autoPlayEnabled}
+        title={`Auto Play ${autoPlayEnabled ? 'on' : 'off'}`}
+        disabled={!settings || autoPlayPending}
+        onClick={() => void toggleAutoPlay()}
+      >
+        <ListEnd size={16} aria-hidden="true" />
+      </button>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
           <AriaButton
@@ -69,7 +94,6 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                   defaults={defaults}
                   bootstrap={bootstrap}
                   recommendation={settings?.timing_margin_recommendation}
-                  autoPlay={settings?.auto_play ?? true}
                   patchSettings={patchSettings}
                 />
               </div>
@@ -107,17 +131,10 @@ interface ProfileFieldsProps {
   defaults: NonNullable<DesktopStore['settings']>['playback_defaults'] | undefined;
   bootstrap: DesktopStore['bootstrap'];
   recommendation: NonNullable<DesktopStore['settings']>['timing_margin_recommendation'] | undefined;
-  autoPlay: boolean;
   patchSettings: DesktopStore['patchSettings'];
 }
 
-function ProfileFields({
-  defaults,
-  bootstrap,
-  recommendation,
-  autoPlay,
-  patchSettings,
-}: ProfileFieldsProps) {
+function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: ProfileFieldsProps) {
   if (!defaults || !bootstrap || !recommendation) {
     return <span className="muted">Profile unavailable</span>;
   }
@@ -127,27 +144,21 @@ function ProfileFields({
   const minReleaseGapUs = frameUs + defaults.timing_margin_us;
   return (
     <>
-      <div className="profile-base-row">
-        <label className="profile-base-hold">
-          Base Hold
-          <select
-            value={defaults.hold_frames}
-            onChange={(event) =>
-              void patchSettings({ playbackDefaults: { holdFrames: Number(event.target.value) } })
-            }
-          >
-            {bootstrap.option_sets.hold_frames.map((value) => (
-              <option key={value} value={value}>
-                {value}f
-              </option>
-            ))}
-          </select>
-        </label>
-        <AutoPlaySwitch
-          checked={autoPlay}
-          onChange={(checked) => void patchSettings({ autoPlay: checked })}
-        />
-      </div>
+      <label>
+        Base Hold
+        <select
+          value={defaults.hold_frames}
+          onChange={(event) =>
+            void patchSettings({ playbackDefaults: { holdFrames: Number(event.target.value) } })
+          }
+        >
+          {bootstrap.option_sets.hold_frames.map((value) => (
+            <option key={value} value={value}>
+              {value}f
+            </option>
+          ))}
+        </select>
+      </label>
       <label>
         Tempo
         <select

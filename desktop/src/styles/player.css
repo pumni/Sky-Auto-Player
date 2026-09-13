@@ -158,6 +158,10 @@
   background: transparent;
   color: var(--text-secondary);
   transform: translateY(-50%);
+  transition:
+    color 120ms ease,
+    opacity 120ms ease,
+    filter 120ms ease;
 }
 
 .player-transport .player-shuffle-action {
@@ -185,10 +189,21 @@
   color: var(--accent);
 }
 
-.player-transport .player-secondary-action:hover:not(:disabled) {
+.player-transport .player-shuffle-action.is-active:focus-visible:not(:disabled) {
+  color: var(--accent);
+}
+
+.player-transport .player-secondary-action:hover:not(:disabled),
+.player-transport .player-secondary-action:focus-visible:not(:disabled) {
   border: 0;
   background: transparent;
   color: var(--text-primary);
+}
+
+.player-transport .player-secondary-action:disabled {
+  color: var(--text-tertiary);
+  cursor: default;
+  opacity: 0.58;
 }
 
 .player-transport .player-stop-action {
@@ -392,24 +407,6 @@
   gap: 9px;
 }
 
-.profile-base-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.profile-base-row .profile-base-hold {
-  display: flex;
-  justify-content: space-between;
-}
-
-.profile-base-row .auto-play-switch {
-  min-width: 124px;
-  min-height: 28px;
-  font-size: 10px;
-}
-
 .auto-play-switch {
   display: inline-flex;
   align-items: center;
@@ -517,6 +514,7 @@
   justify-self: end;
   min-width: 0;
   gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .player-utility-button {
@@ -716,11 +714,30 @@
   border-radius: 4px;
   color: var(--text-tertiary);
   background: transparent;
+  transition:
+    color 120ms ease,
+    opacity 120ms ease,
+    filter 120ms ease;
 }
 
-.player-tool-button:hover {
+.player-tool-button:hover:not(:disabled),
+.player-tool-button:focus-visible:not(:disabled) {
   color: var(--text-primary);
   background: transparent;
+}
+
+.player-tool-button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.player-auto-play-button.is-on {
+  color: var(--accent);
+}
+
+.player-auto-play-button.is-on:hover:not(:disabled),
+.player-auto-play-button.is-on:focus-visible:not(:disabled) {
+  color: var(--accent-hover);
 }
 
 .player-tool-button:focus-visible {
