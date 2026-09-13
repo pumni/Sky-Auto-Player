@@ -539,14 +539,24 @@ test('Shuffle changes Next traversal without repeating visited songs', async ({ 
 
   const visited = ['Blue Bird'];
   for (let count = 0; count < 4; count += 1) {
+    const currentTitle = await player.locator('.player-track-copy strong').textContent();
     await player.getByRole('button', { name: 'Next' }).click();
+    const title = player.locator('.player-track-copy strong');
     const proceed = page.getByRole('button', { name: 'Proceed with current settings' });
-    if (await proceed.isVisible().catch(() => false)) await proceed.click();
-    await expect(player.getByText('Playing', { exact: true })).toBeVisible();
-    const title = (await player.locator('.player-track-copy strong').textContent())?.trim();
-    expect(title).toBeTruthy();
-    if (!title) throw new Error('shuffled Now Playing title is missing');
-    visited.push(title);
+    const playing = player.getByText('Playing', { exact: true });
+    let confirmationAccepted = false;
+    await expect(async () => {
+      if (!confirmationAccepted && (await proceed.isVisible())) {
+        await proceed.click();
+        confirmationAccepted = true;
+      }
+      await expect(title).not.toHaveText(currentTitle ?? '');
+      await expect(playing).toBeVisible();
+    }).toPass({ timeout: 10_000 });
+    const titleText = (await title.textContent())?.trim();
+    expect(titleText).toBeTruthy();
+    if (!titleText) throw new Error('shuffled Now Playing title is missing');
+    visited.push(titleText);
   }
   expect(new Set(visited).size).toBe(visited.length);
   expect(visited[1]).not.toBe('Candle Run');
