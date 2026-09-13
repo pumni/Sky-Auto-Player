@@ -24,13 +24,14 @@ const recommendation: TimingMarginRecommendation = {
 describe('TimingMarginControl', () => {
   afterEach(() => cleanup());
 
-  it('steps by the backend increment and applies recommendations explicitly', () => {
+  it('shows recommendation as text and steps by the backend increment', () => {
     const changes: number[] = [];
     render(
       <TimingMarginControl
         value={800}
         options={options}
         recommendation={recommendation}
+        density="full"
         onChange={async (value) => {
           changes.push(value);
           return value;
@@ -39,10 +40,31 @@ describe('TimingMarginControl', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Use recommended (1300 µs)' }));
 
-    expect(changes).toEqual([900, 1_300]);
-    expect(screen.getByText(/Source: Qualified calibration/)).toBeInTheDocument();
+    expect(changes).toEqual([900]);
+    expect(screen.getByText('· rec. 1300 µs')).toBeInTheDocument();
+    expect(screen.getByText('Source: Qualified calibration')).toBeInTheDocument();
+    expect(screen.getByText('Applies to Hold and Release Gap')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the compact variant informational and omits source details', () => {
+    render(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        density="compact"
+        onChange={async (value) => value}
+      />,
+    );
+
+    expect(screen.getByRole('group', { name: 'Timing Margin' })).toContainElement(
+      screen.getByText('· rec. 1300 µs'),
+    );
+    expect(screen.queryByText(/Source:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Applies to Hold and Release Gap')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
   });
 
   it('disables steps at the configured endpoints', () => {
@@ -51,6 +73,7 @@ describe('TimingMarginControl', () => {
         value={0}
         options={options}
         recommendation={recommendation}
+        density="full"
         onChange={async () => 0}
       />,
     );
@@ -63,6 +86,7 @@ describe('TimingMarginControl', () => {
         value={3_000}
         options={options}
         recommendation={recommendation}
+        density="full"
         onChange={async () => 3_000}
       />,
     );
@@ -79,6 +103,7 @@ describe('TimingMarginControl', () => {
         value={800}
         options={options}
         recommendation={recommendation}
+        density="compact"
         onChange={(value) => {
           changes.push(value);
           return new Promise<number>((resolve) => confirmations.push(resolve));
@@ -107,6 +132,7 @@ describe('TimingMarginControl', () => {
         value={800}
         options={options}
         recommendation={recommendation}
+        density="full"
         onChange={async () => {
           throw new Error('settings IPC failed');
         }}
@@ -118,20 +144,25 @@ describe('TimingMarginControl', () => {
     await waitFor(() => expect(screen.getByText('800 µs')).toBeInTheDocument());
   });
 
-  it('shows an over-range recommendation without clamping or applying it', () => {
+  it('shows an over-range recommendation as information and never writes it', () => {
+    const changes: number[] = [];
     render(
       <TimingMarginControl
         value={800}
         options={options}
         recommendation={{ ...recommendation, recommended_timing_margin_us: 5_300 }}
-        onChange={async (value) => value}
+        density="compact"
+        onChange={async (value) => {
+          changes.push(value);
+          return value;
+        }}
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Use recommended (5300 µs)' })).toBeDisabled();
-    expect(
-      screen.getByText('Recommendation exceeds the current Timing Margin range.'),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Recommended sender margin: 5300 µs/)).toBeInTheDocument();
+    expect(screen.getByText('· rec. 5300 µs · out of range')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    expect(changes).toEqual([900]);
+    expect(changes).not.toContain(5_300);
   });
 });

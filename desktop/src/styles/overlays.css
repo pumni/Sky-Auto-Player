@@ -96,6 +96,20 @@
   margin-bottom: 1px;
 }
 
+.settings-timing-group {
+  display: grid;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-timing-group h4 {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .settings-section label:not(.checkbox-row) {
   display: grid;
   gap: 6px;
@@ -165,13 +179,28 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px 12px;
-  margin-top: 12px;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.timing-margin-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  min-width: 0;
 }
 
 .timing-margin-label {
   color: var(--text-secondary);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.timing-margin-recommendation {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .timing-margin-stepper {
@@ -193,9 +222,12 @@
   cursor: default;
 }
 
-.timing-margin-recommendation,
 .timing-margin-control .settings-note {
   grid-column: 1 / -1;
+}
+
+.timing-margin-control--full .timing-margin-source {
+  margin-top: 2px;
 }
 
 .settings-timing-summary,
@@ -206,6 +238,10 @@
   margin: 10px 0 0;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.profile-timing-summary {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .settings-timing-summary div,

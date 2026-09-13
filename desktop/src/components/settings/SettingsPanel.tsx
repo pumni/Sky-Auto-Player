@@ -154,43 +154,47 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                       </select>
                     </label>
                   </div>
-                  <TimingMarginControl
-                    value={defaults.timing_margin_us}
-                    options={bootstrap.option_sets}
-                    recommendation={settings.timing_margin_recommendation}
-                    onChange={(value) =>
-                      patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
-                        (authoritative) =>
-                          authoritative?.playback_defaults.timing_margin_us ?? null,
-                      )
-                    }
-                  />
-                  <dl className="settings-timing-summary">
-                    <div>
-                      <dt>1 frame</dt>
-                      <dd>{(frameUs / 1_000).toFixed(3)} ms</dd>
-                    </div>
-                    <div>
-                      <dt>Base hold</dt>
-                      <dd>{(frameBaseHoldUs / 1_000).toFixed(3)} ms</dd>
-                    </div>
-                    <div>
-                      <dt>Target hold</dt>
-                      <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
-                    </div>
-                    <div>
-                      <dt>Release gap</dt>
-                      <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
-                    </div>
-                    <div>
-                      <dt>Late Down tolerance</dt>
-                      <dd>{defaults.down_late_grace_us} µs</dd>
-                    </div>
-                  </dl>
-                  <p className="settings-note">
-                    Playback changes apply when preparing the next session. An active session keeps
-                    its frozen timing values.
-                  </p>
+                  <div className="settings-timing-group">
+                    <h4>Timing</h4>
+                    <TimingMarginControl
+                      value={defaults.timing_margin_us}
+                      options={bootstrap.option_sets}
+                      recommendation={settings.timing_margin_recommendation}
+                      density="full"
+                      onChange={(value) =>
+                        patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
+                          (authoritative) =>
+                            authoritative?.playback_defaults.timing_margin_us ?? null,
+                        )
+                      }
+                    />
+                    <dl className="settings-timing-summary">
+                      <div>
+                        <dt>1 frame</dt>
+                        <dd>{(frameUs / 1_000).toFixed(3)} ms</dd>
+                      </div>
+                      <div>
+                        <dt>Base hold</dt>
+                        <dd>{(frameBaseHoldUs / 1_000).toFixed(3)} ms</dd>
+                      </div>
+                      <div>
+                        <dt>Target hold</dt>
+                        <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
+                      </div>
+                      <div>
+                        <dt>Release gap</dt>
+                        <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
+                      </div>
+                      <div>
+                        <dt>Late Down tolerance</dt>
+                        <dd>{defaults.down_late_grace_us} µs</dd>
+                      </div>
+                    </dl>
+                    <p className="settings-note">
+                      Changes apply to the next prepared session; an active session keeps its frozen
+                      timing values.
+                    </p>
+                  </div>
                 </section>
               )}
 

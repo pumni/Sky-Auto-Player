@@ -449,16 +449,49 @@ test('Player Bar remains compact, centered, and bounded at the minimum viewport'
 });
 
 test('Playback Profile works through the narrow popover with focus restore', async ({ page }) => {
-  await page.setViewportSize({ width: 800, height: 560 });
+  await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
   const trigger = page.getByRole('button', { name: 'Configure playback profile' });
+  const popover = page.getByRole('dialog', { name: 'Playback profile' });
+
+  await trigger.click();
+  await expect(popover).toBeVisible();
+  const assertPopoverGeometry = async () => {
+    const box = await popover.boundingBox();
+    expect(box).not.toBeNull();
+    if (box) {
+      expect(box.width).toBeGreaterThanOrEqual(260);
+      expect(box.width).toBeLessThanOrEqual(320);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()?.width ?? 0);
+    }
+    const hasHorizontalOverflow = await popover.evaluate(
+      (element) => element.scrollWidth > element.clientWidth,
+    );
+    expect(hasHorizontalOverflow).toBe(false);
+  };
+  await assertPopoverGeometry();
+  await page.keyboard.press('Escape');
+  await expect(popover).toBeHidden();
+
+  await page.setViewportSize({ width: 800, height: 560 });
   await trigger.click();
 
-  const popover = page.getByRole('dialog', { name: 'Playback profile' });
   await expect(popover).toBeVisible();
+  await assertPopoverGeometry();
   await expect(popover.getByLabel('Hold')).toBeVisible();
   await expect(popover.getByLabel('Tempo')).toBeVisible();
   await expect(popover.getByLabel('FPS')).toBeVisible();
+  await expect(popover.locator('.profile-timing-summary dt')).toHaveText([
+    'Target hold',
+    'Release gap',
+    'Late Down tolerance',
+  ]);
+  await expect(popover.locator('.timing-margin-control')).toContainText(
+    'Timing Margin · rec. 2300 µs',
+  );
+  await expect(popover.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
+  await expect(popover.getByText(/Source:/)).toHaveCount(0);
   await expect(popover.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
   await expect(popover.locator('input[type="checkbox"]')).toHaveCount(0);
   await expectNoSeriousAccessibilityViolations(page);
@@ -565,6 +598,25 @@ test('Settings modal has no serious accessibility violations and closes accessib
     'aria-current',
     'page',
   );
+  await expect(dialog.getByRole('heading', { name: 'Timing' })).toBeVisible();
+  await expect(
+    dialog.getByText('Source: Default fallback (no valid calibration cache)'),
+  ).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
+  await expect(dialog.getByText(/sender evidence, not proof/)).toHaveCount(0);
+  const playbackContentHasHorizontalOverflow = await dialog
+    .locator('.settings-content')
+    .evaluate((element) => element.scrollWidth > element.clientWidth);
+  expect(playbackContentHasHorizontalOverflow).toBe(false);
+  const timingHeadingBox = await dialog.locator('.timing-margin-heading').boundingBox();
+  const timingStepperBox = await dialog.locator('.timing-margin-stepper').boundingBox();
+  expect(timingHeadingBox).not.toBeNull();
+  expect(timingStepperBox).not.toBeNull();
+  if (timingHeadingBox && timingStepperBox) {
+    const headingCenterY = timingHeadingBox.y + timingHeadingBox.height / 2;
+    const stepperCenterY = timingStepperBox.y + timingStepperBox.height / 2;
+    expect(Math.abs(headingCenterY - stepperCenterY)).toBeLessThanOrEqual(2);
+  }
   const initialBox = await dialog.boundingBox();
   const settingsContent = dialog.locator('.settings-content');
   const initialContentWidth = await settingsContent.evaluate((element) => element.clientWidth);

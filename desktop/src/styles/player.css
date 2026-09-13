@@ -293,9 +293,10 @@
   z-index: 7;
   display: grid;
   gap: 10px;
-  min-width: 205px;
-  width: max-content;
+  width: min(320px, calc(100vw - 24px));
+  min-width: min(260px, calc(100vw - 24px));
   max-width: calc(100vw - 24px);
+  box-sizing: border-box;
   padding: 12px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-panel);
@@ -320,7 +321,11 @@
 
 .profile-popover .timing-margin-control {
   grid-template-columns: minmax(0, 1fr) auto;
-  margin-top: 2px;
+  gap: 5px 8px;
+}
+
+.profile-popover .timing-margin-heading {
+  column-gap: 4px;
 }
 
 .profile-popover .profile-timing-summary {
