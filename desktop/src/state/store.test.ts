@@ -906,7 +906,7 @@ describe('desktop store', () => {
     expect(store.getState().playback.transportOperation).toBeNull();
   });
 
-  it('stops a native session whose start response arrives after its operation timed out', async () => {
+  it('binds a native session from reconciliation when its start response is delayed', async () => {
     const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 60_000 });
     let releaseStart: (() => void) | undefined;
     const stopped: string[] = [];
@@ -953,18 +953,173 @@ describe('desktop store', () => {
 
       await vi.advanceTimersByTimeAsync(15_001);
       expect(store.getState().playback.transportOperation).toBeNull();
-      expect(store.getState().playback.sessionId).toBeNull();
-      expect(store.getState().playback.startRequestId).not.toBeNull();
+      expect(store.getState().playback.sessionId).not.toBeNull();
+      expect(store.getState().playback.startRequestId).toBeNull();
+      expect(store.getState().playback.state).toBe('starting');
+      expect(stopped).toEqual([]);
 
       releaseStart?.();
       await act(async () => startRequest);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(stopped).toHaveLength(1);
+      expect(stopped).toEqual([]);
+      expect(store.getState().playback.sessionId).not.toBeNull();
+      const reconciledSessionId = store.getState().playback.sessionId;
+      await act(async () => store.getState().stopPlayback());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toEqual([reconciledSessionId]);
       expect(store.getState().playback.sessionId).toBeNull();
       expect(store.getState().playback.state).toBe('idle');
       expect(store.getState().playback.startRequestId).toBeNull();
       expect(store.getState().playback.transportOperation).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases a never-resolving start when native status reports no session', async () => {
+    const bridge = createMockBridge();
+    bridge.startPlayback = () =>
+      new Promise<import('../bridge/DesktopBridge').PlaybackSession>(() => undefined);
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+
+    vi.useFakeTimers();
+    try {
+      void store.getState().startPreparedPlayback('proceed');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_001);
+      });
+
+      expect(store.getState().playback.startRequestId).toBeNull();
+      expect(store.getState().playback.sessionId).toBeNull();
+      expect(store.getState().playback.transportOperation).toBeNull();
+      expect(store.getState().playback.prepared).toBeNull();
+      expect(store.getState().playback.state).toBe('idle');
+      expect(store.getState().playback.error).toContain('Press Play to try again');
+
+      await act(async () => store.getState().prepareSelectedPlayback());
+      expect(store.getState().playback.prepared).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps Play retryable when both the start and status IPC calls never resolve', async () => {
+    const bridge = createMockBridge();
+    bridge.startPlayback = () =>
+      new Promise<import('../bridge/DesktopBridge').PlaybackSession>(() => undefined);
+    bridge.getPlaybackStatus = () =>
+      new Promise<import('../bridge/DesktopBridge').PlaybackStatus>(() => undefined);
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+
+    vi.useFakeTimers();
+    try {
+      void store.getState().startPreparedPlayback('proceed');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(17_100);
+      });
+
+      expect(store.getState().playback.startRequestId).toBeNull();
+      expect(store.getState().playback.sessionId).toBeNull();
+      expect(store.getState().playback.transportOperation).toBeNull();
+      expect(store.getState().playback.prepared).toBeNull();
+      expect(store.getState().playback.state).toBe('idle');
+      expect(store.getState().playback.error).toContain('Native playback status query timed out');
+      await act(async () => store.getState().prepareSelectedPlayback());
+      expect(store.getState().playback.prepared).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles a missing terminal event after Stop from the native retirement status', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 5 });
+    const originalSubscribe = bridge.subscribeUiEvents;
+    bridge.subscribeUiEvents = async (listener) =>
+      originalSubscribe((event) => {
+        if (event.name === 'playback.finished' || event.name === 'playback.failed') return;
+        listener(event);
+      });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => store.getState().stopPlayback());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.getState().playback.state).toBe('finished');
+      expect(store.getState().playback.sessionId).not.toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_001);
+      });
+      expect(store.getState().playback.sessionId).toBeNull();
+      expect(store.getState().playback.state).toBe('idle');
+      expect(store.getState().playback.transportOperation).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores Pause and Resume controls when their confirmation events are missing', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 5 });
+    let muteStateConfirmations = false;
+    const originalSubscribe = bridge.subscribeUiEvents;
+    bridge.subscribeUiEvents = async (listener) =>
+      originalSubscribe((event) => {
+        if (
+          muteStateConfirmations &&
+          (event.name === 'playback.snapshot' ||
+            (event.name === 'playback.state_changed' &&
+              ['paused', 'playing'].includes(event.payload.state)))
+        )
+          return;
+        listener(event);
+      });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    muteStateConfirmations = true;
+    vi.useFakeTimers();
+    try {
+      await act(async () => store.getState().pausePlayback());
+      expect(store.getState().playback.transportOperation).toBe('pausing');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_001);
+      });
+      expect(store.getState().playback.state).toBe('paused');
+      expect(store.getState().playback.transportOperation).toBeNull();
+
+      await act(async () => store.getState().resumePlayback());
+      expect(store.getState().playback.transportOperation).toBe('resuming');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_001);
+      });
+      expect(store.getState().playback.state).toBe('playing');
+      expect(store.getState().playback.transportOperation).toBeNull();
+      expect(store.getState().playback.sessionId).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }

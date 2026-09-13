@@ -98,17 +98,33 @@
 .transport-actions {
   position: relative;
   display: grid;
-  grid-template-columns: 34px 40px 34px;
+  grid-template-columns: minmax(0, 1fr) 34px 34px 40px 34px 34px minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
   min-width: 0;
   gap: 8px;
 }
 
+.transport-previous-slot {
+  grid-column: 3;
+}
+
+.transport-primary-slot {
+  grid-column: 4;
+}
+
+.transport-next-slot {
+  grid-column: 5;
+}
+
 .transport-stop-slot {
-  position: absolute;
-  top: 0;
-  right: 0;
+  grid-column: 6;
+}
+
+.transport-stop-balance-slot {
+  grid-column: 2;
+}
+
+.transport-stop-slot {
   width: 34px;
   height: 40px;
 }
@@ -146,11 +162,20 @@
   }
 }
 
-.player-secondary-action {
+.transport-actions .player-secondary-action {
   width: 34px;
   min-height: 34px;
   padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
   color: var(--text-secondary);
+}
+
+.transport-actions .player-secondary-action:hover:not(:disabled) {
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
 }
 
 .player-transport-status {

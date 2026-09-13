@@ -413,6 +413,34 @@ pub struct PlaybackSessionDto {
     pub plan_fingerprint: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct PlaybackActiveStatusDto {
+    pub session_id: String,
+    pub song_id: String,
+    pub title: String,
+    pub state: PlaybackSessionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct PlaybackTerminalStatusDto {
+    pub session_id: String,
+    pub song_id: String,
+    pub state: PlaybackSessionState,
+    pub outcome: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct PlaybackStatusDto {
+    pub active: Option<PlaybackActiveStatusDto>,
+    pub last_terminal: Option<PlaybackTerminalStatusDto>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(deny_unknown_fields)]
@@ -864,6 +892,11 @@ pub async fn start_playback(
     params: PlaybackStartRequest,
 ) -> Result<PlaybackSessionDto, String> {
     blocking_request(state, "playback.start", params).await
+}
+
+#[tauri::command]
+pub async fn get_playback_status(state: State<'_, AppState>) -> Result<PlaybackStatusDto, String> {
+    blocking_request(state, "playback.get_status", serde_json::json!({})).await
 }
 
 async fn playback_session_command(

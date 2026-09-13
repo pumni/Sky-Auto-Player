@@ -127,6 +127,12 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     pausedTotalMs: number;
     state: 'starting' | 'playing' | 'paused' | 'stopping';
   } | null = null;
+  let lastTerminal: {
+    session_id: string;
+    song_id: string;
+    state: 'finished' | 'failed';
+    outcome: string | null;
+  } | null = null;
   let playbackTimer: ReturnType<typeof setInterval> | null = null;
   const preparedConfigs = new Map<string, PlaybackConfig>();
   let diagnosticsEnabled = false;
@@ -312,6 +318,12 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   ) => {
     if (activeSession !== session) return;
     emitPlaybackState(session, 'finished', message);
+    lastTerminal = {
+      session_id: session.sessionId,
+      song_id: session.songId,
+      state: 'finished',
+      outcome,
+    };
     activeSession = null;
     stopPlaybackTimer();
     emit({
@@ -780,8 +792,32 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
             : 'mock-plan',
       };
     },
+    async getPlaybackStatus() {
+      return {
+        active: activeSession
+          ? {
+              session_id: activeSession.sessionId,
+              song_id: activeSession.songId,
+              title: activeSession.title,
+              state: activeSession.state,
+            }
+          : null,
+        last_terminal: lastTerminal,
+      };
+    },
     async stopPlayback(request) {
-      if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
+      if (activeSession?.sessionId !== request.sessionId) {
+        if (lastTerminal?.session_id === request.sessionId) {
+          return {
+            accepted: true,
+            session_id: request.sessionId,
+            state: lastTerminal.state,
+            pending_command: null,
+            reason: null,
+          };
+        }
+        throw new Error('stale session');
+      }
       const session = activeSession;
       if (session.state !== 'stopping') {
         session.state = 'stopping';

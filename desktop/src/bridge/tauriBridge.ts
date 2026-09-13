@@ -70,6 +70,7 @@ export function createTauriBridge(): DesktopBridge {
       call(COMMANDS.beginUpdateHandoff, { targetVersion }),
     preparePlayback: (request: PlaybackPrepare) => call(COMMANDS.preparePlayback, request),
     startPlayback: (request: PlaybackStart) => call(COMMANDS.startPlayback, request),
+    getPlaybackStatus: () => call(COMMANDS.getPlaybackStatus),
     stopPlayback: (request: PlaybackSessionCommand) => call(COMMANDS.stopPlayback, request),
     pausePlayback: (request: PlaybackSessionCommand) => call(COMMANDS.pausePlayback, request),
     resumePlayback: (request: PlaybackSessionCommand) => call(COMMANDS.resumePlayback, request),

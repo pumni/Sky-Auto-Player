@@ -37,6 +37,9 @@ export type { TimingMarginRecommendationDto } from './TimingMarginRecommendation
 export type { PlaybackDecisionAcceptanceDto } from './PlaybackDecisionAcceptanceDto';
 export type { PlaybackAdmission } from './PlaybackAdmission';
 export type { PlaybackCommandAckDto } from './PlaybackCommandAckDto';
+export type { PlaybackActiveStatusDto } from './PlaybackActiveStatusDto';
+export type { PlaybackStatusDto } from './PlaybackStatusDto';
+export type { PlaybackTerminalStatusDto } from './PlaybackTerminalStatusDto';
 export type { PlaybackControl } from './PlaybackControl';
 export type { PlaybackPendingControl } from './PlaybackPendingControl';
 export type { PlaybackDecision } from './PlaybackDecision';

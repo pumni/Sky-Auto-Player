@@ -98,8 +98,9 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             <SkipBack size={16} aria-hidden="true" />
           </button>
         </div>
+        <div className="transport-slot transport-stop-balance-slot" aria-hidden="true" />
         <div className="transport-slot transport-primary-slot">
-          {!active && !playback.prepared && (
+          {!active && !playback.prepared && playback.startRequestId === null && (
             <button
               className="icon-button button-primary player-primary-action"
               type="button"
@@ -113,6 +114,17 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
               onClick={() => void prepareAndMaybeStart(false)}
             >
               <Play size={18} aria-hidden="true" />
+            </button>
+          )}
+          {!active && playback.startRequestId !== null && (
+            <button
+              className="icon-button button-primary player-primary-action is-pending"
+              type="button"
+              aria-label="Starting playback"
+              title="Starting playback"
+              disabled
+            >
+              <LoaderCircle size={18} aria-hidden="true" />
             </button>
           )}
           {active && playback.state === 'playing' && (
@@ -168,18 +180,21 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           </button>
         </div>
         <div className="transport-slot transport-stop-slot">
-          {hasSession && ['starting', 'playing', 'paused'].includes(playback.state) && (
-            <button
-              className="icon-button player-secondary-action"
-              type="button"
-              aria-label="Stop"
-              title="Stop"
-              disabled={operationPending && playback.transportOperation !== 'starting'}
-              onClick={() => void stop()}
-            >
-              <CircleStop size={16} aria-hidden="true" />
-            </button>
-          )}
+          {hasSession &&
+            ['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(
+              playback.state,
+            ) && (
+              <button
+                className="icon-button player-secondary-action"
+                type="button"
+                aria-label="Stop"
+                title="Stop"
+                disabled={playback.transportOperation === 'stopping'}
+                onClick={() => void stop()}
+              >
+                <CircleStop size={16} aria-hidden="true" />
+              </button>
+            )}
         </div>
       </div>
       <div

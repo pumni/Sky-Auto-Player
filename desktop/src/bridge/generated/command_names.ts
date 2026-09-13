@@ -33,6 +33,7 @@ export const COMMANDS = {
   libraryImportLocalFilesToPlaylist: 'library_import_local_files_to_playlist',
   libraryImportLocalFolderToPlaylist: 'library_import_local_folder_to_playlist',
   exportSenderTrace: 'export_sender_trace',
+  getPlaybackStatus: 'get_playback_status',
 } as const;
 
 export const UI_EVENTS_COMMAND = 'subscribe_ui_events' as const;

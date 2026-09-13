@@ -57,6 +57,15 @@ describe('PlayerTransport', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
   });
 
+  it('shows a stable pending control while the start request has no session id yet', async () => {
+    const { setPlayback } = await setupTransport();
+    act(() => setPlayback({ startRequestId: 7, transportOperation: 'starting' }));
+
+    expect(screen.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Play' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+  });
+
   it('locks Previous and Next while a risk confirmation owns the prepared song', async () => {
     const { setPlayback, currentSong, context } = await setupTransport();
     act(() =>
@@ -89,7 +98,15 @@ describe('PlayerTransport', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
   });
 
-  it('disables Previous, Next, and Stop while another transport operation owns the controls', async () => {
+  it('keeps Stop available while native retirement is still pending', async () => {
+    const { setPlayback, sessionId } = await setupTransport();
+    act(() => setPlayback({ state: 'stopping', sessionId, transportOperation: null }));
+
+    expect(screen.getByRole('button', { name: 'Playback transition pending' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+  });
+
+  it('locks navigation while an operation is pending but keeps Stop as a safety control', async () => {
     const { setPlayback, sessionId, currentSong, context } = await setupTransport();
     act(() =>
       setPlayback({
@@ -103,7 +120,7 @@ describe('PlayerTransport', () => {
 
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
   });
 
   it('exposes the familiar Previous and Next names and disables Next at the context end', async () => {

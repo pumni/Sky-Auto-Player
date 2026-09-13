@@ -492,6 +492,28 @@ test('Titlebar search and Player primary control share the application center ax
   if (activeBox) {
     expect(Math.abs(activeBox.x + activeBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
   }
+
+  for (const label of ['Previous', 'Next', 'Stop']) {
+    const button = page.getByRole('button', { name: label, exact: true });
+    const style = await button.evaluate((element) => {
+      const computed = getComputedStyle(element);
+      return {
+        borderTopWidth: computed.borderTopWidth,
+        backgroundColor: computed.backgroundColor,
+      };
+    });
+    expect(style.borderTopWidth, `${label} must remain borderless`).toBe('0px');
+    expect(style.backgroundColor, `${label} must remain visually unboxed`).toBe('rgba(0, 0, 0, 0)');
+  }
+  const nextBox = await page.getByRole('button', { name: 'Next', exact: true }).boundingBox();
+  const stopBox = await page.getByRole('button', { name: 'Stop', exact: true }).boundingBox();
+  expect(nextBox).not.toBeNull();
+  expect(stopBox).not.toBeNull();
+  if (nextBox && stopBox) {
+    const stopGap = stopBox.x - (nextBox.x + nextBox.width);
+    expect(stopGap).toBeGreaterThanOrEqual(0);
+    expect(stopGap).toBeLessThanOrEqual(8);
+  }
 });
 
 test('Player Bar remains compact, centered, and bounded at the minimum viewport', async ({
