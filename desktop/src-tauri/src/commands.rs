@@ -418,6 +418,7 @@ pub struct PlaybackSessionDto {
 #[serde(deny_unknown_fields)]
 pub struct PlaybackActiveStatusDto {
     pub session_id: String,
+    pub prepared_id: String,
     pub song_id: String,
     pub title: String,
     pub state: PlaybackSessionState,
@@ -428,9 +429,12 @@ pub struct PlaybackActiveStatusDto {
 #[serde(deny_unknown_fields)]
 pub struct PlaybackTerminalStatusDto {
     pub session_id: String,
+    pub prepared_id: String,
     pub song_id: String,
     pub state: PlaybackSessionState,
     pub outcome: Option<String>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

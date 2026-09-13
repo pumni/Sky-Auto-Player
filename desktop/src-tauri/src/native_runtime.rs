@@ -3255,6 +3255,7 @@ impl NativePlaybackService {
                 };
                 Ok::<PlaybackActiveStatusDto, String>(PlaybackActiveStatusDto {
                     session_id: active.session_id.clone(),
+                    prepared_id: active.prepared_id.clone(),
                     song_id: active.song_id.clone(),
                     title: active.title.clone(),
                     state,
@@ -3561,6 +3562,10 @@ impl NativePlaybackService {
                     );
                     let mut last_event_state = PlaybackEventState::Starting;
                     let (code, message) = physical_startup_failure(&error);
+                    let fallback_publication = PlaybackTerminalPublication::Failed {
+                        code: code.into(),
+                        message: message.into(),
+                    };
                     match publish_terminal_failure_state(
                         &events,
                         &failed_active,
@@ -3582,6 +3587,7 @@ impl NativePlaybackService {
                                 &self.active,
                                 &self.last_terminal,
                                 &failed_active,
+                                Some(&fallback_publication),
                             );
                         }
                     }
@@ -3667,7 +3673,12 @@ impl NativePlaybackService {
                     );
                 }
                 Err(_) => {
-                    let _ = release_terminal_ownership(&self.active, &self.last_terminal, &active);
+                    let _ = release_terminal_ownership(
+                        &self.active,
+                        &self.last_terminal,
+                        &active,
+                        None,
+                    );
                 }
             }
             if let Ok(mut prepared) = self.prepared.lock() {
@@ -3710,7 +3721,12 @@ impl NativePlaybackService {
                     );
                 }
                 Err(_) => {
-                    let _ = release_terminal_ownership(&self.active, &self.last_terminal, &active);
+                    let _ = release_terminal_ownership(
+                        &self.active,
+                        &self.last_terminal,
+                        &active,
+                        None,
+                    );
                 }
             }
             if let Ok(mut prepared) = self.prepared.lock() {
@@ -3761,7 +3777,12 @@ impl NativePlaybackService {
                     );
                 }
                 Err(_) => {
-                    let _ = release_terminal_ownership(&self.active, &self.last_terminal, &active);
+                    let _ = release_terminal_ownership(
+                        &self.active,
+                        &self.last_terminal,
+                        &active,
+                        None,
+                    );
                 }
             }
             if let Ok(mut prepared) = self.prepared.lock() {
@@ -4003,8 +4024,12 @@ impl NativePlaybackService {
                 completed_sender_trace(&active),
             );
         }
-        let ownership_released =
-            release_terminal_ownership(&self.active, &self.last_terminal, &active);
+        let ownership_released = release_terminal_ownership(
+            &self.active,
+            &self.last_terminal,
+            &active,
+            terminal_publication.as_ref(),
+        );
         if ownership_released.is_ok()
             && let Some(publication) = terminal_publication.as_ref()
             && publish_terminal_event(&events, &active, publication).is_err()
@@ -5037,6 +5062,7 @@ fn release_terminal_ownership(
     active_slot: &Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: &Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
     active: &Arc<NativeActivePlayback>,
+    publication: Option<&PlaybackTerminalPublication>,
 ) -> Result<(), String> {
     active
         .pending
@@ -5065,6 +5091,19 @@ fn release_terminal_ownership(
     } else {
         None
     };
+    let (failure_code, failure_message) = if terminal_state == PlaybackSessionState::Failed {
+        match publication {
+            Some(PlaybackTerminalPublication::Failed { code, message }) => {
+                (Some(code.clone()), Some(message.clone()))
+            }
+            _ => (
+                Some("native_player_failed".into()),
+                Some("Native playback worker failed".into()),
+            ),
+        }
+    } else {
+        (None, None)
+    };
     let mut slot = active_slot
         .lock()
         .map_err(|_| "native active-playback lock poisoned".to_string())?;
@@ -5079,9 +5118,12 @@ fn release_terminal_ownership(
     }
     *terminal = Some(PlaybackTerminalStatusDto {
         session_id: active.session_id.clone(),
+        prepared_id: active.prepared_id.clone(),
         song_id: active.song_id.clone(),
         state: terminal_state,
         outcome,
+        failure_code,
+        failure_message,
     });
     active.done.store(true, Ordering::Release);
     Ok(())
@@ -5094,7 +5136,7 @@ fn publish_retirement_barrier(
     active: &Arc<NativeActivePlayback>,
     publication: &PlaybackTerminalPublication,
 ) -> Result<(), String> {
-    release_terminal_ownership(active_slot, last_terminal, active)?;
+    release_terminal_ownership(active_slot, last_terminal, active, Some(publication))?;
     publish_terminal_event(events, active, publication)
 }
 
@@ -6957,9 +6999,12 @@ mod tests {
             *service.last_terminal.lock().expect("terminal state") =
                 Some(PlaybackTerminalStatusDto {
                     session_id: "a".repeat(32),
+                    prepared_id: "b".repeat(32),
                     song_id: "song-a".into(),
                     state: terminal_state,
                     outcome: None,
+                    failure_code: None,
+                    failure_message: None,
                 });
             let acknowledgement = service
                 .command(
@@ -6984,6 +7029,7 @@ mod tests {
             active_status.active,
             Some(PlaybackActiveStatusDto {
                 session_id: active.session_id.clone(),
+                prepared_id: active.prepared_id.clone(),
                 song_id: active.song_id.clone(),
                 title: active.title.clone(),
                 state: PlaybackSessionState::Playing,
@@ -6992,7 +7038,7 @@ mod tests {
         assert!(active_status.last_terminal.is_none());
 
         *active.state.lock().expect("playback state") = PlaybackSessionState::Finished;
-        release_terminal_ownership(&service.active, &service.last_terminal, &active)
+        release_terminal_ownership(&service.active, &service.last_terminal, &active, None)
             .expect("retirement barrier");
         let retired_status = service.status().expect("retired playback status");
         assert!(retired_status.active.is_none());
@@ -7000,10 +7046,45 @@ mod tests {
             retired_status.last_terminal,
             Some(PlaybackTerminalStatusDto {
                 session_id: active.session_id.clone(),
+                prepared_id: active.prepared_id.clone(),
                 song_id: active.song_id.clone(),
                 state: PlaybackSessionState::Finished,
                 outcome: Some("finished".into()),
+                failure_code: None,
+                failure_message: None,
             })
+        );
+    }
+
+    #[test]
+    fn playback_status_preserves_prepared_identity_and_failure_details() {
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let active = active_for_control(PlaybackSessionState::Failed, None);
+        *service.active.lock().expect("active slot") = Some(active.clone());
+        let failure = PlaybackTerminalPublication::Failed {
+            code: "target_not_found".into(),
+            message: "Sky window was not found. Open Sky and try again.".into(),
+        };
+
+        release_terminal_ownership(
+            &service.active,
+            &service.last_terminal,
+            &active,
+            Some(&failure),
+        )
+        .expect("retirement barrier");
+
+        let terminal = service
+            .status()
+            .expect("terminal status")
+            .last_terminal
+            .expect("retired failure");
+        assert_eq!(terminal.session_id, active.session_id);
+        assert_eq!(terminal.prepared_id, active.prepared_id);
+        assert_eq!(terminal.failure_code.as_deref(), Some("target_not_found"));
+        assert_eq!(
+            terminal.failure_message.as_deref(),
+            Some("Sky window was not found. Open Sky and try again.")
         );
     }
 

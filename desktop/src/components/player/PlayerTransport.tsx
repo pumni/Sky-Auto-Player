@@ -1,4 +1,4 @@
-import { CircleStop, LoaderCircle, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import { LoaderCircle, Pause, Play, SkipBack, SkipForward, Square } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
 import { selectSongById } from '../../state/store';
 import { formatPlayerDuration } from './playerFormatting';
@@ -192,7 +192,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
                 disabled={playback.transportOperation === 'stopping'}
                 onClick={() => void stop()}
               >
-                <CircleStop size={16} aria-hidden="true" />
+                <Square size={12} aria-hidden="true" />
               </button>
             )}
         </div>

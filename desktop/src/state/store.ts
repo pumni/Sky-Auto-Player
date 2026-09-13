@@ -333,6 +333,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
     const matches = [...pendingStarts.values()].filter((item) => item.identity.songId === songId);
     return matches[matches.length - 1] ?? null;
   };
+  const pendingStartForPreparedId = (preparedId: string): PendingPlaybackStart | null =>
+    [...pendingStarts.values()].find((item) => item.preparedId === preparedId) ?? null;
   const membershipRevisionFor = (source: LibrarySource) =>
     sourceMembershipRevisions.get(sourceKey(source)) ?? 0;
   const playbackContextIsCurrent = (context: PlaybackContext) =>
@@ -680,8 +682,10 @@ export function createDesktopStore(bridge: DesktopBridge) {
           payload: {
             session_id: terminal.session_id,
             song_id: terminal.song_id,
-            code: 'playback_failed',
-            message: 'Playback failed before the terminal event reached the interface.',
+            code: terminal.failure_code ?? 'playback_failed',
+            message:
+              terminal.failure_message ??
+              'Playback failed before the terminal event reached the interface.',
           },
         });
       } else {
@@ -738,7 +742,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const status = await queryPlaybackStatus();
         if (!canApply()) return;
         const current = get().playback;
-        const pending = status.active ? pendingStartForSong(status.active.song_id) : null;
+        const pending = status.active ? pendingStartForPreparedId(status.active.prepared_id) : null;
 
         if (status.active) {
           const nativeSession = status.active;
@@ -787,19 +791,20 @@ export function createDesktopStore(bridge: DesktopBridge) {
                 current.snapshot?.session_id === nativeSession.session_id ? current.snapshot : null,
               error: conflict
                 ? 'A different native playback session is active. Stop it before starting another song.'
-                : 'Playback response timed out; the native session state was restored.',
+                : null,
             },
           });
           return;
         }
 
         const terminal = status.last_terminal;
+        const expectedPendingStart =
+          expectedStartRequestId === null ? null : pendingStarts.get(expectedStartRequestId);
         const matchingTerminal =
           terminal &&
           (terminal.session_id === expectedSessionId ||
             terminal.session_id === current.sessionId ||
-            (pendingStartForSong(terminal.song_id)?.epoch === expectedStartRequestId &&
-              expectedStartRequestId !== null));
+            expectedPendingStart?.preparedId === terminal.prepared_id);
         if (matchingTerminal) {
           clearTerminalReconciliationTimer();
           emitReconciledTerminal(terminal);
@@ -833,6 +838,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         transportOperationEpoch += 1;
         const pendingRequestId = current.startRequestId;
         if (pendingRequestId !== null) {
+          pendingStarts.delete(pendingRequestId);
           set({
             playback: {
               ...current,
@@ -863,6 +869,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
         transportOperationEpoch += 1;
         const current = get().playback;
         const noBoundSession = current.sessionId === null;
+        if (noBoundSession && current.startRequestId !== null) {
+          pendingStarts.delete(current.startRequestId);
+        }
         set({
           playback: {
             ...current,

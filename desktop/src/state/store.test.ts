@@ -956,6 +956,7 @@ describe('desktop store', () => {
       expect(store.getState().playback.sessionId).not.toBeNull();
       expect(store.getState().playback.startRequestId).toBeNull();
       expect(store.getState().playback.state).toBe('starting');
+      expect(store.getState().playback.error).toBeNull();
       expect(stopped).toEqual([]);
 
       releaseStart?.();
@@ -1007,6 +1008,106 @@ describe('desktop store', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('does not mistake a retired terminal for a replay of the same song', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 5 });
+    const startedPreparedIds: string[] = [];
+    const originalStart = bridge.startPlayback;
+    bridge.startPlayback = async (request) => {
+      startedPreparedIds.push(request.preparedId);
+      return originalStart(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    await act(async () => store.getState().stopPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('idle'));
+
+    const staleTerminal = await bridge.getPlaybackStatus();
+    expect(staleTerminal.active).toBeNull();
+    expect(staleTerminal.last_terminal?.prepared_id).toBe(startedPreparedIds[0]);
+
+    await act(async () => store.getState().prepareSelectedPlayback());
+    const replayPreparedId = store.getState().playback.prepared?.prepared_id;
+    expect(replayPreparedId).toBeDefined();
+    expect(replayPreparedId).not.toBe(startedPreparedIds[0]);
+    bridge.startPlayback = () =>
+      new Promise<import('../bridge/DesktopBridge').PlaybackSession>(() => undefined);
+
+    vi.useFakeTimers();
+    try {
+      void store.getState().startPreparedPlayback('proceed');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_001);
+      });
+
+      expect(store.getState().playback.startRequestId).toBeNull();
+      expect(store.getState().playback.sessionId).toBeNull();
+      expect(store.getState().playback.transportOperation).toBeNull();
+      expect(store.getState().playback.state).toBe('idle');
+      expect(store.getState().playback.error).toContain('Press Play to try again');
+      await act(async () => store.getState().prepareSelectedPlayback());
+      expect(store.getState().playback.prepared).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores actionable native failure details when the terminal event is missing', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    const prepared = store.getState().playback.prepared;
+    const identity = store.getState().playback.preparedIdentity;
+    const preparedId = prepared?.prepared_id;
+    if (!preparedId || !identity) throw new Error('prepared playback is missing');
+    const sessionId = 'c'.repeat(32);
+    const failureMessage =
+      'Sky window was not found. Open Sky and make sure its window is visible, then try again.';
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        sessionId,
+        currentSong: identity,
+        prepared: null,
+        preparedIdentity: null,
+        state: 'playing',
+      },
+    });
+    bridge.stopPlayback = async (request) => ({
+      accepted: true,
+      session_id: request.sessionId,
+      state: 'failed',
+      pending_command: null,
+      reason: null,
+    });
+    bridge.getPlaybackStatus = async () => ({
+      active: null,
+      last_terminal: {
+        session_id: sessionId,
+        prepared_id: preparedId,
+        song_id: first.song_id,
+        state: 'failed',
+        outcome: null,
+        failure_code: 'target_not_found',
+        failure_message: failureMessage,
+      },
+    });
+
+    await act(async () => store.getState().stopPlayback());
+
+    expect(store.getState().playback.state).toBe('failed');
+    expect(store.getState().playback.error).toBe(`target_not_found: ${failureMessage}`);
   });
 
   it('keeps Play retryable when both the start and status IPC calls never resolve', async () => {
@@ -1220,7 +1321,8 @@ describe('desktop store', () => {
     };
     const sessionId = 'e'.repeat(32);
     bridge.startPlayback = async (request) => {
-      const songId = request.preparedId.replace('prepared-', '');
+      const songId = store.getState().playback.preparedIdentity?.songId;
+      if (!songId) throw new Error('prepared song identity is missing');
       const started = {
         session_id: sessionId,
         prepared_id: request.preparedId,

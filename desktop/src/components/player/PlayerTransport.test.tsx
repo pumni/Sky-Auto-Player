@@ -55,6 +55,9 @@ describe('PlayerTransport', () => {
     expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Stop' }).querySelector('svg.lucide-square'),
+    ).toBeInTheDocument();
   });
 
   it('shows a stable pending control while the start request has no session id yet', async () => {

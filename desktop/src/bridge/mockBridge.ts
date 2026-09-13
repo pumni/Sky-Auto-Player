@@ -116,8 +116,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   let generation = 1;
   let settings = initialSettings();
   let playbackSessionSequence = 0;
+  let preparedPlaybackSequence = 0;
   let activeSession: {
     sessionId: string;
+    preparedId: string;
     songId: string;
     title: string;
     config: PlaybackConfig;
@@ -129,12 +131,16 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   } | null = null;
   let lastTerminal: {
     session_id: string;
+    prepared_id: string;
     song_id: string;
     state: 'finished' | 'failed';
     outcome: string | null;
+    failure_code: string | null;
+    failure_message: string | null;
   } | null = null;
   let playbackTimer: ReturnType<typeof setInterval> | null = null;
   const preparedConfigs = new Map<string, PlaybackConfig>();
+  const preparedSongIds = new Map<string, string>();
   let diagnosticsEnabled = false;
   let diagnosticsSeq = 0;
   let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
@@ -320,9 +326,12 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     emitPlaybackState(session, 'finished', message);
     lastTerminal = {
       session_id: session.sessionId,
+      prepared_id: session.preparedId,
       song_id: session.songId,
       state: 'finished',
       outcome,
+      failure_code: null,
+      failure_message: null,
     };
     activeSession = null;
     stopPlaybackTimer();
@@ -660,8 +669,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       const found = allRows().find((item) => item.song_id === request.songId);
       if (!found) throw new Error('song was not found');
       const risk = found.risk_level === 'low' ? 'low' : 'medium';
-      const preparedId = `prepared-${found.song_id}`;
+      const preparedId = `prepared-${++preparedPlaybackSequence}-${found.song_id}`;
       preparedConfigs.set(preparedId, request.config);
+      preparedSongIds.set(preparedId, found.song_id);
       return {
         prepared_id: preparedId,
         song: {
@@ -748,12 +758,16 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       const config = request.decisions.some((item) => item.decision === 'dry_run')
         ? { ...baseConfig, dry_run: true }
         : baseConfig;
-      const songId = request.preparedId.replace('prepared-', '');
+      const songId = preparedSongIds.get(request.preparedId);
+      if (!songId) throw new Error('prepared playback is stale or already consumed');
       const song = allRows().find((item) => item.song_id === songId);
       if (!song) throw new Error('song was not found');
+      preparedSongIds.delete(request.preparedId);
+      preparedConfigs.delete(request.preparedId);
       playbackSessionSequence += 1;
       const session = {
         sessionId: playbackSessionSequence.toString(16).padStart(32, '0'),
+        preparedId: request.preparedId,
         songId,
         title: song.title,
         config,
@@ -797,6 +811,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         active: activeSession
           ? {
               session_id: activeSession.sessionId,
+              prepared_id: activeSession.preparedId,
               song_id: activeSession.songId,
               title: activeSession.title,
               state: activeSession.state,
