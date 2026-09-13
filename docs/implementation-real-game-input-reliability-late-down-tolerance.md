@@ -5,6 +5,10 @@
 > only; users adjust Timing Margin through the existing bounded stepper. This
 > presentation change does not alter the separate native
 > `PlaybackDecision::UseRecommended` risk-flow decision.
+>
+> Missing, invalid, and out-of-envelope calibration now show the `500 µs`
+> default as the informational fallback. Qualified calibration remains
+> evidence-based; older fallback calculations below are historical.
 
 ## Status
 

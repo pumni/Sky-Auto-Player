@@ -22,7 +22,7 @@ describe('SettingsPanel playback timing', () => {
     expect(
       screen.getByText('Source: Default fallback (no valid calibration cache)'),
     ).toBeInTheDocument();
-    expect(screen.getByText('· rec. 2300 µs')).toBeInTheDocument();
+    expect(screen.getByText('· rec. 500 µs')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/sender evidence, not proof/)).not.toBeInTheDocument();
   });

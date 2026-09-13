@@ -95,7 +95,7 @@ function initialSettings(): Settings {
       dry_run: false,
     },
     timing_margin_recommendation: {
-      recommended_timing_margin_us: 2_300,
+      recommended_timing_margin_us: 500,
       qualified: false,
       source: 'default_fallback',
     },
@@ -480,7 +480,9 @@ export function createMockBridge(): DesktopBridge {
           ...settings,
           timing_margin_recommendation: {
             ...settings.timing_margin_recommendation,
-            recommended_timing_margin_us: Math.ceil((playback.downLateGraceUs + 300) / 100) * 100,
+            recommended_timing_margin_us: settings.timing_margin_recommendation.qualified
+              ? Math.ceil((playback.downLateGraceUs + 300) / 100) * 100
+              : 500,
           },
         };
       }

@@ -39,11 +39,11 @@ The user-owned Timing Margin defaults to `500 µs`, ranges from `0` through
 `3,000 µs` in `100 µs` steps, and applies equally to Hold and Release Gap.
 The independent Late Down tolerance defaults to `2,000 µs`, ranges from `0`
 through `5,000 µs` in `100 µs` steps, and is frozen per prepared session.
-Calibration never supplies part of the authored timing equation. It may
-produce an advisory recommendation from the selected Late Down tolerance plus
-measured transport-reserve evidence; with the default cutoff and the
-unqualified `300 µs` reserve, the fallback recommendation is `2,300 µs`.
-Calibration is never shown as qualified when fallback is used.
+Calibration never supplies part of the authored timing equation. Qualified
+calibration may produce an advisory recommendation from the selected Late
+Down tolerance plus measured transport-reserve evidence. Without qualified
+evidence, the informational fallback recommendation is the `500 µs` default
+Timing Margin. Calibration is never shown as qualified when fallback is used.
 Production calibration uses one pair metric per Down/Up SendInput
 packet, based on `T_D/P_D/C_D` and `T_U/P_U/C_U`; Raw Input receipt timing is
 not part of qualification. It uses exactly the six `1/5/15 × hot/cold`
@@ -54,8 +54,8 @@ candidate at or below `2,000 µs` qualifies and reserves at least `300 µs`; a
 candidate above `2,000 µs` is out of the trusted envelope and uses the
 unqualified transport reserve. A qualified recommendation is rounded up to
 the next `100 µs` after adding the currently selected Late Down tolerance.
-With the default `2,000 µs` cutoff and fallback `300 µs` reserve, that advisory
-value is `2,300 µs`. It is informational only and never writes a setting.
+An unqualified recommendation falls back to the `500 µs` default Timing
+Margin. Recommendations are informational only and never write a setting.
 Users adjust Timing Margin with its bounded stepper; a change affects only the
 next prepared session.
 

@@ -85,7 +85,7 @@ Base Hold                 [1f]
 Tempo                     [1x]
 FPS                       [60]
 
-Timing Margin · rec. 2300 us     [-] 800 us [+]
+Timing Margin · rec. 500 us      [-] 800 us [+]
 
 Target hold               17.167 ms
 Release gap               17.167 ms
@@ -102,8 +102,8 @@ Remove the **Use recommended** button from the quick profile.
 
 The quick profile must show recommendation as non-interactive secondary text immediately adjacent to the Timing Margin label, for example:
 
-- `Timing Margin · rec. 2300 us`
-- or `Timing Margin   Recommended 2300 us`
+- `Timing Margin · rec. 500 us`
+- or `Timing Margin   Recommended 500 us`
 
 Requirements:
 
@@ -163,7 +163,7 @@ Playback defaults
 [ Base Hold ] [ Tempo ] [ FPS ]
 
 Timing
-Timing Margin     rec. 2300 us                 [-] 800 us [+]
+Timing Margin     rec. 500 us                  [-] 800 us [+]
                   Default fallback · sender-side recommendation
                   Applies to Hold and Release Gap
 
