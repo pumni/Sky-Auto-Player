@@ -3930,12 +3930,12 @@ impl NativePlaybackService {
             thread::sleep(Duration::from_millis(20));
         }
         stop_supervisor_heartbeat(&active);
-        if let Some(player) = &active.player {
-            if !matches!(player.join(Duration::from_secs(5)), Ok(true)) {
-                let _ = player.panic_release();
-                let _ = player.quit();
-                let _ = player.join(Duration::from_secs(5));
-            }
+        if let Some(player) = &active.player
+            && !matches!(player.join(Duration::from_secs(5)), Ok(true))
+        {
+            let _ = player.panic_release();
+            let _ = player.quit();
+            let _ = player.join(Duration::from_secs(5));
         }
         if active.physical
             && let Ok(mut trace_state) = self.sender_trace_state.lock()

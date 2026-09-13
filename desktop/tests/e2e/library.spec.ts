@@ -391,13 +391,13 @@ test('Player transport geometry stays fixed when song timing labels appear', asy
 test('natural finish retires the old session and starts the next context song', async ({
   page,
 }) => {
-  await page.goto('/?mockPlaybackDurationMs=350&mockStartDelayMs=20');
+  await page.goto('/?mockPlaybackDurationMs=5000&mockStartDelayMs=20');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
   await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
-    timeout: 5_000,
+    timeout: 12_000,
   });
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
