@@ -173,6 +173,7 @@ export interface DesktopStore {
     prepared: PreparedPlayback | null;
     snapshot: Extract<UiEvent, { name: 'playback.snapshot' }>['payload'] | null;
     error: string | null;
+    statusRetryPending: boolean;
   };
   initialize: () => Promise<void>;
   applyEvent: (event: UiEvent) => void;
@@ -200,6 +201,7 @@ export interface DesktopStore {
   startPreparedPlayback: (decision?: PlaybackDecisionId) => Promise<void>;
   cancelPreparedPlayback: () => void;
   stopPlayback: () => Promise<void>;
+  retryPlaybackStatus: () => Promise<void>;
   pausePlayback: () => Promise<void>;
   resumePlayback: () => Promise<void>;
   previousPlayback: () => Promise<void>;
@@ -214,6 +216,71 @@ export interface DesktopStore {
   startCalibration: (mode?: CalibrationModeId) => Promise<void>;
   cancelCalibration: () => Promise<void>;
   setCalibrationOpen: (open: boolean) => void;
+}
+
+export type PlaybackIssueKind =
+  'recoverable_status' | 'playback_failure' | 'target_failure' | 'conflict';
+
+export interface PlaybackIssuePresentation {
+  kind: PlaybackIssueKind;
+  title: string;
+  message: string;
+}
+
+const TARGET_FAILURE_TITLES: Record<string, string> = {
+  target_not_found: 'Sky window was not found',
+  target_integrity_mismatch: 'Sky is running with different permissions',
+  target_focus_failed: 'Sky could not be focused',
+};
+
+export function playbackIssuePresentation(
+  playback: Pick<DesktopStore['playback'], 'error' | 'sessionId' | 'startRequestId' | 'state'>,
+): PlaybackIssuePresentation | null {
+  const message = playback.error;
+  if (!message) return null;
+
+  if (message.startsWith('Playback status is unavailable:')) {
+    return {
+      kind: 'recoverable_status',
+      title: 'Playback status is unavailable',
+      message: playback.sessionId
+        ? 'Sky Auto Player cannot confirm the current session.'
+        : 'Sky Auto Player cannot confirm whether playback started.',
+    };
+  }
+
+  const targetFailure = /^(target_[a-z_]+):\s*(.*)$/s.exec(message);
+  const targetFailureCode = targetFailure?.[1];
+  if (targetFailure && targetFailureCode && TARGET_FAILURE_TITLES[targetFailureCode]) {
+    return {
+      kind: 'target_failure',
+      title: TARGET_FAILURE_TITLES[targetFailureCode],
+      message: targetFailure[2] || message,
+    };
+  }
+
+  if (playback.sessionId !== null || playback.startRequestId !== null) {
+    const conflict = message.startsWith('A different native playback session is active.');
+    return {
+      kind: conflict ? 'conflict' : 'recoverable_status',
+      title: conflict
+        ? 'Another native playback session is active'
+        : playback.startRequestId !== null
+          ? 'Playback status is unavailable'
+          : 'Playback status needs attention',
+      message,
+    };
+  }
+
+  if (message.startsWith('Native playback did not create a session.')) {
+    return {
+      kind: 'playback_failure',
+      title: 'Playback could not start',
+      message: 'No active playback session was created.',
+    };
+  }
+
+  return { kind: 'playback_failure', title: 'Playback failed', message };
 }
 
 const EMPTY_DETAIL: DetailEntry = { state: 'idle', value: null, error: null };
@@ -315,6 +382,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
   let diagnosticsToggleEpoch = 0;
   let transportOperationEpoch = 0;
   let playbackReconciliationEpoch = 0;
+  let playbackStatusRetryPromise: Promise<void> | null = null;
+  let playbackStatusRetryToken = 0;
   let transportOperationTimer: ReturnType<typeof setTimeout> | null = null;
   let terminalReconciliationTimer: ReturnType<typeof setTimeout> | null = null;
   const retiredSessions = new Map<string, 'finished' | 'failed'>();
@@ -791,7 +860,10 @@ export function createDesktopStore(bridge: DesktopBridge) {
                 current.snapshot?.session_id === nativeSession.session_id ? current.snapshot : null,
               error: conflict
                 ? 'A different native playback session is active. Stop it before starting another song.'
-                : null,
+                : ['starting', 'stopping'].includes(nativeSession.state)
+                  ? 'The app could not confirm the current session state.'
+                  : null,
+              statusRetryPending: false,
             },
           });
           return;
@@ -849,7 +921,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
               transportOperation: null,
               state: 'idle',
               snapshot: null,
-              error: 'Native playback did not create a session. Press Play to try again.',
+              error:
+                'Native playback did not create a session. No active playback session was created. Press Play to try again.',
             },
           });
         } else {
@@ -868,25 +941,11 @@ export function createDesktopStore(bridge: DesktopBridge) {
         clearTerminalReconciliationTimer();
         transportOperationEpoch += 1;
         const current = get().playback;
-        const noBoundSession = current.sessionId === null;
-        if (noBoundSession && current.startRequestId !== null) {
-          pendingStarts.delete(current.startRequestId);
-        }
         set({
           playback: {
             ...current,
-            ...(noBoundSession && current.startRequestId !== null
-              ? {
-                  prepared: null,
-                  preparedIdentity: null,
-                  preparedContext: null,
-                  startRequestId: null,
-                  state: 'idle' as const,
-                  snapshot: null,
-                }
-              : {}),
             transportOperation: null,
-            error: `${errorMessage(error)} Playback controls are available; retry or Stop the session.`,
+            error: `Playback status is unavailable: ${errorMessage(error)}`,
           },
         });
       }
@@ -936,7 +995,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
       clearTransportTimer();
       const epoch = ++transportOperationEpoch;
       playbackReconciliationEpoch += 1;
-      set({ playback: { ...current, transportOperation: operation, error: null } });
+      set({
+        playback: {
+          ...current,
+          transportOperation: operation,
+          error: operation === 'stopping' ? current.error : null,
+        },
+      });
       armOperationTimer(epoch, operation);
       return epoch;
     };
@@ -1344,6 +1409,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         prepared: null,
         snapshot: null,
         error: null,
+        statusRetryPending: false,
       },
 
       async initialize() {
@@ -2393,7 +2459,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const playback = get().playback;
         if (
           playback.transportOperation !== null ||
-          playback.prepared?.admission !== 'confirmation_required'
+          !['confirmation_required', 'blocked'].includes(playback.prepared?.admission ?? '')
         )
           return;
         set({
@@ -2435,6 +2501,31 @@ export function createDesktopStore(bridge: DesktopBridge) {
         } catch (error) {
           finishOperation(operationEpoch, errorMessage(error));
         }
+      },
+
+      retryPlaybackStatus() {
+        if (playbackStatusRetryPromise) return playbackStatusRetryPromise;
+        const playback = get().playback;
+        const token = ++playbackReconciliationEpoch;
+        playbackStatusRetryToken = token;
+        const operation = playback.transportOperation ?? 'starting';
+        const epoch = transportOperationEpoch;
+        set({ playback: { ...playback, statusRetryPending: true } });
+        const retryPromise = reconcilePlaybackAfterTimeout(
+          token,
+          operation,
+          epoch,
+          playback.sessionId,
+          playback.startRequestId,
+        ).finally(() => {
+          if (playbackStatusRetryPromise !== retryPromise || playbackStatusRetryToken !== token)
+            return;
+          playbackStatusRetryPromise = null;
+          const latest = get().playback;
+          set({ playback: { ...latest, statusRetryPending: false } });
+        });
+        playbackStatusRetryPromise = retryPromise;
+        return retryPromise;
       },
 
       async pausePlayback() {

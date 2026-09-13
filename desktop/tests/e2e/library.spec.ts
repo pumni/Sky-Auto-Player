@@ -128,6 +128,32 @@ function expectStablePlayerBar(
   expect(after.player.height).toBe(before.player.height);
 }
 
+async function expectRecoveryBannerWithinViewport(page: Page) {
+  const banner = page.getByRole('alert');
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  const box = await banner.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  if (box && viewport) {
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+  }
+  const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(documentWidth).toBeLessThanOrEqual(viewport?.width ?? 0);
+}
+
+async function startSelectedSong(page: Page) {
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
+  if (await proceed.isVisible().catch(() => false)) await proceed.click();
+  return player;
+}
+
 test('mock desktop vertical slice can search and inspect a song', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
@@ -533,6 +559,88 @@ test('starting never exposes Pause and transport fits the supported narrow viewp
   expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
   await player.getByRole('button', { name: 'Stop' }).click();
   await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+});
+
+test('status Retry restores Playing and clears the recovery banner without moving the transport', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.goto(
+    '/?mockPlaybackDurationMs=120000&mockStartDelayMs=10&mockStartResponseDelayMs=60000&mockStatusQueryFailures=1&mockDropPlaybackSnapshots=1&mockDropPlaybackStartConfirmation=1',
+  );
+  const player = await startSelectedSong(page);
+  await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
+  const beforeRecovery = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(beforeRecovery);
+
+  await expectRecoveryBannerWithinViewport(page);
+  await expect(page.getByRole('alert')).toContainText('Playback status is unavailable');
+  await expect(player.getByRole('button', { name: 'Retry status' })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Stop playback' })).toBeVisible();
+  const issueGeometry = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(issueGeometry);
+  expectStablePlayerBar(beforeRecovery, issueGeometry);
+
+  await player.getByRole('button', { name: 'Retry status' }).click();
+  await expect(player.getByRole('button', { name: 'Pause' })).toBeEnabled();
+  await expect(player.getByRole('alert')).toHaveCount(0);
+  const recoveredGeometry = await readPlayerBarGeometry(page);
+  expectStablePlayerBar(beforeRecovery, recoveredGeometry);
+});
+
+test('Stop playback remains explicit and actionable from a recovery banner at 800×560', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto(
+    '/?mockPlaybackDurationMs=120000&mockStartDelayMs=10&mockStartResponseDelayMs=60000&mockStatusQueryFailures=1&mockDropPlaybackSnapshots=1&mockDropPlaybackStartConfirmation=1',
+  );
+  const player = await startSelectedSong(page);
+  await expectRecoveryBannerWithinViewport(page);
+  const beforeStop = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(beforeStop);
+
+  await player.getByRole('button', { name: 'Stop playback' }).click();
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+  await expect(player.getByRole('alert')).toHaveCount(0);
+  const afterStop = await readPlayerBarGeometry(page);
+  expectStablePlayerBar(beforeStop, afterStop);
+});
+
+test('authoritative no-session recovery returns to Play and Try again at 800×560', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/?mockNeverCreateSession=1');
+  const idleGeometry = await readPlayerBarGeometry(page);
+  const player = await startSelectedSong(page);
+  await expectRecoveryBannerWithinViewport(page);
+  await expect(page.getByRole('alert')).toContainText('No active playback session was created');
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Try again' })).toBeEnabled();
+  expectStablePlayerBar(idleGeometry, await readPlayerBarGeometry(page));
+});
+
+test('target startup failures keep their actionable message at supported viewports', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1200, height: 760 },
+    { width: 1280, height: 720 },
+    { width: 800, height: 560 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/?mockStartFailure=target_not_found');
+    const player = await startSelectedSong(page);
+    await expectRecoveryBannerWithinViewport(page);
+    await expect(page.getByRole('alert')).toContainText('Sky window was not found');
+    await expect(page.getByRole('alert')).toContainText(
+      'Open Sky and make sure its window is visible',
+    );
+    await expect(player.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    await expect(player.getByRole('button', { name: 'Stop playback' })).toHaveCount(0);
+    expectPlayerBarGeometry(await readPlayerBarGeometry(page));
+  }
 });
 
 test('Titlebar search and Player primary control share the application center axis', async ({

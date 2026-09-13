@@ -108,11 +108,18 @@ function initialSettings(): Settings {
 export interface MockBridgeOptions {
   playbackDurationMs?: number;
   startDelayMs?: number;
+  startResponseDelayMs?: number;
+  statusQueryFailures?: number;
+  neverCreateSession?: boolean;
+  startFailure?: { code: string; message: string };
+  emitSnapshots?: boolean;
+  dropPlaybackStartConfirmation?: boolean;
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
   const playbackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
   const startDelayMs = Math.max(0, options.startDelayMs ?? 30);
+  let statusQueryFailures = Math.max(0, Math.floor(options.statusQueryFailures ?? 0));
   let generation = 1;
   let settings = initialSettings();
   let playbackSessionSequence = 0;
@@ -258,6 +265,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     state: 'starting' | 'playing' | 'paused' | 'stopping' | 'finished',
     message: string | null = null,
   ) => {
+    if (options.dropPlaybackStartConfirmation && state === 'playing') return;
     emit({
       v: 1,
       name: 'playback.state_changed',
@@ -764,6 +772,12 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       if (!song) throw new Error('song was not found');
       preparedSongIds.delete(request.preparedId);
       preparedConfigs.delete(request.preparedId);
+      if (options.startFailure) {
+        throw new Error(`${options.startFailure.code}: ${options.startFailure.message}`);
+      }
+      if (options.neverCreateSession) {
+        return new Promise(() => undefined);
+      }
       playbackSessionSequence += 1;
       const session = {
         sessionId: playbackSessionSequence.toString(16).padStart(32, '0'),
@@ -786,13 +800,19 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           session.state = 'playing';
           emitPlaybackState(session, 'playing');
         }
-        if (session.state === 'playing' || session.state === 'paused') {
+        if (
+          options.emitSnapshots !== false &&
+          (session.state === 'playing' || session.state === 'paused')
+        ) {
           emitPlaybackSnapshot(session);
         }
         if (session.state === 'playing' && playbackElapsedMs(session) >= playbackDurationMs) {
           retirePlaybackSession(session, 'finished', 'Playback finished');
         }
       }, 40);
+      if (options.startResponseDelayMs && options.startResponseDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, options.startResponseDelayMs));
+      }
       return {
         session_id: session.sessionId,
         prepared_id: request.preparedId,
@@ -807,6 +827,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       };
     },
     async getPlaybackStatus() {
+      if (statusQueryFailures > 0) {
+        statusQueryFailures -= 1;
+        throw new Error('Mock playback status query unavailable.');
+      }
       return {
         active: activeSession
           ? {

@@ -424,12 +424,21 @@
 }
 
 .player-admission-error {
-  right: auto;
-  left: 50%;
-  width: min(560px, calc(100% - 32px));
-  transform: translateX(-50%);
+  right: 12px;
+  left: 12px;
+  width: auto;
+  transform: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border-strong));
   border-left-color: var(--danger);
+}
+
+.player-admission-recoverable_status,
+.player-admission-conflict {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border-strong));
+  border-left-color: var(--warning);
 }
 
 .admission-copy {
@@ -456,7 +465,59 @@
 }
 
 .player-admission-error .admission-copy span {
+  overflow: visible;
   color: var(--danger);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.player-admission-recoverable_status .admission-copy .player-message,
+.player-admission-conflict .admission-copy .player-message {
+  color: var(--text-secondary);
+}
+
+.admission-recovery-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admission-recovery-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding-inline: 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.admission-recovery-spinner-slot {
+  display: grid;
+  flex: 0 0 14px;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+}
+
+.admission-recovery-action:disabled .admission-recovery-spinner-slot svg {
+  animation: player-transport-spin 900ms linear infinite;
+}
+
+@media (max-width: 700px) {
+  .player-admission-error {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .admission-recovery-actions {
+    justify-content: flex-start;
+  }
 }
 
 .admission-actions {
@@ -483,6 +544,11 @@
   .player-admission {
     right: 10px;
     left: 10px;
+  }
+
+  .player-admission-error {
+    right: 12px;
+    left: 12px;
   }
 }
 

@@ -2,10 +2,25 @@ import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import type { SearchRequest, SettingsPatch } from '../bridge/DesktopBridge';
-import { createDesktopStore, selectRowAtIndex, selectSelectedDetail } from './store';
+import {
+  createDesktopStore,
+  playbackIssuePresentation,
+  selectRowAtIndex,
+  selectSelectedDetail,
+} from './store';
 
 function rowAt(store: ReturnType<typeof createDesktopStore>, index: number) {
   return selectRowAtIndex(store.getState().library, index);
+}
+
+async function startFirstSong(store: ReturnType<typeof createDesktopStore>) {
+  const first = rowAt(store, 0);
+  if (!first) throw new Error('mock library is empty');
+  await act(async () => store.getState().selectSong(first.song_id));
+  await act(async () => store.getState().prepareSelectedPlayback());
+  await act(async () => store.getState().startPreparedPlayback('proceed'));
+  await waitFor(() => expect(store.getState().playback.sessionId).not.toBeNull());
+  return first;
 }
 
 describe('desktop store', () => {
@@ -956,7 +971,7 @@ describe('desktop store', () => {
       expect(store.getState().playback.sessionId).not.toBeNull();
       expect(store.getState().playback.startRequestId).toBeNull();
       expect(store.getState().playback.state).toBe('starting');
-      expect(store.getState().playback.error).toBeNull();
+      expect(playbackIssuePresentation(store.getState().playback)?.kind).toBe('recoverable_status');
       expect(stopped).toEqual([]);
 
       releaseStart?.();
@@ -1110,7 +1125,7 @@ describe('desktop store', () => {
     expect(store.getState().playback.error).toBe(`target_not_found: ${failureMessage}`);
   });
 
-  it('keeps Play retryable when both the start and status IPC calls never resolve', async () => {
+  it('keeps ownership while status is unknown, then enables Play after authoritative no-session status', async () => {
     const bridge = createMockBridge();
     bridge.startPlayback = () =>
       new Promise<import('../bridge/DesktopBridge').PlaybackSession>(() => undefined);
@@ -1130,12 +1145,19 @@ describe('desktop store', () => {
         await vi.advanceTimersByTimeAsync(17_100);
       });
 
-      expect(store.getState().playback.startRequestId).toBeNull();
+      expect(store.getState().playback.startRequestId).not.toBeNull();
       expect(store.getState().playback.sessionId).toBeNull();
       expect(store.getState().playback.transportOperation).toBeNull();
+      expect(store.getState().playback.state).toBe('idle');
+      expect(playbackIssuePresentation(store.getState().playback)?.kind).toBe('recoverable_status');
+
+      bridge.getPlaybackStatus = async () => ({ active: null, last_terminal: null });
+      await act(async () => store.getState().retryPlaybackStatus());
+      expect(store.getState().playback.startRequestId).toBeNull();
       expect(store.getState().playback.prepared).toBeNull();
       expect(store.getState().playback.state).toBe('idle');
-      expect(store.getState().playback.error).toContain('Native playback status query timed out');
+      expect(store.getState().playback.error).toContain('No active playback session was created');
+      expect(playbackIssuePresentation(store.getState().playback)?.kind).toBe('playback_failure');
       await act(async () => store.getState().prepareSelectedPlayback());
       expect(store.getState().playback.prepared).not.toBeNull();
     } finally {
@@ -1664,5 +1686,126 @@ describe('desktop store', () => {
     expect(store.getState().calibration.operationId).toMatch(/^[0-9a-f]{32}$/);
     expect(store.getState().calibration.result?.outcome).toBe('succeeded');
     expect(store.getState().calibration.result?.source).toBe('qualified_calibration');
+  });
+
+  it('restores Playing and Paused from authoritative Retry status without an error', async () => {
+    for (const targetState of ['playing', 'paused'] as const) {
+      const store = createDesktopStore(createMockBridge({ playbackDurationMs: 60_000 }));
+      await act(async () => store.getState().initialize());
+      await startFirstSong(store);
+      await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+      if (targetState === 'paused') {
+        await act(async () => store.getState().pausePlayback());
+        await waitFor(() => expect(store.getState().playback.state).toBe('paused'));
+      }
+      const sessionId = store.getState().playback.sessionId;
+      act(() =>
+        store.setState({
+          playback: {
+            ...store.getState().playback,
+            error: 'Playback status is unavailable: Mock event delivery was interrupted.',
+          },
+        }),
+      );
+
+      await act(async () => store.getState().retryPlaybackStatus());
+
+      expect(store.getState().playback.sessionId).toBe(sessionId);
+      expect(store.getState().playback.state).toBe(targetState);
+      expect(store.getState().playback.error).toBeNull();
+      expect(playbackIssuePresentation(store.getState().playback)).toBeNull();
+      await act(async () => store.getState().stopPlayback());
+    }
+  });
+
+  it('keeps Starting recoverable with Retry status and Stop after reconciliation', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 60_000 }),
+    );
+    await act(async () => store.getState().initialize());
+    await startFirstSong(store);
+    expect(store.getState().playback.state).toBe('starting');
+    const sessionId = store.getState().playback.sessionId;
+
+    await act(async () => store.getState().retryPlaybackStatus());
+
+    expect(store.getState().playback.sessionId).toBe(sessionId);
+    expect(store.getState().playback.state).toBe('starting');
+    expect(playbackIssuePresentation(store.getState().playback)?.kind).toBe('recoverable_status');
+    await act(async () => store.getState().stopPlayback());
+    await waitFor(() => expect(store.getState().playback.sessionId).toBeNull());
+  });
+
+  it('keeps the owned session and recovery actions when Retry status also fails', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000, emitSnapshots: false });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await startFirstSong(store);
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    const sessionId = store.getState().playback.sessionId;
+    bridge.getPlaybackStatus = async () => {
+      throw new Error('Mock IPC disconnected.');
+    };
+
+    await act(async () => store.getState().retryPlaybackStatus());
+
+    expect(store.getState().playback.sessionId).toBe(sessionId);
+    expect(store.getState().playback.error).toContain('Mock IPC disconnected');
+    expect(playbackIssuePresentation(store.getState().playback)?.kind).toBe('recoverable_status');
+    await act(async () => store.getState().stopPlayback());
+    await waitFor(() => expect(store.getState().playback.sessionId).toBeNull());
+  });
+
+  it('deduplicates Retry status calls and rejects a stale response after a newer session binds', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000 });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    await startFirstSong(store);
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    const originalStatus = await bridge.getPlaybackStatus();
+    const oldSessionId = store.getState().playback.sessionId;
+    let releaseStatus: ((status: typeof originalStatus) => void) | undefined;
+    let queryCount = 0;
+    bridge.getPlaybackStatus = () => {
+      queryCount += 1;
+      return new Promise((resolve) => {
+        releaseStatus = resolve;
+      });
+    };
+    act(() =>
+      store.setState({
+        playback: {
+          ...store.getState().playback,
+          error: 'Playback status is unavailable: Mock event delivery was interrupted.',
+        },
+      }),
+    );
+
+    let firstRetry: Promise<void> | undefined;
+    let secondRetry: Promise<void> | undefined;
+    act(() => {
+      firstRetry = store.getState().retryPlaybackStatus();
+      secondRetry = store.getState().retryPlaybackStatus();
+    });
+    expect(firstRetry).toBe(secondRetry);
+    expect(queryCount).toBe(1);
+    act(() =>
+      store.setState({
+        playback: {
+          ...store.getState().playback,
+          sessionId: 'd'.repeat(32),
+          state: 'playing',
+          error: null,
+        },
+      }),
+    );
+    releaseStatus?.(originalStatus);
+    await act(async () => firstRetry);
+
+    expect(store.getState().playback.sessionId).toBe('d'.repeat(32));
+    expect(store.getState().playback.state).toBe('playing');
+    expect(store.getState().playback.error).toBeNull();
+    expect(store.getState().playback.statusRetryPending).toBe(false);
+    expect(oldSessionId).not.toBe(store.getState().playback.sessionId);
   });
 });
