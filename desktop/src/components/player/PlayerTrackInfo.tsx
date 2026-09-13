@@ -41,13 +41,11 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const trackSubtitle =
     !currentSong && !selectedSongId
       ? 'Select a song from your Library'
-      : playbackError
-        ? 'Playback error'
-        : active
-          ? playerStateLabel(playbackState)
-          : currentSong && playbackState === 'idle'
-            ? 'Ready to play'
-            : metadata;
+      : active
+        ? playerStateLabel(playbackState)
+        : currentSong && playbackState === 'idle' && !playbackError
+          ? 'Ready to play'
+          : metadata;
 
   return (
     <div className="player-track-info">

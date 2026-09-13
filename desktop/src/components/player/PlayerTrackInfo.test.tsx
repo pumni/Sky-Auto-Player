@@ -49,4 +49,25 @@ describe('PlayerTrackInfo', () => {
     expect(screen.getByText(row.title)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
   });
+
+  it('keeps song metadata in the track line when a separate playback error is shown', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 1);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    act(() =>
+      store.setState({
+        playback: {
+          ...store.getState().playback,
+          error: 'target_not_found: Open Sky and try again.',
+        },
+      }),
+    );
+
+    render(<PlayerTrackInfo useStore={store} />);
+    expect(screen.getByText(row.title)).toBeInTheDocument();
+    expect(screen.getByText(/TXT ·/)).toBeInTheDocument();
+    expect(screen.queryByText('Playback error')).not.toBeInTheDocument();
+  });
 });

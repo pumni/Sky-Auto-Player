@@ -59,6 +59,75 @@ async function expectWorkbenchWithinBounds(
   await expect(page.locator('.workbench')).toHaveAttribute('data-layout-fits', 'true');
 }
 
+async function readPlayerBarGeometry(page: Page) {
+  return page.evaluate(() => {
+    const player = document.querySelector<HTMLElement>('.player-bar');
+    const primary = player?.querySelector<HTMLElement>('[data-testid="player-primary-slot"]');
+    const controls = player?.querySelector<HTMLElement>('[data-testid="player-controls-row"]');
+    const timeline = player?.querySelector<HTMLElement>('.player-timeline');
+    const rail = player?.querySelector<HTMLElement>('.player-timeline progress');
+    if (!player || !primary || !controls || !timeline || !rail) return null;
+
+    const rect = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    };
+    const visibleControlCenters: Record<string, number> = {};
+    for (const label of ['Previous', 'Pause', 'Resume', 'Next', 'Stop']) {
+      const button = player.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      if (button && button.getClientRects().length > 0) {
+        const box = button.getBoundingClientRect();
+        visibleControlCenters[label] = box.y + box.height / 2;
+      }
+    }
+    const primaryBox = rect(primary);
+    return {
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      viewportCenterX: window.innerWidth / 2,
+      player: rect(player),
+      controls: rect(controls),
+      primary: primaryBox,
+      primaryCenterX: primaryBox.x + primaryBox.width / 2,
+      primaryCenterY: primaryBox.y + primaryBox.height / 2,
+      timeline: rect(timeline),
+      rail: rect(rail),
+      visibleControlCenters,
+      documentWidth: document.documentElement.scrollWidth,
+      documentHeight: document.documentElement.scrollHeight,
+    };
+  });
+}
+
+function expectPlayerBarGeometry(geometry: Awaited<ReturnType<typeof readPlayerBarGeometry>>) {
+  expect(geometry).not.toBeNull();
+  if (!geometry) throw new Error('Player Bar geometry is unavailable');
+  expect(Math.abs(geometry.primaryCenterX - geometry.viewportCenterX)).toBeLessThanOrEqual(2);
+  expect(geometry.player.height).toBe(92);
+  expect(
+    geometry.timeline.y - (geometry.primary.y + geometry.primary.height),
+  ).toBeGreaterThanOrEqual(6);
+  expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.documentHeight).toBeLessThanOrEqual(geometry.viewportHeight);
+  for (const centerY of Object.values(geometry.visibleControlCenters)) {
+    expect(Math.abs(centerY - geometry.primaryCenterY)).toBeLessThanOrEqual(1);
+  }
+}
+
+function expectStablePlayerBar(
+  before: Awaited<ReturnType<typeof readPlayerBarGeometry>>,
+  after: Awaited<ReturnType<typeof readPlayerBarGeometry>>,
+) {
+  expect(before).not.toBeNull();
+  expect(after).not.toBeNull();
+  if (!before || !after) throw new Error('Player Bar geometry is unavailable');
+  expect(Math.abs(after.primaryCenterX - before.primaryCenterX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.primaryCenterY - before.primaryCenterY)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.timeline.y - before.timeline.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.rail.y - before.rail.y)).toBeLessThanOrEqual(1);
+  expect(after.player.height).toBe(before.player.height);
+}
+
 test('mock desktop vertical slice can search and inspect a song', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
@@ -492,6 +561,8 @@ test('Titlebar search and Player primary control share the application center ax
   if (activeBox) {
     expect(Math.abs(activeBox.x + activeBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
   }
+  const activeGeometry = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(activeGeometry);
 
   for (const label of ['Previous', 'Next', 'Stop']) {
     const button = page.getByRole('button', { name: label, exact: true });
@@ -512,39 +583,61 @@ test('Titlebar search and Player primary control share the application center ax
   if (nextBox && stopBox) {
     const stopGap = stopBox.x - (nextBox.x + nextBox.width);
     expect(stopGap).toBeGreaterThanOrEqual(0);
-    expect(stopGap).toBeLessThanOrEqual(8);
+    expect(stopGap).toBeLessThanOrEqual(12);
   }
 });
 
-test('Player Bar remains compact, centered, and bounded at the minimum viewport', async ({
+test('Player Bar keeps a centered controls row and separate timeline at supported viewports', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 800, height: 560 });
-  await page.goto('/');
-  const player = page.getByRole('contentinfo', { name: 'Player controls' });
-  const playerBox = await player.boundingBox();
-  const playBox = await player.getByRole('button', { name: 'Play', exact: true }).boundingBox();
-  const timelineBox = await player.locator('.player-timeline').boundingBox();
-  const toolsBox = await player.locator('.player-tools').boundingBox();
-  expect(playerBox).not.toBeNull();
-  expect(playBox).not.toBeNull();
-  expect(timelineBox).not.toBeNull();
-  expect(toolsBox).not.toBeNull();
-  if (playerBox && playBox && timelineBox && toolsBox) {
-    expect(Math.abs(playBox.x + playBox.width / 2 - 400)).toBeLessThanOrEqual(2);
-    expect(toolsBox.x + toolsBox.width).toBeLessThanOrEqual(playerBox.x + playerBox.width - 8);
-    expect(timelineBox.x + timelineBox.width).toBeLessThanOrEqual(toolsBox.x);
-  }
-  await expect(player.getByRole('button', { name: 'Configure playback profile' })).toHaveAttribute(
-    'aria-label',
-    'Configure playback profile',
-  );
+  for (const viewport of [
+    { width: 1200, height: 760 },
+    { width: 1280, height: 720 },
+    { width: 800, height: 560 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=1200');
+    const player = page.getByRole('contentinfo', { name: 'Player controls' });
+    await page.getByRole('row', { name: /Blue Bird/ }).click();
 
-  await page.getByRole('button', { name: 'Open utility panel' }).click();
-  const openPlayBox = await player.getByRole('button', { name: 'Play', exact: true }).boundingBox();
-  expect(openPlayBox).not.toBeNull();
-  if (openPlayBox) {
-    expect(Math.abs(openPlayBox.x + openPlayBox.width / 2 - 400)).toBeLessThanOrEqual(2);
+    const idle = await readPlayerBarGeometry(page);
+    expectPlayerBarGeometry(idle);
+
+    await player.getByRole('button', { name: 'Play', exact: true }).click();
+    await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
+    const starting = await readPlayerBarGeometry(page);
+    expectPlayerBarGeometry(starting);
+    expectStablePlayerBar(idle, starting);
+
+    await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+    const playing = await readPlayerBarGeometry(page);
+    expectPlayerBarGeometry(playing);
+    expectStablePlayerBar(idle, playing);
+
+    await player.getByRole('button', { name: 'Pause' }).click();
+    await expect(player.getByRole('button', { name: 'Resume' })).toBeVisible();
+    const paused = await readPlayerBarGeometry(page);
+    expectPlayerBarGeometry(paused);
+    expectStablePlayerBar(idle, paused);
+
+    await player.getByRole('button', { name: 'Resume' }).click();
+    await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
+    const resumed = await readPlayerBarGeometry(page);
+    expectPlayerBarGeometry(resumed);
+    expectStablePlayerBar(idle, resumed);
+
+    const toolsBox = await player.locator('.player-tools').boundingBox();
+    const timelineBox = await player.locator('.player-timeline').boundingBox();
+    expect(toolsBox).not.toBeNull();
+    expect(timelineBox).not.toBeNull();
+    if (toolsBox && timelineBox) {
+      expect(timelineBox.x + timelineBox.width).toBeLessThanOrEqual(toolsBox.x);
+    }
+    await expect(
+      player.getByRole('button', { name: 'Configure playback profile' }),
+    ).toHaveAttribute('aria-label', 'Configure playback profile');
+    await player.getByRole('button', { name: 'Stop' }).click();
+    await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
   }
 });
 
@@ -642,10 +735,15 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   const idlePrimary = page.getByRole('button', { name: 'Play', exact: true });
   const idleBox = await idlePrimary.boundingBox();
   expect(idleBox).not.toBeNull();
+  const idleGeometry = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(idleGeometry);
 
   await idlePrimary.click();
   const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
   await expect(confirmation).toBeVisible();
+  const confirmationGeometry = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(confirmationGeometry);
+  expectStablePlayerBar(idleGeometry, confirmationGeometry);
   await expect(player.getByRole('button', { name: 'Previous' })).toBeDisabled();
   await expect(player.getByRole('button', { name: 'Next' })).toBeDisabled();
   await expect(
@@ -684,13 +782,22 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
       Math.abs(idleBox.x + idleBox.width / 2 - (activeBox.x + activeBox.width / 2)),
     ).toBeLessThanOrEqual(1);
   }
+  const activeGeometry = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(activeGeometry);
+  expectStablePlayerBar(idleGeometry, activeGeometry);
   await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.getByRole('button', { name: 'Pause' }).click();
   await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible();
+  const pausedGeometry = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(pausedGeometry);
+  expectStablePlayerBar(idleGeometry, pausedGeometry);
   await page.getByRole('button', { name: 'Resume' }).click();
   await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  const resumedGeometry = await readPlayerBarGeometry(page);
+  expectPlayerBarGeometry(resumedGeometry);
+  expectStablePlayerBar(idleGeometry, resumedGeometry);
   await page.getByRole('button', { name: 'Stop' }).click();
   await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
 });

@@ -88,6 +88,9 @@ describe('PlayerTransport', () => {
 
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    expect(screen.getByTestId('player-controls-row')).toBeInTheDocument();
+    expect(screen.getByTestId('player-primary-slot')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
   });
 
   it('maps playing to Pause, paused to Resume, and keeps Stop discoverable', async () => {

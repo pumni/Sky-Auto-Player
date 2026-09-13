@@ -85,8 +85,8 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
 
   return (
     <div className="player-transport">
-      <div className="transport-actions">
-        <div className="transport-slot transport-previous-slot">
+      <div className="player-controls-row" data-testid="player-controls-row">
+        <div className="player-core-controls" data-testid="player-core-controls">
           <button
             className="icon-button player-secondary-action"
             type="button"
@@ -97,77 +97,78 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           >
             <SkipBack size={16} aria-hidden="true" />
           </button>
-        </div>
-        <div className="transport-slot transport-stop-balance-slot" aria-hidden="true" />
-        <div className="transport-slot transport-primary-slot">
-          {!active && !playback.prepared && playback.startRequestId === null && (
-            <button
-              className="icon-button button-primary player-primary-action"
-              type="button"
-              aria-label="Play"
-              title="Play"
-              disabled={
-                playback.startRequestId !== null ||
-                (!selectedSongId && (!playback.currentSong || !contextCurrent)) ||
-                operationPending
-              }
-              onClick={() => void prepareAndMaybeStart(false)}
-            >
-              <Play size={18} aria-hidden="true" />
-            </button>
-          )}
-          {!active && playback.startRequestId !== null && (
-            <button
-              className="icon-button button-primary player-primary-action is-pending"
-              type="button"
-              aria-label="Starting playback"
-              title="Starting playback"
-              disabled
-            >
-              <LoaderCircle size={18} aria-hidden="true" />
-            </button>
-          )}
-          {active && playback.state === 'playing' && (
-            <button
-              className="icon-button button-primary player-primary-action"
-              type="button"
-              aria-label="Pause"
-              title="Pause"
-              disabled={operationPending}
-              onClick={() => void pause()}
-            >
-              <Pause size={18} aria-hidden="true" />
-            </button>
-          )}
-          {active && playback.state === 'paused' && (
-            <button
-              className="icon-button button-primary player-primary-action"
-              type="button"
-              aria-label="Resume"
-              title="Resume"
-              disabled={operationPending}
-              onClick={() => void resume()}
-            >
-              <Play size={18} aria-hidden="true" />
-            </button>
-          )}
-          {active && playback.state !== 'playing' && playback.state !== 'paused' && (
-            <button
-              className="icon-button button-primary player-primary-action is-pending"
-              type="button"
-              aria-label={
-                playback.state === 'starting' ? 'Starting playback' : 'Playback transition pending'
-              }
-              title={
-                playback.state === 'starting' ? 'Starting playback' : 'Playback transition pending'
-              }
-              disabled
-            >
-              <LoaderCircle size={18} aria-hidden="true" />
-            </button>
-          )}
-        </div>
-        <div className="transport-slot transport-next-slot">
+          <div className="player-primary-slot" data-testid="player-primary-slot">
+            {!active && !playback.prepared && playback.startRequestId === null && (
+              <button
+                className="icon-button button-primary player-primary-action"
+                type="button"
+                aria-label="Play"
+                title="Play"
+                disabled={
+                  playback.startRequestId !== null ||
+                  (!selectedSongId && (!playback.currentSong || !contextCurrent)) ||
+                  operationPending
+                }
+                onClick={() => void prepareAndMaybeStart(false)}
+              >
+                <Play size={18} aria-hidden="true" />
+              </button>
+            )}
+            {!active && playback.startRequestId !== null && (
+              <button
+                className="icon-button button-primary player-primary-action is-pending"
+                type="button"
+                aria-label="Starting playback"
+                title="Starting playback"
+                disabled
+              >
+                <LoaderCircle size={18} aria-hidden="true" />
+              </button>
+            )}
+            {active && playback.state === 'playing' && (
+              <button
+                className="icon-button button-primary player-primary-action"
+                type="button"
+                aria-label="Pause"
+                title="Pause"
+                disabled={operationPending}
+                onClick={() => void pause()}
+              >
+                <Pause size={18} aria-hidden="true" />
+              </button>
+            )}
+            {active && playback.state === 'paused' && (
+              <button
+                className="icon-button button-primary player-primary-action"
+                type="button"
+                aria-label="Resume"
+                title="Resume"
+                disabled={operationPending}
+                onClick={() => void resume()}
+              >
+                <Play size={18} aria-hidden="true" />
+              </button>
+            )}
+            {active && playback.state !== 'playing' && playback.state !== 'paused' && (
+              <button
+                className="icon-button button-primary player-primary-action is-pending"
+                type="button"
+                aria-label={
+                  playback.state === 'starting'
+                    ? 'Starting playback'
+                    : 'Playback transition pending'
+                }
+                title={
+                  playback.state === 'starting'
+                    ? 'Starting playback'
+                    : 'Playback transition pending'
+                }
+                disabled
+              >
+                <LoaderCircle size={18} aria-hidden="true" />
+              </button>
+            )}
+          </div>
           <button
             className="icon-button player-secondary-action"
             type="button"
@@ -179,23 +180,21 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             <SkipForward size={16} aria-hidden="true" />
           </button>
         </div>
-        <div className="transport-slot transport-stop-slot">
-          {hasSession &&
-            ['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(
-              playback.state,
-            ) && (
-              <button
-                className="icon-button player-secondary-action"
-                type="button"
-                aria-label="Stop"
-                title="Stop"
-                disabled={playback.transportOperation === 'stopping'}
-                onClick={() => void stop()}
-              >
-                <Square size={12} aria-hidden="true" />
-              </button>
-            )}
-        </div>
+        {hasSession &&
+          ['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(
+            playback.state,
+          ) && (
+            <button
+              className="icon-button player-secondary-action player-stop-action"
+              type="button"
+              aria-label="Stop"
+              title="Stop"
+              disabled={playback.transportOperation === 'stopping'}
+              onClick={() => void stop()}
+            >
+              <Square size={12} aria-hidden="true" />
+            </button>
+          )}
       </div>
       <div
         className={`player-timeline${timelineSongExists ? '' : ' is-disabled'}`}
