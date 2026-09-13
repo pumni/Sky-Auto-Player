@@ -116,12 +116,18 @@ export type PlaybackPatch = Partial<
 export type SettingsPatch = Partial<
   Omit<
     GeneratedSettingsPatch,
-    'theme' | 'telemetryEnabled' | 'verboseHud' | 'playbackDefaults' | 'updatePreferences'
+    | 'theme'
+    | 'telemetryEnabled'
+    | 'verboseHud'
+    | 'playbackDefaults'
+    | 'autoPlay'
+    | 'updatePreferences'
   > & {
     theme: ThemeId;
     telemetryEnabled: boolean;
     verboseHud: boolean;
     playbackDefaults: PlaybackPatch;
+    autoPlay: boolean;
     updatePreferences: UpdatePatch;
   }
 >;

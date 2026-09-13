@@ -5,6 +5,7 @@ import type { Bootstrap, SettingsPatch, ThemeId } from '../../bridge/DesktopBrid
 import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
 import { LateDownToleranceControl } from './LateDownToleranceControl';
 import { TimingMarginControl } from './TimingMarginControl';
+import { AutoPlaySwitch } from './AutoPlaySwitch';
 
 interface SettingsPanelProps {
   bootstrap: Bootstrap;
@@ -123,6 +124,10 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                         ))}
                       </select>
                     </label>
+                    <AutoPlaySwitch
+                      checked={settings.auto_play}
+                      onChange={(autoPlay) => patch({ autoPlay })}
+                    />
                     <label>
                       Tempo
                       <select

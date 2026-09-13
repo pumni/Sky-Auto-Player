@@ -27,6 +27,7 @@ async function setupTransport() {
     total: 1,
     currentIndex: 0,
     currentSongId: row.song_id,
+    shuffleTraversal: null,
     dryRun: false,
     membershipRevision: 0,
     valid: true,
@@ -144,5 +145,20 @@ describe('PlayerTransport', () => {
     );
     expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
     expect(store.getState().playback.context?.currentIndex).toBe(0);
+  });
+
+  it('toggles Shuffle accessibly without changing the current song', async () => {
+    const { store, setPlayback, currentSong, context } = await setupTransport();
+    act(() => setPlayback({ currentSong, context, state: 'playing' }));
+
+    const shuffle = screen.getByRole('button', { name: 'Shuffle' });
+    expect(shuffle).toHaveAttribute('aria-pressed', 'false');
+    act(() => shuffle.click());
+
+    expect(screen.getByRole('button', { name: 'Shuffle' })).toHaveAttribute('aria-pressed', 'true');
+    expect(store.getState().playback.shuffleEnabled).toBe(true);
+    expect(store.getState().playback.currentSong?.songId).toBe(currentSong.songId);
+    expect(store.getState().playback.context?.shuffleTraversal?.originIndex).toBe(0);
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0);
   });
 });

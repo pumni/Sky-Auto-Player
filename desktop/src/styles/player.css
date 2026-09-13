@@ -86,7 +86,7 @@
   --player-secondary-target: 34px;
   --player-primary-size: 42px;
   --player-control-gap: 8px;
-  --player-stop-gap: 12px;
+  --player-stop-gap: 4px;
   --player-primary-half: 21px;
   position: relative;
   grid-column: 2;
@@ -109,20 +109,19 @@
 
 .player-core-controls {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  display: flex;
-  align-items: center;
-  gap: var(--player-control-gap);
-  transform: translate(-50%, -50%);
+  inset: 0;
 }
 
 .player-primary-slot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
   display: grid;
   flex: 0 0 var(--player-primary-size);
   place-items: center;
   width: var(--player-primary-size);
   height: var(--player-primary-size);
+  transform: translate(-50%, -50%);
 }
 
 .player-transport .player-primary-action {
@@ -145,6 +144,8 @@
 }
 
 .player-transport .player-secondary-action {
+  position: absolute;
+  top: 50%;
   display: grid;
   flex: 0 0 var(--player-secondary-target);
   place-items: center;
@@ -156,6 +157,32 @@
   border-radius: 50%;
   background: transparent;
   color: var(--text-secondary);
+  transform: translateY(-50%);
+}
+
+.player-transport .player-shuffle-action {
+  left: calc(
+    50% - var(--player-primary-half) - var(--player-control-gap) - var(--player-secondary-target) -
+      var(--player-control-gap) - var(--player-secondary-target)
+  );
+}
+
+.player-transport .player-previous-action {
+  left: calc(
+    50% - var(--player-primary-half) - var(--player-control-gap) - var(--player-secondary-target)
+  );
+}
+
+.player-transport .player-next-action {
+  left: calc(50% + var(--player-primary-half) + var(--player-control-gap));
+}
+
+.player-transport .player-shuffle-action.is-active {
+  color: var(--accent);
+}
+
+.player-transport .player-shuffle-action.is-active:hover:not(:disabled) {
+  color: var(--accent);
 }
 
 .player-transport .player-secondary-action:hover:not(:disabled) {
@@ -168,7 +195,7 @@
   position: absolute;
   top: 50%;
   left: calc(
-    50% + var(--player-secondary-target) + var(--player-control-gap) + var(--player-primary-half) +
+    50% + var(--player-primary-half) + var(--player-control-gap) + var(--player-secondary-target) +
       var(--player-stop-gap)
   );
   transform: translateY(-50%);
@@ -363,6 +390,98 @@
   display: grid;
   justify-content: stretch;
   gap: 9px;
+}
+
+.profile-base-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-base-row .profile-base-hold {
+  display: flex;
+  justify-content: space-between;
+}
+
+.profile-base-row .auto-play-switch {
+  min-width: 124px;
+  min-height: 28px;
+  font-size: 10px;
+}
+
+.auto-play-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.auto-play-switch:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: transparent;
+}
+
+.auto-play-switch:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+.auto-play-switch-track {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 28px;
+  align-items: center;
+  width: 28px;
+  height: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.auto-play-switch-track > span {
+  width: 10px;
+  height: 10px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  transition:
+    transform 120ms ease,
+    background-color 120ms ease;
+}
+
+.auto-play-switch.is-on .auto-play-switch-track {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.auto-play-switch.is-on .auto-play-switch-track > span {
+  background: var(--surface-panel);
+  transform: translateX(12px);
+}
+
+.auto-play-switch-state {
+  min-width: 20px;
+  color: var(--text-tertiary);
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.auto-play-switch.is-on .auto-play-switch-state {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .profile-popover .profile-fields label {
@@ -565,6 +684,14 @@
 
   .player-tools {
     gap: 6px;
+  }
+}
+
+@media (max-width: 700px) {
+  .player-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    padding-inline: 8px;
   }
 }
 

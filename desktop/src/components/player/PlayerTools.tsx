@@ -2,6 +2,7 @@ import { PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
+import { AutoPlaySwitch } from '../settings/AutoPlaySwitch';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 
 interface PlayerToolsProps {
@@ -68,6 +69,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                   defaults={defaults}
                   bootstrap={bootstrap}
                   recommendation={settings?.timing_margin_recommendation}
+                  autoPlay={settings?.auto_play ?? true}
                   patchSettings={patchSettings}
                 />
               </div>
@@ -105,10 +107,17 @@ interface ProfileFieldsProps {
   defaults: NonNullable<DesktopStore['settings']>['playback_defaults'] | undefined;
   bootstrap: DesktopStore['bootstrap'];
   recommendation: NonNullable<DesktopStore['settings']>['timing_margin_recommendation'] | undefined;
+  autoPlay: boolean;
   patchSettings: DesktopStore['patchSettings'];
 }
 
-function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: ProfileFieldsProps) {
+function ProfileFields({
+  defaults,
+  bootstrap,
+  recommendation,
+  autoPlay,
+  patchSettings,
+}: ProfileFieldsProps) {
   if (!defaults || !bootstrap || !recommendation) {
     return <span className="muted">Profile unavailable</span>;
   }
@@ -118,21 +127,27 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
   const minReleaseGapUs = frameUs + defaults.timing_margin_us;
   return (
     <>
-      <label>
-        Base Hold
-        <select
-          value={defaults.hold_frames}
-          onChange={(event) =>
-            void patchSettings({ playbackDefaults: { holdFrames: Number(event.target.value) } })
-          }
-        >
-          {bootstrap.option_sets.hold_frames.map((value) => (
-            <option key={value} value={value}>
-              {value}f
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="profile-base-row">
+        <label className="profile-base-hold">
+          Base Hold
+          <select
+            value={defaults.hold_frames}
+            onChange={(event) =>
+              void patchSettings({ playbackDefaults: { holdFrames: Number(event.target.value) } })
+            }
+          >
+            {bootstrap.option_sets.hold_frames.map((value) => (
+              <option key={value} value={value}>
+                {value}f
+              </option>
+            ))}
+          </select>
+        </label>
+        <AutoPlaySwitch
+          checked={autoPlay}
+          onChange={(checked) => void patchSettings({ autoPlay: checked })}
+        />
+      </div>
       <label>
         Tempo
         <select

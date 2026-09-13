@@ -117,6 +117,12 @@
   font-size: 12px;
 }
 
+.settings-section .auto-play-switch {
+  width: 100%;
+  min-height: 34px;
+  font-size: 12px;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

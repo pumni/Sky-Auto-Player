@@ -73,7 +73,7 @@ async function readPlayerBarGeometry(page: Page) {
       return { x: box.x, y: box.y, width: box.width, height: box.height };
     };
     const visibleControlCenters: Record<string, number> = {};
-    for (const label of ['Previous', 'Pause', 'Resume', 'Next', 'Stop']) {
+    for (const label of ['Shuffle', 'Previous', 'Pause', 'Resume', 'Next', 'Stop']) {
       const button = player.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
       if (button && button.getClientRects().length > 0) {
         const box = button.getBoundingClientRect();
@@ -527,6 +527,68 @@ test('Next waits for retirement and starts the next context song', async ({ page
   await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
 });
 
+test('Shuffle changes Next traversal without repeating visited songs', async ({ page }) => {
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  const shuffle = player.getByRole('button', { name: 'Shuffle' });
+  await shuffle.click();
+  await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+
+  const visited = ['Blue Bird'];
+  for (let count = 0; count < 4; count += 1) {
+    await player.getByRole('button', { name: 'Next' }).click();
+    const proceed = page.getByRole('button', { name: 'Proceed with current settings' });
+    if (await proceed.isVisible().catch(() => false)) await proceed.click();
+    await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+    const title = (await player.locator('.player-track-copy strong').textContent())?.trim();
+    expect(title).toBeTruthy();
+    if (!title) throw new Error('shuffled Now Playing title is missing');
+    visited.push(title);
+  }
+  expect(new Set(visited).size).toBe(visited.length);
+  expect(visited[1]).not.toBe('Candle Run');
+});
+
+test('Auto Play Off stays on the finished song, and a live On toggle advances it', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=700&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  const profile = player.getByRole('button', { name: 'Configure playback profile' });
+  await profile.click();
+  const autoPlay = page.getByRole('dialog', { name: 'Playback profile' }).getByRole('switch', {
+    name: 'Auto Play',
+  });
+  await autoPlay.click();
+  await expect(autoPlay).toHaveAttribute('aria-checked', 'false');
+  await page.keyboard.press('Escape');
+
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible({
+    timeout: 5_000,
+  });
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await profile.click();
+  const liveAutoPlay = page.getByRole('dialog', { name: 'Playback profile' }).getByRole('switch', {
+    name: 'Auto Play',
+  });
+  await liveAutoPlay.click();
+  await expect(liveAutoPlay).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
+    timeout: 5_000,
+  });
+});
+
 test('rapid Play and risk confirmation clicks create only one active session', async ({ page }) => {
   await page.goto('/?mockPlaybackDurationMs=5_000&mockStartDelayMs=10');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
@@ -628,6 +690,8 @@ test('target startup failures keep their actionable message at supported viewpor
     { width: 1200, height: 760 },
     { width: 1280, height: 720 },
     { width: 800, height: 560 },
+    // A physical 800 px Windows client area at 125% DPI exposes a 640 CSS px viewport.
+    { width: 640, height: 448 },
   ]) {
     await page.setViewportSize(viewport);
     await page.goto('/?mockStartFailure=target_not_found');
@@ -672,7 +736,7 @@ test('Titlebar search and Player primary control share the application center ax
   const activeGeometry = await readPlayerBarGeometry(page);
   expectPlayerBarGeometry(activeGeometry);
 
-  for (const label of ['Previous', 'Next', 'Stop']) {
+  for (const label of ['Shuffle', 'Previous', 'Next', 'Stop']) {
     const button = page.getByRole('button', { name: label, exact: true });
     const style = await button.evaluate((element) => {
       const computed = getComputedStyle(element);
@@ -691,7 +755,7 @@ test('Titlebar search and Player primary control share the application center ax
   if (nextBox && stopBox) {
     const stopGap = stopBox.x - (nextBox.x + nextBox.width);
     expect(stopGap).toBeGreaterThanOrEqual(0);
-    expect(stopGap).toBeLessThanOrEqual(12);
+    expect(stopGap).toBeLessThanOrEqual(8);
   }
 });
 
@@ -702,6 +766,8 @@ test('Player Bar keeps a centered controls row and separate timeline at supporte
     { width: 1200, height: 760 },
     { width: 1280, height: 720 },
     { width: 800, height: 560 },
+    // Match the logical viewport of an 800×560 Tauri client area at 125% DPI.
+    { width: 640, height: 448 },
   ]) {
     await page.setViewportSize(viewport);
     await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=1200');
@@ -710,6 +776,21 @@ test('Player Bar keeps a centered controls row and separate timeline at supporte
 
     const idle = await readPlayerBarGeometry(page);
     expectPlayerBarGeometry(idle);
+    const shuffle = player.getByRole('button', { name: 'Shuffle' });
+    await expect(shuffle).toHaveAttribute('aria-pressed', 'false');
+    await shuffle.click();
+    await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
+    const activeShuffleColor = await shuffle.evaluate((element) => getComputedStyle(element).color);
+    const accentColor = await player.evaluate((element) => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--accent)';
+      element.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    expect(activeShuffleColor).toBe(accentColor);
+    expectStablePlayerBar(idle, await readPlayerBarGeometry(page));
 
     await player.getByRole('button', { name: 'Play', exact: true }).click();
     await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
@@ -780,6 +861,12 @@ test('Playback Profile works through the narrow popover with focus restore', asy
 
   await expect(popover).toBeVisible();
   await assertPopoverGeometry();
+  const autoPlay = popover.getByRole('switch', { name: 'Auto Play' });
+  await expect(autoPlay).toHaveAttribute('aria-checked', 'true');
+  await autoPlay.click();
+  await expect(autoPlay).toHaveAttribute('aria-checked', 'false');
+  await autoPlay.click();
+  await expect(autoPlay).toHaveAttribute('aria-checked', 'true');
   await expect(popover.getByLabel('Hold')).toBeVisible();
   await expect(popover.getByLabel('Tempo')).toBeVisible();
   await expect(popover.getByLabel('FPS')).toBeVisible();

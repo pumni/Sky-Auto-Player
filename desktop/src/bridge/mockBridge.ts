@@ -94,6 +94,7 @@ function initialSettings(): Settings {
       fps: 60,
       dry_run: false,
     },
+    auto_play: true,
     timing_margin_recommendation: {
       recommended_timing_margin_us: 500,
       qualified: false,
@@ -558,6 +559,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           ? {}
           : { telemetry_enabled: patch.telemetryEnabled }),
         ...(patch.verboseHud === undefined ? {} : { verbose_hud: patch.verboseHud }),
+        ...(patch.autoPlay === undefined ? {} : { auto_play: patch.autoPlay }),
         ...(playback === undefined
           ? {}
           : {

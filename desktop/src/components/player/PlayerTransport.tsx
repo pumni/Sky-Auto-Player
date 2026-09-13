@@ -1,6 +1,6 @@
-import { LoaderCircle, Pause, Play, SkipBack, SkipForward, Square } from 'lucide-react';
+import { LoaderCircle, Pause, Play, Shuffle, SkipBack, SkipForward, Square } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
-import { selectSongById } from '../../state/store';
+import { nextPlaybackPosition, selectSongById } from '../../state/store';
 import { formatPlayerDuration } from './playerFormatting';
 
 interface PlayerTransportProps {
@@ -19,6 +19,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
   const resume = useStore((store) => store.resumePlayback);
   const previous = useStore((store) => store.previousPlayback);
   const next = useStore((store) => store.nextPlayback);
+  const setShuffleEnabled = useStore((store) => store.setShuffleEnabled);
 
   const operationPending = playback.transportOperation !== null;
   const confirmationPending = playback.prepared?.admission === 'confirmation_required';
@@ -31,7 +32,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     playback.context.valid &&
     playback.context.generation === libraryGeneration;
   const canPrevious = contextCurrent;
-  const canNext = contextCurrent && playback.context!.currentIndex + 1 < playback.context!.total;
+  const canNext = contextCurrent && nextPlaybackPosition(playback.context!) !== null;
   const timelineSongExists = Boolean(playback.currentSong || selectedSongId);
   const selectedDurationUs =
     playback.currentSong?.durationUs ??
@@ -88,7 +89,22 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
       <div className="player-controls-row" data-testid="player-controls-row">
         <div className="player-core-controls" data-testid="player-core-controls">
           <button
-            className="icon-button player-secondary-action"
+            className={`icon-button player-secondary-action player-shuffle-action${playback.shuffleEnabled ? ' is-active' : ''}`}
+            type="button"
+            aria-label="Shuffle"
+            aria-pressed={playback.shuffleEnabled}
+            title={playback.shuffleEnabled ? 'Shuffle on' : 'Shuffle off'}
+            disabled={
+              playback.transportOperation !== null ||
+              confirmationPending ||
+              (!contextCurrent && !selectedSongId && !playback.currentSong)
+            }
+            onClick={() => setShuffleEnabled(!playback.shuffleEnabled)}
+          >
+            <Shuffle size={16} aria-hidden="true" />
+          </button>
+          <button
+            className="icon-button player-secondary-action player-previous-action"
             type="button"
             aria-label="Previous"
             title="Previous"
@@ -170,7 +186,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             )}
           </div>
           <button
-            className="icon-button player-secondary-action"
+            className="icon-button player-secondary-action player-next-action"
             type="button"
             aria-label="Next"
             title="Next"

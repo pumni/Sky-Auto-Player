@@ -878,6 +878,7 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
     );
     settings.playback_defaults.tempo_scale = raw_f64(raw, "default_tempo_scale", 1.0);
     settings.playback_defaults.fps = raw_fps(raw, "game_fps", DEFAULT_GAME_FPS);
+    settings.playback_behavior.auto_play = raw_bool(raw, "auto_play", true);
     settings.telemetry_enabled = raw_bool(raw, "telemetry_enabled_by_default", false);
     settings.verbose_hud = raw_bool(raw, "verbose_hud", false);
     settings.songs_dir = raw_string(raw, "songs_dir", DEFAULT_SONGS_DIR);
@@ -1012,6 +1013,10 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
     migrated.insert(
         "default_down_late_grace_us".into(),
         Value::from(down_late_grace_us),
+    );
+    migrated.insert(
+        "auto_play".into(),
+        Value::from(raw_bool(raw, "auto_play", true)),
     );
     for key in [
         "default_timing_profile",
@@ -1267,6 +1272,10 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
         Value::from(settings.playback_defaults.fps),
     );
     raw.insert(
+        "auto_play".into(),
+        Value::from(settings.playback_behavior.auto_play),
+    );
+    raw.insert(
         "telemetry_enabled_by_default".into(),
         Value::from(settings.telemetry_enabled),
     );
@@ -1502,6 +1511,43 @@ mod tests {
     }
 
     #[test]
+    fn settings_store_persists_auto_play_without_changing_timing() {
+        let root =
+            std::env::temp_dir().join(format!("sky-auto-play-settings-{}", std::process::id()));
+        let path = root.join("config.json");
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            &path,
+            br#"{"schema_version":5,"default_timing_margin_us":1200}"#,
+        )
+        .expect("seed prior schema");
+
+        let store = JsonSettingsStore::new(&path);
+        let mut service = SettingsService::load(store.clone()).expect("load settings");
+        assert!(service.snapshot().playback_behavior.auto_play);
+        let original_defaults = service.snapshot().playback_defaults.clone();
+        service
+            .patch(&SettingsPatch {
+                auto_play: Some(false),
+                ..Default::default()
+            })
+            .expect("disable auto play");
+        assert_eq!(service.snapshot().playback_defaults, original_defaults);
+        let raw: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read settings")).expect("valid json");
+        assert_eq!(
+            raw["schema_version"],
+            sky_app_core::settings::SCHEMA_VERSION
+        );
+        assert_eq!(raw["auto_play"], false);
+
+        let reloaded = store.load().expect("reload settings");
+        assert!(!reloaded.playback_behavior.auto_play);
+        assert_eq!(reloaded.playback_defaults, original_defaults);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn settings_migration_canonicalizes_invalid_timing_margin_in_persisted_file() {
         for invalid_margin in [799_u64, 3_001_u64] {
             let root = std::env::temp_dir().join(format!(
@@ -1561,6 +1607,7 @@ mod tests {
                 .load()
                 .expect("migrate settings");
             assert_eq!(settings.playback_defaults.down_late_grace_us, expected);
+            assert!(settings.playback_behavior.auto_play);
             let raw: Value =
                 serde_json::from_slice(&fs::read(&path).expect("read migrated config"))
                     .expect("valid migrated json");
@@ -1569,6 +1616,7 @@ mod tests {
                 sky_app_core::settings::SCHEMA_VERSION
             );
             assert_eq!(raw["default_down_late_grace_us"], expected);
+            assert_eq!(raw["auto_play"], true);
             let _ = fs::remove_dir_all(root);
         }
     }

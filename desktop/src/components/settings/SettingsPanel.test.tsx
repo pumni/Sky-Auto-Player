@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -17,6 +17,14 @@ describe('SettingsPanel playback timing', () => {
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
 
     expect(screen.getByLabelText('Base Hold')).toBeInTheDocument();
+    const autoPlay = screen.getByRole('switch', { name: 'Auto Play' });
+    expect(autoPlay).toHaveAttribute('aria-checked', 'true');
+    await act(async () => autoPlay.click());
+    await waitFor(() => expect(store.getState().settings?.auto_play).toBe(false));
+    expect(screen.getByRole('switch', { name: 'Auto Play' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
     expect(screen.getByText('Late Down tolerance').parentElement).toHaveTextContent('2000 µs');
     expect(screen.getByRole('heading', { name: 'Timing' })).toBeInTheDocument();
     expect(

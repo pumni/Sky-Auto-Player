@@ -58,9 +58,54 @@ export interface PlaybackContext {
   total: number;
   currentIndex: number;
   currentSongId: string;
+  shuffleTraversal: ShuffleTraversal | null;
   dryRun: boolean;
   membershipRevision: number;
   valid: boolean;
+}
+
+export interface ShuffleTraversal {
+  originIndex: number;
+  step: number;
+  position: number;
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+  let a = Math.abs(left);
+  let b = Math.abs(right);
+  while (b !== 0) [a, b] = [b, a % b];
+  return a;
+}
+
+export function createShuffleTraversal(
+  total: number,
+  originIndex: number,
+  seed: string,
+): ShuffleTraversal | null {
+  if (!Number.isInteger(total) || total < 1 || !Number.isInteger(originIndex)) return null;
+  const origin = ((originIndex % total) + total) % total;
+  if (total === 1) return { originIndex: origin, step: 0, position: 0 };
+  let hash = 2_166_136_261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619) >>> 0;
+  }
+  let step = (hash % (total - 1)) + 1;
+  while (greatestCommonDivisor(step, total) !== 1) {
+    step = (step % (total - 1)) + 1;
+  }
+  return { originIndex: origin, step, position: 0 };
+}
+
+export function playbackContextIndexAt(context: PlaybackContext, position: number): number | null {
+  if (!Number.isInteger(position) || position < 0 || position >= context.total) return null;
+  const traversal = context.shuffleTraversal;
+  return traversal ? (traversal.originIndex + position * traversal.step) % context.total : position;
+}
+
+export function nextPlaybackPosition(context: PlaybackContext): number | null {
+  const position = context.shuffleTraversal?.position ?? context.currentIndex;
+  return position + 1 < context.total ? position + 1 : null;
 }
 
 interface PendingPlaybackStart {
@@ -162,6 +207,7 @@ export interface DesktopStore {
     progress: { completed: number; total: number | null; message: string };
   };
   playback: {
+    shuffleEnabled: boolean;
     state: PlaybackUiState;
     sessionId: string | null;
     currentSong: PlaybackSongIdentity | null;
@@ -206,6 +252,7 @@ export interface DesktopStore {
   resumePlayback: () => Promise<void>;
   previousPlayback: () => Promise<void>;
   nextPlayback: () => Promise<void>;
+  setShuffleEnabled: (enabled: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
   setDiagnosticsEnabled: (enabled: boolean) => Promise<void>;
   exportSenderTrace: () => Promise<string>;
@@ -377,6 +424,7 @@ function updatePlaylistSummary(
 export function createDesktopStore(bridge: DesktopBridge) {
   let detailRequestToken = 0;
   let startRequestEpoch = 0;
+  let shuffleTraversalSequence = 0;
   const pendingStarts = new Map<number, PendingPlaybackStart>();
   let settingsMutationTail: Promise<void> = Promise.resolve();
   let diagnosticsToggleEpoch = 0;
@@ -1059,6 +1107,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
     const contextForSong = (library: LibraryState, songId: string): PlaybackContext | null => {
       const currentIndex = library.indexById.get(songId);
       if (currentIndex === undefined) return null;
+      const shuffleEnabled = get().playback.shuffleEnabled;
       return {
         source: library.searchSource,
         query: library.query,
@@ -1066,6 +1115,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
         total: library.resultTotal,
         currentIndex,
         currentSongId: songId,
+        shuffleTraversal: shuffleEnabled
+          ? createShuffleTraversal(
+              library.resultTotal,
+              currentIndex,
+              `${library.generation}:${sourceKey(library.searchSource)}:${library.query}:${songId}:${++shuffleTraversalSequence}`,
+            )
+          : null,
         dryRun: false,
         membershipRevision: membershipRevisionFor(library.searchSource),
         valid: true,
@@ -1282,7 +1338,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
     const transitionContextPlayback = async (
       context: PlaybackContext,
-      targetIndex: number,
+      targetPosition: number,
       operation: 'advancing' | 'restarting',
       sessionId: string | null,
     ) => {
@@ -1307,12 +1363,17 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (outcome === 'failed') return;
         }
         if (!operationIsCurrent(epoch)) return;
+        const targetIndex = playbackContextIndexAt(context, targetPosition);
+        if (targetIndex === null) throw new Error('There is no next playback-context item.');
         const row = await resolveContextRow(context, targetIndex);
         if (!operationIsCurrent(epoch)) return;
         const nextContext: PlaybackContext = {
           ...context,
           currentIndex: targetIndex,
           currentSongId: row.song_id,
+          shuffleTraversal: context.shuffleTraversal
+            ? { ...context.shuffleTraversal, position: targetPosition }
+            : null,
         };
         const identity = identityFromRow(row, context.generation);
         const prepared = await prepareForOperation(identity, nextContext, undefined, epoch);
@@ -1398,6 +1459,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         progress: { completed: 0, total: null, message: '' },
       },
       playback: {
+        shuffleEnabled: false,
         state: 'idle',
         sessionId: null,
         currentSong: null,
@@ -1628,11 +1690,14 @@ export function createDesktopStore(bridge: DesktopBridge) {
             event.payload.outcome === 'finished' &&
             current.transportOperation !== 'stopping' &&
             !continueOperation &&
+            !context?.dryRun &&
+            get().settings?.auto_play === true &&
             context !== null &&
             context.currentSongId === event.payload.song_id &&
             playbackContextIsCurrent(context) &&
             context.generation === get().library.generation &&
-            context.currentIndex + 1 < context.total;
+            nextPlaybackPosition(context) !== null;
+          const nextPosition = context ? nextPlaybackPosition(context) : null;
           if (!continueOperation) clearOperationFromEvent();
           set({
             playback: {
@@ -1654,8 +1719,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
               error: null,
             },
           });
-          if (autoAdvance && context) {
-            void transitionContextPlayback(context, context.currentIndex + 1, 'advancing', null);
+          if (autoAdvance && context && nextPosition !== null) {
+            void transitionContextPlayback(context, nextPosition, 'advancing', null);
           }
         } else if (event.name === 'playback.failed') {
           const current = get().playback;
@@ -2259,16 +2324,23 @@ export function createDesktopStore(bridge: DesktopBridge) {
           try {
             const settings = await bridge.patchSettings(patch);
             const playback = get().playback;
-            const cancelPreparing = playback.transportOperation === 'preparing';
+            const autoPlayOnly =
+              patch.autoPlay !== undefined &&
+              patch.theme === undefined &&
+              patch.telemetryEnabled === undefined &&
+              patch.verboseHud === undefined &&
+              patch.playbackDefaults === undefined &&
+              patch.updatePreferences === undefined;
+            const cancelPreparing = !autoPlayOnly && playback.transportOperation === 'preparing';
             if (cancelPreparing) clearOperationFromEvent();
             set({
               settings,
               settingsState: 'ready',
               playback: {
                 ...playback,
-                prepared: null,
-                preparedIdentity: null,
-                preparedContext: null,
+                prepared: autoPlayOnly ? playback.prepared : null,
+                preparedIdentity: autoPlayOnly ? playback.preparedIdentity : null,
+                preparedContext: autoPlayOnly ? playback.preparedContext : null,
                 transportOperation: cancelPreparing ? null : playback.transportOperation,
               },
             });
@@ -2556,6 +2628,34 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
       },
 
+      setShuffleEnabled(enabled) {
+        const playback = get().playback;
+        if (
+          playback.shuffleEnabled === enabled ||
+          playback.transportOperation !== null ||
+          playback.prepared?.admission === 'confirmation_required'
+        )
+          return;
+        const updateTraversal = (context: PlaybackContext | null): PlaybackContext | null => {
+          if (!context || !playbackContextIsCurrent(context)) return context;
+          return {
+            ...context,
+            shuffleTraversal: enabled
+              ? createShuffleTraversal(
+                  context.total,
+                  context.currentIndex,
+                  `${context.generation}:${sourceKey(context.source)}:${context.query}:${context.currentSongId}:${++shuffleTraversalSequence}`,
+                )
+              : null,
+          };
+        };
+        const context = updateTraversal(playback.context);
+        const preparedContext = updateTraversal(playback.preparedContext);
+        set({
+          playback: { ...playback, shuffleEnabled: enabled, context, preparedContext },
+        });
+      },
+
       async previousPlayback() {
         const playback = get().playback;
         const context = playback.context;
@@ -2568,9 +2668,10 @@ export function createDesktopStore(bridge: DesktopBridge) {
           return;
         const currentUs =
           playback.snapshot?.session_id === playback.sessionId ? playback.snapshot.current_us : 0;
-        const targetIndex =
-          currentUs > 3_000_000 ? context.currentIndex : Math.max(0, context.currentIndex - 1);
-        await transitionContextPlayback(context, targetIndex, 'restarting', playback.sessionId);
+        const currentPosition = context.shuffleTraversal?.position ?? context.currentIndex;
+        const targetPosition =
+          currentUs > 3_000_000 ? currentPosition : Math.max(0, currentPosition - 1);
+        await transitionContextPlayback(context, targetPosition, 'restarting', playback.sessionId);
       },
 
       async nextPlayback() {
@@ -2583,9 +2684,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
           playback.transportOperation !== null
         )
           return;
-        const targetIndex = context.currentIndex + 1;
-        if (targetIndex >= context.total) return;
-        await transitionContextPlayback(context, targetIndex, 'advancing', playback.sessionId);
+        const targetPosition = nextPlaybackPosition(context);
+        if (targetPosition === null) return;
+        await transitionContextPlayback(context, targetPosition, 'advancing', playback.sessionId);
       },
 
       setSettingsOpen(open) {
