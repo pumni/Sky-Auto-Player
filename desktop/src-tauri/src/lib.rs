@@ -355,6 +355,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
             commands::cancel_calibration,
             commands::prepare_playback,
             commands::start_playback,
+            commands::get_playback_status,
             commands::stop_playback,
             commands::pause_playback,
             commands::resume_playback,
@@ -818,6 +819,7 @@ mod ipc_tests {
                 super::commands::search_songs,
                 super::commands::prepare_playback,
                 super::commands::start_playback,
+                super::commands::get_playback_status,
                 super::commands::stop_playback,
                 super::commands::shutdown,
             ])
@@ -832,6 +834,11 @@ mod ipc_tests {
         let generation = bootstrap_value["catalog_generation"]
             .as_u64()
             .expect("generation");
+        let idle_status =
+            tauri::test::get_ipc_response(&webview, request("get_playback_status", json!({}), 6))
+                .expect("playback status command should succeed before start");
+        let idle_status: serde_json::Value = idle_status.deserialize().expect("status JSON");
+        assert!(idle_status["active"].is_null());
         let search = tauri::test::get_ipc_response(
             &webview,
             request(
@@ -868,6 +875,11 @@ mod ipc_tests {
         let started_value: serde_json::Value = started.deserialize().expect("session JSON");
         assert_eq!(started_value["state"], "starting");
         let session_id = started_value["session_id"].as_str().expect("session ID");
+        let active_status =
+            tauri::test::get_ipc_response(&webview, request("get_playback_status", json!({}), 14))
+                .expect("playback status command should report the active session");
+        let active_status: serde_json::Value = active_status.deserialize().expect("status JSON");
+        assert_eq!(active_status["active"]["session_id"], session_id);
         tauri::test::get_ipc_response(
             &webview,
             request(

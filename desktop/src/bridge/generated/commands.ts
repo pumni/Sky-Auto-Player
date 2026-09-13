@@ -17,6 +17,7 @@ import type {
   PlaybackPrepare,
   PlaybackSession,
   PlaybackSessionCommand,
+  PlaybackStatus,
   PlaybackStart,
   PreparedPlayback,
   SearchRequest,
@@ -51,6 +52,7 @@ export interface CommandRequestMap {
   begin_update_handoff: { targetVersion: string };
   prepare_playback: PlaybackPrepare;
   start_playback: PlaybackStart;
+  get_playback_status: undefined;
   stop_playback: PlaybackSessionCommand;
   pause_playback: PlaybackSessionCommand;
   resume_playback: PlaybackSessionCommand;
@@ -85,6 +87,7 @@ export interface CommandResponseMap {
   begin_update_handoff: UpdateHandoff;
   prepare_playback: PreparedPlayback;
   start_playback: PlaybackSession;
+  get_playback_status: PlaybackStatus;
   stop_playback: PlaybackCommandAck;
   pause_playback: PlaybackCommandAck;
   resume_playback: PlaybackCommandAck;

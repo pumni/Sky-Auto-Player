@@ -16,8 +16,8 @@ import type {
   PlaybackConfig,
   PlaybackDecisionId,
   PlaybackDecisionAcceptance,
-  PlaybackPrepare,
   PreparedPlayback,
+  PlaybackStatus,
   UpdateCheck,
   UpdateChannelId,
   LibrarySource,
@@ -25,10 +25,50 @@ import type {
   LibraryNavigation,
 } from '../bridge/DesktopBridge';
 import { initialEventState, reduceEvent } from './eventReducer';
+import { rememberRetiredSession } from './retiredSessions';
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'fatal';
 type PlaybackUiState =
   'idle' | 'starting' | 'playing' | 'paused' | 'stopping' | 'finished' | 'failed';
+export type TransportOperation =
+  | null
+  | 'preparing'
+  | 'starting'
+  | 'pausing'
+  | 'resuming'
+  | 'stopping'
+  | 'advancing'
+  | 'restarting';
+
+export interface PlaybackSongIdentity {
+  songId: string;
+  title: string;
+  liked: boolean;
+  durationUs: number | null;
+  formatLabel: string;
+  noteCount: number | null;
+  riskLevel: SongRow['risk_level'];
+  generation: number;
+}
+
+export interface PlaybackContext {
+  source: LibrarySource;
+  query: string;
+  generation: number;
+  total: number;
+  currentIndex: number;
+  currentSongId: string;
+  dryRun: boolean;
+  membershipRevision: number;
+  valid: boolean;
+}
+
+interface PendingPlaybackStart {
+  epoch: number;
+  preparedId: string;
+  identity: PlaybackSongIdentity;
+  context: PlaybackContext;
+}
 type CalibrationUiState =
   'idle' | 'starting' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled';
 export type UtilityView = 'details' | 'diagnostics';
@@ -124,11 +164,16 @@ export interface DesktopStore {
   playback: {
     state: PlaybackUiState;
     sessionId: string | null;
-    songTitle: string | null;
-    pendingCommand: 'pause' | 'resume' | null;
+    currentSong: PlaybackSongIdentity | null;
+    context: PlaybackContext | null;
+    preparedIdentity: PlaybackSongIdentity | null;
+    preparedContext: PlaybackContext | null;
+    startRequestId: number | null;
+    transportOperation: TransportOperation;
     prepared: PreparedPlayback | null;
     snapshot: Extract<UiEvent, { name: 'playback.snapshot' }>['payload'] | null;
     error: string | null;
+    statusRetryPending: boolean;
   };
   initialize: () => Promise<void>;
   applyEvent: (event: UiEvent) => void;
@@ -154,10 +199,13 @@ export interface DesktopStore {
   beginUpdateHandoff: () => Promise<void>;
   prepareSelectedPlayback: (overrides?: Partial<PlaybackConfig>) => Promise<void>;
   startPreparedPlayback: (decision?: PlaybackDecisionId) => Promise<void>;
+  cancelPreparedPlayback: () => void;
   stopPlayback: () => Promise<void>;
+  retryPlaybackStatus: () => Promise<void>;
   pausePlayback: () => Promise<void>;
   resumePlayback: () => Promise<void>;
-  skipPlayback: () => Promise<void>;
+  previousPlayback: () => Promise<void>;
+  nextPlayback: () => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
   setDiagnosticsEnabled: (enabled: boolean) => Promise<void>;
   exportSenderTrace: () => Promise<string>;
@@ -168,6 +216,71 @@ export interface DesktopStore {
   startCalibration: (mode?: CalibrationModeId) => Promise<void>;
   cancelCalibration: () => Promise<void>;
   setCalibrationOpen: (open: boolean) => void;
+}
+
+export type PlaybackIssueKind =
+  'recoverable_status' | 'playback_failure' | 'target_failure' | 'conflict';
+
+export interface PlaybackIssuePresentation {
+  kind: PlaybackIssueKind;
+  title: string;
+  message: string;
+}
+
+const TARGET_FAILURE_TITLES: Record<string, string> = {
+  target_not_found: 'Sky window was not found',
+  target_integrity_mismatch: 'Sky is running with different permissions',
+  target_focus_failed: 'Sky could not be focused',
+};
+
+export function playbackIssuePresentation(
+  playback: Pick<DesktopStore['playback'], 'error' | 'sessionId' | 'startRequestId' | 'state'>,
+): PlaybackIssuePresentation | null {
+  const message = playback.error;
+  if (!message) return null;
+
+  if (message.startsWith('Playback status is unavailable:')) {
+    return {
+      kind: 'recoverable_status',
+      title: 'Playback status is unavailable',
+      message: playback.sessionId
+        ? 'Sky Auto Player cannot confirm the current session.'
+        : 'Sky Auto Player cannot confirm whether playback started.',
+    };
+  }
+
+  const targetFailure = /^(target_[a-z_]+):\s*(.*)$/s.exec(message);
+  const targetFailureCode = targetFailure?.[1];
+  if (targetFailure && targetFailureCode && TARGET_FAILURE_TITLES[targetFailureCode]) {
+    return {
+      kind: 'target_failure',
+      title: TARGET_FAILURE_TITLES[targetFailureCode],
+      message: targetFailure[2] || message,
+    };
+  }
+
+  if (playback.sessionId !== null || playback.startRequestId !== null) {
+    const conflict = message.startsWith('A different native playback session is active.');
+    return {
+      kind: conflict ? 'conflict' : 'recoverable_status',
+      title: conflict
+        ? 'Another native playback session is active'
+        : playback.startRequestId !== null
+          ? 'Playback status is unavailable'
+          : 'Playback status needs attention',
+      message,
+    };
+  }
+
+  if (message.startsWith('Native playback did not create a session.')) {
+    return {
+      kind: 'playback_failure',
+      title: 'Playback could not start',
+      message: 'No active playback session was created.',
+    };
+  }
+
+  return { kind: 'playback_failure', title: 'Playback failed', message };
 }
 
 const EMPTY_DETAIL: DetailEntry = { state: 'idle', value: null, error: null };
@@ -263,23 +376,38 @@ function updatePlaylistSummary(
 
 export function createDesktopStore(bridge: DesktopBridge) {
   let detailRequestToken = 0;
-  let prepareRequestEpoch = 0;
   let startRequestEpoch = 0;
-  let pendingStart: {
-    epoch: number;
-    preparedId: string;
-    songId: string;
-    songTitle: string;
-  } | null = null;
+  const pendingStarts = new Map<number, PendingPlaybackStart>();
   let settingsMutationTail: Promise<void> = Promise.resolve();
   let diagnosticsToggleEpoch = 0;
-  const retiredSessionIds = new Set<string>();
+  let transportOperationEpoch = 0;
+  let playbackReconciliationEpoch = 0;
+  let playbackStatusRetryPromise: Promise<void> | null = null;
+  let playbackStatusRetryToken = 0;
+  let transportOperationTimer: ReturnType<typeof setTimeout> | null = null;
+  let terminalReconciliationTimer: ReturnType<typeof setTimeout> | null = null;
+  const retiredSessions = new Map<string, 'finished' | 'failed'>();
+  const retirementWaiters = new Map<string, Set<(outcome: 'finished' | 'failed' | null) => void>>();
+  const TRANSPORT_OPERATION_TIMEOUT_MS = 15_000;
+  const PLAYBACK_RECONCILIATION_TIMEOUT_MS = 2_000;
+  const MAX_PENDING_PLAYBACK_STARTS = 16;
   const pageSize = LIBRARY_PAGE_SIZE;
   const pageCache = new Map<string, Map<number, SearchResult>>();
   const pageRequests = new Map<string, Promise<SearchResult>>();
+  const sourceMembershipRevisions = new Map<string, number>();
   let diagnosticsEventSeq = 0;
 
   const sourceKey = (source: LibrarySource) => JSON.stringify(source);
+  const pendingStartForSong = (songId: string): PendingPlaybackStart | null => {
+    const matches = [...pendingStarts.values()].filter((item) => item.identity.songId === songId);
+    return matches[matches.length - 1] ?? null;
+  };
+  const pendingStartForPreparedId = (preparedId: string): PendingPlaybackStart | null =>
+    [...pendingStarts.values()].find((item) => item.preparedId === preparedId) ?? null;
+  const membershipRevisionFor = (source: LibrarySource) =>
+    sourceMembershipRevisions.get(sourceKey(source)) ?? 0;
+  const playbackContextIsCurrent = (context: PlaybackContext) =>
+    context.valid && context.membershipRevision === membershipRevisionFor(context.source);
   const cacheKey = (source: LibrarySource, query: string, generation: number) =>
     `${generation}\u0000${sourceKey(source)}\u0000${query}`;
   const invalidateSourceCache = (source: LibrarySource): void => {
@@ -340,6 +468,39 @@ export function createDesktopStore(bridge: DesktopBridge) {
   };
 
   return create<DesktopStore>((set, get) => {
+    const invalidatePlaybackMembershipContext = (source: LibrarySource): void => {
+      const key = sourceKey(source);
+      sourceMembershipRevisions.set(key, (sourceMembershipRevisions.get(key) ?? 0) + 1);
+      const playback = get().playback;
+      const contextMatches =
+        playback.context !== null && sourceKey(playback.context.source) === key;
+      const context =
+        playback.context && sourceKey(playback.context.source) === key
+          ? { ...playback.context, valid: false }
+          : playback.context;
+      const preparedMatches =
+        playback.preparedContext !== null && sourceKey(playback.preparedContext.source) === key;
+      const cancelConfirmation =
+        preparedMatches &&
+        playback.prepared?.admission === 'confirmation_required' &&
+        playback.transportOperation === null;
+      if (!contextMatches && !preparedMatches) return;
+      set({
+        playback: {
+          ...playback,
+          context,
+          prepared: cancelConfirmation ? null : playback.prepared,
+          preparedIdentity: cancelConfirmation ? null : playback.preparedIdentity,
+          preparedContext: preparedMatches
+            ? { ...playback.preparedContext!, valid: false }
+            : playback.preparedContext,
+          error: cancelConfirmation
+            ? 'The Library changed while playback was awaiting confirmation. Prepare the song again.'
+            : playback.error,
+        },
+      });
+    };
+
     const setLibraryMutationPending = (key: string, pending: boolean): boolean => {
       const current = get().libraryNavigation;
       if (pending && current.pendingMutations.has(key)) return false;
@@ -376,7 +537,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
       const current = get().library;
       if (generation <= current.generation) return;
       detailRequestToken += 1;
-      prepareRequestEpoch += 1;
+      const playback = get().playback;
+      const cancelPreparing = playback.transportOperation === 'preparing';
+      if (cancelPreparing) clearOperationFromEvent();
       set({
         library: {
           ...current,
@@ -389,7 +552,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
           error: null,
         },
         details: { bySongId: new Map() },
-        playback: { ...get().playback, prepared: null },
+        playback: {
+          ...playback,
+          prepared: null,
+          preparedIdentity: null,
+          preparedContext: null,
+          transportOperation: cancelPreparing ? null : playback.transportOperation,
+        },
       });
       await get().search();
     };
@@ -399,26 +568,65 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
     const acceptsSessionEvent = (sessionId: string, songId: string): boolean => {
       const current = get().playback;
-      if (retiredSessionIds.has(sessionId)) return false;
+      if (retiredSessions.has(sessionId)) return false;
       if (current.sessionId === sessionId) return true;
+      if (current.sessionId !== null) return false;
+      const pending = pendingStartForSong(songId);
       if (
-        pendingStart &&
-        pendingStart.songId === songId &&
-        (current.state === 'idle' || current.state === 'finished' || current.state === 'failed')
+        pending &&
+        (current.startRequestId === null || current.startRequestId === pending.epoch) &&
+        ['idle', 'starting', 'finished', 'failed'].includes(current.state)
       ) {
         // The native runtime may publish the first state/terminal event before the
-        // start promise continuation runs. Bind that event to the pending
-        // start, while still rejecting events from an unrelated song/session.
+        // start promise continuation runs. Bind the event only to the matching
+        // request; a timed-out request cannot steal a newer start's ownership.
         return true;
       }
-      return !current.sessionId && pendingStart?.songId === songId;
+      return false;
     };
 
-    const bindSessionTitle = (sessionId: string, songId: string): string | null => {
+    const bindSessionIdentity = (
+      sessionId: string,
+      songId: string,
+    ): PlaybackSongIdentity | null => {
       const current = get().playback;
-      if (current.sessionId === sessionId && current.songTitle) return current.songTitle;
-      if (pendingStart?.songId === songId) return pendingStart.songTitle;
-      return current.songTitle;
+      if (current.sessionId === sessionId && current.currentSong?.songId === songId) {
+        return current.currentSong;
+      }
+      const pending = pendingStartForSong(songId);
+      if (pending) return pending.identity;
+      if (current.currentSong?.songId === songId) return current.currentSong;
+      return null;
+    };
+
+    const finishRetirementWaiters = (sessionId: string, outcome: 'finished' | 'failed') => {
+      const waiters = retirementWaiters.get(sessionId);
+      retirementWaiters.delete(sessionId);
+      waiters?.forEach((resolve) => resolve(outcome));
+    };
+
+    const retireSession = (sessionId: string, outcome: 'finished' | 'failed') => {
+      rememberRetiredSession(retiredSessions, sessionId, outcome);
+      finishRetirementWaiters(sessionId, outcome);
+    };
+
+    const waitForRetirement = (sessionId: string): Promise<'finished' | 'failed' | null> => {
+      const retired = retiredSessions.get(sessionId);
+      if (retired) return Promise.resolve(retired);
+      return new Promise((resolve) => {
+        const waiters = retirementWaiters.get(sessionId) ?? new Set();
+        const timeout = setTimeout(() => {
+          waiters.delete(onRetirement);
+          if (waiters.size === 0) retirementWaiters.delete(sessionId);
+          resolve(null);
+        }, TRANSPORT_OPERATION_TIMEOUT_MS);
+        const onRetirement = (outcome: 'finished' | 'failed' | null) => {
+          clearTimeout(timeout);
+          resolve(outcome);
+        };
+        waiters.add(onRetirement);
+        retirementWaiters.set(sessionId, waiters);
+      });
     };
 
     const mergePage = (result: SearchResult, token: number): boolean => {
@@ -457,11 +665,12 @@ export function createDesktopStore(bridge: DesktopBridge) {
       offset: number,
       generation: number,
       token: number,
+      mergeIntoLibrary = true,
     ): Promise<SearchResult> => {
       const key = cacheKey(source, query, generation);
       const cached = pageCache.get(key)?.get(offset);
       if (cached) {
-        mergePage(cached, token);
+        if (mergeIntoLibrary) mergePage(cached, token);
         return cached;
       }
       const inFlight = pageRequests.get(`${key}\u0000${offset}`);
@@ -483,7 +692,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           pageCache.get(cacheKey(source, query, result.generation)) ?? new Map();
         generationPages.set(result.offset, result);
         pageCache.set(cacheKey(source, query, result.generation), generationPages);
-        mergePage(result, token);
+        if (mergeIntoLibrary) mergePage(result, token);
         return result;
       } finally {
         if (pageRequests.get(requestKey) === requestPromise) pageRequests.delete(requestKey);
@@ -508,6 +717,617 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (get().library.searchRequestGeneration !== token) return;
         const message = error instanceof Error ? error.message : String(error);
         set({ library: { ...get().library, loading: false, error: message } });
+      }
+    };
+
+    const clearTransportTimer = () => {
+      if (transportOperationTimer !== null) clearTimeout(transportOperationTimer);
+      transportOperationTimer = null;
+    };
+
+    const clearTerminalReconciliationTimer = () => {
+      if (terminalReconciliationTimer !== null) clearTimeout(terminalReconciliationTimer);
+      terminalReconciliationTimer = null;
+    };
+
+    const armTerminalReconciliationTimer = (sessionId: string, startRequestId: number | null) => {
+      clearTerminalReconciliationTimer();
+      const token = ++playbackReconciliationEpoch;
+      const epoch = transportOperationEpoch;
+      terminalReconciliationTimer = setTimeout(() => {
+        terminalReconciliationTimer = null;
+        const current = get().playback;
+        if (current.sessionId !== sessionId || current.startRequestId !== startRequestId) return;
+        void reconcilePlaybackAfterTimeout(token, 'stopping', epoch, sessionId, startRequestId);
+      }, TRANSPORT_OPERATION_TIMEOUT_MS);
+    };
+
+    const emitReconciledTerminal = (terminal: NonNullable<PlaybackStatus['last_terminal']>) => {
+      if (retiredSessions.has(terminal.session_id)) return;
+      if (terminal.state === 'failed') {
+        get().applyEvent({
+          v: 1,
+          name: 'playback.failed',
+          payload: {
+            session_id: terminal.session_id,
+            song_id: terminal.song_id,
+            code: terminal.failure_code ?? 'playback_failed',
+            message:
+              terminal.failure_message ??
+              'Playback failed before the terminal event reached the interface.',
+          },
+        });
+      } else {
+        const outcome = terminal.outcome ?? 'quit';
+        get().applyEvent({
+          v: 1,
+          name: 'playback.finished',
+          payload: {
+            session_id: terminal.session_id,
+            song_id: terminal.song_id,
+            outcome,
+            total_us: 0,
+            message: outcome === 'finished' ? 'Playback finished' : 'Playback stopped',
+          },
+        });
+      }
+    };
+
+    const queryPlaybackStatus = async (): Promise<PlaybackStatus> => {
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      try {
+        return await Promise.race([
+          bridge.getPlaybackStatus(),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error('Native playback status query timed out.')),
+              PLAYBACK_RECONCILIATION_TIMEOUT_MS,
+            );
+          }),
+        ]);
+      } finally {
+        if (timeout !== null) clearTimeout(timeout);
+      }
+    };
+
+    const reconcilePlaybackAfterTimeout = async (
+      token: number,
+      operation: Exclude<TransportOperation, null>,
+      epoch: number,
+      expectedSessionId: string | null,
+      expectedStartRequestId: number | null,
+    ) => {
+      const canApply = () => {
+        if (playbackReconciliationEpoch !== token) return false;
+        const current = get().playback;
+        return (
+          (current.sessionId === expectedSessionId &&
+            current.startRequestId === expectedStartRequestId) ||
+          (current.transportOperation === operation && transportOperationEpoch === epoch)
+        );
+      };
+
+      try {
+        const status = await queryPlaybackStatus();
+        if (!canApply()) return;
+        const current = get().playback;
+        const pending = status.active ? pendingStartForPreparedId(status.active.prepared_id) : null;
+
+        if (status.active) {
+          const nativeSession = status.active;
+          const library = get().library;
+          const row = selectSongById(library, nativeSession.song_id);
+          const identity =
+            pending?.identity ??
+            (current.currentSong?.songId === nativeSession.song_id
+              ? current.currentSong
+              : row
+                ? identityFromRow(row, library.generation)
+                : {
+                    songId: nativeSession.song_id,
+                    title: nativeSession.title,
+                    liked: false,
+                    durationUs: null,
+                    formatLabel: 'SKY',
+                    noteCount: null,
+                    riskLevel: 'unknown' as const,
+                    generation: library.generation,
+                  });
+          const context =
+            pending?.context ??
+            (current.currentSong?.songId === nativeSession.song_id ? current.context : null);
+          const conflict =
+            (current.sessionId !== null && current.sessionId !== nativeSession.session_id) ||
+            (current.startRequestId !== null && current.startRequestId !== pending?.epoch);
+          if (current.sessionId && conflict) retireSession(current.sessionId, 'failed');
+          clearTransportTimer();
+          clearTerminalReconciliationTimer();
+          transportOperationEpoch += 1;
+          if (pending) pendingStarts.delete(pending.epoch);
+          set({
+            playback: {
+              ...current,
+              sessionId: nativeSession.session_id,
+              currentSong: { ...identity, title: nativeSession.title },
+              context,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              startRequestId: null,
+              transportOperation: null,
+              state: nativeSession.state,
+              snapshot:
+                current.snapshot?.session_id === nativeSession.session_id ? current.snapshot : null,
+              error: conflict
+                ? 'A different native playback session is active. Stop it before starting another song.'
+                : ['starting', 'stopping'].includes(nativeSession.state)
+                  ? 'The app could not confirm the current session state.'
+                  : null,
+              statusRetryPending: false,
+            },
+          });
+          return;
+        }
+
+        const terminal = status.last_terminal;
+        const expectedPendingStart =
+          expectedStartRequestId === null ? null : pendingStarts.get(expectedStartRequestId);
+        const matchingTerminal =
+          terminal &&
+          (terminal.session_id === expectedSessionId ||
+            terminal.session_id === current.sessionId ||
+            expectedPendingStart?.preparedId === terminal.prepared_id);
+        if (matchingTerminal) {
+          clearTerminalReconciliationTimer();
+          emitReconciledTerminal(terminal);
+          if (
+            (operation === 'advancing' || operation === 'restarting') &&
+            get().playback.transportOperation === operation &&
+            transportOperationEpoch === epoch
+          ) {
+            armOperationTimer(epoch, operation);
+          }
+          return;
+        }
+
+        if (current.sessionId !== null) {
+          clearTerminalReconciliationTimer();
+          get().applyEvent({
+            v: 1,
+            name: 'playback.failed',
+            payload: {
+              session_id: current.sessionId,
+              song_id: current.currentSong?.songId ?? '',
+              code: 'session_retired',
+              message: 'The native playback session has retired. Press Play to start again.',
+            },
+          });
+          return;
+        }
+
+        clearTransportTimer();
+        clearTerminalReconciliationTimer();
+        transportOperationEpoch += 1;
+        const pendingRequestId = current.startRequestId;
+        if (pendingRequestId !== null) {
+          pendingStarts.delete(pendingRequestId);
+          set({
+            playback: {
+              ...current,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              startRequestId: null,
+              transportOperation: null,
+              state: 'idle',
+              snapshot: null,
+              error:
+                'Native playback did not create a session. No active playback session was created. Press Play to try again.',
+            },
+          });
+        } else {
+          set({
+            playback: {
+              ...current,
+              transportOperation: null,
+              error:
+                'Playback did not confirm the requested operation. Check the session and try again.',
+            },
+          });
+        }
+      } catch (error) {
+        if (!canApply()) return;
+        clearTransportTimer();
+        clearTerminalReconciliationTimer();
+        transportOperationEpoch += 1;
+        const current = get().playback;
+        set({
+          playback: {
+            ...current,
+            transportOperation: null,
+            error: `Playback status is unavailable: ${errorMessage(error)}`,
+          },
+        });
+      }
+    };
+
+    const operationTimedOut = (epoch: number, operation: Exclude<TransportOperation, null>) => {
+      if (transportOperationEpoch !== epoch) return;
+      transportOperationTimer = null;
+      const current = get().playback;
+      const token = ++playbackReconciliationEpoch;
+      const transitionCanContinue = operation === 'advancing' || operation === 'restarting';
+      if (!transitionCanContinue) {
+        transportOperationEpoch += 1;
+        set({
+          playback: {
+            ...current,
+            transportOperation: null,
+            error: 'Playback confirmation timed out. Checking the native session state…',
+          },
+        });
+      }
+      void reconcilePlaybackAfterTimeout(
+        token,
+        operation,
+        epoch,
+        current.sessionId,
+        current.startRequestId,
+      );
+    };
+
+    const armOperationTimer = (epoch: number, operation: Exclude<TransportOperation, null>) => {
+      clearTransportTimer();
+      clearTerminalReconciliationTimer();
+      transportOperationTimer = setTimeout(
+        () => operationTimedOut(epoch, operation),
+        TRANSPORT_OPERATION_TIMEOUT_MS,
+      );
+    };
+
+    const beginOperation = (
+      operation: Exclude<TransportOperation, null>,
+      preemptTransport = false,
+    ): number | null => {
+      const current = get().playback;
+      if (current.transportOperation !== null && !(preemptTransport && operation === 'stopping'))
+        return null;
+      clearTransportTimer();
+      const epoch = ++transportOperationEpoch;
+      playbackReconciliationEpoch += 1;
+      set({
+        playback: {
+          ...current,
+          transportOperation: operation,
+          error: operation === 'stopping' ? current.error : null,
+        },
+      });
+      armOperationTimer(epoch, operation);
+      return epoch;
+    };
+
+    const operationIsCurrent = (epoch: number) => transportOperationEpoch === epoch;
+
+    const finishOperation = (epoch: number, error: string | null = null) => {
+      if (!operationIsCurrent(epoch)) return false;
+      clearTransportTimer();
+      transportOperationEpoch += 1;
+      set({ playback: { ...get().playback, transportOperation: null, error } });
+      return true;
+    };
+
+    const clearOperationFromEvent = () => {
+      clearTransportTimer();
+      transportOperationEpoch += 1;
+    };
+
+    const playbackAfterBrowserNavigation = (
+      playback: DesktopStore['playback'],
+    ): DesktopStore['playback'] => {
+      const cancelPreparing = playback.transportOperation === 'preparing';
+      if (cancelPreparing) clearOperationFromEvent();
+      const preserveIdentity =
+        playback.sessionId !== null ||
+        playback.startRequestId !== null ||
+        (!cancelPreparing && playback.transportOperation !== null);
+      return {
+        ...playback,
+        prepared: null,
+        preparedIdentity: null,
+        preparedContext: null,
+        currentSong: preserveIdentity ? playback.currentSong : null,
+        context: preserveIdentity ? playback.context : null,
+        sessionId: preserveIdentity ? playback.sessionId : null,
+        state: preserveIdentity ? playback.state : 'idle',
+        snapshot: preserveIdentity ? playback.snapshot : null,
+        transportOperation: cancelPreparing ? null : playback.transportOperation,
+        error: null,
+      };
+    };
+
+    const identityFromRow = (row: SongRow, generation: number): PlaybackSongIdentity => ({
+      songId: row.song_id,
+      title: row.title,
+      liked: row.liked,
+      durationUs: row.duration_us,
+      formatLabel: row.format_label,
+      noteCount: row.note_count,
+      riskLevel: row.risk_level,
+      generation,
+    });
+
+    const contextForSong = (library: LibraryState, songId: string): PlaybackContext | null => {
+      const currentIndex = library.indexById.get(songId);
+      if (currentIndex === undefined) return null;
+      return {
+        source: library.searchSource,
+        query: library.query,
+        generation: library.generation,
+        total: library.resultTotal,
+        currentIndex,
+        currentSongId: songId,
+        dryRun: false,
+        membershipRevision: membershipRevisionFor(library.searchSource),
+        valid: true,
+      };
+    };
+
+    const resolveContextRow = async (context: PlaybackContext, index: number): Promise<SongRow> => {
+      const library = get().library;
+      if (context.generation !== library.generation || !playbackContextIsCurrent(context)) {
+        throw new Error(
+          'The Library context changed after playback started. Select a song to create a new playback context.',
+        );
+      }
+      if (!Number.isInteger(index) || index < 0 || index >= context.total) {
+        throw new Error('There is no song at that playback-context position.');
+      }
+      const offset = Math.floor(index / pageSize) * pageSize;
+      const visibleContext =
+        library.generation === context.generation &&
+        library.query === context.query &&
+        sourceKey(library.searchSource) === sourceKey(context.source);
+      const visibleRow = visibleContext ? selectRowAtIndex(library, index) : undefined;
+      if (visibleRow) return visibleRow;
+      const result = await loadPage(
+        context.query,
+        context.source,
+        offset,
+        context.generation,
+        library.searchRequestGeneration,
+        false,
+      );
+      if (get().library.generation !== context.generation) {
+        throw new Error('The Library changed while the adjacent song was being resolved.');
+      }
+      const row = result.items[index - result.offset];
+      if (!row)
+        throw new Error('The adjacent song is no longer available in this Library context.');
+      return row;
+    };
+
+    const makePlaybackConfig = (
+      overrides?: Partial<PlaybackConfig>,
+      inheritedDryRun = false,
+    ): PlaybackConfig => {
+      const settings = get().settings;
+      if (!settings) throw new Error('Playback settings are not ready.');
+      return {
+        hold_frames: overrides?.hold_frames ?? settings.playback_defaults.hold_frames,
+        timing_margin_us:
+          overrides?.timing_margin_us ?? settings.playback_defaults.timing_margin_us,
+        down_late_grace_us:
+          overrides?.down_late_grace_us ?? settings.playback_defaults.down_late_grace_us,
+        tempo_scale: overrides?.tempo_scale ?? settings.playback_defaults.tempo_scale,
+        fps: overrides?.fps ?? settings.playback_defaults.fps,
+        dry_run: overrides?.dry_run ?? inheritedDryRun,
+      };
+    };
+
+    const prepareForOperation = async (
+      identity: PlaybackSongIdentity,
+      context: PlaybackContext,
+      overrides: Partial<PlaybackConfig> | undefined,
+      operationEpoch: number,
+    ): Promise<PreparedPlayback | null> => {
+      if (!playbackContextIsCurrent(context)) {
+        throw new Error(
+          'The Library source changed. Select a song to create a new playback context.',
+        );
+      }
+      const config = makePlaybackConfig(overrides, context.dryRun);
+      const prepared = await bridge.preparePlayback({
+        songId: identity.songId,
+        generation: context.generation,
+        config,
+      });
+      if (context.generation !== get().library.generation || !playbackContextIsCurrent(context)) {
+        throw new Error(
+          'The Library context changed while playback was being prepared. Select a song to create a new context.',
+        );
+      }
+      if (!operationIsCurrent(operationEpoch)) return null;
+      const preparedContext = { ...context, dryRun: config.dry_run };
+      set({
+        playback: {
+          ...get().playback,
+          prepared,
+          preparedIdentity: identity,
+          preparedContext,
+          error: prepared.error_message,
+        },
+      });
+      return prepared;
+    };
+
+    const startForOperation = async (
+      prepared: PreparedPlayback,
+      identity: PlaybackSongIdentity,
+      context: PlaybackContext,
+      decision: PlaybackDecisionId | undefined,
+      operationEpoch: number,
+    ): Promise<void> => {
+      if (!operationIsCurrent(operationEpoch)) return;
+      if (!prepared.prepared_id)
+        throw new Error('The prepared playback plan is no longer available.');
+      const decisions: PlaybackDecisionAcceptance[] = decision
+        ? [{ decision, accepted: true }]
+        : [];
+      const startEpoch = ++startRequestEpoch;
+      pendingStarts.set(startEpoch, {
+        epoch: startEpoch,
+        preparedId: prepared.prepared_id,
+        identity,
+        context,
+      });
+      while (pendingStarts.size > MAX_PENDING_PLAYBACK_STARTS) {
+        const oldest = pendingStarts.keys().next().value;
+        if (oldest === undefined) break;
+        pendingStarts.delete(oldest);
+      }
+      set({
+        playback: {
+          ...get().playback,
+          startRequestId: startEpoch,
+          transportOperation: 'starting',
+          error: null,
+        },
+      });
+      const session = await bridge
+        .startPlayback({
+          preparedId: prepared.prepared_id,
+          decisions,
+        })
+        .catch((error: unknown) => {
+          pendingStarts.delete(startEpoch);
+          const current = get().playback;
+          if (current.startRequestId === startEpoch) {
+            set({ playback: { ...current, startRequestId: null } });
+          }
+          throw error;
+        });
+      if (!operationIsCurrent(operationEpoch) || retiredSessions.has(session.session_id)) {
+        pendingStarts.delete(startEpoch);
+        const current = get().playback;
+        const ownsRequest = current.startRequestId === startEpoch;
+        if (retiredSessions.has(session.session_id)) {
+          if (ownsRequest) set({ playback: { ...current, startRequestId: null } });
+          return;
+        }
+        if (current.sessionId === session.session_id) {
+          if (ownsRequest) set({ playback: { ...current, startRequestId: null } });
+          return;
+        }
+        if (current.sessionId === null) {
+          set({
+            playback: {
+              ...current,
+              sessionId: session.session_id,
+              currentSong: identity,
+              context,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              startRequestId: ownsRequest ? null : current.startRequestId,
+              state: 'starting',
+              snapshot: null,
+            },
+          });
+          const stopEpoch = beginOperation('stopping');
+          try {
+            await bridge.stopPlayback({ sessionId: session.session_id });
+          } catch (error) {
+            if (stopEpoch !== null) finishOperation(stopEpoch, errorMessage(error));
+          }
+        } else {
+          if (ownsRequest) set({ playback: { ...current, startRequestId: null } });
+          void bridge.stopPlayback({ sessionId: session.session_id }).catch(() => undefined);
+        }
+        return;
+      }
+      pendingStarts.delete(startEpoch);
+      if (!playbackContextIsCurrent(context)) {
+        const current = get().playback;
+        if (current.startRequestId === startEpoch) {
+          set({ playback: { ...current, startRequestId: null } });
+        }
+        void bridge.stopPlayback({ sessionId: session.session_id }).catch(() => undefined);
+        throw new Error('The Library source changed while playback was starting.');
+      }
+      const current = get().playback;
+      if (current.sessionId !== null && current.sessionId !== session.session_id) {
+        if (current.startRequestId === startEpoch) {
+          set({ playback: { ...current, startRequestId: null } });
+        }
+        void bridge.stopPlayback({ sessionId: session.session_id }).catch(() => undefined);
+        return;
+      }
+      const earlyEventBound = current.sessionId === session.session_id;
+      set({
+        playback: {
+          ...current,
+          prepared: null,
+          preparedIdentity: null,
+          preparedContext: null,
+          startRequestId: null,
+          sessionId: session.session_id,
+          currentSong: identity,
+          context,
+          state: earlyEventBound ? current.state : 'starting',
+          snapshot: earlyEventBound ? current.snapshot : null,
+          error: null,
+        },
+      });
+    };
+
+    const transitionContextPlayback = async (
+      context: PlaybackContext,
+      targetIndex: number,
+      operation: 'advancing' | 'restarting',
+      sessionId: string | null,
+    ) => {
+      const epoch = beginOperation(operation);
+      if (epoch === null) return;
+      try {
+        if (context.generation !== get().library.generation || !playbackContextIsCurrent(context)) {
+          throw new Error(
+            'The Library context changed after playback started. Select a song to create a new playback context.',
+          );
+        }
+        if (sessionId) {
+          const retirement = waitForRetirement(sessionId);
+          const state = get().playback.state;
+          if (!['finished', 'failed'].includes(state)) {
+            await bridge.skipPlayback({ sessionId });
+          }
+          const outcome = await retirement;
+          if (outcome === null) {
+            throw new Error('The current playback session did not retire in time.');
+          }
+          if (outcome === 'failed') return;
+        }
+        if (!operationIsCurrent(epoch)) return;
+        const row = await resolveContextRow(context, targetIndex);
+        if (!operationIsCurrent(epoch)) return;
+        const nextContext: PlaybackContext = {
+          ...context,
+          currentIndex: targetIndex,
+          currentSongId: row.song_id,
+        };
+        const identity = identityFromRow(row, context.generation);
+        const prepared = await prepareForOperation(identity, nextContext, undefined, epoch);
+        if (!prepared || !operationIsCurrent(epoch)) return;
+        if (prepared.admission === 'blocked') {
+          finishOperation(epoch, prepared.error_message ?? 'Playback is blocked for this song.');
+          return;
+        }
+        if (prepared.admission === 'confirmation_required') {
+          finishOperation(epoch);
+          return;
+        }
+        await startForOperation(prepared, identity, nextContext, undefined, epoch);
+      } catch (error) {
+        finishOperation(epoch, errorMessage(error));
       }
     };
 
@@ -580,11 +1400,16 @@ export function createDesktopStore(bridge: DesktopBridge) {
       playback: {
         state: 'idle',
         sessionId: null,
-        songTitle: null,
-        pendingCommand: null,
+        currentSong: null,
+        context: null,
+        preparedIdentity: null,
+        preparedContext: null,
+        startRequestId: null,
+        transportOperation: null,
         prepared: null,
         snapshot: null,
         error: null,
+        statusRetryPending: false,
       },
 
       async initialize() {
@@ -619,7 +1444,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (
             !sessionId ||
             playback.sessionId !== sessionId ||
-            retiredSessionIds.has(sessionId) ||
+            retiredSessions.has(sessionId) ||
             !['starting', 'playing', 'paused', 'stopping'].includes(playback.state)
           ) {
             return;
@@ -666,10 +1491,17 @@ export function createDesktopStore(bridge: DesktopBridge) {
         );
         if (event.name === 'core.fatal') {
           detailRequestToken += 1;
+          clearOperationFromEvent();
           set({
             fatal: eventState.fatal,
             bootstrapState: 'fatal',
-            playback: { ...get().playback, state: 'failed', error: eventState.fatal },
+            playback: {
+              ...get().playback,
+              state: 'failed',
+              startRequestId: null,
+              transportOperation: null,
+              error: eventState.fatal,
+            },
             calibration: {
               ...get().calibration,
               state:
@@ -684,7 +1516,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (event.name === 'catalog.changed') {
           if (eventState.catalogGeneration <= get().library.generation) return;
           detailRequestToken += 1;
-          prepareRequestEpoch += 1;
+          const playback = get().playback;
+          const cancelPreparing = playback.transportOperation === 'preparing';
+          if (cancelPreparing) clearOperationFromEvent();
           set({
             library: {
               ...get().library,
@@ -697,7 +1531,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
               error: null,
               loading: true,
             },
-            playback: { ...get().playback, prepared: null },
+            playback: {
+              ...playback,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              transportOperation: cancelPreparing ? null : playback.transportOperation,
+            },
           });
           set({ details: { bySongId: new Map() } });
           void get().search();
@@ -706,74 +1546,144 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (event.name === 'playback.state_changed') {
           const current = get().playback;
           if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
-          const songTitle = bindSessionTitle(event.payload.session_id, event.payload.song_id);
-          if (pendingStart?.songId === event.payload.song_id) pendingStart = null;
+          const pending = pendingStartForSong(event.payload.song_id);
+          const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
+          const context = pending?.context ?? current.context;
+          const confirmsOperation =
+            (current.transportOperation === 'starting' && event.payload.state === 'playing') ||
+            (current.transportOperation === 'pausing' && event.payload.state === 'paused') ||
+            (current.transportOperation === 'resuming' && event.payload.state === 'playing');
+          if (confirmsOperation) clearOperationFromEvent();
+          if (pending) pendingStarts.delete(pending.epoch);
+          const startRequestId =
+            current.sessionId === event.payload.session_id ||
+            current.startRequestId === pending?.epoch
+              ? null
+              : current.startRequestId;
           set({
             playback: {
               ...current,
               sessionId: event.payload.session_id,
-              songTitle,
-              pendingCommand:
-                (current.pendingCommand === 'pause' && event.payload.state === 'paused') ||
-                (current.pendingCommand === 'resume' && event.payload.state === 'playing')
-                  ? null
-                  : current.pendingCommand,
+              currentSong: identity ?? current.currentSong,
+              context,
+              transportOperation: confirmsOperation ? null : current.transportOperation,
+              startRequestId,
               snapshot: current.sessionId === event.payload.session_id ? current.snapshot : null,
               state:
                 event.payload.state === 'failed'
                   ? 'failed'
                   : (event.payload.state as PlaybackUiState),
-              error: event.payload.message,
+              error: event.payload.state === 'failed' ? event.payload.message : null,
             },
           });
+          if (event.payload.state === 'finished' || event.payload.state === 'failed') {
+            armTerminalReconciliationTimer(event.payload.session_id, startRequestId);
+          } else {
+            clearTerminalReconciliationTimer();
+          }
         } else if (event.name === 'playback.snapshot') {
           const current = get().playback;
           if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
-          if (pendingStart?.songId === event.payload.song_id) pendingStart = null;
+          const pending = pendingStartForSong(event.payload.song_id);
+          const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
+          const context = pending?.context ?? current.context;
+          const confirmsOperation =
+            (current.transportOperation === 'starting' && event.payload.state === 'playing') ||
+            (current.transportOperation === 'pausing' && event.payload.state === 'paused') ||
+            (current.transportOperation === 'resuming' && event.payload.state === 'playing');
+          if (confirmsOperation) clearOperationFromEvent();
+          if (pending) pendingStarts.delete(pending.epoch);
           set({
             playback: {
               ...current,
               sessionId: event.payload.session_id,
-              songTitle: event.payload.title,
-              pendingCommand:
-                (current.pendingCommand === 'pause' && event.payload.state === 'paused') ||
-                (current.pendingCommand === 'resume' && event.payload.state === 'playing')
+              currentSong: identity
+                ? { ...identity, title: event.payload.title }
+                : current.currentSong,
+              context,
+              transportOperation: confirmsOperation ? null : current.transportOperation,
+              startRequestId:
+                current.sessionId === event.payload.session_id ||
+                current.startRequestId === pending?.epoch
                   ? null
-                  : current.pendingCommand,
+                  : current.startRequestId,
               state: event.payload.state as PlaybackUiState,
               snapshot: event.payload,
-              error: event.payload.message,
+              error: null,
             },
           });
         } else if (event.name === 'playback.finished') {
           const current = get().playback;
           if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
-          retiredSessionIds.add(event.payload.session_id);
-          const songTitle = bindSessionTitle(event.payload.session_id, event.payload.song_id);
-          if (pendingStart?.songId === event.payload.song_id) pendingStart = null;
+          clearTerminalReconciliationTimer();
+          retireSession(event.payload.session_id, 'finished');
+          const pending = pendingStartForSong(event.payload.song_id);
+          const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
+          const context = pending?.context ?? current.context;
+          if (pending) pendingStarts.delete(pending.epoch);
+          const continueOperation =
+            current.transportOperation === 'advancing' ||
+            current.transportOperation === 'restarting';
+          const autoAdvance =
+            event.payload.outcome === 'finished' &&
+            current.transportOperation !== 'stopping' &&
+            !continueOperation &&
+            context !== null &&
+            context.currentSongId === event.payload.song_id &&
+            playbackContextIsCurrent(context) &&
+            context.generation === get().library.generation &&
+            context.currentIndex + 1 < context.total;
+          if (!continueOperation) clearOperationFromEvent();
           set({
             playback: {
               ...current,
-              sessionId: event.payload.session_id,
-              songTitle,
-              pendingCommand: null,
-              state: 'finished',
+              sessionId: null,
+              currentSong: identity ?? current.currentSong,
+              context,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              startRequestId:
+                current.sessionId === event.payload.session_id ||
+                current.startRequestId === pending?.epoch
+                  ? null
+                  : current.startRequestId,
+              transportOperation: continueOperation ? current.transportOperation : null,
+              state: 'idle',
+              snapshot: null,
               error: null,
             },
           });
+          if (autoAdvance && context) {
+            void transitionContextPlayback(context, context.currentIndex + 1, 'advancing', null);
+          }
         } else if (event.name === 'playback.failed') {
           const current = get().playback;
           if (!acceptsSessionEvent(event.payload.session_id, event.payload.song_id)) return;
-          retiredSessionIds.add(event.payload.session_id);
-          const songTitle = bindSessionTitle(event.payload.session_id, event.payload.song_id);
-          if (pendingStart?.songId === event.payload.song_id) pendingStart = null;
+          clearTerminalReconciliationTimer();
+          retireSession(event.payload.session_id, 'failed');
+          const pending = pendingStartForSong(event.payload.song_id);
+          const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
+          const context = pending?.context ?? current.context;
+          if (pending) pendingStarts.delete(pending.epoch);
+          clearOperationFromEvent();
           set({
             playback: {
               ...current,
-              sessionId: event.payload.session_id,
-              songTitle,
-              pendingCommand: null,
+              sessionId: null,
+              currentSong: identity ?? current.currentSong,
+              context,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              startRequestId:
+                current.sessionId === event.payload.session_id ||
+                current.startRequestId === pending?.epoch
+                  ? null
+                  : current.startRequestId,
+              transportOperation: null,
               state: 'failed',
+              snapshot: null,
               error: `${event.payload.code}: ${event.payload.message}`,
             },
           });
@@ -815,7 +1725,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (state === 'succeeded') {
             void bridge.getSettings().then((settings) => {
               set({ settings, settingsState: 'ready' });
-              prepareRequestEpoch += 1;
             });
           }
         } else if (event.name === 'update.available') {
@@ -912,21 +1821,28 @@ export function createDesktopStore(bridge: DesktopBridge) {
       async selectSong(songId) {
         const current = get();
         const cached = current.details.bySongId.get(songId);
+        const selectingDifferentSongAfterRetirement =
+          current.playback.sessionId === null &&
+          current.playback.transportOperation === null &&
+          current.playback.currentSong !== null &&
+          current.playback.currentSong?.songId !== songId;
         if (
           current.library.selectedSongId === songId &&
+          !selectingDifferentSongAfterRetirement &&
           cached &&
           (cached.state === 'ready' || cached.state === 'loading')
         ) {
           return;
         }
         detailRequestToken += 1;
-        prepareRequestEpoch += 1;
         const token = detailRequestToken;
         const requestGeneration = current.library.generation;
         const currentPlayback = get().playback;
-        const sessionIsActive = ['starting', 'playing', 'paused', 'stopping'].includes(
-          currentPlayback.state,
-        );
+        const cancelPreparing = currentPlayback.transportOperation === 'preparing';
+        if (cancelPreparing) clearOperationFromEvent();
+        const preservePlaybackIdentity =
+          currentPlayback.sessionId !== null ||
+          (!cancelPreparing && currentPlayback.transportOperation !== null);
         const detail =
           cached ??
           ({
@@ -944,7 +1860,14 @@ export function createDesktopStore(bridge: DesktopBridge) {
           playback: {
             ...currentPlayback,
             prepared: null,
-            songTitle: sessionIsActive ? currentPlayback.songTitle : null,
+            preparedIdentity: null,
+            preparedContext: null,
+            currentSong: preservePlaybackIdentity ? currentPlayback.currentSong : null,
+            context: preservePlaybackIdentity ? currentPlayback.context : null,
+            state: preservePlaybackIdentity ? currentPlayback.state : 'idle',
+            sessionId: preservePlaybackIdentity ? currentPlayback.sessionId : null,
+            snapshot: preservePlaybackIdentity ? currentPlayback.snapshot : null,
+            transportOperation: cancelPreparing ? null : currentPlayback.transportOperation,
             error: null,
           },
         });
@@ -1092,6 +2015,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
         const active = get().library.source;
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const removed = await bridge.deletePlaylist(playlistId);
           if (removed) {
@@ -1121,6 +2045,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const key = `playlist:${playlistId}:import:file`;
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const result = await bridge.importLocalFilesToPlaylist(playlistId);
           set({
@@ -1140,6 +2065,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const key = `playlist:${playlistId}:import:folder`;
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const result = await bridge.importLocalFolderToPlaylist(playlistId);
           set({
@@ -1159,6 +2085,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const key = `playlist:${playlistId}:song:${songId}:add`;
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const summary = await bridge.addSongsToPlaylist(playlistId, [songId]);
           set({
@@ -1179,6 +2106,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const key = `playlist:${playlistId}:song:${songId}:remove`;
         if (!setLibraryMutationPending(key, true)) return;
         setLibraryError(null);
+        invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
         try {
           const summary = await bridge.removeSongsFromPlaylist(playlistId, [songId]);
           set({
@@ -1201,11 +2129,10 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const current = get().library;
         if (sourceKey(current.source) !== sourceKey(source) || current.playlistAddMode !== null) {
           detailRequestToken += 1;
-          prepareRequestEpoch += 1;
           set({
             library: { ...get().library, selectedSongId: null, playlistAddMode: null },
             details: { bySongId: new Map() },
-            playback: { ...get().playback, prepared: null },
+            playback: playbackAfterBrowserNavigation(get().playback),
           });
         }
         await get().search('', source);
@@ -1214,7 +2141,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
       async openPlaylistAdd(playlistId) {
         const playlistSource: LibrarySource = { kind: 'playlist', id: playlistId };
         detailRequestToken += 1;
-        prepareRequestEpoch += 1;
         const current = get().library;
         set({
           library: {
@@ -1224,7 +2150,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             selectedSongId: null,
           },
           details: { bySongId: new Map() },
-          playback: { ...get().playback, prepared: null },
+          playback: playbackAfterBrowserNavigation(get().playback),
         });
         await get().search('', playlistSource);
       },
@@ -1234,7 +2160,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
         const playlistId = current.playlistAddMode?.playlistId;
         if (!playlistId) return;
         detailRequestToken += 1;
-        prepareRequestEpoch += 1;
         const playlistSource: LibrarySource = { kind: 'playlist', id: playlistId };
         set({
           library: {
@@ -1244,25 +2169,35 @@ export function createDesktopStore(bridge: DesktopBridge) {
             selectedSongId: null,
           },
           details: { bySongId: new Map() },
-          playback: { ...get().playback, prepared: null },
+          playback: playbackAfterBrowserNavigation(get().playback),
         });
         await get().search('', playlistSource);
       },
 
       async setSongLiked(songId, liked) {
         const current = get().library;
+        const playback = get().playback;
         const previous = selectSongById(current, songId);
-        if (!previous) return;
-        const optimistic = { ...previous, liked };
-        const likedDelta = previous.liked === liked ? 0 : liked ? 1 : -1;
+        const currentPlaybackSong =
+          playback.currentSong?.songId === songId ? playback.currentSong : null;
+        if (!previous && !currentPlaybackSong) return;
+        const previousLiked = previous?.liked ?? currentPlaybackSong?.liked ?? false;
+        if (previousLiked === liked) return;
+        invalidatePlaybackMembershipContext({ kind: 'smart', id: 'liked' });
+        const optimistic = previous ? { ...previous, liked } : null;
+        const likedDelta = liked ? 1 : -1;
         pageCache.clear();
         set({
           library: {
-            ...updateLoadedRows(current, [optimistic]),
+            ...(optimistic ? updateLoadedRows(current, [optimistic]) : current),
             likedTotal: Math.max(0, current.likedTotal + likedDelta),
           },
+          playback: currentPlaybackSong
+            ? { ...get().playback, currentSong: { ...currentPlaybackSong, liked } }
+            : get().playback,
         });
-        const generation = current.generation > 0 ? current.generation : undefined;
+        const targetGeneration = currentPlaybackSong?.generation ?? current.generation;
+        const generation = targetGeneration > 0 ? targetGeneration : undefined;
         try {
           const result = await bridge.setSongLiked({
             songId,
@@ -1285,8 +2220,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
           const row = selectSongById(latest, songId);
           const shouldRollback = row?.liked === liked;
           const rollback = shouldRollback
-            ? updateLoadedRows(latest, [{ ...previous, liked: !liked }])
+            ? updateLoadedRows(latest, [{ ...row!, liked: previousLiked }])
             : latest;
+          const latestPlayback = get().playback;
           set({
             library: {
               ...rollback,
@@ -1294,6 +2230,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
                 ? Math.max(0, latest.likedTotal - likedDelta)
                 : rollback.likedTotal,
             },
+            playback:
+              latestPlayback.currentSong?.songId === songId
+                ? {
+                    ...latestPlayback,
+                    currentSong: { ...latestPlayback.currentSong, liked: previousLiked },
+                  }
+                : latestPlayback,
           });
           set({ library: { ...get().library, error: message } });
         }
@@ -1315,12 +2258,20 @@ export function createDesktopStore(bridge: DesktopBridge) {
           set({ settingsState: 'loading' });
           try {
             const settings = await bridge.patchSettings(patch);
+            const playback = get().playback;
+            const cancelPreparing = playback.transportOperation === 'preparing';
+            if (cancelPreparing) clearOperationFromEvent();
             set({
               settings,
               settingsState: 'ready',
-              playback: { ...get().playback, prepared: null },
+              playback: {
+                ...playback,
+                prepared: null,
+                preparedIdentity: null,
+                preparedContext: null,
+                transportOperation: cancelPreparing ? null : playback.transportOperation,
+              },
             });
-            prepareRequestEpoch += 1;
             document.documentElement.dataset.theme = settings.theme;
             return settings;
           } catch (error) {
@@ -1396,169 +2347,245 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
 
       async prepareSelectedPlayback(overrides) {
-        const selectedSongId = get().library.selectedSongId;
-        const settings = get().settings;
-        if (!selectedSongId || !settings) {
+        const current = get();
+        const playback = current.playback;
+        if (playback.prepared?.admission === 'confirmation_required') return;
+        if (
+          playback.startRequestId !== null ||
+          playback.transportOperation !== null ||
+          playback.sessionId !== null ||
+          ['starting', 'playing', 'paused', 'stopping'].includes(playback.state)
+        ) {
+          return;
+        }
+        const selectedSongId =
+          playback.context && !playbackContextIsCurrent(playback.context)
+            ? current.library.selectedSongId
+            : (playback.currentSong?.songId ?? current.library.selectedSongId);
+        if (!selectedSongId || !current.settings) {
           set({
-            playback: { ...get().playback, error: 'Select a song before preparing playback.' },
+            playback: { ...playback, error: 'Select a song before preparing playback.' },
           });
           return;
         }
-        const config: PlaybackConfig = {
-          hold_frames: overrides?.hold_frames ?? settings.playback_defaults.hold_frames,
-          timing_margin_us:
-            overrides?.timing_margin_us ?? settings.playback_defaults.timing_margin_us,
-          down_late_grace_us:
-            overrides?.down_late_grace_us ?? settings.playback_defaults.down_late_grace_us,
-          tempo_scale: overrides?.tempo_scale ?? settings.playback_defaults.tempo_scale,
-          fps: overrides?.fps ?? settings.playback_defaults.fps,
-          dry_run: overrides?.dry_run ?? false,
-        };
-        const request: PlaybackPrepare = {
-          songId: selectedSongId,
-          generation: get().library.generation,
-          config,
-        };
-        const requestEpoch = prepareRequestEpoch;
-        const requestGeneration = request.generation;
-        try {
-          const prepared = await bridge.preparePlayback(request);
-          if (
-            requestEpoch !== prepareRequestEpoch ||
-            get().library.selectedSongId !== selectedSongId ||
-            get().library.generation !== requestGeneration
-          ) {
-            return;
-          }
-          set({ playback: { ...get().playback, prepared, error: prepared.error_message } });
-        } catch (error) {
-          if (
-            requestEpoch !== prepareRequestEpoch ||
-            get().library.selectedSongId !== selectedSongId ||
-            get().library.generation !== requestGeneration
-          ) {
-            return;
-          }
+        const reuseCurrentContext =
+          playback.currentSong?.songId === selectedSongId &&
+          playback.context !== null &&
+          playbackContextIsCurrent(playback.context);
+        const context = reuseCurrentContext
+          ? playback.context!
+          : contextForSong(current.library, selectedSongId);
+        if (!context) {
           set({
             playback: {
-              ...get().playback,
-              prepared: null,
-              error: error instanceof Error ? error.message : String(error),
+              ...playback,
+              error: 'Select a loaded Library row before preparing playback.',
             },
           });
+          return;
+        }
+        const row = selectSongById(current.library, selectedSongId);
+        const identity =
+          reuseCurrentContext && playback.currentSong
+            ? playback.currentSong
+            : row
+              ? identityFromRow(row, context.generation)
+              : null;
+        if (!identity) {
+          set({
+            playback: {
+              ...playback,
+              error: 'The selected song is not available in this Library context.',
+            },
+          });
+          return;
+        }
+        const operationEpoch = beginOperation('preparing');
+        if (operationEpoch === null) return;
+        try {
+          const prepared = await prepareForOperation(identity, context, overrides, operationEpoch);
+          if (!prepared || !operationIsCurrent(operationEpoch)) return;
+          finishOperation(operationEpoch, prepared.error_message);
+        } catch (error) {
+          finishOperation(operationEpoch, errorMessage(error));
         }
       },
 
       async startPreparedPlayback(decision) {
-        const prepared = get().playback.prepared;
-        if (!prepared?.prepared_id) {
-          set({ playback: { ...get().playback, error: 'Prepare playback before starting.' } });
+        const playback = get().playback;
+        const prepared = playback.prepared;
+        const identity = playback.preparedIdentity;
+        const context = playback.preparedContext;
+        if (playback.startRequestId !== null) return;
+        if (playback.transportOperation !== null) return;
+        if (
+          playback.sessionId !== null ||
+          ['playing', 'paused', 'stopping'].includes(playback.state)
+        ) {
           return;
         }
-        const decisions: PlaybackDecisionAcceptance[] = decision
-          ? [{ decision, accepted: true }]
-          : [];
-        const startEpoch = ++startRequestEpoch;
-        const preparedTitle = prepared.song.title;
-        pendingStart = {
-          epoch: startEpoch,
-          preparedId: prepared.prepared_id,
-          songId: prepared.song.song_id,
-          songTitle: preparedTitle,
-        };
-        try {
-          const session = await bridge.startPlayback({
-            preparedId: prepared.prepared_id,
-            decisions,
-          });
-          if (startEpoch !== startRequestEpoch) return;
-          pendingStart = null;
-          const current = get().playback;
-          const boundToEarlyEvent = current.sessionId === session.session_id;
-          set({
-            playback: {
-              ...current,
-              prepared: null,
-              sessionId: session.session_id,
-              songTitle: current.songTitle ?? preparedTitle,
-              state: boundToEarlyEvent ? current.state : 'starting',
-              snapshot: boundToEarlyEvent ? current.snapshot : null,
-              error: null,
-            },
-          });
-        } catch (error) {
-          if (startEpoch === startRequestEpoch) pendingStart = null;
-          set({
-            playback: {
-              ...get().playback,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
+        if (!prepared?.prepared_id || !identity || !context) {
+          set({ playback: { ...playback, error: 'Prepare playback before starting.' } });
+          return;
         }
+        if (prepared.admission === 'blocked') return;
+        if (
+          prepared.admission === 'confirmation_required' &&
+          (!decision || !prepared.decisions.some((item) => item.decision === decision))
+        )
+          return;
+        if (!playbackContextIsCurrent(context)) {
+          set({
+            playback: {
+              ...playback,
+              prepared: null,
+              preparedIdentity: null,
+              preparedContext: null,
+              error: 'The Library source changed. Select a song and prepare playback again.',
+            },
+          });
+          return;
+        }
+        const operationEpoch = beginOperation('starting');
+        if (operationEpoch === null) return;
+        try {
+          await startForOperation(prepared, identity, context, decision, operationEpoch);
+        } catch (error) {
+          finishOperation(operationEpoch, errorMessage(error));
+        }
+      },
+
+      cancelPreparedPlayback() {
+        const playback = get().playback;
+        if (
+          playback.transportOperation !== null ||
+          !['confirmation_required', 'blocked'].includes(playback.prepared?.admission ?? '')
+        )
+          return;
+        set({
+          playback: {
+            ...playback,
+            prepared: null,
+            preparedIdentity: null,
+            preparedContext: null,
+            error: null,
+          },
+        });
       },
 
       async stopPlayback() {
-        const sessionId = get().playback.sessionId;
-        if (!sessionId) return;
+        const playback = get().playback;
+        const sessionId = playback.sessionId;
+        const preemptTransport = playback.transportOperation !== null;
+        if (
+          !sessionId ||
+          !['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(
+            playback.state,
+          )
+        )
+          return;
+        const operationEpoch = beginOperation('stopping', preemptTransport);
+        if (operationEpoch === null) return;
         try {
-          await bridge.stopPlayback({ sessionId });
-          set({ playback: { ...get().playback, pendingCommand: null } });
+          const acknowledgement = await bridge.stopPlayback({ sessionId });
+          if (['finished', 'failed'].includes(acknowledgement.state)) {
+            const token = ++playbackReconciliationEpoch;
+            await reconcilePlaybackAfterTimeout(
+              token,
+              'stopping',
+              operationEpoch,
+              sessionId,
+              playback.startRequestId,
+            );
+          }
         } catch (error) {
-          set({
-            playback: {
-              ...get().playback,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
+          finishOperation(operationEpoch, errorMessage(error));
         }
       },
 
+      retryPlaybackStatus() {
+        if (playbackStatusRetryPromise) return playbackStatusRetryPromise;
+        const playback = get().playback;
+        const token = ++playbackReconciliationEpoch;
+        playbackStatusRetryToken = token;
+        const operation = playback.transportOperation ?? 'starting';
+        const epoch = transportOperationEpoch;
+        set({ playback: { ...playback, statusRetryPending: true } });
+        const retryPromise = reconcilePlaybackAfterTimeout(
+          token,
+          operation,
+          epoch,
+          playback.sessionId,
+          playback.startRequestId,
+        ).finally(() => {
+          if (playbackStatusRetryPromise !== retryPromise || playbackStatusRetryToken !== token)
+            return;
+          playbackStatusRetryPromise = null;
+          const latest = get().playback;
+          set({ playback: { ...latest, statusRetryPending: false } });
+        });
+        playbackStatusRetryPromise = retryPromise;
+        return retryPromise;
+      },
+
       async pausePlayback() {
-        const sessionId = get().playback.sessionId;
-        if (!sessionId) return;
+        const playback = get().playback;
+        const sessionId = playback.sessionId;
+        if (!sessionId || playback.state !== 'playing' || playback.transportOperation !== null)
+          return;
+        const operationEpoch = beginOperation('pausing');
+        if (operationEpoch === null) return;
         try {
-          const ack = await bridge.pausePlayback({ sessionId });
-          set({ playback: { ...get().playback, pendingCommand: ack.pending_command } });
+          await bridge.pausePlayback({ sessionId });
         } catch (error) {
-          set({
-            playback: {
-              ...get().playback,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
+          finishOperation(operationEpoch, errorMessage(error));
         }
       },
 
       async resumePlayback() {
-        const sessionId = get().playback.sessionId;
-        if (!sessionId) return;
+        const playback = get().playback;
+        const sessionId = playback.sessionId;
+        if (!sessionId || playback.state !== 'paused' || playback.transportOperation !== null)
+          return;
+        const operationEpoch = beginOperation('resuming');
+        if (operationEpoch === null) return;
         try {
-          const ack = await bridge.resumePlayback({ sessionId });
-          set({ playback: { ...get().playback, pendingCommand: ack.pending_command } });
+          await bridge.resumePlayback({ sessionId });
         } catch (error) {
-          set({
-            playback: {
-              ...get().playback,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
+          finishOperation(operationEpoch, errorMessage(error));
         }
       },
 
-      async skipPlayback() {
-        const sessionId = get().playback.sessionId;
-        if (!sessionId) return;
-        try {
-          await bridge.skipPlayback({ sessionId });
-          set({ playback: { ...get().playback, pendingCommand: null } });
-        } catch (error) {
-          set({
-            playback: {
-              ...get().playback,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
-        }
+      async previousPlayback() {
+        const playback = get().playback;
+        const context = playback.context;
+        if (
+          !context ||
+          !playbackContextIsCurrent(context) ||
+          playback.prepared?.admission === 'confirmation_required' ||
+          playback.transportOperation !== null
+        )
+          return;
+        const currentUs =
+          playback.snapshot?.session_id === playback.sessionId ? playback.snapshot.current_us : 0;
+        const targetIndex =
+          currentUs > 3_000_000 ? context.currentIndex : Math.max(0, context.currentIndex - 1);
+        await transitionContextPlayback(context, targetIndex, 'restarting', playback.sessionId);
+      },
+
+      async nextPlayback() {
+        const playback = get().playback;
+        const context = playback.context;
+        if (
+          !context ||
+          !playbackContextIsCurrent(context) ||
+          playback.prepared?.admission === 'confirmation_required' ||
+          playback.transportOperation !== null
+        )
+          return;
+        const targetIndex = context.currentIndex + 1;
+        if (targetIndex >= context.total) return;
+        await transitionContextPlayback(context, targetIndex, 'advancing', playback.sessionId);
       },
 
       setSettingsOpen(open) {
