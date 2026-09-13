@@ -33,6 +33,7 @@ import type {
   PlaybackPrepareRequest,
   PlaybackSessionCommandRequest,
   PlaybackSessionDto,
+  PlaybackStatusDto,
   PreparedPlaybackDto,
   PlaybackStartRequest,
   PlaybackDefaultsDto,
@@ -144,6 +145,7 @@ export type PreparedPlayback = PreparedPlaybackDto;
 export type PlaybackStart = PlaybackStartRequest;
 export type PlaybackSession = PlaybackSessionDto;
 export type PlaybackSessionCommand = PlaybackSessionCommandRequest;
+export type PlaybackStatus = PlaybackStatusDto;
 export type DiagnosticsSnapshot = DiagnosticsSnapshotDto;
 export type DiagnosticsBackend = DiagnosticsBackendStatus;
 export type DiagnosticsEnabled = DiagnosticsEnabledDto;
@@ -183,6 +185,7 @@ export interface DesktopBridge {
   beginUpdateHandoff(targetVersion: string): Promise<UpdateHandoff>;
   preparePlayback(request: PlaybackPrepare): Promise<PreparedPlayback>;
   startPlayback(request: PlaybackStart): Promise<PlaybackSession>;
+  getPlaybackStatus(): Promise<PlaybackStatus>;
   stopPlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
   pausePlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
   resumePlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;

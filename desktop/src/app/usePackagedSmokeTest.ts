@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../state/store';
 
@@ -12,11 +12,12 @@ interface SmokeWindow extends Window {
 }
 
 export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProps): void {
+  const smokeStarted = useRef(false);
+
   useEffect(() => {
-    let completed = false;
     const runPackagedSmoke = async () => {
-      if (completed) return;
-      completed = true;
+      if (smokeStarted.current) return;
+      smokeStarted.current = true;
       const waitForReady = async () => {
         for (let attempt = 0; attempt < 300; attempt += 1) {
           const state = useStore.getState();

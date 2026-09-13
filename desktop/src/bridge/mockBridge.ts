@@ -105,11 +105,49 @@ function initialSettings(): Settings {
   };
 }
 
-export function createMockBridge(): DesktopBridge {
+export interface MockBridgeOptions {
+  playbackDurationMs?: number;
+  startDelayMs?: number;
+  startResponseDelayMs?: number;
+  statusQueryFailures?: number;
+  neverCreateSession?: boolean;
+  startFailure?: { code: string; message: string };
+  emitSnapshots?: boolean;
+  dropPlaybackStartConfirmation?: boolean;
+}
+
+export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
+  const playbackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
+  const startDelayMs = Math.max(0, options.startDelayMs ?? 30);
+  let statusQueryFailures = Math.max(0, Math.floor(options.statusQueryFailures ?? 0));
   let generation = 1;
   let settings = initialSettings();
-  let activeSession: { sessionId: string; songId: string; config: PlaybackConfig } | null = null;
+  let playbackSessionSequence = 0;
+  let preparedPlaybackSequence = 0;
+  let activeSession: {
+    sessionId: string;
+    preparedId: string;
+    songId: string;
+    title: string;
+    config: PlaybackConfig;
+    totalUs: number;
+    startedAt: number;
+    pausedAt: number | null;
+    pausedTotalMs: number;
+    state: 'starting' | 'playing' | 'paused' | 'stopping';
+  } | null = null;
+  let lastTerminal: {
+    session_id: string;
+    prepared_id: string;
+    song_id: string;
+    state: 'finished' | 'failed';
+    outcome: string | null;
+    failure_code: string | null;
+    failure_message: string | null;
+  } | null = null;
+  let playbackTimer: ReturnType<typeof setInterval> | null = null;
   const preparedConfigs = new Map<string, PlaybackConfig>();
+  const preparedSongIds = new Map<string, string>();
   let diagnosticsEnabled = false;
   let diagnosticsSeq = 0;
   let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
@@ -224,8 +262,10 @@ export function createMockBridge(): DesktopBridge {
   };
   const emitPlaybackState = (
     session: { sessionId: string; songId: string },
-    state: 'playing' | 'paused' | 'stopping' | 'finished',
+    state: 'starting' | 'playing' | 'paused' | 'stopping' | 'finished',
+    message: string | null = null,
   ) => {
+    if (options.dropPlaybackStartConfirmation && state === 'playing') return;
     emit({
       v: 1,
       name: 'playback.state_changed',
@@ -234,8 +274,84 @@ export function createMockBridge(): DesktopBridge {
         song_id: session.songId,
         state,
         physical: false,
-        message: null,
+        message,
         outcome: state === 'finished' ? 'finished' : null,
+      },
+    });
+  };
+  const stopPlaybackTimer = () => {
+    if (playbackTimer === null) return;
+    clearInterval(playbackTimer);
+    playbackTimer = null;
+  };
+  const playbackElapsedMs = (session: NonNullable<typeof activeSession>) =>
+    Math.max(
+      0,
+      (session.state === 'paused' ? (session.pausedAt ?? Date.now()) : Date.now()) -
+        session.startedAt -
+        session.pausedTotalMs -
+        (session.state === 'starting' ? startDelayMs : 0),
+    );
+  const emitPlaybackSnapshot = (session: NonNullable<typeof activeSession>) => {
+    const elapsedMs = Math.min(playbackDurationMs, playbackElapsedMs(session));
+    const currentUs = Math.min(
+      session.totalUs,
+      Math.floor((elapsedMs / playbackDurationMs) * session.totalUs),
+    );
+    emit({
+      v: 1,
+      name: 'playback.snapshot',
+      payload: {
+        session_id: session.sessionId,
+        seq: Math.max(1, Math.floor(elapsedMs / 40) + 1),
+        state:
+          session.state === 'starting'
+            ? 'starting'
+            : session.state === 'paused'
+              ? 'paused'
+              : 'playing',
+        song_id: session.songId,
+        title: session.title,
+        current_us: currentUs,
+        total_us: session.totalUs,
+        pre_roll_remaining_us:
+          session.state === 'starting'
+            ? Math.max(0, startDelayMs - (Date.now() - session.startedAt)) * 1_000
+            : 0,
+        focus_state: session.state === 'starting' ? 'waiting' : 'focused',
+        health: 'healthy',
+        input_path_degraded: false,
+        message: null,
+      },
+    });
+  };
+  const retirePlaybackSession = (
+    session: NonNullable<typeof activeSession>,
+    outcome: string,
+    message: string,
+  ) => {
+    if (activeSession !== session) return;
+    emitPlaybackState(session, 'finished', message);
+    lastTerminal = {
+      session_id: session.sessionId,
+      prepared_id: session.preparedId,
+      song_id: session.songId,
+      state: 'finished',
+      outcome,
+      failure_code: null,
+      failure_message: null,
+    };
+    activeSession = null;
+    stopPlaybackTimer();
+    emit({
+      v: 1,
+      name: 'playback.finished',
+      payload: {
+        session_id: session.sessionId,
+        song_id: session.songId,
+        outcome,
+        total_us: session.totalUs,
+        message,
       },
     });
   };
@@ -561,8 +677,9 @@ export function createMockBridge(): DesktopBridge {
       const found = allRows().find((item) => item.song_id === request.songId);
       if (!found) throw new Error('song was not found');
       const risk = found.risk_level === 'low' ? 'low' : 'medium';
-      const preparedId = `prepared-${found.song_id}`;
+      const preparedId = `prepared-${++preparedPlaybackSequence}-${found.song_id}`;
       preparedConfigs.set(preparedId, request.config);
+      preparedSongIds.set(preparedId, found.song_id);
       return {
         prepared_id: preparedId,
         song: {
@@ -641,6 +758,7 @@ export function createMockBridge(): DesktopBridge {
       };
     },
     async startPlayback(request) {
+      if (activeSession) throw new Error('another playback session is active');
       const baseConfig = preparedConfigs.get(request.preparedId) ?? {
         ...settings.playback_defaults,
         dry_run: false,
@@ -648,13 +766,53 @@ export function createMockBridge(): DesktopBridge {
       const config = request.decisions.some((item) => item.decision === 'dry_run')
         ? { ...baseConfig, dry_run: true }
         : baseConfig;
+      const songId = preparedSongIds.get(request.preparedId);
+      if (!songId) throw new Error('prepared playback is stale or already consumed');
+      const song = allRows().find((item) => item.song_id === songId);
+      if (!song) throw new Error('song was not found');
+      preparedSongIds.delete(request.preparedId);
+      preparedConfigs.delete(request.preparedId);
+      if (options.startFailure) {
+        throw new Error(`${options.startFailure.code}: ${options.startFailure.message}`);
+      }
+      if (options.neverCreateSession) {
+        return new Promise(() => undefined);
+      }
+      playbackSessionSequence += 1;
       const session = {
-        sessionId: 'b'.repeat(32),
-        songId: request.preparedId.replace('prepared-', ''),
+        sessionId: playbackSessionSequence.toString(16).padStart(32, '0'),
+        preparedId: request.preparedId,
+        songId,
+        title: song.title,
         config,
+        totalUs: song.duration_us ?? 1_000_000,
+        startedAt: Date.now(),
+        pausedAt: null,
+        pausedTotalMs: 0,
+        state: 'starting' as 'starting' | 'playing' | 'paused' | 'stopping',
       };
       activeSession = session;
-      setTimeout(() => emitPlaybackState(session, 'playing'), 0);
+      emitPlaybackState(session, 'starting');
+      stopPlaybackTimer();
+      playbackTimer = setInterval(() => {
+        if (activeSession !== session) return;
+        if (session.state === 'starting' && Date.now() - session.startedAt >= startDelayMs) {
+          session.state = 'playing';
+          emitPlaybackState(session, 'playing');
+        }
+        if (
+          options.emitSnapshots !== false &&
+          (session.state === 'playing' || session.state === 'paused')
+        ) {
+          emitPlaybackSnapshot(session);
+        }
+        if (session.state === 'playing' && playbackElapsedMs(session) >= playbackDurationMs) {
+          retirePlaybackSession(session, 'finished', 'Playback finished');
+        }
+      }, 40);
+      if (options.startResponseDelayMs && options.startResponseDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, options.startResponseDelayMs));
+      }
       return {
         session_id: session.sessionId,
         prepared_id: request.preparedId,
@@ -668,14 +826,43 @@ export function createMockBridge(): DesktopBridge {
             : 'mock-plan',
       };
     },
+    async getPlaybackStatus() {
+      if (statusQueryFailures > 0) {
+        statusQueryFailures -= 1;
+        throw new Error('Mock playback status query unavailable.');
+      }
+      return {
+        active: activeSession
+          ? {
+              session_id: activeSession.sessionId,
+              prepared_id: activeSession.preparedId,
+              song_id: activeSession.songId,
+              title: activeSession.title,
+              state: activeSession.state,
+            }
+          : null,
+        last_terminal: lastTerminal,
+      };
+    },
     async stopPlayback(request) {
-      if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
+      if (activeSession?.sessionId !== request.sessionId) {
+        if (lastTerminal?.session_id === request.sessionId) {
+          return {
+            accepted: true,
+            session_id: request.sessionId,
+            state: lastTerminal.state,
+            pending_command: null,
+            reason: null,
+          };
+        }
+        throw new Error('stale session');
+      }
       const session = activeSession;
-      activeSession = null;
-      setTimeout(() => {
+      if (session.state !== 'stopping') {
+        session.state = 'stopping';
         emitPlaybackState(session, 'stopping');
-        emitPlaybackState(session, 'finished');
-      }, 0);
+        setTimeout(() => retirePlaybackSession(session, 'quit', 'Playback stopped'), 0);
+      }
       return {
         accepted: true,
         session_id: request.sessionId,
@@ -687,7 +874,10 @@ export function createMockBridge(): DesktopBridge {
     async pausePlayback(request) {
       if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
       const session = activeSession;
-      setTimeout(() => emitPlaybackState(session, 'paused'), 0);
+      if (session.state !== 'playing') throw new Error('pause requires a playing session');
+      session.state = 'paused';
+      session.pausedAt = Date.now();
+      emitPlaybackState(session, 'paused');
       return {
         accepted: true,
         session_id: request.sessionId,
@@ -699,7 +889,11 @@ export function createMockBridge(): DesktopBridge {
     async resumePlayback(request) {
       if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
       const session = activeSession;
-      setTimeout(() => emitPlaybackState(session, 'playing'), 0);
+      if (session.state !== 'paused') throw new Error('resume requires a paused session');
+      session.pausedTotalMs += Date.now() - (session.pausedAt ?? Date.now());
+      session.pausedAt = null;
+      session.state = 'playing';
+      emitPlaybackState(session, 'playing');
       return {
         accepted: true,
         session_id: request.sessionId,
@@ -711,11 +905,11 @@ export function createMockBridge(): DesktopBridge {
     async skipPlayback(request) {
       if (activeSession?.sessionId !== request.sessionId) throw new Error('stale session');
       const session = activeSession;
-      activeSession = null;
-      setTimeout(() => {
+      if (session.state !== 'stopping') {
+        session.state = 'stopping';
         emitPlaybackState(session, 'stopping');
-        emitPlaybackState(session, 'finished');
-      }, 0);
+        setTimeout(() => retirePlaybackSession(session, 'skipped', 'Playback skipped'), 0);
+      }
       return {
         accepted: true,
         session_id: request.sessionId,
@@ -811,9 +1005,11 @@ export function createMockBridge(): DesktopBridge {
     },
     async shutdown(_failed = false) {
       if (diagnosticsTimer !== null) clearInterval(diagnosticsTimer);
+      stopPlaybackTimer();
       if (calibrationTimer !== null) clearTimeout(calibrationTimer);
       diagnosticsTimer = null;
       calibrationTimer = null;
+      activeSession = null;
       listeners.clear();
     },
   };
