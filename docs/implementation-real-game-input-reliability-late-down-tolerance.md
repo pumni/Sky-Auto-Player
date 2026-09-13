@@ -1,5 +1,11 @@
 # Real-game input reliability investigation and user-owned Late Down tolerance
 
+> **UI follow-up (PR #234):** Earlier **Use recommended** Timing Margin UI
+> examples in this handoff are superseded. Recommendation is informational
+> only; users adjust Timing Margin through the existing bounded stepper. This
+> presentation change does not alter the separate native
+> `PlaybackDecision::UseRecommended` risk-flow decision.
+
 ## Status
 
 Implementation / investigation handoff for Codex on draft PR #233.

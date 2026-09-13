@@ -24,7 +24,7 @@ microsecond conversions.
 | `min_hold` | Fixed materialized floor equal to the selected frame-based hold plus the exact user Timing Margin. |
 | `down_late_cutoff` | Independent user-owned production cutoff for authorized Down admission; default `2,000 µs` after the physical target, range `0..=5,000 µs` in `100 µs` steps, frozen per prepared session. |
 | `min_release_gap` | One frame period plus the same exact user Timing Margin between a same-key Up and the next same-key Down. |
-| `timing_margin_recommendation` | Advisory value derived from calibration evidence; it changes a setting only after an explicit user action. |
+| `timing_margin_recommendation` | Informational value derived from calibration evidence; it never writes settings, and users adjust Timing Margin with its bounded stepper. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
@@ -158,10 +158,11 @@ The user-facing recommendation is
 `ceil_to_100us(selected_down_late_tolerance + reserve)`. With the default
 `2,000 µs` cutoff and fallback `300 µs` reserve, the unqualified advisory value
 is `2,300 µs`. A valid calibration may therefore recommend another value. It
-never changes a saved user setting or an active/prepared session; the user must
-explicitly choose **Use recommended**. An invalid, missing, or out-of-envelope
-cache uses the unqualified transport reserve and recomputes the advisory value
-from the selected cutoff. Qualification status and source remain visible.
+never changes a saved user setting or an active/prepared session. Settings and
+the quick profile present it as informational text; users adjust Timing Margin
+with the bounded stepper. An invalid, missing, or out-of-envelope cache uses
+the unqualified transport reserve and recomputes the advisory value from the
+selected cutoff. Qualification status and source remain visible.
 Calibration does not change Note-On timestamps, physical Down targets, the
 selected Late Down cutoff,
 or runtime scheduling. Protocol 10, native schema 15, artifact

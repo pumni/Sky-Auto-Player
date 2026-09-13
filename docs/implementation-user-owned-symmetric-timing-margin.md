@@ -4,6 +4,12 @@
 
 Status: **implementation complete; superseded as an active handoff**.
 
+> **UI follow-up (PR #234):** The earlier **Use recommended** Timing Margin UI
+> action described below is superseded. Recommendation is informational only;
+> users adjust Timing Margin through the existing bounded stepper. This
+> presentation change does not alter the separate native
+> `PlaybackDecision::UseRecommended` risk-flow decision.
+
 The merge defaults accepted by the user are:
 
 - Timing Margin: **500 us**.

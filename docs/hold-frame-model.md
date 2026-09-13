@@ -55,8 +55,8 @@ candidate above `2,000 µs` is out of the trusted envelope and uses the
 unqualified transport reserve. A qualified recommendation is rounded up to
 the next `100 µs` after adding the currently selected Late Down tolerance.
 With the default `2,000 µs` cutoff and fallback `300 µs` reserve, that advisory
-value is `2,300 µs`. Applying it
-requires the user's explicit **Use recommended** action and affects only the
+value is `2,300 µs`. It is informational only and never writes a setting.
+Users adjust Timing Margin with its bounded stepper; a change affects only the
 next prepared session.
 
 The release gap is one base game frame plus the exact Timing Margin. It is an
