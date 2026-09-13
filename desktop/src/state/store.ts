@@ -108,6 +108,15 @@ export function nextPlaybackPosition(context: PlaybackContext): number | null {
   return position + 1 < context.total ? position + 1 : null;
 }
 
+export function previousPlaybackPosition(
+  context: PlaybackContext,
+  currentUs: number,
+): number | null {
+  const position = context.shuffleTraversal?.position ?? context.currentIndex;
+  if (currentUs > 3_000_000) return position;
+  return position > 0 ? position - 1 : null;
+}
+
 interface PendingPlaybackStart {
   epoch: number;
   preparedId: string;
@@ -2668,9 +2677,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
           return;
         const currentUs =
           playback.snapshot?.session_id === playback.sessionId ? playback.snapshot.current_us : 0;
-        const currentPosition = context.shuffleTraversal?.position ?? context.currentIndex;
-        const targetPosition =
-          currentUs > 3_000_000 ? currentPosition : Math.max(0, currentPosition - 1);
+        const targetPosition = previousPlaybackPosition(context, currentUs);
+        if (targetPosition === null) return;
         await transitionContextPlayback(context, targetPosition, 'restarting', playback.sessionId);
       },
 

@@ -183,7 +183,7 @@ describe('PlayerTransport', () => {
     const { store, setPlayback, currentSong, context } = await setupTransport();
     act(() => setPlayback({ currentSong, context, state: 'idle' }));
 
-    expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
 
@@ -192,8 +192,48 @@ describe('PlayerTransport', () => {
         context: { ...context, total: 2 },
       }),
     );
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
     expect(store.getState().playback.context?.currentIndex).toBe(0);
+  });
+
+  it('enables Previous only when restart or a previous traversal item applies', async () => {
+    const { setPlayback, currentSong, context, sessionId } = await setupTransport();
+    const snapshot = (currentUs: number) => ({
+      session_id: sessionId,
+      seq: 1,
+      state: 'playing' as const,
+      song_id: currentSong.songId,
+      title: currentSong.title,
+      current_us: currentUs,
+      total_us: 10_000_000,
+      pre_roll_remaining_us: 0,
+      focus_state: 'focused' as const,
+      health: 'healthy' as const,
+      input_path_degraded: false,
+      message: null,
+    });
+    act(() =>
+      setPlayback({
+        currentSong,
+        context: { ...context, total: 2 },
+        state: 'playing',
+        sessionId,
+        snapshot: snapshot(3_000_000),
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+
+    act(() => setPlayback({ snapshot: snapshot(3_000_001) }));
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled();
+
+    act(() =>
+      setPlayback({
+        context: { ...context, currentIndex: 1, total: 2 },
+        snapshot: snapshot(3_000_000),
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled();
   });
 
   it('toggles Shuffle accessibly without changing the current song', async () => {

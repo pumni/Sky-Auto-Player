@@ -1,6 +1,11 @@
 import { LoaderCircle, Pause, Play, Shuffle, SkipBack, SkipForward, Square } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
-import { nextPlaybackPosition, playbackIssuePresentation, selectSongById } from '../../state/store';
+import {
+  nextPlaybackPosition,
+  playbackIssuePresentation,
+  previousPlaybackPosition,
+  selectSongById,
+} from '../../state/store';
 import { formatPlayerDuration } from './playerFormatting';
 
 interface PlayerTransportProps {
@@ -36,7 +41,6 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     playback.context !== null &&
     playback.context.valid &&
     playback.context.generation === libraryGeneration;
-  const canPrevious = contextCurrent;
   const canNext = contextCurrent && nextPlaybackPosition(playback.context!) !== null;
   const transportOwnsControls = operationPending || confirmationPending || recoveryPending;
   const primaryPending =
@@ -60,6 +64,8 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     Math.max(0, snapshotCurrent ? (playback.snapshot?.current_us ?? 0) : 0),
     totalUs || 0,
   );
+  const canPrevious =
+    contextCurrent && previousPlaybackPosition(playback.context!, currentUs) !== null;
   const progressLabel = !timelineSongExists
     ? 'Playback progress unavailable until a song is selected'
     : totalUs

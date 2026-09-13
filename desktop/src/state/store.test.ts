@@ -1112,6 +1112,60 @@ describe('desktop store', () => {
     expect(store.getState().playback.context?.currentIndex).toBe(1);
   });
 
+  it('does nothing at the traversal origin before the restart threshold, then restarts after it', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 20_000, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    act(() => store.getState().setShuffleEnabled(true));
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0);
+    const originalSession = store.getState().playback.sessionId;
+    if (!originalSession) throw new Error('mock session did not start');
+    const snapshotAt = (sessionId: string, currentUs: number) => ({
+      session_id: sessionId,
+      seq: 1,
+      state: 'playing' as const,
+      song_id: first.song_id,
+      title: first.title,
+      current_us: currentUs,
+      total_us: first.duration_us ?? 10_000_000,
+      pre_roll_remaining_us: 0,
+      focus_state: 'focused' as const,
+      health: 'healthy' as const,
+      input_path_degraded: false,
+      message: null,
+    });
+
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        snapshot: snapshotAt(originalSession, 3_000_000),
+      },
+    });
+    await act(async () => store.getState().previousPlayback());
+    expect(store.getState().playback.sessionId).toBe(originalSession);
+    expect(store.getState().playback.transportOperation).toBeNull();
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0);
+
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        snapshot: snapshotAt(originalSession, 3_000_001),
+      },
+    });
+    await act(async () => store.getState().previousPlayback());
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+    expect(store.getState().playback.sessionId).not.toBe(originalSession);
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0);
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+  });
+
   it('explicit Stop retires the session without advancing the frozen context', async () => {
     const store = createDesktopStore(
       createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 }),

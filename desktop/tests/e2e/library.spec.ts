@@ -1204,7 +1204,7 @@ test('selected Song Detail has no serious accessibility violations', async ({ pa
 
 test('Player Bar keeps transport geometry stable through its lifecycle', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
-  await page.goto('/');
+  await page.goto('/?mockPlaybackDurationMs=120000');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   const progress = page.getByRole('progressbar', { name: /Playback progress/ });
@@ -1253,6 +1253,7 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
 
   const activePrimary = page.getByRole('button', { name: 'Pause' });
   await expect(activePrimary).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Previous' })).toBeDisabled();
   const activeBox = await activePrimary.boundingBox();
   expect(activeBox).not.toBeNull();
   if (idleBox && activeBox) {
