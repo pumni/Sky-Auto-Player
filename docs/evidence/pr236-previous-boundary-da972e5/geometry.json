@@ -1,0 +1,1102 @@
+[
+  {
+    "name": "idle-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": true,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": true,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": true,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Play",
+        "disabled": true,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 0,
+    "shuffle": "false",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "038EA5775BD3E034F6CA9DF2E276DD33917EFA8106E37B7C858CA5A7A967049C"
+  },
+  {
+    "name": "quick-profile-no-autoplay-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": true,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": true,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": true,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Play",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 0,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "75D7C6471B6AB46D2A2EC46C8054C1D2C11252374C7F2CA5E2973918C8A7839D"
+  },
+  {
+    "name": "playing-traversal-origin-previous-disabled-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": true,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 102837,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "FACBFEE950B7E7CCACD78DEDDAAACCC0DB65F960A92A9C95D00CD6B4450061FC"
+  },
+  {
+    "name": "playing-after-three-seconds-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 3053443,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "A816C1E91E70660A860E5D873793AF0B9E7B2D95BC9D5223B4E72C2C4A931E0C"
+  },
+  {
+    "name": "playing-shuffle-on-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 3154949,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "A816C1E91E70660A860E5D873793AF0B9E7B2D95BC9D5223B4E72C2C4A931E0C"
+  },
+  {
+    "name": "playing-shuffle-off-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 3358515,
+    "shuffle": "false",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "47A163A3850A87DE052F63D88BD1EB556F424440935158288FF9B200570E680C"
+  },
+  {
+    "name": "playing-auto-play-off-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 3561827,
+    "shuffle": "true",
+    "autoPlay": "false",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "BB0D186EFFFC0CB57E265D2630E9E20BFD33A823BB0CEEEF263B46B97FD72B28"
+  },
+  {
+    "name": "playing-auto-play-on-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 3663544,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "55FC0D604A41D90FC0ACECBC5CFDD43039D8622A38EFF6CB8EE0EE6FA60F2F4A"
+  },
+  {
+    "name": "settings-playback-autoplay-on-1200x760",
+    "clientPixels": "1200x760",
+    "pngPixels": "1200x760",
+    "viewport": {
+      "width": 960,
+      "height": 608,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 960,
+      "height": 608
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 375,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": false,
+        "x": 417,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 509,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 547,
+        "y": 532.4000244140625,
+        "width": 34,
+        "height": 34,
+        "centerY": 549.4000244140625
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 459,
+        "y": 528.4000244140625,
+        "width": 42,
+        "height": 42,
+        "centerY": 549.4000244140625
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 848,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 884,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": null
+      },
+      "utility": {
+        "x": 920,
+        "y": 546.4000244140625,
+        "width": 32,
+        "height": 32,
+        "centerY": 562.4000244140625,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 480,
+    "currentUs": 3968396,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 579.4000244140625,
+    "imageSha256": "2891144495DAF45A45434701771DBF4532B5ABFFFE9668DE00E264A87949CFB5"
+  },
+  {
+    "name": "idle-800x560",
+    "clientPixels": "800x560",
+    "pngPixels": "800x560",
+    "viewport": {
+      "width": 640,
+      "height": 448,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 640,
+      "height": 448
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 215,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": true,
+        "x": 256.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": true,
+        "x": 348.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": true,
+        "x": 386.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Play",
+        "disabled": true,
+        "x": 298.9875183105469,
+        "y": 368.3999938964844,
+        "width": 42,
+        "height": 42,
+        "centerY": 389.3999938964844
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 527.9874877929688,
+        "y": 386.3999938964844,
+        "width": 32,
+        "height": 32,
+        "centerY": 402.3999938964844,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 563.9874877929688,
+        "y": 386.3999938964844,
+        "width": 32,
+        "height": 32,
+        "centerY": 402.3999938964844,
+        "pressed": null
+      },
+      "utility": {
+        "x": 599.9874877929688,
+        "y": 386.3999938964844,
+        "width": 32,
+        "height": 32,
+        "centerY": 402.3999938964844,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 319.9875183105469,
+    "currentUs": 0,
+    "shuffle": "false",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 419.3999938964844,
+    "imageSha256": "DC941727EC29181C1F741C39B9C60BC7D988A329367D117F90ECF2920D1D3168"
+  },
+  {
+    "name": "playing-traversal-origin-previous-disabled-800x560",
+    "clientPixels": "800x560",
+    "pngPixels": "800x560",
+    "viewport": {
+      "width": 640,
+      "height": 448,
+      "dpr": 1.25
+    },
+    "document": {
+      "width": 640,
+      "height": 448
+    },
+    "controls": {
+      "Shuffle": {
+        "visible": true,
+        "label": "Shuffle",
+        "disabled": false,
+        "x": 215,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Previous": {
+        "visible": true,
+        "label": "Previous",
+        "disabled": true,
+        "x": 256.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Next": {
+        "visible": true,
+        "label": "Next",
+        "disabled": false,
+        "x": 348.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Stop": {
+        "visible": true,
+        "label": "Stop",
+        "disabled": false,
+        "x": 386.9875183105469,
+        "y": 372.3999938964844,
+        "width": 34,
+        "height": 34,
+        "centerY": 389.3999938964844
+      },
+      "Primary": {
+        "visible": true,
+        "label": "Pause",
+        "disabled": false,
+        "x": 298.9875183105469,
+        "y": 368.3999938964844,
+        "width": 42,
+        "height": 42,
+        "centerY": 389.3999938964844
+      }
+    },
+    "tools": {
+      "autoPlay": {
+        "x": 527.9874877929688,
+        "y": 386.3999938964844,
+        "width": 32,
+        "height": 32,
+        "centerY": 402.3999938964844,
+        "pressed": "true"
+      },
+      "profile": {
+        "x": 563.9874877929688,
+        "y": 386.3999938964844,
+        "width": 32,
+        "height": 32,
+        "centerY": 402.3999938964844,
+        "pressed": null
+      },
+      "utility": {
+        "x": 599.9874877929688,
+        "y": 386.3999938964844,
+        "width": 32,
+        "height": 32,
+        "centerY": 402.3999938964844,
+        "pressed": "false"
+      }
+    },
+    "primaryCenterX": 319.9875183105469,
+    "currentUs": 102681,
+    "shuffle": "true",
+    "autoPlay": "true",
+    "selectedTitle": null,
+    "tauri": true,
+    "timelineTop": 419.3999938964844,
+    "imageSha256": "B7A5714CC9C6B989FAA276929A5DD2E214257851DD597BB8DD4915118CD82135"
+  }
+]
