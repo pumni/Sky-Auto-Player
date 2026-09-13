@@ -486,7 +486,7 @@ jobs:
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.98
 
       - name: JavaScript dependency advisory scan
-        uses: google/osv-scanner-action/osv-scanner-action@06b2ab4348248b456ee06c9e953637f55e03504f # v2.5.0
+        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.0
         with:
           scan-args: |-
             --lockfile=./desktop/bun.lock
