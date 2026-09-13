@@ -4,13 +4,24 @@
 
 Status: **implementation complete; superseded as an active handoff**.
 
+> **UI follow-up (PR #234):** The earlier **Use recommended** Timing Margin UI
+> action described below is superseded. Recommendation is informational only;
+> users adjust Timing Margin through the existing bounded stepper. This
+> presentation change does not alter the separate native
+> `PlaybackDecision::UseRecommended` risk-flow decision.
+>
+> **Recommendation follow-up (PR #234):** Missing, invalid, and out-of-envelope
+> calibration now show the `500 µs` default as the informational fallback.
+> Qualified calibration recommendations remain evidence-based; the earlier
+> `2,300 µs` fallback example below is historical.
+
 The merge defaults accepted by the user are:
 
 - Timing Margin: **500 us**.
 - Late Down tolerance: **2000 us**.
 - Base Hold choices remain **1.0 / 1.25 / 1.5 frames**.
 - The two controls remain independent; the cutoff is never added to authored Hold or Release Gap.
-- Calibration remains advisory only. With the default cutoff and unqualified 300-us transport reserve, the fallback recommendation is **2300 us**.
+- At the original #233 implementation point, the fallback recommendation was **2300 us**; PR #234 changes the unqualified fallback to **500 us** while qualified calibration remains evidence-based.
 
 The remainder of this document preserves the implementation history of the original Timing Margin work. Older examples that mention 800-us margin or a 500-us fixed cutoff are historical design context, not current product defaults. The Late Down work and final closure are documented in `implementation-real-game-input-reliability-late-down-tolerance.md`.
 

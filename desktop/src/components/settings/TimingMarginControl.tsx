@@ -6,6 +6,7 @@ interface TimingMarginControlProps {
   value: number;
   options: PlaybackOptionSets;
   recommendation: TimingMarginRecommendation;
+  density: 'compact' | 'full';
   onChange: (value: number) => Promise<number | null>;
 }
 
@@ -13,6 +14,7 @@ export function TimingMarginControl({
   value,
   options,
   recommendation,
+  density,
   onChange,
 }: TimingMarginControlProps) {
   const min = options.timing_margin_min_us;
@@ -46,8 +48,19 @@ export function TimingMarginControl({
   };
 
   return (
-    <div className="timing-margin-control" aria-label="Timing Margin">
-      <span className="timing-margin-label">Timing Margin</span>
+    <div
+      className={`timing-margin-control timing-margin-control--${density}`}
+      role="group"
+      aria-label="Timing Margin"
+    >
+      <div className="timing-margin-heading">
+        <span className="timing-margin-label">Timing Margin</span>
+        <span className="timing-margin-recommendation">
+          {` · rec. ${recommendation.recommended_timing_margin_us} µs${
+            recommendationWithinRange ? '' : ' · out of range'
+          }`}
+        </span>
+      </div>
       <div className="timing-margin-stepper">
         <button
           className="button timing-margin-step"
@@ -69,29 +82,14 @@ export function TimingMarginControl({
           +
         </button>
       </div>
-      {requestedValue !== recommendation.recommended_timing_margin_us && (
-        <button
-          className="button timing-margin-recommendation"
-          type="button"
-          disabled={!recommendationWithinRange}
-          onClick={() => requestValue(recommendation.recommended_timing_margin_us)}
-        >
-          Use recommended ({recommendation.recommended_timing_margin_us} µs)
-        </button>
+      {density === 'full' && (
+        <>
+          <span className="settings-note timing-margin-source">
+            Source: {timingMarginRecommendationSourceLabel(recommendation.source)}
+          </span>
+          <span className="settings-note">Applies to Hold and Release Gap</span>
+        </>
       )}
-      {!recommendationWithinRange && (
-        <span className="settings-note" role="status">
-          Recommendation exceeds the current Timing Margin range.
-        </span>
-      )}
-      <span className="settings-note">
-        Applies to Hold and Release Gap. Changes take effect in the next prepared session.
-      </span>
-      <span className="settings-note">
-        Recommended sender margin: {recommendation.recommended_timing_margin_us} µs · Source:{' '}
-        {timingMarginRecommendationSourceLabel(recommendation.source)}. This is sender evidence, not
-        proof that the game accepted a note.
-      </span>
     </div>
   );
 }

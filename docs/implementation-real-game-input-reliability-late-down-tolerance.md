@@ -1,5 +1,15 @@
 # Real-game input reliability investigation and user-owned Late Down tolerance
 
+> **UI follow-up (PR #234):** Earlier **Use recommended** Timing Margin UI
+> examples in this handoff are superseded. Recommendation is informational
+> only; users adjust Timing Margin through the existing bounded stepper. This
+> presentation change does not alter the separate native
+> `PlaybackDecision::UseRecommended` risk-flow decision.
+>
+> Missing, invalid, and out-of-envelope calibration now show the `500 µs`
+> default as the informational fallback. Qualified calibration remains
+> evidence-based; older fallback calculations below are historical.
+
 ## Status
 
 Implementation / investigation handoff for Codex on draft PR #233.

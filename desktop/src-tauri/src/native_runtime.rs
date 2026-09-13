@@ -736,6 +736,9 @@ impl NativeCalibrationService {
         };
         let recommendation_available = outcome == CalibrationOutcome::Succeeded;
         let recommended_timing_margin_us = recommendation_available.then(|| {
+            if !applied {
+                return sky_app_core::settings::DEFAULT_TIMING_MARGIN_US;
+            }
             let reserve_us = margin_us.unwrap_or(sky_native_adapters::DEFAULT_TRANSPORT_MARGIN_US);
             let evidence_budget_us = down_late_grace_us.saturating_add(reserve_us);
             evidence_budget_us.div_ceil(sky_app_core::settings::TIMING_MARGIN_STEP_US)
@@ -4918,12 +4921,15 @@ fn timing_margin_recommendation(
     down_late_grace_us: u64,
 ) -> crate::commands::TimingMarginRecommendationDto {
     let resolution = load_calibration_resolution(calibration_cache_path);
-    let evidence_budget = down_late_grace_us
-        .checked_add(resolution.transport_reserve_us)
-        .expect("bounded calibration reserve");
-    let recommended_timing_margin_us = evidence_budget
-        .div_ceil(sky_app_core::settings::TIMING_MARGIN_STEP_US)
-        * sky_app_core::settings::TIMING_MARGIN_STEP_US;
+    let recommended_timing_margin_us = if resolution.qualified {
+        let evidence_budget = down_late_grace_us
+            .checked_add(resolution.transport_reserve_us)
+            .expect("bounded calibration reserve");
+        evidence_budget.div_ceil(sky_app_core::settings::TIMING_MARGIN_STEP_US)
+            * sky_app_core::settings::TIMING_MARGIN_STEP_US
+    } else {
+        sky_app_core::settings::DEFAULT_TIMING_MARGIN_US
+    };
     let source = match resolution.source.as_str() {
         sky_native_adapters::CALIBRATION_MARGIN_SOURCE_DEVICE => "qualified_calibration",
         sky_native_adapters::CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE => {
@@ -5866,9 +5872,10 @@ mod tests {
             assert_eq!(
                 recommendation.recommended_timing_margin_us,
                 match worst {
+                    0 => 800,
                     677 => 1_300,
                     1_900 => 2_500,
-                    _ => 800,
+                    _ => sky_app_core::settings::DEFAULT_TIMING_MARGIN_US,
                 }
             );
             assert_eq!(recommendation.qualified, expected_margin.is_some());
@@ -5895,14 +5902,17 @@ mod tests {
     }
 
     #[test]
-    fn sender_margin_recommendation_tracks_cutoff_without_clamping_to_setting_max() {
+    fn unqualified_margin_recommendation_uses_default_timing_margin() {
         let path = std::env::temp_dir().join(format!(
             "sky-down-tolerance-recommendation-{}-missing.json",
             std::process::id()
         ));
-        for (cutoff, expected) in [(500, 800), (1_000, 1_300), (2_000, 2_300), (5_000, 5_300)] {
+        for cutoff in [500, 1_000, 2_000, 5_000] {
             let recommendation = timing_margin_recommendation(&path, cutoff);
-            assert_eq!(recommendation.recommended_timing_margin_us, expected);
+            assert_eq!(
+                recommendation.recommended_timing_margin_us,
+                sky_app_core::settings::DEFAULT_TIMING_MARGIN_US
+            );
             assert_eq!(recommendation.source, "default_fallback");
         }
     }

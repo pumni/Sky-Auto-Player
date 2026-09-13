@@ -169,6 +169,7 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
         value={defaults.timing_margin_us}
         options={bootstrap.option_sets}
         recommendation={recommendation}
+        density="compact"
         onChange={(value) =>
           patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
             (authoritative) => authoritative?.playback_defaults.timing_margin_us ?? null,
@@ -176,14 +177,6 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
         }
       />
       <dl className="profile-timing-summary">
-        <div>
-          <dt>1 frame</dt>
-          <dd>{(frameUs / 1_000).toFixed(3)} ms</dd>
-        </div>
-        <div>
-          <dt>Base hold</dt>
-          <dd>{(frameBaseHoldUs / 1_000).toFixed(3)} ms</dd>
-        </div>
         <div>
           <dt>Target hold</dt>
           <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
