@@ -6,20 +6,20 @@ they were written; they do not define the current build contract.
 
 ## Current contract
 
-- Production compiler: Rust `1.98.0`, pinned by `rust/rust-toolchain.toml`.
+- Production compiler: Rust `1.98.1`, pinned by `rust/rust-toolchain.toml`.
 - Workspace MSRV: Rust `1.98`, declared by `rust/Cargo.toml`.
 - Edition: Rust `2024`.
 - Target: `x86_64-pc-windows-msvc`.
 - Dependency resolution: `rust/Cargo.lock` is committed and native product
   builds use Cargo's locked mode.
 - Every root-level native build explicitly exports
-  `RUSTUP_TOOLCHAIN=1.98.0`; the desktop, calibration binary, and updater are
+  `RUSTUP_TOOLCHAIN=1.98.1`; the desktop, calibration binary, and updater are
   each built with `--locked`.
 - Native packaged-app provenance checks require the embedded build metadata to
   start with the exact pinned compiler prefix.
 
 The nested toolchain file is discovered reliably when commands run from
-`rust/`. Root-level commands must set `RUSTUP_TOOLCHAIN=1.98.0` explicitly,
+`rust/`. Root-level commands must set `RUSTUP_TOOLCHAIN=1.98.1` explicitly,
 as the CI and release workflows do.
 
 ## Upgrade policy

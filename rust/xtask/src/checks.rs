@@ -2160,7 +2160,7 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "needs: changes",
         "if: needs.changes.outputs.updater_required == 'true'",
         "runs-on: windows-latest",
-        "rustup toolchain install 1.98.0",
+        "rustup toolchain install 1.98.1",
         "bun-version: 1.4.0",
         "bun install --frozen-lockfile",
         "scripts/test_v4_updater_key_rotation.ps1",
@@ -4709,7 +4709,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
     if: needs.changes.outputs.updater_required == 'true'
     runs-on: windows-latest
     steps:
-      - run: rustup toolchain install 1.98.0
+      - run: rustup toolchain install 1.98.1
       - run: bun install --frozen-lockfile
       - run: scripts/test_v4_updater_key_rotation.ps1
   updater_e2e:
