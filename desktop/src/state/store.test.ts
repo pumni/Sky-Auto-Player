@@ -898,12 +898,110 @@ describe('desktop store', () => {
     }
   });
 
-  it('cancels a pending natural advance when the Library search context changes', async () => {
+  it('continues natural Auto Play from its frozen context when Library search changes before finish', async () => {
     const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 5 });
     const preparePlayback = vi.spyOn(bridge, 'preparePlayback');
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
     const first = await startFirstSong(store);
+    const second = rowAt(store, 1);
+    if (!second) throw new Error('mock library is too small');
+    const sessionId = store.getState().playback.sessionId;
+    if (!sessionId) throw new Error('mock session did not start');
+    await act(async () => store.getState().search('Moonlit'));
+    const prepareCount = preparePlayback.mock.calls.length;
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        store.getState().applyEvent({
+          v: 1,
+          name: 'playback.finished',
+          payload: {
+            session_id: sessionId,
+            song_id: first.song_id,
+            outcome: 'finished',
+            total_us: first.duration_us ?? 1_000_000,
+            message: 'Playback finished',
+          },
+        });
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(AUTO_PLAY_HANDOFF_MS + 100));
+
+      expect(store.getState().library.query).toBe('Moonlit');
+      expect(preparePlayback).toHaveBeenCalledTimes(prepareCount + 1);
+      expect(preparePlayback.mock.calls.at(-1)?.[0].songId).toBe(second.song_id);
+      expect(store.getState().playback.context?.query).toBe('');
+      expect(store.getState().playback.transportOperation).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('continues natural Auto Play when Library search changes during handoff', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 5 });
+    const preparePlayback = vi.spyOn(bridge, 'preparePlayback');
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = await startFirstSong(store);
+    const second = rowAt(store, 1);
+    if (!second) throw new Error('mock library is too small');
+    const sessionId = store.getState().playback.sessionId;
+    if (!sessionId) throw new Error('mock session did not start');
+    const prepareCount = preparePlayback.mock.calls.length;
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        store.getState().applyEvent({
+          v: 1,
+          name: 'playback.finished',
+          payload: {
+            session_id: sessionId,
+            song_id: first.song_id,
+            outcome: 'finished',
+            total_us: first.duration_us ?? 1_000_000,
+            message: 'Playback finished',
+          },
+        });
+      });
+      expect(store.getState().playback.transportOperation).toBe('advancing');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120);
+        await store.getState().search('Moonlit');
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(AUTO_PLAY_HANDOFF_MS - 120 + 100));
+
+      expect(store.getState().library.query).toBe('Moonlit');
+      expect(preparePlayback).toHaveBeenCalledTimes(prepareCount + 1);
+      expect(preparePlayback.mock.calls.at(-1)?.[0].songId).toBe(second.song_id);
+      expect(store.getState().playback.context?.query).toBe('');
+      expect(store.getState().playback.transportOperation).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels pending natural Auto Play when playback membership is invalidated', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 5 });
+    const preparePlayback = vi.spyOn(bridge, 'preparePlayback');
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    const second = rowAt(store, 1);
+    if (!first || !second) throw new Error('mock library is too small');
+    await act(async () => store.getState().createPlaylist('Auto Play invalidation'));
+    const playlistId = store.getState().library.source.id;
+    if (store.getState().library.source.kind !== 'playlist')
+      throw new Error('new playlist was not selected');
+    await act(async () => {
+      await store.getState().addSongToPlaylist(playlistId, first.song_id);
+      await store.getState().addSongToPlaylist(playlistId, second.song_id);
+    });
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     const sessionId = store.getState().playback.sessionId;
     if (!sessionId) throw new Error('mock session did not start');
     const prepareCount = preparePlayback.mock.calls.length;
@@ -925,13 +1023,14 @@ describe('desktop store', () => {
       });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(120);
-        await store.getState().search('Moonlit');
+        await store.getState().removeSongFromPlaylist(playlistId, first.song_id);
       });
+      expect(store.getState().playback.context?.valid).toBe(false);
       await act(async () => vi.advanceTimersByTimeAsync(AUTO_PLAY_HANDOFF_MS));
 
-      expect(store.getState().library.query).toBe('Moonlit');
       expect(preparePlayback).toHaveBeenCalledTimes(prepareCount);
       expect(store.getState().playback.transportOperation).toBeNull();
+      expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
     } finally {
       vi.useRealTimers();
     }

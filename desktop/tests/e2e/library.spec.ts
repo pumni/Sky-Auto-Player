@@ -835,6 +835,54 @@ test('Now Playing does not pull a browsed search context back to the playback co
   await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(browsedScrollTop);
 });
 
+test('natural Auto Play continues its frozen context after browsing a search', async ({ page }) => {
+  await page.goto('/?mockPlaybackDurationMs=2000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+
+  const search = page.getByLabel('Search library');
+  await search.fill('Moonlit');
+  await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
+
+  await expect(player.getByRole('status')).toHaveText('Starting next song', { timeout: 10_000 });
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
+    timeout: 10_000,
+  });
+  await expect(search).toHaveValue('Moonlit');
+  await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
+});
+
+test('natural Auto Play keeps a newly browsed Library source during its handoff', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=3000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  const transition = player.getByRole('status');
+  await expect(transition).toHaveText('Starting next song', { timeout: 10_000 });
+  const handoffStartedAt = await page.evaluate(() => performance.now());
+
+  const likedSongs = page.locator('.library-navigator').getByRole('button', {
+    name: 'Liked Songs',
+  });
+  await likedSongs.click();
+  await expect(page.getByRole('heading', { name: 'Liked Songs' })).toBeVisible();
+  const browseElapsedMs = await page.evaluate(
+    (startedAt) => performance.now() - startedAt,
+    handoffStartedAt,
+  );
+  expect(browseElapsedMs).toBeLessThan(450);
+
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
+    timeout: 10_000,
+  });
+  await expect(page.getByRole('heading', { name: 'Liked Songs' })).toBeVisible();
+});
+
 test('browsing and liking another Library row keeps Player Bar identity on Now Playing', async ({
   page,
 }) => {

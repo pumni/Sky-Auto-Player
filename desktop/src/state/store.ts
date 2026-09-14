@@ -1411,8 +1411,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
               current.settings?.auto_play === true &&
               context.generation === current.library.generation &&
               playbackContextIsCurrent(context) &&
-              playbackContextMatchesLibrary(context, current.library) &&
               owner !== null &&
+              owner === context &&
               owner.currentSongId === context.currentSongId &&
               owner.currentIndex === context.currentIndex
             );
