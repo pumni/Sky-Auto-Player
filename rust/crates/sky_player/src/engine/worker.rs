@@ -15,6 +15,8 @@ mod health;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod health;
 mod orchestration;
+#[allow(dead_code)]
+mod physical_timing_guard;
 mod planning;
 mod startup;
 mod timing;
