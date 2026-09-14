@@ -107,57 +107,63 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
             <div className="settings-content">
               {category === 'playback' && (
                 <section className="settings-section" aria-labelledby="playback-settings-title">
-                  <h3 id="playback-settings-title">Playback defaults</h3>
-                  <div className="settings-grid">
-                    <label>
-                      Base Hold
-                      <select
-                        value={defaults.hold_frames}
-                        onChange={(event) =>
-                          patch({ playbackDefaults: { holdFrames: Number(event.target.value) } })
-                        }
-                      >
-                        {bootstrap.option_sets.hold_frames.map((value) => (
-                          <option key={value} value={value}>
-                            {value} {value === 1 ? 'frame' : 'frames'}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                  <h3 id="playback-settings-title">Playback</h3>
+                  <div className="settings-playback-group">
+                    <h4>Behavior</h4>
                     <AutoPlaySwitch
                       checked={settings.auto_play}
                       onChange={(autoPlay) => patch({ autoPlay })}
                     />
-                    <label>
-                      Tempo
-                      <select
-                        value={defaults.tempo_scale}
-                        onChange={(event) =>
-                          patch({ playbackDefaults: { tempoScale: Number(event.target.value) } })
-                        }
-                      >
-                        {bootstrap.option_sets.tempo_scales.map((value) => (
-                          <option key={value} value={value}>
-                            {value}×
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      FPS
-                      <select
-                        value={defaults.fps}
-                        onChange={(event) =>
-                          patch({ playbackDefaults: { fps: Number(event.target.value) } })
-                        }
-                      >
-                        {bootstrap.option_sets.fps.map((value) => (
-                          <option key={value} value={value}>
-                            {value}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                  </div>
+                  <div className="settings-playback-group">
+                    <h4>Playback defaults</h4>
+                    <div className="settings-grid">
+                      <label>
+                        Base Hold
+                        <select
+                          value={defaults.hold_frames}
+                          onChange={(event) =>
+                            patch({ playbackDefaults: { holdFrames: Number(event.target.value) } })
+                          }
+                        >
+                          {bootstrap.option_sets.hold_frames.map((value) => (
+                            <option key={value} value={value}>
+                              {value} {value === 1 ? 'frame' : 'frames'}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Tempo
+                        <select
+                          value={defaults.tempo_scale}
+                          onChange={(event) =>
+                            patch({ playbackDefaults: { tempoScale: Number(event.target.value) } })
+                          }
+                        >
+                          {bootstrap.option_sets.tempo_scales.map((value) => (
+                            <option key={value} value={value}>
+                              {value}×
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        FPS
+                        <select
+                          value={defaults.fps}
+                          onChange={(event) =>
+                            patch({ playbackDefaults: { fps: Number(event.target.value) } })
+                          }
+                        >
+                          {bootstrap.option_sets.fps.map((value) => (
+                            <option key={value} value={value}>
+                              {value}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
                   </div>
                   <div className="settings-timing-group">
                     <h4>Timing</h4>

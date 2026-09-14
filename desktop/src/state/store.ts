@@ -132,6 +132,7 @@ export const MAX_DIAGNOSTIC_EVENTS = 500;
 export const MAX_DIAGNOSTIC_LINE_LENGTH = 4096;
 export const LIBRARY_PAGE_SIZE = 200;
 export const DETAIL_CACHE_LIMIT = 64;
+export const AUTO_PLAY_HANDOFF_MS = 450;
 
 export interface DiagnosticsEventLine {
   seq: number;
@@ -274,6 +275,11 @@ export interface DesktopStore {
   setCalibrationOpen: (open: boolean) => void;
 }
 
+interface PendingAutoAdvanceHandoff {
+  cancel: () => void;
+  isCurrent: (state: DesktopStore) => boolean;
+}
+
 export type PlaybackIssueKind =
   'recoverable_status' | 'playback_failure' | 'target_failure' | 'conflict';
 
@@ -362,6 +368,26 @@ export function selectSongById(
 ) {
   const index = songId ? library.indexById.get(songId) : undefined;
   return index === undefined ? undefined : selectRowAtIndex(library, index);
+}
+
+export function playbackContextMatchesLibrary(
+  context: PlaybackContext | null,
+  library: LibraryState,
+): context is PlaybackContext {
+  return Boolean(
+    context?.valid &&
+    context.generation === library.generation &&
+    context.query === library.query &&
+    context.source.kind === library.searchSource.kind &&
+    context.source.id === library.searchSource.id,
+  );
+}
+
+export function selectNowPlayingSongId(
+  store: Pick<DesktopStore, 'library' | 'playback'>,
+): string | null {
+  const { currentSong } = store.playback;
+  return currentSong?.generation === store.library.generation ? currentSong.songId : null;
 }
 
 function updateLoadedRows(library: LibraryState, updates: readonly SongRow[]): LibraryState {
@@ -453,6 +479,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
   const pageRequests = new Map<string, Promise<SearchResult>>();
   const sourceMembershipRevisions = new Map<string, number>();
   let diagnosticsEventSeq = 0;
+  let autoPlaySettingsRevision = 0;
 
   const sourceKey = (source: LibrarySource) => JSON.stringify(source);
   const pendingStartForSong = (songId: string): PendingPlaybackStart | null => {
@@ -524,7 +551,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
     }
   };
 
-  return create<DesktopStore>((set, get) => {
+  let pendingAutoAdvanceHandoff: PendingAutoAdvanceHandoff | null = null;
+  const store = create<DesktopStore>((set, get) => {
     const invalidatePlaybackMembershipContext = (source: LibrarySource): void => {
       const key = sourceKey(source);
       sourceMembershipRevisions.set(key, (sourceMembershipRevisions.get(key) ?? 0) + 1);
@@ -1350,6 +1378,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       targetPosition: number,
       operation: 'advancing' | 'restarting',
       sessionId: string | null,
+      naturalAutoPlayRevision?: number,
     ) => {
       const epoch = beginOperation(operation);
       if (epoch === null) return;
@@ -1372,6 +1401,44 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (outcome === 'failed') return;
         }
         if (!operationIsCurrent(epoch)) return;
+        if (naturalAutoPlayRevision !== undefined) {
+          const handoffIsCurrent = (current: DesktopStore) => {
+            const owner = current.playback.context;
+            return (
+              operationIsCurrent(epoch) &&
+              current.playback.transportOperation === 'advancing' &&
+              autoPlaySettingsRevision === naturalAutoPlayRevision &&
+              current.settings?.auto_play === true &&
+              context.generation === current.library.generation &&
+              playbackContextIsCurrent(context) &&
+              playbackContextMatchesLibrary(context, current.library) &&
+              owner !== null &&
+              owner.currentSongId === context.currentSongId &&
+              owner.currentIndex === context.currentIndex
+            );
+          };
+          const handoffElapsed = await new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => {
+              if (pendingAutoAdvanceHandoff?.cancel === cancel) {
+                pendingAutoAdvanceHandoff = null;
+              }
+              resolve(true);
+            }, AUTO_PLAY_HANDOFF_MS);
+            const cancel = () => {
+              clearTimeout(timer);
+              if (pendingAutoAdvanceHandoff?.cancel === cancel) {
+                pendingAutoAdvanceHandoff = null;
+              }
+              resolve(false);
+            };
+            pendingAutoAdvanceHandoff = { cancel, isCurrent: handoffIsCurrent };
+          });
+          if (!operationIsCurrent(epoch)) return;
+          if (!handoffElapsed || !handoffIsCurrent(get())) {
+            finishOperation(epoch);
+            return;
+          }
+        }
         const targetIndex = playbackContextIndexAt(context, targetPosition);
         if (targetIndex === null) throw new Error('There is no next playback-context item.');
         const row = await resolveContextRow(context, targetIndex);
@@ -1729,7 +1796,13 @@ export function createDesktopStore(bridge: DesktopBridge) {
             },
           });
           if (autoAdvance && context && nextPosition !== null) {
-            void transitionContextPlayback(context, nextPosition, 'advancing', null);
+            void transitionContextPlayback(
+              context,
+              nextPosition,
+              'advancing',
+              null,
+              autoPlaySettingsRevision,
+            );
           }
         } else if (event.name === 'playback.failed') {
           const current = get().playback;
@@ -2333,6 +2406,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
           try {
             const settings = await bridge.patchSettings(patch);
             const playback = get().playback;
+            if (patch.autoPlay !== undefined && patch.autoPlay !== get().settings?.auto_play) {
+              autoPlaySettingsRevision += 1;
+            }
             const autoPlayOnly =
               patch.autoPlay !== undefined &&
               patch.theme === undefined &&
@@ -2844,6 +2920,11 @@ export function createDesktopStore(bridge: DesktopBridge) {
       },
     };
   });
+  store.subscribe((state) => {
+    const pending = pendingAutoAdvanceHandoff;
+    if (pending && !pending.isCurrent(state)) pending.cancel();
+  });
+  return store;
 }
 
 export type DesktopStoreHook = ReturnType<typeof createDesktopStore>;

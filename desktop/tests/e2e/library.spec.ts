@@ -717,11 +717,122 @@ test('natural finish retires the old session and starts the next context song', 
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  const transition = player.getByRole('status');
+  await expect(transition).toHaveText('Starting next song', { timeout: 12_000 });
+  const handoffObservedAt = await page.evaluate(() => performance.now());
+  const playingRow = page.getByRole('row', { name: /Blue Bird/ });
+  await expect(playingRow).toHaveAttribute('aria-current', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
     timeout: 12_000,
   });
+  const handoffElapsedMs = await page.evaluate(
+    (startedAt) => performance.now() - startedAt,
+    handoffObservedAt,
+  );
+  expect(handoffElapsedMs).toBeGreaterThanOrEqual(300);
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Candle Run/ })).toHaveAttribute(
+    'aria-current',
+    'true',
+  );
   await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
+});
+
+test('Now Playing stays separate from selection and follows an offscreen Auto Play successor', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const list = page.locator('.track-table');
+  await list.evaluate((element) => {
+    element.scrollTop = 248 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  const selectedRow = page.getByRole('row', { name: /Song 249/ });
+  await expect(selectedRow).toBeVisible();
+  await selectedRow.click();
+  const selectedGeometry = await selectedRow.boundingBox();
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(selectedRow).toHaveAttribute('aria-selected', 'true');
+  await expect(selectedRow).toHaveAttribute('aria-current', 'true');
+  const playingGeometry = await selectedRow.boundingBox();
+  expect(selectedGeometry).not.toBeNull();
+  expect(playingGeometry).not.toBeNull();
+  if (selectedGeometry && playingGeometry) {
+    expect(Math.abs(playingGeometry.height - selectedGeometry.height)).toBeLessThanOrEqual(0.5);
+  }
+
+  await list.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await player.getByRole('button', { name: 'Next' }).click();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 250');
+
+  const nowPlayingRow = page.getByRole('row', { name: /Song 250/ });
+  await expect(nowPlayingRow).toHaveAttribute('aria-current', 'true');
+  await expect(nowPlayingRow).toHaveAttribute('aria-selected', 'false');
+  await expect(nowPlayingRow).toBeInViewport();
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(200 * 46);
+  await expect(selectedRow).toHaveAttribute('aria-selected', 'true');
+});
+
+test('natural Auto Play follows an offscreen successor without changing the selected row', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.goto('/?mockPlaybackDurationMs=850&mockStartDelayMs=10');
+  const list = page.locator('.track-table');
+  await list.evaluate((element) => {
+    element.scrollTop = 248 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  const selectedRow = page.getByRole('row', { name: /Song 249/ });
+  await expect(selectedRow).toBeVisible();
+  await selectedRow.click();
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(selectedRow).toHaveAttribute('aria-current', 'true');
+
+  await list.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await expect(player.getByRole('status')).toHaveText('Starting next song', { timeout: 5_000 });
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 250', {
+    timeout: 5_000,
+  });
+
+  const nowPlayingRow = page.getByRole('row', { name: /Song 250/ });
+  await expect(nowPlayingRow).toHaveAttribute('aria-current', 'true');
+  await expect(nowPlayingRow).toHaveAttribute('aria-selected', 'false');
+  await expect(nowPlayingRow).toBeInViewport();
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(200 * 46);
+});
+
+test('Now Playing does not pull a browsed search context back to the playback context', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+
+  await page.getByLabel('Search library').fill('Song');
+  const list = page.locator('.track-table');
+  await expect(page.getByText(/songs$/)).toBeVisible();
+  await list.evaluate((element) => {
+    element.scrollTop = 2800;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  const browsedScrollTop = await list.evaluate((element) => element.scrollTop);
+  await player.getByRole('button', { name: 'Next' }).click();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(browsedScrollTop);
 });
 
 test('browsing and liking another Library row keeps Player Bar identity on Now Playing', async ({
@@ -1290,7 +1401,13 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await settingsButton.click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Behavior' })).toBeVisible();
   await expect(dialog).toContainText('Playback defaults');
+  const autoPlay = dialog.getByRole('switch', { name: 'Auto Play' });
+  await expect(autoPlay).toContainText(
+    'Automatically continue to the next song after the current song finishes successfully.',
+  );
+  await expect(dialog.locator('.settings-grid').getByRole('switch')).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: 'Playback' })).toHaveAttribute(
     'aria-current',
     'page',
@@ -1377,6 +1494,38 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(settingsButton).toBeFocused();
+});
+
+test('Playback Behavior stays usable in a compact Settings viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 448 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  const row = dialog.getByRole('switch', { name: 'Auto Play' });
+  await expect(row).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Playback defaults' })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Timing' })).toBeVisible();
+  const geometry = await dialog.evaluate((element) => {
+    const content = element.querySelector<HTMLElement>('.settings-content');
+    const switchRow = element.querySelector<HTMLElement>('.auto-play-switch');
+    if (!content || !switchRow) return null;
+    const contentBox = content.getBoundingClientRect();
+    const rowBox = switchRow.getBoundingClientRect();
+    return {
+      contentClientWidth: content.clientWidth,
+      contentScrollWidth: content.scrollWidth,
+      rowLeft: rowBox.left,
+      rowRight: rowBox.right,
+      contentLeft: contentBox.left,
+      contentRight: contentBox.right,
+    };
+  });
+  expect(geometry).not.toBeNull();
+  if (geometry) {
+    expect(geometry.contentScrollWidth).toBeLessThanOrEqual(geometry.contentClientWidth);
+    expect(geometry.rowLeft).toBeGreaterThanOrEqual(geometry.contentLeft);
+    expect(geometry.rowRight).toBeLessThanOrEqual(geometry.contentRight);
+  }
 });
 
 test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
