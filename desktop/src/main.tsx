@@ -23,9 +23,13 @@ const isTauri =
   'isTauri' in window ||
   window.location.protocol === 'tauri:' ||
   window.location.hostname === 'tauri.localhost';
-const mockDuration = Number(
-  new URLSearchParams(window.location.search).get('mockPlaybackDurationMs'),
-);
+const mockDurations = (
+  new URLSearchParams(window.location.search).get('mockPlaybackDurationMs') ?? ''
+)
+  .split(',')
+  .map((value) => Number(value.trim()))
+  .filter((value) => Number.isFinite(value) && value > 0)
+  .map((value) => Math.min(value, 120_000));
 const mockParams = new URLSearchParams(window.location.search);
 const mockStartDelay = Number(mockParams.get('mockStartDelayMs'));
 const mockStartResponseDelay = Number(mockParams.get('mockStartResponseDelayMs'));
@@ -51,9 +55,14 @@ const mockStartFailures: Record<string, { code: string; message: string }> = {
 const bridge = isTauri
   ? createTauriBridge()
   : createMockBridge({
-      ...(Number.isFinite(mockDuration) && mockDuration > 0
-        ? { playbackDurationMs: Math.min(mockDuration, 120_000) }
-        : {}),
+      ...(mockDurations.length === 1 && mockDurations[0] !== undefined
+        ? { playbackDurationMs: mockDurations[0] }
+        : mockDurations.length > 1 && mockDurations[0] !== undefined
+          ? {
+              playbackDurationMs: mockDurations[0],
+              playbackDurationsMs: mockDurations,
+            }
+          : {}),
       ...(Number.isFinite(mockStartDelay) && mockStartDelay > 0
         ? { startDelayMs: Math.min(mockStartDelay, 15_000) }
         : {}),

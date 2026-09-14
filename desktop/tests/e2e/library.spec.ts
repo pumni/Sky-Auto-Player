@@ -712,7 +712,7 @@ test('Player transport geometry stays fixed when song timing labels appear', asy
 test('natural finish retires the old session and starts the next context song', async ({
   page,
 }) => {
-  await page.goto('/?mockPlaybackDurationMs=5000&mockStartDelayMs=20');
+  await page.goto('/?mockPlaybackDurationMs=2500,120000&mockStartDelayMs=20');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
@@ -724,10 +724,11 @@ test('natural finish retires the old session and starts the next context song', 
   await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
     timeout: 12_000,
   });
-  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible({ timeout: 12_000 });
   await expect(page.getByRole('row', { name: /Candle Run/ })).toHaveAttribute(
     'aria-current',
     'true',
+    { timeout: 12_000 },
   );
   await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
 });
@@ -777,7 +778,7 @@ test('natural Auto Play follows an offscreen successor without changing the sele
   page,
 }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
-  await page.goto('/?mockPlaybackDurationMs=850&mockStartDelayMs=10');
+  await page.goto('/?mockPlaybackDurationMs=850,120000&mockStartDelayMs=10');
   const list = page.locator('.track-table');
   await list.evaluate((element) => {
     element.scrollTop = 248 * 46;

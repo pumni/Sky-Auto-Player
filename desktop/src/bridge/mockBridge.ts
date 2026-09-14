@@ -114,10 +114,14 @@ export interface MockBridgeOptions {
   startFailure?: { code: string; message: string };
   emitSnapshots?: boolean;
   dropPlaybackStartConfirmation?: boolean;
+  playbackDurationsMs?: number[];
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
-  const playbackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
+  const defaultPlaybackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
+  const playbackDurationsMs = options.playbackDurationsMs?.map((duration) =>
+    Math.max(50, duration),
+  );
   const startDelayMs = Math.max(0, options.startDelayMs ?? 30);
   let statusQueryFailures = Math.max(0, Math.floor(options.statusQueryFailures ?? 0));
   let generation = 1;
@@ -131,6 +135,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     title: string;
     config: PlaybackConfig;
     totalUs: number;
+    playbackDurationMs: number;
     startedAt: number;
     pausedAt: number | null;
     pausedTotalMs: number;
@@ -290,10 +295,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         (session.state === 'starting' ? startDelayMs : 0),
     );
   const emitPlaybackSnapshot = (session: NonNullable<typeof activeSession>) => {
-    const elapsedMs = Math.min(playbackDurationMs, playbackElapsedMs(session));
+    const elapsedMs = Math.min(session.playbackDurationMs, playbackElapsedMs(session));
     const currentUs = Math.min(
       session.totalUs,
-      Math.floor((elapsedMs / playbackDurationMs) * session.totalUs),
+      Math.floor((elapsedMs / session.playbackDurationMs) * session.totalUs),
     );
     emit({
       v: 1,
@@ -759,6 +764,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       if (options.neverCreateSession) {
         return new Promise(() => undefined);
       }
+      const sessionDurationMs =
+        playbackDurationsMs && playbackSessionSequence < playbackDurationsMs.length
+          ? (playbackDurationsMs[playbackSessionSequence] ?? defaultPlaybackDurationMs)
+          : defaultPlaybackDurationMs;
       playbackSessionSequence += 1;
       const session = {
         sessionId: playbackSessionSequence.toString(16).padStart(32, '0'),
@@ -767,6 +776,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         title: song.title,
         config,
         totalUs: song.duration_us ?? 1_000_000,
+        playbackDurationMs: sessionDurationMs,
         startedAt: Date.now(),
         pausedAt: null,
         pausedTotalMs: 0,
@@ -787,7 +797,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         ) {
           emitPlaybackSnapshot(session);
         }
-        if (session.state === 'playing' && playbackElapsedMs(session) >= playbackDurationMs) {
+        if (
+          session.state === 'playing' &&
+          playbackElapsedMs(session) >= session.playbackDurationMs
+        ) {
           retirePlaybackSession(session, 'finished', 'Playback finished');
         }
       }, 40);

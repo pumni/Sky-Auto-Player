@@ -40,7 +40,7 @@ function stopServer() {
 try {
   await waitForServer();
   const result = await new Promise((resolve, reject) => {
-    const runner = spawn(process.execPath, [playwrightCli, 'test'], {
+    const runner = spawn(process.execPath, [playwrightCli, 'test', ...process.argv.slice(2)], {
       cwd: desktopRoot,
       stdio: 'inherit',
       windowsHide: true,
