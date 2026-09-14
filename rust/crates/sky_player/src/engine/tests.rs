@@ -41,8 +41,8 @@ fn test_session_options(
         profile: DispatchProfile::StrictTimingDiagnostic,
         timing: TimingOptions {
             game_fps: 60,
-            min_hold_us: 0,
-            min_release_gap_us: 16_667,
+            min_hold_us: 500,
+            min_release_gap_us: 17_167,
             frame_us: 16_667,
             frame_base_hold_us: 0,
             timing_margin_us: 500,
@@ -75,6 +75,20 @@ fn test_session_options(
         restore_race_hook: None,
         timer_lifecycle_context: None,
     }
+}
+
+fn set_test_timing_margin(options: &mut NativeSessionOptions, timing_margin_us: u64) {
+    options.timing.timing_margin_us = timing_margin_us;
+    options.timing.min_hold_us = options
+        .timing
+        .frame_base_hold_us
+        .checked_add(timing_margin_us)
+        .expect("test hold timing equation");
+    options.timing.min_release_gap_us = options
+        .timing
+        .frame_us
+        .checked_add(timing_margin_us)
+        .expect("test release timing equation");
 }
 
 fn start_with_test_wall_clock_slack(session: &NativeDispatchSession) {
@@ -4486,6 +4500,56 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
 }
 
 #[test]
+fn native_timing_contract_rejects_mismatched_hold_and_release_floors() {
+    let schedule = startup_boundary_schedule();
+    let backend = || BackendConfig::Mock {
+        latency_base_us: 0,
+        latency_per_key_us: 0,
+        fault_script: FaultInjectionScript::none(),
+    };
+    let mut hold_mismatch = test_session_options(schedule.clone(), 1, backend());
+    hold_mismatch.timing.min_hold_us += 1;
+    let hold_error = NativeDispatchSession::new(hold_mismatch)
+        .err()
+        .expect("native admission must reject a mismatched hold floor");
+    assert!(hold_error.contains("min_hold_us"), "{hold_error}");
+
+    let mut release_mismatch = test_session_options(schedule, 1, backend());
+    release_mismatch.timing.min_release_gap_us += 1;
+    let release_error = NativeDispatchSession::new(release_mismatch)
+        .err()
+        .expect("native admission must reject a mismatched release floor");
+    assert!(
+        release_error.contains("min_release_gap_us"),
+        "{release_error}"
+    );
+}
+
+#[test]
+fn native_timing_contract_rejects_checked_add_overflow() {
+    let backend = || BackendConfig::Mock {
+        latency_base_us: 0,
+        latency_per_key_us: 0,
+        fault_script: FaultInjectionScript::none(),
+    };
+    let mut hold_overflow = test_session_options(startup_boundary_schedule(), 1, backend());
+    hold_overflow.timing.frame_base_hold_us = u64::MAX;
+    hold_overflow.timing.min_hold_us = u64::MAX;
+    let hold_error = NativeDispatchSession::new(hold_overflow)
+        .err()
+        .expect("native admission must reject hold equation overflow");
+    assert!(hold_error.contains("frame_base_hold_us + timing_margin_us"));
+
+    let mut release_overflow = test_session_options(startup_boundary_schedule(), 1, backend());
+    release_overflow.timing.frame_us = u64::MAX;
+    release_overflow.timing.min_release_gap_us = u64::MAX;
+    let release_error = NativeDispatchSession::new(release_overflow)
+        .err()
+        .expect("native admission must reject release equation overflow");
+    assert!(release_error.contains("frame_us + timing_margin_us"));
+}
+
+#[test]
 fn native_session_rejects_deterministically_infeasible_schedule_before_worker_start() {
     let actions = vec![
         KeyActionInput {
@@ -4521,7 +4585,8 @@ fn native_session_rejects_deterministically_infeasible_schedule_before_worker_st
             fault_script: FaultInjectionScript::none(),
         },
     );
-    options.timing.min_hold_us = 300;
+    options.timing.frame_base_hold_us = 300;
+    set_test_timing_margin(&mut options, 0);
     let result = NativeDispatchSession::new(options);
     assert!(matches!(
         result,
@@ -4718,14 +4783,14 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
-            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000 + 16_667,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000 + 17_167,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "same-key-chord-after-release-gap".to_string().into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
-            scheduled_us: TEST_AUTHORED_EPOCH_US + 2_000 + 16_667,
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 2_000 + 17_167,
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "cleanup".to_string().into(),
         },
@@ -4744,7 +4809,7 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
             fault_script: FaultInjectionScript::none(),
         },
     );
-    options.timing.min_hold_us = 300;
+    set_test_timing_margin(&mut options, 500);
     let session = NativeDispatchSession::new(options).expect("authored-feasible admission");
 
     start_with_test_wall_clock_slack(&session);
@@ -4830,7 +4895,7 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
     // consume the scripted packet index first. Exact cutoff behavior is
     // covered by deterministic dispatch tests; the product default is supplied
     // by the application/session policy, not this test-only override.
-    options.timing.timing_margin_us = 20_000;
+    set_test_timing_margin(&mut options, 20_000);
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
     start_with_test_wall_clock_slack(&session);
@@ -4911,7 +4976,7 @@ fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
     // Windows test runner enough scheduling margin that host preemption does
     // not turn the telemetry assertion into an unrelated startup deadline
     // failure.  Production configuration remains unchanged.
-    options.timing.timing_margin_us = 20_000;
+    set_test_timing_margin(&mut options, 20_000);
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
     start_with_test_wall_clock_slack(&session);

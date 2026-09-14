@@ -1439,6 +1439,17 @@ impl ProductionDispatchTestHarness {
         )
     }
 
+    pub fn physical_wait_target_for_test(
+        &self,
+        plan: &NextDispatchPlan,
+    ) -> Result<Option<QpcTicks>, String> {
+        physical_wait_target_for_plan(plan, &self.runtime)
+    }
+
+    pub fn physical_window_expired_boundaries_for_test(&self) -> u64 {
+        self.local_metrics.physical_window_expired_boundaries
+    }
+
     /// Classify a frozen Down plan one QPC tick before its target without the
     /// test-only direct-boundary authorization shortcut. This exercises the
     /// production future-observation branch against the current runtime state.

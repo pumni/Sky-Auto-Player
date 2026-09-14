@@ -215,6 +215,7 @@ fn commit_down_send_outcome(
                     return DispatchStep::TerminateStatic("authorized Down classified as missed");
                 }
             },
+            runtime.pending_up_recovery.is_some(),
             observer,
         );
     }
@@ -637,6 +638,7 @@ fn record_down_send_outcome(
             observed_qpc,
             effective_now_ticks,
             DownMissReason::DownExpiredBeforeSend,
+            false,
             observer,
         );
     }

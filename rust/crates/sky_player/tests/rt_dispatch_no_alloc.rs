@@ -551,6 +551,68 @@ fn production_mixed_hard_path_no_alloc() {
     assert_eq!(harness.chord_integrity_lost_count(), 0);
 }
 
+/// Mixed Down classification at its authored boundary and the later prepared
+/// Up-prefix recovery remain allocation-free across their separate floors.
+#[test]
+fn production_infeasible_mixed_recovery_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let packets = harness.configure_packet_capture();
+
+    let first = harness.plan_current_dispatch();
+    let first_target = harness
+        .physical_target_qpc_for_test(&first)
+        .expect("first Down target");
+    let before_first_target = QpcTicks::from_raw(
+        first_target
+            .as_u64()
+            .checked_sub(1)
+            .expect("first Down future tick"),
+    );
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&first, before_first_target),
+        DispatchStep::NoWork
+    ));
+    let first_step = harness.dispatch_at_qpc_for_test(&first, first_target);
+    assert!(matches!(first_step, DispatchStep::Dispatched));
+
+    enable_counting();
+    let mixed = harness.plan_current_dispatch();
+    let mixed_target = harness
+        .physical_target_qpc_for_test(&mixed)
+        .expect("mixed authored target");
+    let before_mixed_target = QpcTicks::from_raw(
+        mixed_target
+            .as_u64()
+            .checked_sub(1)
+            .expect("mixed future tick"),
+    );
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&mixed, before_mixed_target),
+        DispatchStep::NoWork
+    ));
+    let classify_step = harness.dispatch_at_qpc_for_test(&mixed, mixed_target);
+    assert_eq!(harness.physical_window_expired_boundaries_for_test(), 1);
+    let recovery_target = harness
+        .physical_wait_target_for_test(&mixed)
+        .expect("pending Up recovery target")
+        .expect("mixed Up floor");
+    let recovery_step = harness.dispatch_at_qpc_for_test(&mixed, recovery_target);
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "infeasible mixed recovery made {allocs} allocation(s)"
+    );
+    assert!(matches!(classify_step, DispatchStep::NoWork));
+    assert!(matches!(recovery_step, DispatchStep::Dispatched));
+    assert_eq!(harness.physical_window_expired_boundaries_for_test(), 1);
+    assert_eq!(
+        packets.lock().expect("packet capture").as_slice(),
+        &[PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
+    );
+}
+
 #[test]
 fn production_deadline_handoff_down_no_alloc() {
     let _lock = TEST_LOCK.lock();
@@ -755,14 +817,26 @@ fn production_mixed_missed_down_recovery_no_alloc() {
     harness.configure_packet_capture();
 
     enable_counting();
-    let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&overdue);
+    let classify_step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&overdue);
+    let recovery_target = harness
+        .physical_wait_target_for_test(&overdue)
+        .expect("pending mixed recovery target")
+        .expect("mixed Up floor");
+    let recovery_step = harness.dispatch_at_qpc_for_test(&overdue, recovery_target);
     let allocs = disable_counting();
 
     assert_eq!(
         allocs, 0,
         "mixed missed recovery allocated {allocs} time(s)"
     );
-    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
+    assert!(
+        matches!(classify_step, DispatchStep::NoWork),
+        "step={classify_step:?}"
+    );
+    assert!(
+        matches!(recovery_step, DispatchStep::Dispatched),
+        "step={recovery_step:?}"
+    );
 }
 
 #[test]

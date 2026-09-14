@@ -49,8 +49,8 @@ pub(crate) use dispatch::ObserverRuntime;
 pub(crate) use dispatch::drain_one_observer;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 pub(super) use dispatch::{
-    AuthoredPacketContext, DispatchStep, DownBoundaryState, PhysicalBoundaryStamp,
-    dispatch_authored_packet, dispatch_stale_packet,
+    AuthoredPacketContext, DispatchStep, DownBoundaryState, PendingUpRecovery,
+    PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
@@ -276,6 +276,9 @@ pub(crate) struct WorkerRuntime {
     /// Musical Down admission state. Up-only safety sends never mutate this
     /// state; authorization is tied to the exact frozen authored boundary.
     pub(crate) down_boundary_state: DownBoundaryState,
+    /// A missed mixed boundary whose prepared Up-prefix remains pending until
+    /// its physical hold floor. This does not authorize its discarded Down.
+    pub(crate) pending_up_recovery: Option<PendingUpRecovery>,
     future_physical_wait_target_qpc: Option<QpcTicks>,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,

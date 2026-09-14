@@ -9,8 +9,8 @@ use super::{
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_win32::input::TrackedKeyState;
 
-#[derive(Clone, Copy)]
-pub(super) enum DownMissReason {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DownMissReason {
     UnobservedBacklog,
     PhysicalWindowExpired,
     DownExpiredBeforeSend,
@@ -111,21 +111,15 @@ pub(super) fn record_missed_down_classification(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn recover_missed_down_boundary(
+pub(crate) fn classify_missed_down_boundary(
     view: &AuthoredBatchView,
-    config: &WorkerConfig,
-    runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    backend: &mut TrackedKeyState,
-    coordinator: &mut RuntimeDispatchCoordinator,
-    clock_state: &mut PlaybackClockState,
+    observer: Option<&PendingObservationQueue>,
+    wake_ticks: sky_dispatch_core::time::TimelineTicks,
     physical_target_qpc: QpcTicks,
     observed_qpc: QpcTicks,
-    wake_ticks: sky_dispatch_core::time::TimelineTicks,
     reason: DownMissReason,
-    observer: Option<&PendingObservationQueue>,
-) -> DispatchStep {
+) {
     queue_down_miss_observation(
         view,
         local_metrics,
@@ -143,6 +137,35 @@ pub(super) fn recover_missed_down_boundary(
         observed_qpc,
         reason,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn recover_missed_down_boundary(
+    view: &AuthoredBatchView,
+    config: &WorkerConfig,
+    runtime: &mut WorkerRuntime,
+    local_metrics: &mut WorkerMetricsLocal,
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    clock_state: &mut PlaybackClockState,
+    physical_target_qpc: QpcTicks,
+    observed_qpc: QpcTicks,
+    wake_ticks: sky_dispatch_core::time::TimelineTicks,
+    reason: DownMissReason,
+    already_classified: bool,
+    observer: Option<&PendingObservationQueue>,
+) -> DispatchStep {
+    if !already_classified {
+        classify_missed_down_boundary(
+            view,
+            local_metrics,
+            observer,
+            wake_ticks,
+            physical_target_qpc,
+            observed_qpc,
+            reason,
+        );
+    }
     if config.timing.strict_timing {
         return DispatchStep::TerminateStatic(match reason {
             DownMissReason::UnobservedBacklog => "down_unobserved_backlog",

@@ -21,6 +21,8 @@ mod observer_wake;
 mod recovery;
 pub(crate) mod timing;
 
+pub(crate) use recovery::{DownMissReason, classify_missed_down_boundary};
+
 /// Outcome of one authored packet dispatch step.
 #[derive(Debug)]
 pub enum DispatchStep {
@@ -81,6 +83,33 @@ impl DownBoundaryAdmission {
     #[inline]
     pub(crate) const fn is_missed(self) -> bool {
         matches!(self, Self::UnobservedBacklog | Self::PhysicalWindowExpired)
+    }
+}
+
+/// A Down miss that has already been classified at its authored boundary,
+/// with only its prepared Up-prefix still waiting for the physical hold floor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PendingUpRecovery {
+    pub(crate) boundary: PhysicalBoundaryStamp,
+    pub(crate) admission: DownBoundaryAdmission,
+}
+
+impl PendingUpRecovery {
+    #[inline]
+    pub(crate) fn matches_authored_boundary(self, boundary: PhysicalBoundaryStamp) -> bool {
+        self.boundary.same_authored_boundary(boundary)
+    }
+}
+
+impl PhysicalBoundaryStamp {
+    #[inline]
+    pub(crate) fn same_authored_boundary(self, other: Self) -> bool {
+        self.first_batch_index == other.first_batch_index
+            && self.packet_index == other.packet_index
+            && self.packet_batch_count == other.packet_batch_count
+            && self.source_action_index == other.source_action_index
+            && self.up_mask == other.up_mask
+            && self.down_mask == other.down_mask
     }
 }
 

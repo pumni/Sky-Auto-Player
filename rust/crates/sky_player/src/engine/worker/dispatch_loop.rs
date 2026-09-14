@@ -61,12 +61,18 @@ pub(crate) fn physical_wait_target_for_plan(
     let window = guard
         .query(physical_target_qpc, masks.up_mask, masks.down_mask)
         .map_err(|error| format!("physical timing window query failed: {error:?}"))?;
-    let wait_target = if masks.down_mask != 0
+    let boundary = physical_boundary_stamp(plan, physical_target_qpc);
+    let wait_target = if let Some(pending) = runtime.pending_up_recovery {
+        if !boundary.is_some_and(|boundary| pending.matches_authored_boundary(boundary)) {
+            return Err("pending Up recovery no longer matches its authored boundary".to_string());
+        }
+        window.musical_up_not_before_qpc
+    } else if masks.down_mask != 0
         && window
             .latest_down_start_qpc
             .is_some_and(|latest| window.packet_not_before_qpc > latest)
     {
-        core::cmp::max(window.authored_target_qpc, window.musical_up_not_before_qpc)
+        window.authored_target_qpc
     } else {
         window.packet_not_before_qpc
     };
@@ -226,6 +232,7 @@ pub(crate) fn dispatch_due_from_plan(
         Ok(None) => {
             if candidate_target_qpc > now_ticks
                 && let Some(boundary) = physical_boundary_stamp(plan, candidate_target_qpc)
+                && runtime.pending_up_recovery.is_none()
                 && runtime.down_boundary_state.awaiting_future()
             {
                 runtime.observe_future_down_boundary(boundary);
@@ -252,12 +259,28 @@ pub(crate) fn dispatch_due_from_plan(
             ));
         }
     };
-    let physical_wait_target = if masks.down_mask != 0
+    let boundary = physical_boundary_stamp(plan, physical_target_qpc);
+    let pending_up_recovery = runtime.pending_up_recovery;
+    if let Some(pending) = pending_up_recovery {
+        if !boundary.is_some_and(|boundary| pending.matches_authored_boundary(boundary)) {
+            return super::DispatchStep::TerminateStatic(
+                "pending Up recovery no longer matches its authored boundary",
+            );
+        }
+        if !runtime.down_boundary_state.awaiting_future() {
+            return super::DispatchStep::TerminateStatic(
+                "pending Up recovery retained Down authorization",
+            );
+        }
+    }
+    let down_window_infeasible = masks.down_mask != 0
         && window
             .latest_down_start_qpc
-            .is_some_and(|latest| window.packet_not_before_qpc > latest)
-    {
-        core::cmp::max(window.authored_target_qpc, window.musical_up_not_before_qpc)
+            .is_some_and(|latest| window.packet_not_before_qpc > latest);
+    let physical_wait_target = if pending_up_recovery.is_some() {
+        window.musical_up_not_before_qpc
+    } else if down_window_infeasible {
+        window.authored_target_qpc
     } else {
         window.packet_not_before_qpc
     };
@@ -265,10 +288,10 @@ pub(crate) fn dispatch_due_from_plan(
         return super::DispatchStep::NoWork;
     }
 
-    let boundary = physical_boundary_stamp(plan, physical_target_qpc);
     #[cfg(any(test, feature = "test-support"))]
     if test_physical_target_qpc.is_some()
         && let Some(boundary_stamp) = boundary
+        && pending_up_recovery.is_none()
         && runtime.down_boundary_state.awaiting_future()
     {
         // The harness passes an exact frozen target as a synthetic future
@@ -277,7 +300,9 @@ pub(crate) fn dispatch_due_from_plan(
         runtime.observe_future_down_boundary(boundary_stamp);
     }
     let latest_down_start_qpc = window.latest_down_start_qpc;
-    let down_admission = if let Some(boundary) = boundary {
+    let down_admission = if let Some(pending) = pending_up_recovery {
+        pending.admission
+    } else if let Some(boundary) = boundary {
         let admission = if runtime.authorize_down_boundary(boundary) {
             local_metrics.deadline_authorization_reuses = local_metrics
                 .deadline_authorization_reuses
@@ -304,7 +329,46 @@ pub(crate) fn dispatch_due_from_plan(
     } else {
         DownBoundaryAdmission::Authorized
     };
-    super::dispatch_authored_packet(
+    if pending_up_recovery.is_none()
+        && down_admission.is_missed()
+        && masks.up_mask != 0
+        && !config.timing.strict_timing
+        && window.musical_up_not_before_qpc > now_ticks
+    {
+        let Some(boundary) = boundary else {
+            return super::DispatchStep::TerminateStatic(
+                "missed mixed Down boundary is missing its authored identity",
+            );
+        };
+        let reason = match down_admission {
+            DownBoundaryAdmission::UnobservedBacklog => {
+                super::dispatch::DownMissReason::UnobservedBacklog
+            }
+            DownBoundaryAdmission::PhysicalWindowExpired => {
+                super::dispatch::DownMissReason::PhysicalWindowExpired
+            }
+            DownBoundaryAdmission::Authorized => {
+                return super::DispatchStep::TerminateStatic(
+                    "authorized Down cannot defer Up-prefix recovery",
+                );
+            }
+        };
+        super::dispatch::classify_missed_down_boundary(
+            &physical.authored_view,
+            local_metrics,
+            observer,
+            effective_now_ticks,
+            physical_target_qpc,
+            now_ticks,
+            reason,
+        );
+        runtime.pending_up_recovery = Some(super::dispatch::PendingUpRecovery {
+            boundary,
+            admission: down_admission,
+        });
+        return super::DispatchStep::NoWork;
+    }
+    let authored_step = super::dispatch_authored_packet(
         super::AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks,
@@ -336,7 +400,11 @@ pub(crate) fn dispatch_due_from_plan(
         desired_pause,
         progress_clock,
         observer,
-    )
+    );
+    if pending_up_recovery.is_some() && matches!(&authored_step, super::DispatchStep::Dispatched) {
+        runtime.pending_up_recovery = None;
+    }
+    authored_step
 }
 
 pub(super) fn dispatch(
@@ -1165,7 +1233,8 @@ mod tests {
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
     use crate::engine::worker::{
-        DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime, dispatch::DispatchStep,
+        DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime,
+        dispatch::{DispatchStep, DownBoundaryAdmission},
     };
     use sky_dispatch_core::time::{DurationTicks, QpcTicks};
     use sky_dispatch_win32::clock::QpcClock;
@@ -1433,6 +1502,15 @@ mod tests {
             subtract_duration(mixed_target, DurationTicks::from_raw(1)),
         ));
 
+        let just_before_mixed = subtract_duration(mixed_target, DurationTicks::from_raw(1));
+        harness
+            .runtime
+            .physical_timing_guard
+            .as_mut()
+            .expect("production guard initialized")
+            .observe_successful_packet(just_before_mixed, 2, 0)
+            .expect("seed an independent Down-key release floor");
+
         let window = harness
             .runtime
             .physical_timing_guard
@@ -1442,18 +1520,47 @@ mod tests {
             .expect("mixed timing window");
         assert!(window.musical_up_not_before_qpc > mixed_target);
         assert!(window.musical_up_not_before_qpc > window.latest_down_start_qpc.unwrap());
-        let wait_target = physical_wait_target_for_plan(&mixed, &harness.runtime)
+        assert!(window.down_not_before_qpc > window.musical_up_not_before_qpc);
+        assert!(window.down_not_before_qpc > window.latest_down_start_qpc.unwrap());
+        let authored_wait_target = physical_wait_target_for_plan(&mixed, &harness.runtime)
             .expect("physical wait target")
             .expect("mixed target");
-        assert_eq!(wait_target, window.musical_up_not_before_qpc);
+        assert_eq!(authored_wait_target, window.authored_target_qpc);
         assert_no_work(harness.dispatch_at_qpc_for_test(&mixed, mixed_target));
-        assert_dispatched(harness.dispatch_at_qpc_for_test(&mixed, wait_target));
+        assert_eq!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture,
+            "the expired Down authorization must be consumed at its authored boundary"
+        );
+        assert_eq!(
+            harness
+                .runtime
+                .pending_up_recovery
+                .expect("mixed Up recovery is deferred")
+                .admission,
+            DownBoundaryAdmission::PhysicalWindowExpired
+        );
+        assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+        assert_eq!(
+            packets.lock().expect("packet capture").as_slice(),
+            &[PhysicalPacket::new(0, 1)],
+            "the Down miss must be classified before the Up hold floor"
+        );
+        let recovery_wait_target = physical_wait_target_for_plan(&mixed, &harness.runtime)
+            .expect("pending recovery wait target")
+            .expect("mixed target");
+        assert_eq!(recovery_wait_target, window.musical_up_not_before_qpc);
+        assert!(recovery_wait_target < window.down_not_before_qpc);
+        assert_no_work(harness.dispatch_at_qpc_for_test(&mixed, mixed_target));
+        assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&mixed, recovery_wait_target));
         assert_eq!(
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
         );
         assert_eq!(harness.backend_active_mask(), 0);
         assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+        assert!(harness.runtime.pending_up_recovery.is_none());
     }
 
     #[test]

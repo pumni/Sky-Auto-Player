@@ -4,7 +4,7 @@ use super::shared::{
 };
 use super::worker::Worker;
 use super::*;
-use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, validate_timing_constants};
+use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_timing_constants};
 use crate::engine::{EnginePollSnapshot, EnginePollStatus};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
@@ -72,6 +72,35 @@ pub(crate) fn validate_native_schedule_timing_with_release_gap(
     .map_err(|error| format!("native tick-domain admission failed: {error}"))
 }
 
+pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<(), String> {
+    let expected_min_hold_us = timing
+        .frame_base_hold_us
+        .checked_add(timing.timing_margin_us)
+        .ok_or_else(|| {
+            "native timing contract overflow: frame_base_hold_us + timing_margin_us".to_string()
+        })?;
+    if timing.min_hold_us != expected_min_hold_us {
+        return Err(format!(
+            "native timing contract mismatch: min_hold_us is {}, expected frame_base_hold_us + timing_margin_us = {expected_min_hold_us}",
+            timing.min_hold_us
+        ));
+    }
+
+    let expected_min_release_gap_us = timing
+        .frame_us
+        .checked_add(timing.timing_margin_us)
+        .ok_or_else(|| {
+            "native timing contract overflow: frame_us + timing_margin_us".to_string()
+        })?;
+    if timing.min_release_gap_us != expected_min_release_gap_us {
+        return Err(format!(
+            "native timing contract mismatch: min_release_gap_us is {}, expected frame_us + timing_margin_us = {expected_min_release_gap_us}",
+            timing.min_release_gap_us
+        ));
+    }
+    Ok(())
+}
+
 pub struct NativeDispatchSession {
     config: Mutex<Option<AdmittedNativeSessionOptions>>,
     profile: DispatchProfile,
@@ -83,6 +112,7 @@ pub struct NativeDispatchSession {
 impl NativeDispatchSession {
     pub fn new(mut options: NativeSessionOptions) -> Result<Self, String> {
         validate_timing_constants()?;
+        validate_native_timing_contract(&options.timing)?;
         // This is the authoritative native admission boundary.  Python calls
         // the same core validator before crossing into Rust, but direct native
         // callers must not be able to construct a session that can only fail
