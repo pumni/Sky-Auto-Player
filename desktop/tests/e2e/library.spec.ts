@@ -721,7 +721,7 @@ test('natural finish retires the old session and starts the next context song', 
   await expect(transition).toHaveText('Starting next song', { timeout: 12_000 });
   const handoffObservedAt = await page.evaluate(() => performance.now());
   const playingRow = page.getByRole('row', { name: /Blue Bird/ });
-  await expect(playingRow).toHaveAttribute('aria-current', 'true');
+  await expect(playingRow).not.toHaveAttribute('aria-current', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
     timeout: 12_000,
   });
