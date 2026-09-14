@@ -1,36 +1,17 @@
-# docs/
+# Technical Documentation
 
-This folder contains technical documentation for Sky Auto Player. It is **not** the website source;
-the GitHub Pages site lives in [`site/`](../site/) and is built with Astro.
+This directory contains canonical technical specifications, architectural contracts, operational runbooks, and historical evidence for Sky Auto Player.
 
-Use [`INDEX.md`](INDEX.md) as the active documentation router. Start from the current task, inspect
-relevant source/direct tests, and open only the matching current documents.
+The documentation router is:
 
-## Active references
+- [`INDEX.md`](INDEX.md) — The sole canonical router mapping system concerns to authoritative documents.
 
-| Path | Purpose |
-|---|---|
-| `architecture.md` | Current application/native architecture and dependency boundaries |
-| `rt-dispatch-architecture.md` | Current real-time dispatch architecture |
-| `timing-principles.md` | Timing semantics and contracts |
-| `hold-frame-model.md` | Hold-frame selection and materialization |
-| `distribution-and-update.md` | Distribution, updater, integrity, and release contract |
-| `rust-toolchain-policy.md` | Rust toolchain policy |
-| `INDEX.md` | Context/documentation router |
+The public website lives in [`site/`](../site/) and is built with Astro.
 
-## Bounded evidence and history
+## Structure
 
-`perf-baselines/`, `releases/`, and relevant ADRs are on-demand evidence, not startup context and not
-repository-wide instructions. Completed plans, migration playbooks, superseded audits, implementation
-briefs, and obsolete choreography are retained in Git history rather than kept in the active
-documentation tree.
-
-Durable architectural decisions belong in `adr/` or the current reference documents above. Do not
-turn this directory into a generated context pack or duplicate active architecture across
-agent-specific documents.
-
-## Website history
-
-The former static website files under `docs/` were removed after the Astro-based site became the
-production GitHub Pages source. Website implementation and generated artifacts belong under `site/`
-and its Pages workflows, not this technical-documentation directory.
+- `adr/` — Architecture Decision Records for structural decisions.
+- `releases/` — Release-specific qualification and acceptance records.
+- `perf-baselines/` — Measured performance baselines across revisions and environments.
+- `evidence/` — Raw experimental and verification evidence.
+- `history/` — Superseded protocols, past migration records, and non-normative transition evidence.

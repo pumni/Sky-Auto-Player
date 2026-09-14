@@ -12,6 +12,12 @@ coordinator state only at the defined planning and ownership boundaries. It
 must not perform telemetry formatting, unbounded allocation, observer health
 updates, or learned timing estimation on the physical path.
 
+The healthy Down/Up hot path must never introduce heap allocation, locks, extra
+timing queries, dynamic dispatch, blocking/unbounded communication, or
+reference-count clones. The realtime worker maintains bounded, nonblocking
+queues and emergency release-all cleanup. Any modification to the realtime path
+requires specialized no-allocation, assembly, and Windows timing verification.
+
 Strict-timing diagnostics use a separate consumer thread. A bounded
 `crossbeam_queue::ArrayQueue<DispatchObservation>` (capacity 64) is shared
 between the diagnostic dispatch path and that consumer:

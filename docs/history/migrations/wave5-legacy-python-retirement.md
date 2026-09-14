@@ -54,7 +54,7 @@ These files are not installable product code and are not runtime dependencies.
 Wave 6 will replace the remaining release/CI orchestration with `cargo xtask`.
 
 The complete per-file retirement record is maintained in
-`docs/migration/wave5-python-retirement-ledger.md` and its JSON companion.
+`wave5-python-retirement-ledger.md` and its JSON companion.
 Classifications are `MIGRATED`, `OBSOLETE`, `TRANSPORT_ONLY`, `DUPLICATE`,
 `FIXTURE_FROZEN`, and `TOOLING_RETAINED`; each deleted test or source surface
 must have a ledger entry and concrete evidence.

@@ -6,4 +6,8 @@ category: 'Troubleshooting'
 question: 'Can I tune Sky Auto Player for a weak PC?'
 ---
 
-Yes. Run `--doctor` to inspect environment status, then use the documented [tuning presets](https://github.com/pumni/Sky-Auto-Player/blob/main/docs/tuning-presets.md) for the packaged or source environment.
+Yes. Open the in-app **Settings** and **Diagnostics** panels to inspect runtime status and adjust playback parameters:
+
+- **Game FPS & Hold Timing**: Align the selected Game FPS with your in-game frame rate cap (e.g., 30 or 60 FPS) and adjust the Hold Frame Model to ensure reliable note registration.
+- **Timing Margin & Tolerances**: Fine-tune the timing margin and late-down tolerance to match system dispatch capabilities.
+- **Diagnostics Panel**: Review real-time dispatch telemetry and focus status directly inside the application.

@@ -1,4 +1,4 @@
-# ADR-0008: V4 GitHub Latest Policy
+# ADR-0009: V4 GitHub Latest Policy
 
 Status: accepted
 
