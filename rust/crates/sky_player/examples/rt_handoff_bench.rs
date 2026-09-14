@@ -187,7 +187,7 @@ impl Samples {
             DispatchStep::TerminateStatic(reason)
                 if matches!(
                     *reason,
-                    "down_hard_late_abort" | "down_deadline_missed_before_send"
+                    "down_physical_window_expired" | "down_unobserved_backlog"
                 ) =>
             {
                 self.deadline_missed_count += 1;

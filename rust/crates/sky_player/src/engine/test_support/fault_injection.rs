@@ -30,8 +30,8 @@ pub enum InjectedSendOutcome {
     /// Return a complete send receipt but fail the post-send QPC boundary.
     QpcFailureAfterSend,
     /// Trusted sender rejects the Down before calling SendInput because the
-    /// authoritative pre-call QPC is beyond the session Down late-grace cutoff.
-    DeadlineMissedBeforeSend,
+    /// authoritative pre-call QPC is beyond the authored Down latest-start boundary.
+    DownExpiredBeforeSend,
 }
 
 /// Script that maps call-index → `InjectedSendOutcome`.

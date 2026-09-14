@@ -64,7 +64,7 @@ fn prepared_success_emitter(
 }
 
 #[test]
-fn prepared_down_cutoff_exact_boundary_sends_once() {
+fn prepared_down_latest_start_exact_boundary_sends_once() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1))
@@ -82,7 +82,7 @@ fn prepared_down_cutoff_exact_boundary_sends_once() {
 }
 
 #[test]
-fn prepared_down_cutoff_one_tick_late_never_calls_emitter() {
+fn prepared_down_latest_start_one_tick_late_never_calls_emitter() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1))
@@ -94,17 +94,14 @@ fn prepared_down_cutoff_one_tick_late_never_calls_emitter() {
         Some(crate::clock::QpcTicks::from_raw(100)),
     );
 
-    assert_eq!(
-        outcome.status,
-        SendTransactionStatus::DeadlineMissedBeforeSend
-    );
+    assert_eq!(outcome.status, SendTransactionStatus::DownExpiredBeforeSend);
     assert_eq!(outcome.evidence.attempts, 0);
     assert_eq!(calls.load(Ordering::Relaxed), 0);
     assert_eq!(state.active_mask, 0);
 }
 
 #[test]
-fn prepared_custom_emitter_samples_cutoff_before_invocation() {
+fn prepared_custom_emitter_checks_latest_start_before_invocation() {
     let calls = Arc::new(AtomicUsize::new(0));
     let clock = crate::clock::QpcClock::initialize().expect("QPC clock");
     let current = clock.now().expect("QPC sample");
@@ -116,10 +113,7 @@ fn prepared_custom_emitter_samples_cutoff_before_invocation() {
 
     let outcome = state.send_prepared_physical_packet_with_cutoff(&prepared, Some(cutoff));
 
-    assert_eq!(
-        outcome.status,
-        SendTransactionStatus::DeadlineMissedBeforeSend
-    );
+    assert_eq!(outcome.status, SendTransactionStatus::DownExpiredBeforeSend);
     assert_eq!(outcome.evidence.attempts, 0);
     assert!(outcome.evidence.started_ticks.is_some());
     assert_eq!(calls.load(Ordering::Relaxed), 0);
@@ -127,7 +121,7 @@ fn prepared_custom_emitter_samples_cutoff_before_invocation() {
 }
 
 #[test]
-fn prepared_custom_emitter_keeps_up_only_exempt_from_down_cutoff() {
+fn prepared_custom_emitter_keeps_up_only_exempt_from_down_latest_start() {
     let calls = Arc::new(AtomicUsize::new(0));
     let clock = crate::clock::QpcClock::initialize().expect("QPC clock");
     let current = clock.now().expect("QPC sample");
@@ -145,7 +139,7 @@ fn prepared_custom_emitter_keeps_up_only_exempt_from_down_cutoff() {
 }
 
 #[test]
-fn prepared_up_only_late_cutoff_remains_release_eligible() {
+fn prepared_up_only_remains_release_eligible_past_down_latest_start() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(1, 0))

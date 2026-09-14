@@ -585,7 +585,6 @@ pub fn selftest_packaged_shell() -> i32 {
                         "config": {
                             "hold_frames": settings.playback_defaults.hold_frames,
                             "timing_margin_us": settings.playback_defaults.timing_margin_us,
-                            "down_late_grace_us": settings.playback_defaults.down_late_grace_us,
                             "tempo_scale": settings.playback_defaults.tempo_scale,
                             "fps": settings.playback_defaults.fps,
                             "dry_run": true
@@ -856,7 +855,7 @@ mod ipc_tests {
             &webview,
             request(
                 "prepare_playback",
-                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"down_late_grace_us":500,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 10,
             ),
         )
@@ -893,7 +892,7 @@ mod ipc_tests {
             &webview,
             request(
                 "prepare_playback",
-                json!({"request":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"down_late_grace_us":500,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                json!({"request":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 14,
             ),
         );
@@ -941,7 +940,7 @@ mod ipc_tests {
             &webview,
             request(
                 "prepare_playback",
-                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"down_late_grace_us":500,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
+                json!({"params":{"songId":song_id,"generation":generation,"config":{"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}}}),
                 64,
             ),
         )

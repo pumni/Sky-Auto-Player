@@ -82,23 +82,17 @@ pub struct WorkerMetricsLocal {
     /// worker counters and never allocate on the dispatch path.
     pub missed_down_boundaries: u64,
     pub missed_down_keys: u64,
-    pub missed_backlog_boundaries: u64,
-    pub missed_hard_late_boundaries: u64,
+    pub unobserved_backlog_boundaries: u64,
+    pub physical_window_expired_boundaries: u64,
     /// Final authored Down admission rejections observed after target
     /// crossing and before the authoritative SendInput timestamp.
     pub final_gate_control_rejections: u64,
     pub final_gate_target_changes: u64,
     pub final_gate_focus_losses: u64,
     pub final_gate_lease_expirations: u64,
-    pub final_gate_cutoff_misses: u64,
+    pub down_expired_before_send: u64,
     pub late_authorized_boundaries: u64,
     pub deadline_authorization_reuses: u64,
-    pub late_discovery_rescue_attempts: u64,
-    pub late_discovery_rescue_sent: u64,
-    pub late_discovery_rescue_sender_cutoff_misses: u64,
-    pub late_discovery_rescue_credit_exhausted: u64,
-    pub late_discovery_rescue_blocked_control: u64,
-    pub late_discovery_rescue_blocked_focus_or_target: u64,
     pub max_missed_lateness_ticks: u64,
     /// Deferred-observer sender packet-boundary hold forensics. These fields
     /// are deliberately scalar-only and are not part of the dispatch worker's

@@ -1,7 +1,6 @@
-//! Fixed-size physical QPC floors for the staged timing-feasibility policy.
+//! Fixed-size physical QPC floors used by production dispatch.
 //!
-//! This module is intentionally not wired into production dispatch yet. It
-//! consumes sender completion timestamps supplied by its caller and never
+//! It consumes sender completion timestamps supplied by its caller and never
 //! samples QPC, reads settings, or walks authored work.
 
 use sky_dispatch_core::{
@@ -40,7 +39,7 @@ pub(super) enum PhysicalTimingGuardError {
 /// its Down release floor. A successful Down consumes the prior Down release
 /// floor and replaces its Up hold floor. Different packet directions therefore
 /// retain independent per-key state.
-pub(super) struct PhysicalTimingGuard {
+pub(crate) struct PhysicalTimingGuard {
     musical_up_not_before_qpc: [Option<QpcTicks>; MAX_KEYS],
     down_not_before_qpc: [Option<QpcTicks>; MAX_KEYS],
     frame_base_hold_ticks: DurationTicks,

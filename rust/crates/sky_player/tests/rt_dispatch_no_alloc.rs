@@ -16,7 +16,7 @@
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_player::engine::dispatch_primitives::{
-    DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep,
+    DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep, DownMissKind,
     DownMissObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
     PendingObservationQueue, ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
     is_clean_dispatch_observation,
@@ -184,7 +184,7 @@ fn down_miss_observation(n: u64) -> DispatchObservation {
         observed_qpc: QpcTicks::from_raw(n),
         up_mask: 0,
         down_mask: 1,
-        cutoff_miss: true,
+        kind: DownMissKind::DownExpiredBeforeSend,
     })
 }
 
@@ -727,7 +727,7 @@ fn production_missed_down_recovery_no_alloc() {
     harness.align_next_plan_to_future_for_test(100_000);
     let first = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.dispatch_due_from_plan_for_test(&first),
+        harness.dispatch_at_plan_target_for_test(&first),
         DispatchStep::Dispatched
     ));
     harness.advance_playback_time_us(100_000);
@@ -766,7 +766,7 @@ fn production_mixed_missed_down_recovery_no_alloc() {
 }
 
 #[test]
-fn production_authorized_hard_late_recovery_no_alloc() {
+fn production_authorized_expired_before_send_recovery_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
     let first = harness.plan_current_dispatch();
@@ -785,6 +785,9 @@ fn production_authorized_hard_late_recovery_no_alloc() {
     let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&future);
     let allocs = disable_counting();
 
-    assert_eq!(allocs, 0, "hard-late recovery allocated {allocs} time(s)");
+    assert_eq!(
+        allocs, 0,
+        "expired-before-send recovery allocated {allocs} time(s)"
+    );
     assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
 }

@@ -21,7 +21,7 @@ pub(crate) fn deadline_missed_before_send_outcome(
     started_ticks: QpcTicks,
 ) -> SendTransactionOutcome {
     SendTransactionOutcome {
-        status: SendTransactionStatus::DeadlineMissedBeforeSend,
+        status: SendTransactionStatus::DownExpiredBeforeSend,
         evidence: SendEvidence {
             requested_mask: packet.up_mask | packet.down_mask,
             confirmed_mask: 0,
@@ -227,7 +227,7 @@ impl TrackedKeyState {
             }
             SendTransactionStatus::PreparationRejected
             | SendTransactionStatus::ZeroProgress
-            | SendTransactionStatus::DeadlineMissedBeforeSend
+            | SendTransactionStatus::DownExpiredBeforeSend
             | SendTransactionStatus::ClockFailureBeforeSend => {
                 self.possibly_active_mask &= !to_send_mask;
             }
@@ -389,33 +389,33 @@ impl TrackedKeyState {
     }
 
     /// Send a prepared packet with a caller-controlled authoritative start
-    /// timestamp and the same pre-syscall Down cutoff as production.
+    /// timestamp and the same pre-syscall Down latest-start check as production.
     pub fn send_prepared_physical_packet_with_start_and_cutoff(
         &mut self,
         prepared: &PreparedPhysicalPacket,
         started_ticks: QpcTicks,
-        latest_allowed_down_qpc: Option<QpcTicks>,
+        latest_down_start_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         self.send_prepared_physical_packet_view_with_start_and_cutoff(
             prepared.as_view(),
             started_ticks,
-            latest_allowed_down_qpc,
+            latest_down_start_qpc,
         )
     }
 
     /// Send a prepared borrowed-view packet with a caller-controlled
-    /// authoritative start timestamp and the same pre-syscall Down cutoff.
+    /// authoritative start timestamp and the same pre-syscall Down latest-start check.
     pub fn send_prepared_physical_packet_view_with_start_and_cutoff(
         &mut self,
         prepared: PreparedPacketView<'_>,
         started_ticks: QpcTicks,
-        latest_allowed_down_qpc: Option<QpcTicks>,
+        latest_down_start_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
-        if super::super::packet::down_cutoff_missed(
+        if super::super::packet::down_latest_start_expired(
             packet.down_mask,
             started_ticks,
-            latest_allowed_down_qpc,
+            latest_down_start_qpc,
         ) {
             return self.apply_packet_outcome(
                 packet,
@@ -463,7 +463,7 @@ impl TrackedKeyState {
                     prepared,
                     clock,
                     started_ticks,
-                    latest_allowed_down_qpc,
+                    latest_down_start_qpc,
                 )
             }
             #[cfg(not(any(test, feature = "test-support")))]
@@ -495,7 +495,7 @@ impl TrackedKeyState {
                     prepared,
                     clock,
                     started_ticks,
-                    latest_allowed_down_qpc,
+                    latest_down_start_qpc,
                 )
             }
         };
@@ -515,16 +515,16 @@ impl TrackedKeyState {
         self.send_prepared_physical_packet_with_cutoff(prepared, None)
     }
 
-    /// Send a trusted prepared packet and enforce an optional Down-only hard
-    /// cutoff against the sender's authoritative pre-call QPC sample.
+    /// Send a trusted prepared packet and enforce an optional Down-only
+    /// latest-start boundary against the sender's authoritative pre-call QPC sample.
     pub fn send_prepared_physical_packet_with_cutoff(
         &mut self,
         prepared: &PreparedPhysicalPacket,
-        latest_allowed_down_qpc: Option<QpcTicks>,
+        latest_down_start_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         self.send_prepared_physical_packet_view_with_cutoff(
             prepared.as_view(),
-            latest_allowed_down_qpc,
+            latest_down_start_qpc,
         )
     }
 
@@ -534,7 +534,7 @@ impl TrackedKeyState {
     pub fn send_prepared_physical_packet_at_final_boundary(
         &mut self,
         prepared: &PreparedPhysicalPacket,
-        latest_allowed_down_qpc: Option<QpcTicks>,
+        latest_down_start_qpc: Option<QpcTicks>,
         test_started_ticks: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
@@ -542,20 +542,20 @@ impl TrackedKeyState {
             return self.send_prepared_physical_packet_with_start_and_cutoff(
                 prepared,
                 test_started_ticks,
-                latest_allowed_down_qpc,
+                latest_down_start_qpc,
             );
         }
         #[cfg(not(any(test, feature = "test-support")))]
         let _ = test_started_ticks;
-        self.send_prepared_physical_packet_with_cutoff(prepared, latest_allowed_down_qpc)
+        self.send_prepared_physical_packet_with_cutoff(prepared, latest_down_start_qpc)
     }
 
     /// Send a trusted borrowed prepared packet and enforce an optional
-    /// Down-only hard cutoff against the sender's authoritative QPC sample.
+    /// Down-only latest-start boundary against the sender's authoritative QPC sample.
     pub fn send_prepared_physical_packet_view_with_cutoff(
         &mut self,
         prepared: PreparedPacketView<'_>,
-        latest_allowed_down_qpc: Option<QpcTicks>,
+        latest_down_start_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
         #[cfg(any(test, feature = "test-support"))]
@@ -571,7 +571,7 @@ impl TrackedKeyState {
                         );
                     }
                 }
-            } else if latest_allowed_down_qpc.is_some() {
+            } else if latest_down_start_qpc.is_some() {
                 return self.apply_packet_outcome(
                     packet,
                     SendTransactionOutcome {
@@ -596,10 +596,10 @@ impl TrackedKeyState {
                 None
             };
             if let Some(started_ticks) = started_ticks
-                && super::super::packet::down_cutoff_missed(
+                && super::super::packet::down_latest_start_expired(
                     packet.down_mask,
                     started_ticks,
-                    latest_allowed_down_qpc,
+                    latest_down_start_qpc,
                 )
             {
                 return self.apply_packet_outcome(
@@ -650,7 +650,7 @@ impl TrackedKeyState {
             super::super::packet::send_prepared_physical_packet_view_once_with_cutoff(
                 prepared,
                 clock,
-                latest_allowed_down_qpc,
+                latest_down_start_qpc,
             )
         };
         #[cfg(not(any(test, feature = "test-support")))]
@@ -681,7 +681,7 @@ impl TrackedKeyState {
             super::super::packet::send_prepared_physical_packet_view_once_with_cutoff(
                 prepared,
                 clock,
-                latest_allowed_down_qpc,
+                latest_down_start_qpc,
             )
         };
         self.apply_packet_outcome(packet, outcome)
@@ -758,7 +758,7 @@ impl TrackedKeyState {
                     outcome.status
                 ));
             }
-            SendTransactionStatus::DeadlineMissedBeforeSend => {
+            SendTransactionStatus::DownExpiredBeforeSend => {
                 // This is a typed no-syscall timing result, not a transport
                 // rejection. The worker owns Production missed-Down recovery
                 // and records the boundary there. Keep backend rejection

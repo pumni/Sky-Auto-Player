@@ -1954,7 +1954,6 @@ describe('desktop store', () => {
         config: {
           hold_frames: 2,
           timing_margin_us: 800,
-          down_late_grace_us: 500,
           tempo_scale: 1,
           fps: 60,
           dry_run: true,
@@ -2082,7 +2081,6 @@ describe('desktop store', () => {
           timing_margin_us: 800,
           min_hold_us: 17_467,
           min_release_gap_us: 17_467,
-          down_late_grace_us: 500,
           timing_margin_recommendation: {
             recommended_timing_margin_us: 800,
             qualified: false,
@@ -2101,9 +2099,9 @@ describe('desktop store', () => {
           chord_split_events: 0,
           missed_down_boundaries: 0,
           missed_down_keys: 0,
-          missed_backlog_boundaries: 0,
-          missed_hard_late_boundaries: 0,
-          final_gate_cutoff_misses: 0,
+          unobserved_backlog_boundaries: 0,
+          physical_window_expired_boundaries: 0,
+          down_expired_before_send: 0,
           final_gate_control_rejections: 0,
           final_gate_target_changes: 0,
           final_gate_focus_losses: 0,
@@ -2177,7 +2175,6 @@ describe('desktop store', () => {
         timing_margin_us: 800,
         min_hold_us: 17_467,
         min_release_gap_us: 17_467,
-        down_late_grace_us: 500,
         timing_margin_recommendation: {
           recommended_timing_margin_us: 800,
           qualified: false,
@@ -2196,9 +2193,9 @@ describe('desktop store', () => {
         chord_split_events: 0,
         missed_down_boundaries: 0,
         missed_down_keys: 0,
-        missed_backlog_boundaries: 0,
-        missed_hard_late_boundaries: 0,
-        final_gate_cutoff_misses: 0,
+        unobserved_backlog_boundaries: 0,
+        physical_window_expired_boundaries: 0,
+        down_expired_before_send: 0,
         final_gate_control_rejections: 0,
         final_gate_target_changes: 0,
         final_gate_focus_losses: seq,
@@ -2217,7 +2214,6 @@ describe('desktop store', () => {
     store.getState().applyEvent(snapshot('a'.repeat(32), 2));
     expect(store.getState().diagnostics.samples).toHaveLength(2);
     expect(store.getState().diagnostics.samples[1]).toMatchObject({
-      down_late_grace_us: 500,
       pre_call_500_750us: 2,
       final_gate_focus_losses: 2,
       sendinput_zero_progress_failures: 2,

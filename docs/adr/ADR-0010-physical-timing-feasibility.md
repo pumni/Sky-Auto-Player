@@ -1,17 +1,17 @@
 # ADR-0010: Physical Timing Feasibility
 
-Status: Accepted campaign contract; implementation is staged across #244-#249.
+Status: Accepted campaign contract; the W2 cutover is implemented under review in #246.
 
 Parent work order: [#243](https://github.com/pumni/Sky-Auto-Player/issues/243).
 W0 characterization: [#244](https://github.com/pumni/Sky-Auto-Player/issues/244).
 
 ## Context
 
-The current timing policy validates an immutable authored schedule using a
-user-owned Timing Margin, then independently permits a Down to start within a
-session-frozen Late Down grace. That independent grace can consume the authored
-hold/release headroom after the schedule has been validated. Sender diagnostics
-measure this compression, but measurement alone does not make a physically
+Before W2, the timing policy validated an immutable authored schedule using a
+user-owned Timing Margin, then independently permitted a Down to start within
+a session-frozen Late Down grace. That independent grace could consume the
+authored hold/release headroom after schedule validation. Sender diagnostics
+measured this compression, but measurement alone could not make a physically
 short transition valid.
 
 The redesign replaces that split policy with one feasibility window. Actual
@@ -122,11 +122,9 @@ classify guaranteed infeasibility before transport; the trusted sender still
 checks its final pre-call QPC independently. No future authored target is
 rebased and no catch-up burst is allowed.
 
-The semantic miss vocabulary is `UnobservedBacklog`,
+The active miss vocabulary is `UnobservedBacklog`,
 `PhysicalWindowExpired`, and `DownExpiredBeforeSend` for transport/status
-reporting (with the final transport name subject to refinement). Legacy names
-such as `Backlog`, `HardLate`, and `DeadlineMissedBeforeSend` do not describe
-the physical failure and are migration targets.
+reporting. Former policy-specific labels have been retired from active code.
 
 ## Up classes
 
@@ -173,31 +171,16 @@ Time Critical priority, adaptive dispatch lead, authored-target rebasing,
 automatic tempo changes, packet retry, chord splitting, or a replacement
 Late Down setting.
 
-## W0 characterization and migration boundary
+## W2 migration boundary
 
-W0 records the pre-cutover behavior without changing production dispatch
-semantics. The following legacy expectations are temporary scaffolding and
-must be replaced or removed during W2 (#246):
+The persisted settings schema is version 7. Migration discards the former
+independent Late Down field and never copies its value into Timing Margin.
+Current settings, DTOs, calibration inputs, acceptance arguments, and UI expose
+only Timing Margin. The migration reader and its regression test are the only
+places that retain the old persisted field name.
 
-- `late_rescue_cutoff_matrix_is_inclusive_and_one_shot`,
-  `future_observation_rearms_rescue_only_after_boundary_commit`, and
-  `randomized_rescue_sequence_never_catches_up_without_future_observation` in
-  `worker.rs`;
-- rescue/backlog/grace assertions in `engine/tests.rs`, including
-  `three_overdue_downs_are_dropped_before_next_future_boundary`,
-  `late_discovery_rescue_still_obeys_sender_cutoff`, and
-  `authorized_down_first_tick_beyond_grace_misses_without_down_syscall`;
-- the W0 test that records the current first-preroll Down admission from
-  `Initial` without future authorization;
-- `down_late_grace_*` admission tests and cutoff-specific assertions whose
-  names/expected policy still treat Late Down as an independent setting.
-
-The final sender pre-call race tests remain required, but their policy input
-must become the authored latest-start window. Hold/release forensics tests are
-characterization of the current telemetry contract and should be updated only
-with their owning observability work, not used to imply physical enforcement
-before the guard exists.
-
-W0 is documentation and characterization only. It does not change public
-settings or schemas, sender APIs, production dispatch behavior, timing/MMCSS/
-spin policy, runtime allocations, or power management.
+The previous rescue state and miss labels have been removed from production
+dispatch. Every Down uses exact future authorization, physical-floor admission,
+and the sender's latest-start check. Historical behavior remains available in
+Git history; the current implementation and tests exercise the accepted
+physical-feasibility contract above.

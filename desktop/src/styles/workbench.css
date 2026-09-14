@@ -1033,19 +1033,6 @@ body.is-resizing * {
   stroke-width: 2;
 }
 
-.plot-threshold {
-  stroke: var(--warning);
-  stroke-dasharray: 5 4;
-  stroke-width: 1.5;
-}
-
-.plot-label {
-  fill: var(--warning);
-  font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 10px;
-  text-anchor: end;
-}
-
 .diagnostics-plot figcaption {
   margin-top: 7px;
 }

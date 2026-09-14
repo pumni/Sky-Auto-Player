@@ -43,6 +43,36 @@ fn physical_boundary_stamp(
     })
 }
 
+pub(crate) fn physical_wait_target_for_plan(
+    plan: &super::planning::NextDispatchPlan,
+    runtime: &super::WorkerRuntime,
+) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
+    let Some(physical_target_qpc) = plan.physical_target_qpc() else {
+        return Ok(None);
+    };
+    let Some(physical) = plan.physical() else {
+        return Ok(Some(physical_target_qpc));
+    };
+    let masks = physical.authored_view.packet_masks;
+    let guard = runtime
+        .physical_timing_guard
+        .as_ref()
+        .ok_or_else(|| "physical timing guard is not initialized".to_string())?;
+    let window = guard
+        .query(physical_target_qpc, masks.up_mask, masks.down_mask)
+        .map_err(|error| format!("physical timing window query failed: {error:?}"))?;
+    let wait_target = if masks.down_mask != 0
+        && window
+            .latest_down_start_qpc
+            .is_some_and(|latest| window.packet_not_before_qpc > latest)
+    {
+        core::cmp::max(window.authored_target_qpc, window.musical_up_not_before_qpc)
+    } else {
+        window.packet_not_before_qpc
+    };
+    Ok(Some(wait_target))
+}
+
 #[inline]
 pub(crate) fn publish_live_metrics_after_dispatch(
     local: &super::WorkerMetricsLocal,
@@ -207,6 +237,34 @@ pub(crate) fn dispatch_due_from_plan(
     let boundary_crossing_qpc =
         boundary_crossing_qpc.or_else(|| (physical_target_qpc <= now_ticks).then_some(now_ticks));
 
+    let Some(physical) = plan.physical() else {
+        return super::DispatchStep::NoWork;
+    };
+    let masks = physical.authored_view.packet_masks;
+    let Some(guard) = runtime.physical_timing_guard.as_ref() else {
+        return super::DispatchStep::TerminateStatic("physical timing guard is not initialized");
+    };
+    let window = match guard.query(physical_target_qpc, masks.up_mask, masks.down_mask) {
+        Ok(window) => window,
+        Err(error) => {
+            return super::DispatchStep::Terminate(format!(
+                "physical timing window query failed: {error:?}"
+            ));
+        }
+    };
+    let physical_wait_target = if masks.down_mask != 0
+        && window
+            .latest_down_start_qpc
+            .is_some_and(|latest| window.packet_not_before_qpc > latest)
+    {
+        core::cmp::max(window.authored_target_qpc, window.musical_up_not_before_qpc)
+    } else {
+        window.packet_not_before_qpc
+    };
+    if physical_wait_target > now_ticks {
+        return super::DispatchStep::NoWork;
+    }
+
     let boundary = physical_boundary_stamp(plan, physical_target_qpc);
     #[cfg(any(test, feature = "test-support"))]
     if test_physical_target_qpc.is_some()
@@ -218,11 +276,9 @@ pub(crate) fn dispatch_due_from_plan(
         // comes from the nonblocking observation that precedes the waiter.
         runtime.observe_future_down_boundary(boundary_stamp);
     }
-    let down_admission = boundary.map_or(DownBoundaryAdmission::Normal, |boundary| {
-        if physical_target_qpc > now_ticks {
-            return DownBoundaryAdmission::Normal;
-        }
-        if runtime.authorize_down_boundary(boundary) {
+    let latest_down_start_qpc = window.latest_down_start_qpc;
+    let down_admission = if let Some(boundary) = boundary {
+        let admission = if runtime.authorize_down_boundary(boundary) {
             local_metrics.deadline_authorization_reuses = local_metrics
                 .deadline_authorization_reuses
                 .saturating_add(1);
@@ -230,43 +286,32 @@ pub(crate) fn dispatch_due_from_plan(
                 local_metrics.late_authorized_boundaries =
                     local_metrics.late_authorized_boundaries.saturating_add(1);
             }
-            return DownBoundaryAdmission::Normal;
+            DownBoundaryAdmission::Authorized
+        } else {
+            DownBoundaryAdmission::UnobservedBacklog
+        };
+        runtime.invalidate_down_authorization();
+        if admission == DownBoundaryAdmission::Authorized
+            && masks.down_mask != 0
+            && window
+                .latest_down_start_qpc
+                .is_some_and(|latest| window.packet_not_before_qpc > latest)
+        {
+            DownBoundaryAdmission::PhysicalWindowExpired
+        } else {
+            admission
         }
-        if !runtime.musical_physical_commit_started {
-            return DownBoundaryAdmission::Normal;
-        }
-
-        let lateness = now_ticks
-            .checked_duration_since(physical_target_qpc)
-            .unwrap_or(DurationTicks::from_raw(u64::MAX));
-        if runtime.try_consume_late_discovery_rescue(lateness, timing.down_late_grace_ticks) {
-            local_metrics.late_discovery_rescue_attempts = local_metrics
-                .late_discovery_rescue_attempts
-                .saturating_add(1);
-            return DownBoundaryAdmission::LateDiscoveryRescue;
-        }
-
-        // A first overdue boundary beyond grace also consumes the one-shot
-        // credit. This prevents the next distinct overdue boundary from
-        // being rescued without a new exact future observation.
-        let credit_was_available = runtime.down_boundary_state.late_rescue_available();
-        runtime.consume_late_discovery_rescue_credit();
-        if !credit_was_available {
-            local_metrics.late_discovery_rescue_credit_exhausted = local_metrics
-                .late_discovery_rescue_credit_exhausted
-                .saturating_add(1);
-        }
-        DownBoundaryAdmission::MissedBacklog
-    });
-    runtime.last_dispatch_was_missed_down = false;
-
-    let step = super::dispatch_authored_packet(
+    } else {
+        DownBoundaryAdmission::Authorized
+    };
+    super::dispatch_authored_packet(
         super::AuthoredPacketContext {
             dispatch_plan: plan,
             effective_now_ticks,
             now_ticks,
             physical_target_qpc,
             down_admission,
+            latest_down_start_qpc,
             focus_loss_fault,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
@@ -291,14 +336,7 @@ pub(crate) fn dispatch_due_from_plan(
         desired_pause,
         progress_clock,
         observer,
-    );
-    if matches!(step, super::DispatchStep::Dispatched)
-        && !runtime.last_dispatch_was_missed_down
-        && boundary.is_some()
-    {
-        runtime.mark_down_commit_started(down_admission.is_late_rescue());
-    }
-    step
+    )
 }
 
 pub(super) fn dispatch(
@@ -500,6 +538,9 @@ pub(super) fn dispatch(
                             target_generation,
                             preflight_target,
                         ) {
+                            if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
+                                guard.invalidate();
+                            }
                             core.runtime.verified_target = None;
                             core.runtime.focus_restore_started_ticks = None;
                             continue;
@@ -514,6 +555,9 @@ pub(super) fn dispatch(
                             core.runtime.terminal_error =
                                 Some(format!("focus restoration failed: {error}"));
                             break;
+                        }
+                        if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
+                            guard.reset();
                         }
                         if let Some(observer) = core.observer.pending.as_ref() {
                             observer.push(
@@ -603,10 +647,16 @@ pub(super) fn dispatch(
                         &mut resources.coordinator,
                         target_hwnd.load(Ordering::Acquire),
                     ) {
+                        if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
+                            guard.invalidate();
+                        }
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("manual pause suspension failed: {error}"));
                         break;
+                    }
+                    if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
+                        guard.reset();
                     }
                     if let Some(observer) = core.observer.pending.as_ref() {
                         observer.push(
@@ -934,6 +984,15 @@ pub(super) fn dispatch(
             }
 
             let deadline_ticks = dispatch_plan.deadline_ticks();
+            let physical_wait_target_qpc =
+                match physical_wait_target_for_plan(&dispatch_plan, &core.runtime) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(error);
+                        break;
+                    }
+                };
             core.runtime.future_physical_wait_target_qpc = if matches!(
                 &dispatch_plan,
                 super::planning::NextDispatchPlan::Physical(_)
@@ -945,7 +1004,7 @@ pub(super) fn dispatch(
 
             match wait_for_next_boundary(WaitBoundaryInput {
                 deadline: WaitDeadline {
-                    physical_target_qpc: dispatch_plan.physical_target_qpc(),
+                    physical_target_qpc: physical_wait_target_qpc,
                     spin_threshold_ticks: if matches!(
                         dispatch_plan,
                         super::planning::NextDispatchPlan::Physical(_)
@@ -1099,13 +1158,51 @@ pub(super) fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{physical_target_qpc_for_work, publish_live_metrics_after_dispatch};
+    use super::{
+        physical_target_qpc_for_work, physical_wait_target_for_plan,
+        publish_live_metrics_after_dispatch,
+    };
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
-    use crate::engine::worker::{DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime};
-    use sky_dispatch_core::time::QpcTicks;
+    use crate::engine::test_support::ProductionDispatchTestHarness;
+    use crate::engine::worker::{
+        DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime, dispatch::DispatchStep,
+    };
+    use sky_dispatch_core::time::{DurationTicks, QpcTicks};
     use sky_dispatch_win32::clock::QpcClock;
+    use sky_dispatch_win32::input::PhysicalPacket;
     use std::num::NonZeroU64;
     use std::sync::atomic::Ordering;
+
+    fn assert_no_work(step: DispatchStep) {
+        assert!(matches!(step, DispatchStep::NoWork), "step={step:?}");
+    }
+
+    fn assert_dispatched(step: DispatchStep) {
+        assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
+    }
+
+    fn subtract_duration(target: QpcTicks, duration: DurationTicks) -> QpcTicks {
+        QpcTicks::from_raw(
+            target
+                .as_u64()
+                .checked_sub(duration.as_u64())
+                .expect("test QPC subtraction"),
+        )
+    }
+
+    fn set_zero_timing_margin(harness: &mut ProductionDispatchTestHarness) {
+        let clock = harness.resources.clock;
+        let frame = clock
+            .duration_from_us(harness.config.timing.frame_us)
+            .expect("frame duration");
+        let base_hold = clock
+            .duration_from_us(harness.config.timing.frame_base_hold_us)
+            .expect("base hold duration");
+        harness.timing.timing_margin_ticks = DurationTicks::ZERO;
+        harness
+            .runtime
+            .set_physical_timing_guard_for_test(base_hold, frame, DurationTicks::ZERO);
+    }
 
     #[test]
     fn live_dispatch_publication_exposes_production_sender_samples() {
@@ -1139,7 +1236,6 @@ mod tests {
             physical_target_qpc: QpcTicks::from_raw(1_000),
         };
         let mut runtime = WorkerRuntime::default();
-        runtime.mark_down_commit_started(false);
         runtime.observe_future_down_boundary(stamp);
         assert_eq!(
             runtime.down_boundary_state,
@@ -1164,7 +1260,6 @@ mod tests {
             ..first
         };
         let mut runtime = WorkerRuntime::default();
-        runtime.mark_down_commit_started(false);
         runtime.observe_future_down_boundary(first);
         assert!(!runtime.authorize_down_boundary(second));
     }
@@ -1181,14 +1276,11 @@ mod tests {
             physical_target_qpc: QpcTicks::from_raw(1_000),
         };
         let mut runtime = WorkerRuntime::default();
-        runtime.mark_down_commit_started(false);
         runtime.observe_future_down_boundary(stamp);
         runtime.invalidate_down_authorization();
         assert_eq!(
             runtime.down_boundary_state,
-            DownBoundaryState::AwaitingFuture {
-                late_rescue_available: false,
-            }
+            DownBoundaryState::AwaitingFuture
         );
         assert!(!runtime.authorize_down_boundary(stamp));
     }
@@ -1251,6 +1343,312 @@ mod tests {
                 .expect("overdue target arithmetic"),
             Some(target),
             "target + 1 tick is overdue work"
+        );
+    }
+
+    #[test]
+    fn first_down_requires_future_observation_and_unobserved_due_work_is_missed() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_packet_capture();
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert!(matches!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::FutureAuthorized(_)
+        ));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, target));
+        assert_eq!(
+            packets.lock().expect("packet capture").as_slice(),
+            &[PhysicalPacket::new(0, 1)]
+        );
+
+        let mut unobserved = ProductionDispatchTestHarness::new_down_only();
+        let packets = unobserved.configure_packet_capture();
+        let plan = unobserved.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert_dispatched(unobserved.dispatch_at_qpc_for_test(&plan, target));
+        assert!(packets.lock().expect("packet capture").is_empty());
+        assert_eq!(unobserved.local_metrics.unobserved_backlog_boundaries, 1);
+    }
+
+    #[test]
+    fn zero_margin_expires_a_positive_pre_call_lateness_without_grace() {
+        let mut exact = ProductionDispatchTestHarness::new_down_only();
+        set_zero_timing_margin(&mut exact);
+        let exact_packets = exact.configure_packet_capture();
+        let exact_plan = exact.plan_current_dispatch();
+        let exact_target = exact_plan.physical_target_qpc().expect("Down target");
+        assert_eq!(exact.timing.timing_margin_ticks, DurationTicks::ZERO);
+        assert_no_work(exact.dispatch_at_qpc_for_test(
+            &exact_plan,
+            subtract_duration(exact_target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(exact.dispatch_at_qpc_for_test(&exact_plan, exact_target));
+        assert_eq!(exact_packets.lock().expect("packet capture").len(), 1);
+
+        let mut late = ProductionDispatchTestHarness::new_down_only();
+        set_zero_timing_margin(&mut late);
+        let late_packets = late.configure_packet_capture();
+        let late_plan = late.plan_current_dispatch();
+        let late_target = late_plan.physical_target_qpc().expect("Down target");
+        assert_eq!(late.timing.timing_margin_ticks, DurationTicks::ZERO);
+        assert_no_work(late.dispatch_at_qpc_for_test(
+            &late_plan,
+            subtract_duration(late_target, DurationTicks::from_raw(1)),
+        ));
+        let one_tick_late = late_target
+            .checked_add_duration(DurationTicks::from_raw(1))
+            .expect("one tick beyond zero-margin latest start");
+        assert_dispatched(late.dispatch_at_qpc_for_test(&late_plan, one_tick_late));
+        assert!(late_packets.lock().expect("packet capture").is_empty());
+        assert_eq!(late.local_metrics.down_expired_before_send, 1);
+    }
+
+    #[test]
+    fn completion_hold_floor_delays_mixed_up_and_expires_its_entire_down_chord() {
+        let mut harness = ProductionDispatchTestHarness::new_mixed();
+        let packets = harness.configure_packet_capture();
+        let first = harness.plan_current_dispatch();
+        let first_target = first.physical_target_qpc().expect("first Down target");
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &first,
+            subtract_duration(first_target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&first, first_target));
+
+        let mixed = harness.plan_current_dispatch();
+        let physical = mixed.physical().expect("mixed physical plan");
+        assert_eq!(
+            physical.authored_view.packet_masks,
+            PhysicalPacket::new(1, 2)
+        );
+        let mixed_target = mixed.physical_target_qpc().expect("mixed target");
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &mixed,
+            subtract_duration(mixed_target, DurationTicks::from_raw(1)),
+        ));
+
+        let window = harness
+            .runtime
+            .physical_timing_guard
+            .as_ref()
+            .expect("production guard initialized")
+            .query(mixed_target, 1, 2)
+            .expect("mixed timing window");
+        assert!(window.musical_up_not_before_qpc > mixed_target);
+        assert!(window.musical_up_not_before_qpc > window.latest_down_start_qpc.unwrap());
+        let wait_target = physical_wait_target_for_plan(&mixed, &harness.runtime)
+            .expect("physical wait target")
+            .expect("mixed target");
+        assert_eq!(wait_target, window.musical_up_not_before_qpc);
+        assert_no_work(harness.dispatch_at_qpc_for_test(&mixed, mixed_target));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&mixed, wait_target));
+        assert_eq!(
+            packets.lock().expect("packet capture").as_slice(),
+            &[PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
+        );
+        assert_eq!(harness.backend_active_mask(), 0);
+        assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+    }
+
+    #[test]
+    fn same_key_release_floor_inside_margin_delays_but_sends_down() {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
+        let packets = harness.configure_packet_capture();
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        let clock = harness.resources.clock;
+        let frame = clock.duration_from_us(16_667).expect("frame ticks");
+        let inside_margin = clock.duration_from_us(250).expect("inside margin");
+        let release_floor = target
+            .checked_add_duration(inside_margin)
+            .expect("release floor");
+        let completed_up = release_floor
+            .as_u64()
+            .checked_sub(frame.as_u64())
+            .map(QpcTicks::from_raw)
+            .expect("prior Up completion");
+        harness
+            .runtime
+            .physical_timing_guard
+            .as_mut()
+            .expect("production guard initialized")
+            .observe_successful_packet(completed_up, 1, 0)
+            .expect("seed trusted prior Up completion");
+
+        let window = harness
+            .runtime
+            .physical_timing_guard
+            .as_ref()
+            .unwrap()
+            .query(target, 0, 1)
+            .unwrap();
+        assert_eq!(window.down_not_before_qpc, release_floor);
+        assert!(release_floor <= window.latest_down_start_qpc.unwrap());
+        assert_eq!(
+            physical_wait_target_for_plan(&plan, &harness.runtime)
+                .unwrap()
+                .unwrap(),
+            release_floor
+        );
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert_no_work(harness.dispatch_at_qpc_for_test(&plan, target));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, release_floor));
+        assert_eq!(
+            packets.lock().expect("packet capture").as_slice(),
+            &[PhysicalPacket::new(0, 1)]
+        );
+    }
+
+    #[test]
+    fn control_interrupt_replans_while_waiting_for_a_delayed_down_floor() {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord(1);
+        let packets = harness.configure_packet_capture();
+        let clock = harness.resources.clock;
+        let frame = clock.duration_from_us(16_667).expect("frame ticks");
+        let base_hold = clock.duration_from_us(10_000).expect("base hold ticks");
+        let margin = clock.duration_from_us(20_000).expect("timing margin");
+        harness.timing.timing_margin_ticks = margin;
+        harness
+            .runtime
+            .set_physical_timing_guard_for_test(base_hold, frame, margin);
+        harness.align_next_plan_to_benchmark_margin_for_test(5_000);
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        let release_floor = target
+            .checked_add_duration(clock.duration_from_us(10_000).expect("floor offset"))
+            .expect("release floor");
+        let completed_up = QpcTicks::from_raw(
+            release_floor
+                .as_u64()
+                .checked_sub(frame.as_u64())
+                .expect("prior Up completion"),
+        );
+        harness
+            .runtime
+            .physical_timing_guard
+            .as_mut()
+            .expect("production guard initialized")
+            .observe_successful_packet(completed_up, 1, 0)
+            .expect("seed trusted prior Up completion");
+
+        let window = harness
+            .runtime
+            .physical_timing_guard
+            .as_ref()
+            .unwrap()
+            .query(target, 0, 1)
+            .unwrap();
+        assert_eq!(window.down_not_before_qpc, release_floor);
+        assert!(release_floor > target);
+        assert!(release_floor <= window.latest_down_start_qpc.unwrap());
+        assert!(harness.interrupt.signal(), "signal control interrupt");
+
+        assert!(harness.wait_and_dispatch_current_plan(&plan).is_err());
+        assert_eq!(harness.local_metrics.wait_interrupted_count, 1);
+        assert_eq!(harness.resources.coordinator.cursor, 0);
+        assert!(packets.lock().expect("packet capture").is_empty());
+        assert!(matches!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::FutureAuthorized(_)
+        ));
+    }
+
+    #[test]
+    fn one_infeasible_key_expires_the_whole_down_chord() {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord(2);
+        let packets = harness.configure_packet_capture();
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        let clock = harness.resources.clock;
+        let frame = clock.duration_from_us(16_667).expect("frame ticks");
+        let beyond_latest = harness
+            .timing
+            .timing_margin_ticks
+            .checked_add(DurationTicks::from_raw(1))
+            .expect("latest-start plus one tick");
+        let release_floor = target
+            .checked_add_duration(beyond_latest)
+            .expect("release floor");
+        let completed_up = release_floor
+            .as_u64()
+            .checked_sub(frame.as_u64())
+            .map(QpcTicks::from_raw)
+            .expect("prior Up completion");
+        harness
+            .runtime
+            .physical_timing_guard
+            .as_mut()
+            .expect("production guard initialized")
+            .observe_successful_packet(completed_up, 1, 0)
+            .expect("seed trusted prior Up completion");
+
+        assert_eq!(
+            physical_wait_target_for_plan(&plan, &harness.runtime)
+                .unwrap()
+                .unwrap(),
+            target,
+            "guaranteed infeasibility waits only until the authored boundary"
+        );
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, target));
+        assert!(packets.lock().expect("packet capture").is_empty());
+        assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+        assert_eq!(harness.backend_active_mask(), 0);
+    }
+
+    #[test]
+    fn several_unobserved_down_boundaries_drain_without_catch_up() {
+        let mut harness = ProductionDispatchTestHarness::new_three_overdue_then_future();
+        let packets = harness.configure_packet_capture();
+        let mut first_plan = Some(harness.plan_current_dispatch());
+        let first_target = first_plan
+            .as_ref()
+            .and_then(|plan| plan.physical_target_qpc())
+            .expect("first Down target");
+        let stalled_now = first_target
+            .checked_add_duration(
+                harness
+                    .resources
+                    .clock
+                    .duration_from_us(3_500)
+                    .expect("stalled-worker duration"),
+            )
+            .expect("stalled-worker QPC");
+
+        for boundary in 0..4 {
+            let plan = if boundary == 0 {
+                first_plan.take().expect("first frozen plan")
+            } else {
+                harness.plan_current_dispatch()
+            };
+            let physical = plan.physical().expect("overdue Down plan");
+            assert_ne!(physical.authored_view.packet_masks.down_mask, 0);
+            assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, stalled_now));
+        }
+        assert_eq!(harness.local_metrics.unobserved_backlog_boundaries, 4);
+        assert!(packets.lock().expect("packet capture").is_empty());
+
+        let future = harness.plan_current_dispatch();
+        let future_target = future.physical_target_qpc().expect("future Down target");
+        assert!(future_target > stalled_now);
+        assert_no_work(harness.dispatch_at_qpc_for_test(&future, stalled_now));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&future, future_target));
+        assert_eq!(
+            packets.lock().expect("packet capture").as_slice(),
+            &[PhysicalPacket::new(0, 1 << 4)],
+            "only the newly future-authorized Down may send"
         );
     }
 }

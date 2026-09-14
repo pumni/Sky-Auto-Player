@@ -12,13 +12,15 @@ with a final foreground-verification cost, so the two focus modes are not
 promised identical latency.
 
 For a physical boundary, native preparation materializes and validates
-one immutable packet before the direct target wait. The worker's single
-interruptible hybrid wait and bounded QPC spin cross the absolute authored
-target, then run the final
+one immutable packet before the interruptible wait. The worker's single
+hybrid wait and bounded QPC spin cross the later of the authored target and
+relevant physical floors. If a Down floor is outside its latest-start window,
+the worker waits only for the authored target and any required Up hold floor,
+then commits the Down chord as missed. It runs the final
 command/control, target, and focus gates, repeats the program-owned atomic
 checks, and evaluates the lease. The worker records `final_policy_qpc` for
 lease admission. The prepared sender then takes the true `pre_call_qpc`
-immediately before the cutoff and one `SendInput` call.
+immediately before the latest-start check and one `SendInput` call.
 Up entries precede Down entries;
 an overlapping Up/Down mask is rejected during preparation. A partial Up is
 reported with partial-progress evidence but is never silently retried by this
@@ -32,18 +34,17 @@ frame_base_hold_us = ceil(hold_frames * frame_us)
 timing_margin_us = persisted_user_value
 effective_min_hold_us = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
-down_late_cutoff_us = 2000
 ```
 
 The user-owned Timing Margin defaults to `500 µs`, ranges from `0` through
 `3,000 µs` in `100 µs` steps, and applies equally to Hold and Release Gap.
-The independent Late Down tolerance defaults to `2,000 µs`, ranges from `0`
-through `5,000 µs` in `100 µs` steps, and is frozen per prepared session.
-Calibration never supplies part of the authored timing equation. Qualified
-calibration may produce an advisory recommendation from the selected Late
-Down tolerance plus measured transport-reserve evidence. Without qualified
-evidence, the informational fallback recommendation is the `500 µs` default
-Timing Margin. Calibration is never shown as qualified when fallback is used.
+It is also the Down latest-start headroom: a Down may begin no later than its
+authored target plus this margin. Calibration never supplies part of the
+authored timing equation. Qualified calibration may produce an advisory
+recommendation from measured transport reserve plus a fixed `100 µs` guard.
+Without qualified evidence, the informational fallback recommendation is the
+`500 µs` default Timing Margin. Calibration is never shown as qualified when
+fallback is used.
 Production calibration uses one pair metric per Down/Up SendInput
 packet, based on `T_D/P_D/C_D` and `T_U/P_U/C_U`; Raw Input receipt timing is
 not part of qualification. It uses exactly the six `1/5/15 × hot/cold`
@@ -52,16 +53,32 @@ bucket. Its transport-reserve candidate is the maximum positive
 `sendinput_shrink_us.max` across required buckets plus a `100 µs` guard. A
 candidate at or below `2,000 µs` qualifies and reserves at least `300 µs`; a
 candidate above `2,000 µs` is out of the trusted envelope and uses the
-unqualified transport reserve. A qualified recommendation is rounded up to
-the next `100 µs` after adding the currently selected Late Down tolerance.
+unqualified transport reserve. A qualified recommendation is the transport
+reserve plus the guard, rounded up to the next `100 µs` step.
 An unqualified recommendation falls back to the `500 µs` default Timing
 Margin. Recommendations are informational only and never write a setting.
 Users adjust Timing Margin with its bounded stepper; a change affects only the
 next prepared session.
 
-The release gap is one base game frame plus the exact Timing Margin. It is an
-authored schedule value, not a runtime delay or a guarantee that the game
-sampled Up before the next Down.
+The release gap is one base game frame plus the exact Timing Margin. The
+immutable schedule remains the source of authored targets. In addition, the
+worker-owned fixed-size `PhysicalTimingGuard` tracks per-key completion floors
+using sender QPC evidence:
+
+```text
+musical_up_not_before = last_successful_down_completion + frame_base_hold
+down_not_before = last_successful_up_completion + frame
+latest_down_start = authored_down_target + timing_margin
+```
+
+The worker waits until the authored target and relevant physical floor are
+both reached. If a Down floor exceeds its latest-start window, it waits only
+until the authored target and any Up-prefix hold floor, then misses the whole
+Down chord. A true pre-call QPC check closes the remaining race immediately
+before `SendInput`. Authored Up and mixed Up-prefix recovery respect the
+Down-completion hold floor. Emergency, focus-loss, and cleanup Ups bypass
+musical floors so safety release stays immediate. Completion evidence never
+proves that Sky sampled the transition.
 
 Production hold forensics keeps these two contracts separate. Static schedule
 validation still requires the authored target gap to be at least
@@ -86,28 +103,22 @@ The identity is checked with checked arithmetic. It describes completion
 interval compression in the Rust/SendInput sender only; it is not a claim
 about game-observed timing.
 The native worker receives the materialized `effective_min_hold_us` and
-`min_release_gap_us` values and uses them as fixed durations. The native desktop
-adapter does not add another frame-relative floor; Rust only range-checks and
-validates these values in QPC ticks. It does not learn or subtract SendInput
-cost. The independent user-owned `down_late_grace_us` sender cutoff defaults to
-`2,000 µs` and is converted once to QPC ticks for each prepared session. It
-never participates in the authored policy,
-which enforces:
+`min_release_gap_us` values and uses them as fixed authored durations. It also
+converts `frame_base_hold_us`, `frame_us`, and `timing_margin_us` once during
+worker admission to initialize the physical guard. Actual completion QPC
+remains in the player worker and never enters `sky_dispatch_core`. Checked
+arithmetic and masks fail closed; invalidated evidence requires lifecycle
+reset before further physical queries. The authored policy enforces:
 
 ```text
 effective_min_hold_us = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
 ```
 
-The two defaults are intentionally decoupled: the `500 µs` authored margin
-is smaller than the `2,000 µs` sender cutoff. An authorized late Down can
-therefore reduce sender-observed hold below the selected frame base even though
-the authored schedule remains valid. This is an explicit user-owned timing
-trade-off and remains observable in sender forensics. Zero is also a valid
-margin choice. The cutoff is never added to an authored target or adapted
-during playback. Equality at the cutoff is
-allowed; the first QPC tick beyond it is a missed Down. Up-only releases
-remain exempt.
+Timing Margin is the only authored Down execution headroom. Zero is a valid
+strict/no-headroom choice. Equality at the latest-start QPC is allowed; the
+first tick beyond it is a missed Down. A Down chord is never split or retried.
+Up-only safety releases remain exempt from musical floors.
 
 At 60 FPS with the default margin:
 
@@ -144,13 +155,16 @@ The native-boundary validator performs this check before the worker can send
 anything, including exact same-timestamp retriggers and timestamp overflow
 cases. It also requires the next same-key Down to meet the materialized
 `min_release_gap_us` after the previous same-key Up. Equal release-gap
-boundaries are valid;
-same-timestamp same-key overlaps are rejected, while disjoint masks may still
-coalesce. Runtime never delays, retries, or rewrites these authored targets.
-Completion is evidence for sender-side telemetry and ownership accounting
-only; it does not create a completion-relative hold floor or a new deadline.
-Runtime deadline/overdue policy handles a late boundary without rewriting
-authored timestamps or emitting a catch-up send.
+boundaries are valid; same-timestamp same-key overlaps are rejected, while
+disjoint masks may still coalesce. Runtime may delay a physical packet until
+its floor is reached, but it never changes an authored target or retries a
+missed Down.
+Successful completion also updates the worker's physical floors, so a later
+Up or same-key Down cannot violate a hold or release interval after transport
+latency. An unobserved Down is `UnobservedBacklog`; a guaranteed infeasible
+Down is `PhysicalWindowExpired`; a final pre-call race is
+`DownExpiredBeforeSend`. Each miss preserves authored timestamps and prevents
+a catch-up send.
 
 A transport zero/partial result is terminal and is handled by fail-closed
 cleanup; it is not retried in production. Strict timing evaluates completion

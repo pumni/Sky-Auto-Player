@@ -45,7 +45,7 @@ impl HoldForensics {
         full_transport_success: bool,
         metrics: &mut WorkerMetricsLocal,
         qpc_clock: QpcClock,
-        down_late_grace_ticks: DurationTicks,
+        timing_margin_ticks: DurationTicks,
     ) -> Result<(), DispatchStep> {
         if !full_transport_success {
             return Ok(());
@@ -74,7 +74,7 @@ impl HoldForensics {
                     completion_qpc,
                     metrics,
                     qpc_clock,
-                    down_late_grace_ticks,
+                    timing_margin_ticks,
                 )?;
             } else {
                 metrics.hold_unmatched_up_count = metrics.hold_unmatched_up_count.saturating_add(1);
@@ -107,7 +107,7 @@ fn observe_hold_pair(
     up_completion_qpc: QpcTicks,
     metrics: &mut WorkerMetricsLocal,
     qpc_clock: QpcClock,
-    down_late_grace_ticks: DurationTicks,
+    timing_margin_ticks: DurationTicks,
 ) -> Result<(), DispatchStep> {
     let authored_hold_ticks = up_target_qpc
         .checked_duration_since(anchor.target_qpc)
@@ -176,7 +176,7 @@ fn observe_hold_pair(
     metrics.max_completion_hold_shrink_us = metrics
         .max_completion_hold_shrink_us
         .max(completion_shrink_us);
-    if pre_call_shrink_ticks > down_late_grace_ticks.as_u64() {
+    if pre_call_shrink_ticks > timing_margin_ticks.as_u64() {
         metrics.pre_call_hold_shrink_over_grace_count = metrics
             .pre_call_hold_shrink_over_grace_count
             .saturating_add(1);

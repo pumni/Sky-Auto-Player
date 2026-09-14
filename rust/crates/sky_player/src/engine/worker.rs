@@ -15,7 +15,6 @@ mod health;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod health;
 mod orchestration;
-#[allow(dead_code)]
 mod physical_timing_guard;
 mod planning;
 mod startup;
@@ -61,7 +60,9 @@ pub(crate) use dispatch_loop::preflight_prepared_plan;
 pub(crate) use dispatch_loop::publish_live_metrics_after_dispatch;
 #[cfg(any(test, feature = "test-support"))]
 #[allow(unused_imports)]
-pub(crate) use dispatch_loop::{preroll_manual_pause_cancels, startup_focus_loss_is_terminal};
+pub(crate) use dispatch_loop::{
+    physical_wait_target_for_plan, preroll_manual_pause_cancels, startup_focus_loss_is_terminal,
+};
 
 #[cfg(any(test, feature = "test-support"))]
 #[cfg(test)]
@@ -260,6 +261,7 @@ pub struct PreparationCounts {
 pub(crate) struct WorkerRuntime {
     pub(crate) preparation_probe: DispatchPreparationProbe,
     pub(crate) production_forensics: ProductionHoldForensics,
+    pub(crate) physical_timing_guard: Option<physical_timing_guard::PhysicalTimingGuard>,
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
@@ -274,7 +276,6 @@ pub(crate) struct WorkerRuntime {
     /// Musical Down admission state. Up-only safety sends never mutate this
     /// state; authorization is tied to the exact frozen authored boundary.
     pub(crate) down_boundary_state: DownBoundaryState,
-    pub(crate) last_dispatch_was_missed_down: bool,
     future_physical_wait_target_qpc: Option<QpcTicks>,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) force_full_cleanup: bool,
@@ -290,6 +291,34 @@ pub(crate) struct WorkerRuntime {
 }
 
 impl WorkerRuntime {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_physical_timing_guard_for_test(
+        &mut self,
+        frame_base_hold_ticks: DurationTicks,
+        frame_ticks: DurationTicks,
+        timing_margin_ticks: DurationTicks,
+    ) {
+        self.physical_timing_guard = Some(physical_timing_guard::PhysicalTimingGuard::new(
+            frame_base_hold_ticks,
+            frame_ticks,
+            timing_margin_ticks,
+        ));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn latest_down_start_for_test(
+        &self,
+        authored_target_qpc: QpcTicks,
+        up_mask: u16,
+        down_mask: u16,
+    ) -> Option<QpcTicks> {
+        self.physical_timing_guard
+            .as_ref()?
+            .query(authored_target_qpc, up_mask, down_mask)
+            .ok()?
+            .latest_down_start_qpc
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn create_test_runtime(verified_target: Option<TargetStamp>) -> Self {
         Self {
@@ -333,52 +362,8 @@ impl WorkerRuntime {
     }
 
     #[inline]
-    pub(crate) fn mark_down_commit_started(&mut self, late_rescue_consumed: bool) {
-        self.down_boundary_state = DownBoundaryState::AwaitingFuture {
-            late_rescue_available: !late_rescue_consumed,
-        };
-    }
-
-    #[inline]
-    pub(crate) fn mark_down_boundary_missed(&mut self) {
-        if self.down_boundary_state.awaiting_future() {
-            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
-                late_rescue_available: false,
-            };
-        }
-    }
-
-    #[inline]
     pub(crate) fn invalidate_down_authorization(&mut self) {
-        if self.down_boundary_state.awaiting_future() {
-            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
-                late_rescue_available: false,
-            };
-        }
-    }
-
-    #[inline]
-    pub(crate) fn try_consume_late_discovery_rescue(
-        &mut self,
-        lateness: DurationTicks,
-        grace: DurationTicks,
-    ) -> bool {
-        if !self.down_boundary_state.late_rescue_available() || lateness > grace {
-            return false;
-        }
-        self.down_boundary_state = DownBoundaryState::AwaitingFuture {
-            late_rescue_available: false,
-        };
-        true
-    }
-
-    #[inline]
-    pub(crate) fn consume_late_discovery_rescue_credit(&mut self) {
-        if self.down_boundary_state.late_rescue_available() {
-            self.down_boundary_state = DownBoundaryState::AwaitingFuture {
-                late_rescue_available: false,
-            };
-        }
+        self.down_boundary_state = DownBoundaryState::AwaitingFuture;
     }
 
     /// Model `WaitBoundary::Due { wait_result: None }` after a future plan
@@ -403,7 +388,7 @@ pub(super) struct WorkerErrorState {
 #[derive(Clone, Copy)]
 pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
-    pub(super) down_late_grace_ticks: DurationTicks,
+    pub(super) timing_margin_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
@@ -433,7 +418,7 @@ impl WorkerTimingState {
     pub(crate) fn create_test_timing() -> Self {
         Self {
             strict_timing: false,
-            down_late_grace_ticks: DurationTicks::ZERO,
+            timing_margin_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,
@@ -623,7 +608,6 @@ mod observer_profile_tests {
     use super::{
         DownBoundaryState, PhysicalBoundaryStamp, QpcTicks, WorkerObserverState, WorkerRuntime,
     };
-    use sky_dispatch_core::time::DurationTicks;
 
     fn boundary(source_action_index: u32) -> PhysicalBoundaryStamp {
         PhysicalBoundaryStamp {
@@ -645,86 +629,22 @@ mod observer_profile_tests {
     }
 
     #[test]
-    // W0 migration characterization: W2 must replace this rescue-credit
-    // behavior when every production Down requires future authorization.
-    fn late_rescue_cutoff_matrix_is_inclusive_and_one_shot() {
-        let grace = DurationTicks::from_raw(500);
-        for lateness in [0, 1, 100, 499, 500] {
-            let mut runtime = WorkerRuntime::create_test_runtime(None);
-            assert_eq!(runtime.down_boundary_state, DownBoundaryState::Initial);
-            runtime.mark_down_commit_started(false);
-            assert_eq!(
-                runtime.down_boundary_state,
-                DownBoundaryState::AwaitingFuture {
-                    late_rescue_available: true,
-                }
-            );
-            assert!(
-                runtime
-                    .try_consume_late_discovery_rescue(DurationTicks::from_raw(lateness), grace,)
-            );
-            assert!(!runtime.try_consume_late_discovery_rescue(DurationTicks::from_raw(1), grace,));
-            assert!(matches!(
-                runtime.down_boundary_state,
-                DownBoundaryState::AwaitingFuture {
-                    late_rescue_available: false
-                }
-            ));
-        }
-        let mut beyond = WorkerRuntime::create_test_runtime(None);
-        beyond.mark_down_commit_started(false);
-        assert!(!beyond.try_consume_late_discovery_rescue(DurationTicks::from_raw(501), grace,));
-    }
-
-    #[test]
-    // W0 migration characterization: remove the one-shot rescue transitions
-    // along with the old authorization state in W2.
-    fn future_observation_rearms_rescue_only_after_boundary_commit() {
+    fn only_exact_future_observation_authorizes_a_down_boundary() {
         let mut runtime = WorkerRuntime::create_test_runtime(None);
-        runtime.mark_down_commit_started(false);
-        assert!(runtime.try_consume_late_discovery_rescue(
-            DurationTicks::from_raw(1),
-            DurationTicks::from_raw(500),
-        ));
+        assert_eq!(
+            runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture
+        );
         let stamp = boundary(7);
+        assert!(!runtime.authorize_down_boundary(stamp));
         runtime.observe_future_down_boundary(stamp);
         assert!(runtime.authorize_down_boundary(stamp));
-        assert!(!runtime.try_consume_late_discovery_rescue(
-            DurationTicks::from_raw(1),
-            DurationTicks::from_raw(500),
-        ));
-        runtime.mark_down_commit_started(false);
-        assert!(runtime.try_consume_late_discovery_rescue(
-            DurationTicks::from_raw(1),
-            DurationTicks::from_raw(500),
-        ));
-    }
-
-    #[test]
-    // W0 migration characterization: this randomized invariant is specific to
-    // the rescue credit that W2 removes.
-    fn randomized_rescue_sequence_never_catches_up_without_future_observation() {
-        let grace = DurationTicks::from_raw(500);
-        let mut runtime = WorkerRuntime::create_test_runtime(None);
-        runtime.mark_down_commit_started(false);
-        let mut state = 0x1357_9bdf_u64;
-        let mut rescue_sent_since_future = false;
-        for _ in 0..10_000 {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1);
-            if state & 0b111 == 0 {
-                runtime.observe_future_down_boundary(boundary((state >> 8) as u32));
-                runtime.mark_down_commit_started(false);
-                rescue_sent_since_future = false;
-                continue;
-            }
-            let rescued = runtime
-                .try_consume_late_discovery_rescue(DurationTicks::from_raw(state % 501), grace);
-            if rescued {
-                assert!(!rescue_sent_since_future);
-                rescue_sent_since_future = true;
-            }
-        }
+        assert!(!runtime.authorize_down_boundary(boundary(8)));
+        runtime.invalidate_down_authorization();
+        assert_eq!(
+            runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture
+        );
+        assert!(!runtime.authorize_down_boundary(stamp));
     }
 }

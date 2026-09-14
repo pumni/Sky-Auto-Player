@@ -5,7 +5,7 @@ use super::observation::{
 use crate::engine::worker::timing::signed_timeline_delta_ticks;
 use crate::engine::{
     RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP,
-    TRACE_SEND_STATUS_DEADLINE_MISSED, TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector,
+    TRACE_SEND_STATUS_DOWN_EXPIRED, TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector,
     TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
 };
 use sky_dispatch_core::time::TimelineTicks;
@@ -72,7 +72,7 @@ pub(super) fn drain_down_miss(
     )
     .map_err(|error| {
         DispatchStep::Terminate(format!(
-            "cutoff trace QPC delta conversion failure: {error}"
+            "Down-miss trace QPC delta conversion failure: {error}"
         ))
     })?;
     let down_count = observation.down_mask.count_ones() as usize;
@@ -82,10 +82,16 @@ pub(super) fn drain_down_miss(
         (true, true) => TRACE_KIND_MIXED,
         (false, false) => TRACE_KIND_DOWN,
     };
-    let (outcome, send_status) = if observation.cutoff_miss {
-        ("down_cutoff_miss", TRACE_SEND_STATUS_DEADLINE_MISSED)
-    } else {
-        ("down_backlog_miss", TRACE_SEND_STATUS_NOT_ATTEMPTED)
+    let (outcome, send_status) = match observation.kind {
+        super::observation::DownMissKind::UnobservedBacklog => {
+            ("down_unobserved_backlog", TRACE_SEND_STATUS_NOT_ATTEMPTED)
+        }
+        super::observation::DownMissKind::PhysicalWindowExpired => {
+            ("physical_window_expired", TRACE_SEND_STATUS_NOT_ATTEMPTED)
+        }
+        super::observation::DownMissKind::DownExpiredBeforeSend => {
+            ("down_expired_before_send", TRACE_SEND_STATUS_DOWN_EXPIRED)
+        }
     };
     if let Err(error) = telemetry.try_push(|| {
         RtTraceRecord::dispatched(
@@ -195,9 +201,10 @@ pub(super) fn drain_blocked_unfocused_observation(
 
 #[cfg(test)]
 mod tests {
+    use super::super::observation::DownMissKind;
     use super::*;
     use crate::engine::{
-        TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_SEND_STATUS_DEADLINE_MISSED,
+        TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_SEND_STATUS_DOWN_EXPIRED,
         TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryMode,
     };
     use sky_dispatch_win32::clock::QpcTicks;
@@ -214,7 +221,7 @@ mod tests {
             observed_qpc: QpcTicks::from_raw(1_021),
             up_mask: 0b0001,
             down_mask: 0b0001,
-            cutoff_miss: true,
+            kind: DownMissKind::DownExpiredBeforeSend,
         };
         let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 4);
 
@@ -227,8 +234,11 @@ mod tests {
         assert_eq!(record.source_action_index, 41);
         assert_eq!(record.event_index, 41);
         assert_eq!(record.kind, TRACE_KIND_MIXED);
-        assert_eq!(record.outcome, trace_outcome_code("down_cutoff_miss"));
-        assert_eq!(record.send_status, TRACE_SEND_STATUS_DEADLINE_MISSED);
+        assert_eq!(
+            record.outcome,
+            trace_outcome_code("down_expired_before_send")
+        );
+        assert_eq!(record.send_status, TRACE_SEND_STATUS_DOWN_EXPIRED);
         assert_eq!(record.physical_target_qpc_ticks, 1_000);
         assert!(record.physical_target_qpc_available);
         assert!(!record.pre_call_qpc_available);
@@ -260,7 +270,7 @@ mod tests {
             observed_qpc: QpcTicks::from_raw(1_021),
             up_mask: 0,
             down_mask: 0b11,
-            cutoff_miss: false,
+            kind: DownMissKind::UnobservedBacklog,
         };
         let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 4);
 
@@ -271,7 +281,10 @@ mod tests {
         assert_eq!(record.compiled_packet_index, 52);
         assert!(record.compiled_packet_index_available);
         assert_eq!(record.kind, TRACE_KIND_DOWN);
-        assert_eq!(record.outcome, trace_outcome_code("down_backlog_miss"));
+        assert_eq!(
+            record.outcome,
+            trace_outcome_code("down_unobserved_backlog")
+        );
         assert_eq!(record.send_status, TRACE_SEND_STATUS_NOT_ATTEMPTED);
         assert_eq!(record.physical_target_qpc_ticks, 1_000);
         assert!(!record.pre_call_qpc_available);
@@ -281,6 +294,35 @@ mod tests {
         assert_eq!(record.requested_count, 2);
         assert_eq!(record.sent_count, 0);
         assert_eq!(record.skipped_count, 2);
+        assert_eq!(record.send_attempts, 0);
+    }
+
+    #[test]
+    fn physical_window_expiration_is_distinct_from_sender_race_and_backlog() {
+        let observation = DownMissObservation {
+            source_action_index: 12,
+            compiled_packet_index: Some(61),
+            authored_ticks: TimelineTicks::from_raw(10),
+            effective_deadline_ticks: TimelineTicks::from_raw(12),
+            wake_ticks: TimelineTicks::from_raw(20),
+            physical_target_qpc: QpcTicks::from_raw(1_000),
+            observed_qpc: QpcTicks::from_raw(1_021),
+            up_mask: 0,
+            down_mask: 0b101,
+            kind: DownMissKind::PhysicalWindowExpired,
+        };
+        let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 4);
+
+        drain_down_miss(&observation, &mut collector).expect("record physical window miss");
+
+        let record = collector.output.records.front().expect("trace record");
+        assert_eq!(
+            record.outcome,
+            trace_outcome_code("physical_window_expired")
+        );
+        assert_eq!(record.send_status, TRACE_SEND_STATUS_NOT_ATTEMPTED);
+        assert_eq!(record.requested_count, 2);
+        assert_eq!(record.sent_count, 0);
         assert_eq!(record.send_attempts, 0);
     }
 }

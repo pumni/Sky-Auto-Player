@@ -1315,7 +1315,6 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.locator('.profile-timing-summary dt')).toHaveText([
     'Target hold',
     'Release gap',
-    'Late Down tolerance',
   ]);
   await expect(popover.locator('.timing-margin-control')).toContainText(
     'Timing Margin · rec. 500 µs',

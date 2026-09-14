@@ -822,7 +822,6 @@
       "timing_margin_us": 500,
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
-      "down_late_grace_us": 2000,
       "min_hold_us": 10918,
       "min_release_gap_us": 8834,
       "focus_restore_grace_us": 100000
@@ -834,7 +833,6 @@
       "timing_margin_us": 1300,
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
-      "down_late_grace_us": 500,
       "min_hold_us": 11718,
       "min_release_gap_us": 9634,
       "focus_restore_grace_us": 100000
@@ -846,7 +844,6 @@
       "timing_margin_us": 800,
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
-      "down_late_grace_us": 500,
       "min_hold_us": 11218,
       "min_release_gap_us": 9134,
       "focus_restore_grace_us": 100000
@@ -858,7 +855,6 @@
       "timing_margin_us": 800,
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
-      "down_late_grace_us": 500,
       "min_hold_us": 11218,
       "min_release_gap_us": 9134,
       "focus_restore_grace_us": 100000

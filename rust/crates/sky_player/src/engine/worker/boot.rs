@@ -221,7 +221,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let frame_us = 1_000_000u64.div_ceil(u64::from(config.timing.game_fps));
+    let frame_us = config.timing.frame_us;
     let frame_ticks = match qpc_clock.duration_from_us(frame_us) {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -245,16 +245,32 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.runtime
         .production_forensics
         .set_frame_policies(frame_ticks, release_gap_ticks);
-    let down_late_grace_ticks = match qpc_clock.duration_from_us(config.timing.down_late_grace_us) {
+    let frame_base_hold_ticks = match qpc_clock.duration_from_us(config.timing.frame_base_hold_us) {
         Ok(ticks) => ticks,
         Err(error) => {
             return admission_failure(
                 &mut backend,
                 metrics,
-                format!("down late-grace conversion failed: {error:?}"),
+                format!("base hold conversion failed: {error:?}"),
             );
         }
     };
+    let timing_margin_ticks = match qpc_clock.duration_from_us(config.timing.timing_margin_us) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("timing-margin conversion failed: {error:?}"),
+            );
+        }
+    };
+    core.runtime.physical_timing_guard =
+        Some(super::physical_timing_guard::PhysicalTimingGuard::new(
+            frame_base_hold_ticks,
+            frame_ticks,
+            timing_margin_ticks,
+        ));
     let strict_down_completion_late_ticks =
         match qpc_clock.duration_from_us(config.timing.strict_down_completion_late_us) {
             Ok(ticks) => ticks,
@@ -592,7 +608,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let start_process_cpu_us = current_process_cpu_time_us();
     core.timing = Some(WorkerTimingState {
         strict_timing: config.timing.strict_timing,
-        down_late_grace_ticks,
+        timing_margin_ticks,
         strict_down_completion_late_ticks,
         strict_up_completion_late_ticks,
         focus_restore_grace_ticks,

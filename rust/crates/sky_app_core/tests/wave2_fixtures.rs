@@ -41,7 +41,7 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
     );
     assert_eq!(
         raw["config_layouts"]["legacy_v2"]["migrated_schema_version"],
-        6
+        7
     );
     assert_eq!(
         raw["config_layouts"]["current_v3"]["normalized_theme"],
@@ -57,7 +57,6 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
             playback_defaults: Some(PlaybackDefaultsPatch {
                 hold_frames: Some(valid["default_hold_frames"].as_f64().unwrap()),
                 timing_margin_us: Some(valid["default_timing_margin_us"].as_u64().unwrap()),
-                down_late_grace_us: None,
                 tempo_scale: Some(valid["default_tempo_scale"].as_f64().unwrap()),
                 fps: Some(valid["game_fps"].as_u64().unwrap() as u16),
             }),

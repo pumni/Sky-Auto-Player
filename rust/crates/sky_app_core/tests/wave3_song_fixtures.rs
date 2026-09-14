@@ -52,7 +52,6 @@ fn schedule_and_risk_cases_match_python_oracle_fields() {
             case["fps"].as_u64().unwrap() as u16,
             case["hold_frames"].as_f64().unwrap(),
             case["timing_margin_us"].as_u64().unwrap(),
-            500,
         )
         .expect("timing policy oracle case");
         let schedule =
@@ -131,7 +130,6 @@ fn timing_policy_cases_match_the_authored_timing_contract() {
             case["fps"].as_u64().unwrap() as u16,
             case["hold_frames"].as_f64().unwrap(),
             case["timing_margin_us"].as_u64().unwrap(),
-            case["down_late_grace_us"].as_u64().unwrap(),
         )
         .expect("materialized policy oracle case");
         assert_eq!(
@@ -142,11 +140,6 @@ fn timing_policy_cases_match_the_authored_timing_contract() {
         assert_eq!(
             policy.frame_base_hold_us,
             case["frame_base_hold_us"].as_u64().unwrap(),
-            "{case}"
-        );
-        assert_eq!(
-            policy.down_late_grace_us,
-            case["down_late_grace_us"].as_u64().unwrap(),
             "{case}"
         );
         assert_eq!(

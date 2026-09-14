@@ -10,9 +10,6 @@ const options: PlaybackOptionSets = {
   timing_margin_min_us: 0,
   timing_margin_max_us: 3_000,
   timing_margin_step_us: 100,
-  down_late_grace_min_us: 0,
-  down_late_grace_max_us: 5_000,
-  down_late_grace_step_us: 100,
 };
 
 const recommendation: TimingMarginRecommendation = {

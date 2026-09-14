@@ -134,7 +134,7 @@ pub(crate) fn create_mock_backend(
             // The packet-emitter path below is the only mock path that can
             // model this typed no-syscall sender result. Keep the legacy
             // scan-code emitter total for tests that exercise it directly.
-            Some(InjectedSendOutcome::DeadlineMissedBeforeSend) => {
+            Some(InjectedSendOutcome::DownExpiredBeforeSend) => {
                 mock_platform_send_result_from_started_ticks(
                     qpc_clock,
                     Ok(sender_started_ticks),
@@ -229,12 +229,9 @@ fn physical_packet_outcome(
         std::thread::sleep(Duration::from_micros(total_latency_us));
     }
     let scripted = script.resolve(call_index);
-    if matches!(
-        scripted,
-        Some(InjectedSendOutcome::DeadlineMissedBeforeSend)
-    ) {
+    if matches!(scripted, Some(InjectedSendOutcome::DownExpiredBeforeSend)) {
         return SendTransactionOutcome {
-            status: SendTransactionStatus::DeadlineMissedBeforeSend,
+            status: SendTransactionStatus::DownExpiredBeforeSend,
             evidence: SendEvidence {
                 requested_mask,
                 confirmed_mask: 0,
@@ -286,8 +283,8 @@ fn physical_packet_outcome(
                 },
             };
         }
-        Some(InjectedSendOutcome::DeadlineMissedBeforeSend) => {
-            unreachable!("DeadlineMissedBeforeSend handled before the transport outcome match")
+        Some(InjectedSendOutcome::DownExpiredBeforeSend) => {
+            unreachable!("DownExpiredBeforeSend handled before the transport outcome match")
         }
     };
     let deadline = match started_ticks.checked_add_duration(DurationTicks::from_raw(latency_ticks))

@@ -50,59 +50,37 @@ pub(crate) struct PhysicalBoundaryStamp {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum DownBoundaryState {
     #[default]
-    Initial,
-    AwaitingFuture {
-        late_rescue_available: bool,
-    },
+    AwaitingFuture,
     FutureAuthorized(PhysicalBoundaryStamp),
 }
 
 impl DownBoundaryState {
     #[inline]
     pub(crate) const fn awaiting_future(self) -> bool {
-        !matches!(self, Self::Initial)
-    }
-
-    #[inline]
-    pub(crate) const fn late_rescue_available(self) -> bool {
-        matches!(
-            self,
-            Self::AwaitingFuture {
-                late_rescue_available: true
-            }
-        )
+        matches!(self, Self::AwaitingFuture)
     }
 
     #[inline]
     pub(crate) const fn authorization(self) -> Option<PhysicalBoundaryStamp> {
         match self {
             Self::FutureAuthorized(stamp) => Some(stamp),
-            Self::Initial | Self::AwaitingFuture { .. } => None,
+            Self::AwaitingFuture => None,
         }
     }
 }
 
 /// Musical admission class for one prepared Down-bearing boundary.
-///
-/// `LateDiscoveryRescue` is deliberately distinct from exact future
-/// authorization: it permits one isolated small-late attempt but never
-/// changes the authored target or bypasses the sender cutoff.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DownBoundaryAdmission {
-    Normal,
-    LateDiscoveryRescue,
-    MissedBacklog,
+    Authorized,
+    UnobservedBacklog,
+    PhysicalWindowExpired,
 }
 
 impl DownBoundaryAdmission {
     #[inline]
     pub(crate) const fn is_missed(self) -> bool {
-        matches!(self, Self::MissedBacklog)
-    }
-
-    #[inline]
-    pub(crate) const fn is_late_rescue(self) -> bool {
-        matches!(self, Self::LateDiscoveryRescue)
+        matches!(self, Self::UnobservedBacklog | Self::PhysicalWindowExpired)
     }
 }
 
@@ -111,6 +89,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) effective_now_ticks: TimelineTicks,
     pub(crate) now_ticks: QpcTicks,
     pub(crate) physical_target_qpc: QpcTicks,
+    pub(crate) latest_down_start_qpc: Option<QpcTicks>,
     pub(crate) down_admission: DownBoundaryAdmission,
     pub(crate) focus_loss_fault: bool,
     pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
@@ -207,13 +186,3 @@ pub(crate) enum PhysicalCommit {
         due_ticks: TimelineTicks,
     },
 }
-
-#[inline]
-#[cfg(test)]
-fn down_late_grace_reached(now_ticks: QpcTicks, latest_allowed_down_qpc: Option<QpcTicks>) -> bool {
-    latest_allowed_down_qpc.is_some_and(|latest| now_ticks > latest)
-}
-
-#[cfg(test)]
-#[path = "cutoff_tests.rs"]
-mod tests;

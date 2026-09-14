@@ -14,7 +14,7 @@ impl TrackedKeyState {
         prepared: &PreparedPhysicalPacket,
         qpc_clock: crate::clock::QpcClock,
         physical_target_qpc: QpcTicks,
-        latest_allowed_down_qpc: Option<QpcTicks>,
+        latest_down_start_qpc: Option<QpcTicks>,
         test_started_ticks: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
@@ -57,10 +57,10 @@ impl TrackedKeyState {
             None
         };
         if let Some(started_ticks) = started_ticks {
-            if super::super::packet::down_cutoff_missed(
+            if super::super::packet::down_latest_start_expired(
                 packet.down_mask,
                 started_ticks,
-                latest_allowed_down_qpc,
+                latest_down_start_qpc,
             ) {
                 return self.apply_packet_outcome(
                     packet,
@@ -85,7 +85,7 @@ impl TrackedKeyState {
                         prepared,
                         qpc_clock,
                         started_ticks,
-                        latest_allowed_down_qpc,
+                        latest_down_start_qpc,
                     );
                 return self.apply_packet_outcome(packet, outcome);
             }
@@ -94,7 +94,7 @@ impl TrackedKeyState {
             prepared,
             qpc_clock,
             physical_target_qpc,
-            latest_allowed_down_qpc,
+            latest_down_start_qpc,
         );
         self.apply_packet_outcome(packet, outcome)
     }
@@ -105,14 +105,14 @@ impl TrackedKeyState {
         prepared: &PreparedPhysicalPacket,
         qpc_clock: crate::clock::QpcClock,
         physical_target_qpc: QpcTicks,
-        latest_allowed_down_qpc: Option<QpcTicks>,
+        latest_down_start_qpc: Option<QpcTicks>,
         started_ticks: QpcTicks,
     ) -> SendTransactionOutcome {
         self.send_prepared_physical_packet_at_target_with_cutoff(
             prepared,
             qpc_clock,
             physical_target_qpc,
-            latest_allowed_down_qpc,
+            latest_down_start_qpc,
             Some(started_ticks),
         )
     }

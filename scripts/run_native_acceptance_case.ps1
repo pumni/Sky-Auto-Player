@@ -4,10 +4,7 @@ param(
     [string]$Scenario,
     [Parameter(Mandatory)]
     [ValidateScript({ $_ -ge 0 -and $_ -le 3000 -and $_ % 100 -eq 0 })]
-    [int]$TimingMarginUs,
-    [Parameter(Mandatory)]
-    [ValidateScript({ $_ -ge 0 -and $_ -le 5000 -and $_ % 100 -eq 0 })]
-    [int]$LateDownToleranceUs
+    [int]$TimingMarginUs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -108,7 +105,6 @@ try {
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
         timing_margin_us = $TimingMarginUs
-        late_down_tolerance_us = $LateDownToleranceUs
         expected_hold_us = 16667 + $TimingMarginUs
         expected_release_gap_us = 16667 + $TimingMarginUs
         harness_path = $harness
@@ -129,8 +125,7 @@ try {
         '--sink-ready', $readyPath, '--sink-events', $eventsPath,
         '--target-hwnd', ([long]$sink.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture),
         '--scenario', $Scenario, '--evidence', $reportPath,
-        '--timing-margin-us', [string]$TimingMarginUs,
-        '--down-late-grace-us', [string]$LateDownToleranceUs
+        '--timing-margin-us', [string]$TimingMarginUs
     )
     $captured = @(& $harness @harnessArgs 2>&1)
     $nativeExit = $LASTEXITCODE
@@ -141,7 +136,7 @@ try {
     $reportLines = @(Get-Content -LiteralPath $reportPath)
     if ($reportLines.Count -ne 1) { throw 'native harness did not emit exactly one report' }
     $report = $reportLines[0] | ConvertFrom-Json
-    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs -or $report.down_late_grace_us -ne $LateDownToleranceUs) {
+    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs) {
         throw 'native report identity or selected settings do not match this invocation'
     }
 
@@ -185,7 +180,6 @@ try {
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
         timing_margin_us = $TimingMarginUs
-        late_down_tolerance_us = $LateDownToleranceUs
         started_utc = $startedUtc
         ended_utc = $endedUtc
         exit_code = $nativeExit
@@ -207,7 +201,7 @@ try {
         Write-Output ('EVIDENCE ' + $runDir)
         $resultCode = 1
     } else {
-        Write-Output ('PASS ' + $Scenario + ' margin=' + $TimingMarginUs + ' tolerance=' + $LateDownToleranceUs + '; sink window ' + $first + '..' + $last + ' (' + $observedWindow.Count + ' events)')
+        Write-Output ('PASS ' + $Scenario + ' margin=' + $TimingMarginUs + '; sink window ' + $first + '..' + $last + ' (' + $observedWindow.Count + ' events)')
         Write-Output ('EVIDENCE ' + $runDir)
         $resultCode = 0
     }
@@ -216,7 +210,6 @@ try {
         run_id = $runId
         scenario = $Scenario
         timing_margin_us = $TimingMarginUs
-        late_down_tolerance_us = $LateDownToleranceUs
         source_revision = if ($head) { $head } else { $null }
         error = $_.Exception.Message
     }

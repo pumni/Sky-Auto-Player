@@ -79,6 +79,7 @@ const MAX_CALIBRATION_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CALIBRATION_ERROR_BYTES: usize = 64 * 1024;
 const CALIBRATION_DEFAULT_TIMEOUT_SECONDS: f64 = 120.0;
 const CALIBRATION_GLOBAL_MAX_SECONDS: f64 = 120.0;
+const CALIBRATION_TIMING_MARGIN_GUARD_US: u64 = 100;
 const CALIBRATION_PUBLICATION_RESERVE_SECONDS: f64 = 5.0;
 const CALIBRATION_PARENT_EXIT_RESERVE_SECONDS: f64 = 1.0;
 const CALIBRATION_NATIVE_EXIT_RESERVE_SECONDS: f64 = 1.0;
@@ -268,7 +269,6 @@ struct NativeCalibrationService {
 struct NativeCalibrationOperation {
     operation_id: String,
     state: CalibrationState,
-    down_late_grace_us: u64,
     cancel: Arc<AtomicBool>,
     child: Arc<Mutex<Option<std::process::Child>>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -311,7 +311,6 @@ impl NativeCalibrationService {
     fn start(
         self: &Arc<Self>,
         request: CalibrationStartRequest,
-        down_late_grace_us: u64,
     ) -> Result<CalibrationStartAckDto, String> {
         validate_calibration_request(&request)?;
         let operation_id = opaque_native_id()?;
@@ -344,7 +343,6 @@ impl NativeCalibrationService {
             *current = Some(NativeCalibrationOperation {
                 operation_id: operation_id.clone(),
                 state: CalibrationState::Running,
-                down_late_grace_us,
                 cancel: cancel.clone(),
                 child: child.clone(),
                 worker: None,
@@ -716,7 +714,7 @@ impl NativeCalibrationService {
         if self.closed.load(Ordering::Acquire) {
             return;
         }
-        let (reservation, down_late_grace_us) = if let Ok(mut operation) = self.operation.lock() {
+        let reservation = if let Ok(mut operation) = self.operation.lock() {
             let Some(current) = operation.as_mut() else {
                 return;
             };
@@ -731,9 +729,9 @@ impl NativeCalibrationService {
                 return;
             }
             current.state = state;
-            (current.reservation.take(), current.down_late_grace_us)
+            current.reservation.take()
         } else {
-            (None, sky_app_core::timing::DEFAULT_DOWN_LATE_GRACE_US)
+            None
         };
         let recommendation_available = outcome == CalibrationOutcome::Succeeded;
         let recommended_timing_margin_us = recommendation_available.then(|| {
@@ -741,7 +739,7 @@ impl NativeCalibrationService {
                 return sky_app_core::settings::DEFAULT_TIMING_MARGIN_US;
             }
             let reserve_us = margin_us.unwrap_or(sky_native_adapters::DEFAULT_TRANSPORT_MARGIN_US);
-            let evidence_budget_us = down_late_grace_us.saturating_add(reserve_us);
+            let evidence_budget_us = reserve_us.saturating_add(CALIBRATION_TIMING_MARGIN_GUARD_US);
             evidence_budget_us.div_ceil(sky_app_core::settings::TIMING_MARGIN_STEP_US)
                 * sky_app_core::settings::TIMING_MARGIN_STEP_US
         });
@@ -1696,8 +1694,7 @@ impl NativeDesktopRuntime {
     pub(crate) fn bootstrap(&self) -> Result<BootstrapDto, String> {
         let snapshot = self.ensure_catalog_loaded()?;
         let settings = self.settings_snapshot()?;
-        let timing_margin_recommendation =
-            self.timing_margin_recommendation(settings.playback_defaults.down_late_grace_us);
+        let timing_margin_recommendation = self.timing_margin_recommendation();
         let result = BootstrapDto {
             app_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: crate::DESKTOP_PROTOCOL_VERSION,
@@ -1711,9 +1708,6 @@ impl NativeDesktopRuntime {
                 timing_margin_min_us: sky_app_core::settings::MIN_TIMING_MARGIN_US,
                 timing_margin_max_us: sky_app_core::settings::MAX_TIMING_MARGIN_US,
                 timing_margin_step_us: sky_app_core::settings::TIMING_MARGIN_STEP_US,
-                down_late_grace_min_us: sky_app_core::settings::MIN_DOWN_LATE_GRACE_US,
-                down_late_grace_max_us: sky_app_core::settings::MAX_DOWN_LATE_GRACE_US,
-                down_late_grace_step_us: sky_app_core::settings::DOWN_LATE_GRACE_STEP_US,
             },
             theme: settings.theme.clone(),
             telemetry_enabled: settings.telemetry_enabled,
@@ -1755,17 +1749,11 @@ impl NativeDesktopRuntime {
 
     fn settings_dto(&self) -> Result<SettingsDto, String> {
         let settings = self.settings_snapshot()?;
-        Ok(settings_dto(
-            &settings,
-            self.timing_margin_recommendation(settings.playback_defaults.down_late_grace_us),
-        ))
+        Ok(settings_dto(&settings, self.timing_margin_recommendation()))
     }
 
-    fn timing_margin_recommendation(
-        &self,
-        down_late_grace_us: u64,
-    ) -> crate::commands::TimingMarginRecommendationDto {
-        timing_margin_recommendation(self.paths.calibration_cache_path(), down_late_grace_us)
+    fn timing_margin_recommendation(&self) -> crate::commands::TimingMarginRecommendationDto {
+        timing_margin_recommendation(self.paths.calibration_cache_path())
     }
 
     fn patch_settings(&self, patch: SettingsPatch) -> Result<SettingsDto, String> {
@@ -1783,7 +1771,6 @@ impl NativeDesktopRuntime {
             playback_defaults: patch.playback_defaults.map(|value| PlaybackDefaultsPatch {
                 hold_frames: value.hold_frames,
                 timing_margin_us: value.timing_margin_us,
-                down_late_grace_us: value.down_late_grace_us,
                 tempo_scale: value.tempo_scale,
                 fps: value.fps,
             }),
@@ -1816,10 +1803,7 @@ impl NativeDesktopRuntime {
         if update_preferences_changed && let Some(update_service) = &self.update_service {
             update_service.reset();
         }
-        Ok(settings_dto(
-            &snapshot,
-            self.timing_margin_recommendation(snapshot.playback_defaults.down_late_grace_us),
-        ))
+        Ok(settings_dto(&snapshot, self.timing_margin_recommendation()))
     }
 
     fn update_preferences(&self) -> Result<UpdatePreferencesDto, String> {
@@ -2307,7 +2291,6 @@ impl NativeDesktopRuntime {
             settings.playback_defaults.fps,
             settings.playback_defaults.hold_frames,
             settings.playback_defaults.timing_margin_us,
-            settings.playback_defaults.down_late_grace_us,
         )?;
         let cached = self.analyze_song(
             &path,
@@ -2395,7 +2378,6 @@ impl NativeDesktopRuntime {
             settings.playback_defaults.fps,
             settings.playback_defaults.hold_frames,
             settings.playback_defaults.timing_margin_us,
-            settings.playback_defaults.down_late_grace_us,
         )?;
         for (song_id, title, path) in &entries {
             let already_cached = self
@@ -2590,10 +2572,8 @@ impl NativeDesktopRuntime {
             request.config.fps,
             request.config.hold_frames,
             request.config.timing_margin_us,
-            request.config.down_late_grace_us,
         )?;
-        let timing_margin_recommendation =
-            self.timing_margin_recommendation(request.config.down_late_grace_us);
+        let timing_margin_recommendation = self.timing_margin_recommendation();
         let schedule = build_schedule_with_policy(&song, request.config.tempo_scale, &policy)
             .map_err(|error| error.to_string())?;
         let risk = analyze_schedule_with_context(
@@ -2620,15 +2600,9 @@ impl NativeDesktopRuntime {
         fps: u16,
         hold_frames: f64,
         timing_margin_us: u64,
-        down_late_grace_us: u64,
     ) -> Result<MaterializedTimingPolicy, String> {
-        MaterializedTimingPolicy::from_user_margin(
-            fps,
-            hold_frames,
-            timing_margin_us,
-            down_late_grace_us,
-        )
-        .map_err(|error| error.to_string())
+        MaterializedTimingPolicy::from_user_margin(fps, hold_frames, timing_margin_us)
+            .map_err(|error| error.to_string())
     }
 
     fn start_playback(
@@ -2668,9 +2642,7 @@ impl NativeDesktopRuntime {
         &self,
         request: CalibrationStartRequest,
     ) -> Result<CalibrationStartAckDto, String> {
-        let settings = self.settings_snapshot()?;
-        self.calibration
-            .start(request, settings.playback_defaults.down_late_grace_us)
+        self.calibration.start(request)
     }
 
     fn cancel_calibration(
@@ -3037,14 +3009,12 @@ fn plan_fingerprint(
         "song_id": song_id,
         "config": {
             "dry_run": config.dry_run,
-            "down_late_grace_us": config.down_late_grace_us,
             "fps": config.fps,
             "hold_frames": config.hold_frames,
             "timing_margin_us": config.timing_margin_us,
             "tempo_scale": config.tempo_scale,
         },
         "policy": {
-            "down_late_grace_us": policy.down_late_grace_us,
             "fps": policy.fps,
             "frame_base_hold_us": policy.frame_base_hold_us,
             "timing_margin_us": policy.timing_margin_us,
@@ -3069,8 +3039,7 @@ fn settings_fingerprint(settings: &ApplicationSettings) -> Result<String, String
     // this cross-runtime identity cannot depend on Rust struct field order.
     let theme = serde_json::to_string(&settings.theme).map_err(json_error)?;
     let payload = format!(
-        "{{\"down_late_grace_us\": {}, \"fps\": {}, \"hold\": {}, \"telemetry\": {}, \"tempo\": {}, \"theme\": {}, \"timing_margin_us\": {}}}",
-        settings.playback_defaults.down_late_grace_us,
+        "{{\"fps\": {}, \"hold\": {}, \"telemetry\": {}, \"tempo\": {}, \"theme\": {}, \"timing_margin_us\": {}}}",
         settings.playback_defaults.fps,
         settings.playback_defaults.hold_frames,
         settings.telemetry_enabled,
@@ -3363,7 +3332,6 @@ impl NativePlaybackService {
                     config.fps,
                     hold_frames,
                     config.timing_margin_us,
-                    config.down_late_grace_us,
                 )
                 && let Ok(recommended_schedule) =
                     build_schedule_with_policy(&song, tempo_scale, &recommended_policy)
@@ -3372,7 +3340,6 @@ impl NativePlaybackService {
                 let recommended_config = PlaybackConfigDto {
                     hold_frames,
                     timing_margin_us: config.timing_margin_us,
-                    down_late_grace_us: config.down_late_grace_us,
                     tempo_scale,
                     fps: config.fps,
                     dry_run: config.dry_run,
@@ -3858,7 +3825,9 @@ impl NativePlaybackService {
                 game_fps: config.fps,
                 min_hold_us: policy.min_hold_us,
                 min_release_gap_us: policy.min_release_gap_us,
-                down_late_grace_us: policy.down_late_grace_us,
+                frame_us: policy.frame_us,
+                frame_base_hold_us: policy.frame_base_hold_us,
+                timing_margin_us: policy.timing_margin_us,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
@@ -4367,8 +4336,6 @@ fn sender_trace_export_json(
             "timing_margin_us": active.timing_policy.timing_margin_us,
             "target_hold_us": active.timing_policy.min_hold_us,
             "release_gap_us": active.timing_policy.min_release_gap_us,
-            "late_down_tolerance_us": active.timing_policy.down_late_grace_us,
-            "down_late_cutoff_us": active.timing_policy.down_late_grace_us,
         },
         "telemetry": telemetry,
     }))
@@ -4519,7 +4486,6 @@ fn publish_diagnostics_snapshot_for_active(
             timing_margin_us: active.timing_policy.timing_margin_us,
             min_hold_us: active.timing_policy.min_hold_us,
             min_release_gap_us: active.timing_policy.min_release_gap_us,
-            down_late_grace_us: active.timing_policy.down_late_grace_us,
             timing_margin_recommendation: active.timing_margin_recommendation.clone(),
             pre_call_lt_250us: sample.pre_call_lt_250us,
             pre_call_250_500us: sample.pre_call_250_500us,
@@ -4534,9 +4500,9 @@ fn publish_diagnostics_snapshot_for_active(
             chord_split_events: sample.chord_split_events,
             missed_down_boundaries: sample.missed_down_boundaries,
             missed_down_keys: sample.missed_down_keys,
-            missed_backlog_boundaries: sample.missed_backlog_boundaries,
-            missed_hard_late_boundaries: sample.missed_hard_late_boundaries,
-            final_gate_cutoff_misses: sample.final_gate_cutoff_misses,
+            unobserved_backlog_boundaries: sample.unobserved_backlog_boundaries,
+            physical_window_expired_boundaries: sample.physical_window_expired_boundaries,
+            down_expired_before_send: sample.down_expired_before_send,
             final_gate_control_rejections: sample.final_gate_control_rejections,
             final_gate_target_changes: sample.final_gate_target_changes,
             final_gate_focus_losses: sample.final_gate_focus_losses,
@@ -4585,9 +4551,9 @@ struct NativeDiagnosticsSample {
     chord_split_events: u64,
     missed_down_boundaries: u64,
     missed_down_keys: u64,
-    missed_backlog_boundaries: u64,
-    missed_hard_late_boundaries: u64,
-    final_gate_cutoff_misses: u64,
+    unobserved_backlog_boundaries: u64,
+    physical_window_expired_boundaries: u64,
+    down_expired_before_send: u64,
     final_gate_control_rejections: u64,
     final_gate_target_changes: u64,
     final_gate_focus_losses: u64,
@@ -4628,9 +4594,9 @@ impl NativeDiagnosticsSample {
             chord_split_events: 0,
             missed_down_boundaries: 0,
             missed_down_keys: 0,
-            missed_backlog_boundaries: 0,
-            missed_hard_late_boundaries: 0,
-            final_gate_cutoff_misses: 0,
+            unobserved_backlog_boundaries: 0,
+            physical_window_expired_boundaries: 0,
+            down_expired_before_send: 0,
             final_gate_control_rejections: 0,
             final_gate_target_changes: 0,
             final_gate_focus_losses: 0,
@@ -4690,9 +4656,9 @@ impl NativeDiagnosticsSample {
             chord_split_events: snapshot.chord_split_events,
             missed_down_boundaries: snapshot.missed_down_boundaries,
             missed_down_keys: snapshot.missed_down_keys,
-            missed_backlog_boundaries: snapshot.missed_backlog_boundaries,
-            missed_hard_late_boundaries: snapshot.missed_hard_late_boundaries,
-            final_gate_cutoff_misses: snapshot.final_gate_cutoff_misses,
+            unobserved_backlog_boundaries: snapshot.unobserved_backlog_boundaries,
+            physical_window_expired_boundaries: snapshot.physical_window_expired_boundaries,
+            down_expired_before_send: snapshot.down_expired_before_send,
             final_gate_control_rejections: snapshot.final_gate_control_rejections,
             final_gate_target_changes: snapshot.final_gate_target_changes,
             final_gate_focus_losses: snapshot.final_gate_focus_losses,
@@ -5252,7 +5218,6 @@ fn playback_defaults(settings: &ApplicationSettings) -> PlaybackDefaultsDto {
     PlaybackDefaultsDto {
         hold_frames: settings.playback_defaults.hold_frames,
         timing_margin_us: settings.playback_defaults.timing_margin_us,
-        down_late_grace_us: settings.playback_defaults.down_late_grace_us,
         tempo_scale: settings.playback_defaults.tempo_scale,
         fps: settings.playback_defaults.fps,
         dry_run: false,
@@ -5274,11 +5239,10 @@ fn update_preferences_dto(settings: &ApplicationSettings) -> UpdatePreferencesDt
 
 fn timing_margin_recommendation(
     calibration_cache_path: impl AsRef<Path>,
-    down_late_grace_us: u64,
 ) -> crate::commands::TimingMarginRecommendationDto {
     let resolution = load_calibration_resolution(calibration_cache_path);
     let recommended_timing_margin_us = if resolution.qualified {
-        let evidence_budget = down_late_grace_us
+        let evidence_budget = CALIBRATION_TIMING_MARGIN_GUARD_US
             .checked_add(resolution.transport_reserve_us)
             .expect("bounded calibration reserve");
         evidence_budget.div_ceil(sky_app_core::settings::TIMING_MARGIN_STEP_US)
@@ -5349,7 +5313,6 @@ struct NativeCatalogViewportRequest {
 struct NativePlaybackPatch {
     hold_frames: Option<f64>,
     timing_margin_us: Option<u64>,
-    down_late_grace_us: Option<u64>,
     tempo_scale: Option<f64>,
     fps: Option<u16>,
 }
@@ -5396,7 +5359,6 @@ impl NativeSettingsPatch {
                 .map(|value| crate::commands::PlaybackPatch {
                     hold_frames: value.hold_frames,
                     timing_margin_us: value.timing_margin_us,
-                    down_late_grace_us: value.down_late_grace_us,
                     tempo_scale: value.tempo_scale,
                     fps: value.fps,
                 }),
@@ -5671,12 +5633,11 @@ mod tests {
             config: PlaybackConfigDto {
                 hold_frames: 1.0,
                 timing_margin_us: 800,
-                down_late_grace_us: 500,
                 tempo_scale: 1.0,
                 fps: 60,
                 dry_run: true,
             },
-            timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, 500)
+            timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("fixture timing policy"),
             timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
                 recommended_timing_margin_us: 800,
@@ -5715,7 +5676,6 @@ mod tests {
         let config = PlaybackConfigDto {
             hold_frames: 1.0,
             timing_margin_us: 800,
-            down_late_grace_us: 500,
             tempo_scale: 1.0,
             fps: 60,
             dry_run: false,
@@ -5724,7 +5684,6 @@ mod tests {
             config.fps,
             config.hold_frames,
             config.timing_margin_us,
-            config.down_late_grace_us,
         )
         .expect("fixture timing policy");
         let schedule = build_schedule_with_policy(&song, config.tempo_scale, &timing_policy)
@@ -5904,7 +5863,6 @@ mod tests {
         assert_eq!(document["timing_policy"]["timing_margin_us"], 800);
         assert_eq!(document["timing_policy"]["target_hold_us"], 17_467);
         assert_eq!(document["timing_policy"]["release_gap_us"], 17_467);
-        assert_eq!(document["timing_policy"]["down_late_cutoff_us"], 500);
         assert_eq!(document["telemetry"], telemetry);
     }
 
@@ -6095,7 +6053,6 @@ mod tests {
         *service.operation.lock().expect("operation") = Some(NativeCalibrationOperation {
             operation_id: "a".repeat(32),
             state: crate::ui_events::CalibrationState::Running,
-            down_late_grace_us: 500,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             child: Arc::new(Mutex::new(None)),
             worker: None,
@@ -6103,16 +6060,13 @@ mod tests {
             reservation: Some(reservation),
         });
         let error = Arc::new(service)
-            .start(
-                CalibrationStartRequest {
-                    mode: CalibrationMode::Quick,
-                    class_name: None,
-                    polyphony: None,
-                    samples: None,
-                    timeout_seconds: None,
-                },
-                500,
-            )
+            .start(CalibrationStartRequest {
+                mode: CalibrationMode::Quick,
+                class_name: None,
+                polyphony: None,
+                samples: None,
+                timeout_seconds: None,
+            })
             .expect_err("duplicate calibration");
         assert!(error.starts_with("already_running:"));
     }
@@ -6166,7 +6120,7 @@ mod tests {
             .publication
             .pause_before_next_admission(entered.clone(), release.clone());
         service
-            .start(quick_calibration_request(), 500)
+            .start(quick_calibration_request())
             .expect("start calibration");
         entered.wait();
 
@@ -6234,7 +6188,7 @@ mod tests {
             .publication
             .pause_after_next_admission(entered.clone(), release.clone());
         service
-            .start(quick_calibration_request(), 500)
+            .start(quick_calibration_request())
             .expect("start calibration");
         entered.wait();
 
@@ -6296,7 +6250,6 @@ mod tests {
         *service.operation.lock().expect("operation") = Some(NativeCalibrationOperation {
             operation_id: "h".repeat(32),
             state: CalibrationState::Running,
-            down_late_grace_us: 500,
             cancel: Arc::new(AtomicBool::new(false)),
             child: Arc::new(Mutex::new(None)),
             worker: Some(worker),
@@ -6407,13 +6360,13 @@ mod tests {
                 expected_margin.unwrap_or(300)
             );
             assert_eq!(resolution.qualified, expected_margin.is_some());
-            let recommendation = timing_margin_recommendation(&cache, 500);
+            let recommendation = timing_margin_recommendation(&cache);
             assert_eq!(
                 recommendation.recommended_timing_margin_us,
                 match worst {
-                    0 => 800,
-                    677 => 1_300,
-                    1_900 => 2_500,
+                    0 => 400,
+                    677 => 900,
+                    1_900 => 2_100,
                     _ => sky_app_core::settings::DEFAULT_TIMING_MARGIN_US,
                 }
             );
@@ -6443,17 +6396,15 @@ mod tests {
     #[test]
     fn unqualified_margin_recommendation_uses_default_timing_margin() {
         let path = std::env::temp_dir().join(format!(
-            "sky-down-tolerance-recommendation-{}-missing.json",
+            "sky-timing-margin-recommendation-{}-missing.json",
             std::process::id()
         ));
-        for cutoff in [500, 1_000, 2_000, 5_000] {
-            let recommendation = timing_margin_recommendation(&path, cutoff);
-            assert_eq!(
-                recommendation.recommended_timing_margin_us,
-                sky_app_core::settings::DEFAULT_TIMING_MARGIN_US
-            );
-            assert_eq!(recommendation.source, "default_fallback");
-        }
+        let recommendation = timing_margin_recommendation(&path);
+        assert_eq!(
+            recommendation.recommended_timing_margin_us,
+            sky_app_core::settings::DEFAULT_TIMING_MARGIN_US
+        );
+        assert_eq!(recommendation.source, "default_fallback");
     }
 
     #[test]
@@ -6485,7 +6436,7 @@ mod tests {
         assert_eq!(settings["playback_defaults"]["timing_margin_us"], 1_200);
         assert_eq!(
             settings["timing_margin_recommendation"]["recommended_timing_margin_us"],
-            2_800
+            900
         );
         assert_eq!(settings["timing_margin_recommendation"]["qualified"], true);
         let persisted: Value =
@@ -7129,7 +7080,6 @@ mod tests {
         assert_eq!(payload.timing_margin_us, 800);
         assert_eq!(payload.min_hold_us, 17_467);
         assert_eq!(payload.min_release_gap_us, 17_467);
-        assert_eq!(payload.down_late_grace_us, 500);
         assert_eq!(
             payload
                 .timing_margin_recommendation
@@ -7150,9 +7100,9 @@ mod tests {
         assert_eq!(payload.chord_split_events, 0);
         assert_eq!(payload.missed_down_boundaries, 0);
         assert_eq!(payload.missed_down_keys, 0);
-        assert_eq!(payload.missed_backlog_boundaries, 0);
-        assert_eq!(payload.missed_hard_late_boundaries, 0);
-        assert_eq!(payload.final_gate_cutoff_misses, 0);
+        assert_eq!(payload.unobserved_backlog_boundaries, 0);
+        assert_eq!(payload.physical_window_expired_boundaries, 0);
+        assert_eq!(payload.down_expired_before_send, 0);
         assert_eq!(payload.final_gate_control_rejections, 0);
         assert_eq!(payload.final_gate_target_changes, 0);
         assert_eq!(payload.final_gate_focus_losses, 0);
@@ -7648,7 +7598,7 @@ mod tests {
                 serde_json::json!({
                     "songId": song_id,
                     "generation": generation,
-                    "config": {"hold_frames":1.0,"timing_margin_us":800,"down_late_grace_us":500,"tempo_scale":1.0,"fps":60,"dry_run":true}
+                    "config": {"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}
                 }),
             )
             .expect("prepare");
@@ -7837,9 +7787,9 @@ mod tests {
         )
         .expect("song");
         let default_policy =
-            MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, 500).expect("default policy");
-        let increased_policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 900, 500)
-            .expect("increased margin");
+            MaterializedTimingPolicy::from_user_margin(60, 1.0, 800).expect("default policy");
+        let increased_policy =
+            MaterializedTimingPolicy::from_user_margin(60, 1.0, 900).expect("increased margin");
         let default_schedule =
             build_schedule_with_policy(&song, 1.0, &default_policy).expect("default schedule");
         let increased_schedule = build_schedule_with_policy(&song, 1.0, &increased_policy)
@@ -7850,7 +7800,6 @@ mod tests {
         let default_config = PlaybackConfigDto {
             hold_frames: 1.0,
             timing_margin_us: 800,
-            down_late_grace_us: 500,
             tempo_scale: 1.0,
             fps: 60,
             dry_run: true,
@@ -7875,28 +7824,9 @@ mod tests {
         .expect("increased-margin fingerprint");
         assert_ne!(default_fingerprint, increased_fingerprint);
 
-        let cutoff_policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, 1_000)
-            .expect("increased Down tolerance");
-        let cutoff_config = PlaybackConfigDto {
-            down_late_grace_us: 1_000,
-            ..default_config.clone()
-        };
-        assert_eq!(
-            (cutoff_policy.min_hold_us, cutoff_policy.min_release_gap_us),
-            (
-                default_policy.min_hold_us,
-                default_policy.min_release_gap_us
-            )
-        );
-        assert_ne!(
-            default_fingerprint,
-            plan_fingerprint("policy", &cutoff_config, &default_schedule, &cutoff_policy,)
-                .expect("cutoff identity")
-        );
-
         // Calibration recommendations are not inputs to materialization or identity.
         let same_policy =
-            MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, 500).expect("same policy");
+            MaterializedTimingPolicy::from_user_margin(60, 1.0, 800).expect("same policy");
         let same_schedule =
             build_schedule_with_policy(&song, 1.0, &same_policy).expect("same authored schedule");
         assert_eq!(
@@ -7917,7 +7847,7 @@ mod tests {
             settings_fingerprint(&settings).expect("settings fingerprint");
         assert_eq!(
             default_settings_fingerprint,
-            "074db50e188b209a66a4aa757e6178a55e821dcec364c89e672cf8ce7ef2bfb7"
+            "c74d3a67e251808529cfa8b1b53626f81f0e6d233086a1b056e3a2eb746df7dd"
         );
         let mut auto_play_changed = settings.clone();
         auto_play_changed.playback_behavior.auto_play = false;
@@ -7933,10 +7863,9 @@ mod tests {
         );
         changed_settings.playback_defaults.timing_margin_us =
             sky_app_core::settings::DEFAULT_TIMING_MARGIN_US;
-        changed_settings.playback_defaults.down_late_grace_us = 1_000;
-        assert_ne!(
+        assert_eq!(
             default_settings_fingerprint,
-            settings_fingerprint(&changed_settings).expect("changed cutoff fingerprint")
+            settings_fingerprint(&changed_settings).expect("restored timing margin fingerprint")
         );
 
         let song = parse_song_json(
@@ -7944,12 +7873,11 @@ mod tests {
             "fingerprint",
         )
         .expect("song");
-        let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, 500).expect("policy");
+        let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 800).expect("policy");
         let schedule = build_schedule_with_policy(&song, 0.95, &policy).expect("schedule");
         let config = PlaybackConfigDto {
             hold_frames: 1.0,
             timing_margin_us: 800,
-            down_late_grace_us: 500,
             tempo_scale: 0.95,
             fps: 60,
             dry_run: true,
@@ -7962,7 +7890,7 @@ mod tests {
                 &policy,
             )
             .expect("plan fingerprint"),
-            "fea20dfa7f66d8306529e632d3826d80cb416710196a01126f2bdd65ff0fca24"
+            "37c8cb8b8e70d3cab60fc794781cbeb794d6bf59b78e38ca1ccbeee0f4afc94d"
         );
     }
 
@@ -8075,7 +8003,6 @@ mod tests {
                     "config": {
                         "hold_frames": 1.0,
                         "timing_margin_us": 800,
-                        "down_late_grace_us": 500,
                         "tempo_scale": 1.0,
                         "fps": 60,
                         "dry_run": false
@@ -8155,7 +8082,7 @@ mod tests {
                 serde_json::json!({
                     "songId": song_id,
                     "generation": generation,
-                    "config": {"hold_frames":1.0,"timing_margin_us":800,"down_late_grace_us":500,"tempo_scale":1.0,"fps":60,"dry_run":true}
+                    "config": {"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}
                 }),
             )
             .expect("prepare");
@@ -8171,7 +8098,6 @@ mod tests {
                 playback_defaults: Some(crate::commands::PlaybackPatch {
                     hold_frames: None,
                     timing_margin_us: None,
-                    down_late_grace_us: None,
                     tempo_scale: Some(0.95),
                     fps: None,
                 }),
@@ -8194,7 +8120,7 @@ mod tests {
                 serde_json::json!({
                     "songId": song_id,
                     "generation": generation,
-                    "config": {"hold_frames":1.0,"timing_margin_us":800,"down_late_grace_us":500,"tempo_scale":1.0,"fps":60,"dry_run":true}
+                    "config": {"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}
                 }),
             )
             .expect("prepare after settings patch");
@@ -8250,7 +8176,7 @@ mod tests {
                 serde_json::json!({
                     "songId": search["items"][0]["song_id"],
                     "generation": generation,
-                    "config": {"hold_frames":1.0,"timing_margin_us":800,"down_late_grace_us":500,"tempo_scale":1.0,"fps":60,"dry_run":true}
+                    "config": {"hold_frames":1.0,"timing_margin_us":800,"tempo_scale":1.0,"fps":60,"dry_run":true}
                 }),
             )
             .expect("prepare");

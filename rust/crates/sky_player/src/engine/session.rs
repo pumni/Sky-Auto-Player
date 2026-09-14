@@ -27,8 +27,9 @@ fn last_missed_down_reason(valid: bool, reason_code: u8) -> Option<String> {
         return None;
     }
     match reason_code {
-        1 => Some("backlog".to_string()),
-        2 => Some("hard_late".to_string()),
+        1 => Some("unobserved_backlog".to_string()),
+        2 => Some("physical_window_expired".to_string()),
+        3 => Some("down_expired_before_send".to_string()),
         _ => None,
     }
 }
@@ -74,7 +75,6 @@ pub(crate) fn validate_native_schedule_timing_with_release_gap(
 pub struct NativeDispatchSession {
     config: Mutex<Option<AdmittedNativeSessionOptions>>,
     profile: DispatchProfile,
-    down_late_grace_us: u64,
     generation_count: u64,
     shared: Arc<SessionShared>,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -166,19 +166,13 @@ impl NativeDispatchSession {
             options,
             instrument_key_profile,
         };
-        let down_late_grace_us = admitted_options.options.timing.down_late_grace_us;
         Ok(Self {
             profile: admitted_options.options.profile,
-            down_late_grace_us,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
             shared,
             thread_handle: Mutex::new(None),
         })
-    }
-
-    pub fn down_late_grace_us(&self) -> u64 {
-        self.down_late_grace_us
     }
 
     fn live_projection(&self) -> ((u64, bool), u64) {
@@ -661,23 +655,15 @@ impl NativeDispatchSession {
             authored_keys_rejected: local.authored_keys_rejected,
             missed_down_boundaries: local.missed_down_boundaries,
             missed_down_keys: local.missed_down_keys,
-            missed_backlog_boundaries: local.missed_backlog_boundaries,
-            missed_hard_late_boundaries: local.missed_hard_late_boundaries,
+            unobserved_backlog_boundaries: local.unobserved_backlog_boundaries,
+            physical_window_expired_boundaries: local.physical_window_expired_boundaries,
             final_gate_control_rejections: local.final_gate_control_rejections,
             final_gate_target_changes: local.final_gate_target_changes,
             final_gate_focus_losses: local.final_gate_focus_losses,
             final_gate_lease_expirations: local.final_gate_lease_expirations,
-            final_gate_cutoff_misses: local.final_gate_cutoff_misses,
+            down_expired_before_send: local.down_expired_before_send,
             late_authorized_boundaries: local.late_authorized_boundaries,
             deadline_authorization_reuses: local.deadline_authorization_reuses,
-            late_discovery_rescue_attempts: local.late_discovery_rescue_attempts,
-            late_discovery_rescue_sent: local.late_discovery_rescue_sent,
-            late_discovery_rescue_sender_cutoff_misses: local
-                .late_discovery_rescue_sender_cutoff_misses,
-            late_discovery_rescue_credit_exhausted: local.late_discovery_rescue_credit_exhausted,
-            late_discovery_rescue_blocked_control: local.late_discovery_rescue_blocked_control,
-            late_discovery_rescue_blocked_focus_or_target: local
-                .late_discovery_rescue_blocked_focus_or_target,
             max_missed_lateness_ticks: local.max_missed_lateness_ticks,
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
@@ -795,23 +781,15 @@ impl NativeDispatchSession {
             authored_keys_rejected: local.authored_keys_rejected,
             missed_down_boundaries: local.missed_down_boundaries,
             missed_down_keys: local.missed_down_keys,
-            missed_backlog_boundaries: local.missed_backlog_boundaries,
-            missed_hard_late_boundaries: local.missed_hard_late_boundaries,
+            unobserved_backlog_boundaries: local.unobserved_backlog_boundaries,
+            physical_window_expired_boundaries: local.physical_window_expired_boundaries,
             final_gate_control_rejections: local.final_gate_control_rejections,
             final_gate_target_changes: local.final_gate_target_changes,
             final_gate_focus_losses: local.final_gate_focus_losses,
             final_gate_lease_expirations: local.final_gate_lease_expirations,
-            final_gate_cutoff_misses: local.final_gate_cutoff_misses,
+            down_expired_before_send: local.down_expired_before_send,
             late_authorized_boundaries: local.late_authorized_boundaries,
             deadline_authorization_reuses: local.deadline_authorization_reuses,
-            late_discovery_rescue_attempts: local.late_discovery_rescue_attempts,
-            late_discovery_rescue_sent: local.late_discovery_rescue_sent,
-            late_discovery_rescue_sender_cutoff_misses: local
-                .late_discovery_rescue_sender_cutoff_misses,
-            late_discovery_rescue_credit_exhausted: local.late_discovery_rescue_credit_exhausted,
-            late_discovery_rescue_blocked_control: local.late_discovery_rescue_blocked_control,
-            late_discovery_rescue_blocked_focus_or_target: local
-                .late_discovery_rescue_blocked_focus_or_target,
             max_missed_lateness_ticks: local.max_missed_lateness_ticks,
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,

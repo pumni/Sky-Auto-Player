@@ -1,11 +1,10 @@
 //! Materialized playback timing policy shared by planning and execution.
 //!
-//! User-owned Timing Margin is applied to authored hold and same-key release
-//! timing. The user-owned Late Down tolerance is a separate session-frozen dispatch policy.
+//! Timing Margin is the only authored execution headroom. It extends both the
+//! base hold floor and same-key release gap by the same amount.
 
 use crate::song::SongError;
 
-pub use crate::settings::DEFAULT_DOWN_LATE_GRACE_US;
 pub const DEFAULT_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,7 +14,6 @@ pub struct MaterializedTimingPolicy {
     pub hold_frames: f64,
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,
-    pub down_late_grace_us: u64,
     pub min_hold_us: u64,
     pub min_release_gap_us: u64,
     pub focus_restore_grace_us: u64,
@@ -26,7 +24,6 @@ impl MaterializedTimingPolicy {
         fps: u16,
         hold_frames: f64,
         timing_margin_us: u64,
-        down_late_grace_us: u64,
     ) -> Result<Self, SongError> {
         if !hold_frames.is_finite() || !crate::settings::HOLD_FRAME_OPTIONS.contains(&hold_frames) {
             return Err(SongError::InvalidHold);
@@ -36,12 +33,6 @@ impl MaterializedTimingPolicy {
             || !timing_margin_us.is_multiple_of(crate::settings::TIMING_MARGIN_STEP_US)
         {
             return Err(SongError::InvalidTimingMargin);
-        }
-        if !(crate::settings::MIN_DOWN_LATE_GRACE_US..=crate::settings::MAX_DOWN_LATE_GRACE_US)
-            .contains(&down_late_grace_us)
-            || !down_late_grace_us.is_multiple_of(crate::settings::DOWN_LATE_GRACE_STEP_US)
-        {
-            return Err(SongError::InvalidDownLateGrace);
         }
 
         let frame_us = crate::song::frame_us(fps)?;
@@ -59,7 +50,6 @@ impl MaterializedTimingPolicy {
             hold_frames,
             frame_base_hold_us,
             timing_margin_us,
-            down_late_grace_us,
             min_hold_us,
             min_release_gap_us,
             focus_restore_grace_us: DEFAULT_FOCUS_RESTORE_GRACE_US,
@@ -79,25 +69,31 @@ mod tests {
             (1.5, 25_001, 25_801, 17_467),
         ];
         for (hold_frames, base_hold_us, min_hold_us, release_gap_us) in expected {
-            let policy = MaterializedTimingPolicy::from_user_margin(60, hold_frames, 800, 500)
-                .expect("valid timing policy");
+            let policy =
+                MaterializedTimingPolicy::from_user_margin(60, hold_frames, 800).expect("valid");
             assert_eq!(policy.frame_us, 16_667);
             assert_eq!(policy.frame_base_hold_us, base_hold_us);
             assert_eq!(policy.timing_margin_us, 800);
             assert_eq!(policy.min_hold_us, min_hold_us);
             assert_eq!(policy.min_release_gap_us, release_gap_us);
-            assert_eq!(policy.down_late_grace_us, 500);
+            assert_eq!(
+                policy.frame_base_hold_us + policy.timing_margin_us,
+                policy.min_hold_us
+            );
+            assert_eq!(
+                policy.frame_us + policy.timing_margin_us,
+                policy.min_release_gap_us
+            );
         }
     }
 
     #[test]
-    fn timing_margin_zero_is_valid_and_one_hundred_microseconds_is_symmetric() {
-        let zero =
-            MaterializedTimingPolicy::from_user_margin(60, 1.0, 0, 500).expect("zero is valid");
+    fn timing_margin_zero_is_valid_and_increases_both_floors_equally() {
+        let zero = MaterializedTimingPolicy::from_user_margin(60, 1.0, 0).expect("zero is valid");
         let eight_hundred =
-            MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, 500).expect("valid margin");
+            MaterializedTimingPolicy::from_user_margin(60, 1.0, 800).expect("valid margin");
         let nine_hundred =
-            MaterializedTimingPolicy::from_user_margin(60, 1.0, 900, 500).expect("valid margin");
+            MaterializedTimingPolicy::from_user_margin(60, 1.0, 900).expect("valid margin");
         assert_eq!(
             (zero.min_hold_us, zero.min_release_gap_us),
             (16_667, 16_667)
@@ -117,31 +113,9 @@ mod tests {
     }
 
     #[test]
-    fn down_grace_changes_only_the_dispatch_cutoff() {
-        let mut baseline = None;
-        for grace_us in [0, 500, 1_000] {
-            let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, grace_us)
-                .expect("valid A/B policy");
-            assert_eq!(policy.down_late_grace_us, grace_us);
-            assert_eq!(policy.min_hold_us, 17_467);
-            assert_eq!(policy.min_release_gap_us, 17_467);
-            let authored = (
-                policy.frame_base_hold_us,
-                policy.min_hold_us,
-                policy.min_release_gap_us,
-            );
-            if let Some(expected) = baseline {
-                assert_eq!(authored, expected);
-            } else {
-                baseline = Some(authored);
-            }
-        }
-    }
-
-    #[test]
     fn materializes_all_supported_fps_with_checked_symmetric_equations() {
         for fps in crate::settings::VALID_FPS {
-            let policy = MaterializedTimingPolicy::from_user_margin(fps, 1.25, 1_200, 500)
+            let policy = MaterializedTimingPolicy::from_user_margin(fps, 1.25, 1_200)
                 .expect("valid FPS policy");
             assert_eq!(policy.min_hold_us, policy.frame_base_hold_us + 1_200);
             assert_eq!(policy.min_release_gap_us, policy.frame_us + 1_200);
@@ -151,29 +125,13 @@ mod tests {
     #[test]
     fn materialization_rejects_out_of_range_or_non_step_margin() {
         for margin in [1, 799, 801, 3_001] {
-            assert!(MaterializedTimingPolicy::from_user_margin(60, 1.0, margin, 500).is_err());
+            assert!(MaterializedTimingPolicy::from_user_margin(60, 1.0, margin).is_err());
         }
         assert_eq!(
-            MaterializedTimingPolicy::from_user_margin(60, 1.0, 3_000, 500)
+            MaterializedTimingPolicy::from_user_margin(60, 1.0, 3_000)
                 .expect("maximum is valid")
                 .timing_margin_us,
             3_000
         );
-    }
-
-    #[test]
-    fn down_late_tolerance_does_not_change_authored_timing_and_is_bounded() {
-        let baseline = MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, 500)
-            .expect("default tolerance");
-        for grace_us in [0, 100, 1_000, 5_000] {
-            let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, grace_us)
-                .expect("valid tolerance");
-            assert_eq!(policy.down_late_grace_us, grace_us);
-            assert_eq!(policy.min_hold_us, baseline.min_hold_us);
-            assert_eq!(policy.min_release_gap_us, baseline.min_release_gap_us);
-        }
-        for grace_us in [1, 99, 5_001] {
-            assert!(MaterializedTimingPolicy::from_user_margin(60, 1.0, 800, grace_us).is_err());
-        }
     }
 }

@@ -16,10 +16,7 @@ use super::super::{
 use super::DownBoundaryAdmission;
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
-use super::recovery::{
-    DownMissReason, queue_down_miss_observation, record_missed_down_classification,
-    record_rescue_admission, record_rescue_send, recover_missed_down_boundary,
-};
+use super::recovery::{DownMissReason, recover_missed_down_boundary};
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SharedProgressClock;
@@ -48,6 +45,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        latest_down_start_qpc,
         down_admission,
         focus_loss_fault,
         supervisor_heartbeat_ticks,
@@ -93,6 +91,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        latest_down_start_qpc,
         down_admission,
         focus_loss_fault,
         physical_plan.target_proof.verified_target(),
@@ -129,6 +128,7 @@ fn commit_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
+    latest_down_start_qpc: Option<QpcTicks>,
     down_admission: DownBoundaryAdmission,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
@@ -157,8 +157,6 @@ fn commit_down_send_outcome(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
-        down_admission,
-        timing,
         has_conflicts,
         focus_loss_fault,
         preflight_target,
@@ -169,7 +167,6 @@ fn commit_down_send_outcome(
         Ok(admission) => admission,
         Err(step) => return step,
     };
-    record_rescue_admission(down_admission, &admission, local_metrics);
     let admission = match finalize_authored_down_admission(
         view,
         config,
@@ -209,7 +206,15 @@ fn commit_down_send_outcome(
             physical_target_qpc,
             now_ticks,
             effective_now_ticks,
-            DownMissReason::Backlog,
+            match down_admission {
+                DownBoundaryAdmission::UnobservedBacklog => DownMissReason::UnobservedBacklog,
+                DownBoundaryAdmission::PhysicalWindowExpired => {
+                    DownMissReason::PhysicalWindowExpired
+                }
+                DownBoundaryAdmission::Authorized => {
+                    return DispatchStep::TerminateStatic("authorized Down classified as missed");
+                }
+            },
             observer,
         );
     }
@@ -227,7 +232,7 @@ fn commit_down_send_outcome(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
-        down_admission,
+        latest_down_start_qpc,
         &admission,
         #[cfg(any(test, feature = "test-support"))]
         test_inject_sender_start.then_some(now_ticks),
@@ -259,7 +264,7 @@ fn resolve_target_crossing_qpc(
     physical_target_qpc: QpcTicks,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
 ) -> Result<Option<QpcTicks>, DispatchStep> {
-    if down_admission.is_missed() || down_admission.is_late_rescue() {
+    if down_admission.is_missed() {
         return Ok(None);
     }
     if let Some(boundary_crossing_qpc) = boundary_crossing_qpc {
@@ -275,7 +280,7 @@ fn resolve_target_crossing_qpc(
     ))
 }
 
-/// Pre-send admission gate for focus, preflight, late-grace, conflict, and final Down authorization.
+/// Pre-send gate for focus, preflight, conflicts, and final Down authorization.
 #[allow(clippy::too_many_arguments)]
 fn admit_authored_down(
     view: &AuthoredBatchView,
@@ -294,8 +299,6 @@ fn admit_authored_down(
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
-    down_admission: DownBoundaryAdmission,
-    timing: &WorkerTimingState,
     has_conflicts: bool,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
@@ -355,34 +358,6 @@ fn admit_authored_down(
         runtime.verified_target = None;
         runtime.invalidate_down_authorization();
         return Ok(AdmissionOutcome::TargetChanged);
-    }
-    if has_down_events
-        && config.timing.strict_timing
-        && !down_admission.is_missed()
-        && effective_now_ticks
-            .checked_duration_since(view.authored_batch_scheduled_ticks)
-            .is_ok_and(|late| late > timing.down_late_grace_ticks)
-    {
-        queue_down_miss_observation(
-            view,
-            local_metrics,
-            observer,
-            effective_now_ticks,
-            physical_target_qpc,
-            now_ticks,
-            DownMissReason::HardLate,
-        );
-        record_missed_down_classification(
-            local_metrics,
-            view.batch_source_action_index,
-            view.packet_masks.down_mask,
-            physical_target_qpc,
-            now_ticks,
-            DownMissReason::HardLate,
-        );
-        return Err(DispatchStep::Terminate(
-            "authored Down exceeded the session down late-grace window".to_string(),
-        ));
     }
     if has_conflicts {
         local_metrics.authored_conflict_events =
@@ -584,7 +559,7 @@ fn record_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     _now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
-    down_admission: DownBoundaryAdmission,
+    latest_down_start_qpc: Option<QpcTicks>,
     admission: &AdmissionOutcome,
     test_now_ticks: Option<QpcTicks>,
     observer: Option<&PendingObservationQueue>,
@@ -599,16 +574,6 @@ fn record_down_send_outcome(
     };
     let packet = view.packet_masks;
     let prepared_packet = &view.prepared_packet;
-    let latest_allowed_down_qpc = if packet.down_mask != 0 {
-        match physical_target_qpc.checked_add_duration(timing.down_late_grace_ticks) {
-            Ok(latest) => Some(latest),
-            Err(_) => {
-                return DispatchStep::TerminateStatic("down_late_grace_boundary_overflow");
-            }
-        }
-    } else {
-        None
-    };
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
@@ -616,7 +581,7 @@ fn record_down_send_outcome(
     debug_assert_eq!(prepared_packet.packet(), packet);
     let result = backend.send_prepared_physical_packet_at_final_boundary(
         prepared_packet,
-        latest_allowed_down_qpc,
+        latest_down_start_qpc,
         test_now_ticks,
     );
     if let Some(started_qpc) = result.evidence.started_ticks
@@ -630,6 +595,11 @@ fn record_down_send_outcome(
         return DispatchStep::Terminate(error);
     }
     if let Some(error) = backend.timing_error.take() {
+        if result.evidence.attempts != 0
+            && let Some(guard) = runtime.physical_timing_guard.as_mut()
+        {
+            guard.invalidate();
+        }
         return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));
     }
     let result_success = result.is_success();
@@ -645,37 +615,16 @@ fn record_down_send_outcome(
     );
     if matches!(
         result.status,
-        sky_dispatch_win32::input::SendTransactionStatus::DeadlineMissedBeforeSend
+        sky_dispatch_win32::input::SendTransactionStatus::DownExpiredBeforeSend
     ) && view.packet_masks.down_mask != 0
     {
-        local_metrics.final_gate_cutoff_misses =
-            local_metrics.final_gate_cutoff_misses.saturating_add(1);
-        record_rescue_send(local_metrics, down_admission, true);
+        local_metrics.down_expired_before_send =
+            local_metrics.down_expired_before_send.saturating_add(1);
         let Some(observed_qpc) = result.evidence.started_ticks else {
             return DispatchStep::TerminateStatic(
-                "DeadlineMissedBeforeSend missing authoritative start boundary",
+                "DownExpiredBeforeSend missing authoritative start boundary",
             );
         };
-        if !runtime.musical_physical_commit_started {
-            queue_down_miss_observation(
-                view,
-                local_metrics,
-                observer,
-                effective_now_ticks,
-                physical_target_qpc,
-                observed_qpc,
-                DownMissReason::HardLate,
-            );
-            record_missed_down_classification(
-                local_metrics,
-                view.batch_source_action_index,
-                view.packet_masks.down_mask,
-                physical_target_qpc,
-                observed_qpc,
-                DownMissReason::HardLate,
-            );
-            return DispatchStep::TerminateStatic("down_deadline_missed_before_send");
-        }
         return recover_missed_down_boundary(
             view,
             config,
@@ -687,7 +636,7 @@ fn record_down_send_outcome(
             physical_target_qpc,
             observed_qpc,
             effective_now_ticks,
-            DownMissReason::HardLate,
+            DownMissReason::DownExpiredBeforeSend,
             observer,
         );
     }
@@ -697,12 +646,32 @@ fn record_down_send_outcome(
     }
     let result_last_win32_error = result.evidence.last_win32_error;
     if !result_success {
+        if result.evidence.attempts != 0
+            && let Some(guard) = runtime.physical_timing_guard.as_mut()
+        {
+            guard.invalidate();
+        }
         return DispatchStep::Terminate(format!(
             "authored Down send integrity failure at action {}",
             view.batch_source_action_index
         ));
     }
-    record_rescue_send(local_metrics, down_admission, false);
+    let Some(completed_qpc) = result_completed_ticks else {
+        if let Some(guard) = runtime.physical_timing_guard.as_mut() {
+            guard.invalidate();
+        }
+        return DispatchStep::TerminateStatic("successful Down missing completion QPC");
+    };
+    let Some(guard) = runtime.physical_timing_guard.as_mut() else {
+        return DispatchStep::TerminateStatic("physical timing guard is not initialized");
+    };
+    if let Err(error) =
+        guard.observe_successful_packet(completed_qpc, packet.up_mask, packet.down_mask)
+    {
+        return DispatchStep::Terminate(format!(
+            "physical timing guard completion update failed: {error:?}"
+        ));
+    }
     let trace_kind = *trace_kind;
     finalize_down_send_outcome(
         view,
