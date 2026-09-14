@@ -2,7 +2,7 @@
 
 This is the normative distribution and update contract for the current v4
 product. The canonical Windows distribution is a Tauri NSIS installer using
-`currentUser` installation semantics under `%LOCALAPPDATA%`. The official
+`currentUser` per-user installation semantics. The official
 Tauri updater, mediated by the Rust-owned `UpdateService`, owns update
 discovery, signature verification, download, and installer execution.
 
@@ -10,8 +10,8 @@ discovery, signature verification, download, and installer execution.
 
 - **Application Identifier:** `io.github.pumni.skyautoplayer`
 - **Version Source:** `desktop/src-tauri/Cargo.toml`
-- **Windows Target:** NSIS only (installer named `Sky-Auto-Player-<version>-setup.exe`)
-- **Installer Scope:** `currentUser` under `%LOCALAPPDATA%\io.github.pumni.skyautoplayer`
+- **Windows Target:** NSIS only (v4 NSIS installer)
+- **Installer Scope:** `currentUser` per-user installation (strictly isolated from the mutable application-data root `%LOCALAPPDATA%\io.github.pumni.skyautoplayer`)
 - **Updater Output:** The NSIS setup executable and its `.exe.sig` sidecar
 - **Runtime Updater:** Official `tauri-plugin-updater`, behind the Rust-owned `UpdateService`
 - **Frontend Boundary:** React/TypeScript surface presents update state and progress only; it cannot supply endpoints, keys, URLs, or downgrade policies.

@@ -14,7 +14,7 @@ assignees: ''
 
 **Environment**
 
-- Install method: NSIS installer (`Sky-Auto-Player-<ver>-setup.exe`) / dev build (`cargo tauri dev`)
+- Install method: v4 NSIS installer / dev build (`cargo tauri dev`)
 - Version (from in-app Settings / About):
 - Windows version + build, display scaling %, game display mode / refresh rate:
 - Keyboard layout & input mode (Key Code / Scan Code) if changed from default:
