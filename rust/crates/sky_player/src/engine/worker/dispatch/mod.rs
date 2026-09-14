@@ -120,7 +120,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) dispatch_plan: &'a NextDispatchPlan,
     pub(crate) effective_now_ticks: TimelineTicks,
     pub(crate) now_ticks: QpcTicks,
-    pub(crate) physical_target_qpc: QpcTicks,
+    pub(crate) physical_timing_window: super::physical_timing_guard::PhysicalTimingWindow,
     pub(crate) latest_down_start_qpc: Option<QpcTicks>,
     pub(crate) down_admission: DownBoundaryAdmission,
     pub(crate) focus_loss_fault: bool,

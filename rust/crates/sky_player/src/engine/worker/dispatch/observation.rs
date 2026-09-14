@@ -3,6 +3,7 @@ use super::super::super::{
     TRACE_FLAG_SENT_FULL, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
     trace_outcome_code, trace_send_status_code,
 };
+use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::wait::WaitObservation;
 use super::super::{
     DispatchPath, DispatchStep, WorkerHealthState, observe_wait_health, release_runtime_outcome,
@@ -18,7 +19,6 @@ pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ObserverLifecycle {
-    RecoveryUp { up_mask: u16 },
     ResetAll,
 }
 
@@ -33,7 +33,6 @@ pub enum DispatchObservation {
     Wait(WaitObservation),
     StaleMetadata(StaleMetadataObservation),
     BlockedUnfocused(BlockedUnfocusedObservation),
-    Lifecycle(ObserverLifecycle),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,11 +71,38 @@ pub struct DownMissObservation {
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub wake_ticks: TimelineTicks,
-    pub physical_target_qpc: QpcTicks,
+    pub(crate) physical_timing_window: PhysicalTimingWindow,
     pub observed_qpc: QpcTicks,
     pub up_mask: u16,
     pub down_mask: u16,
     pub kind: DownMissKind,
+}
+
+impl DownMissObservation {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_fixture(n: u64) -> Self {
+        let authored_target_qpc = QpcTicks::from_raw(n);
+        Self {
+            source_action_index: n as u32,
+            compiled_packet_index: None,
+            authored_ticks: TimelineTicks::from_raw(n),
+            effective_deadline_ticks: TimelineTicks::from_raw(n),
+            wake_ticks: TimelineTicks::from_raw(n),
+            physical_timing_window: PhysicalTimingWindow {
+                authored_target_qpc,
+                musical_up_not_before_qpc: authored_target_qpc,
+                down_not_before_qpc: authored_target_qpc,
+                packet_not_before_qpc: authored_target_qpc,
+                latest_down_start_qpc: Some(authored_target_qpc),
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
+            },
+            observed_qpc: authored_target_qpc,
+            up_mask: 0,
+            down_mask: 1,
+            kind: DownMissKind::DownExpiredBeforeSend,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -110,6 +136,7 @@ pub struct DownObservation {
     pub epoch_qpc: QpcTicks,
     pub allow_pre_epoch_startup_dispatch: bool,
     pub physical_target_qpc: QpcTicks,
+    pub(crate) physical_timing_window: PhysicalTimingWindow,
     pub final_policy_qpc: QpcTicks,
     pub pre_call_qpc: QpcTicks,
     pub sendinput_completion_qpc: QpcTicks,
@@ -132,6 +159,46 @@ impl DownTraceObservation {
 }
 
 impl DownObservation {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_fixture(n: u64) -> Self {
+        let authored_target_qpc = QpcTicks::from_raw(n);
+        Self {
+            epoch_qpc: QpcTicks::ZERO,
+            allow_pre_epoch_startup_dispatch: false,
+            physical_target_qpc: authored_target_qpc,
+            physical_timing_window: PhysicalTimingWindow {
+                authored_target_qpc,
+                musical_up_not_before_qpc: authored_target_qpc,
+                down_not_before_qpc: authored_target_qpc,
+                packet_not_before_qpc: authored_target_qpc,
+                latest_down_start_qpc: Some(authored_target_qpc),
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
+            },
+            final_policy_qpc: QpcTicks::ZERO,
+            pre_call_qpc: QpcTicks::ZERO,
+            sendinput_completion_qpc: QpcTicks::ZERO,
+            dispatch_ready_qpc: Some(QpcTicks::ZERO),
+            wake_qpc: None,
+            precision_handoff: None,
+            requested_packet: PhysicalPacket::new(0, 1),
+            confirmed_mask: 1,
+            skipped_mask: 0,
+            trace: DownTraceObservation {
+                event_index: n as u32,
+                compiled_packet_index: Some(n),
+                trace_kind: 0,
+                result_status: SendTransactionStatus::Complete,
+                send_attempts: 1,
+                retry_reason: PacketRetryReason::None,
+                chord_integrity_lost: false,
+                last_win32_error: 0,
+                authored_ticks: TimelineTicks::ZERO,
+                effective_deadline_ticks: TimelineTicks::ZERO,
+            },
+        }
+    }
+
     pub(super) const fn path(self) -> DispatchPath {
         match (
             self.requested_packet.up_mask != 0,
@@ -364,6 +431,30 @@ pub(super) fn record_down_send_telemetry(
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks,
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
+                physical_not_before_qpc_ticks: Some(
+                    observation
+                        .physical_timing_window
+                        .packet_not_before_qpc
+                        .as_u64(),
+                ),
+                hold_floor_qpc_ticks: Some(
+                    observation
+                        .physical_timing_window
+                        .musical_up_not_before_qpc
+                        .as_u64(),
+                ),
+                release_floor_qpc_ticks: Some(
+                    observation
+                        .physical_timing_window
+                        .down_not_before_qpc
+                        .as_u64(),
+                ),
+                latest_down_start_qpc_ticks: observation
+                    .physical_timing_window
+                    .latest_down_start_qpc
+                    .map(|ticks| ticks.as_u64()),
+                hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
+                release_floor_mask: observation.physical_timing_window.release_floor_mask,
                 pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
                 sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),
                 observation_qpc_ticks: None,
@@ -446,6 +537,12 @@ pub(super) fn record_release_telemetry(
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: trace.wake_ticks,
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
+                physical_not_before_qpc_ticks: None,
+                hold_floor_qpc_ticks: None,
+                release_floor_qpc_ticks: None,
+                latest_down_start_qpc_ticks: None,
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
                 pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
                 sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),
                 observation_qpc_ticks: None,

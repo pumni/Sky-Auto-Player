@@ -18,39 +18,20 @@ use std::collections::VecDeque;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct RtTraceRecord {
-    /// Zero-based sequence in the exported session trace. This is not a
-    /// compiled schedule packet identity.
-    pub trace_record_index: u32,
-    /// Compiled schedule packet identity when the observation came from an
-    /// authored packet. Zero is a valid packet index, so consumers must check
-    /// the availability field.
     pub compiled_packet_index: u64,
-    pub compiled_packet_index_available: bool,
-    /// Identity in the compiled source schedule. This remains equal to
-    /// `event_index` today; it is explicit in schema 14 to make that contract
-    /// reviewable by trace consumers.
-    pub source_action_index: u32,
-    pub event_index: u32,
-    pub kind: u8,
-    pub outcome: u8,
-    pub polyphony: u8,
-    pub flags: u8,
-    pub send_status: u8,
-    pub up_mask: u16,
-    pub down_mask: u16,
     pub authored_ticks: u64,
     pub effective_deadline_ticks: u64,
     pub wake_ticks: u64,
     /// Raw QPC values must be interpreted only when their paired availability
     /// field is true; zero is a valid QPC value.
-    pub physical_target_qpc_ticks: u64,
-    pub physical_target_qpc_available: bool,
+    pub authored_target_qpc_ticks: u64,
+    pub physical_not_before_qpc_ticks: u64,
+    pub hold_floor_qpc_ticks: u64,
+    pub release_floor_qpc_ticks: u64,
+    pub latest_down_start_qpc_ticks: u64,
     pub pre_call_qpc_ticks: u64,
-    pub pre_call_qpc_available: bool,
     pub sendinput_completion_qpc_ticks: u64,
-    pub sendinput_completion_qpc_available: bool,
     pub observation_qpc_ticks: u64,
-    pub observation_qpc_available: bool,
     /// Deprecated compatibility key. Its value is the trusted pre-call QPC
     /// boundary immediately before the prepared SendInput call.
     pub send_started_ticks: u64,
@@ -61,21 +42,48 @@ pub struct RtTraceRecord {
     /// Deprecated compatibility key for completion residual diagnostics.
     pub dispatch_cost_us: u64,
     pub core_post_send_duration_us: u64,
-    pub post_send_metrics_available: bool,
     pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
+    /// Zero-based sequence in the exported session trace. This is not a
+    /// compiled schedule packet identity.
+    pub trace_record_index: u32,
+    /// Identity in the compiled source schedule. This remains equal to
+    /// `event_index` today; it is explicit in schema 14 to make that contract
+    /// reviewable by trace consumers.
+    pub source_action_index: u32,
+    pub event_index: u32,
     /// Historical compatibility field. Adaptive lead is no longer part of
     /// runtime evidence and this publication adapter always emits zero.
     pub applied_lead_ticks: u32,
     pub win32_error: u32,
+    pub up_mask: u16,
+    pub down_mask: u16,
+    pub hold_floor_mask: u16,
+    pub release_floor_mask: u16,
+    /// Availability fields distinguish missing QPC samples from valid zero.
+    pub compiled_packet_index_available: bool,
+    pub authored_target_qpc_available: bool,
+    pub physical_not_before_qpc_available: bool,
+    pub hold_floor_qpc_available: bool,
+    pub release_floor_qpc_available: bool,
+    pub latest_down_start_qpc_available: bool,
+    pub pre_call_qpc_available: bool,
+    pub sendinput_completion_qpc_available: bool,
+    pub observation_qpc_available: bool,
+    pub post_send_metrics_available: bool,
+    pub kind: u8,
+    pub outcome: u8,
+    pub polyphony: u8,
+    pub flags: u8,
+    pub send_status: u8,
     pub requested_count: u8,
     pub sent_count: u8,
     pub skipped_count: u8,
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 15;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 16;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -116,6 +124,12 @@ pub(crate) struct TraceTiming {
     pub(crate) effective_deadline_ticks: TimelineTicks,
     pub(crate) wake_ticks: TimelineTicks,
     pub(crate) physical_target_qpc_ticks: Option<u64>,
+    pub(crate) physical_not_before_qpc_ticks: Option<u64>,
+    pub(crate) hold_floor_qpc_ticks: Option<u64>,
+    pub(crate) release_floor_qpc_ticks: Option<u64>,
+    pub(crate) latest_down_start_qpc_ticks: Option<u64>,
+    pub(crate) hold_floor_mask: u16,
+    pub(crate) release_floor_mask: u16,
     pub(crate) pre_call_qpc_ticks: Option<u64>,
     pub(crate) sendinput_completion_qpc_ticks: Option<u64>,
     pub(crate) observation_qpc_ticks: Option<u64>,
@@ -198,8 +212,18 @@ impl RtTraceRecord {
             authored_ticks: timing.authored_ticks.as_u64(),
             effective_deadline_ticks: timing.effective_deadline_ticks.as_u64(),
             wake_ticks: timing.wake_ticks.as_u64(),
-            physical_target_qpc_ticks: timing.physical_target_qpc_ticks.unwrap_or_default(),
-            physical_target_qpc_available: timing.physical_target_qpc_ticks.is_some(),
+            authored_target_qpc_ticks: timing.physical_target_qpc_ticks.unwrap_or_default(),
+            authored_target_qpc_available: timing.physical_target_qpc_ticks.is_some(),
+            physical_not_before_qpc_ticks: timing.physical_not_before_qpc_ticks.unwrap_or_default(),
+            physical_not_before_qpc_available: timing.physical_not_before_qpc_ticks.is_some(),
+            hold_floor_qpc_ticks: timing.hold_floor_qpc_ticks.unwrap_or_default(),
+            hold_floor_qpc_available: timing.hold_floor_qpc_ticks.is_some(),
+            release_floor_qpc_ticks: timing.release_floor_qpc_ticks.unwrap_or_default(),
+            release_floor_qpc_available: timing.release_floor_qpc_ticks.is_some(),
+            latest_down_start_qpc_ticks: timing.latest_down_start_qpc_ticks.unwrap_or_default(),
+            latest_down_start_qpc_available: timing.latest_down_start_qpc_ticks.is_some(),
+            hold_floor_mask: timing.hold_floor_mask,
+            release_floor_mask: timing.release_floor_mask,
             pre_call_qpc_ticks: timing.pre_call_qpc_ticks.unwrap_or_default(),
             pre_call_qpc_available: timing.pre_call_qpc_ticks.is_some(),
             sendinput_completion_qpc_ticks: timing
@@ -239,9 +263,9 @@ pub(crate) fn trace_outcome_code(outcome: &str) -> u8 {
         "strict_completion_slo_exceeded" => 6,
         "chord_integrity_lost" => 7,
         "aborted" => 8,
-        "down_expired_before_send" => 9,
+        "down_final_sender_window_expired" => 9,
         "down_unobserved_backlog" => 10,
-        "physical_window_expired" => 11,
+        "down_physical_window_expired" => 11,
         _ => 255,
     }
 }
@@ -477,6 +501,12 @@ mod tests {
                 effective_deadline_ticks: TimelineTicks::ZERO,
                 wake_ticks: TimelineTicks::ZERO,
                 physical_target_qpc_ticks: None,
+                physical_not_before_qpc_ticks: None,
+                hold_floor_qpc_ticks: None,
+                release_floor_qpc_ticks: None,
+                latest_down_start_qpc_ticks: None,
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
                 observation_qpc_ticks: None,

@@ -734,17 +734,22 @@ impl NativeCalibrationService {
             None
         };
         let recommendation_available = outcome == CalibrationOutcome::Succeeded;
-        let recommended_timing_margin_us = recommendation_available.then(|| {
-            if !applied {
-                return sky_app_core::settings::DEFAULT_TIMING_MARGIN_US;
-            }
-            let reserve_us = margin_us.unwrap_or(sky_native_adapters::DEFAULT_TRANSPORT_MARGIN_US);
-            let evidence_budget_us = reserve_us.saturating_add(CALIBRATION_TIMING_MARGIN_GUARD_US);
-            evidence_budget_us.div_ceil(sky_app_core::settings::TIMING_MARGIN_STEP_US)
-                * sky_app_core::settings::TIMING_MARGIN_STEP_US
-        });
-        let recommendation_qualified = recommendation_available && applied;
-        let recommendation_source = if recommendation_qualified {
+        let recommended_timing_margin_us = if !recommendation_available {
+            None
+        } else if applied {
+            recommended_calibrated_timing_margin_us(
+                margin_us.unwrap_or(sky_native_adapters::DEFAULT_TRANSPORT_MARGIN_US),
+            )
+        } else {
+            Some(sky_app_core::settings::DEFAULT_TIMING_MARGIN_US)
+        };
+        let insufficient_headroom =
+            recommendation_available && applied && recommended_timing_margin_us.is_none();
+        let recommendation_qualified =
+            recommendation_available && applied && !insufficient_headroom;
+        let recommendation_source = if insufficient_headroom {
+            "insufficient_headroom"
+        } else if recommendation_qualified {
             "qualified_calibration"
         } else if recommendation_available {
             "out_of_envelope_fallback"
@@ -4323,7 +4328,7 @@ fn sender_trace_export_json(
     telemetry: &Value,
 ) -> Result<String, serde_json::Error> {
     serde_json::to_string(&serde_json::json!({
-        "export_schema_version": 1,
+        "export_schema_version": 2,
         "session_id": active.session_id,
         "song_id": active.song_id,
         "song_title": active.title,
@@ -4500,9 +4505,14 @@ fn publish_diagnostics_snapshot_for_active(
             chord_split_events: sample.chord_split_events,
             missed_down_boundaries: sample.missed_down_boundaries,
             missed_down_keys: sample.missed_down_keys,
-            unobserved_backlog_boundaries: sample.unobserved_backlog_boundaries,
-            physical_window_expired_boundaries: sample.physical_window_expired_boundaries,
-            down_expired_before_send: sample.down_expired_before_send,
+            missed_unobserved_backlog_boundaries: sample.missed_unobserved_backlog_boundaries,
+            missed_physical_window_boundaries: sample.missed_physical_window_boundaries,
+            final_sender_window_expirations: sample.final_sender_window_expirations,
+            release_floor_infeasible_boundaries: sample.release_floor_infeasible_boundaries,
+            hold_floor_delay_boundaries: sample.hold_floor_delay_boundaries,
+            max_hold_floor_delay_us: sample.max_hold_floor_delay_us,
+            release_floor_delay_boundaries: sample.release_floor_delay_boundaries,
+            max_release_floor_delay_us: sample.max_release_floor_delay_us,
             final_gate_control_rejections: sample.final_gate_control_rejections,
             final_gate_target_changes: sample.final_gate_target_changes,
             final_gate_focus_losses: sample.final_gate_focus_losses,
@@ -4551,9 +4561,14 @@ struct NativeDiagnosticsSample {
     chord_split_events: u64,
     missed_down_boundaries: u64,
     missed_down_keys: u64,
-    unobserved_backlog_boundaries: u64,
-    physical_window_expired_boundaries: u64,
-    down_expired_before_send: u64,
+    missed_unobserved_backlog_boundaries: u64,
+    missed_physical_window_boundaries: u64,
+    final_sender_window_expirations: u64,
+    release_floor_infeasible_boundaries: u64,
+    hold_floor_delay_boundaries: u64,
+    max_hold_floor_delay_us: u64,
+    release_floor_delay_boundaries: u64,
+    max_release_floor_delay_us: u64,
     final_gate_control_rejections: u64,
     final_gate_target_changes: u64,
     final_gate_focus_losses: u64,
@@ -4594,9 +4609,14 @@ impl NativeDiagnosticsSample {
             chord_split_events: 0,
             missed_down_boundaries: 0,
             missed_down_keys: 0,
-            unobserved_backlog_boundaries: 0,
-            physical_window_expired_boundaries: 0,
-            down_expired_before_send: 0,
+            missed_unobserved_backlog_boundaries: 0,
+            missed_physical_window_boundaries: 0,
+            final_sender_window_expirations: 0,
+            release_floor_infeasible_boundaries: 0,
+            hold_floor_delay_boundaries: 0,
+            max_hold_floor_delay_us: 0,
+            release_floor_delay_boundaries: 0,
+            max_release_floor_delay_us: 0,
             final_gate_control_rejections: 0,
             final_gate_target_changes: 0,
             final_gate_focus_losses: 0,
@@ -4656,9 +4676,14 @@ impl NativeDiagnosticsSample {
             chord_split_events: snapshot.chord_split_events,
             missed_down_boundaries: snapshot.missed_down_boundaries,
             missed_down_keys: snapshot.missed_down_keys,
-            unobserved_backlog_boundaries: snapshot.unobserved_backlog_boundaries,
-            physical_window_expired_boundaries: snapshot.physical_window_expired_boundaries,
-            down_expired_before_send: snapshot.down_expired_before_send,
+            missed_unobserved_backlog_boundaries: snapshot.missed_unobserved_backlog_boundaries,
+            missed_physical_window_boundaries: snapshot.missed_physical_window_boundaries,
+            final_sender_window_expirations: snapshot.final_sender_window_expirations,
+            release_floor_infeasible_boundaries: snapshot.release_floor_infeasible_boundaries,
+            hold_floor_delay_boundaries: snapshot.hold_floor_delay_boundaries,
+            max_hold_floor_delay_us: snapshot.max_hold_floor_delay_us,
+            release_floor_delay_boundaries: snapshot.release_floor_delay_boundaries,
+            max_release_floor_delay_us: snapshot.max_release_floor_delay_us,
             final_gate_control_rejections: snapshot.final_gate_control_rejections,
             final_gate_target_changes: snapshot.final_gate_target_changes,
             final_gate_focus_losses: snapshot.final_gate_focus_losses,
@@ -5242,30 +5267,38 @@ fn timing_margin_recommendation(
 ) -> crate::commands::TimingMarginRecommendationDto {
     let resolution = load_calibration_resolution(calibration_cache_path);
     let recommended_timing_margin_us = if resolution.qualified {
-        let evidence_budget = CALIBRATION_TIMING_MARGIN_GUARD_US
-            .checked_add(resolution.transport_reserve_us)
-            .expect("bounded calibration reserve");
-        evidence_budget.div_ceil(sky_app_core::settings::TIMING_MARGIN_STEP_US)
-            * sky_app_core::settings::TIMING_MARGIN_STEP_US
+        recommended_calibrated_timing_margin_us(resolution.transport_reserve_us)
     } else {
-        sky_app_core::settings::DEFAULT_TIMING_MARGIN_US
+        Some(sky_app_core::settings::DEFAULT_TIMING_MARGIN_US)
     };
-    let source = match resolution.source.as_str() {
-        sky_native_adapters::CALIBRATION_MARGIN_SOURCE_DEVICE => "qualified_calibration",
-        sky_native_adapters::CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE => {
-            "out_of_envelope_fallback"
+    let source = if resolution.qualified && recommended_timing_margin_us.is_none() {
+        "insufficient_headroom"
+    } else {
+        match resolution.source.as_str() {
+            sky_native_adapters::CALIBRATION_MARGIN_SOURCE_DEVICE => "qualified_calibration",
+            sky_native_adapters::CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE => {
+                "out_of_envelope_fallback"
+            }
+            sky_native_adapters::CALIBRATION_MARGIN_SOURCE_INVALID => "invalid_cache_fallback",
+            sky_native_adapters::CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE => {
+                "incompatible_calibration_fallback"
+            }
+            _ => "default_fallback",
         }
-        sky_native_adapters::CALIBRATION_MARGIN_SOURCE_INVALID => "invalid_cache_fallback",
-        sky_native_adapters::CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE => {
-            "incompatible_calibration_fallback"
-        }
-        _ => "default_fallback",
     };
     crate::commands::TimingMarginRecommendationDto {
         recommended_timing_margin_us,
-        qualified: resolution.qualified,
+        qualified: resolution.qualified && recommended_timing_margin_us.is_some(),
         source: source.into(),
     }
+}
+
+fn recommended_calibrated_timing_margin_us(transport_reserve_us: u64) -> Option<u64> {
+    let evidence_budget_us =
+        transport_reserve_us.checked_add(CALIBRATION_TIMING_MARGIN_GUARD_US)?;
+    let step_us = sky_app_core::settings::TIMING_MARGIN_STEP_US;
+    let recommendation_us = evidence_budget_us.div_ceil(step_us).checked_mul(step_us)?;
+    (recommendation_us <= sky_app_core::settings::MAX_TIMING_MARGIN_US).then_some(recommendation_us)
 }
 
 fn settings_dto(
@@ -5579,20 +5612,21 @@ mod tests {
     use super::{
         CALIBRATION_DEFAULT_TIMEOUT_SECONDS, CALIBRATION_MIN_FULL_TIMEOUT_SECONDS,
         CALIBRATION_MIN_NATIVE_TOTAL_SECONDS, CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS,
-        CalibrationRunError, DiagnosticsBackendHealth, DiagnosticsPublicationGate,
-        MAX_DECISION_COUNT, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS, MaterializedTimingPolicy,
-        NativeActivePlayback, NativeCalibrationOperation, NativeCalibrationService,
-        NativeDesktopRuntime, NativeDiagnosticsSample, NativeEventHub, NativePlaybackService,
-        PlaybackActiveStatusDto, PlaybackPendingControl, PlaybackTerminalPublication,
-        PlaybackTerminalStatusDto, SenderTraceState, TestSeams, calibration_budget,
-        diagnostics_backend_status, opaque_native_id, percentile_ms, physical_startup_failure,
-        plan_fingerprint, population_sigma_ms, publish_calibration_cache,
+        CALIBRATION_TIMING_MARGIN_GUARD_US, CalibrationRunError, DiagnosticsBackendHealth,
+        DiagnosticsPublicationGate, MAX_DECISION_COUNT, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS,
+        MaterializedTimingPolicy, NativeActivePlayback, NativeCalibrationOperation,
+        NativeCalibrationService, NativeDesktopRuntime, NativeDiagnosticsSample, NativeEventHub,
+        NativePlaybackService, PlaybackActiveStatusDto, PlaybackPendingControl,
+        PlaybackTerminalPublication, PlaybackTerminalStatusDto, SenderTraceState, TestSeams,
+        calibration_budget, diagnostics_backend_status, opaque_native_id, percentile_ms,
+        physical_startup_failure, plan_fingerprint, population_sigma_ms, publish_calibration_cache,
         publish_diagnostics_snapshot_for_active, publish_playback_state,
         publish_retirement_barrier, publish_stopped_completion, publish_terminal_poll_result,
-        release_terminal_ownership, remove_oldest_snapshot, resolve_install_root,
-        retain_prepared_capacity, safe_calibration_evidence, sender_sample_summary,
-        sender_trace_export_json, settings_fingerprint, supervisor_heartbeat_loop,
-        timing_margin_recommendation, validate_playback_start_request,
+        recommended_calibrated_timing_margin_us, release_terminal_ownership,
+        remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
+        safe_calibration_evidence, sender_sample_summary, sender_trace_export_json,
+        settings_fingerprint, supervisor_heartbeat_loop, timing_margin_recommendation,
+        validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
@@ -5640,7 +5674,7 @@ mod tests {
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("fixture timing policy"),
             timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: 800,
+                recommended_timing_margin_us: Some(800),
                 qualified: false,
                 source: "default_fallback".into(),
             },
@@ -5704,7 +5738,7 @@ mod tests {
                 risk,
                 timing_policy,
                 timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                    recommended_timing_margin_us: 800,
+                    recommended_timing_margin_us: Some(800),
                     qualified: false,
                     source: "default_fallback".into(),
                 },
@@ -5841,7 +5875,7 @@ mod tests {
     fn sender_trace_export_includes_session_identity_and_frozen_policy() {
         let active = active_for_control_with_physical(PlaybackSessionState::Finished, None, true);
         let telemetry = serde_json::json!({
-            "schema_version": 14,
+            "schema_version": 16,
             "qpc_frequency_hz": 10_000_000,
             "records": [],
             "attempted": 0,
@@ -5853,7 +5887,7 @@ mod tests {
         let export = sender_trace_export_json(&active, &telemetry).expect("sender trace JSON");
         let document: Value = serde_json::from_str(&export).expect("valid sender trace JSON");
 
-        assert_eq!(document["export_schema_version"], 1);
+        assert_eq!(document["export_schema_version"], 2);
         assert_eq!(document["session_id"], "a".repeat(32));
         assert_eq!(document["song_id"], "c".repeat(32));
         assert_eq!(document["song_title"], "Fixture");
@@ -6363,12 +6397,12 @@ mod tests {
             let recommendation = timing_margin_recommendation(&cache);
             assert_eq!(
                 recommendation.recommended_timing_margin_us,
-                match worst {
+                Some(match worst {
                     0 => 400,
                     677 => 900,
                     1_900 => 2_100,
                     _ => sky_app_core::settings::DEFAULT_TIMING_MARGIN_US,
-                }
+                })
             );
             assert_eq!(recommendation.qualified, expected_margin.is_some());
             assert_eq!(
@@ -6394,6 +6428,22 @@ mod tests {
     }
 
     #[test]
+    fn calibrated_timing_margin_reports_insufficient_headroom_without_clamping() {
+        let max = sky_app_core::settings::MAX_TIMING_MARGIN_US;
+        let guard = CALIBRATION_TIMING_MARGIN_GUARD_US;
+
+        assert_eq!(
+            recommended_calibrated_timing_margin_us(max - guard),
+            Some(max)
+        );
+        assert_eq!(
+            recommended_calibrated_timing_margin_us(max - guard + 1),
+            None
+        );
+        assert_eq!(recommended_calibrated_timing_margin_us(u64::MAX), None);
+    }
+
+    #[test]
     fn unqualified_margin_recommendation_uses_default_timing_margin() {
         let path = std::env::temp_dir().join(format!(
             "sky-timing-margin-recommendation-{}-missing.json",
@@ -6402,7 +6452,7 @@ mod tests {
         let recommendation = timing_margin_recommendation(&path);
         assert_eq!(
             recommendation.recommended_timing_margin_us,
-            sky_app_core::settings::DEFAULT_TIMING_MARGIN_US
+            Some(sky_app_core::settings::DEFAULT_TIMING_MARGIN_US)
         );
         assert_eq!(recommendation.source, "default_fallback");
     }
@@ -7084,7 +7134,7 @@ mod tests {
             payload
                 .timing_margin_recommendation
                 .recommended_timing_margin_us,
-            800
+            Some(800)
         );
         assert!(!payload.timing_margin_recommendation.qualified);
         assert_eq!(payload.pre_call_lt_250us, 0);
@@ -7100,9 +7150,14 @@ mod tests {
         assert_eq!(payload.chord_split_events, 0);
         assert_eq!(payload.missed_down_boundaries, 0);
         assert_eq!(payload.missed_down_keys, 0);
-        assert_eq!(payload.unobserved_backlog_boundaries, 0);
-        assert_eq!(payload.physical_window_expired_boundaries, 0);
-        assert_eq!(payload.down_expired_before_send, 0);
+        assert_eq!(payload.missed_unobserved_backlog_boundaries, 0);
+        assert_eq!(payload.missed_physical_window_boundaries, 0);
+        assert_eq!(payload.final_sender_window_expirations, 0);
+        assert_eq!(payload.release_floor_infeasible_boundaries, 0);
+        assert_eq!(payload.hold_floor_delay_boundaries, 0);
+        assert_eq!(payload.max_hold_floor_delay_us, 0);
+        assert_eq!(payload.release_floor_delay_boundaries, 0);
+        assert_eq!(payload.max_release_floor_delay_us, 0);
         assert_eq!(payload.final_gate_control_rejections, 0);
         assert_eq!(payload.final_gate_target_changes, 0);
         assert_eq!(payload.final_gate_focus_losses, 0);

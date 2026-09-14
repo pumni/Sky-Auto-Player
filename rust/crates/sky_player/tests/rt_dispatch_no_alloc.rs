@@ -16,9 +16,9 @@
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_player::engine::dispatch_primitives::{
-    DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep, DownMissKind,
-    DownMissObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
-    PendingObservationQueue, ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
+    DispatchObservation, DispatchObservationEvidence, DispatchPath, DispatchStep,
+    DownMissObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue,
+    ProductionDispatchTestHarness, UpObservation, UpTraceObservation,
     is_clean_dispatch_observation,
 };
 
@@ -105,32 +105,7 @@ fn disable_counting() -> u64 {
 }
 
 fn down_observation(n: u64) -> DispatchObservation {
-    DispatchObservation::Down(DownObservation {
-        epoch_qpc: QpcTicks::ZERO,
-        allow_pre_epoch_startup_dispatch: false,
-        physical_target_qpc: QpcTicks::ZERO,
-        final_policy_qpc: QpcTicks::ZERO,
-        pre_call_qpc: QpcTicks::ZERO,
-        sendinput_completion_qpc: QpcTicks::ZERO,
-        dispatch_ready_qpc: Some(QpcTicks::ZERO),
-        wake_qpc: None,
-        precision_handoff: None,
-        requested_packet: PhysicalPacket::new(0, 1),
-        confirmed_mask: 1,
-        skipped_mask: 0,
-        trace: DownTraceObservation {
-            event_index: n as u32,
-            compiled_packet_index: Some(n),
-            trace_kind: 0,
-            result_status: SendTransactionStatus::Complete,
-            send_attempts: 1,
-            retry_reason: PacketRetryReason::None,
-            chord_integrity_lost: false,
-            last_win32_error: 0,
-            authored_ticks: TimelineTicks::ZERO,
-            effective_deadline_ticks: TimelineTicks::ZERO,
-        },
-    })
+    DispatchObservation::Down(DownObservation::test_fixture(n))
 }
 
 fn up_observation(n: u64) -> DispatchObservation {
@@ -174,18 +149,7 @@ fn up_observation(n: u64) -> DispatchObservation {
 }
 
 fn down_miss_observation(n: u64) -> DispatchObservation {
-    DispatchObservation::DownMiss(DownMissObservation {
-        source_action_index: n as u32,
-        compiled_packet_index: None,
-        authored_ticks: TimelineTicks::from_raw(n),
-        effective_deadline_ticks: TimelineTicks::from_raw(n),
-        wake_ticks: TimelineTicks::from_raw(n),
-        physical_target_qpc: QpcTicks::from_raw(n),
-        observed_qpc: QpcTicks::from_raw(n),
-        up_mask: 0,
-        down_mask: 1,
-        kind: DownMissKind::DownExpiredBeforeSend,
-    })
+    DispatchObservation::DownMiss(DownMissObservation::test_fixture(n))
 }
 
 fn clean_dispatch_evidence(requested_count: usize) -> DispatchObservationEvidence {
@@ -386,7 +350,6 @@ fn overflow_drops_newest_for_down_and_up() {
             DispatchObservation::BlockedUnfocused(_) => {
                 panic!("blocked observation not expected")
             }
-            DispatchObservation::Lifecycle(_) => panic!("lifecycle observation not expected"),
         }
 
         let mut last = None;
@@ -407,7 +370,6 @@ fn overflow_drops_newest_for_down_and_up() {
             DispatchObservation::BlockedUnfocused(_) => {
                 panic!("blocked observation not expected")
             }
-            DispatchObservation::Lifecycle(_) => panic!("lifecycle observation not expected"),
         }
     }
 }
@@ -592,7 +554,7 @@ fn production_infeasible_mixed_recovery_no_alloc() {
         DispatchStep::NoWork
     ));
     let classify_step = harness.dispatch_at_qpc_for_test(&mixed, mixed_target);
-    assert_eq!(harness.physical_window_expired_boundaries_for_test(), 1);
+    assert_eq!(harness.missed_physical_window_boundaries_for_test(), 1);
     let recovery_target = harness
         .physical_wait_target_for_test(&mixed)
         .expect("pending Up recovery target")
@@ -606,7 +568,7 @@ fn production_infeasible_mixed_recovery_no_alloc() {
     );
     assert!(matches!(classify_step, DispatchStep::NoWork));
     assert!(matches!(recovery_step, DispatchStep::Dispatched));
-    assert_eq!(harness.physical_window_expired_boundaries_for_test(), 1);
+    assert_eq!(harness.missed_physical_window_boundaries_for_test(), 1);
     assert_eq!(
         packets.lock().expect("packet capture").as_slice(),
         &[PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]

@@ -47,9 +47,14 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     chord_split_events: 2,
     missed_down_boundaries: 0,
     missed_down_keys: 0,
-    unobserved_backlog_boundaries: 0,
-    physical_window_expired_boundaries: 0,
-    down_expired_before_send: 0,
+    missed_unobserved_backlog_boundaries: 0,
+    missed_physical_window_boundaries: 0,
+    final_sender_window_expirations: 0,
+    hold_floor_delay_boundaries: 0,
+    max_hold_floor_delay_us: 0,
+    release_floor_delay_boundaries: 0,
+    release_floor_infeasible_boundaries: 0,
+    max_release_floor_delay_us: 0,
     final_gate_control_rejections: 0,
     final_gate_target_changes: 0,
     final_gate_focus_losses: 0,
@@ -100,9 +105,14 @@ describe('DiagnosticsView', () => {
             release_late_2ms: 0,
             missed_down_boundaries: 2,
             missed_down_keys: 3,
-            unobserved_backlog_boundaries: 1,
-            physical_window_expired_boundaries: 2,
-            down_expired_before_send: 2,
+            missed_unobserved_backlog_boundaries: 1,
+            missed_physical_window_boundaries: 2,
+            final_sender_window_expirations: 2,
+            hold_floor_delay_boundaries: 3,
+            max_hold_floor_delay_us: 400,
+            release_floor_delay_boundaries: 1,
+            release_floor_infeasible_boundaries: 1,
+            max_release_floor_delay_us: 200,
             final_gate_control_rejections: 1,
             final_gate_target_changes: 1,
             final_gate_focus_losses: 1,
@@ -132,9 +142,12 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('17.467 ms');
     expect(screen.getByText('Release gap').parentElement).toHaveTextContent('17.467 ms');
     expect(screen.getByText('Physical-window expirations')).toBeInTheDocument();
+    expect(screen.getByText('Release-floor infeasible boundaries').parentElement).toHaveTextContent(
+      '1',
+    );
     expect(screen.getByText('Missed Down keys')).toBeInTheDocument();
     expect(screen.getByText('Unobserved backlog boundaries')).toBeInTheDocument();
-    expect(screen.getByText('Sender latest-start expirations')).toBeInTheDocument();
+    expect(screen.getByText('Sender-window expirations')).toBeInTheDocument();
     expect(screen.getByText('Focus gate rejections')).toBeInTheDocument();
     expect(screen.getByText('Target changes')).toBeInTheDocument();
     expect(screen.getByText('Lease expirations')).toBeInTheDocument();
@@ -279,6 +292,7 @@ describe('DiagnosticsView', () => {
 
     expect(screen.getByText('Healthy')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Deadline admission' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Physical floor delays' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Input transport' })).toBeInTheDocument();
     expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent('327 μs');
     expect(screen.getByText('Pre-call > 2 ms').parentElement).toHaveTextContent('4');
@@ -434,7 +448,7 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Error');
     for (const label of [
       'Missed Down boundaries',
-      'Sender latest-start expirations',
+      'Sender-window expirations',
       'SendInput partial events',
       'Dropped keys',
       'Active keys',

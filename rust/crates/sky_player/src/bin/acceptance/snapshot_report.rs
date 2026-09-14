@@ -1,0 +1,82 @@
+use serde_json::{Value, json};
+use sky_player::engine::EngineSnapshot;
+
+pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
+    let stuck_keys = snapshot
+        .release_outcome
+        .as_ref()
+        .map_or(0, |outcome| u64::from(outcome.stuck_mask.count_ones()));
+    let release = snapshot.release_outcome.as_ref().map(|outcome| {
+        json!({
+            "attempted_mask": outcome.attempted_mask,
+            "transport_anomaly": outcome.transport_anomaly,
+            "released_successfully": outcome.released_successfully,
+            "stuck_mask": outcome.stuck_mask,
+            "verification_inconclusive": outcome.verification_inconclusive,
+            "attempts": outcome.attempts,
+        })
+    });
+
+    json!({
+        "status": snapshot.status,
+        "outcome": snapshot.outcome,
+        "last_error": snapshot.last_error,
+        "active_count": snapshot.active_count,
+        "possibly_active_count": snapshot.possibly_active_count,
+        "failed_release_count": snapshot.failed_release_count,
+        "keys_inserted_before_failure": snapshot.keys_inserted_before_failure,
+        "stuck_keys": stuck_keys,
+        "terminal_error": snapshot.terminal_error,
+        "keys_dropped": snapshot.keys_dropped,
+        "chord_split_events": snapshot.chord_split_events,
+        "sendinput_partial_events": snapshot.sendinput_partial_events,
+        "sendinput_zero_progress_failures": snapshot.sendinput_zero_progress_failures,
+        "chord_integrity_lost": snapshot.chord_integrity_lost,
+        "max_sendinput_pre_call_lateness_us": snapshot.max_sendinput_pre_call_lateness_us,
+        "pre_call_lt_250us": snapshot.pre_call_lt_250us,
+        "pre_call_250_500us": snapshot.pre_call_250_500us,
+        "pre_call_500_750us": snapshot.pre_call_500_750us,
+        "pre_call_750_1000us": snapshot.pre_call_750_1000us,
+        "pre_call_1000_1500us": snapshot.pre_call_1000_1500us,
+        "pre_call_1500_2000us": snapshot.pre_call_1500_2000us,
+        "pre_call_ge_2000us": snapshot.pre_call_ge_2000us,
+        "missed_down_boundaries": snapshot.missed_down_boundaries,
+        "missed_down_keys": snapshot.missed_down_keys,
+        "missed_unobserved_backlog_boundaries": snapshot.missed_unobserved_backlog_boundaries,
+        "missed_physical_window_boundaries": snapshot.missed_physical_window_boundaries,
+        "final_sender_window_expirations": snapshot.final_sender_window_expirations,
+        "release_floor_infeasible_boundaries": snapshot.release_floor_infeasible_boundaries,
+        "hold_floor_delay_boundaries": snapshot.hold_floor_delay_boundaries,
+        "max_hold_floor_delay_us": snapshot.max_hold_floor_delay_us,
+        "last_hold_floor_delay_mask": snapshot.last_hold_floor_delay_mask,
+        "last_hold_floor_authored_target_qpc_ticks": snapshot.last_hold_floor_authored_target_qpc_ticks,
+        "last_hold_floor_not_before_qpc_ticks": snapshot.last_hold_floor_not_before_qpc_ticks,
+        "release_floor_delay_boundaries": snapshot.release_floor_delay_boundaries,
+        "max_release_floor_delay_us": snapshot.max_release_floor_delay_us,
+        "last_release_floor_delay_mask": snapshot.last_release_floor_delay_mask,
+        "last_release_floor_authored_target_qpc_ticks": snapshot.last_release_floor_authored_target_qpc_ticks,
+        "last_release_floor_not_before_qpc_ticks": snapshot.last_release_floor_not_before_qpc_ticks,
+        "final_gate_control_rejections": snapshot.final_gate_control_rejections,
+        "final_gate_focus_losses": snapshot.final_gate_focus_losses,
+        "final_gate_target_changes": snapshot.final_gate_target_changes,
+        "final_gate_lease_expirations": snapshot.final_gate_lease_expirations,
+        "production_forensics_available": snapshot.production_forensics_available,
+        "production_forensics_version": snapshot.production_forensics_version,
+        "production_hold_pair_samples": snapshot.production_hold_pair_samples,
+        "production_min_hold_start_after_down_completion_ticks": snapshot.production_min_hold_start_after_down_completion_ticks,
+        "production_hold_floor_violation_count": snapshot.production_hold_floor_violation_count,
+        "production_release_floor_samples": snapshot.production_release_floor_samples,
+        "production_min_down_start_after_up_completion_ticks": snapshot.production_min_down_start_after_up_completion_ticks,
+        "production_release_floor_violation_count": snapshot.production_release_floor_violation_count,
+        "production_hold_floor_ticks": snapshot.production_hold_floor_ticks,
+        "production_release_floor_ticks": snapshot.production_release_floor_ticks,
+        "production_same_call_same_key_retrigger_count": snapshot.production_same_call_same_key_retrigger_count,
+        "production_anchor_overwrite_count": snapshot.production_anchor_overwrite_count,
+        "production_unmatched_up_count": snapshot.production_unmatched_up_count,
+        "production_anomaly_ring_overwrite_count": snapshot.production_anomaly_ring_overwrite_count,
+        "production_forensics_anomaly_count": snapshot.production_forensics_anomaly_count,
+        "production_structural_anomaly_count": snapshot.production_structural_anomaly_count,
+        "production_timing_diagnostic_count": snapshot.production_timing_diagnostic_count,
+        "release_outcome": release,
+    })
+}

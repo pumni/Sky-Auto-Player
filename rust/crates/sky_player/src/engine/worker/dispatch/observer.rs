@@ -3,6 +3,7 @@ use super::super::super::{
     TimelineTicks, try_publish_metrics,
 };
 use super::super::health::build_dispatch_budget;
+use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::wait::WaitObservation;
 use super::super::{
     DispatchHealthObservation, DispatchHealthOptions, DispatchPath, WorkerHealthState,
@@ -10,7 +11,6 @@ use super::super::{
     signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
 };
 use super::authored::resolve_slo_terminal_step;
-pub(crate) use super::hold_forensics::HoldForensics;
 use super::observation::{
     DispatchObservation, DownObservation, DownTraceObservation, OBSERVATION_QUEUE_CAPACITY,
     PrecisionHandoffEvidence, StaleMetadataObservation, UpObservation, down_effective_ticks,
@@ -18,6 +18,7 @@ use super::observation::{
     record_release_telemetry, up_dispatch_evidence, up_transport_counts,
 };
 use super::observer_wake::take_deadline_wake_qpc;
+use super::recovery::record_physical_floor_delays;
 use super::timing::{DownSendTiming, is_clean_dispatch_observation};
 use super::{AuthoredBatchView, DispatchStep};
 use crossbeam_queue::ArrayQueue;
@@ -36,6 +37,7 @@ pub(crate) fn publisher_down_send_outcome(
     qpc_clock: QpcClock,
     _effective_now_ticks: TimelineTicks,
     physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
+    physical_timing_window: PhysicalTimingWindow,
     capture_dispatch_ready_qpc: bool,
     trace_kind: u8,
     result_status: sky_dispatch_win32::input::SendTransactionStatus,
@@ -82,11 +84,18 @@ pub(crate) fn publisher_down_send_outcome(
         result_status,
         local_metrics,
     );
+    if matches!(
+        result_status,
+        sky_dispatch_win32::input::SendTransactionStatus::Complete
+    ) {
+        record_physical_floor_delays(local_metrics, physical_timing_window);
+    }
     if let Some(observer) = observer {
         let observation = DownObservation {
             epoch_qpc: timing_proof.epoch_qpc,
             allow_pre_epoch_startup_dispatch: timing_proof.allow_pre_epoch_startup_dispatch,
             physical_target_qpc,
+            physical_timing_window,
             final_policy_qpc,
             pre_call_qpc,
             sendinput_completion_qpc,
@@ -229,7 +238,6 @@ impl ObserverRuntime {
             .name("sky-dispatch-observer".to_string())
             .spawn(move || {
                 let mut local_metrics = WorkerMetricsLocal::default();
-                let mut hold_forensics = HoldForensics::default();
                 let mut health = WorkerHealthState::new(health_options);
                 let mut timing = timing;
                 let mut terminal_error = None;
@@ -259,7 +267,6 @@ impl ObserverRuntime {
                         qpc_clock,
                         now_qpc_ticks,
                         &mut timing,
-                        &mut hold_forensics,
                     ) {
                         Ok(Some(drain_us)) => {
                             local_metrics.observer_duration_max_us =
@@ -341,7 +348,6 @@ pub(crate) fn drain_down_send_outcome(
     qpc_clock: QpcClock,
     now_us: u64,
     timing: &WorkerTimingState,
-    hold_forensics: &mut HoldForensics,
 ) -> Result<(), DispatchStep> {
     let path = observation.path();
     let health_budget = build_dispatch_budget(path, health.options);
@@ -466,16 +472,6 @@ pub(crate) fn drain_down_send_outcome(
         )
     ) && observation.trace.result_success();
     let clean_dispatch_sample = is_clean_dispatch_observation(_observation_evidence);
-    hold_forensics.observe_packet(
-        observation.requested_packet,
-        observation.physical_target_qpc,
-        observation.pre_call_qpc,
-        observation.sendinput_completion_qpc,
-        clean_dispatch_sample,
-        local_metrics,
-        qpc_clock,
-        timing.timing_margin_ticks,
-    )?;
     let strict_completion_late = timing.strict_timing
         && clean_dispatch_sample
         && completion_lateness_ticks > 0
@@ -716,7 +712,6 @@ pub(crate) fn drain_one_observer(
     qpc_clock: QpcClock,
     now_qpc_ticks: sky_dispatch_win32::clock::QpcTicks,
     timing: &mut WorkerTimingState,
-    hold_forensics: &mut HoldForensics,
 ) -> Result<Option<u64>, DispatchStep> {
     let Some(observation) = pending.pop_front() else {
         return Ok(None);
@@ -744,7 +739,6 @@ pub(crate) fn drain_one_observer(
             qpc_clock,
             now_us,
             timing,
-            hold_forensics,
         )?,
         DispatchObservation::DownMiss(miss) => {
             super::observer_trace::drain_down_miss(miss, telemetry)?;
@@ -766,9 +760,6 @@ pub(crate) fn drain_one_observer(
         }
         DispatchObservation::BlockedUnfocused(blocked) => {
             super::observer_trace::drain_blocked_unfocused_observation(blocked, telemetry)?;
-        }
-        DispatchObservation::Lifecycle(lifecycle) => {
-            hold_forensics.observe_lifecycle(*lifecycle);
         }
     }
     #[cfg(any(test, feature = "test-support"))]

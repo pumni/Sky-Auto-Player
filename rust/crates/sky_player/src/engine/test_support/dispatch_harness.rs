@@ -11,7 +11,6 @@ use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
 use crate::engine::worker::dispatch::PendingObservationQueue;
-use crate::engine::worker::dispatch::observer::HoldForensics;
 use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
 };
@@ -57,7 +56,6 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) metrics: SharedMetrics,
     pub(crate) progress_clock: SharedProgressClock,
     pub(crate) observer: PendingObservationQueue,
-    pub(crate) hold_forensics: HoldForensics,
     pub(crate) interrupt: OwnedEvent,
     pub(crate) last_wait_result: Option<WaitResult>,
     effective_now_ticks: TimelineTicks,
@@ -732,7 +730,6 @@ impl ProductionDispatchTestHarness {
             metrics: SharedMetrics::default(),
             progress_clock,
             observer: PendingObservationQueue::default(),
-            hold_forensics: HoldForensics::default(),
             interrupt: OwnedEvent::new_auto_reset().expect("test interrupt event"),
             last_wait_result: None,
             effective_now_ticks: TimelineTicks::ZERO,
@@ -1490,8 +1487,8 @@ impl ProductionDispatchTestHarness {
         physical_wait_target_for_plan(plan, &self.runtime)
     }
 
-    pub fn physical_window_expired_boundaries_for_test(&self) -> u64 {
-        self.local_metrics.physical_window_expired_boundaries
+    pub fn missed_physical_window_boundaries_for_test(&self) -> u64 {
+        self.local_metrics.missed_physical_window_boundaries
     }
 
     /// Classify a frozen Down plan one QPC tick before its target without the
@@ -1774,6 +1771,14 @@ impl ProductionDispatchTestHarness {
             physical.authored_view.packet_masks.up_mask,
             physical.authored_view.packet_masks.down_mask,
         );
+        let physical_timing_window = self
+            .runtime
+            .physical_timing_window_for_test(
+                physical_target_qpc,
+                physical.authored_view.packet_masks.up_mask,
+                physical.authored_view.packet_masks.down_mask,
+            )
+            .expect("physical timing window");
         // This direct helper represents the old inner wait with a synthetic
         // exact-boundary sample. The production worker supplies the real
         // crossing from its single wait before entering this function.
@@ -1782,7 +1787,7 @@ impl ProductionDispatchTestHarness {
             dispatch_plan: plan,
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
-            physical_target_qpc,
+            physical_timing_window,
             latest_down_start_qpc,
             down_admission: DownBoundaryAdmission::Authorized,
             focus_loss_fault: false,
@@ -1824,7 +1829,6 @@ impl ProductionDispatchTestHarness {
             self.resources.clock,
             sky_dispatch_win32::clock::QpcTicks::ZERO,
             &mut self.timing,
-            &mut self.hold_forensics,
         )
     }
     pub fn pop_observation(

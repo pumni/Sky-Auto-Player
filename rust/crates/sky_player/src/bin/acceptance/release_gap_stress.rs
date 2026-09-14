@@ -36,19 +36,19 @@ pub(super) fn scenario_plan(timing_margin_us: u64) -> Result<ScenarioPlan, Strin
 pub(super) fn production_visibility_qualification(
     scenario: Scenario,
     hold_samples: u64,
-    hold_below_frame_floor: u64,
+    hold_floor_violations: u64,
     release_samples: u64,
-    release_below_frame_floor: u64,
+    release_floor_violations: u64,
 ) -> (Verdict, &'static str) {
-    if hold_below_frame_floor > 0 || release_below_frame_floor > 0 {
-        (Verdict::Fail, "observed completion hold or release gap fell below the fixed one-frame floor")
+    if hold_floor_violations > 0 || release_floor_violations > 0 {
+        (Verdict::Fail, "observed sender start violated a fixed physical hold or release floor")
     } else if scenario == Scenario::ReleaseGapStress
         && (hold_samples < RELEASE_GAP_STRESS_MIN_SAMPLES
             || release_samples < RELEASE_GAP_STRESS_MIN_SAMPLES)
     {
         (Verdict::NonQualifying, "stress collected fewer than 512 qualifying hold or release samples")
     } else {
-        (Verdict::Pass, "production hold and release forensics meet the scenario qualification threshold")
+        (Verdict::Pass, "production hold and release floor forensics meet the scenario qualification threshold")
     }
 }
 

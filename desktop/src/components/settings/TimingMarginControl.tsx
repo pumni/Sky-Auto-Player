@@ -20,10 +20,12 @@ export function TimingMarginControl({
   const min = options.timing_margin_min_us;
   const max = options.timing_margin_max_us;
   const step = options.timing_margin_step_us;
+  const recommendedMargin = recommendation.recommended_timing_margin_us;
   const recommendationWithinRange =
-    recommendation.recommended_timing_margin_us >= min &&
-    recommendation.recommended_timing_margin_us <= max &&
-    recommendation.recommended_timing_margin_us % step === 0;
+    recommendedMargin !== null &&
+    recommendedMargin >= min &&
+    recommendedMargin <= max &&
+    recommendedMargin % step === 0;
   const [requestedValue, setRequestedValue] = useState(value);
   const authoritativeValue = useRef(value);
   const pendingWrites = useRef(0);
@@ -56,9 +58,9 @@ export function TimingMarginControl({
       <div className="timing-margin-heading">
         <span className="timing-margin-label">Timing Margin</span>
         <span className="timing-margin-recommendation">
-          {` · rec. ${recommendation.recommended_timing_margin_us} µs${
-            recommendationWithinRange ? '' : ' · out of range'
-          }`}
+          {recommendedMargin === null
+            ? ' · no recommendation'
+            : ` · rec. ${recommendedMargin} µs${recommendationWithinRange ? '' : ' · out of range'}`}
         </span>
       </div>
       <div className="timing-margin-stepper">

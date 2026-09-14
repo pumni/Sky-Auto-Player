@@ -548,10 +548,6 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
             let _ = value;
             samples.record_observation_failure("unexpected_blocked_focus_observation");
         }
-        DispatchObservation::Lifecycle(value) => {
-            let _ = value;
-            samples.record_observation_failure("unexpected_lifecycle_observation");
-        }
     }
 }
 
@@ -691,12 +687,6 @@ fn drain_observations(harness: &mut ProductionDispatchTestHarness, samples: &mut
                 samples.observation_count += 1;
                 add_observation(samples, observation);
             }
-            // A terminal cleanup/reset lifecycle can be emitted after a
-            // mixed packet. It is not a physical timing sample; accepting it
-            // here keeps the real-wait benchmark focused on the one physical
-            // observation promised by the iteration while still detecting a
-            // missing or duplicated Down/Up below.
-            DispatchObservation::Lifecycle(_) => {}
             other => {
                 samples.observation_count += 1;
                 add_observation(samples, other);
