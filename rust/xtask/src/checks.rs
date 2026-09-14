@@ -4049,7 +4049,6 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
     let skip_supply_chain = should_skip_supply_chain(skip_supply_chain, env_val.as_deref());
     match group {
         "static" => {
-            audits::agent_context::run(&root)?;
             audits::durable_names::run(&root)?;
             audits::architecture::run(&root)?;
             audits::security::run(&root)?;

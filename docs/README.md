@@ -25,9 +25,9 @@ repository-wide instructions. Completed plans, migration playbooks, superseded a
 briefs, and obsolete choreography are retained in Git history rather than kept in the active
 documentation tree.
 
-Durable architectural decisions belong in `adr/` or the current reference documents above. Do not
-turn this directory into a generated context pack or duplicate active architecture across
-agent-specific documents.
+Durable architectural decisions belong in `adr/` or the current reference documents above. Avoid
+generated context packs and duplicate architecture documents; keep one current reference per durable
+concern.
 
 ## Website history
 

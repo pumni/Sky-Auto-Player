@@ -69,12 +69,6 @@ test.describe('published route and asset contracts', () => {
       'Sitemap: https://pumni.github.io/Sky-Auto-Player/sitemap-index.xml',
     );
 
-    const llms = await request.get(origin + '/llms.txt');
-    expect(llms.status()).toBe(200);
-    const llmsText = await llms.text();
-    expect(llmsText).toContain('Sky Auto Player');
-    expect(llmsText).toContain('SendInput API only');
-
     const google = await request.get(origin + '/google40b614dcfbf81da7.html');
     expect(google.status()).toBe(200);
     expect((await google.text()).trim()).toBe(

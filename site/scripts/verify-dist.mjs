@@ -16,7 +16,6 @@ const dist = resolve(scriptDir, '..', 'dist');
 // ── Required static files (non-HTML artifacts) ──────────────────────────────
 const requiredStaticFiles = [
   'robots.txt',
-  'llms.txt',
   'google40b614dcfbf81da7.html',
   'sitemap-index.xml',
   'favicon.ico',

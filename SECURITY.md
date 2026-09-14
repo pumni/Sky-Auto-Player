@@ -2,9 +2,8 @@
 
 ## Canonical security contract
 
-This file is the source of truth for Sky Auto Player's security boundary. Agent guidance may
-summarize these rules, but it does not own or redefine them. The executable enforcement gate is
-`cargo xtask check static`.
+This file is the source of truth for Sky Auto Player's security boundary. The executable
+enforcement gate is `cargo xtask check static`.
 
 Sky Auto Player is a Windows 11 desktop tool that reads music-sheet files and simulates keyboard
 keypresses through the public Windows `SendInput` API so users can play music sheets in

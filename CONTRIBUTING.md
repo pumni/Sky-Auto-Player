@@ -9,8 +9,6 @@ keeps process proportional to the risk of the boundary being changed.
 - Use [`docs/INDEX.md`](docs/INDEX.md) to route to the smallest active document set relevant to your
   change.
 - Inspect the production source and direct tests for the behavior you are changing.
-- [`AGENTS.md`](AGENTS.md) is a concise repository/agent guide; it is not a replacement for source,
-  tests, or task-specific investigation.
 
 Do not preload historical plans or archives. Existing documentation describes the current system and
 should normally be preserved, but an intentional contribution may change a documented architecture
