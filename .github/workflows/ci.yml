@@ -560,7 +560,7 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.98.1
         run: |
           $version = (rustc --version)
-          if ($version -notmatch '^rustc 1\.98\.0\s') {
+          if ($version -notmatch '^rustc 1\.98\.1\s') {
             throw "Expected stable Rust 1.98.1 from rust/rust-toolchain.toml, got: $version"
           }
 
