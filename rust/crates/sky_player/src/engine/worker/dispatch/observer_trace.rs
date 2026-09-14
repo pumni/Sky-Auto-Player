@@ -34,6 +34,12 @@ pub(super) fn drain_stale_metadata_observation(
                 effective_deadline_ticks: observation.effective_scheduled_ticks,
                 wake_ticks: observation.effective_now_ticks,
                 physical_target_qpc_ticks: None,
+                physical_not_before_qpc_ticks: None,
+                hold_floor_qpc_ticks: None,
+                release_floor_qpc_ticks: None,
+                latest_down_start_qpc_ticks: None,
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
                 observation_qpc_ticks: None,
@@ -68,7 +74,12 @@ pub(super) fn drain_down_miss(
 ) -> Result<(), DispatchStep> {
     let dispatch_start_error_ticks = signed_timeline_delta_ticks(
         TimelineTicks::from_raw(observation.observed_qpc.as_u64()),
-        TimelineTicks::from_raw(observation.physical_target_qpc.as_u64()),
+        TimelineTicks::from_raw(
+            observation
+                .physical_timing_window
+                .authored_target_qpc
+                .as_u64(),
+        ),
     )
     .map_err(|error| {
         DispatchStep::Terminate(format!(
@@ -86,12 +97,14 @@ pub(super) fn drain_down_miss(
         super::observation::DownMissKind::UnobservedBacklog => {
             ("down_unobserved_backlog", TRACE_SEND_STATUS_NOT_ATTEMPTED)
         }
-        super::observation::DownMissKind::PhysicalWindowExpired => {
-            ("physical_window_expired", TRACE_SEND_STATUS_NOT_ATTEMPTED)
-        }
-        super::observation::DownMissKind::DownExpiredBeforeSend => {
-            ("down_expired_before_send", TRACE_SEND_STATUS_DOWN_EXPIRED)
-        }
+        super::observation::DownMissKind::PhysicalWindowExpired => (
+            "down_physical_window_expired",
+            TRACE_SEND_STATUS_NOT_ATTEMPTED,
+        ),
+        super::observation::DownMissKind::DownExpiredBeforeSend => (
+            "down_final_sender_window_expired",
+            TRACE_SEND_STATUS_DOWN_EXPIRED,
+        ),
     };
     if let Err(error) = telemetry.try_push(|| {
         RtTraceRecord::dispatched(
@@ -112,7 +125,36 @@ pub(super) fn drain_down_miss(
                 authored_ticks: observation.authored_ticks,
                 effective_deadline_ticks: observation.effective_deadline_ticks,
                 wake_ticks: observation.wake_ticks,
-                physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
+                physical_target_qpc_ticks: Some(
+                    observation
+                        .physical_timing_window
+                        .authored_target_qpc
+                        .as_u64(),
+                ),
+                physical_not_before_qpc_ticks: Some(
+                    observation
+                        .physical_timing_window
+                        .packet_not_before_qpc
+                        .as_u64(),
+                ),
+                hold_floor_qpc_ticks: Some(
+                    observation
+                        .physical_timing_window
+                        .musical_up_not_before_qpc
+                        .as_u64(),
+                ),
+                release_floor_qpc_ticks: Some(
+                    observation
+                        .physical_timing_window
+                        .down_not_before_qpc
+                        .as_u64(),
+                ),
+                latest_down_start_qpc_ticks: observation
+                    .physical_timing_window
+                    .latest_down_start_qpc
+                    .map(|ticks| ticks.as_u64()),
+                hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
+                release_floor_mask: observation.physical_timing_window.release_floor_mask,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
                 observation_qpc_ticks: Some(observation.observed_qpc.as_u64()),
@@ -171,6 +213,12 @@ pub(super) fn drain_blocked_unfocused_observation(
                 effective_deadline_ticks: observation.effective_deadline_ticks,
                 wake_ticks: observation.effective_now_ticks,
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
+                physical_not_before_qpc_ticks: None,
+                hold_floor_qpc_ticks: None,
+                release_floor_qpc_ticks: None,
+                latest_down_start_qpc_ticks: None,
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
                 observation_qpc_ticks: Some(observation.observed_qpc.as_u64()),
@@ -209,6 +257,26 @@ mod tests {
     };
     use sky_dispatch_win32::clock::QpcTicks;
 
+    fn physical_window(
+        authored_target: u64,
+        hold_floor: u64,
+        release_floor: u64,
+        packet_not_before: u64,
+        latest_down_start: Option<u64>,
+        hold_floor_mask: u16,
+        release_floor_mask: u16,
+    ) -> crate::engine::worker::physical_timing_guard::PhysicalTimingWindow {
+        crate::engine::worker::physical_timing_guard::PhysicalTimingWindow {
+            authored_target_qpc: QpcTicks::from_raw(authored_target),
+            musical_up_not_before_qpc: QpcTicks::from_raw(hold_floor),
+            down_not_before_qpc: QpcTicks::from_raw(release_floor),
+            packet_not_before_qpc: QpcTicks::from_raw(packet_not_before),
+            latest_down_start_qpc: latest_down_start.map(QpcTicks::from_raw),
+            hold_floor_mask,
+            release_floor_mask,
+        }
+    }
+
     #[test]
     fn cutoff_trace_preserves_mixed_same_key_boundary_and_zero_attempts() {
         let observation = DownMissObservation {
@@ -217,7 +285,7 @@ mod tests {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(20),
-            physical_target_qpc: QpcTicks::from_raw(1_000),
+            physical_timing_window: physical_window(1_000, 1_005, 1_020, 1_020, Some(1_010), 1, 2),
             observed_qpc: QpcTicks::from_raw(1_021),
             up_mask: 0b0001,
             down_mask: 0b0001,
@@ -236,11 +304,21 @@ mod tests {
         assert_eq!(record.kind, TRACE_KIND_MIXED);
         assert_eq!(
             record.outcome,
-            trace_outcome_code("down_expired_before_send")
+            trace_outcome_code("down_final_sender_window_expired")
         );
         assert_eq!(record.send_status, TRACE_SEND_STATUS_DOWN_EXPIRED);
-        assert_eq!(record.physical_target_qpc_ticks, 1_000);
-        assert!(record.physical_target_qpc_available);
+        assert_eq!(record.authored_target_qpc_ticks, 1_000);
+        assert!(record.authored_target_qpc_available);
+        assert_eq!(record.physical_not_before_qpc_ticks, 1_020);
+        assert!(record.physical_not_before_qpc_available);
+        assert_eq!(record.hold_floor_qpc_ticks, 1_005);
+        assert!(record.hold_floor_qpc_available);
+        assert_eq!(record.release_floor_qpc_ticks, 1_020);
+        assert!(record.release_floor_qpc_available);
+        assert_eq!(record.latest_down_start_qpc_ticks, 1_010);
+        assert!(record.latest_down_start_qpc_available);
+        assert_eq!(record.hold_floor_mask, 1);
+        assert_eq!(record.release_floor_mask, 2);
         assert!(!record.pre_call_qpc_available);
         assert!(!record.sendinput_completion_qpc_available);
         assert_eq!(record.observation_qpc_ticks, 1_021);
@@ -266,7 +344,7 @@ mod tests {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(20),
-            physical_target_qpc: QpcTicks::from_raw(1_000),
+            physical_timing_window: physical_window(1_000, 1_000, 1_000, 1_000, Some(1_010), 0, 0),
             observed_qpc: QpcTicks::from_raw(1_021),
             up_mask: 0,
             down_mask: 0b11,
@@ -286,7 +364,8 @@ mod tests {
             trace_outcome_code("down_unobserved_backlog")
         );
         assert_eq!(record.send_status, TRACE_SEND_STATUS_NOT_ATTEMPTED);
-        assert_eq!(record.physical_target_qpc_ticks, 1_000);
+        assert_eq!(record.authored_target_qpc_ticks, 1_000);
+        assert_eq!(record.latest_down_start_qpc_ticks, 1_010);
         assert!(!record.pre_call_qpc_available);
         assert!(!record.sendinput_completion_qpc_available);
         assert!(record.observation_qpc_available);
@@ -305,7 +384,7 @@ mod tests {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(20),
-            physical_target_qpc: QpcTicks::from_raw(1_000),
+            physical_timing_window: physical_window(1_000, 1_000, 1_000, 1_000, Some(1_010), 0, 0),
             observed_qpc: QpcTicks::from_raw(1_021),
             up_mask: 0,
             down_mask: 0b101,
@@ -318,7 +397,7 @@ mod tests {
         let record = collector.output.records.front().expect("trace record");
         assert_eq!(
             record.outcome,
-            trace_outcome_code("physical_window_expired")
+            trace_outcome_code("down_physical_window_expired")
         );
         assert_eq!(record.send_status, TRACE_SEND_STATUS_NOT_ATTEMPTED);
         assert_eq!(record.requested_count, 2);

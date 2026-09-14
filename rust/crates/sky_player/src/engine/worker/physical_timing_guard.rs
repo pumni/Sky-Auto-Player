@@ -15,7 +15,7 @@ const VALID_KEY_MASK: u16 = (1_u16 << MAX_KEYS) - 1;
 /// hold_floor_mask and release_floor_mask identify packet keys whose stored
 /// physical floor is later than the authored target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct PhysicalTimingWindow {
+pub(crate) struct PhysicalTimingWindow {
     pub(super) authored_target_qpc: QpcTicks,
     pub(super) musical_up_not_before_qpc: QpcTicks,
     pub(super) down_not_before_qpc: QpcTicks,

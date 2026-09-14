@@ -1,6 +1,6 @@
 # ADR-0010: Physical Timing Feasibility
 
-Status: Accepted campaign contract; the W2 cutover is implemented under review in #246.
+Status: Accepted; W2 merged in PR #254.
 
 Parent work order: [#243](https://github.com/pumni/Sky-Auto-Player/issues/243).
 W0 characterization: [#244](https://github.com/pumni/Sky-Auto-Player/issues/244).
@@ -122,9 +122,11 @@ classify guaranteed infeasibility before transport; the trusted sender still
 checks its final pre-call QPC independently. No future authored target is
 rebased and no catch-up burst is allowed.
 
-The active miss vocabulary is `UnobservedBacklog`,
-`PhysicalWindowExpired`, and `DownExpiredBeforeSend` for transport/status
-reporting. Former policy-specific labels have been retired from active code.
+The active miss vocabulary is `unobserved_backlog`,
+`physical_window_expired`, and `final_sender_window_expired`. The three
+production counters are mutually exclusive and sum to the total missed Down
+boundaries; a sender latest-start rejection is counted at that boundary once.
+Former policy-specific labels have been retired from active code.
 
 ## Up classes
 
@@ -136,9 +138,12 @@ Up behavior keeps three distinct classes:
 3. Emergency/safety Up for panic, focus-loss suspension, terminal cleanup, or
    uncertain/partial transport bypasses musical floors and releases immediately.
 
-Mixed-packet recovery sends only the prepared Up-prefix view at its musical
-floor, then commits the packet's Down identities as expired/missed. It does not
-rebuild a payload or split a Down chord into a playable subset.
+When a Down is known infeasible, the worker consumes its authorization and
+records the miss at the authored target. Mixed-packet recovery independently
+waits for the prepared Up-prefix view's musical floor, then sends only that
+view. A safety lifecycle during pending recovery resolves the frozen missed
+frame before clearing recovery state, so its Down cannot be planned again. It
+does not rebuild a payload or split a Down chord into a playable subset.
 
 ## Calibration
 
@@ -153,6 +158,10 @@ It never changes a live or prepared session. The six-sample startup waiter
 probe is not p99 scheduler-reserve evidence. Unqualified evidence retains a
 clearly labeled fallback; a wake-jitter-derived margin requires separate
 qualification.
+
+If the rounded reserve plus guard exceeds the public 3,000 µs Timing Margin
+maximum, the recommendation is absent and its source is
+`insufficient_headroom`; it is never clipped to a smaller supported value.
 
 ## Preserved architecture and boundaries
 
@@ -184,3 +193,20 @@ dispatch. Every Down uses exact future authorization, physical-floor admission,
 and the sender's latest-start check. Historical behavior remains available in
 Git history; the current implementation and tests exercise the accepted
 physical-feasibility contract above.
+
+## W3 observability contract
+
+W3 preserves every W2 send/drop decision. The worker publishes mutually
+exclusive missed-Down reason counts, hold- and release-floor delay counts and
+maximum delays, and fixed-size production forensics derived from trusted
+sender timestamps. Forensics compares observed Up pre-call starts with prior
+Down completion plus the base hold, and Down pre-call starts with prior Up
+completion plus one frame. It reports minima, samples, violations, and
+structural anomalies without sampling QPC, allocating, locking, or changing
+dispatch admission.
+
+Bounded traces keep the authored target, packet not-before time, separate hold
+and release floors, latest Down start, and independent floor masks. Native
+telemetry schema is version 16 and the sender-trace export envelope is version
+2. Calibration reports insufficient headroom explicitly when a qualified
+measurement cannot fit the supported margin range.

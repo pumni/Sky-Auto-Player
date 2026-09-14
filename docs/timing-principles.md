@@ -26,7 +26,7 @@ microsecond conversions.
 | `musical_up_not_before` | Per-key floor from the last successful Down completion plus `frame_base_hold_ticks`. |
 | `down_not_before` | Per-key floor from the last successful Up completion plus `frame_ticks`. |
 | `min_release_gap` | One frame period plus the same exact user Timing Margin between a same-key Up and the next same-key Down. |
-| `timing_margin_recommendation` | Informational value: qualified calibration evidence may suggest a value; otherwise it falls back to the `500 µs` default. It never writes settings. |
+| `timing_margin_recommendation` | Informational value: qualified calibration may suggest a supported value; unqualified evidence falls back to `500 µs`, while insufficient headroom produces no recommendation. It never writes settings. |
 | `authored_hold_valid` | Pre-start proof that authored Down→Up spacing meets the materialized hold. |
 
 The worker never applies a learned dispatch-cost lead to `scheduled` or
@@ -84,10 +84,10 @@ packet_not_before_qpc <= latest_down_start_qpc
 pre_call_qpc <= latest_down_start_qpc
 ```
 
-If the physical floor is later than the latest start, the complete Down chord
-is expired. The authored Down is omitted, any required musical Up prefix waits
-for its hold floor and is sent once, and later authored times remain
-unchanged. The sender repeats the latest-start check immediately before
+If the physical floor is later than the latest start, the worker consumes the
+authorization and classifies the complete Down chord as missed at the authored
+target. Any required musical Up prefix then waits independently for its hold
+floor and is sent once; later authored times remain unchanged. The sender repeats the latest-start check immediately before
 `SendInput`; equality is permitted and the first QPC tick beyond the limit
 sends no Down. Emergency and cleanup Ups bypass musical floors. Partial,
 uncertain, or post-send clock failures invalidate guard evidence and fail
@@ -161,9 +161,11 @@ calibration is missing, invalid, or out of envelope, the recommendation is the
 `500 µs` default Timing Margin. It never changes a saved user setting or an
 active/prepared session. Settings and the quick profile present it as
 informational text; users adjust Timing Margin with the bounded stepper.
-Qualification status and source remain visible.
-Calibration does not change Note-On timestamps, physical Down targets, Timing
-Margin, or runtime scheduling. Protocol 10, native schema 15, artifact
+If the rounded result exceeds the public `3,000 µs` maximum, the recommendation
+is unavailable with source `insufficient_headroom`; the UI does not clip it.
+Qualification status and source remain visible. Calibration does not change
+Note-On timestamps, physical Down targets, Timing Margin, or runtime
+scheduling. Protocol 10, native schema 16, artifact
 schema 11, cache version 8, source formula version 6, and evidence kind
 `sender_completion_hold_shrink` are mutually incompatible with protocol-9 /
 cache-v5/v6/v7 Raw Input or old sender-formula evidence. A failed or invalid
@@ -215,12 +217,13 @@ the future. The identity stamp survives waiter-entry latency and a same-plan
 control replan, and is consumed before the boundary is admitted. A changed
 plan, pause, focus/epoch reset, or completed boundary clears it.
 
-An overdue Down without that exact stamp is `UnobservedBacklog`. A stamped
+An overdue Down without that exact stamp is `unobserved_backlog`. A stamped
 Down whose per-key physical floors cannot fit inside the latest-start window
-is `PhysicalWindowExpired`. A race detected by the sender after worker
-admission is `DownExpiredBeforeSend`. Production sends no Down for any of
-these cases and commits the authored frame as missed; mixed packets may send
-only their required Up prefix after its musical hold floor. Strict timing
+is `physical_window_expired`. A race detected by the sender after worker
+admission is `final_sender_window_expired`. Production sends no Down for any
+of these cases and commits the authored frame as missed at its authored target;
+mixed packets may send only their required Up prefix after its later musical
+hold floor. Strict timing
 diagnostics may keep misses terminal for qualification. Emergency and
 cleanup Up releases bypass the musical floors. Missed Down targets are never
 retried, rebased, or emitted as a catch-up burst.
@@ -230,11 +233,12 @@ retried, rebased, or emitted as a catch-up burst.
 The final physical path is ordered and fail-closed:
 
 1. Prepare and validate the immutable packet before the target wait.
-2. One interruptible lease-bounded hybrid waiter crosses the later of the
-   authored target and relevant physical floors. When a Down floor is already
-   beyond its latest-start window, the worker waits only for the authored
-   target and any required musical Up floor before expiring the Down chord.
-   The waiter returns its QPC sample; it does not change the target.
+2. One interruptible lease-bounded hybrid waiter crosses the authored target
+   and relevant physical floors. When a Down floor is already beyond its
+   latest-start window, the worker waits to the authored target and classifies
+   the Down as missed there; required Up-prefix recovery has its own later
+   hold-floor wait. The waiter returns its QPC sample; it does not change the
+   target.
 3. Recheck command/control, the stamped target, and foreground focus (Down
    only) after target crossing. A rejection records a bounded final-gate
    diagnostic and performs no packet syscall.
@@ -256,7 +260,8 @@ mixed integrity loss is never blindly retried. A skipped key that the
 coordinator still owns is state disagreement and requires full cleanup and
 termination. Any zero/partial transport result is terminal for the playback
 worker; cleanup is a separate fail-closed release-all operation. The typed
-`DownExpiredBeforeSend` result records a final latest-start race, keeps
+`DownExpiredBeforeSend` result records a final latest-start race as
+`final_sender_window_expired`, keeps
 `SendInput` uncalled, and enters the bounded missed-frame recovery path.
 
 Up-only traffic uses command and lease admission but not the Down focus gate.
@@ -330,12 +335,14 @@ health windows, telemetry record materialization, shared metric publication,
 and observer timing counters. It uses its own local health state and metrics.
 On shutdown, the worker signals the consumer, joins it, merges its metrics,
 and only then publishes the final report. Observer output cannot authorize or
-reorder input. The observer also owns fixed `[Option<HoldAnchor>; 15]` sender
-packet-boundary hold forensics. Successful packets are processed in canonical
-UP-then-DOWN order; each paired sample compares authored target, pre-call, and
-completion QPC boundaries. These are sender-side hold proxies only, never game
-observations. Incomplete transport does not mutate pairing state, and the
-forensics scalars do not alter the native telemetry schema or dispatch path.
+reorder input.
+
+Production forensics remains in the worker as fixed-size state. Successful
+packets update hold and release anchors only from trusted completion QPC values;
+observed next-direction pre-call starts are compared with the fixed base
+hold/frame floors. It retains sample counts, minima, violations, structural
+anomalies, and a bounded anomaly ring. The sender never samples QPC for this
+forensics, allocates, locks, or consults the diagnostic observer.
 
 ## 7. Observability and compatibility
 
@@ -350,17 +357,19 @@ The authoritative sender-side metrics are:
 - `pre_call_to_completion = sendinput_completion_qpc - pre_call_qpc`;
 - completion residual/error as diagnostic evidence only;
 - requested/confirmed/skipped packet masks;
-- release-floor/defer evidence; and
+- release-floor/defer evidence;
+- mutually exclusive Down miss reasons and separate hold/release-floor delay
+  counts, maximum delay, QPC boundaries, and contributing masks; and
 - diagnostic-only observer queue/drop and telemetry counters;
-- diagnostic-only sender packet-boundary hold pairs, including minimum
-  pre-call/completion hold, positive shrink, ownership anomalies, and
-  same-call retrigger counts.
+- fixed-size production hold/release floor samples, minima, violations,
+  ownership anomalies, and same-call retrigger counts.
 
 The producer-side maximum SendInput pre-call lateness is retained in raw QPC
 ticks. The `2 ms`, `5 ms`, and `10 ms` bucket cutoffs are converted once during
 worker admission; the compatibility/public microsecond maximum is derived only
-when a metrics snapshot is published. This preserves the public schema and
-bucket semantics without a QPC frequency conversion on every physical send.
+when a metrics snapshot is published. Native telemetry schema 16 carries the
+floor and latest-start trace boundaries without a QPC frequency conversion on
+every physical send.
 
 `actual_us`, completion lateness, and observed hold are sender-side proxies.
 They must not be described as game-observed timing. The compatibility report

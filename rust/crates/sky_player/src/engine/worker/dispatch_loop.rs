@@ -307,13 +307,6 @@ pub(crate) fn dispatch_due_from_plan(
         admission
     } else if let Some(boundary) = boundary {
         let admission = if runtime.authorize_down_boundary(boundary) {
-            local_metrics.deadline_authorization_reuses = local_metrics
-                .deadline_authorization_reuses
-                .saturating_add(1);
-            if physical_target_qpc < now_ticks {
-                local_metrics.late_authorized_boundaries =
-                    local_metrics.late_authorized_boundaries.saturating_add(1);
-            }
             DownBoundaryAdmission::Authorized
         } else {
             DownBoundaryAdmission::UnobservedBacklog
@@ -370,7 +363,7 @@ pub(crate) fn dispatch_due_from_plan(
             local_metrics,
             observer,
             effective_now_ticks,
-            physical_target_qpc,
+            window,
             now_ticks,
             reason,
         );
@@ -386,7 +379,7 @@ pub(crate) fn dispatch_due_from_plan(
             dispatch_plan: plan,
             effective_now_ticks,
             now_ticks,
-            physical_target_qpc,
+            physical_timing_window: window,
             down_admission,
             latest_down_start_qpc,
             focus_loss_fault,
@@ -646,15 +639,6 @@ pub(super) fn dispatch(
                                 Some(format!("focus restoration failed: {error}"));
                             break;
                         }
-                        if let Some(observer) = core.observer.pending.as_ref() {
-                            observer.push(
-                                super::dispatch::observation::DispatchObservation::Lifecycle(
-                                    super::dispatch::observation::ObserverLifecycle::ResetAll,
-                                ),
-                                &mut core.metrics.observer_dropped_samples,
-                                &mut core.metrics.observer_queue_high_watermark,
-                            );
-                        }
                         core.runtime.production_forensics.observe_lifecycle(
                             super::dispatch::observation::ObserverLifecycle::ResetAll,
                         );
@@ -747,15 +731,6 @@ pub(super) fn dispatch(
                         core.runtime.terminal_error =
                             Some(format!("manual pause suspension failed: {error}"));
                         break;
-                    }
-                    if let Some(observer) = core.observer.pending.as_ref() {
-                        observer.push(
-                            super::dispatch::observation::DispatchObservation::Lifecycle(
-                                super::dispatch::observation::ObserverLifecycle::ResetAll,
-                            ),
-                            &mut core.metrics.observer_dropped_samples,
-                            &mut core.metrics.observer_queue_high_watermark,
-                        );
                     }
                     core.runtime.production_forensics.observe_lifecycle(
                         super::dispatch::observation::ObserverLifecycle::ResetAll,
@@ -1465,7 +1440,12 @@ mod tests {
         let target = plan.physical_target_qpc().expect("Down target");
         assert_dispatched(unobserved.dispatch_at_qpc_for_test(&plan, target));
         assert!(packets.lock().expect("packet capture").is_empty());
-        assert_eq!(unobserved.local_metrics.unobserved_backlog_boundaries, 1);
+        assert_eq!(
+            unobserved
+                .local_metrics
+                .missed_unobserved_backlog_boundaries,
+            1
+        );
     }
 
     #[test]
@@ -1498,7 +1478,35 @@ mod tests {
             .expect("one tick beyond zero-margin latest start");
         assert_dispatched(late.dispatch_at_qpc_for_test(&late_plan, one_tick_late));
         assert!(late_packets.lock().expect("packet capture").is_empty());
-        assert_eq!(late.local_metrics.down_expired_before_send, 1);
+        assert_eq!(late.local_metrics.final_sender_window_expirations, 1);
+    }
+
+    #[test]
+    fn positive_pre_call_lateness_inside_timing_margin_is_not_a_miss() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_packet_capture();
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert!(harness.timing.timing_margin_ticks > DurationTicks::ZERO);
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+
+        let one_tick_late = target
+            .checked_add_duration(DurationTicks::from_raw(1))
+            .expect("positive pre-call lateness inside timing margin");
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, one_tick_late));
+
+        assert_eq!(packets.lock().expect("packet capture").len(), 1);
+        assert!(harness.local_metrics.max_sendinput_pre_call_lateness_ticks > 0);
+        assert_eq!(harness.local_metrics.missed_down_boundaries, 0);
+        assert_eq!(
+            harness.local_metrics.missed_unobserved_backlog_boundaries,
+            0
+        );
+        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
+        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
@@ -1564,7 +1572,8 @@ mod tests {
                 .admission,
             DownBoundaryAdmission::PhysicalWindowExpired
         );
-        assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
+        assert_eq!(harness.local_metrics.release_floor_infeasible_boundaries, 1);
         assert_eq!(
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(0, 1)],
@@ -1576,14 +1585,14 @@ mod tests {
         assert_eq!(recovery_wait_target, window.musical_up_not_before_qpc);
         assert!(recovery_wait_target < window.down_not_before_qpc);
         assert_no_work(harness.dispatch_at_qpc_for_test(&mixed, mixed_target));
-        assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
         assert_dispatched(harness.dispatch_at_qpc_for_test(&mixed, recovery_wait_target));
         assert_eq!(
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0)]
         );
         assert_eq!(harness.backend_active_mask(), 0);
-        assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
         assert!(harness.runtime.pending_up_recovery.is_none());
     }
 
@@ -1643,7 +1652,7 @@ mod tests {
             assert!(window.down_not_before_qpc > window.latest_down_start_qpc.unwrap());
 
             assert_no_work(harness.dispatch_at_qpc_for_test(&mixed, mixed_target));
-            assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+            assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
             assert_eq!(
                 harness
                     .runtime
@@ -1700,7 +1709,7 @@ mod tests {
             assert_eq!(statuses.get("dropped_expired"), Some(&1));
             assert_eq!(statuses.get("scheduled"), Some(&1));
             assert_eq!(statuses.get("released"), Some(&1));
-            assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+            assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
             assert_eq!(
                 packets.lock().expect("packet capture").as_slice(),
                 &[PhysicalPacket::new(0, 1)],
@@ -1729,7 +1738,7 @@ mod tests {
                 DownBoundaryState::FutureAuthorized(_)
             ));
             assert_dispatched(harness.dispatch_at_qpc_for_test(&next_down, next_target));
-            assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+            assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
             assert_eq!(
                 packets.lock().expect("packet capture").as_slice(),
                 &[PhysicalPacket::new(0, 1), PhysicalPacket::new(0, 1 << 2),],
@@ -1904,7 +1913,7 @@ mod tests {
         ));
         assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, target));
         assert!(packets.lock().expect("packet capture").is_empty());
-        assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
         assert_eq!(harness.backend_active_mask(), 0);
     }
 
@@ -1937,7 +1946,10 @@ mod tests {
             assert_ne!(physical.authored_view.packet_masks.down_mask, 0);
             assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, stalled_now));
         }
-        assert_eq!(harness.local_metrics.unobserved_backlog_boundaries, 4);
+        assert_eq!(
+            harness.local_metrics.missed_unobserved_backlog_boundaries,
+            4
+        );
         assert!(packets.lock().expect("packet capture").is_empty());
 
         let future = harness.plan_current_dispatch();

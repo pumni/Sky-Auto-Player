@@ -323,6 +323,19 @@ impl WorkerRuntime {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn physical_timing_window_for_test(
+        &self,
+        authored_target_qpc: QpcTicks,
+        up_mask: u16,
+        down_mask: u16,
+    ) -> Option<physical_timing_guard::PhysicalTimingWindow> {
+        self.physical_timing_guard
+            .as_ref()?
+            .query(authored_target_qpc, up_mask, down_mask)
+            .ok()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn create_test_runtime(verified_target: Option<TargetStamp>) -> Self {
         Self {
             verified_target,

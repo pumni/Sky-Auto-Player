@@ -82,50 +82,46 @@ pub struct WorkerMetricsLocal {
     /// worker counters and never allocate on the dispatch path.
     pub missed_down_boundaries: u64,
     pub missed_down_keys: u64,
-    pub unobserved_backlog_boundaries: u64,
-    pub physical_window_expired_boundaries: u64,
+    pub missed_unobserved_backlog_boundaries: u64,
+    pub missed_physical_window_boundaries: u64,
     /// Final authored Down admission rejections observed after target
     /// crossing and before the authoritative SendInput timestamp.
     pub final_gate_control_rejections: u64,
     pub final_gate_target_changes: u64,
     pub final_gate_focus_losses: u64,
     pub final_gate_lease_expirations: u64,
-    pub down_expired_before_send: u64,
-    pub late_authorized_boundaries: u64,
-    pub deadline_authorization_reuses: u64,
+    pub final_sender_window_expirations: u64,
+    /// Missed Down boundaries where a prior-Up release floor itself exceeded
+    /// the latest feasible Down start.
+    pub release_floor_infeasible_boundaries: u64,
     pub max_missed_lateness_ticks: u64,
-    /// Deferred-observer sender packet-boundary hold forensics. These fields
-    /// are deliberately scalar-only and are not part of the dispatch worker's
-    /// precision path.
-    pub hold_pair_samples: u64,
-    pub min_pre_call_hold_us: u64,
-    pub min_completion_hold_us: u64,
-    pub max_pre_call_hold_shrink_us: u64,
-    pub max_completion_hold_shrink_us: u64,
-    pub pre_call_hold_shrink_over_grace_count: u64,
-    pub hold_unmatched_up_count: u64,
-    pub hold_anchor_overwrite_count: u64,
-    pub same_call_retrigger_boundaries: u64,
-    pub same_call_retrigger_keys: u64,
+    /// Counts one authored packet boundary when its fixed physical floor is
+    /// later than the authored target. QPC timestamps and masks below retain
+    /// the latest contributing boundary without per-note storage.
+    pub hold_floor_delay_boundaries: u64,
+    pub(crate) max_hold_floor_delay_ticks: u64,
+    pub max_hold_floor_delay_us: u64,
+    pub last_hold_floor_delay_mask: u16,
+    pub last_hold_floor_authored_target_qpc_ticks: u64,
+    pub last_hold_floor_not_before_qpc_ticks: u64,
+    pub release_floor_delay_boundaries: u64,
+    pub(crate) max_release_floor_delay_ticks: u64,
+    pub max_release_floor_delay_us: u64,
+    pub last_release_floor_delay_mask: u16,
+    pub last_release_floor_authored_target_qpc_ticks: u64,
+    pub last_release_floor_not_before_qpc_ticks: u64,
     /// Worker-local fixed-size production forensics. Availability is false
     /// until a successful physical packet has supplied evidence.
     pub production_forensics_available: bool,
     pub production_forensics_version: u32,
     pub production_hold_pair_samples: u64,
-    pub production_min_pre_call_hold_ticks: u64,
-    pub production_min_completion_hold_ticks: u64,
-    pub production_max_pre_call_shrink_ticks: u64,
-    pub production_max_completion_shrink_ticks: u64,
-    pub production_completion_hold_below_frame_count: u64,
-    pub production_release_gap_samples: u64,
-    pub production_min_release_gap_ticks: u64,
-    /// The hard sender-side visibility floor used for completion-to-next-Down
-    /// release forensics. This is the base game-frame duration; the authored
-    /// release-gap policy also contains intentionally consumable headroom.
-    pub production_release_visibility_floor_ticks: u64,
-    pub production_release_gap_below_policy_count: u64,
-    pub production_release_headroom_consumed_count: u64,
-    pub production_max_release_headroom_consumed_ticks: u64,
+    pub production_min_hold_start_after_down_completion_ticks: u64,
+    pub production_hold_floor_violation_count: u64,
+    pub production_release_floor_samples: u64,
+    pub production_min_down_start_after_up_completion_ticks: u64,
+    pub production_release_floor_violation_count: u64,
+    pub production_hold_floor_ticks: u64,
+    pub production_release_floor_ticks: u64,
     pub production_same_call_same_key_retrigger_count: u64,
     pub production_anchor_overwrite_count: u64,
     pub production_unmatched_up_count: u64,
@@ -252,45 +248,6 @@ impl WorkerMetricsLocal {
         self.recovered_zero_progress_but_late = self
             .recovered_zero_progress_but_late
             .saturating_add(observer.recovered_zero_progress_but_late);
-        self.hold_pair_samples = self
-            .hold_pair_samples
-            .saturating_add(observer.hold_pair_samples);
-        if observer.min_pre_call_hold_us != 0 {
-            self.min_pre_call_hold_us = if self.min_pre_call_hold_us == 0 {
-                observer.min_pre_call_hold_us
-            } else {
-                self.min_pre_call_hold_us.min(observer.min_pre_call_hold_us)
-            };
-        }
-        if observer.min_completion_hold_us != 0 {
-            self.min_completion_hold_us = if self.min_completion_hold_us == 0 {
-                observer.min_completion_hold_us
-            } else {
-                self.min_completion_hold_us
-                    .min(observer.min_completion_hold_us)
-            };
-        }
-        self.max_pre_call_hold_shrink_us = self
-            .max_pre_call_hold_shrink_us
-            .max(observer.max_pre_call_hold_shrink_us);
-        self.max_completion_hold_shrink_us = self
-            .max_completion_hold_shrink_us
-            .max(observer.max_completion_hold_shrink_us);
-        self.pre_call_hold_shrink_over_grace_count = self
-            .pre_call_hold_shrink_over_grace_count
-            .saturating_add(observer.pre_call_hold_shrink_over_grace_count);
-        self.hold_unmatched_up_count = self
-            .hold_unmatched_up_count
-            .saturating_add(observer.hold_unmatched_up_count);
-        self.hold_anchor_overwrite_count = self
-            .hold_anchor_overwrite_count
-            .saturating_add(observer.hold_anchor_overwrite_count);
-        self.same_call_retrigger_boundaries = self
-            .same_call_retrigger_boundaries
-            .saturating_add(observer.same_call_retrigger_boundaries);
-        self.same_call_retrigger_keys = self
-            .same_call_retrigger_keys
-            .saturating_add(observer.same_call_retrigger_keys);
         self.effective_spin_threshold_us = self
             .effective_spin_threshold_us
             .max(observer.effective_spin_threshold_us);
@@ -477,6 +434,12 @@ pub(crate) fn try_publish_metrics(
             local.max_sendinput_pre_call_lateness_ticks,
         ))
         .unwrap_or_default();
+    published.max_hold_floor_delay_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(local.max_hold_floor_delay_ticks))
+        .unwrap_or_default();
+    published.max_release_floor_delay_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(local.max_release_floor_delay_ticks))
+        .unwrap_or_default();
     if shared.snapshot.try_publish(&published) {
         shared.last_publish_us.store(now_us, Ordering::Relaxed);
         #[cfg(test)]
@@ -554,5 +517,24 @@ mod tests {
         let published = shared.snapshot.load();
         assert_eq!(published.max_sendinput_pre_call_lateness_ticks, 1_234);
         assert_eq!(published.max_sendinput_pre_call_lateness_us, 1_234);
+    }
+
+    #[test]
+    fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
+        let shared = SharedMetrics::default();
+        let local = WorkerMetricsLocal {
+            max_hold_floor_delay_ticks: 1_234,
+            max_release_floor_delay_ticks: 2_345,
+            ..WorkerMetricsLocal::default()
+        };
+        let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+
+        try_publish_metrics(&local, &shared, qpc_clock, 0, true);
+
+        let published = shared.snapshot.load();
+        assert_eq!(published.max_hold_floor_delay_ticks, 1_234);
+        assert_eq!(published.max_hold_floor_delay_us, 1_234);
+        assert_eq!(published.max_release_floor_delay_ticks, 2_345);
+        assert_eq!(published.max_release_floor_delay_us, 2_345);
     }
 }

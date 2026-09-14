@@ -1,200 +1,20 @@
-use super::super::super::{DurationTicks, QpcClock};
+use super::super::super::DurationTicks;
 use super::super::WorkerMetricsLocal;
-use super::DispatchStep;
 use super::observation::ObserverLifecycle;
 use sky_dispatch_win32::clock::QpcTicks;
 use sky_dispatch_win32::input::PhysicalPacket;
 
 const MAX_KEYS: usize = sky_dispatch_core::model::MAX_KEYS;
 
-#[derive(Clone, Copy, Debug)]
-struct HoldAnchor {
-    target_qpc: QpcTicks,
-    pre_call_qpc: QpcTicks,
-    completion_qpc: QpcTicks,
-}
-
-#[derive(Default)]
-pub(crate) struct HoldForensics {
-    active: [Option<HoldAnchor>; MAX_KEYS],
-}
-
-impl HoldForensics {
-    pub(crate) fn observe_lifecycle(&mut self, lifecycle: ObserverLifecycle) {
-        match lifecycle {
-            ObserverLifecycle::RecoveryUp { up_mask } => self.clear_mask(up_mask),
-            ObserverLifecycle::ResetAll => self.active.fill(None),
-        }
-    }
-
-    fn clear_mask(&mut self, mask: u16) {
-        for slot in 0..MAX_KEYS {
-            if mask & (1u16 << slot) != 0 {
-                self.active[slot] = None;
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn observe_packet(
-        &mut self,
-        packet: PhysicalPacket,
-        target_qpc: QpcTicks,
-        pre_call_qpc: QpcTicks,
-        completion_qpc: QpcTicks,
-        full_transport_success: bool,
-        metrics: &mut WorkerMetricsLocal,
-        qpc_clock: QpcClock,
-        timing_margin_ticks: DurationTicks,
-    ) -> Result<(), DispatchStep> {
-        if !full_transport_success {
-            return Ok(());
-        }
-
-        let retrigger_mask = packet.up_mask & packet.down_mask;
-        if retrigger_mask != 0 {
-            metrics.same_call_retrigger_boundaries =
-                metrics.same_call_retrigger_boundaries.saturating_add(1);
-            metrics.same_call_retrigger_keys = metrics
-                .same_call_retrigger_keys
-                .saturating_add(u64::from(retrigger_mask.count_ones()));
-        }
-
-        // PhysicalPacket/build_inputs canonical order is all UP, then all DOWN.
-        for slot in 0..MAX_KEYS {
-            let bit = 1u16 << slot;
-            if packet.up_mask & bit == 0 {
-                continue;
-            }
-            if let Some(anchor) = self.active[slot].take() {
-                observe_hold_pair(
-                    anchor,
-                    target_qpc,
-                    pre_call_qpc,
-                    completion_qpc,
-                    metrics,
-                    qpc_clock,
-                    timing_margin_ticks,
-                )?;
-            } else {
-                metrics.hold_unmatched_up_count = metrics.hold_unmatched_up_count.saturating_add(1);
-            }
-        }
-
-        for slot in 0..MAX_KEYS {
-            let bit = 1u16 << slot;
-            if packet.down_mask & bit == 0 {
-                continue;
-            }
-            if self.active[slot].is_some() {
-                metrics.hold_anchor_overwrite_count =
-                    metrics.hold_anchor_overwrite_count.saturating_add(1);
-            }
-            self.active[slot] = Some(HoldAnchor {
-                target_qpc,
-                pre_call_qpc,
-                completion_qpc,
-            });
-        }
-        Ok(())
-    }
-}
-
-fn observe_hold_pair(
-    anchor: HoldAnchor,
-    up_target_qpc: QpcTicks,
-    up_pre_call_qpc: QpcTicks,
-    up_completion_qpc: QpcTicks,
-    metrics: &mut WorkerMetricsLocal,
-    qpc_clock: QpcClock,
-    timing_margin_ticks: DurationTicks,
-) -> Result<(), DispatchStep> {
-    let authored_hold_ticks = up_target_qpc
-        .checked_duration_since(anchor.target_qpc)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("hold forensics target ordering failure: {error}"))
-        })?;
-    let pre_call_hold_ticks = up_pre_call_qpc
-        .checked_duration_since(anchor.pre_call_qpc)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("hold forensics pre-call ordering failure: {error}"))
-        })?;
-    let completion_hold_ticks = up_completion_qpc
-        .checked_duration_since(anchor.completion_qpc)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "hold forensics completion ordering failure: {error}"
-            ))
-        })?;
-
-    let pre_call_hold_us = qpc_clock
-        .duration_to_us(pre_call_hold_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "hold forensics pre-call conversion failure: {error:?}"
-            ))
-        })?;
-    let completion_hold_us = qpc_clock
-        .duration_to_us(completion_hold_ticks)
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "hold forensics completion conversion failure: {error:?}"
-            ))
-        })?;
-    let pre_call_shrink_ticks = authored_hold_ticks
-        .as_u64()
-        .saturating_sub(pre_call_hold_ticks.as_u64());
-    let completion_shrink_ticks = authored_hold_ticks
-        .as_u64()
-        .saturating_sub(completion_hold_ticks.as_u64());
-    let pre_call_shrink_us = qpc_clock
-        .duration_to_us(DurationTicks::from_raw(pre_call_shrink_ticks))
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "hold forensics pre-call shrink conversion failure: {error:?}"
-            ))
-        })?;
-    let completion_shrink_us = qpc_clock
-        .duration_to_us(DurationTicks::from_raw(completion_shrink_ticks))
-        .map_err(|error| {
-            DispatchStep::Terminate(format!(
-                "hold forensics completion shrink conversion failure: {error:?}"
-            ))
-        })?;
-
-    let first_sample = metrics.hold_pair_samples == 0;
-    metrics.hold_pair_samples = metrics.hold_pair_samples.saturating_add(1);
-    if first_sample {
-        metrics.min_pre_call_hold_us = pre_call_hold_us;
-        metrics.min_completion_hold_us = completion_hold_us;
-    } else {
-        metrics.min_pre_call_hold_us = metrics.min_pre_call_hold_us.min(pre_call_hold_us);
-        metrics.min_completion_hold_us = metrics.min_completion_hold_us.min(completion_hold_us);
-    }
-    metrics.max_pre_call_hold_shrink_us =
-        metrics.max_pre_call_hold_shrink_us.max(pre_call_shrink_us);
-    metrics.max_completion_hold_shrink_us = metrics
-        .max_completion_hold_shrink_us
-        .max(completion_shrink_us);
-    if pre_call_shrink_ticks > timing_margin_ticks.as_u64() {
-        metrics.pre_call_hold_shrink_over_grace_count = metrics
-            .pre_call_hold_shrink_over_grace_count
-            .saturating_add(1);
-    }
-    Ok(())
-}
-
 /// Fixed-size sender evidence owned by the worker itself. It deliberately
 /// consumes the timestamps already returned by the trusted sender: it does
 /// not sample QPC, allocate, lock, format, or walk the schedule.
-pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 2;
+pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 3;
 const PRODUCTION_ANOMALY_CAPACITY: usize = 32;
 
 #[derive(Clone, Copy, Default)]
 struct ProductionHoldAnchor {
     valid: bool,
-    target_ticks: u64,
-    pre_call_ticks: u64,
     completion_ticks: u64,
 }
 
@@ -221,36 +41,28 @@ pub(crate) struct ProductionHoldForensics {
     anomaly_count: u64,
     anomaly_ring_overwrites: u64,
     pair_samples: u64,
-    min_pre_call_hold_ticks: u64,
-    min_completion_hold_ticks: u64,
-    max_pre_call_shrink_ticks: u64,
-    max_completion_shrink_ticks: u64,
-    completion_hold_below_frame_count: u64,
-    release_gap_samples: u64,
-    min_release_gap_ticks: u64,
-    // Observed completion-to-next-pre-call intervals are hard only against
-    // the base frame visibility floor. Authored sender headroom is allowed to
-    // be consumed by transport and is reported separately below.
-    release_gap_below_policy_count: u64,
-    release_headroom_consumed_count: u64,
-    max_release_headroom_consumed_ticks: u64,
+    min_hold_start_after_down_completion_ticks: u64,
+    hold_floor_violation_count: u64,
+    release_floor_samples: u64,
+    min_down_start_after_up_completion_ticks: u64,
+    release_floor_violation_count: u64,
     same_call_same_key_retrigger_count: u64,
     anchor_overwrite_count: u64,
     unmatched_up_count: u64,
     structural_anomaly_count: u64,
     timing_diagnostic_count: u64,
-    frame_policy_ticks: u64,
-    authored_release_gap_ticks: u64,
+    frame_base_hold_ticks: u64,
+    frame_ticks: u64,
 }
 
 impl ProductionHoldForensics {
     pub(crate) fn set_frame_policies(
         &mut self,
-        frame_policy_ticks: DurationTicks,
-        release_gap_policy_ticks: DurationTicks,
+        frame_base_hold_ticks: DurationTicks,
+        frame_ticks: DurationTicks,
     ) {
-        self.frame_policy_ticks = frame_policy_ticks.as_u64();
-        self.authored_release_gap_ticks = release_gap_policy_ticks.as_u64();
+        self.frame_base_hold_ticks = frame_base_hold_ticks.as_u64();
+        self.frame_ticks = frame_ticks.as_u64();
     }
 
     pub(crate) fn observe_lifecycle(&mut self, lifecycle: ObserverLifecycle) {
@@ -332,70 +144,32 @@ impl ProductionHoldForensics {
                         bit,
                         target,
                         pre_call,
-                        anchor.target_ticks,
-                        target.abs_diff(anchor.target_ticks),
+                        anchor.completion_ticks,
+                        completion.abs_diff(anchor.completion_ticks),
                     );
                 }
-                let Some(authored_hold) = target.checked_sub(anchor.target_ticks) else {
-                    self.record_anomaly(
-                        1,
-                        slot,
-                        source_action_index,
-                        bit,
-                        target,
-                        target,
-                        anchor.target_ticks,
-                        target.abs_diff(anchor.target_ticks),
-                    );
-                    self.anchors[slot].valid = false;
-                    continue;
+                let hold_start = pre_call.checked_sub(anchor.completion_ticks);
+                self.pair_samples = self.pair_samples.saturating_add(1);
+                let hold_start_ticks = hold_start.unwrap_or_default();
+                self.min_hold_start_after_down_completion_ticks = if self.pair_samples == 1 {
+                    hold_start_ticks
+                } else {
+                    self.min_hold_start_after_down_completion_ticks
+                        .min(hold_start_ticks)
                 };
-                let Some(pre_call_hold) = pre_call.checked_sub(anchor.pre_call_ticks) else {
+                if hold_start.is_none() || hold_start_ticks < self.frame_base_hold_ticks {
+                    self.hold_floor_violation_count =
+                        self.hold_floor_violation_count.saturating_add(1);
                     self.record_anomaly(
-                        2,
+                        9,
                         slot,
                         source_action_index,
                         bit,
                         target,
                         pre_call,
-                        anchor.pre_call_ticks,
-                        pre_call.abs_diff(anchor.pre_call_ticks),
-                    );
-                    self.anchors[slot].valid = false;
-                    continue;
-                };
-                let Some(completion_hold) = completion.checked_sub(anchor.completion_ticks) else {
-                    self.record_anomaly(
-                        3,
-                        slot,
-                        source_action_index,
-                        bit,
-                        target,
-                        completion,
                         anchor.completion_ticks,
-                        completion.abs_diff(anchor.completion_ticks),
+                        hold_start_ticks,
                     );
-                    self.anchors[slot].valid = false;
-                    continue;
-                };
-                self.pair_samples = self.pair_samples.saturating_add(1);
-                if self.pair_samples == 1 {
-                    self.min_pre_call_hold_ticks = pre_call_hold;
-                    self.min_completion_hold_ticks = completion_hold;
-                } else {
-                    self.min_pre_call_hold_ticks = self.min_pre_call_hold_ticks.min(pre_call_hold);
-                    self.min_completion_hold_ticks =
-                        self.min_completion_hold_ticks.min(completion_hold);
-                }
-                let pre_call_shrink = authored_hold.saturating_sub(pre_call_hold);
-                let completion_shrink = authored_hold.saturating_sub(completion_hold);
-                self.max_pre_call_shrink_ticks =
-                    self.max_pre_call_shrink_ticks.max(pre_call_shrink);
-                self.max_completion_shrink_ticks =
-                    self.max_completion_shrink_ticks.max(completion_shrink);
-                if self.frame_policy_ticks > 0 && completion_hold < self.frame_policy_ticks {
-                    self.completion_hold_below_frame_count =
-                        self.completion_hold_below_frame_count.saturating_add(1);
                 }
                 self.last_up_completion_ticks[slot] = Some(completion);
             } else {
@@ -431,8 +205,10 @@ impl ProductionHoldForensics {
                     None => {
                         // A pre-call sample before the previous Up completion
                         // is an ordering fault. Retain both timestamps.
-                        self.release_gap_below_policy_count =
-                            self.release_gap_below_policy_count.saturating_add(1);
+                        self.release_floor_samples = self.release_floor_samples.saturating_add(1);
+                        self.min_down_start_after_up_completion_ticks = 0;
+                        self.release_floor_violation_count =
+                            self.release_floor_violation_count.saturating_add(1);
                         self.record_anomaly(
                             8,
                             slot,
@@ -445,23 +221,16 @@ impl ProductionHoldForensics {
                         );
                     }
                     Some(gap) => {
-                        self.release_gap_samples = self.release_gap_samples.saturating_add(1);
-                        self.min_release_gap_ticks = if self.release_gap_samples == 1 {
-                            gap
-                        } else {
-                            self.min_release_gap_ticks.min(gap)
-                        };
-                        let headroom_consumed = self.authored_release_gap_ticks.saturating_sub(gap);
-                        if headroom_consumed > 0 {
-                            self.release_headroom_consumed_count =
-                                self.release_headroom_consumed_count.saturating_add(1);
-                            self.max_release_headroom_consumed_ticks = self
-                                .max_release_headroom_consumed_ticks
-                                .max(headroom_consumed);
-                        }
-                        if self.frame_policy_ticks > 0 && gap < self.frame_policy_ticks {
-                            self.release_gap_below_policy_count =
-                                self.release_gap_below_policy_count.saturating_add(1);
+                        self.release_floor_samples = self.release_floor_samples.saturating_add(1);
+                        self.min_down_start_after_up_completion_ticks =
+                            if self.release_floor_samples == 1 {
+                                gap
+                            } else {
+                                self.min_down_start_after_up_completion_ticks.min(gap)
+                            };
+                        if gap < self.frame_ticks {
+                            self.release_floor_violation_count =
+                                self.release_floor_violation_count.saturating_add(1);
                             self.record_anomaly(
                                 7,
                                 slot,
@@ -486,14 +255,12 @@ impl ProductionHoldForensics {
                     bit,
                     target,
                     pre_call,
-                    previous_anchor.target_ticks,
-                    target.abs_diff(previous_anchor.target_ticks),
+                    previous_anchor.completion_ticks,
+                    completion.abs_diff(previous_anchor.completion_ticks),
                 );
             }
             self.anchors[slot] = ProductionHoldAnchor {
                 valid: true,
-                target_ticks: target,
-                pre_call_ticks: pre_call,
                 completion_ticks: completion,
             };
         }
@@ -552,19 +319,15 @@ impl ProductionHoldForensics {
         metrics.production_forensics_available = true;
         metrics.production_forensics_version = PRODUCTION_FORENSICS_VERSION;
         metrics.production_hold_pair_samples = self.pair_samples;
-        metrics.production_min_pre_call_hold_ticks = self.min_pre_call_hold_ticks;
-        metrics.production_min_completion_hold_ticks = self.min_completion_hold_ticks;
-        metrics.production_max_pre_call_shrink_ticks = self.max_pre_call_shrink_ticks;
-        metrics.production_max_completion_shrink_ticks = self.max_completion_shrink_ticks;
-        metrics.production_completion_hold_below_frame_count =
-            self.completion_hold_below_frame_count;
-        metrics.production_release_gap_samples = self.release_gap_samples;
-        metrics.production_min_release_gap_ticks = self.min_release_gap_ticks;
-        metrics.production_release_gap_below_policy_count = self.release_gap_below_policy_count;
-        metrics.production_release_visibility_floor_ticks = self.frame_policy_ticks;
-        metrics.production_release_headroom_consumed_count = self.release_headroom_consumed_count;
-        metrics.production_max_release_headroom_consumed_ticks =
-            self.max_release_headroom_consumed_ticks;
+        metrics.production_min_hold_start_after_down_completion_ticks =
+            self.min_hold_start_after_down_completion_ticks;
+        metrics.production_hold_floor_violation_count = self.hold_floor_violation_count;
+        metrics.production_release_floor_samples = self.release_floor_samples;
+        metrics.production_min_down_start_after_up_completion_ticks =
+            self.min_down_start_after_up_completion_ticks;
+        metrics.production_release_floor_violation_count = self.release_floor_violation_count;
+        metrics.production_hold_floor_ticks = self.frame_base_hold_ticks;
+        metrics.production_release_floor_ticks = self.frame_ticks;
         metrics.production_same_call_same_key_retrigger_count =
             self.same_call_same_key_retrigger_count;
         metrics.production_anchor_overwrite_count = self.anchor_overwrite_count;

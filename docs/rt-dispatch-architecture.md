@@ -168,13 +168,11 @@ anomaly) and exactly 15 matching sink KeyDown/KeyUp records. All non-cleanup
 scenarios require their authored/logical and transport evidence only; a zero-mask
 terminal release result is not a fresh physical All-Up probe.
 
-Every report also carries the production hold/retrigger forensics already
-published by the session snapshot: pair sample count, minimum pre-call and
-completion hold ticks, completion-hold-below-frame count, release-gap samples
-and below-policy count, same-call same-key retriggers, anchor/unmatched-Up
-counts, and the aggregate forensics anomaly count. These fields make the
-500/750/1000 us comparison able to check hold, retrigger, and release-gap
-invariants without adding realtime instrumentation.
+Every report also carries fixed-size production hold/release floor forensics:
+sample counts, minimum observed intervals, floor violations, same-call
+retrigger counts, anchor/unmatched-Up counts, and separate structural and
+timing anomaly totals. Floor-delay counts and maxima are reported independently
+from mutually exclusive missed-Down reasons.
 
 Authored logical preparation validates and consumes the selected packet's
 compact intents in one primary pass, freezing the commit proof and the batch
@@ -383,8 +381,9 @@ prepared schedule or setting.
 For a future physical plan, the worker uses one high-resolution waitable timer
 and event-interruptible hybrid wait to the absolute target computed from the
 authored target and relevant physical floors. If a Down floor already exceeds
-its latest-start window, it waits only to the authored target and any required
-Up-prefix hold floor before expiring the Down.
+its latest-start window, it waits to the authored target, consumes authorization,
+and records the miss there. Any required Up-prefix recovery then waits
+independently for its hold floor.
 The waiter sleeps while the target is farther away than the frozen spin
 threshold, then performs the bounded QPC spin until the target. There is no
 per-note `T - guard` admission wake and no second precision wait. A lease-only,
@@ -469,32 +468,25 @@ required physical ownership and cleanup state are complete.
 
 Production has no observer failure or queue-overflow path. Its fixed
 worker-local forensics block publishes an availability/version marker and
-bounded scalar evidence for hold pairs, pre-call/completion shrink,
-release-gap policy, same-call retriggers, anchor overwrites, unmatched Ups,
-and a fixed anomaly ring. It adds no QPC sample, allocation, lock, formatting,
-or unbounded scan to the production send path. Diagnostic observer
-failure, telemetry overflow, or metric conversion failure cannot
-rewrite physical ownership. The worker terminates through the normal cleanup
-path and preserves the primary and secondary errors.
+bounded scalar evidence for physical hold/release floors, same-call retriggers,
+anchor overwrites, unmatched Ups, and a fixed anomaly ring. It adds no QPC
+sample, allocation, lock, formatting, or unbounded scan to the production send
+path. Diagnostic observer failure, telemetry overflow, or metric conversion
+failure cannot rewrite physical ownership. The worker terminates through the
+normal cleanup path and preserves the primary and secondary errors.
 
-The live snapshot is a small projection of authoritative playback state.
-The diagnostic observer publishes sender hold-forensics scalars and the last
-classified missed-Down sample only in the terminal/full snapshot; the
-lightweight polling snapshot remains unchanged. The diagnostic final report is
-materialized after worker and observer shutdown;
-the production report uses worker scalar state. Historical estimator plumbing
-is not part of the active production session contract and cannot affect timing.
+The live snapshot projects authoritative worker counters and physical forensics.
+The full snapshot includes the last classified missed-Down sample, floor-delay
+QPC boundaries and masks, and production forensics version 3. The lightweight
+diagnostics projection carries miss reasons and floor-delay counts/maxima. The
+production report uses the same bounded worker scalar state; no observer queue
+owns physical floor anchors.
 
-Hold-forensics ownership must also follow physical releases that are outside a
-regular successful authored observation. After a successful recovery safety Up,
-the dispatch producer enqueues the bounded FIFO lifecycle event
-`RecoveryUp(mask)`; the observer clears only those physical anchors. After a
-successful global release (for example focus suspension or manual pause), it
-enqueues `ResetAll`; the observer clears every anchor. These lifecycle events
-are diagnostic state synchronization only and never authorize, split, retry,
-or catch up a physical packet. Dropping lifecycle evidence is reported through
-`observer_dropped_samples` and makes diagnostic qualification invalid, because
-the observer can no longer prove generation ownership.
+Physical releases outside authored observations reset forensics anchors inline
+after confirmed recovery or safety release. A successful keyed recovery clears
+only its released slots; a global safety release clears every slot. These
+resets synchronize diagnostic state and never authorize, split, retry, or catch
+up a physical packet.
 
 ## 8. Verification matrix
 

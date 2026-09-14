@@ -15,8 +15,9 @@ For a physical boundary, native preparation materializes and validates
 one immutable packet before the interruptible wait. The worker's single
 hybrid wait and bounded QPC spin cross the later of the authored target and
 relevant physical floors. If a Down floor is outside its latest-start window,
-the worker waits only for the authored target and any required Up hold floor,
-then commits the Down chord as missed. It runs the final
+the worker waits only to the authored target, consumes the exact authorization,
+and classifies the Down chord as missed. A mixed packet's Up prefix then waits
+independently for its musical hold floor before recovery. It runs the final
 command/control, target, and focus gates, repeats the program-owned atomic
 checks, and evaluates the lease. The worker records `final_policy_qpc` for
 lease admission. The prepared sender then takes the true `pre_call_qpc`
@@ -72,36 +73,21 @@ latest_down_start = authored_down_target + timing_margin
 ```
 
 The worker waits until the authored target and relevant physical floor are
-both reached. If a Down floor exceeds its latest-start window, it waits only
-until the authored target and any Up-prefix hold floor, then misses the whole
-Down chord. A true pre-call QPC check closes the remaining race immediately
+both reached. If a Down floor exceeds its latest-start window, the worker
+classifies the whole Down chord as missed at the authored target. Any Up-prefix
+recovery then waits for its independent hold floor. A true pre-call QPC check closes the remaining race immediately
 before `SendInput`. Authored Up and mixed Up-prefix recovery respect the
 Down-completion hold floor. Emergency, focus-loss, and cleanup Ups bypass
 musical floors so safety release stays immediate. Completion evidence never
 proves that Sky sampled the transition.
 
-Production hold forensics keeps these two contracts separate. Static schedule
-validation still requires the authored target gap to be at least
-`min_release_gap_us` (`frame_us + timing_margin_us`). The conservative
-sender observation `next_down_pre_call - previous_up_completion` is instead
-compared with the base frame visibility floor `frame_us`: transport completion
-may consume the sender headroom that was intentionally reserved by the
-authored policy. The forensics block reports that consumed headroom separately
-and retains a hard violation only when the observed interval falls below the
-base frame floor or has negative timestamp ordering. This is sender evidence,
-not proof that Sky sampled, rendered, or produced audio for the transition.
-
-The sender evidence is computed in raw QPC ticks before conversion:
-
-```text
-sender_hold_shrink = (T_U - T_D) - (C_U - C_D)
-sender_hold_shrink = ((P_D - T_D) - (P_U - T_U))
-                    + ((C_D - P_D) - (C_U - P_U))
-```
-
-The identity is checked with checked arithmetic. It describes completion
-interval compression in the Rust/SendInput sender only; it is not a claim
-about game-observed timing.
+Production hold forensics checks the fixed physical floors with trusted sender
+timestamps. For each successful paired key, it records
+`up_pre_call - prior_down_completion` against `frame_base_hold_ticks` and
+`down_pre_call - prior_up_completion` against `frame_ticks`. It publishes
+sample counts, minimum observed intervals, and violation counts separately
+from authored schedule validation. These are sender-side checks, not proof
+that Sky sampled, rendered, or produced audio for the transition.
 The native worker receives the materialized `effective_min_hold_us` and
 `min_release_gap_us` values and uses them as fixed authored durations. It also
 converts `frame_base_hold_us`, `frame_us`, and `timing_margin_us` once during
@@ -161,26 +147,28 @@ its floor is reached, but it never changes an authored target or retries a
 missed Down.
 Successful completion also updates the worker's physical floors, so a later
 Up or same-key Down cannot violate a hold or release interval after transport
-latency. An unobserved Down is `UnobservedBacklog`; a guaranteed infeasible
-Down is `PhysicalWindowExpired`; a final pre-call race is
-`DownExpiredBeforeSend`. Each miss preserves authored timestamps and prevents
-a catch-up send.
+latency. Miss classification uses mutually exclusive reasons:
+`unobserved_backlog`, `physical_window_expired`, or
+`final_sender_window_expired`. Their counters sum to `missed_down_boundaries`;
+a sender latest-start rejection is counted at that boundary once. Hold- and
+release-floor delay counts and maxima are separate evidence, with the latest
+contributing authored and physical QPC targets and masks retained in the
+bounded trace. Each miss preserves authored timestamps and prevents a catch-up
+send.
 
 A transport zero/partial result is terminal and is handled by fail-closed
 cleanup; it is not retried in production. Strict timing evaluates completion
 residuals, while normal playback preserves the schedule when transport
 integrity remains valid.
 
-Diagnostic mode may report sender-side start, completion, lateness, duration,
-and release-floor evidence. Production retains only bounded worker-local
-scalars and a fixed anomaly ring: hold-pair count/minima, pre-call and
-completion shrink maxima, below-frame count, release-gap minima/violations,
-headroom-consumption count/maximum, same-call retriggers, anchor overwrites,
-unmatched Ups, and ring overwrites. Structural anomalies and timing
-diagnostics have separate counters; the generic ring total is observability
-only and is not the sole qualification predicate.
-The production forensics block exposes an availability/version marker and
-never allocates, locks, samples QPC, or consults the diagnostic observer.
+Production retains bounded worker-local scalars and a fixed anomaly ring:
+hold/release floor sample counts, minimum observed intervals, floor violations,
+same-call retriggers, anchor overwrites, unmatched Ups, and ring overwrites.
+Structural anomalies and timing diagnostics have separate counters. Hold- and
+release-floor delay counts and maxima are published independently from the
+exclusive Down miss taxonomy. The production forensics block exposes an
+availability/version marker and never allocates, locks, samples QPC, or
+consults the diagnostic observer.
 These values are not game-onset or audio-onset measurements. The old estimator
 and adaptive dispatch lead are not part of this model; historical lead fields
 are compatibility-only zeros.

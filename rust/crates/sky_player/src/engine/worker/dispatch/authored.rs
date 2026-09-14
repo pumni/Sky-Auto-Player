@@ -4,6 +4,7 @@ use super::super::super::{
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::super::invoke_final_gate_race_hook;
+use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
@@ -44,7 +45,7 @@ pub(crate) fn dispatch_authored_packet(
         dispatch_plan,
         effective_now_ticks,
         now_ticks,
-        physical_target_qpc,
+        physical_timing_window,
         latest_down_start_qpc,
         down_admission,
         focus_loss_fault,
@@ -56,6 +57,7 @@ pub(crate) fn dispatch_authored_packet(
         #[cfg(any(test, feature = "test-support"))]
         test_inject_sender_start,
     } = ctx;
+    let physical_target_qpc = physical_timing_window.authored_target_qpc;
     let WorkerResources {
         clock: qpc_clock,
         backend,
@@ -91,6 +93,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        physical_timing_window,
         latest_down_start_qpc,
         down_admission,
         focus_loss_fault,
@@ -128,6 +131,7 @@ fn commit_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
+    physical_timing_window: PhysicalTimingWindow,
     latest_down_start_qpc: Option<QpcTicks>,
     down_admission: DownBoundaryAdmission,
     focus_loss_fault: bool,
@@ -203,7 +207,7 @@ fn commit_down_send_outcome(
             backend,
             coordinator,
             clock_state,
-            physical_target_qpc,
+            physical_timing_window,
             now_ticks,
             effective_now_ticks,
             match down_admission {
@@ -233,6 +237,7 @@ fn commit_down_send_outcome(
         effective_now_ticks,
         now_ticks,
         physical_target_qpc,
+        physical_timing_window,
         latest_down_start_qpc,
         &admission,
         #[cfg(any(test, feature = "test-support"))]
@@ -560,6 +565,7 @@ fn record_down_send_outcome(
     effective_now_ticks: TimelineTicks,
     _now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
+    physical_timing_window: PhysicalTimingWindow,
     latest_down_start_qpc: Option<QpcTicks>,
     admission: &AdmissionOutcome,
     test_now_ticks: Option<QpcTicks>,
@@ -619,8 +625,6 @@ fn record_down_send_outcome(
         sky_dispatch_win32::input::SendTransactionStatus::DownExpiredBeforeSend
     ) && view.packet_masks.down_mask != 0
     {
-        local_metrics.down_expired_before_send =
-            local_metrics.down_expired_before_send.saturating_add(1);
         let Some(observed_qpc) = result.evidence.started_ticks else {
             return DispatchStep::TerminateStatic(
                 "DownExpiredBeforeSend missing authoritative start boundary",
@@ -634,7 +638,7 @@ fn record_down_send_outcome(
             backend,
             coordinator,
             clock_state,
-            physical_target_qpc,
+            physical_timing_window,
             observed_qpc,
             effective_now_ticks,
             DownMissReason::DownExpiredBeforeSend,
@@ -687,6 +691,7 @@ fn record_down_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
+        physical_timing_window,
         *target_crossing_qpc,
         *final_policy_qpc,
         trace_kind,
@@ -716,6 +721,7 @@ fn finalize_down_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
+    physical_timing_window: PhysicalTimingWindow,
     target_crossing_qpc: Option<QpcTicks>,
     final_policy_qpc: QpcTicks,
     trace_kind: u8,
@@ -769,6 +775,7 @@ fn finalize_down_send_outcome(
         qpc_clock,
         effective_now_ticks,
         physical_target_qpc,
+        physical_timing_window,
         capture_dispatch_ready_qpc,
         trace_kind,
         result_status,

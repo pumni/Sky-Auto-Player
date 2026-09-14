@@ -198,10 +198,6 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
           : measure(value, unit, 0);
   const senderSuppressionCount = latest
     ? latest.missed_down_boundaries +
-      latest.missed_down_keys +
-      latest.unobserved_backlog_boundaries +
-      latest.physical_window_expired_boundaries +
-      latest.down_expired_before_send +
       latest.final_gate_control_rejections +
       latest.final_gate_target_changes +
       latest.final_gate_focus_losses +
@@ -245,7 +241,7 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
                 : {
                     status: 'Attention',
-                    detail: `${latest?.physical_window_expired_boundaries ?? 0} physical-window expirations; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
+                    detail: `${latest?.missed_physical_window_boundaries ?? 0} physical-window expirations; ${latest?.final_sender_window_expirations ?? 0} sender-window expirations; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
                   };
   const handleExportSenderTrace = async () => {
     setTraceExporting(true);
@@ -383,7 +379,11 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 />
                 <Metric
                   label="Recommended sender margin"
-                  value={`${latest.timing_margin_recommendation.recommended_timing_margin_us} µs`}
+                  value={
+                    latest.timing_margin_recommendation.recommended_timing_margin_us === null
+                      ? 'Unavailable'
+                      : `${latest.timing_margin_recommendation.recommended_timing_margin_us} µs`
+                  }
                 />
                 <Metric
                   label="Recommendation source"
@@ -446,16 +446,16 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 />
                 <Metric
                   label="Physical-window expirations"
-                  value={playerMetric(latest.physical_window_expired_boundaries)}
+                  value={playerMetric(latest.missed_physical_window_boundaries)}
                 />
                 <Metric label="Missed Down keys" value={playerMetric(latest.missed_down_keys)} />
                 <Metric
                   label="Unobserved backlog boundaries"
-                  value={playerMetric(latest.unobserved_backlog_boundaries)}
+                  value={playerMetric(latest.missed_unobserved_backlog_boundaries)}
                 />
                 <Metric
-                  label="Sender latest-start expirations"
-                  value={playerMetric(latest.down_expired_before_send)}
+                  label="Sender-window expirations"
+                  value={playerMetric(latest.final_sender_window_expirations)}
                 />
                 <Metric
                   label="Focus gate rejections"
@@ -472,6 +472,28 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <Metric
                   label="Control rejections"
                   value={playerMetric(latest.final_gate_control_rejections)}
+                />
+              </MetricGroup>
+              <MetricGroup title="Physical floor delays">
+                <Metric
+                  label="Hold-floor delayed boundaries"
+                  value={playerMetric(latest.hold_floor_delay_boundaries)}
+                />
+                <Metric
+                  label="Maximum hold-floor delay"
+                  value={measure(latest.max_hold_floor_delay_us, 'µs', 0)}
+                />
+                <Metric
+                  label="Release-floor delayed boundaries"
+                  value={playerMetric(latest.release_floor_delay_boundaries)}
+                />
+                <Metric
+                  label="Release-floor infeasible boundaries"
+                  value={playerMetric(latest.release_floor_infeasible_boundaries)}
+                />
+                <Metric
+                  label="Maximum release-floor delay"
+                  value={measure(latest.max_release_floor_delay_us, 'µs', 0)}
                 />
               </MetricGroup>
               <MetricGroup title="Input transport">

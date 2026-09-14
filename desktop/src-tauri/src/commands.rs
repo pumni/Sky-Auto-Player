@@ -260,7 +260,7 @@ pub struct PlaybackOptionSetsDto {
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
 pub struct TimingMarginRecommendationDto {
-    pub recommended_timing_margin_us: u64,
+    pub recommended_timing_margin_us: Option<u64>,
     pub qualified: bool,
     pub source: String,
 }

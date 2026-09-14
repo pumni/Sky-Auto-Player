@@ -1928,8 +1928,18 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
                 authored_ticks: 0,
                 effective_deadline_ticks: 0,
                 wake_ticks: 0,
-                physical_target_qpc_ticks: 0,
-                physical_target_qpc_available: false,
+                authored_target_qpc_ticks: 0,
+                authored_target_qpc_available: false,
+                physical_not_before_qpc_ticks: 0,
+                physical_not_before_qpc_available: false,
+                hold_floor_qpc_ticks: 0,
+                hold_floor_qpc_available: false,
+                release_floor_qpc_ticks: 0,
+                release_floor_qpc_available: false,
+                latest_down_start_qpc_ticks: 0,
+                latest_down_start_qpc_available: false,
+                hold_floor_mask: 0,
+                release_floor_mask: 0,
                 pre_call_qpc_ticks: 0,
                 pre_call_qpc_available: false,
                 sendinput_completion_qpc_ticks: 0,
@@ -2404,6 +2414,7 @@ fn authored_post_start_focus_loss_pauses_without_resumable_cleanup() {
         matches!(seed_step, super::worker::DispatchStep::Dispatched),
         "seed dispatch: {seed_step:?}"
     );
+    while harness.pop_observation().is_some() {}
     harness.config.focus.require_focus = true;
     let seed_send_calls = calls.load(Ordering::SeqCst);
     let release_calls = harness.full_instrument_release_calls();
@@ -2435,11 +2446,11 @@ fn authored_post_start_focus_loss_pauses_without_resumable_cleanup() {
             .expect("progress projection")
             .paused
     );
-    assert!(
-        !std::iter::from_fn(|| harness.pop_observation())
-            .any(|observation| { matches!(observation, DispatchObservation::Lifecycle(_)) }),
-        "cached focus loss must not publish a lifecycle reset"
-    );
+    assert!(matches!(
+        harness.pop_observation(),
+        Some(DispatchObservation::BlockedUnfocused(_))
+    ));
+    assert!(harness.pop_observation().is_none());
 }
 
 struct FocusOverrideResetGuard;
@@ -3148,7 +3159,6 @@ fn authored_down_target_change_after_crossing_never_reaches_transport() {
 #[test]
 fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     use super::test_support::ProductionDispatchTestHarness;
-    use super::worker::dispatch::DispatchObservation;
 
     let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
     let calls = harness.configure_send_counter();
@@ -3188,9 +3198,8 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     );
     assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
     assert!(
-        !std::iter::from_fn(|| harness.pop_observation())
-            .any(|observation| { matches!(observation, DispatchObservation::Lifecycle(_)) }),
-        "final-gate focus loss must not publish a lifecycle reset"
+        !std::iter::from_fn(|| harness.pop_observation()).any(|_| true),
+        "final-gate focus loss must not enqueue a diagnostics observation"
     );
 }
 
@@ -3890,6 +3899,12 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(13),
             physical_target_qpc_ticks: Some(100),
+            physical_not_before_qpc_ticks: Some(105),
+            hold_floor_qpc_ticks: Some(103),
+            release_floor_qpc_ticks: Some(105),
+            latest_down_start_qpc_ticks: Some(110),
+            hold_floor_mask: 1,
+            release_floor_mask: 2,
             pre_call_qpc_ticks: Some(120),
             sendinput_completion_qpc_ticks: Some(125),
             observation_qpc_ticks: None,
@@ -3918,8 +3933,15 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(record.send_attempts, 2);
     assert_eq!(record.send_started_ticks, 22);
     assert_eq!(record.send_completed_ticks, 25);
-    assert_eq!(record.physical_target_qpc_ticks, 100);
-    assert!(record.physical_target_qpc_available);
+    assert_eq!(record.authored_target_qpc_ticks, 100);
+    assert!(record.authored_target_qpc_available);
+    assert_eq!(record.physical_not_before_qpc_ticks, 105);
+    assert!(record.physical_not_before_qpc_available);
+    assert_eq!(record.hold_floor_qpc_ticks, 103);
+    assert_eq!(record.release_floor_qpc_ticks, 105);
+    assert_eq!(record.latest_down_start_qpc_ticks, 110);
+    assert_eq!(record.hold_floor_mask, 1);
+    assert_eq!(record.release_floor_mask, 2);
     assert_eq!(record.pre_call_qpc_ticks, 120);
     assert!(record.pre_call_qpc_available);
     assert_eq!(record.sendinput_completion_qpc_ticks, 125);
@@ -3955,6 +3977,12 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
             physical_target_qpc_ticks: None,
+            physical_not_before_qpc_ticks: None,
+            hold_floor_qpc_ticks: None,
+            release_floor_qpc_ticks: None,
+            latest_down_start_qpc_ticks: None,
+            hold_floor_mask: 0,
+            release_floor_mask: 0,
             pre_call_qpc_ticks: None,
             sendinput_completion_qpc_ticks: None,
             observation_qpc_ticks: None,
@@ -4002,6 +4030,12 @@ fn native_summary_ignores_non_backend_trace() {
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
             physical_target_qpc_ticks: None,
+            physical_not_before_qpc_ticks: None,
+            hold_floor_qpc_ticks: None,
+            release_floor_qpc_ticks: None,
+            latest_down_start_qpc_ticks: None,
+            hold_floor_mask: 0,
+            release_floor_mask: 0,
             pre_call_qpc_ticks: None,
             sendinput_completion_qpc_ticks: None,
             observation_qpc_ticks: None,
@@ -4823,7 +4857,7 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert!(snapshot.terminal_error.is_none(), "{snapshot:?}");
-    assert!(snapshot.hold_pair_samples >= 1, "{snapshot:?}");
+    assert!(snapshot.production_hold_pair_samples >= 1, "{snapshot:?}");
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
@@ -4911,10 +4945,10 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
     assert_eq!(snapshot.terminal_error, None, "{snapshot:?}");
     assert_eq!(snapshot.authored_keys_rejected, 0, "{snapshot:?}");
     assert_eq!(
-        snapshot.physical_window_expired_boundaries, 0,
+        snapshot.missed_physical_window_boundaries, 0,
         "a sender-side latest-start miss is not a guard window miss: {snapshot:?}"
     );
-    assert_eq!(snapshot.down_expired_before_send, 1, "{snapshot:?}");
+    assert_eq!(snapshot.final_sender_window_expirations, 1, "{snapshot:?}");
     assert_eq!(
         snapshot.generation_status_counts.get("dropped_expired"),
         Some(&1)

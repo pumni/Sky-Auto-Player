@@ -3,7 +3,9 @@
 #[rustfmt::skip]
 mod acceptance {
 #[path = "release_gap_stress.rs"] mod release_gap_stress;
+#[path = "snapshot_report.rs"] mod snapshot_report;
 use release_gap_stress::{attach_sink_window_provenance, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
+use snapshot_report::snapshot_json;
 #[cfg(test)]
 use release_gap_stress::RELEASE_GAP_STRESS_CYCLES;
 use serde::Deserialize;
@@ -609,11 +611,6 @@ fn focus_evidence_clean(paused: bool, final_gate_focus_losses: u64, target_chang
 }
 fn target_change_preflight_error(snapshot: &EngineSnapshot) -> bool { snapshot.outcome.as_deref() == Some("error") && snapshot.terminal_error.as_deref().is_some_and(|error| error.contains("instrument key preflight failed")) }
 fn target_change_cleanup_exception(snapshot: &EngineSnapshot) -> bool { target_change_preflight_error(snapshot) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.release_outcome.as_ref().is_some_and(|outcome| outcome.verification_inconclusive && !outcome.transport_anomaly) }
-fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
-    let stuck_keys = snapshot.release_outcome.as_ref().map_or(0, |outcome| u64::from(outcome.stuck_mask.count_ones()));
-    let release = snapshot.release_outcome.as_ref().map(|outcome| json!({"attempted_mask": outcome.attempted_mask, "transport_anomaly": outcome.transport_anomaly, "released_successfully": outcome.released_successfully, "stuck_mask": outcome.stuck_mask, "verification_inconclusive": outcome.verification_inconclusive, "attempts": outcome.attempts}));
-    json!({"status": snapshot.status, "outcome": snapshot.outcome, "last_error": snapshot.last_error, "active_count": snapshot.active_count, "possibly_active_count": snapshot.possibly_active_count, "failed_release_count": snapshot.failed_release_count, "keys_inserted_before_failure": snapshot.keys_inserted_before_failure, "stuck_keys": stuck_keys, "terminal_error": snapshot.terminal_error, "keys_dropped": snapshot.keys_dropped, "chord_split_events": snapshot.chord_split_events, "sendinput_partial_events": snapshot.sendinput_partial_events, "sendinput_zero_progress_failures": snapshot.sendinput_zero_progress_failures, "max_sendinput_pre_call_lateness_us": snapshot.max_sendinput_pre_call_lateness_us, "pre_call_lt_250us": snapshot.pre_call_lt_250us, "pre_call_250_500us": snapshot.pre_call_250_500us, "pre_call_500_750us": snapshot.pre_call_500_750us, "pre_call_750_1000us": snapshot.pre_call_750_1000us, "pre_call_1000_1500us": snapshot.pre_call_1000_1500us, "pre_call_1500_2000us": snapshot.pre_call_1500_2000us, "pre_call_ge_2000us": snapshot.pre_call_ge_2000us, "missed_down_boundaries": snapshot.missed_down_boundaries, "missed_down_keys": snapshot.missed_down_keys, "unobserved_backlog_boundaries": snapshot.unobserved_backlog_boundaries, "physical_window_expired_boundaries": snapshot.physical_window_expired_boundaries, "down_expired_before_send": snapshot.down_expired_before_send, "final_gate_focus_losses": snapshot.final_gate_focus_losses, "final_gate_target_changes": snapshot.final_gate_target_changes, "final_gate_lease_expirations": snapshot.final_gate_lease_expirations, "production_forensics_available": snapshot.production_forensics_available, "production_forensics_version": snapshot.production_forensics_version, "production_hold_pair_samples": snapshot.production_hold_pair_samples, "production_min_pre_call_hold_ticks": snapshot.production_min_pre_call_hold_ticks, "production_min_completion_hold_ticks": snapshot.production_min_completion_hold_ticks, "production_max_pre_call_shrink_ticks": snapshot.production_max_pre_call_shrink_ticks, "production_max_completion_shrink_ticks": snapshot.production_max_completion_shrink_ticks, "production_completion_hold_below_frame_count": snapshot.production_completion_hold_below_frame_count, "production_release_gap_samples": snapshot.production_release_gap_samples, "production_min_release_gap_ticks": snapshot.production_min_release_gap_ticks, "production_release_gap_below_policy_count": snapshot.production_release_gap_below_policy_count, "production_same_call_same_key_retrigger_count": snapshot.production_same_call_same_key_retrigger_count, "production_anchor_overwrite_count": snapshot.production_anchor_overwrite_count, "production_unmatched_up_count": snapshot.production_unmatched_up_count, "production_forensics_anomaly_count": snapshot.production_forensics_anomaly_count, "release_outcome": release})
-}
 fn write_report(args: &RunArgs, verdict: Verdict, reason: &str, details: Value) -> i32 {
     let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "timing_margin_us": args.timing_margin_us, "min_hold_us": acceptance_min_hold_us(args.timing_margin_us), "min_release_gap_us": acceptance_min_release_gap_us(args.timing_margin_us), "reason": reason, "details": details});
     let serialized = serde_json::to_string(&report).unwrap_or_else(|_| format!(r#"{{"status":"{}","reason":"report serialization failed"}}"#, verdict.label()));
@@ -854,9 +851,9 @@ fn run_windows(args: RunArgs) -> i32 {
     let (visibility_verdict, visibility_reason) = production_visibility_qualification(
         args.scenario,
         snapshot.production_hold_pair_samples,
-        snapshot.production_completion_hold_below_frame_count,
-        snapshot.production_release_gap_samples,
-        snapshot.production_release_gap_below_policy_count,
+        snapshot.production_hold_floor_violation_count,
+        snapshot.production_release_floor_samples,
+        snapshot.production_release_floor_violation_count,
     );
     if visibility_verdict != Verdict::Pass { return write_report(&args, visibility_verdict, visibility_reason, details); }
     write_report(
