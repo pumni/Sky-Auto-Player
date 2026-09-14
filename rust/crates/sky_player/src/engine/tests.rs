@@ -3504,6 +3504,42 @@ fn future_classification_then_waiter_entry_stall_keeps_exact_boundary_authorized
 }
 
 #[test]
+// W0 migration characterization: replace this first-preroll bypass in W2;
+// it records legacy behavior and is not the accepted authorization contract.
+fn first_preroll_down_can_send_after_unobserved_startup_stall() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::DownBoundaryState;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_send_counter();
+    assert_eq!(
+        harness.runtime.down_boundary_state,
+        DownBoundaryState::Initial
+    );
+
+    let first = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.classify_future_plan_without_authorization_shortcut_for_test(&first),
+        super::worker::DispatchStep::NoWork
+    ));
+    assert_eq!(
+        harness.runtime.down_boundary_state,
+        DownBoundaryState::Initial,
+        "the current production observation branch does not authorize Initial"
+    );
+
+    // Model startup stalling until one tick after the same frozen target. The
+    // legacy first-Down exception admits it without future authorization.
+    assert!(matches!(
+        harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&first),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(harness.runtime.musical_physical_commit_started);
+    assert_eq!(harness.local_metrics.late_discovery_rescue_attempts, 0);
+}
+
+#[test]
 fn overdue_down_beyond_rescue_grace_is_committed_missed_without_sendinput() {
     use super::test_support::ProductionDispatchTestHarness;
     use super::worker::dispatch::observation::DispatchObservation;

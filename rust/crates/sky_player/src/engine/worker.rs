@@ -643,11 +643,20 @@ mod observer_profile_tests {
     }
 
     #[test]
+    // W0 migration characterization: W2 must replace this rescue-credit
+    // behavior when every production Down requires future authorization.
     fn late_rescue_cutoff_matrix_is_inclusive_and_one_shot() {
         let grace = DurationTicks::from_raw(500);
         for lateness in [0, 1, 100, 499, 500] {
             let mut runtime = WorkerRuntime::create_test_runtime(None);
+            assert_eq!(runtime.down_boundary_state, DownBoundaryState::Initial);
             runtime.mark_down_commit_started(false);
+            assert_eq!(
+                runtime.down_boundary_state,
+                DownBoundaryState::AwaitingFuture {
+                    late_rescue_available: true,
+                }
+            );
             assert!(
                 runtime
                     .try_consume_late_discovery_rescue(DurationTicks::from_raw(lateness), grace,)
@@ -666,6 +675,8 @@ mod observer_profile_tests {
     }
 
     #[test]
+    // W0 migration characterization: remove the one-shot rescue transitions
+    // along with the old authorization state in W2.
     fn future_observation_rearms_rescue_only_after_boundary_commit() {
         let mut runtime = WorkerRuntime::create_test_runtime(None);
         runtime.mark_down_commit_started(false);
@@ -688,6 +699,8 @@ mod observer_profile_tests {
     }
 
     #[test]
+    // W0 migration characterization: this randomized invariant is specific to
+    // the rescue credit that W2 removes.
     fn randomized_rescue_sequence_never_catches_up_without_future_observation() {
         let grace = DurationTicks::from_raw(500);
         let mut runtime = WorkerRuntime::create_test_runtime(None);
