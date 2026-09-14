@@ -16,8 +16,8 @@ _Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the
 </div>
 
 <div align="center">
-  <a href="branding\app-mockup.png" target="_blank">
-    <img src="branding\app-mockup.png" alt="Sky Auto Player v4.0.1 desktop Library" width="640" style="border-radius: 8px; max-width: 100%;">
+  <a href="branding/app-mockup.png" target="_blank">
+    <img src="branding/app-mockup.png" alt="Sky Auto Player v4.0.1 desktop Library" width="640" style="border-radius: 8px; max-width: 100%;">
   </a>
 </div>
 

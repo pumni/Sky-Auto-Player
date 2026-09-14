@@ -3,7 +3,7 @@ key: 'storage'
 locale: 'vi'
 order: 13
 category: 'General'
-question: "Log và config của Sky Auto Player được lưu ở đâu?"
+question: 'Log và config của Sky Auto Player được lưu ở đâu?'
 ---
 
 Settings, cache, dữ liệu library và trạng thái calibration nằm trong vùng app-data tại

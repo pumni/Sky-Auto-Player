@@ -3,7 +3,7 @@ key: 'storage'
 locale: 'en'
 order: 13
 category: 'General'
-question: "Where are Sky Auto Player’s logs and config stored?"
+question: 'Where are Sky Auto Player’s logs and config stored?'
 ---
 
 Application settings, cache, library data, and calibration state live under the app-data boundary in
