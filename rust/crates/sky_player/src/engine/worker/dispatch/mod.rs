@@ -88,15 +88,18 @@ impl DownBoundaryAdmission {
 
 /// A Down miss that has already been classified at its authored boundary,
 /// with only its prepared Up-prefix still waiting for the physical hold floor.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PendingUpRecovery {
     pub(crate) boundary: PhysicalBoundaryStamp,
     pub(crate) admission: DownBoundaryAdmission,
+    /// Frozen coordinator token for resolving the already-missed Down if a
+    /// lifecycle safety release interrupts the delayed Up-prefix recovery.
+    pub(crate) authored_commit: PreparedAuthoredCommit,
 }
 
 impl PendingUpRecovery {
     #[inline]
-    pub(crate) fn matches_authored_boundary(self, boundary: PhysicalBoundaryStamp) -> bool {
+    pub(crate) fn matches_authored_boundary(&self, boundary: PhysicalBoundaryStamp) -> bool {
         self.boundary.same_authored_boundary(boundary)
     }
 }

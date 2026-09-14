@@ -136,6 +136,46 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    pub fn new_mixed_then_future_down() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "down1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x15].into(),
+                reason: "up1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x16].into(),
+                reason: "missed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 5_000,
+                scan_codes: vec![0x17].into(),
+                reason: "fresh-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 10_000,
+                scan_codes: vec![0x16, 0x17].into(),
+                reason: "final-up".into(),
+            },
+        ])
+    }
+
     /// Two independent physical Down boundaries used by the deterministic
     /// pre-wait stall/backlog regression.
     pub fn new_two_down_boundaries() -> Self {
@@ -943,10 +983,14 @@ impl ProductionDispatchTestHarness {
     /// cannot accidentally replace the production cleanup path with a direct
     /// coordinator mutation.
     pub fn suspend_live_input_for_test(&mut self) -> Result<Vec<u64>, String> {
+        let effective_now_ticks = self.effective_now_ticks;
+        let target_hwnd = self.target_hwnd.load(Ordering::Acquire);
         super::super::worker::suspend_live_input(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
-            self.target_hwnd.load(Ordering::Acquire),
+            &mut self.runtime,
+            Ok(effective_now_ticks),
+            target_hwnd,
         )
     }
 

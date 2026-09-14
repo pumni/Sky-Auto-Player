@@ -62,7 +62,7 @@ pub(crate) fn physical_wait_target_for_plan(
         .query(physical_target_qpc, masks.up_mask, masks.down_mask)
         .map_err(|error| format!("physical timing window query failed: {error:?}"))?;
     let boundary = physical_boundary_stamp(plan, physical_target_qpc);
-    let wait_target = if let Some(pending) = runtime.pending_up_recovery {
+    let wait_target = if let Some(pending) = runtime.pending_up_recovery.as_ref() {
         if !boundary.is_some_and(|boundary| pending.matches_authored_boundary(boundary)) {
             return Err("pending Up recovery no longer matches its authored boundary".to_string());
         }
@@ -260,9 +260,12 @@ pub(crate) fn dispatch_due_from_plan(
         }
     };
     let boundary = physical_boundary_stamp(plan, physical_target_qpc);
-    let pending_up_recovery = runtime.pending_up_recovery;
-    if let Some(pending) = pending_up_recovery {
-        if !boundary.is_some_and(|boundary| pending.matches_authored_boundary(boundary)) {
+    let pending_up_recovery = runtime
+        .pending_up_recovery
+        .as_ref()
+        .map(|pending| (pending.boundary, pending.admission));
+    if let Some((pending_boundary, _)) = pending_up_recovery {
+        if !boundary.is_some_and(|boundary| pending_boundary.same_authored_boundary(boundary)) {
             return super::DispatchStep::TerminateStatic(
                 "pending Up recovery no longer matches its authored boundary",
             );
@@ -300,8 +303,8 @@ pub(crate) fn dispatch_due_from_plan(
         runtime.observe_future_down_boundary(boundary_stamp);
     }
     let latest_down_start_qpc = window.latest_down_start_qpc;
-    let down_admission = if let Some(pending) = pending_up_recovery {
-        pending.admission
+    let down_admission = if let Some((_, admission)) = pending_up_recovery {
+        admission
     } else if let Some(boundary) = boundary {
         let admission = if runtime.authorize_down_boundary(boundary) {
             local_metrics.deadline_authorization_reuses = local_metrics
@@ -353,6 +356,15 @@ pub(crate) fn dispatch_due_from_plan(
                 );
             }
         };
+        let authored_commit = match &physical.authored_view.commit {
+            super::dispatch::PhysicalCommit::Authored(commit) => commit.clone(),
+            super::dispatch::PhysicalCommit::Coalesced { authored, .. } => authored.clone(),
+            super::dispatch::PhysicalCommit::PendingRelease { .. } => {
+                return super::DispatchStep::TerminateStatic(
+                    "missed mixed Down boundary has no frozen authored commit",
+                );
+            }
+        };
         super::dispatch::classify_missed_down_boundary(
             &physical.authored_view,
             local_metrics,
@@ -365,6 +377,7 @@ pub(crate) fn dispatch_due_from_plan(
         runtime.pending_up_recovery = Some(super::dispatch::PendingUpRecovery {
             boundary,
             admission: down_admission,
+            authored_commit,
         });
         return super::DispatchStep::NoWork;
     }
@@ -613,9 +626,18 @@ pub(super) fn dispatch(
                             core.runtime.focus_restore_started_ticks = None;
                             continue;
                         }
+                        let lifecycle_effective_now = resources
+                            .playback
+                            .get_elapsed_allow_pre_epoch(
+                                now_ticks,
+                                core.runtime.allow_pre_epoch_startup_dispatch,
+                            )
+                            .map_err(|error| error.to_string());
                         if let Err(error) = suspend_live_input(
                             &mut resources.backend,
                             &mut resources.coordinator,
+                            &mut core.runtime,
+                            lifecycle_effective_now,
                             preflight_target.hwnd,
                         ) {
                             core.runtime.verified_target = None;
@@ -623,9 +645,6 @@ pub(super) fn dispatch(
                             core.runtime.terminal_error =
                                 Some(format!("focus restoration failed: {error}"));
                             break;
-                        }
-                        if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
-                            guard.reset();
                         }
                         if let Some(observer) = core.observer.pending.as_ref() {
                             observer.push(
@@ -710,21 +729,24 @@ pub(super) fn dispatch(
                 core.runtime.invalidate_down_authorization();
                 core.runtime.verified_target = None;
                 if !resources.playback.is_paused() {
+                    let lifecycle_effective_now = resources
+                        .playback
+                        .get_elapsed_allow_pre_epoch(
+                            now_ticks,
+                            core.runtime.allow_pre_epoch_startup_dispatch,
+                        )
+                        .map_err(|error| error.to_string());
                     if let Err(error) = suspend_live_input(
                         &mut resources.backend,
                         &mut resources.coordinator,
+                        &mut core.runtime,
+                        lifecycle_effective_now,
                         target_hwnd.load(Ordering::Acquire),
                     ) {
-                        if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
-                            guard.invalidate();
-                        }
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("manual pause suspension failed: {error}"));
                         break;
-                    }
-                    if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
-                        guard.reset();
                     }
                     if let Some(observer) = core.observer.pending.as_ref() {
                         observer.push(
@@ -1236,6 +1258,7 @@ mod tests {
         DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime,
         dispatch::{DispatchStep, DownBoundaryAdmission},
     };
+    use sky_dispatch_core::clock::PauseReason;
     use sky_dispatch_core::time::{DurationTicks, QpcTicks};
     use sky_dispatch_win32::clock::QpcClock;
     use sky_dispatch_win32::input::PhysicalPacket;
@@ -1536,6 +1559,7 @@ mod tests {
             harness
                 .runtime
                 .pending_up_recovery
+                .as_ref()
                 .expect("mixed Up recovery is deferred")
                 .admission,
             DownBoundaryAdmission::PhysicalWindowExpired
@@ -1561,6 +1585,175 @@ mod tests {
         assert_eq!(harness.backend_active_mask(), 0);
         assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
         assert!(harness.runtime.pending_up_recovery.is_none());
+    }
+
+    #[test]
+    fn lifecycle_suspension_terminalizes_pending_mixed_miss_before_resume() {
+        for pause_reason in [PauseReason::Manual, PauseReason::Focus] {
+            let mut harness = ProductionDispatchTestHarness::new_mixed_then_future_down();
+            let packets = harness.configure_packet_capture();
+            let first = harness.plan_current_dispatch();
+            let first_target = first.physical_target_qpc().expect("first Down target");
+            assert_no_work(harness.dispatch_at_qpc_for_test(
+                &first,
+                subtract_duration(first_target, DurationTicks::from_raw(1)),
+            ));
+            assert_dispatched(harness.dispatch_at_qpc_for_test(&first, first_target));
+
+            let mixed = harness.plan_current_dispatch();
+            assert_eq!(
+                mixed
+                    .physical()
+                    .expect("mixed physical plan")
+                    .authored_view
+                    .packet_masks,
+                PhysicalPacket::new(1, 2)
+            );
+            let mixed_target = mixed.physical_target_qpc().expect("mixed target");
+            assert_no_work(harness.dispatch_at_qpc_for_test(
+                &mixed,
+                subtract_duration(mixed_target, DurationTicks::from_raw(1)),
+            ));
+            let just_before_mixed = subtract_duration(mixed_target, DurationTicks::from_raw(1));
+            let seed_future_down_floor =
+                subtract_duration(just_before_mixed, DurationTicks::from_raw(1));
+            harness
+                .runtime
+                .physical_timing_guard
+                .as_mut()
+                .expect("production guard initialized")
+                .observe_successful_packet(seed_future_down_floor, 0, 1 << 2)
+                .expect("seed a floor on the next authored Down key");
+            harness
+                .runtime
+                .physical_timing_guard
+                .as_mut()
+                .expect("production guard initialized")
+                .observe_successful_packet(just_before_mixed, 2, 0)
+                .expect("seed an independent Down-key release floor");
+            let window = harness
+                .runtime
+                .physical_timing_guard
+                .as_ref()
+                .expect("production guard initialized")
+                .query(mixed_target, 1, 2)
+                .expect("mixed timing window");
+            assert!(window.musical_up_not_before_qpc > mixed_target);
+            assert!(window.musical_up_not_before_qpc > window.latest_down_start_qpc.unwrap());
+            assert!(window.down_not_before_qpc > window.latest_down_start_qpc.unwrap());
+
+            assert_no_work(harness.dispatch_at_qpc_for_test(&mixed, mixed_target));
+            assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+            assert_eq!(
+                harness
+                    .runtime
+                    .pending_up_recovery
+                    .as_ref()
+                    .expect("mixed Up recovery is deferred")
+                    .admission,
+                DownBoundaryAdmission::PhysicalWindowExpired
+            );
+            assert_eq!(
+                packets.lock().expect("packet capture").as_slice(),
+                &[PhysicalPacket::new(0, 1)],
+                "the Down miss is classified before the later Up recovery floor"
+            );
+
+            if pause_reason == PauseReason::Focus {
+                harness
+                    .resources
+                    .playback
+                    .enter_pause(pause_reason, mixed_target)
+                    .expect("focus suspension starts");
+            }
+            harness
+                .suspend_live_input_for_test()
+                .expect("lifecycle safety release resolves the frozen miss");
+            if pause_reason == PauseReason::Manual {
+                harness
+                    .resources
+                    .playback
+                    .enter_pause(pause_reason, mixed_target)
+                    .expect("manual pause starts after safety release");
+            }
+            harness
+                .resources
+                .playback
+                .exit_pause(pause_reason, window.musical_up_not_before_qpc)
+                .expect("lifecycle pause resumes");
+
+            assert_eq!(harness.backend_active_mask(), 0);
+            assert_eq!(
+                harness.runtime.down_boundary_state,
+                DownBoundaryState::AwaitingFuture
+            );
+            assert!(harness.runtime.pending_up_recovery.is_none());
+            assert_eq!(harness.resources.coordinator.active_mask, 0);
+            assert_eq!(harness.resources.coordinator.cursor, 3);
+            assert_eq!(harness.full_instrument_release_calls(), 1);
+            harness
+                .resources
+                .coordinator
+                .check_invariants()
+                .expect("coordinator remains coherent after lifecycle resolution");
+            let statuses = harness.resources.coordinator.generation_status_counts();
+            assert_eq!(statuses.get("dropped_expired"), Some(&1));
+            assert_eq!(statuses.get("scheduled"), Some(&1));
+            assert_eq!(statuses.get("released"), Some(&1));
+            assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+            assert_eq!(
+                packets.lock().expect("packet capture").as_slice(),
+                &[PhysicalPacket::new(0, 1)],
+                "suspension bypasses the musical floor and sends no stale Down or delayed recovery packet"
+            );
+
+            harness.advance_playback_time_us(4_000);
+            let next_down = harness.plan_current_dispatch();
+            let next_target = next_down.physical_target_qpc().expect("next Down target");
+            let fresh_window = harness
+                .runtime
+                .physical_timing_guard
+                .as_ref()
+                .expect("production guard initialized")
+                .query(next_target, 0, 1 << 2)
+                .expect("reset guard admits the new generation at its authored target");
+            assert_eq!(
+                fresh_window.down_not_before_qpc,
+                fresh_window.authored_target_qpc
+            );
+            assert_no_work(
+                harness.classify_future_plan_without_authorization_shortcut_for_test(&next_down),
+            );
+            assert!(matches!(
+                harness.runtime.down_boundary_state,
+                DownBoundaryState::FutureAuthorized(_)
+            ));
+            assert_dispatched(harness.dispatch_at_qpc_for_test(&next_down, next_target));
+            assert_eq!(harness.local_metrics.physical_window_expired_boundaries, 1);
+            assert_eq!(
+                packets.lock().expect("packet capture").as_slice(),
+                &[PhysicalPacket::new(0, 1), PhysicalPacket::new(0, 1 << 2),],
+                "the next Down is sent only after a fresh future authorization"
+            );
+            assert_eq!(harness.backend_active_mask(), 1 << 2);
+            assert_eq!(
+                harness
+                    .resources
+                    .coordinator
+                    .generation_status_counts()
+                    .get("dropped_expired"),
+                Some(&1),
+                "the prior missed generation stays terminal after resume"
+            );
+            assert_eq!(
+                harness
+                    .resources
+                    .coordinator
+                    .generation_status_counts()
+                    .get("active"),
+                Some(&1)
+            );
+        }
     }
 
     #[test]
