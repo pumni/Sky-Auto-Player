@@ -1,7 +1,9 @@
 {
-  "sourceSha": "60836de312382954b35937c47b88a3a874ee13f6",
+  "sourceSha": "dcfd670ecdec75d2805518da9b9fe827402d7027",
   "runtime": "Microsoft Edge WebView2 (real Tauri/Wry window, connected through its local CDP endpoint)",
   "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "browserProduct": "Edg/154.0.4258.12",
+  "browserRevision": "@8d226004f4abeafb91f4a8a4b0facae986bef737",
   "captures": [
     {
       "name": "playing-selected-and-now-playing-1200x760",
@@ -10,7 +12,7 @@
         "width": 1200,
         "height": 760
       },
-      "sha256": "2E8E999DCA6B932D4643F04C83C5CCBF928F7C57C2D50D84A8765ACECA0AF530",
+      "sha256": "D93088E5A0BC932A25F1A5F5ADB3F9DB6A46F7B4F14A4CA8E49E1DCEFD0BB3D8",
       "geometry": {
         "nativeTauriBridgeDetected": true,
         "viewport": {
@@ -27,14 +29,10 @@
           "height": 608
         },
         "workbenchFits": "true",
-        "currentPlayerTitle": "Senorita   (Snejok)",
-        "library": {
-          "scrollTop": 2973.60009765625,
-          "clientWidth": 868,
-          "clientHeight": 376
-        },
+        "currentPlayerTitle": "All Of Me",
+        "library": null,
         "nowPlaying": {
-          "title": "Senorita (Snejok)",
+          "title": "All Of Me",
           "selected": "true",
           "current": "true",
           "className": "track-table-row track-row is-selected is-playing",
@@ -43,38 +41,38 @@
             "ariaHidden": "true"
           },
           "box": {
-            "x": 80.8,
-            "y": 311.8,
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 357.8
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
           }
         },
         "selectedRow": {
-          "title": "Senorita (Snejok)",
+          "title": "All Of Me",
           "selected": "true",
           "current": "true",
           "box": {
-            "x": 80.8,
-            "y": 311.8,
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 357.8
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
           }
         },
         "autoPlayDock": {
-          "pressed": "true",
-          "title": "Auto Play on",
+          "pressed": "false",
+          "title": "Auto Play off",
           "iconClass": "lucide lucide-list-music",
           "box": {
             "x": 848,
-            "y": 546.4,
+            "y": 546.4000244140625,
             "width": 32,
             "height": 32,
             "right": 880,
-            "bottom": 578.4
+            "bottom": 578.4000244140625
           }
         },
         "autoPlaySettings": null,
@@ -88,7 +86,7 @@
         "width": 1200,
         "height": 760
       },
-      "sha256": "72C2D3BE6AA27613E82E79B8C48C7FA24F260094334CCED0448C2AAF77C58D59",
+      "sha256": "B7682E90B04239BAE575D5000FFBFE421E3AF9CC43F05A6675AEB583662AF7E9",
       "geometry": {
         "nativeTauriBridgeDetected": true,
         "viewport": {
@@ -105,14 +103,10 @@
           "height": 608
         },
         "workbenchFits": "true",
-        "currentPlayerTitle": "Senorita   (Snejok)",
-        "library": {
-          "scrollTop": 2973.60009765625,
-          "clientWidth": 868,
-          "clientHeight": 376
-        },
+        "currentPlayerTitle": "All Of Me",
+        "library": null,
         "nowPlaying": {
-          "title": "Senorita (Snejok)",
+          "title": "All Of Me",
           "selected": "false",
           "current": "true",
           "className": "track-table-row track-row is-playing",
@@ -121,38 +115,38 @@
             "ariaHidden": "true"
           },
           "box": {
-            "x": 80.8,
-            "y": 311.8,
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 357.8
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
           }
         },
         "selectedRow": {
-          "title": "Servant of Evil",
+          "title": "Alen Walker - On My Way",
           "selected": "true",
           "current": null,
           "box": {
-            "x": 80.8,
-            "y": 357.8,
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 403.8
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
           }
         },
         "autoPlayDock": {
-          "pressed": "true",
-          "title": "Auto Play on",
+          "pressed": "false",
+          "title": "Auto Play off",
           "iconClass": "lucide lucide-list-music",
           "box": {
             "x": 848,
-            "y": 546.4,
+            "y": 546.4000244140625,
             "width": 32,
             "height": 32,
             "right": 880,
-            "bottom": 578.4
+            "bottom": 578.4000244140625
           }
         },
         "autoPlaySettings": null,
@@ -166,7 +160,7 @@
         "width": 1200,
         "height": 760
       },
-      "sha256": "740CD67D57B8E25E3C22212D6A9641D6C311965A8BB802ADCDFACFCBC7DA4731",
+      "sha256": "C122401E93E11C369A168D7ADBE8D758AAF80677C70BC91740B2CBE920681285",
       "geometry": {
         "nativeTauriBridgeDetected": true,
         "viewport": {
@@ -183,14 +177,10 @@
           "height": 608
         },
         "workbenchFits": "true",
-        "currentPlayerTitle": "Senorita   (Snejok)",
-        "library": {
-          "scrollTop": 2973.60009765625,
-          "clientWidth": 868,
-          "clientHeight": 376
-        },
+        "currentPlayerTitle": "All Of Me",
+        "library": null,
         "nowPlaying": {
-          "title": "Senorita (Snejok)",
+          "title": "All Of Me",
           "selected": "false",
           "current": "true",
           "className": "track-table-row track-row is-playing",
@@ -199,25 +189,25 @@
             "ariaHidden": "true"
           },
           "box": {
-            "x": 80.8,
-            "y": 311.8,
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 357.8
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
           }
         },
         "selectedRow": {
-          "title": "Servant of Evil",
+          "title": "Alen Walker - On My Way",
           "selected": "true",
           "current": null,
           "box": {
-            "x": 80.8,
-            "y": 357.8,
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 403.8
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
           }
         },
         "autoPlayDock": {
@@ -226,11 +216,11 @@
           "iconClass": "lucide lucide-list-music",
           "box": {
             "x": 848,
-            "y": 546.4,
+            "y": 546.4000244140625,
             "width": 32,
             "height": 32,
             "right": 880,
-            "bottom": 578.4
+            "bottom": 578.4000244140625
           }
         },
         "autoPlaySettings": null,
@@ -244,7 +234,7 @@
         "width": 1200,
         "height": 760
       },
-      "sha256": "AD58B6D10AC5775C4898B6A14B2FB9A1110705EE064CEE798457853F20E3E578",
+      "sha256": "4827638B59A2253625788EF79A84114B95A7E5B905C805D2FC33EED8A6E3D27C",
       "geometry": {
         "nativeTauriBridgeDetected": true,
         "viewport": {
@@ -261,14 +251,10 @@
           "height": 608
         },
         "workbenchFits": "true",
-        "currentPlayerTitle": "Senorita   (Snejok)",
-        "library": {
-          "scrollTop": 2973.60009765625,
-          "clientWidth": 868,
-          "clientHeight": 376
-        },
+        "currentPlayerTitle": "All Of Me",
+        "library": null,
         "nowPlaying": {
-          "title": "Senorita (Snejok)",
+          "title": "All Of Me",
           "selected": "false",
           "current": "true",
           "className": "track-table-row track-row is-playing",
@@ -277,25 +263,25 @@
             "ariaHidden": "true"
           },
           "box": {
-            "x": 80.8,
-            "y": 311.8,
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 357.8
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
           }
         },
         "selectedRow": {
-          "title": "Servant of Evil",
+          "title": "Alen Walker - On My Way",
           "selected": "true",
           "current": null,
           "box": {
-            "x": 80.8,
-            "y": 357.8,
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 403.8
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
           }
         },
         "autoPlayDock": {
@@ -304,11 +290,11 @@
           "iconClass": "lucide lucide-list-music",
           "box": {
             "x": 848,
-            "y": 546.4,
+            "y": 546.4000244140625,
             "width": 32,
             "height": 32,
             "right": 880,
-            "bottom": 578.4
+            "bottom": 578.4000244140625
           }
         },
         "autoPlaySettings": null,
@@ -322,7 +308,7 @@
         "width": 1200,
         "height": 760
       },
-      "sha256": "A2AF329429B6673CC70BFD6A91F3F6DE7DAD85832A8E36B4EFEC6070D9A20B05",
+      "sha256": "0D52F7A11D7B5333A80B1CB1B1B4136040FB55CAB70DB30EBE1B5E1A0DBE11BD",
       "geometry": {
         "nativeTauriBridgeDetected": true,
         "viewport": {
@@ -339,14 +325,10 @@
           "height": 608
         },
         "workbenchFits": "true",
-        "currentPlayerTitle": "Ocean Eyes",
-        "library": {
-          "scrollTop": 2346.39990234375,
-          "clientWidth": 868,
-          "clientHeight": 376
-        },
+        "currentPlayerTitle": "We Wish You A Merry Christmas",
+        "library": null,
         "nowPlaying": {
-          "title": "Ocean Eyes",
+          "title": "Arthur Warrell - We Wish You A Merry Christmas",
           "selected": "false",
           "current": "true",
           "className": "track-table-row track-row is-playing",
@@ -355,25 +337,25 @@
             "ariaHidden": "true"
           },
           "box": {
-            "x": 80.8,
-            "y": 157,
+            "x": 80.80000305175781,
+            "y": 295.3999938964844,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 203
+            "right": 932.8000030517578,
+            "bottom": 341.3999938964844
           }
         },
         "selectedRow": {
-          "title": "Servant of Evil",
+          "title": "Alen Walker - On My Way",
           "selected": "true",
           "current": null,
           "box": {
-            "x": 80.8,
-            "y": 985,
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 1031
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
           }
         },
         "autoPlayDock": {
@@ -382,11 +364,11 @@
           "iconClass": "lucide lucide-list-music",
           "box": {
             "x": 848,
-            "y": 546.4,
+            "y": 546.4000244140625,
             "width": 32,
             "height": 32,
             "right": 880,
-            "bottom": 578.4
+            "bottom": 578.4000244140625
           }
         },
         "autoPlaySettings": null,
@@ -400,7 +382,7 @@
         "width": 1200,
         "height": 760
       },
-      "sha256": "3CD03F30580E703A62CAC08146C620F23FF8ECBFC1818C129410B332E5A80D89",
+      "sha256": "B27D157AB6718CAA91D6C932BF89563895FBBB03ABCE2041B45BD45DF05C9A05",
       "geometry": {
         "nativeTauriBridgeDetected": true,
         "viewport": {
@@ -417,14 +399,10 @@
           "height": 608
         },
         "workbenchFits": "true",
-        "currentPlayerTitle": "Ocean Eyes",
-        "library": {
-          "scrollTop": 2346.39990234375,
-          "clientWidth": 868,
-          "clientHeight": 376
-        },
+        "currentPlayerTitle": "We Wish You A Merry Christmas",
+        "library": null,
         "nowPlaying": {
-          "title": "Ocean Eyes",
+          "title": "Arthur Warrell - We Wish You A Merry Christmas",
           "selected": "false",
           "current": "true",
           "className": "track-table-row track-row is-playing",
@@ -433,25 +411,25 @@
             "ariaHidden": "true"
           },
           "box": {
-            "x": 80.8,
-            "y": 157,
+            "x": 80.80000305175781,
+            "y": 295.3999938964844,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 203
+            "right": 932.8000030517578,
+            "bottom": 341.3999938964844
           }
         },
         "selectedRow": {
-          "title": "Servant of Evil",
+          "title": "Alen Walker - On My Way",
           "selected": "true",
           "current": null,
           "box": {
-            "x": 80.8,
-            "y": 985,
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
             "width": 852,
             "height": 46,
-            "right": 932.8,
-            "bottom": 1031
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
           }
         },
         "autoPlayDock": {
@@ -460,40 +438,16 @@
           "iconClass": "lucide lucide-list-music",
           "box": {
             "x": 848,
-            "y": 546.4,
+            "y": 546.4000244140625,
             "width": 32,
             "height": 32,
             "right": 880,
-            "bottom": 578.4
+            "bottom": 578.4000244140625
           }
         },
         "autoPlaySettings": {
           "checked": "true",
-          "description": "Automatically continue to the next song after the current song finishes successfully.",
-          "box": {
-            "x": 262.8,
-            "y": 240.98,
-            "width": 585.2,
-            "height": 58,
-            "right": 848,
-            "bottom": 298.98
-          },
-          "descriptionBox": {
-            "x": 275.6,
-            "y": 273.25,
-            "width": 403.91,
-            "height": 14.85,
-            "right": 679.51,
-            "bottom": 288.1
-          },
-          "controlBox": {
-            "x": 779.2,
-            "y": 261.27,
-            "width": 56,
-            "height": 17.4,
-            "right": 835.2,
-            "bottom": 278.67
-          }
+          "description": "Behavior\nAuto Play\nAutomatically continue to the next song after the current song finishes successfully.\nON"
         },
         "transportStatus": null
       }
@@ -505,7 +459,7 @@
         "width": 800,
         "height": 560
       },
-      "sha256": "83B6265FEEEAC08C1C17414DEC4DF2694D68840D45F468B92B6F7837043237AD",
+      "sha256": "AB40398D8D6A30FC40FAF97DD38A89974639195F332C70C719C42499A0F005B0",
       "geometry": {
         "nativeTauriBridgeDetected": true,
         "viewport": {
@@ -522,14 +476,10 @@
           "height": 448
         },
         "workbenchFits": "true",
-        "currentPlayerTitle": "Ocean Eyes",
-        "library": {
-          "scrollTop": 2346.39990234375,
-          "clientWidth": 548,
-          "clientHeight": 216
-        },
+        "currentPlayerTitle": "We Wish You A Merry Christmas",
+        "library": null,
         "nowPlaying": {
-          "title": "Ocean Eyes",
+          "title": "Arthur Warrell - We Wish You A Merry Christmas",
           "selected": "false",
           "current": "true",
           "className": "track-table-row track-row is-playing",
@@ -538,26 +488,38 @@
             "ariaHidden": "true"
           },
           "box": {
-            "x": 80.8,
-            "y": 157,
+            "x": 80.80000305175781,
+            "y": 295.3999938964844,
             "width": 532,
             "height": 46,
-            "right": 612.8,
-            "bottom": 203
+            "right": 612.8000030517578,
+            "bottom": 341.3999938964844
           }
         },
-        "selectedRow": null,
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 532,
+            "height": 46,
+            "right": 612.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
         "autoPlayDock": {
           "pressed": "true",
           "title": "Auto Play on",
           "iconClass": "lucide lucide-list-music",
           "box": {
-            "x": 527.99,
-            "y": 386.4,
+            "x": 527.9874877929688,
+            "y": 386.3999938964844,
             "width": 32,
             "height": 32,
-            "right": 559.99,
-            "bottom": 418.4
+            "right": 559.9874877929688,
+            "bottom": 418.3999938964844
           }
         },
         "autoPlaySettings": null,
@@ -571,7 +533,7 @@
         "width": 800,
         "height": 560
       },
-      "sha256": "DBE7B42CA033CA329AE1E146991539BB6451488462FD4498315C62DDDEF5C74F",
+      "sha256": "263B2E2E809816FDAA6EFD323B4E9BAA5403F6AEFF0B68653D43267732DEED4E",
       "geometry": {
         "nativeTauriBridgeDetected": true,
         "viewport": {
@@ -588,14 +550,10 @@
           "height": 448
         },
         "workbenchFits": "true",
-        "currentPlayerTitle": "Ocean Eyes",
-        "library": {
-          "scrollTop": 2346.39990234375,
-          "clientWidth": 548,
-          "clientHeight": 216
-        },
+        "currentPlayerTitle": "We Wish You A Merry Christmas",
+        "library": null,
         "nowPlaying": {
-          "title": "Ocean Eyes",
+          "title": "Arthur Warrell - We Wish You A Merry Christmas",
           "selected": "false",
           "current": "true",
           "className": "track-table-row track-row is-playing",
@@ -604,55 +562,43 @@
             "ariaHidden": "true"
           },
           "box": {
-            "x": 80.8,
-            "y": 157,
+            "x": 80.80000305175781,
+            "y": 295.3999938964844,
             "width": 532,
             "height": 46,
-            "right": 612.8,
-            "bottom": 203
+            "right": 612.8000030517578,
+            "bottom": 341.3999938964844
           }
         },
-        "selectedRow": null,
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 532,
+            "height": 46,
+            "right": 612.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
         "autoPlayDock": {
           "pressed": "true",
           "title": "Auto Play on",
           "iconClass": "lucide lucide-list-music",
           "box": {
-            "x": 527.99,
-            "y": 386.4,
+            "x": 527.9874877929688,
+            "y": 386.3999938964844,
             "width": 32,
             "height": 32,
-            "right": 559.99,
-            "bottom": 418.4
+            "right": 559.9874877929688,
+            "bottom": 418.3999938964844
           }
         },
         "autoPlaySettings": {
           "checked": "true",
-          "description": "Automatically continue to the next song after the current song finishes successfully.",
-          "box": {
-            "x": 208.8,
-            "y": 231.38,
-            "width": 373.2,
-            "height": 72.7,
-            "right": 582,
-            "bottom": 304.08
-          },
-          "descriptionBox": {
-            "x": 221.6,
-            "y": 263.58,
-            "width": 285.6,
-            "height": 29.7,
-            "right": 507.2,
-            "bottom": 293.28
-          },
-          "controlBox": {
-            "x": 513.2,
-            "y": 259.02,
-            "width": 56,
-            "height": 17.4,
-            "right": 569.2,
-            "bottom": 276.42
-          }
+          "description": "Behavior\nAuto Play\nAutomatically continue to the next song after the current song finishes successfully.\nON"
         },
         "transportStatus": null
       }
