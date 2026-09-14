@@ -1,0 +1,661 @@
+{
+  "sourceSha": "60836de312382954b35937c47b88a3a874ee13f6",
+  "runtime": "Microsoft Edge WebView2 (real Tauri/Wry window, connected through its local CDP endpoint)",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "captures": [
+    {
+      "name": "playing-selected-and-now-playing-1200x760",
+      "file": "playing-selected-and-now-playing-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "2E8E999DCA6B932D4643F04C83C5CCBF928F7C57C2D50D84A8765ACECA0AF530",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "Senorita   (Snejok)",
+        "library": {
+          "scrollTop": 2973.60009765625,
+          "clientWidth": 868,
+          "clientHeight": 376
+        },
+        "nowPlaying": {
+          "title": "Senorita (Snejok)",
+          "selected": "true",
+          "current": "true",
+          "className": "track-table-row track-row is-selected is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.8,
+            "y": 311.8,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 357.8
+          }
+        },
+        "selectedRow": {
+          "title": "Senorita (Snejok)",
+          "selected": "true",
+          "current": "true",
+          "box": {
+            "x": 80.8,
+            "y": 311.8,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 357.8
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "playing-different-from-selected-1200x760",
+      "file": "playing-different-from-selected-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "72C2D3BE6AA27613E82E79B8C48C7FA24F260094334CCED0448C2AAF77C58D59",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "Senorita   (Snejok)",
+        "library": {
+          "scrollTop": 2973.60009765625,
+          "clientWidth": 868,
+          "clientHeight": 376
+        },
+        "nowPlaying": {
+          "title": "Senorita (Snejok)",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.8,
+            "y": 311.8,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 357.8
+          }
+        },
+        "selectedRow": {
+          "title": "Servant of Evil",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.8,
+            "y": 357.8,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 403.8
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "autoplay-icon-off-1200x760",
+      "file": "autoplay-icon-off-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "740CD67D57B8E25E3C22212D6A9641D6C311965A8BB802ADCDFACFCBC7DA4731",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "Senorita   (Snejok)",
+        "library": {
+          "scrollTop": 2973.60009765625,
+          "clientWidth": 868,
+          "clientHeight": 376
+        },
+        "nowPlaying": {
+          "title": "Senorita (Snejok)",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.8,
+            "y": 311.8,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 357.8
+          }
+        },
+        "selectedRow": {
+          "title": "Servant of Evil",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.8,
+            "y": 357.8,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 403.8
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "false",
+          "title": "Auto Play off",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "autoplay-icon-on-1200x760",
+      "file": "autoplay-icon-on-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "AD58B6D10AC5775C4898B6A14B2FB9A1110705EE064CEE798457853F20E3E578",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "Senorita   (Snejok)",
+        "library": {
+          "scrollTop": 2973.60009765625,
+          "clientWidth": 868,
+          "clientHeight": 376
+        },
+        "nowPlaying": {
+          "title": "Senorita (Snejok)",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.8,
+            "y": 311.8,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 357.8
+          }
+        },
+        "selectedRow": {
+          "title": "Servant of Evil",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.8,
+            "y": 357.8,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 403.8
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "next-song-now-playing-1200x760",
+      "file": "next-song-now-playing-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "A2AF329429B6673CC70BFD6A91F3F6DE7DAD85832A8E36B4EFEC6070D9A20B05",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "Ocean Eyes",
+        "library": {
+          "scrollTop": 2346.39990234375,
+          "clientWidth": 868,
+          "clientHeight": 376
+        },
+        "nowPlaying": {
+          "title": "Ocean Eyes",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.8,
+            "y": 157,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 203
+          }
+        },
+        "selectedRow": {
+          "title": "Servant of Evil",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.8,
+            "y": 985,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 1031
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "settings-playback-behavior-1200x760",
+      "file": "settings-playback-behavior-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "3CD03F30580E703A62CAC08146C620F23FF8ECBFC1818C129410B332E5A80D89",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "Ocean Eyes",
+        "library": {
+          "scrollTop": 2346.39990234375,
+          "clientWidth": 868,
+          "clientHeight": 376
+        },
+        "nowPlaying": {
+          "title": "Ocean Eyes",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.8,
+            "y": 157,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 203
+          }
+        },
+        "selectedRow": {
+          "title": "Servant of Evil",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.8,
+            "y": 985,
+            "width": 852,
+            "height": 46,
+            "right": 932.8,
+            "bottom": 1031
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4
+          }
+        },
+        "autoPlaySettings": {
+          "checked": "true",
+          "description": "Automatically continue to the next song after the current song finishes successfully.",
+          "box": {
+            "x": 262.8,
+            "y": 240.98,
+            "width": 585.2,
+            "height": 58,
+            "right": 848,
+            "bottom": 298.98
+          },
+          "descriptionBox": {
+            "x": 275.6,
+            "y": 273.25,
+            "width": 403.91,
+            "height": 14.85,
+            "right": 679.51,
+            "bottom": 288.1
+          },
+          "controlBox": {
+            "x": 779.2,
+            "y": 261.27,
+            "width": 56,
+            "height": 17.4,
+            "right": 835.2,
+            "bottom": 278.67
+          }
+        },
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "compact-library-now-playing-800x560",
+      "file": "compact-library-now-playing-800x560.png",
+      "pngPixels": {
+        "width": 800,
+        "height": 560
+      },
+      "sha256": "83B6265FEEEAC08C1C17414DEC4DF2694D68840D45F468B92B6F7837043237AD",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 640,
+          "height": 448,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 800,
+            "height": 560
+          }
+        },
+        "document": {
+          "width": 640,
+          "height": 448
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "Ocean Eyes",
+        "library": {
+          "scrollTop": 2346.39990234375,
+          "clientWidth": 548,
+          "clientHeight": 216
+        },
+        "nowPlaying": {
+          "title": "Ocean Eyes",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.8,
+            "y": 157,
+            "width": 532,
+            "height": 46,
+            "right": 612.8,
+            "bottom": 203
+          }
+        },
+        "selectedRow": null,
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 527.99,
+            "y": 386.4,
+            "width": 32,
+            "height": 32,
+            "right": 559.99,
+            "bottom": 418.4
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "compact-settings-playback-behavior-800x560",
+      "file": "compact-settings-playback-behavior-800x560.png",
+      "pngPixels": {
+        "width": 800,
+        "height": 560
+      },
+      "sha256": "DBE7B42CA033CA329AE1E146991539BB6451488462FD4498315C62DDDEF5C74F",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 640,
+          "height": 448,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 800,
+            "height": 560
+          }
+        },
+        "document": {
+          "width": 640,
+          "height": 448
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "Ocean Eyes",
+        "library": {
+          "scrollTop": 2346.39990234375,
+          "clientWidth": 548,
+          "clientHeight": 216
+        },
+        "nowPlaying": {
+          "title": "Ocean Eyes",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.8,
+            "y": 157,
+            "width": 532,
+            "height": 46,
+            "right": 612.8,
+            "bottom": 203
+          }
+        },
+        "selectedRow": null,
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 527.99,
+            "y": 386.4,
+            "width": 32,
+            "height": 32,
+            "right": 559.99,
+            "bottom": 418.4
+          }
+        },
+        "autoPlaySettings": {
+          "checked": "true",
+          "description": "Automatically continue to the next song after the current song finishes successfully.",
+          "box": {
+            "x": 208.8,
+            "y": 231.38,
+            "width": 373.2,
+            "height": 72.7,
+            "right": 582,
+            "bottom": 304.08
+          },
+          "descriptionBox": {
+            "x": 221.6,
+            "y": 263.58,
+            "width": 285.6,
+            "height": 29.7,
+            "right": 507.2,
+            "bottom": 293.28
+          },
+          "controlBox": {
+            "x": 513.2,
+            "y": 259.02,
+            "width": 56,
+            "height": 17.4,
+            "right": 569.2,
+            "bottom": 276.42
+          }
+        },
+        "transportStatus": null
+      }
+    }
+  ]
+}
