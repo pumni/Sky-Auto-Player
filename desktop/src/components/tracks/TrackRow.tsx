@@ -1,13 +1,15 @@
 import { memo, type CSSProperties, type ReactNode } from 'react';
+import { Volume2 } from 'lucide-react';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
-import { selectRowAtIndex } from '../../state/store';
+import { selectNowPlayingSongId, selectRowAtIndex } from '../../state/store';
 import { TrackActionsMenu } from './TrackActionsMenu';
 
 interface TrackRowProps {
   index: number;
   row: SongRow;
   selected: boolean;
+  playing?: boolean;
   start: number;
   onFocus?: () => void;
   onSelect: () => void;
@@ -34,6 +36,7 @@ export const TrackRow = memo(function TrackRow({
   index,
   row,
   selected,
+  playing = false,
   start,
   onFocus,
   onSelect,
@@ -45,9 +48,10 @@ export const TrackRow = memo(function TrackRow({
   return (
     <div
       id={`song-row-${row.song_id}`}
-      className={`track-table-row track-row${selected ? ' is-selected' : ''}`}
+      className={`track-table-row track-row${selected ? ' is-selected' : ''}${playing ? ' is-playing' : ''}`}
       role="row"
       aria-selected={selected}
+      aria-current={playing ? 'true' : undefined}
       aria-rowindex={index + 2}
       tabIndex={-1}
       style={style}
@@ -55,7 +59,7 @@ export const TrackRow = memo(function TrackRow({
       onClick={onSelect}
     >
       <span className="track-cell track-cell-index" role="gridcell">
-        {index + 1}
+        {playing ? <Volume2 size={14} aria-hidden="true" /> : index + 1}
       </span>
       <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
         <span className="track-title-text">{row.title}</span>
@@ -124,6 +128,9 @@ export const VirtualTrackRow = memo(function VirtualTrackRow({
   const selected = useStore(
     (store) => selectRowAtIndex(store.library, index)?.song_id === store.library.selectedSongId,
   );
+  const playing = useStore(
+    (store) => selectRowAtIndex(store.library, index)?.song_id === selectNowPlayingSongId(store),
+  );
   const setSongLiked = useStore((store) => store.setSongLiked);
   const selectSong = useStore((store) => store.selectSong);
 
@@ -151,6 +158,7 @@ export const VirtualTrackRow = memo(function VirtualTrackRow({
       row={row}
       index={index}
       selected={selected}
+      playing={playing}
       start={start}
       onSelect={() => void selectSong(row.song_id)}
       onToggleLiked={() => void setSongLiked(row.song_id, !row.liked)}

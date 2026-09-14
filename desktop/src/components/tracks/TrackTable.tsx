@@ -1,7 +1,13 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
-import { selectRowAtIndex, type DesktopStore, type DesktopStoreHook } from '../../state/store';
+import {
+  selectNowPlayingSongId,
+  selectRowAtIndex,
+  playbackContextMatchesLibrary,
+  type DesktopStore,
+  type DesktopStoreHook,
+} from '../../state/store';
 import { VirtualTrackRow } from './TrackRow';
 import { TrackTableHeader } from './TrackTableHeader';
 
@@ -44,6 +50,24 @@ export function TrackTable({ useStore }: TrackTableProps) {
   useEffect(() => {
     void setViewport(first, last);
   }, [first, last, setViewport]);
+
+  useEffect(() => {
+    let previousSongId = useStore.getState().playback.currentSong?.songId ?? null;
+    return useStore.subscribe((state) => {
+      const nextSongId = state.playback.currentSong?.songId ?? null;
+      if (nextSongId === previousSongId) return;
+      previousSongId = nextSongId;
+      if (!nextSongId || selectNowPlayingSongId(state) !== nextSongId) return;
+      const context = state.playback.context;
+      if (
+        context &&
+        context.currentSongId === nextSongId &&
+        playbackContextMatchesLibrary(context, state.library)
+      ) {
+        virtualizer.scrollToIndex(context.currentIndex, { align: 'auto' });
+      }
+    });
+  }, [useStore, virtualizer]);
 
   useEffect(() => {
     const grid = parentRef.current;

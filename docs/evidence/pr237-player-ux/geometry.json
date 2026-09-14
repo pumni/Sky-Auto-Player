@@ -1,0 +1,607 @@
+{
+  "sourceSha": "dcfd670ecdec75d2805518da9b9fe827402d7027",
+  "runtime": "Microsoft Edge WebView2 (real Tauri/Wry window, connected through its local CDP endpoint)",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "browserProduct": "Edg/154.0.4258.12",
+  "browserRevision": "@8d226004f4abeafb91f4a8a4b0facae986bef737",
+  "captures": [
+    {
+      "name": "playing-selected-and-now-playing-1200x760",
+      "file": "playing-selected-and-now-playing-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "D93088E5A0BC932A25F1A5F5ADB3F9DB6A46F7B4F14A4CA8E49E1DCEFD0BB3D8",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "All Of Me",
+        "library": null,
+        "nowPlaying": {
+          "title": "All Of Me",
+          "selected": "true",
+          "current": "true",
+          "className": "track-table-row track-row is-selected is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
+          }
+        },
+        "selectedRow": {
+          "title": "All Of Me",
+          "selected": "true",
+          "current": "true",
+          "box": {
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "false",
+          "title": "Auto Play off",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4000244140625,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4000244140625
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "playing-different-from-selected-1200x760",
+      "file": "playing-different-from-selected-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "B7682E90B04239BAE575D5000FFBFE421E3AF9CC43F05A6675AEB583662AF7E9",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "All Of Me",
+        "library": null,
+        "nowPlaying": {
+          "title": "All Of Me",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
+          }
+        },
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "false",
+          "title": "Auto Play off",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4000244140625,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4000244140625
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "autoplay-icon-off-1200x760",
+      "file": "autoplay-icon-off-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "C122401E93E11C369A168D7ADBE8D758AAF80677C70BC91740B2CBE920681285",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "All Of Me",
+        "library": null,
+        "nowPlaying": {
+          "title": "All Of Me",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
+          }
+        },
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "false",
+          "title": "Auto Play off",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4000244140625,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4000244140625
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "autoplay-icon-on-1200x760",
+      "file": "autoplay-icon-on-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "4827638B59A2253625788EF79A84114B95A7E5B905C805D2FC33EED8A6E3D27C",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "All Of Me",
+        "library": null,
+        "nowPlaying": {
+          "title": "All Of Me",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.80000305175781,
+            "y": 249.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 295.40000915527344
+          }
+        },
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4000244140625,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4000244140625
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "next-song-now-playing-1200x760",
+      "file": "next-song-now-playing-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "0D52F7A11D7B5333A80B1CB1B1B4136040FB55CAB70DB30EBE1B5E1A0DBE11BD",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "We Wish You A Merry Christmas",
+        "library": null,
+        "nowPlaying": {
+          "title": "Arthur Warrell - We Wish You A Merry Christmas",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.80000305175781,
+            "y": 295.3999938964844,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 341.3999938964844
+          }
+        },
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4000244140625,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4000244140625
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "settings-playback-behavior-1200x760",
+      "file": "settings-playback-behavior-1200x760.png",
+      "pngPixels": {
+        "width": 1200,
+        "height": 760
+      },
+      "sha256": "B27D157AB6718CAA91D6C932BF89563895FBBB03ABCE2041B45BD45DF05C9A05",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 960,
+          "height": 608,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 1200,
+            "height": 760
+          }
+        },
+        "document": {
+          "width": 960,
+          "height": 608
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "We Wish You A Merry Christmas",
+        "library": null,
+        "nowPlaying": {
+          "title": "Arthur Warrell - We Wish You A Merry Christmas",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.80000305175781,
+            "y": 295.3999938964844,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 341.3999938964844
+          }
+        },
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 852,
+            "height": 46,
+            "right": 932.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 848,
+            "y": 546.4000244140625,
+            "width": 32,
+            "height": 32,
+            "right": 880,
+            "bottom": 578.4000244140625
+          }
+        },
+        "autoPlaySettings": {
+          "checked": "true",
+          "description": "Behavior\nAuto Play\nAutomatically continue to the next song after the current song finishes successfully.\nON"
+        },
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "compact-library-now-playing-800x560",
+      "file": "compact-library-now-playing-800x560.png",
+      "pngPixels": {
+        "width": 800,
+        "height": 560
+      },
+      "sha256": "AB40398D8D6A30FC40FAF97DD38A89974639195F332C70C719C42499A0F005B0",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 640,
+          "height": 448,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 800,
+            "height": 560
+          }
+        },
+        "document": {
+          "width": 640,
+          "height": 448
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "We Wish You A Merry Christmas",
+        "library": null,
+        "nowPlaying": {
+          "title": "Arthur Warrell - We Wish You A Merry Christmas",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.80000305175781,
+            "y": 295.3999938964844,
+            "width": 532,
+            "height": 46,
+            "right": 612.8000030517578,
+            "bottom": 341.3999938964844
+          }
+        },
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 532,
+            "height": 46,
+            "right": 612.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 527.9874877929688,
+            "y": 386.3999938964844,
+            "width": 32,
+            "height": 32,
+            "right": 559.9874877929688,
+            "bottom": 418.3999938964844
+          }
+        },
+        "autoPlaySettings": null,
+        "transportStatus": null
+      }
+    },
+    {
+      "name": "compact-settings-playback-behavior-800x560",
+      "file": "compact-settings-playback-behavior-800x560.png",
+      "pngPixels": {
+        "width": 800,
+        "height": 560
+      },
+      "sha256": "263B2E2E809816FDAA6EFD323B4E9BAA5403F6AEFF0B68653D43267732DEED4E",
+      "geometry": {
+        "nativeTauriBridgeDetected": true,
+        "viewport": {
+          "width": 640,
+          "height": 448,
+          "dpr": 1.25,
+          "physicalPixels": {
+            "width": 800,
+            "height": 560
+          }
+        },
+        "document": {
+          "width": 640,
+          "height": 448
+        },
+        "workbenchFits": "true",
+        "currentPlayerTitle": "We Wish You A Merry Christmas",
+        "library": null,
+        "nowPlaying": {
+          "title": "Arthur Warrell - We Wish You A Merry Christmas",
+          "selected": "false",
+          "current": "true",
+          "className": "track-table-row track-row is-playing",
+          "indexCell": {
+            "iconClass": "lucide lucide-volume2 lucide-volume-2",
+            "ariaHidden": "true"
+          },
+          "box": {
+            "x": 80.80000305175781,
+            "y": 295.3999938964844,
+            "width": 532,
+            "height": 46,
+            "right": 612.8000030517578,
+            "bottom": 341.3999938964844
+          }
+        },
+        "selectedRow": {
+          "title": "Alen Walker - On My Way",
+          "selected": "true",
+          "current": null,
+          "box": {
+            "x": 80.80000305175781,
+            "y": 157.40000915527344,
+            "width": 532,
+            "height": 46,
+            "right": 612.8000030517578,
+            "bottom": 203.40000915527344
+          }
+        },
+        "autoPlayDock": {
+          "pressed": "true",
+          "title": "Auto Play on",
+          "iconClass": "lucide lucide-list-music",
+          "box": {
+            "x": 527.9874877929688,
+            "y": 386.3999938964844,
+            "width": 32,
+            "height": 32,
+            "right": 559.9874877929688,
+            "bottom": 418.3999938964844
+          }
+        },
+        "autoPlaySettings": {
+          "checked": "true",
+          "description": "Behavior\nAuto Play\nAutomatically continue to the next song after the current song finishes successfully.\nON"
+        },
+        "transportStatus": null
+      }
+    }
+  ]
+}

@@ -17,7 +17,16 @@ describe('SettingsPanel playback timing', () => {
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
 
     expect(screen.getByLabelText('Base Hold')).toBeInTheDocument();
+    const behaviorHeading = screen.getByRole('heading', { name: 'Behavior' });
+    const defaultsHeading = screen.getByRole('heading', { name: 'Playback defaults' });
+    expect(
+      behaviorHeading.compareDocumentPosition(defaultsHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     const autoPlay = screen.getByRole('switch', { name: 'Auto Play' });
+    expect(autoPlay.parentElement).toBe(behaviorHeading.parentElement);
+    expect(autoPlay).toHaveTextContent(
+      'Automatically continue to the next song after the current song finishes successfully.',
+    );
     expect(autoPlay).toHaveAttribute('aria-checked', 'true');
     await act(async () => autoPlay.click());
     await waitFor(() => expect(store.getState().settings?.auto_play).toBe(false));

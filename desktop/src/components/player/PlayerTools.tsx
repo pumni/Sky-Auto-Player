@@ -1,4 +1,4 @@
-import { ListEnd, PanelRight, SlidersHorizontal } from 'lucide-react';
+import { ListMusic, PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
@@ -65,7 +65,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         disabled={!settings || autoPlayPending}
         onClick={() => void toggleAutoPlay()}
       >
-        <ListEnd size={16} aria-hidden="true" />
+        <ListMusic size={16} aria-hidden="true" />
       </button>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>

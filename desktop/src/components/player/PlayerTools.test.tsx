@@ -17,6 +17,8 @@ describe('PlayerTools playback modes and profile', () => {
     const utility = screen.getByRole('button', { name: 'Open utility panel' });
     expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
     expect(autoPlay).toHaveAttribute('title', 'Auto Play on');
+    expect(autoPlay.querySelector('svg')).toHaveClass('lucide-list-music');
+    expect(autoPlay.querySelector('svg')).not.toHaveClass('lucide-list-end');
     expect(
       autoPlay.compareDocumentPosition(profile) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();

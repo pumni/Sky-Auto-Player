@@ -65,6 +65,20 @@ describe('Track Browser primitives', () => {
     expect(onSelect).toHaveBeenCalledOnce();
   });
 
+  it('renders Now Playing independently alongside selection without changing row geometry', () => {
+    render(<TrackRow row={row} index={6} selected playing start={276} onSelect={vi.fn()} />);
+
+    const renderedRow = screen.getByRole('row', { name: /Liminal Garden/ });
+    expect(renderedRow).toHaveAttribute('aria-selected', 'true');
+    expect(renderedRow).toHaveAttribute('aria-current', 'true');
+    expect(renderedRow).toHaveClass('is-selected', 'is-playing');
+    expect(renderedRow.style.transform).toBe('translateY(276px)');
+    expect(renderedRow.querySelector('.track-cell-index svg')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+  });
+
   it('formats song counts with singular grammar', () => {
     expect(formatSongCount(0)).toBe('0 songs');
     expect(formatSongCount(1)).toBe('1 song');
