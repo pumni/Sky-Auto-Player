@@ -141,8 +141,8 @@ The ZIP experiment used a real v3.4.5 release tree with 235 files and 30,835,159
 | across-run max | 1,956,166 us | 1,444,442 us | -26.2% |
 | measured total | 36,295,267 us | 31,329,758 us | -13.7% |
 
-The complete raw matrix is in
-`docs/perf-baselines/2026-08-updater-zip-qualification.md`. The candidate had one tail outlier,
+The complete raw matrix is preserved in historical qualification records
+(`2026-08-updater-zip-qualification.md`). The candidate had one tail outlier,
 so these numbers are qualification evidence, not a guaranteed tail bound.
 
 Bun comparison used five runs each on the same site source and lockfile:
