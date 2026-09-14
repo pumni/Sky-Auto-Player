@@ -67,21 +67,10 @@ impl ProductionHoldForensics {
 
     pub(crate) fn observe_lifecycle(&mut self, lifecycle: ObserverLifecycle) {
         match lifecycle {
-            ObserverLifecycle::RecoveryUp { up_mask } => self.clear_mask(up_mask),
             ObserverLifecycle::ResetAll => {
                 self.anchors.fill(ProductionHoldAnchor::default());
                 self.last_up_completion_ticks.fill(None);
             }
-        }
-    }
-
-    fn clear_mask(&mut self, mask: u16) {
-        let mut touched = mask;
-        while touched != 0 {
-            let slot = touched.trailing_zeros() as usize;
-            touched &= touched - 1;
-            self.anchors[slot] = ProductionHoldAnchor::default();
-            self.last_up_completion_ticks[slot] = None;
         }
     }
 
@@ -127,14 +116,68 @@ impl ProductionHoldForensics {
         let target = target_qpc.as_u64();
         let pre_call = pre_call_qpc.as_u64();
         let completion = completion_qpc.as_u64();
-        let mut up_mask = packet.up_mask;
+        self.observe_ups(
+            packet.up_mask,
+            packet.down_mask,
+            source_action_index,
+            target,
+            pre_call,
+            completion,
+        );
+        self.observe_downs(
+            packet.down_mask,
+            source_action_index,
+            target,
+            pre_call,
+            completion,
+        );
+        self.publish_metrics(metrics);
+    }
+
+    /// Record a fully confirmed musical Up-prefix recovery using the sender's
+    /// existing start/completion timestamps. Failed or uncertain transport
+    /// must never create an optimistic physical anchor.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn observe_recovery_up(
+        &mut self,
+        up_mask: u16,
+        source_action_index: u32,
+        target_qpc: QpcTicks,
+        started_qpc: QpcTicks,
+        completed_qpc: QpcTicks,
+        full_transport_success: bool,
+        metrics: &mut WorkerMetricsLocal,
+    ) {
+        if !full_transport_success {
+            return;
+        }
+        self.observe_ups(
+            up_mask,
+            0,
+            source_action_index,
+            target_qpc.as_u64(),
+            started_qpc.as_u64(),
+            completed_qpc.as_u64(),
+        );
+        self.publish_metrics(metrics);
+    }
+
+    fn observe_ups(
+        &mut self,
+        mut up_mask: u16,
+        same_call_down_mask: u16,
+        source_action_index: u32,
+        target: u64,
+        up_start: u64,
+        completion: u64,
+    ) {
         while up_mask != 0 {
             let slot = up_mask.trailing_zeros() as usize;
             let bit = 1u16 << slot;
             up_mask &= up_mask - 1;
             if self.anchors[slot].valid {
                 let anchor = self.anchors[slot];
-                if packet.down_mask & bit != 0 {
+                if same_call_down_mask & bit != 0 {
                     self.same_call_same_key_retrigger_count =
                         self.same_call_same_key_retrigger_count.saturating_add(1);
                     self.record_anomaly(
@@ -143,12 +186,12 @@ impl ProductionHoldForensics {
                         source_action_index,
                         bit,
                         target,
-                        pre_call,
+                        up_start,
                         anchor.completion_ticks,
                         completion.abs_diff(anchor.completion_ticks),
                     );
                 }
-                let hold_start = pre_call.checked_sub(anchor.completion_ticks);
+                let hold_start = up_start.checked_sub(anchor.completion_ticks);
                 self.pair_samples = self.pair_samples.saturating_add(1);
                 let hold_start_ticks = hold_start.unwrap_or_default();
                 self.min_hold_start_after_down_completion_ticks = if self.pair_samples == 1 {
@@ -166,7 +209,7 @@ impl ProductionHoldForensics {
                         source_action_index,
                         bit,
                         target,
-                        pre_call,
+                        up_start,
                         anchor.completion_ticks,
                         hold_start_ticks,
                     );
@@ -175,17 +218,12 @@ impl ProductionHoldForensics {
             } else {
                 self.unmatched_up_count = self.unmatched_up_count.saturating_add(1);
                 self.record_anomaly(4, slot, source_action_index, bit, target, completion, 0, 0);
+                // Even without a paired Down sample, a successful Up is the
+                // physical release anchor for the next same-key Down.
+                self.last_up_completion_ticks[slot] = Some(completion);
             }
             self.anchors[slot].valid = false;
         }
-        self.observe_downs(
-            packet.down_mask,
-            source_action_index,
-            target,
-            pre_call,
-            completion,
-        );
-        self.publish_metrics(metrics);
     }
 
     fn observe_downs(

@@ -1574,6 +1574,8 @@ mod tests {
         );
         assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
         assert_eq!(harness.local_metrics.release_floor_infeasible_boundaries, 1);
+        assert_eq!(harness.local_metrics.hold_floor_delay_boundaries, 0);
+        assert_eq!(harness.local_metrics.release_floor_delay_boundaries, 0);
         assert_eq!(
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(0, 1)],
@@ -1594,6 +1596,10 @@ mod tests {
         assert_eq!(harness.backend_active_mask(), 0);
         assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
         assert!(harness.runtime.pending_up_recovery.is_none());
+        assert_eq!(harness.local_metrics.hold_floor_delay_boundaries, 1);
+        assert_eq!(harness.local_metrics.last_hold_floor_delay_mask, 1);
+        assert_eq!(harness.local_metrics.release_floor_delay_boundaries, 0);
+        assert_eq!(harness.local_metrics.production_hold_pair_samples, 1);
     }
 
     #[test]
@@ -1653,6 +1659,9 @@ mod tests {
 
             assert_no_work(harness.dispatch_at_qpc_for_test(&mixed, mixed_target));
             assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
+            assert_eq!(harness.local_metrics.release_floor_infeasible_boundaries, 1);
+            assert_eq!(harness.local_metrics.hold_floor_delay_boundaries, 0);
+            assert_eq!(harness.local_metrics.release_floor_delay_boundaries, 0);
             assert_eq!(
                 harness
                     .runtime
@@ -1710,6 +1719,8 @@ mod tests {
             assert_eq!(statuses.get("scheduled"), Some(&1));
             assert_eq!(statuses.get("released"), Some(&1));
             assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
+            assert_eq!(harness.local_metrics.hold_floor_delay_boundaries, 0);
+            assert_eq!(harness.local_metrics.release_floor_delay_boundaries, 0);
             assert_eq!(
                 packets.lock().expect("packet capture").as_slice(),
                 &[PhysicalPacket::new(0, 1)],

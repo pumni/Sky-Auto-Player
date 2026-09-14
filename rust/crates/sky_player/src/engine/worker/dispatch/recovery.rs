@@ -1,9 +1,7 @@
 use super::super::super::{PlaybackClockState, QpcTicks};
 use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime};
-use super::observation::{
-    DispatchObservation, DownMissKind, DownMissObservation, ObserverLifecycle,
-};
+use super::observation::{DispatchObservation, DownMissKind, DownMissObservation};
 use super::{
     AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalCommit, RecoveryDescriptor,
 };
@@ -134,7 +132,6 @@ pub(crate) fn classify_missed_down_boundary(
         observed_qpc,
         reason,
     );
-    record_physical_floor_delays(local_metrics, physical_timing_window);
     record_release_floor_infeasibility(local_metrics, physical_timing_window, reason);
     record_missed_down_classification(
         local_metrics,
@@ -150,7 +147,28 @@ pub(crate) fn record_physical_floor_delays(
     local_metrics: &mut WorkerMetricsLocal,
     window: PhysicalTimingWindow,
 ) {
-    if window.hold_floor_mask != 0 {
+    record_hold_floor_delay(local_metrics, window, window.hold_floor_mask);
+    record_release_floor_delay(local_metrics, window);
+}
+
+pub(crate) fn record_recovery_hold_floor_delay(
+    local_metrics: &mut WorkerMetricsLocal,
+    window: PhysicalTimingWindow,
+    recovered_up_mask: u16,
+) {
+    record_hold_floor_delay(
+        local_metrics,
+        window,
+        window.hold_floor_mask & recovered_up_mask,
+    );
+}
+
+fn record_hold_floor_delay(
+    local_metrics: &mut WorkerMetricsLocal,
+    window: PhysicalTimingWindow,
+    mask: u16,
+) {
+    if mask != 0 {
         let delay = window
             .musical_up_not_before_qpc
             .as_u64()
@@ -160,13 +178,19 @@ pub(crate) fn record_physical_floor_delays(
                 local_metrics.hold_floor_delay_boundaries.saturating_add(1);
             local_metrics.max_hold_floor_delay_ticks =
                 local_metrics.max_hold_floor_delay_ticks.max(delay);
-            local_metrics.last_hold_floor_delay_mask = window.hold_floor_mask;
+            local_metrics.last_hold_floor_delay_mask = mask;
             local_metrics.last_hold_floor_authored_target_qpc_ticks =
                 window.authored_target_qpc.as_u64();
             local_metrics.last_hold_floor_not_before_qpc_ticks =
                 window.musical_up_not_before_qpc.as_u64();
         }
     }
+}
+
+fn record_release_floor_delay(
+    local_metrics: &mut WorkerMetricsLocal,
+    window: PhysicalTimingWindow,
+) {
     if window.release_floor_mask != 0 {
         let delay = window
             .down_not_before_qpc
@@ -309,9 +333,20 @@ pub(super) fn recover_missed_down_boundary(
                 "physical timing guard recovery update failed: {error:?}"
             ));
         }
-        runtime
-            .production_forensics
-            .observe_lifecycle(ObserverLifecycle::RecoveryUp { up_mask });
+        let full_transport_success = result.status
+            == sky_dispatch_win32::input::SendTransactionStatus::Complete
+            && result.evidence.confirmed_mask == up_mask
+            && result.evidence.skipped_mask == 0;
+        runtime.production_forensics.observe_recovery_up(
+            up_mask,
+            view.batch_source_action_index,
+            physical_timing_window.authored_target_qpc,
+            started,
+            completed,
+            full_transport_success,
+            local_metrics,
+        );
+        record_recovery_hold_floor_delay(local_metrics, physical_timing_window, up_mask);
         (started, completed)
     };
     let started_effective = match clock_state

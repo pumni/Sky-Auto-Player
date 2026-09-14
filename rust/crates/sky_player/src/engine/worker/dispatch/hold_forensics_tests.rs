@@ -76,6 +76,86 @@ fn exact_hold_and_release_floors_are_measured_from_sender_completion() {
 }
 
 #[test]
+fn successful_recovery_up_records_hold_and_next_down_release_samples() {
+    let mut forensics = ProductionHoldForensics::default();
+    forensics.set_frame_policies(DurationTicks::from_raw(20), DurationTicks::from_raw(10));
+    let mut metrics = WorkerMetricsLocal::default();
+
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        100,
+        101,
+        105,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    forensics.observe_recovery_up(
+        1,
+        18,
+        QpcTicks::from_raw(120),
+        QpcTicks::from_raw(125),
+        QpcTicks::from_raw(130),
+        true,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.production_hold_pair_samples, 1);
+    assert_eq!(
+        metrics.production_min_hold_start_after_down_completion_ticks,
+        20
+    );
+    assert_eq!(metrics.production_hold_floor_violation_count, 0);
+
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        139,
+        140,
+        142,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.production_release_floor_samples, 1);
+    assert_eq!(
+        metrics.production_min_down_start_after_up_completion_ticks,
+        10
+    );
+    assert_eq!(metrics.production_release_floor_violation_count, 0);
+}
+
+#[test]
+fn uncertain_recovery_transport_does_not_create_hold_or_release_evidence() {
+    let mut forensics = ProductionHoldForensics::default();
+    forensics.set_frame_policies(DurationTicks::from_raw(20), DurationTicks::from_raw(10));
+    let mut metrics = WorkerMetricsLocal::default();
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        100,
+        101,
+        105,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    forensics.observe_recovery_up(
+        1,
+        18,
+        QpcTicks::from_raw(120),
+        QpcTicks::from_raw(125),
+        QpcTicks::from_raw(130),
+        false,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.production_hold_pair_samples, 0);
+    assert_eq!(metrics.production_release_floor_samples, 0);
+    assert_eq!(metrics.production_forensics_anomaly_count, 0);
+}
+
+#[test]
 fn up_start_below_down_completion_hold_floor_is_a_forensics_anomaly() {
     let mut forensics = ProductionHoldForensics::default();
     forensics.set_frame_policies(DurationTicks::from_raw(20), DurationTicks::from_raw(10));

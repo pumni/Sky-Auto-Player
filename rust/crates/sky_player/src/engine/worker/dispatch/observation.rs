@@ -19,7 +19,6 @@ pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ObserverLifecycle {
-    RecoveryUp { up_mask: u16 },
     ResetAll,
 }
 
