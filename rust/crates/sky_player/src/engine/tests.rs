@@ -2241,6 +2241,7 @@ fn final_control_admission_rejects_each_command_state_in_priority_order() {
                 skip_requested: &skip_requested,
                 panic_requested: &panic_requested,
                 desired_pause: &desired_pause,
+                system_power: None,
                 supervisor_heartbeat_ticks: &heartbeat,
             },
         )
@@ -2261,6 +2262,97 @@ fn final_control_admission_rejects_each_command_state_in_priority_order() {
 }
 
 #[test]
+fn system_suspend_after_wait_wake_blocks_final_down_admission_until_revalidated_resume() {
+    use super::shared::SystemPowerState;
+    use sky_dispatch_win32::event::OwnedEvent;
+
+    let qpc_clock = QpcClock::initialize().expect("QPC clock");
+    let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
+    let system_power = SystemPowerState::default();
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let panic_requested = AtomicBool::new(false);
+    let desired_pause = AtomicBool::new(false);
+    let heartbeat = AtomicU64::new(1);
+    let signals = || FinalControlSignals {
+        quit_requested: &quit_requested,
+        skip_requested: &skip_requested,
+        panic_requested: &panic_requested,
+        desired_pause: &desired_pause,
+        system_power: Some(&system_power),
+        supervisor_heartbeat_ticks: &heartbeat,
+    };
+
+    // The direct wait has already woken. A suspend callback arriving before
+    // final admission must still win the final atomic gate.
+    assert!(system_power.notify(true, &interrupt));
+    assert_eq!(
+        final_control_admission_with_lease(qpc_clock, DurationTicks::ZERO, signals())
+            .expect("suspend final gate")
+            .0,
+        FinalControlAdmission::SystemSuspendRequested
+    );
+    system_power.take_pending();
+    assert!(system_power.notify(false, &interrupt));
+    assert_eq!(
+        final_control_admission_with_lease(qpc_clock, DurationTicks::ZERO, signals())
+            .expect("resume remains blocked until worker admission")
+            .0,
+        FinalControlAdmission::SystemSuspendRequested
+    );
+    assert!(system_power.complete_resume());
+    assert_eq!(
+        final_control_admission_with_lease(qpc_clock, DurationTicks::ZERO, signals())
+            .expect("revalidated resume final gate")
+            .0,
+        FinalControlAdmission::Allowed
+    );
+}
+
+#[test]
+fn shutdown_during_system_suspend_finishes_with_physical_state_released() {
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    let options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session
+        .arm(TEST_WALL_CLOCK_PREROLL_US)
+        .expect("arm session");
+    wait_for_focus_down(&session);
+
+    assert!(session.notify_system_power(true));
+    let pause_deadline = Instant::now() + Duration::from_secs(2);
+    let mut snapshot = session.snapshot_lite();
+    while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < pause_deadline {
+        std::thread::sleep(Duration::from_millis(1));
+        snapshot = session.snapshot_lite();
+    }
+    assert!(snapshot.is_paused, "suspend was not applied: {snapshot:?}");
+    assert_eq!(
+        snapshot.active_count, 0,
+        "suspend did not release held keys"
+    );
+    assert!(session.system_power_snapshot().down_blocked);
+
+    session.quit().expect("quit while suspended");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let terminal = session.snapshot_lite();
+    assert!(terminal.is_finished);
+    assert_eq!(terminal.active_count, 0);
+    assert!(session.system_power_snapshot().down_blocked);
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn authoritative_final_control_gate_uses_fresh_qpc_for_lease() {
     let qpc_clock = QpcClock::initialize().expect("QPC clock");
     let quit_requested = AtomicBool::new(true);
@@ -2273,6 +2365,7 @@ fn authoritative_final_control_gate_uses_fresh_qpc_for_lease() {
         skip_requested: &skip_requested,
         panic_requested: &panic_requested,
         desired_pause: &desired_pause,
+        system_power: None,
         supervisor_heartbeat_ticks: &heartbeat,
     };
 

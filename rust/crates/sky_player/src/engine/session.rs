@@ -109,6 +109,15 @@ pub struct NativeDispatchSession {
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemPowerSnapshot {
+    pub suspended: bool,
+    pub down_blocked: bool,
+    pub suspend_notifications: u64,
+    pub resume_notifications: u64,
+    pub duplicate_notifications: u64,
+}
+
 impl NativeDispatchSession {
     pub fn new(mut options: NativeSessionOptions) -> Result<Self, String> {
         validate_timing_constants()?;
@@ -158,6 +167,7 @@ impl NativeDispatchSession {
         let shared = Arc::new(SessionShared {
             commands: SessionCommands {
                 interrupt,
+                system_power: super::shared::SystemPowerState::default(),
                 desired_pause: AtomicBool::new(false),
                 quit_requested: AtomicBool::new(false),
                 skip_requested: AtomicBool::new(false),
@@ -569,6 +579,32 @@ impl NativeDispatchSession {
             &self.shared.commands.interrupt,
             active,
         );
+    }
+
+    /// Record a Windows suspend/resume transition without formatting, logging,
+    /// locking, or publishing from the OS callback.
+    pub fn notify_system_power(&self, suspended: bool) -> bool {
+        self.shared
+            .commands
+            .system_power
+            .notify(suspended, &self.shared.commands.interrupt)
+    }
+
+    pub fn system_power_snapshot(&self) -> SystemPowerSnapshot {
+        let (
+            suspended,
+            down_blocked,
+            suspend_notifications,
+            resume_notifications,
+            duplicate_notifications,
+        ) = self.shared.commands.system_power.snapshot();
+        SystemPowerSnapshot {
+            suspended,
+            down_blocked,
+            suspend_notifications,
+            resume_notifications,
+            duplicate_notifications,
+        }
     }
 
     fn poll_status(

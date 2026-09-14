@@ -6,7 +6,7 @@
 //! verification of production dispatch functions.
 
 use crate::engine::config::{DispatchProfile, WorkerConfig};
-use crate::engine::shared::SharedProgressClock;
+use crate::engine::shared::{SharedProgressClock, SystemPowerState};
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
@@ -52,6 +52,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) skip_requested: AtomicBool,
     pub(crate) panic_requested: AtomicBool,
     pub(crate) desired_pause: AtomicBool,
+    pub(super) system_power: SystemPowerState,
     pub(crate) supervisor_heartbeat_ticks: AtomicU64,
     pub(crate) metrics: SharedMetrics,
     pub(crate) progress_clock: SharedProgressClock,
@@ -726,6 +727,7 @@ impl ProductionDispatchTestHarness {
             skip_requested: AtomicBool::new(false),
             panic_requested: AtomicBool::new(false),
             desired_pause: AtomicBool::new(false),
+            system_power: SystemPowerState::default(),
             supervisor_heartbeat_ticks: AtomicU64::new(0),
             metrics: SharedMetrics::default(),
             progress_clock,
@@ -989,6 +991,65 @@ impl ProductionDispatchTestHarness {
             Ok(effective_now_ticks),
             target_hwnd,
         )
+    }
+
+    pub fn apply_system_suspend_for_test(&mut self, now_ticks: QpcTicks) -> Result<(), String> {
+        super::super::worker::apply_system_suspend_transition(
+            &mut self.resources.backend,
+            &mut self.resources.coordinator,
+            &mut self.runtime,
+            &mut self.resources.playback,
+            &self.progress_clock,
+            now_ticks,
+            self.target_hwnd.load(Ordering::Acquire),
+        )
+    }
+
+    pub fn notify_system_power_for_test(&self, suspended: bool) -> bool {
+        self.system_power.notify(suspended, &self.interrupt)
+    }
+
+    pub fn take_system_power_pending_for_test(&self) -> u8 {
+        self.system_power.take_pending()
+    }
+
+    pub fn system_power_down_blocked_for_test(&self) -> bool {
+        self.system_power.down_blocked()
+    }
+
+    pub fn complete_system_resume_for_test(&self) -> bool {
+        self.system_power.complete_resume()
+    }
+
+    pub fn try_system_resume_for_test(
+        &mut self,
+        lease_timeout_ticks: DurationTicks,
+    ) -> Result<bool, String> {
+        let mut suspend_applied = true;
+        let mut resume_pending = true;
+        super::super::worker::try_complete_system_resume_transition(
+            &mut suspend_applied,
+            &mut resume_pending,
+            super::super::worker::SystemResumeTransition {
+                system_power: &self.system_power,
+                config: &self.config,
+                backend: &self.resources.backend,
+                runtime: &mut self.runtime,
+                playback: &mut self.resources.playback,
+                progress_clock: &self.progress_clock,
+                qpc_clock: self.resources.clock,
+                focus_active: &self.focus_active,
+                target_hwnd: &self.target_hwnd,
+                target_generation: &self.target_generation,
+                lease_timeout_ticks,
+                supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
+            },
+        )
+    }
+
+    pub fn set_supervisor_heartbeat_for_test(&self, ticks: QpcTicks) {
+        self.supervisor_heartbeat_ticks
+            .store(ticks.as_u64(), Ordering::Release);
     }
 
     /// Number of full-instrument cleanup operations performed by terminal
@@ -1418,6 +1479,7 @@ impl ProductionDispatchTestHarness {
             &self.skip_requested,
             &self.panic_requested,
             &self.desired_pause,
+            &self.system_power,
             &self.supervisor_heartbeat_ticks,
             self.timing.lease_timeout_ticks,
             &self.progress_clock,
@@ -1815,6 +1877,7 @@ impl ProductionDispatchTestHarness {
             &self.skip_requested,
             &self.panic_requested,
             &self.desired_pause,
+            &self.system_power,
             &self.progress_clock,
             Some(&self.observer),
         )

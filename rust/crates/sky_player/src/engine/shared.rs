@@ -142,6 +142,7 @@ impl ProgressClockSnapshot {
 /// individual resources retain their existing types and ordering semantics.
 pub(super) struct SessionCommands {
     pub(super) interrupt: OwnedEvent,
+    pub(super) system_power: SystemPowerState,
     pub(super) desired_pause: AtomicBool,
     pub(super) quit_requested: AtomicBool,
     pub(super) skip_requested: AtomicBool,
@@ -149,6 +150,115 @@ pub(super) struct SessionCommands {
     pub(super) focus_active: AtomicBool,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) command_timing: CommandTimingState,
+}
+
+pub(super) const SYSTEM_POWER_OS_SUSPENDED: u8 = 1 << 0;
+pub(super) const SYSTEM_POWER_DOWN_BLOCKED: u8 = 1 << 1;
+pub(super) const SYSTEM_POWER_SUSPEND_PENDING: u8 = 1 << 2;
+pub(super) const SYSTEM_POWER_RESUME_PENDING: u8 = 1 << 3;
+const SYSTEM_POWER_PENDING_MASK: u8 = SYSTEM_POWER_SUSPEND_PENDING | SYSTEM_POWER_RESUME_PENDING;
+
+/// Lock-free notification state shared by the OS callback and playback worker.
+/// The callback only updates atomics and signals the already-owned interrupt.
+pub(crate) struct SystemPowerState {
+    state: AtomicU8,
+    suspend_count: AtomicU64,
+    resume_count: AtomicU64,
+    duplicate_count: AtomicU64,
+}
+
+impl Default for SystemPowerState {
+    fn default() -> Self {
+        Self {
+            state: AtomicU8::new(0),
+            suspend_count: AtomicU64::new(0),
+            resume_count: AtomicU64::new(0),
+            duplicate_count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl SystemPowerState {
+    pub(super) fn notify(&self, suspended: bool, interrupt: &OwnedEvent) -> bool {
+        loop {
+            let current = self.state.load(Ordering::Acquire);
+            let os_suspended = current & SYSTEM_POWER_OS_SUSPENDED != 0;
+            if os_suspended == suspended {
+                self.duplicate_count.fetch_add(1, Ordering::Relaxed);
+                return false;
+            }
+            let next = if suspended {
+                current
+                    | SYSTEM_POWER_OS_SUSPENDED
+                    | SYSTEM_POWER_DOWN_BLOCKED
+                    | SYSTEM_POWER_SUSPEND_PENDING
+            } else {
+                (current & !SYSTEM_POWER_OS_SUSPENDED)
+                    | SYSTEM_POWER_DOWN_BLOCKED
+                    | SYSTEM_POWER_RESUME_PENDING
+            };
+            if self
+                .state
+                .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                if suspended {
+                    self.suspend_count.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.resume_count.fetch_add(1, Ordering::Relaxed);
+                }
+                let _ = interrupt.signal();
+                return true;
+            }
+        }
+    }
+
+    pub(super) fn take_pending(&self) -> u8 {
+        self.state
+            .fetch_and(!SYSTEM_POWER_PENDING_MASK, Ordering::AcqRel)
+            & SYSTEM_POWER_PENDING_MASK
+    }
+
+    pub(super) fn down_blocked(&self) -> bool {
+        self.state.load(Ordering::Acquire) & SYSTEM_POWER_DOWN_BLOCKED != 0
+    }
+
+    pub(super) fn os_suspended(&self) -> bool {
+        self.state.load(Ordering::Acquire) & SYSTEM_POWER_OS_SUSPENDED != 0
+    }
+
+    /// Complete worker-side resume only if no newer suspend has arrived.
+    pub(super) fn complete_resume(&self) -> bool {
+        loop {
+            let current = self.state.load(Ordering::Acquire);
+            if current & (SYSTEM_POWER_OS_SUSPENDED | SYSTEM_POWER_SUSPEND_PENDING) != 0 {
+                return false;
+            }
+            if self
+                .state
+                .compare_exchange(
+                    current,
+                    current & !SYSTEM_POWER_DOWN_BLOCKED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    pub(super) fn snapshot(&self) -> (bool, bool, u64, u64, u64) {
+        let state = self.state.load(Ordering::Acquire);
+        (
+            state & SYSTEM_POWER_OS_SUSPENDED != 0,
+            state & SYSTEM_POWER_DOWN_BLOCKED != 0,
+            self.suspend_count.load(Ordering::Relaxed),
+            self.resume_count.load(Ordering::Relaxed),
+            self.duplicate_count.load(Ordering::Relaxed),
+        )
+    }
 }
 
 pub(super) struct SessionTarget {
@@ -287,5 +397,32 @@ mod tests {
             anchor.elapsed_us(QpcTicks::from_raw(2_000), test_qpc_clock()),
             0
         );
+    }
+
+    #[test]
+    fn power_notifications_are_idempotent_and_down_stays_blocked_until_worker_resume() {
+        let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
+        let power = SystemPowerState::default();
+
+        assert!(power.notify(true, &interrupt));
+        assert!(!power.notify(true, &interrupt));
+        assert!(power.os_suspended());
+        assert!(power.down_blocked());
+        assert_eq!(power.take_pending(), SYSTEM_POWER_SUSPEND_PENDING);
+
+        assert!(power.notify(false, &interrupt));
+        assert!(!power.notify(false, &interrupt));
+        assert!(!power.os_suspended());
+        assert!(power.down_blocked());
+        assert_eq!(power.take_pending(), SYSTEM_POWER_RESUME_PENDING);
+
+        assert!(power.complete_resume());
+        assert!(!power.down_blocked());
+        let (_, _, suspends, resumes, duplicates) = power.snapshot();
+        assert_eq!((suspends, resumes, duplicates), (1, 1, 2));
+
+        assert!(power.notify(true, &interrupt));
+        assert!(!power.complete_resume());
+        assert!(power.down_blocked());
     }
 }

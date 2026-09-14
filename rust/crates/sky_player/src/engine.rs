@@ -19,7 +19,7 @@ pub use config::{
     BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, FocusOptions, NativeSessionOptions,
     PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
 };
-pub use session::NativeDispatchSession;
+pub use session::{NativeDispatchSession, SystemPowerSnapshot};
 pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot};
 pub use telemetry::{
     NATIVE_TELEMETRY_SCHEMA_VERSION, NativeTelemetryOutput, NativeTelemetrySummary, RtTraceRecord,

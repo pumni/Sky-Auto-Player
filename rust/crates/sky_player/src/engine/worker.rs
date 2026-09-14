@@ -53,11 +53,15 @@ pub(super) use dispatch::{
     PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::apply_system_suspend_transition;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::preflight_prepared_plan;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::publish_live_metrics_after_dispatch;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::{SystemResumeTransition, try_complete_system_resume_transition};
 #[cfg(any(test, feature = "test-support"))]
 #[allow(unused_imports)]
 pub(crate) use dispatch_loop::{
@@ -380,6 +384,13 @@ impl WorkerRuntime {
     #[inline]
     pub(crate) fn invalidate_down_authorization(&mut self) {
         self.down_boundary_state = DownBoundaryState::AwaitingFuture;
+    }
+
+    pub(crate) fn reset_wait_state_after_system_suspend(&mut self) {
+        self.future_physical_wait_target_qpc = None;
+        self.last_dispatch_deadline_wake_qpc = None;
+        self.last_dispatch_deadline_target_qpc = None;
+        self.pending_wait_observation = None;
     }
 
     /// Model `WaitBoundary::Due { wait_result: None }` after a future plan

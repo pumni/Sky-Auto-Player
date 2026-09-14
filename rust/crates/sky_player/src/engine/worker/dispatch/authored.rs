@@ -20,7 +20,7 @@ use super::observer::publisher_down_send_outcome;
 use super::recovery::{DownMissReason, recover_missed_down_boundary};
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
-use crate::engine::shared::SharedProgressClock;
+use crate::engine::shared::{SharedProgressClock, SystemPowerState};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_authored_packet(
@@ -38,6 +38,7 @@ pub(crate) fn dispatch_authored_packet(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
+    system_power: &SystemPowerState,
     progress_clock: &SharedProgressClock,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
@@ -85,6 +86,7 @@ pub(crate) fn dispatch_authored_packet(
         skip_requested,
         panic_requested,
         desired_pause,
+        system_power,
         progress_clock,
         qpc_clock,
         backend,
@@ -123,6 +125,7 @@ fn commit_down_send_outcome(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
+    system_power: &SystemPowerState,
     progress_clock: &SharedProgressClock,
     qpc_clock: QpcClock,
     backend: &mut TrackedKeyState,
@@ -157,6 +160,7 @@ fn commit_down_send_outcome(
         skip_requested,
         panic_requested,
         desired_pause,
+        system_power,
         progress_clock,
         effective_now_ticks,
         now_ticks,
@@ -185,6 +189,7 @@ fn commit_down_send_outcome(
         skip_requested,
         panic_requested,
         desired_pause,
+        system_power,
         progress_clock,
         physical_target_qpc,
         down_admission,
@@ -301,6 +306,7 @@ fn admit_authored_down(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
+    system_power: &SystemPowerState,
     progress_clock: &SharedProgressClock,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
@@ -383,6 +389,7 @@ fn admit_authored_down(
         skip_requested,
         panic_requested,
         desired_pause,
+        system_power: Some(system_power),
         supervisor_heartbeat_ticks,
     };
     let control_admission = final_control_precheck(control_signals);
@@ -418,6 +425,7 @@ fn finalize_authored_down_admission(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
+    system_power: &SystemPowerState,
     progress_clock: &SharedProgressClock,
     physical_target_qpc: QpcTicks,
     down_admission: DownBoundaryAdmission,
@@ -461,6 +469,7 @@ fn finalize_authored_down_admission(
         skip_requested,
         panic_requested,
         desired_pause,
+        system_power: Some(system_power),
         supervisor_heartbeat_ticks,
     };
     let control_admission = final_control_precheck(control_signals);

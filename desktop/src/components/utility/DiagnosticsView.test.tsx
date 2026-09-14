@@ -66,6 +66,19 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     release_late_2ms: 1,
     session_id: 'a'.repeat(32),
     last_error: null,
+    power_request_created: true,
+    power_request_active: true,
+    power_request_create_failures: 0,
+    power_request_set_failures: 0,
+    power_request_clear_failures: 0,
+    power_request_close_failures: 0,
+    suspend_resume_registered: true,
+    suspend_resume_registration_failures: 0,
+    suspend_resume_unregistration_failures: 0,
+    system_suspend_active: false,
+    system_suspend_notifications: 0,
+    system_resume_notifications: 0,
+    duplicate_system_power_notifications: 0,
     ...overrides,
   };
 }
@@ -119,6 +132,12 @@ describe('DiagnosticsView', () => {
             final_gate_lease_expirations: 1,
             sendinput_partial_events: 1,
             sendinput_zero_progress_failures: 0,
+            system_suspend_active: true,
+            system_suspend_notifications: 1,
+            system_resume_notifications: 1,
+            duplicate_system_power_notifications: 2,
+            power_request_active: false,
+            power_request_set_failures: 1,
           }),
         ],
       },
@@ -156,6 +175,13 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('SendInput partial events')).toBeInTheDocument();
     expect(screen.getByText('Dropped keys')).toBeInTheDocument();
     expect(screen.getByText('Stuck keys')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Windows power lifecycle' })).toBeInTheDocument();
+    expect(screen.getByText('System power state').parentElement).toHaveTextContent(
+      'Suspended / re-admission blocked',
+    );
+    expect(screen.getByText('Suspend notifications').parentElement).toHaveTextContent('1');
+    expect(screen.getByText('Duplicate notifications').parentElement).toHaveTextContent('2');
+    expect(screen.getByText('Power request set failures').parentElement).toHaveTextContent('1');
     expect(screen.getByText(/Sender-side status: Attention/)).toBeInTheDocument();
     expect(screen.getByText('Release > 2 ms').parentElement).toHaveTextContent('0');
     expect(screen.queryByText('P50')).toBeNull();

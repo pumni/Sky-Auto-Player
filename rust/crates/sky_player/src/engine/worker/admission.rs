@@ -132,6 +132,7 @@ pub(crate) enum FinalControlAdmission {
     QuitRequested,
     SkipRequested,
     PauseRequested,
+    SystemSuspendRequested,
     LeaseExpired,
 }
 
@@ -141,6 +142,7 @@ pub(crate) struct FinalControlSignals<'a> {
     pub(crate) skip_requested: &'a AtomicBool,
     pub(crate) panic_requested: &'a AtomicBool,
     pub(crate) desired_pause: &'a AtomicBool,
+    pub(crate) system_power: Option<&'a super::super::shared::SystemPowerState>,
     pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
 }
 
@@ -185,6 +187,12 @@ pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalC
     if signals.desired_pause.load(Ordering::Acquire) {
         return FinalControlAdmission::PauseRequested;
     }
+    if signals
+        .system_power
+        .is_some_and(super::super::shared::SystemPowerState::down_blocked)
+    {
+        return FinalControlAdmission::SystemSuspendRequested;
+    }
     FinalControlAdmission::Allowed
 }
 
@@ -210,6 +218,7 @@ pub(crate) fn final_control_admission_with_lease(
         skip_requested: signals.skip_requested,
         panic_requested: signals.panic_requested,
         desired_pause: signals.desired_pause,
+        system_power: signals.system_power,
         supervisor_heartbeat_ticks: signals.supervisor_heartbeat_ticks,
     });
     if !matches!(precheck, FinalControlAdmission::Allowed) {

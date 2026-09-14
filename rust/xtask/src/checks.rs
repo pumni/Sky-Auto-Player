@@ -42,6 +42,8 @@ const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
     "Win32::Media",
     "Win32::UI::Input",
     "Win32::System::Performance",
+    // W4 playback lifecycle request and explicit suspend/resume notification boundary.
+    "Win32::System::Power",
     "Win32::System::LibraryLoader",
     "Win32::System::SystemInformation",
     "Win32::System::Threading",
