@@ -1383,6 +1383,33 @@ impl ProductionDispatchTestHarness {
         )
     }
 
+    /// Classify a frozen Down plan one QPC tick before its target without the
+    /// test-only direct-boundary authorization shortcut. This exercises the
+    /// production future-observation branch against the current runtime state.
+    pub fn classify_future_plan_without_authorization_shortcut_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+    ) -> DispatchStep {
+        let target = plan
+            .physical_target_qpc()
+            .expect("future classification requires a physical target");
+        let before_target = QpcTicks::from_raw(
+            target
+                .as_u64()
+                .checked_sub(1)
+                .expect("physical target must be nonzero"),
+        );
+        self.dispatch_plan_at_with_sender_option(
+            plan,
+            TimelineTicks::ZERO,
+            before_target,
+            false,
+            None,
+            None,
+            false,
+        )
+    }
+
     /// Invoke a frozen plan at its exact synthetic QPC boundary.  This keeps
     /// metadata-only commit allocation tests independent of waiter setup and
     /// wall-clock timer state.
