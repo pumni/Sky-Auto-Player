@@ -2,4 +2,4 @@
 import type { PlaybackPatch } from "./PlaybackPatch";
 import type { UpdatePreferencesPatch } from "./UpdatePreferencesPatch";
 
-export type SettingsPatch = { theme: string | null, telemetryEnabled: boolean | null, verboseHud: boolean | null, playbackDefaults: PlaybackPatch | null, updatePreferences: UpdatePreferencesPatch | null, };
+export type SettingsPatch = { theme: string | null, telemetryEnabled: boolean | null, verboseHud: boolean | null, playbackDefaults: PlaybackPatch | null, autoPlay: boolean | null, updatePreferences: UpdatePreferencesPatch | null, };

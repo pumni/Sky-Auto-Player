@@ -1,6 +1,11 @@
-import { LoaderCircle, Pause, Play, SkipBack, SkipForward, Square } from 'lucide-react';
+import { LoaderCircle, Pause, Play, Shuffle, SkipBack, SkipForward, Square } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
-import { selectSongById } from '../../state/store';
+import {
+  nextPlaybackPosition,
+  playbackIssuePresentation,
+  previousPlaybackPosition,
+  selectSongById,
+} from '../../state/store';
 import { formatPlayerDuration } from './playerFormatting';
 
 interface PlayerTransportProps {
@@ -19,10 +24,16 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
   const resume = useStore((store) => store.resumePlayback);
   const previous = useStore((store) => store.previousPlayback);
   const next = useStore((store) => store.nextPlayback);
+  const setShuffleEnabled = useStore((store) => store.setShuffleEnabled);
 
   const operationPending = playback.transportOperation !== null;
   const confirmationPending = playback.prepared?.admission === 'confirmation_required';
   const hasSession = playback.sessionId !== null;
+  const issue = playbackIssuePresentation(playback);
+  const recoveryPending =
+    playback.statusRetryPending ||
+    issue?.kind === 'recoverable_status' ||
+    issue?.kind === 'conflict';
   const active =
     hasSession &&
     ['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(playback.state);
@@ -30,8 +41,17 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     playback.context !== null &&
     playback.context.valid &&
     playback.context.generation === libraryGeneration;
-  const canPrevious = contextCurrent;
-  const canNext = contextCurrent && playback.context!.currentIndex + 1 < playback.context!.total;
+  const canNext = contextCurrent && nextPlaybackPosition(playback.context!) !== null;
+  const transportOwnsControls = operationPending || confirmationPending || recoveryPending;
+  const primaryPending =
+    operationPending ||
+    playback.startRequestId !== null ||
+    recoveryPending ||
+    (hasSession && ['starting', 'stopping', 'finished', 'failed'].includes(playback.state));
+  const primaryCanStartPrepared = playback.prepared?.admission === 'ready';
+  const primaryCanPlay = Boolean(selectedSongId || (playback.currentSong && contextCurrent));
+  const stopCanAct =
+    hasSession && ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
   const timelineSongExists = Boolean(playback.currentSong || selectedSongId);
   const selectedDurationUs =
     playback.currentSong?.durationUs ??
@@ -44,6 +64,8 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     Math.max(0, snapshotCurrent ? (playback.snapshot?.current_us ?? 0) : 0),
     totalUs || 0,
   );
+  const canPrevious =
+    contextCurrent && previousPlaybackPosition(playback.context!, currentUs) !== null;
   const progressLabel = !timelineSongExists
     ? 'Playback progress unavailable until a song is selected'
     : totalUs
@@ -81,120 +103,109 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     if (current.playback.prepared?.admission === 'ready') await start();
   };
 
-  const otherTransportOwnsControls = operationPending || confirmationPending;
-
   return (
     <div className="player-transport">
       <div className="player-controls-row" data-testid="player-controls-row">
         <div className="player-core-controls" data-testid="player-core-controls">
           <button
-            className="icon-button player-secondary-action"
+            className={`icon-button player-secondary-action player-shuffle-action${playback.shuffleEnabled ? ' is-active' : ''}`}
+            type="button"
+            aria-label="Shuffle"
+            aria-pressed={playback.shuffleEnabled}
+            title={playback.shuffleEnabled ? 'Shuffle on' : 'Shuffle off'}
+            disabled={transportOwnsControls}
+            onClick={() => setShuffleEnabled(!playback.shuffleEnabled)}
+          >
+            <Shuffle size={16} aria-hidden="true" />
+          </button>
+          <button
+            className="icon-button player-secondary-action player-previous-action"
             type="button"
             aria-label="Previous"
             title="Previous"
-            disabled={!canPrevious || otherTransportOwnsControls}
+            disabled={!canPrevious || transportOwnsControls}
             onClick={() => void previous()}
           >
             <SkipBack size={16} aria-hidden="true" />
           </button>
           <div className="player-primary-slot" data-testid="player-primary-slot">
-            {!active && !playback.prepared && playback.startRequestId === null && (
-              <button
-                className="icon-button button-primary player-primary-action"
-                type="button"
-                aria-label="Play"
-                title="Play"
-                disabled={
-                  playback.startRequestId !== null ||
-                  (!selectedSongId && (!playback.currentSong || !contextCurrent)) ||
-                  operationPending
-                }
-                onClick={() => void prepareAndMaybeStart(false)}
-              >
-                <Play size={18} aria-hidden="true" />
-              </button>
-            )}
-            {!active && playback.startRequestId !== null && (
+            {primaryPending ? (
               <button
                 className="icon-button button-primary player-primary-action is-pending"
                 type="button"
-                aria-label="Starting playback"
-                title="Starting playback"
+                aria-label={transportStatus ?? 'Playback transition pending'}
+                title={transportStatus ?? 'Playback transition pending'}
                 disabled
               >
                 <LoaderCircle size={18} aria-hidden="true" />
               </button>
-            )}
-            {active && playback.state === 'playing' && (
+            ) : active && playback.state === 'playing' ? (
               <button
                 className="icon-button button-primary player-primary-action"
                 type="button"
                 aria-label="Pause"
                 title="Pause"
-                disabled={operationPending}
                 onClick={() => void pause()}
               >
                 <Pause size={18} aria-hidden="true" />
               </button>
-            )}
-            {active && playback.state === 'paused' && (
+            ) : active && playback.state === 'paused' ? (
               <button
                 className="icon-button button-primary player-primary-action"
                 type="button"
                 aria-label="Resume"
                 title="Resume"
-                disabled={operationPending}
                 onClick={() => void resume()}
               >
                 <Play size={18} aria-hidden="true" />
               </button>
-            )}
-            {active && playback.state !== 'playing' && playback.state !== 'paused' && (
+            ) : (
               <button
-                className="icon-button button-primary player-primary-action is-pending"
+                className="icon-button button-primary player-primary-action"
                 type="button"
-                aria-label={
-                  playback.state === 'starting'
-                    ? 'Starting playback'
-                    : 'Playback transition pending'
-                }
+                aria-label="Play"
                 title={
-                  playback.state === 'starting'
-                    ? 'Starting playback'
-                    : 'Playback transition pending'
+                  confirmationPending
+                    ? 'Playback confirmation required'
+                    : playback.prepared?.admission === 'blocked'
+                      ? 'Playback is blocked'
+                      : 'Play'
                 }
-                disabled
+                disabled={
+                  transportOwnsControls ||
+                  (!primaryCanStartPrepared &&
+                    (confirmationPending || playback.prepared?.admission === 'blocked')) ||
+                  (!primaryCanStartPrepared && !primaryCanPlay)
+                }
+                onClick={() =>
+                  primaryCanStartPrepared ? void start() : void prepareAndMaybeStart(false)
+                }
               >
-                <LoaderCircle size={18} aria-hidden="true" />
+                <Play size={18} aria-hidden="true" />
               </button>
             )}
           </div>
           <button
-            className="icon-button player-secondary-action"
+            className="icon-button player-secondary-action player-next-action"
             type="button"
             aria-label="Next"
             title="Next"
-            disabled={!canNext || otherTransportOwnsControls}
+            disabled={!canNext || transportOwnsControls}
             onClick={() => void next()}
           >
             <SkipForward size={16} aria-hidden="true" />
           </button>
         </div>
-        {hasSession &&
-          ['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(
-            playback.state,
-          ) && (
-            <button
-              className="icon-button player-secondary-action player-stop-action"
-              type="button"
-              aria-label="Stop"
-              title="Stop"
-              disabled={playback.transportOperation === 'stopping'}
-              onClick={() => void stop()}
-            >
-              <Square size={12} aria-hidden="true" />
-            </button>
-          )}
+        <button
+          className="icon-button player-secondary-action player-stop-action"
+          type="button"
+          aria-label="Stop"
+          title="Stop"
+          disabled={!stopCanAct || playback.transportOperation === 'stopping'}
+          onClick={() => void stop()}
+        >
+          <Square size={12} aria-hidden="true" />
+        </button>
       </div>
       <div
         className={`player-timeline${timelineSongExists ? '' : ' is-disabled'}`}

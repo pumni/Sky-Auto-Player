@@ -95,6 +95,7 @@ pub struct SettingsPatch {
     pub telemetry_enabled: Option<bool>,
     pub verbose_hud: Option<bool>,
     pub playback_defaults: Option<PlaybackPatch>,
+    pub auto_play: Option<bool>,
     pub update_preferences: Option<UpdatePreferencesPatch>,
 }
 
@@ -462,6 +463,7 @@ pub struct SettingsDto {
     pub theme: String,
     pub ui_background_mode: String,
     pub playback_defaults: PlaybackDefaultsDto,
+    pub auto_play: bool,
     pub timing_margin_recommendation: TimingMarginRecommendationDto,
     pub telemetry_enabled: bool,
     pub verbose_hud: bool,

@@ -41,7 +41,7 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
     );
     assert_eq!(
         raw["config_layouts"]["legacy_v2"]["migrated_schema_version"],
-        4
+        6
     );
     assert_eq!(
         raw["config_layouts"]["current_v3"]["normalized_theme"],
@@ -61,6 +61,7 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
                 tempo_scale: Some(valid["default_tempo_scale"].as_f64().unwrap()),
                 fps: Some(valid["game_fps"].as_u64().unwrap() as u16),
             }),
+            auto_play: None,
             update: Some(sky_app_core::settings::UpdatePreferencesPatch {
                 auto_check: Some(valid["update_preferences"]["auto_check"].as_bool().unwrap()),
                 channel: Some(UpdateChannel::Beta),
@@ -75,6 +76,7 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
         .expect("valid patch");
     assert_eq!(patched.theme, "slate");
     assert_eq!(patched.playback_defaults.fps, 120);
+    assert!(patched.playback_behavior.auto_play);
     assert_eq!(
         patched.playback_defaults.timing_margin_us,
         valid["default_timing_margin_us"].as_u64().unwrap()

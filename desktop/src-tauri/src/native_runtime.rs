@@ -1770,6 +1770,12 @@ impl NativeDesktopRuntime {
 
     fn patch_settings(&self, patch: SettingsPatch) -> Result<SettingsDto, String> {
         let update_preferences_changed = patch.update_preferences.is_some();
+        let auto_play_only = patch.auto_play.is_some()
+            && patch.theme.is_none()
+            && patch.telemetry_enabled.is_none()
+            && patch.verbose_hud.is_none()
+            && patch.playback_defaults.is_none()
+            && patch.update_preferences.is_none();
         let core_patch = sky_app_core::settings::SettingsPatch {
             theme: patch.theme,
             telemetry_enabled: patch.telemetry_enabled,
@@ -1781,6 +1787,7 @@ impl NativeDesktopRuntime {
                 tempo_scale: value.tempo_scale,
                 fps: value.fps,
             }),
+            auto_play: patch.auto_play,
             update: patch
                 .update_preferences
                 .map(|value| CoreUpdatePreferencesPatch {
@@ -1802,8 +1809,10 @@ impl NativeDesktopRuntime {
             .map_err(|_| "native settings lock poisoned".to_string())?;
         let snapshot = settings.patch(&core_patch).map_err(settings_error)?.clone();
         drop(settings);
-        self.playback.invalidate_settings();
-        self.invalidate_analysis_cache();
+        if !auto_play_only {
+            self.playback.invalidate_settings();
+            self.invalidate_analysis_cache();
+        }
         if update_preferences_changed && let Some(update_service) = &self.update_service {
             update_service.reset();
         }
@@ -3051,9 +3060,10 @@ fn plan_fingerprint(
 
 fn settings_fingerprint(settings: &ApplicationSettings) -> Result<String, String> {
     // Keep this in lockstep with DesktopPlaybackService._settings_fingerprint.
-    // Update timestamps and unrelated preferences must not invalidate a plan;
-    // the routed settings.patch path explicitly invalidates every plan after a
-    // successful mutation, while update metadata writes remain independent.
+    // Update timestamps and unrelated preferences must not invalidate a plan.
+    // The routed settings.patch path additionally invalidates plans for
+    // schedule-affecting changes; behavior-only Auto Play changes stay outside
+    // this identity and preserve a prepared schedule.
     // Python's settings fingerprint uses json.dumps with sorted keys and its
     // default separators (`, ` and `: `). Keep the flat payload explicit so
     // this cross-runtime identity cannot depend on Rust struct field order.
@@ -5302,6 +5312,7 @@ fn settings_dto(
         theme: settings.theme.clone(),
         ui_background_mode: settings.ui_background_mode.clone(),
         playback_defaults: playback_defaults(settings),
+        auto_play: settings.playback_behavior.auto_play,
         timing_margin_recommendation,
         telemetry_enabled: settings.telemetry_enabled,
         verbose_hud: settings.verbose_hud,
@@ -5360,6 +5371,7 @@ struct NativeSettingsPatch {
     telemetry_enabled: Option<bool>,
     verbose_hud: Option<bool>,
     playback_defaults: Option<NativePlaybackPatch>,
+    auto_play: Option<bool>,
     update_preferences: Option<NativeUpdatePreferencesPatch>,
 }
 
@@ -5388,6 +5400,7 @@ impl NativeSettingsPatch {
                     tempo_scale: value.tempo_scale,
                     fps: value.fps,
                 }),
+            auto_play: self.auto_play,
             update_preferences: self.update_preferences.map(|value| value.into_public()),
         }
     }
@@ -7906,6 +7919,12 @@ mod tests {
             default_settings_fingerprint,
             "074db50e188b209a66a4aa757e6178a55e821dcec364c89e672cf8ce7ef2bfb7"
         );
+        let mut auto_play_changed = settings.clone();
+        auto_play_changed.playback_behavior.auto_play = false;
+        assert_eq!(
+            default_settings_fingerprint,
+            settings_fingerprint(&auto_play_changed).expect("Auto Play is not timing identity")
+        );
         let mut changed_settings = settings.clone();
         changed_settings.playback_defaults.timing_margin_us = 900;
         assert_ne!(
@@ -8156,6 +8175,7 @@ mod tests {
                     tempo_scale: Some(0.95),
                     fps: None,
                 }),
+                auto_play: None,
                 update_preferences: None,
             })
             .expect("native settings invalidation seam");
@@ -8163,7 +8183,7 @@ mod tests {
             runtime
                 .dispatch(
                     "playback.start",
-                    serde_json::json!({"prepared_id":prepared_id,"decisions":[]}),
+                    serde_json::json!({"preparedId":prepared_id,"decisions":[]}),
                 )
                 .is_err()
         );
@@ -8189,9 +8209,78 @@ mod tests {
             runtime
                 .dispatch(
                     "playback.start",
-                    serde_json::json!({"prepared_id":prepared_id,"decisions":[]}),
+                    serde_json::json!({"preparedId":prepared_id,"decisions":[]}),
                 )
                 .is_err()
+        );
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn auto_play_patch_keeps_prepared_native_playback_valid() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-auto-play-native-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), r#"{"schema_version":5}"#).expect("config");
+        fs::write(
+            root.join("songs/demo.json"),
+            r#"{"name":"Demo","songNotes":[{"time":0,"key":"Key0"}]}"#,
+        )
+        .expect("song");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let bootstrap = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("bootstrap");
+        let generation = bootstrap["catalog_generation"]
+            .as_u64()
+            .expect("generation");
+        let search = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"demo","offset":0,"limit":10,"generation":generation}),
+            )
+            .expect("search");
+        let prepared = runtime
+            .dispatch(
+                "playback.prepare",
+                serde_json::json!({
+                    "songId": search["items"][0]["song_id"],
+                    "generation": generation,
+                    "config": {"hold_frames":1.0,"timing_margin_us":800,"down_late_grace_us":500,"tempo_scale":1.0,"fps":60,"dry_run":true}
+                }),
+            )
+            .expect("prepare");
+        let prepared_id = prepared["prepared_id"].as_str().expect("prepared ID");
+        let updated = runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: Some(false),
+                update_preferences: None,
+            })
+            .expect("Auto Play settings patch");
+        assert!(!updated.auto_play);
+        let decisions = if prepared["admission"] == "confirmation_required" {
+            serde_json::json!([{"decision":"proceed","accepted":true}])
+        } else {
+            serde_json::json!([])
+        };
+        assert!(
+            runtime
+                .dispatch(
+                    "playback.start",
+                    serde_json::json!({
+                        "preparedId":prepared_id,
+                        "decisions":decisions
+                    }),
+                )
+                .is_ok()
         );
         runtime.shutdown();
         let _ = fs::remove_dir_all(root);

@@ -8,7 +8,7 @@ use crate::library::{LibraryError, LikedSongs};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 pub const DEFAULT_GAME_FPS: u16 = 60;
 pub const VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240];
 pub const DEFAULT_HOLD_FRAMES: f64 = 1.0;
@@ -129,6 +129,23 @@ pub struct PlaybackDefaults {
     pub fps: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlaybackBehaviorSettings {
+    #[serde(default = "default_auto_play")]
+    pub auto_play: bool,
+}
+
+impl Default for PlaybackBehaviorSettings {
+    fn default() -> Self {
+        Self { auto_play: true }
+    }
+}
+
+fn default_auto_play() -> bool {
+    true
+}
+
 impl Default for PlaybackDefaults {
     fn default() -> Self {
         Self {
@@ -146,6 +163,8 @@ pub struct ApplicationSettings {
     pub theme: String,
     pub ui_background_mode: String,
     pub playback_defaults: PlaybackDefaults,
+    #[serde(default)]
+    pub playback_behavior: PlaybackBehaviorSettings,
     pub telemetry_enabled: bool,
     pub verbose_hud: bool,
     pub songs_dir: String,
@@ -167,6 +186,7 @@ impl Default for ApplicationSettings {
             theme: "aurora".into(),
             ui_background_mode: "transparent".into(),
             playback_defaults: PlaybackDefaults::default(),
+            playback_behavior: PlaybackBehaviorSettings::default(),
             telemetry_enabled: false,
             verbose_hud: false,
             songs_dir: DEFAULT_SONGS_DIR.into(),
@@ -205,6 +225,7 @@ pub struct SettingsPatch {
     pub telemetry_enabled: Option<bool>,
     pub verbose_hud: Option<bool>,
     pub playback_defaults: Option<PlaybackDefaultsPatch>,
+    pub auto_play: Option<bool>,
     pub update: Option<UpdatePreferencesPatch>,
 }
 
@@ -343,6 +364,9 @@ pub fn apply_patch(
         if let Some(value) = playback.fps {
             next.playback_defaults.fps = validate_fps(value)?;
         }
+    }
+    if let Some(value) = patch.auto_play {
+        next.playback_behavior.auto_play = value;
     }
     if let Some(update) = &patch.update {
         if let Some(value) = update.auto_check {
@@ -532,6 +556,7 @@ pub fn patchable_field_names() -> BTreeSet<&'static str> {
         "telemetry_enabled",
         "verbose_hud",
         "playback_defaults",
+        "auto_play",
         "update",
     ]
     .into_iter()
@@ -586,6 +611,12 @@ mod tests {
             DEFAULT_DOWN_LATE_GRACE_US
         );
         assert_eq!(settings.update.channel, UpdateChannel::Stable);
+        assert!(settings.playback_behavior.auto_play);
+        assert!(
+            serde_json::from_str::<PlaybackBehaviorSettings>("{}")
+                .expect("missing behavior settings default")
+                .auto_play
+        );
 
         let mut invalid_persisted = ApplicationSettings::default();
         invalid_persisted.playback_defaults.timing_margin_us = 799;
@@ -595,6 +626,34 @@ mod tests {
                 .timing_margin_us,
             DEFAULT_TIMING_MARGIN_US
         );
+    }
+
+    #[test]
+    fn auto_play_patch_persists_as_behavior_without_changing_timing_defaults() {
+        let defaults = ApplicationSettings::default();
+        let timing_before = defaults.playback_defaults.clone();
+        let disabled = apply_patch(
+            &defaults,
+            &SettingsPatch {
+                auto_play: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("disable Auto Play");
+        assert!(!disabled.playback_behavior.auto_play);
+        assert_eq!(disabled.playback_defaults, timing_before);
+
+        let enabled = apply_patch(
+            &disabled,
+            &SettingsPatch {
+                auto_play: Some(true),
+                ..Default::default()
+            },
+        )
+        .expect("enable Auto Play");
+        assert!(enabled.playback_behavior.auto_play);
+        assert_eq!(enabled.playback_defaults, timing_before);
+        assert!(patchable_field_names().contains("auto_play"));
     }
 
     #[test]

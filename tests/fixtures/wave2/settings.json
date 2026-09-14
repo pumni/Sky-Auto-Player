@@ -12,7 +12,7 @@
         }
       },
       "normalized_hold_frames": 1.5,
-      "migrated_schema_version": 4,
+      "migrated_schema_version": 6,
       "migrated_has_legacy_profile": false,
       "unknown_field_preserved": null
     },
@@ -53,6 +53,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -84,7 +87,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.0
@@ -103,6 +107,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -134,7 +141,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.0
@@ -153,6 +161,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -184,7 +195,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.0
@@ -206,6 +218,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -237,7 +252,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.0
@@ -264,6 +280,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -295,7 +314,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.5
@@ -323,6 +343,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -354,7 +377,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.25
@@ -381,6 +405,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -412,7 +439,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.25
@@ -440,6 +468,9 @@
             "tempo_scale": 1.0,
             "fps": 120
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -471,7 +502,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "game_fps": 120,
@@ -500,6 +532,9 @@
             "tempo_scale": 1.0,
             "fps": 90
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -531,7 +566,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "game_fps": 90,
@@ -565,6 +601,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -596,7 +635,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "future_field": "preserve",
@@ -647,6 +687,9 @@
             "tempo_scale": 0.95,
             "fps": 120
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "{'legacy': True}",
@@ -680,7 +723,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.0,
@@ -744,6 +788,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "songs",
@@ -775,7 +822,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.0,
@@ -818,6 +866,9 @@
             "tempo_scale": 1.0,
             "fps": 60
           },
+          "playback_behavior": {
+            "auto_play": true
+          },
           "telemetry_enabled": false,
           "verbose_hud": false,
           "songs_dir": "None",
@@ -849,7 +900,8 @@
           }
         },
         "migrated": {
-          "schema_version": 5,
+          "schema_version": 6,
+          "auto_play": true,
           "default_timing_margin_us": 500,
           "default_down_late_grace_us": 2000,
           "default_hold_frames": 1.0,

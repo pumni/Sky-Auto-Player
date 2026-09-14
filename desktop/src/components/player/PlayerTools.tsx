@@ -1,4 +1,4 @@
-import { PanelRight, SlidersHorizontal } from 'lucide-react';
+import { ListEnd, PanelRight, SlidersHorizontal } from 'lucide-react';
 import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
@@ -11,6 +11,7 @@ interface PlayerToolsProps {
 
 export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const settings = useStore((store) => store.settings);
+  const autoPlayEnabled = settings?.auto_play ?? true;
   const defaults = settings?.playback_defaults;
   const bootstrap = useStore((store) => store.bootstrap);
   const utility = useStore((store) => store.utility);
@@ -22,6 +23,8 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const playback = useStore((store) => store.playback);
   const hasPreparedPlayback = playback.prepared !== null;
   const [profileOpen, setProfileOpen] = useState(false);
+  const [autoPlayPending, setAutoPlayPending] = useState(false);
+  const autoPlayMutationPending = useRef(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
   const canPreparePlayback =
     Boolean(playback.currentSong || selectedSongId) &&
@@ -39,8 +42,31 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
     if (prepared?.admission === 'ready') await start();
   };
 
+  const toggleAutoPlay = async () => {
+    if (!settings || autoPlayMutationPending.current) return;
+    autoPlayMutationPending.current = true;
+    setAutoPlayPending(true);
+    try {
+      await patchSettings({ autoPlay: !settings.auto_play });
+    } finally {
+      autoPlayMutationPending.current = false;
+      setAutoPlayPending(false);
+    }
+  };
+
   return (
     <div className="player-tools">
+      <button
+        className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
+        type="button"
+        aria-label="Auto Play"
+        aria-pressed={autoPlayEnabled}
+        title={`Auto Play ${autoPlayEnabled ? 'on' : 'off'}`}
+        disabled={!settings || autoPlayPending}
+        onClick={() => void toggleAutoPlay()}
+      >
+        <ListEnd size={16} aria-hidden="true" />
+      </button>
       <div className="player-profile">
         <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
           <AriaButton

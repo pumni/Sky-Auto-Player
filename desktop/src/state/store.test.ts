@@ -3,9 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import type { SearchRequest, SettingsPatch } from '../bridge/DesktopBridge';
 import {
+  createShuffleTraversal,
   createDesktopStore,
+  playbackContextIndexAt,
   playbackIssuePresentation,
   selectRowAtIndex,
+  type PlaybackContext,
   selectSelectedDetail,
 } from './store';
 
@@ -24,6 +27,52 @@ async function startFirstSong(store: ReturnType<typeof createDesktopStore>) {
 }
 
 describe('desktop store', () => {
+  it('defaults Shuffle off and persists Auto Play on', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    expect(store.getState().playback.shuffleEnabled).toBe(false);
+    expect(store.getState().settings?.auto_play).toBe(true);
+  });
+
+  it('creates a deterministic shuffle permutation that visits every context index once', () => {
+    for (const total of [2, 3, 4, 5, 10, 12, 37]) {
+      const originIndex = total - 1;
+      const traversal = createShuffleTraversal(total, originIndex, `stable-seed-${total}`);
+      expect(traversal).not.toBeNull();
+      if (!traversal) throw new Error('shuffle traversal was not created');
+      const context: PlaybackContext = {
+        source: { kind: 'smart', id: 'all' },
+        query: '',
+        generation: 1,
+        total,
+        currentIndex: originIndex,
+        currentSongId: `song-${originIndex}`,
+        shuffleTraversal: traversal,
+        dryRun: false,
+        membershipRevision: 0,
+        valid: true,
+      };
+      const order = Array.from({ length: total }, (_, position) =>
+        playbackContextIndexAt(context, position),
+      );
+      expect(order).toHaveLength(total);
+      expect(order[0]).toBe(originIndex);
+      expect(order[1]).not.toBe(originIndex);
+      expect(new Set(order).size).toBe(total);
+      expect(order).toEqual(
+        Array.from({ length: total }, (_, position) =>
+          playbackContextIndexAt(
+            {
+              ...context,
+              shuffleTraversal: createShuffleTraversal(total, originIndex, `stable-seed-${total}`),
+            },
+            position,
+          ),
+        ),
+      );
+    }
+  });
+
   it('boots, searches, selects a song, and applies a catalog event', async () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
@@ -677,6 +726,192 @@ describe('desktop store', () => {
     expect(store.getState().playback.error).toBeNull();
   });
 
+  it('uses the shuffled successor for natural Auto Play', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 140, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock library is too small');
+    await act(async () => store.getState().setShuffleEnabled(true));
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    const initialContext = store.getState().playback.context;
+    if (!initialContext?.shuffleTraversal) throw new Error('shuffle traversal was not captured');
+    const nextIndex = playbackContextIndexAt(initialContext, 1);
+    if (nextIndex === null) throw new Error('shuffle next index was not resolved');
+    await act(async () => store.getState().setViewport(nextIndex, nextIndex));
+    await waitFor(() => expect(rowAt(store, nextIndex)).toBeDefined());
+    const expectedNext = rowAt(store, nextIndex);
+    if (!expectedNext) throw new Error('expected shuffled row was not loaded');
+
+    await waitFor(() => {
+      expect(store.getState().playback.state).toBe('playing');
+      expect(store.getState().playback.currentSong?.songId).toBe(expectedNext.song_id);
+    });
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(1);
+  });
+
+  it('keeps dry-run Test playback one-shot when Auto Play is enabled', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 120, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback({ dry_run: true }));
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+
+    await waitFor(() => {
+      expect(store.getState().playback.sessionId).toBeNull();
+      expect(store.getState().playback.state).toBe('idle');
+    });
+    expect(store.getState().settings?.auto_play).toBe(true);
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+    expect(store.getState().playback.context?.dryRun).toBe(true);
+  });
+
+  it('uses the same shuffled history for Next and Previous, then resumes sequentially when disabled', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    act(() => store.getState().setShuffleEnabled(true));
+    const shuffledContext = store.getState().playback.context;
+    if (!shuffledContext?.shuffleTraversal) throw new Error('shuffle context was not initialized');
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+    const shuffledIndex = playbackContextIndexAt(shuffledContext, 1);
+    if (shuffledIndex === null) throw new Error('shuffle next index is unavailable');
+    await act(async () => store.getState().nextPlayback());
+    await waitFor(() =>
+      expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(1),
+    );
+    await waitFor(() => expect(store.getState().playback.transportOperation).toBeNull());
+    expect(store.getState().playback.context?.currentIndex).toBe(shuffledIndex);
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(1);
+
+    act(() => store.setState({ playback: { ...store.getState().playback, snapshot: null } }));
+    await act(async () => store.getState().previousPlayback());
+    await waitFor(() =>
+      expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0),
+    );
+    await waitFor(() => expect(store.getState().playback.transportOperation).toBeNull());
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0);
+
+    act(() => store.getState().setShuffleEnabled(false));
+    await act(async () => store.getState().nextPlayback());
+    await waitFor(() => expect(store.getState().playback.context?.currentIndex).toBe(2));
+    await waitFor(() => expect(store.getState().playback.transportOperation).toBeNull());
+    expect(store.getState().playback.context?.currentIndex).toBe(2);
+    expect(store.getState().playback.context?.shuffleTraversal).toBeNull();
+  });
+
+  it('Shuffle Previous restarts the current shuffled item after three seconds', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 20_000, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    act(() => store.getState().setShuffleEnabled(true));
+    const initialContext = store.getState().playback.context;
+    if (!initialContext?.shuffleTraversal) throw new Error('shuffle traversal was not initialized');
+    const nextIndex = playbackContextIndexAt(initialContext, 1);
+    if (nextIndex === null) throw new Error('shuffle next index was not resolved');
+    await act(async () => store.getState().nextPlayback());
+    await waitFor(() =>
+      expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(1),
+    );
+    if (store.getState().playback.prepared?.admission === 'confirmation_required') {
+      await act(async () => store.getState().startPreparedPlayback('proceed'));
+    }
+    await waitFor(() => expect(store.getState().playback.transportOperation).toBeNull());
+    await act(async () => store.getState().setViewport(nextIndex, nextIndex));
+    await waitFor(() => expect(rowAt(store, nextIndex)).toBeDefined());
+    const currentSongId = rowAt(store, nextIndex)?.song_id;
+    expect(store.getState().playback.currentSong?.songId).toBe(currentSongId);
+    const currentSession = store.getState().playback.sessionId;
+    if (!currentSession) throw new Error('shuffled session did not start');
+    const song = rowAt(store, nextIndex);
+    if (!song) throw new Error('shuffled song was not loaded');
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        snapshot: {
+          session_id: currentSession,
+          seq: 1,
+          state: 'playing',
+          song_id: song.song_id,
+          title: song.title,
+          current_us: 3_000_001,
+          total_us: song.duration_us ?? 10_000_000,
+          pre_roll_remaining_us: 0,
+          focus_state: 'focused',
+          health: 'healthy',
+          input_path_degraded: false,
+          message: null,
+        },
+      },
+    });
+
+    await act(async () => store.getState().previousPlayback());
+    if (store.getState().playback.prepared?.admission === 'confirmation_required') {
+      await act(async () => store.getState().startPreparedPlayback('proceed'));
+    }
+    await waitFor(() => expect(store.getState().playback.sessionId).not.toBe(currentSession));
+    await waitFor(() => expect(store.getState().playback.transportOperation).toBeNull());
+    expect(store.getState().playback.currentSong?.songId).toBe(song.song_id);
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(1);
+  });
+
+  it('turning Auto Play off during a song keeps natural finish replayable on that song', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 350, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    const first = await startFirstSong(store);
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    await act(async () => store.getState().patchSettings({ autoPlay: false }));
+
+    await waitFor(() => {
+      expect(store.getState().playback.sessionId).toBeNull();
+      expect(store.getState().playback.state).toBe('idle');
+    });
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+    expect(store.getState().playback.context?.currentIndex).toBe(0);
+    expect(store.getState().settings?.auto_play).toBe(false);
+  });
+
+  it('keeps a prepared plan when Auto Play alone is patched', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    const prepared = store.getState().playback.prepared;
+    expect(prepared?.prepared_id).toBeTruthy();
+
+    await act(async () => store.getState().patchSettings({ autoPlay: false }));
+
+    expect(store.getState().playback.prepared?.prepared_id).toBe(prepared?.prepared_id);
+    expect(store.getState().playback.preparedContext).not.toBeNull();
+  });
+
   it('Next retires the active session before starting its context neighbor', async () => {
     const store = createDesktopStore(
       createMockBridge({ playbackDurationMs: 5_000, startDelayMs: 5 }),
@@ -686,6 +921,7 @@ describe('desktop store', () => {
     const nextSong = rowAt(store, 2);
     if (!first || !nextSong) throw new Error('mock library is too small');
     await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().patchSettings({ autoPlay: false }));
     await act(async () => store.getState().prepareSelectedPlayback());
     await act(async () => store.getState().startPreparedPlayback('proceed'));
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
@@ -874,6 +1110,60 @@ describe('desktop store', () => {
     expect(store.getState().playback.currentSong?.songId).toBe(second.song_id);
     expect(store.getState().playback.sessionId).not.toBe(restartedSession);
     expect(store.getState().playback.context?.currentIndex).toBe(1);
+  });
+
+  it('does nothing at the traversal origin before the restart threshold, then restarts after it', async () => {
+    const store = createDesktopStore(
+      createMockBridge({ playbackDurationMs: 20_000, startDelayMs: 5 }),
+    );
+    await act(async () => store.getState().initialize());
+    act(() => store.getState().setShuffleEnabled(true));
+    const first = rowAt(store, 1);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0);
+    const originalSession = store.getState().playback.sessionId;
+    if (!originalSession) throw new Error('mock session did not start');
+    const snapshotAt = (sessionId: string, currentUs: number) => ({
+      session_id: sessionId,
+      seq: 1,
+      state: 'playing' as const,
+      song_id: first.song_id,
+      title: first.title,
+      current_us: currentUs,
+      total_us: first.duration_us ?? 10_000_000,
+      pre_roll_remaining_us: 0,
+      focus_state: 'focused' as const,
+      health: 'healthy' as const,
+      input_path_degraded: false,
+      message: null,
+    });
+
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        snapshot: snapshotAt(originalSession, 3_000_000),
+      },
+    });
+    await act(async () => store.getState().previousPlayback());
+    expect(store.getState().playback.sessionId).toBe(originalSession);
+    expect(store.getState().playback.transportOperation).toBeNull();
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0);
+
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        snapshot: snapshotAt(originalSession, 3_000_001),
+      },
+    });
+    await act(async () => store.getState().previousPlayback());
+    expect(store.getState().playback.currentSong?.songId).toBe(first.song_id);
+    expect(store.getState().playback.sessionId).not.toBe(originalSession);
+    expect(store.getState().playback.context?.shuffleTraversal?.position).toBe(0);
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
   });
 
   it('explicit Stop retires the session without advancing the frozen context', async () => {
@@ -1258,6 +1548,7 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
+    act(() => store.getState().setShuffleEnabled(true));
     const allSongs = [rowAt(store, 0), rowAt(store, 1), rowAt(store, 2)];
     if (allSongs.some((song) => !song)) throw new Error('mock library is too small');
     const [first, second, third] = allSongs as [
