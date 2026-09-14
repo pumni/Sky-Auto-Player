@@ -18,7 +18,7 @@ The implementation work completed for the first official v4 release now provides
 isolation without a second repository. The source repository can publish v4 releases with
 channel-specific GitHub Latest behavior, and the v4 runtime can consume a separate protected
 metadata branch in that same repository. The temporary v3 Latest coexistence policy is retired by
-[ADR-0008](ADR-0008-v4-github-latest-policy.md); the one-time promotion of the already immutable
+[ADR-0009](ADR-0009-v4-github-latest-policy.md); the one-time promotion of the already immutable
 `v4.0.1` release remains a separate owner/admin gate in issue #187.
 
 ## Decision
@@ -88,6 +88,6 @@ bounded metadata branch. Operators no longer need a dedicated release-authority 
 compatibility path. The former repository can be removed as an owner/admin cutover action after the
 rehearsal and final release gate in issue #165.
 
-The temporary v3 Latest coexistence namespace is historical context only. ADR-0008 defines the
+The temporary v3 Latest coexistence namespace is historical context only. ADR-0009 defines the
 current channel-aware Latest policy, while issue #187 separately gates the one-time promotion of
 the immutable `v4.0.1` release without rebuilding or changing its tag, assets, or metadata.

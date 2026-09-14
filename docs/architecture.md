@@ -24,6 +24,17 @@ Effects are composed by the shell and outer adapter crates. The only physical
 keyboard input boundary is Windows `SendInput`; the application does not read
 or modify another process, inject code, install hooks, or bypass anti-cheat.
 
+### Module ownership
+
+Each state has one owner and each module has a focused invariant:
+
+- `sky_app_core` owns pure application and domain policy (parsing, validation, sheet models).
+- `sky_native_adapters` encapsulates concrete filesystem, process, and Win32 host adapters.
+- `sky_player` owns session lifecycle, worker admission/control, QPC-based timing, target/focus gates, telemetry publication, and cleanup.
+- `sky_dispatch_core` owns pure schedule and action policy.
+- `sky_dispatch_win32` owns Windows wait, focus, priority, and `SendInput` boundaries.
+- `sky_desktop_shell` (`desktop/src-tauri`) owns Tauri command decoding, delivery DTO translation, and the Rust-owned `UpdateService` policy boundary. It contains no song scheduling, risk analysis, persisted-settings migration, or realtime dispatch algorithms.
+
 ## Native desktop ownership
 
 All 21 stable desktop commands have one native handler. There is no Python
@@ -69,6 +80,12 @@ The packaged previous-v4 to candidate-v4 fixture is test-only and consumes the
 exact installer/signature bytes re-downloaded from a release draft. The retired
 v3 transaction/recovery implementation is preserved in Git history and the
 `v3-maintenance` line; it is not part of the current workspace or product graph.
+
+## Unsafe boundary and test seams
+
+Unsafe code is strictly limited to low-level Win32 platform integration (`sky_dispatch_win32`, Windows wait, timer, and `SendInput` boundaries) and must carry an explicit `// SAFETY:` justification. Application orchestration, domain policies (`sky_app_core`), Tauri command delivery, catalog indexing, calibration validation, and updater policy remain 100% safe Rust.
+
+Test seams are feature-gated or test-gated and never activated by environment variables alone in production. Production packages compose safe seams explicitly while runtime builds use disabled seams. There is no foreign-language extension crate, wheel build, or Python player binding in the workspace.
 
 ## Evidence and repository tooling
 

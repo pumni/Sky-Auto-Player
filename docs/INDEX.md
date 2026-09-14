@@ -15,10 +15,11 @@ Historical plans, audit reports, issue text, and obsolete work orders do not ove
 
 ## Active architecture and runtime
 
-- [architecture.md](architecture.md) — Native Tauri/Rust layering, dependency direction, and component ownership.
-- [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — Native real-time dispatch contract and runtime boundary.
+- [architecture.md](architecture.md) — Native Tauri/Rust layering, dependency direction, module ownership, and unsafe boundary.
+- [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — Native real-time dispatch contract, thread split, hot-path constraints, and runtime boundary.
 - [timing-principles.md](timing-principles.md) — Timing semantics, targets, measurement domains, and fail-closed behavior.
 - [hold-frame-model.md](hold-frame-model.md) — User-selected FPS and authored hold materialization.
+- [tuning-presets.md](tuning-presets.md) — Native settings, playback preferences, and runtime tuning boundaries.
 - [library-v1-contract.md](library-v1-contract.md) — Native manifest, collection, and local import contract.
 
 ## Security, distribution, and toolchain
@@ -52,8 +53,24 @@ Packaging, Windows timing acceptance, release, and benchmark scripts are special
 
 ## Decisions and bounded evidence
 
-- `docs/adr/` — Architecture Decision Records for specific structural choices.
+- `docs/adr/` — Architecture Decision Records for specific structural choices:
+  - [adr/ADR-0001-packetized-native-input-dispatch.md](adr/ADR-0001-packetized-native-input-dispatch.md)
+  - [adr/ADR-0002-tauri-desktop-ui.md](adr/ADR-0002-tauri-desktop-ui.md)
+  - [adr/ADR-0003-rust-first-clean-architecture.md](adr/ADR-0003-rust-first-clean-architecture.md)
+  - [adr/ADR-0004-direct-tauri-rust-ipc.md](adr/ADR-0004-direct-tauri-rust-ipc.md)
+  - [adr/ADR-0005-rust-xtask-release.md](adr/ADR-0005-rust-xtask-release.md)
+  - [adr/ADR-0006-v4-distribution-installation-update.md](adr/ADR-0006-v4-distribution-installation-update.md)
+  - [adr/ADR-0007-single-repository-v4-release-architecture.md](adr/ADR-0007-single-repository-v4-release-architecture.md)
+  - [adr/ADR-0008-v4-builtin-song-catalog.md](adr/ADR-0008-v4-builtin-song-catalog.md)
+  - [adr/ADR-0009-v4-github-latest-policy.md](adr/ADR-0009-v4-github-latest-policy.md)
 - `docs/releases/` — Release-specific acceptance evidence and verification records.
 - `docs/perf-baselines/` — Measured performance baselines for specific environments and revisions.
+- `docs/evidence/` — Raw experimental and verification evidence.
+
+## Historical evidence and superseded contracts
+
+- [history/timing-experiments.md](history/timing-experiments.md) — Historical timing experiments and calibration procedures (non-normative).
+- [history/protocol-9-raw-input.md](history/protocol-9-raw-input.md) — Historical protocol-9 Raw Input observer mechanics (superseded).
+- [history/v3/distribution-and-update.md](history/v3/distribution-and-update.md) — Historical v3 portable ZIP and standalone updater mechanics (superseded).
+- `docs/history/migrations/` — Past transition summaries (`wave2` through `wave6`, `architecture-target.md`, `v4-clean-distribution-execution.md`, retirement ledgers) preserving past transition evidence.
 - Completed plans, superseded audits, and historical implementation work orders live in Git history (`git log`).
-- Historical migration summaries (`wave2-native-application-services.md`, `wave3-native-desktop-ownership.md`, `wave4-final-native-ownership.md`, `wave5-legacy-python-retirement.md`, `wave6-rust-xtask-release-ci.md`, `architecture-target.md`) preserve past transition evidence and are not current operational contracts.

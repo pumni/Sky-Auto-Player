@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Broken or misbehaving playback/timing, TUI, update path, or CLI in Sky Auto Player
+about: Broken or misbehaving playback, timing, desktop UI, library, or update in Sky Auto Player
 title: "[bug] "
 labels: ["bug"]
 assignees: ''
@@ -10,15 +10,14 @@ assignees: ''
 
 - [ ] I searched existing issues for a duplicate.
 - [ ] This is a functional bug, not a security or vulnerability disclosure. For security-sensitive findings, follow [`SECURITY.md`](../../SECURITY.md) and use the private disclosure channel.
-- [ ] I removed private data from any pasted logs (paths and song names are fine; credentials, tokens, and personal info are not).
+- [ ] I removed sensitive data from any pasted logs (paths and song names are fine; credentials, tokens, and personal info are not).
 
 **Environment**
 
-- Install method: packaged `Sky-Auto-Player-v<ver>.zip` executable
-- Version (from `Sky-Auto-Player.exe --version`):
-- Windows version + build, display scaling %, game refresh rate:
-- Keyboard layout / input scan-code mode (`--scan-code-mode`) if changed from default:
-- Terminal: Windows Terminal / conhost / other, if the bug is TUI rendering:
+- Install method: v4 NSIS installer / dev build (`cargo tauri dev`)
+- Version (from in-app Settings / About):
+- Windows version + build, display scaling %, game display mode / refresh rate:
+- Keyboard layout & input mode (Key Code / Scan Code) if changed from default:
 
 **Behaviour**
 
@@ -26,31 +25,31 @@ What happened, and what you expected instead.
 
 **Steps to reproduce**
 
-1. Song — name or minimised `.json` placed under `songs/`:
-2. Launch command / TUI flow, including relevant flags (`--fps`, `--hold-frames`, `--countdown`, `--repeat`, hotkeys…):
-3. What the HUD showed during/after the failure:
+1. Song format and name (built-in song, or imported `.json` / `.skysheet` / `.txt`):
+2. Settings configured (Game FPS, Hold Frame Model, Timing Margin, etc.):
+3. Playback action taken (keyboard hotkey, Play button in app, etc.):
+4. What happened during/after playback:
 
 **Reproduces with defaults?**
 
-Does it still happen with `--hold-frames` and `--fps` at defaults, and with the game window focused immediately after pressing the refocus key? State how you tested.
+Does the issue persist when resetting playback settings (Game FPS, Hold Frame Model, Timing Margin) to defaults?
 
-**Diagnostics** (attach, don't paste in full)
+**Diagnostics & Logs**
 
-- [ ] `--doctor` / `--doctor-input` / `--doctor-calibrate` output if it throws or reports degraded
-- [ ] `--debug-csv` output: the matched `.csv` and `.summary.json` from `logs/`
-- [ ] `--debug-playback` log from `logs/`
-- [ ] Crash log `logs/crash_*.log` if the app terminated
-- [ ] Screenshot / plain-text render if the TUI looks wrong
+- [ ] In-app **Diagnostics** panel summary or screenshot
+- [ ] Application logs from `%LOCALAPPDATA%\io.github.pumni.skyautoplayer\logs\` (if applicable)
+- [ ] Crash details / Windows Event Viewer log (if the application terminated unexpectedly)
+- [ ] Screenshot or video demonstrating the behavior
 
 **Category** (optional)
 
-- [ ] Timing or dispatch (late/missed/cut notes, hold-frame, chord)
-- [ ] Focus or hotkey (refocus, pause, panic, key steal)
-- [ ] HUD / TUI / theme rendering
-- [ ] Song decode / calibration / estimator
-- [ ] Update path (notify, **Update now**, version compare)
-- [ ] CLI / config / packaging
+- [ ] Timing or dispatch (late/missed notes, hold frame model, chords)
+- [ ] Window focus, foreground admission, or hotkeys (pause, resume, panic key)
+- [ ] Desktop UI, Library, or Settings
+- [ ] Sheet import / parser (JSON, SkySheet, TXT)
+- [ ] Updater (channel selection, update check, installer launch)
+- [ ] Startup, installer, or packaging
 
 **Additional context**
 
-Any one-off environment detail that might be relevant — noise, power plan, background load, other windows with hooks, etc.
+Any system details that might be relevant (power plan, background load, third-party overlays, etc.).

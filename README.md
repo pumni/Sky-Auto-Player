@@ -4,34 +4,29 @@
 
 # Sky Auto Player
 
-*Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the beat with sub-millisecond native precision.*
+_Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the beat with sub-millisecond native precision._
 
 [![Version](https://img.shields.io/github/v/release/pumni/Sky-Auto-Player?style=for-the-badge&label=version&color=blue)](https://github.com/pumni/Sky-Auto-Player/releases)
 [![Downloads](https://img.shields.io/github/downloads/pumni/Sky-Auto-Player/total?style=for-the-badge&label=downloads&logo=github&color=success)](https://github.com/pumni/Sky-Auto-Player/releases)
 [![License](https://img.shields.io/github/license/pumni/Sky-Auto-Player?style=for-the-badge&color=orange)](https://github.com/pumni/Sky-Auto-Player/blob/main/LICENSE)
 [![Stars](https://img.shields.io/github/stars/pumni/Sky-Auto-Player?style=for-the-badge&label=stars&color=gold)](https://github.com/pumni/Sky-Auto-Player/stargazers)
 
-**Current version: v4.0.1** · Windows 10/11 64-bit
-
 **[🌐 Landing Page](https://pumni.github.io/Sky-Auto-Player/)** · **[FAQ](https://pumni.github.io/Sky-Auto-Player/faq/)** · **[Releases / Downloads](https://github.com/pumni/Sky-Auto-Player/releases)**
 
 </div>
 
 <div align="center">
-  <a href="docs/evidence/desktop-nonphysical/library-v4.0.1-app.png" target="_blank">
-    <img src="docs/evidence/desktop-nonphysical/library-v4.0.1-app.png" alt="Sky Auto Player v4.0.1 desktop Library" width="640" style="border-radius: 8px; max-width: 100%;">
+  <a href="branding/app-mockup.png" target="_blank">
+    <img src="branding/app-mockup.png" alt="Sky Auto Player v4.0.1 desktop Library" width="640" style="border-radius: 8px; max-width: 100%;">
   </a>
-  <p><em>Sky Auto Player v4.0.1 — Library, Song Details, and Player Bar.</em></p>
 </div>
-
-The packaged `Sky-Auto-Player.exe` opens the canonical Tauri desktop GUI. It is the only supported
-user-facing application and runs entirely on the native Rust desktop runtime.
 
 ---
 
 **Sky Auto Player** transforms song sheets from the [specy/skyMusic](https://specy.github.io/skyMusic/) editor into clean chords, rapid arpeggios, and expressive holds played in-game with microsecond-level timing accuracy.
 
 The application uses a **high-performance native architecture**:
+
 - 🦀 **Native Rust Real-Time Core (`sky_player`)** — Dedicated RT worker handling timeline compilation, absolute QPC scheduling, MMCSS thread priority, sub-millisecond spin-wait, focus gating, and safe input dispatch.
 - 🖥️ **Tauri 2 + React/TypeScript desktop GUI** — The canonical packaged interface for Library, Song Detail, Player Dock, Diagnostics, Settings, and Updates.
 
@@ -102,12 +97,14 @@ Selecting **Update and Restart** uses the official Tauri updater through the Rus
 <summary><b>Will this get me banned?</b></summary>
 
 It sends standard keyboard input only and never touches the game process — no memory reading, no hooking, no DLL injection, and no file modification. This is identical to the mechanism used by physical programmable keyboards and macro utilities. However, automated playback may still conflict with Sky's Terms of Service, so use it responsibly and at your own risk.
+
 </details>
 
 <details>
 <summary><b>Does it run on macOS or Linux?</b></summary>
 
 No. Sky Auto Player depends on Windows-specific system APIs — `SendInput` for input dispatch and MMCSS / QPC for real-time thread scheduling. macOS and Linux are not supported.
+
 </details>
 
 <details>
@@ -133,6 +130,7 @@ cargo xtask check all
 cd desktop
 bun run tauri build --ci -- --profile dist
 ```
+
 </details>
 
 The complete FAQ — covering supported file formats, troubleshooting, timing architecture, and the security model — is available at **<https://pumni.github.io/Sky-Auto-Player/faq/>**.

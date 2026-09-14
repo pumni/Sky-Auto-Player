@@ -17,7 +17,6 @@ policy, but it does not block this project's release.
 
 - Application identifier: `io.github.pumni.skyautoplayer`
 - Version source: `desktop/src-tauri/Cargo.toml`
-- Current foundation version: `4.0.0-alpha.1`
 - Windows target: NSIS only
 - Installer scope: `currentUser` under `%LOCALAPPDATA%`
 - Updater output: the NSIS setup executable and its `.exe.sig` sidecar

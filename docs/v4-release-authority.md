@@ -8,8 +8,7 @@ pumni/Sky-Auto-Player
 ```
 
 The repository contains the v4 source, immutable GitHub Releases, release provenance, and the
-`release-metadata` deployment branch, which must be protected before production cutover.
-`v4.0.1` is the first official v4 release lineage.
+protected `release-metadata` deployment branch. `v4.0.1` is the first official v4 release lineage.
 The earlier v4.0.0 builds were rehearsal/pre-release infrastructure and are not a supported
 compatibility endpoint or migration target. There is no bridge, fallback, compatibility shim, or
 permanent second-repository release topology.
@@ -27,9 +26,9 @@ beta:   https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata
 The frontend cannot provide an endpoint, key, URL, or downgrade policy. The `release-metadata`
 branch is mutable deployment state separate from immutable GitHub Release assets. Its channel files
 are created only by a successful qualified promotion; bootstrap must not create fabricated
-`latest.json` files. Until the first qualified promotion, a missing channel file fails closed.
-Branch ruleset/protection and the approved workflow/maintainer promotion path are owner/admin
-prerequisites tracked by issue #165; no official v4.0.1 dispatch is allowed before that gate passes.
+`latest.json` files. If a channel file is missing or invalid, updater checks fail closed.
+Branch ruleset/protection and the approved workflow/maintainer promotion path ensure only qualified
+releases update these endpoints.
 
 Stable and beta are independent paths:
 
@@ -149,7 +148,7 @@ The current Authenticode policy is `unsigned-zero-budget`: updater cryptographic
 mandatory even while Windows publisher identity is intentionally unsigned. Any future production
 signer requires separate qualification and does not change the repository or metadata topology.
 
-For runner isolation, evidence retention, rehearsal, and owner/admin cutover requirements, see
-[`v4-release-execution-topology.md`](v4-release-execution-topology.md) and issue #165. Owner/admin
-actions such as branch protection, secret removal, repository deletion, and the final v4.0.1
-dispatch are not performed by this runbook.
+For runner isolation, evidence retention, and production execution topology, see
+[`v4-release-execution-topology.md`](v4-release-execution-topology.md). Owner/admin actions such as
+branch protection and secret custody are separate governance operations outside individual workflow
+dispatches.

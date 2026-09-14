@@ -1,10 +1,13 @@
-# Native Timing & Infrastructure Experiments
+# Historical Timing & Infrastructure Experiments (Non-normative)
 
-The former Python/Textual experiment commands are retired. This document is a
-record of native timing evidence and must not be used to launch `src/main.py`
-or any other Python product entrypoint.
+> [!NOTE]
+> This document is historical experimental evidence preserved for reference. It contains
+> records from earlier timing investigations, including superseded Python-era harness concepts
+> and transition notes.
+> For current operational timing contracts, see [timing-principles.md](../timing-principles.md),
+> [hold-frame-model.md](../hold-frame-model.md), and [rt-dispatch-architecture.md](../rt-dispatch-architecture.md).
 
-This document records the open experiments and calibration procedures for Sky Auto Player's timing infrastructure. For historical experiments (O1 through O10.4) and retired parameters, refer to the archived document [2026-06_timing-experiments.md](archive/2026-06_timing-experiments.md).
+This document records historical experiments and calibration procedures for Sky Auto Player's timing infrastructure. Earlier experiments (O1 through O10.4) and retired parameters are preserved in Git history.
 
 ---
 
@@ -76,7 +79,7 @@ To record game audio accurately on Windows without background noise:
 
 ### O10.7 Retired Python UI-contention investigation
 * **Status:** Historical evidence. The Textual UI and Python dispatch path are retired.
-* **Tooling:** Automated using [measure_dispatch_tail.py](file:///d:/Dev/Sky%20Player/scripts/measure_dispatch_tail.py) simulating 60Hz UI load (GIL contention) and SendInput latency (empirical distribution: p50≈477µs, p99≈953µs, max≈1695µs).
+* **Tooling:** Automated using `measure_dispatch_tail.py` simulating 60Hz UI load (GIL contention) and SendInput latency (empirical distribution: p50≈477µs, p99≈953µs, max≈1695µs).
 * **Matrix results (2026-06-25):**
   - **Load Off / Def:** p50 lateness: -567.0µs | p99 lateness: 62.0µs | max lateness: 68.0µs
   - **Load On / 1ms:** p50 lateness: -568.0µs | p99 lateness: 40.0µs | max lateness: 334.0µs
