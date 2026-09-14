@@ -89,7 +89,6 @@ function initialSettings(): Settings {
     playback_defaults: {
       hold_frames: 1,
       timing_margin_us: 500,
-      down_late_grace_us: 2_000,
       tempo_scale: 1,
       fps: 60,
       dry_run: false,
@@ -115,10 +114,14 @@ export interface MockBridgeOptions {
   startFailure?: { code: string; message: string };
   emitSnapshots?: boolean;
   dropPlaybackStartConfirmation?: boolean;
+  playbackDurationsMs?: number[];
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
-  const playbackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
+  const defaultPlaybackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
+  const playbackDurationsMs = options.playbackDurationsMs?.map((duration) =>
+    Math.max(50, duration),
+  );
   const startDelayMs = Math.max(0, options.startDelayMs ?? 30);
   let statusQueryFailures = Math.max(0, Math.floor(options.statusQueryFailures ?? 0));
   let generation = 1;
@@ -132,6 +135,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     title: string;
     config: PlaybackConfig;
     totalUs: number;
+    playbackDurationMs: number;
     startedAt: number;
     pausedAt: number | null;
     pausedTotalMs: number;
@@ -199,7 +203,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         timing_margin_us: config.timing_margin_us,
         min_hold_us: frameBaseHoldUs + config.timing_margin_us,
         min_release_gap_us: frameUs + config.timing_margin_us,
-        down_late_grace_us: config.down_late_grace_us,
         timing_margin_recommendation: settings.timing_margin_recommendation,
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
@@ -214,9 +217,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         chord_split_events: 0,
         missed_down_boundaries: 1,
         missed_down_keys: 1,
-        missed_backlog_boundaries: 0,
-        missed_hard_late_boundaries: 1,
-        final_gate_cutoff_misses: 1,
+        unobserved_backlog_boundaries: 0,
+        physical_window_expired_boundaries: 1,
+        down_expired_before_send: 1,
         final_gate_control_rejections: 0,
         final_gate_target_changes: 1,
         final_gate_focus_losses: 1,
@@ -233,9 +236,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   };
   const emitCalibrationFinished = (operationId: string, outcome: 'succeeded' | 'cancelled') => {
     const recommendedTimingMarginUs =
-      outcome === 'succeeded'
-        ? Math.ceil((settings.playback_defaults.down_late_grace_us + 300) / 100) * 100
-        : null;
+      outcome === 'succeeded' ? Math.ceil((300 + 100) / 100) * 100 : null;
     if (outcome === 'succeeded') {
       settings = {
         ...settings,
@@ -294,10 +295,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         (session.state === 'starting' ? startDelayMs : 0),
     );
   const emitPlaybackSnapshot = (session: NonNullable<typeof activeSession>) => {
-    const elapsedMs = Math.min(playbackDurationMs, playbackElapsedMs(session));
+    const elapsedMs = Math.min(session.playbackDurationMs, playbackElapsedMs(session));
     const currentUs = Math.min(
       session.totalUs,
-      Math.floor((elapsedMs / playbackDurationMs) * session.totalUs),
+      Math.floor((elapsedMs / session.playbackDurationMs) * session.totalUs),
     );
     emit({
       v: 1,
@@ -397,9 +398,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           timing_margin_min_us: 0,
           timing_margin_max_us: 3_000,
           timing_margin_step_us: 100,
-          down_late_grace_min_us: 0,
-          down_late_grace_max_us: 5_000,
-          down_late_grace_step_us: 100,
         },
         theme: settings.theme,
         telemetry_enabled: settings.telemetry_enabled,
@@ -569,9 +567,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 ...(playback.timingMarginUs === undefined
                   ? {}
                   : { timing_margin_us: playback.timingMarginUs }),
-                ...(playback.downLateGraceUs === undefined
-                  ? {}
-                  : { down_late_grace_us: playback.downLateGraceUs }),
                 ...(playback.tempoScale === undefined ? {} : { tempo_scale: playback.tempoScale }),
                 ...(playback.fps === undefined ? {} : { fps: playback.fps }),
               },
@@ -593,17 +588,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
               },
             }),
       };
-      if (playback?.downLateGraceUs !== undefined) {
-        settings = {
-          ...settings,
-          timing_margin_recommendation: {
-            ...settings.timing_margin_recommendation,
-            recommended_timing_margin_us: settings.timing_margin_recommendation.qualified
-              ? Math.ceil((playback.downLateGraceUs + 300) / 100) * 100
-              : 500,
-          },
-        };
-      }
       return settings;
     },
     async checkForUpdate(): Promise<UpdateCheck> {
@@ -780,6 +764,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       if (options.neverCreateSession) {
         return new Promise(() => undefined);
       }
+      const sessionDurationMs =
+        playbackDurationsMs && playbackSessionSequence < playbackDurationsMs.length
+          ? (playbackDurationsMs[playbackSessionSequence] ?? defaultPlaybackDurationMs)
+          : defaultPlaybackDurationMs;
       playbackSessionSequence += 1;
       const session = {
         sessionId: playbackSessionSequence.toString(16).padStart(32, '0'),
@@ -788,6 +776,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         title: song.title,
         config,
         totalUs: song.duration_us ?? 1_000_000,
+        playbackDurationMs: sessionDurationMs,
         startedAt: Date.now(),
         pausedAt: null,
         pausedTotalMs: 0,
@@ -808,7 +797,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         ) {
           emitPlaybackSnapshot(session);
         }
-        if (session.state === 'playing' && playbackElapsedMs(session) >= playbackDurationMs) {
+        if (
+          session.state === 'playing' &&
+          playbackElapsedMs(session) >= session.playbackDurationMs
+        ) {
           retirePlaybackSession(session, 'finished', 'Playback finished');
         }
       }, 40);
@@ -946,10 +938,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           timing_margin_us: 500,
           target_hold_us: 17_167,
           release_gap_us: 17_167,
-          late_down_tolerance_us: 2_000,
         },
         telemetry: {
-          schema_version: 14,
+          schema_version: 15,
           qpc_frequency_hz: 10_000_000,
           records: [],
           attempted: 0,

@@ -1209,8 +1209,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
         hold_frames: overrides?.hold_frames ?? settings.playback_defaults.hold_frames,
         timing_margin_us:
           overrides?.timing_margin_us ?? settings.playback_defaults.timing_margin_us,
-        down_late_grace_us:
-          overrides?.down_late_grace_us ?? settings.playback_defaults.down_late_grace_us,
         tempo_scale: overrides?.tempo_scale ?? settings.playback_defaults.tempo_scale,
         fps: overrides?.fps ?? settings.playback_defaults.fps,
         dry_run: overrides?.dry_run ?? inheritedDryRun,

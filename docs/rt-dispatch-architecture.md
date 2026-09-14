@@ -131,14 +131,12 @@ bounds and do not change production scheduler or timing policy.
 The current application default is a `500 µs` user Timing Margin at 60 FPS:
 `frame_us = 16,667`, so both the 1-frame minimum hold and minimum release gap
 are `17,167 µs`; focus restore grace remains `100,000 µs`. Historical
-acceptance runs retain the exact margin/cutoff values recorded in their
-artifacts and are not rewritten when product defaults change.
+acceptance runs retain their exact recorded values and are not rewritten when
+product defaults change.
 Controlled A/B runs may pass `--timing-margin-us 0..3000` in `100 µs` steps;
 the `timing-margin-sweep` scenario authors its Hold and Release Gap targets
 from that exact value and records the packet timestamps in every report.
-The independent acceptance-only `--down-late-grace-us 0..5000` value uses
-100 µs steps and changes only the cutoff supplied to the native worker. The
-physical propagation sweep uses `500`, `1000`, `2000`, and `5000` µs. The
+The physical propagation sweep uses `500`, `1000`, `2000`, and `5000` µs. The
 `focus-loss` scenario first commits a canonical sink Down/Up pair, waits for
 `startup_ready` and that
 pair's event evidence, then moves foreground to the validated project-owned
@@ -239,7 +237,7 @@ frozen plan
   -> final command/control, target, and foreground proof
   -> cheap program-owned control/target/focus atomic revalidation
   -> final_policy_qpc sample and lease admission
-  -> sender SetLastError(0), true pre_call_qpc sample, and Down-only cutoff
+-> sender SetLastError(0), true pre_call_qpc sample, and Down latest-start check
   -> one packetized SendInput call
   -> completion QPC and transport-mask validation
   -> coordinator ownership commit on clean success
@@ -253,7 +251,7 @@ worker's `final_policy_qpc` is the post-revalidation policy/lease evidence
 sample. The trusted prepared sender then resolves the fixed payload pointer
 and length, resets thread-local Win32 error state, takes the true
 `pre_call_qpc` immediately before the syscall, and applies the Down-only
-cutoff against that sample.
+latest-start boundary against that sample.
 The sender performs no target wait or policy recheck after receiving the
 prepared packet.
 The transport reports `sendinput_completion_qpc`; production does not subtract
@@ -342,7 +340,6 @@ frame_base_hold_us = ceil(hold_frames * frame_us)
 timing_margin_us = persisted_user_value
 effective_min_hold_us = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
-down_late_cutoff_us = 2000
 ```
 
 Native admission checked tick arithmetic enforces before worker start:
@@ -354,29 +351,40 @@ next_same_key_down - previous_same_key_up >= min_release_gap_us
 
 The user margin is materialized once into the authored schedule. The release
 gap reserves one frame plus the exact same user margin; it is sender-side
-visibility policy, not evidence that the game sampled the Up transition.
-An invalid
-interval fails native admission before any musical SendInput. The worker never
-combines Down completion with the authored hold to create a second floor, never
-creates a completion-derived minimum-hold terminal state, and never rewrites an
-authored Up target. Runtime
-deadline/overdue policy handles a late boundary; recovery-only pending
-releases are stored in a fixed `[Option; 15]` per-key table with mask and
-generation ownership. There is no transport retry state.
+visibility policy, not evidence that the game sampled the Up transition. An
+invalid interval fails native admission before any musical SendInput. Authored
+targets remain immutable; runtime physical floors can delay a packet or expire
+its Down while preserving those targets. Recovery-only pending releases are
+stored in a fixed `[Option; 15]` per-key table with mask and generation
+ownership. There is no transport retry state.
 
-The session-fixed `down_late_grace_us` is the independent user-owned sender
-cutoff, defaulting to `2,000 µs`, converted once to QPC ticks at admission. It bounds
-authorized Down lateness only. It is never derived from Timing Margin,
-calibration, or dispatch lead, and never changes an authored target. The
-trusted sender repeats the same cutoff check immediately before `SendInput`,
-while Up-only safety releases remain exempt. Calibration supplies a
-recommendation only; its result cannot mutate a prepared schedule or setting
-without an explicit user action.
+The worker converts `frame_base_hold_us`, `frame_us`, and `timing_margin_us`
+once during admission to initialize a fixed-size, per-key
+`PhysicalTimingGuard` with independent Up hold and Down release floors:
+
+```text
+musical_up_not_before[key] = successful_down_completion[key] + frame_base_hold
+down_not_before[key] = successful_up_completion[key] + frame
+latest_down_start = authored_down_target + timing_margin
+```
+
+Each physical packet waits until its authored target and relevant floors are
+reached. If a Down floor exceeds its latest-start window, the worker waits
+until the authored target and any required Up-prefix hold floor, then expires
+the whole Down chord. The authored target is never moved. Actual completion
+QPC remains in `sky_player`; it does not enter `sky_dispatch_core`. Guard
+arithmetic is checked, and partial, uncertain, or post-send clock failures
+invalidate its evidence. Calibration recommends transport reserve plus a
+fixed `100 µs` guard, rounded up to the margin step; it never changes a
+prepared schedule or setting.
 
 ## 5. Wait and interrupt ordering
 
 For a future physical plan, the worker uses one high-resolution waitable timer
-and event-interruptible hybrid wait directly to the absolute physical target.
+and event-interruptible hybrid wait to the absolute target computed from the
+authored target and relevant physical floors. If a Down floor already exceeds
+its latest-start window, it waits only to the authored target and any required
+Up-prefix hold floor before expiring the Down.
 The waiter sleeps while the target is farther away than the frozen spin
 threshold, then performs the bounded QPC spin until the target. There is no
 per-note `T - guard` admission wake and no second precision wait. A lease-only,
@@ -397,11 +405,12 @@ uses the 1,000 µs fallback. The chosen value is frozen for the session.
 Calibration changes waiting cost only: it never changes an authored target and
 never introduces a dispatch lead.
 
-The final precision spin performs only its QPC target/down-late-grace comparison and
+The final precision spin performs only its QPC wait-target comparison and
 `spin_loop`. Interrupt, lease, command, focus, and pause invalidation decisions
 are completed before that stage; no interrupt-generation polling or control
 branch is inserted into the final spin. The QPC deadline check remains
-authoritative and cannot be bypassed by an event.
+authoritative and cannot be bypassed by an event. The sender independently
+checks the Down latest-start boundary with its true pre-call QPC sample.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
 timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
@@ -428,39 +437,32 @@ bookkeeping, but it never calls `SendInput` before the authoritative physical
 QPC target/epoch gate. This projection distinction must not be used to create
 an early physical send.
 
-After a successful musical Down boundary, the worker tracks a Down-only
-authorization state. A future Down-bearing boundary is authorized by an exact
-stamp containing the frozen authored packet identity, masks, and physical QPC
-target. The stamp survives waiter-entry latency and a same-boundary
-`Continue`/replan, but not a changed plan, target, epoch, pause, focus rebase,
-or completed/missed commit. The kernel wait result is not the musical proof.
+Every Down-bearing boundary, including the first preroll Down, requires an
+exact future authorization stamp containing the frozen authored packet
+identity, masks, and physical QPC target. The stamp survives waiter-entry
+latency and a same-boundary `Continue`/replan, but not a changed plan, target,
+epoch, pause, focus rebase, or completed/missed commit. A kernel wait result is
+not the musical proof.
 
-The first overdue Down discovered within the fixed grace may use the
-one-shot late-discovery rescue credit carried by `AwaitingFuture`, but only
-after playback has started and while the exact future authorization,
-focus/control/target, and lease proof remain valid. The credit is consumed at
-admission; a second overdue boundary without an intervening future observation
-is `MissedBacklog`. The sender's pre-call cutoff remains authoritative, so a
-rescue never sends after the cutoff and never retries or catches up a missed
-Down.
-
-An unobserved overdue Down is a recoverable Production deadline miss after the
-first successful musical Down: the Down portion is omitted, the frozen
-coordinator frame is committed as missed, and playback advances to the next
-authored target without rebasing or changing timestamps. A Mixed frame sends
-only its required Up subset through one borrowed view of the prepared primary
-packet's canonical Up prefix; no second recovery payload is materialized. A
-failed or uncertain safety Up remains terminal. Up-only safety releases are exempt from
-the musical backlog rule and are sent even when late. Strict-timing diagnostic
-mode may retain terminal behavior for qualification. In every mode, missed
-Downs are never retried or emitted as a catch-up burst.
+A due Down without that exact authorization is `UnobservedBacklog`. A
+future-authorized Down whose physical floors cannot fit inside its authored
+latest-start window is `PhysicalWindowExpired`; the worker waits interruptibly
+to the authored target and any required Up-prefix hold floor before recording
+the miss. The Down portion is omitted, the frozen coordinator frame is
+committed as missed, and playback advances to the next authored target without
+rebasing or changing timestamps. A Mixed frame sends only its required Up
+subset through one borrowed view of the prepared primary packet's canonical Up
+prefix; no second recovery payload is materialized. A failed or uncertain
+safety Up remains terminal. Up-only safety releases bypass musical floors and
+are sent even when late. In every mode, missed Downs are never retried or
+emitted as a catch-up burst.
 
 ## 7. Failure and publication boundaries
 
 Every QPC query used for a correctness decision is terminal on failure.
 Coordinator commit follows confirmed transport evidence; a typed
-`DeadlineMissedBeforeSend` result is handled as a missed authored frame only
-after startup and only when no Down syscall occurred. Cleanup releases
+`DownExpiredBeforeSend` result is handled as a missed authored frame only when
+no Down syscall occurred. Cleanup releases
 active/possibly-active keys and verifies the resulting state before successful
 completion. The ready boundary is published only after startup gates and the
 required physical ownership and cleanup state are complete.

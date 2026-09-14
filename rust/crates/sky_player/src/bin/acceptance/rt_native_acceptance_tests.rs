@@ -1,5 +1,5 @@
 use super::{
-    ACCEPTANCE_DOWN_LATE_GRACE_US, ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US,
+    ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US,
     DRAIN_DEADLINE_MS, DrainClock, DrainMode, DrainResult, EVENT_SCHEMA_VERSION, EventRecord,
     EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY, MAX_KEYS,
     MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
@@ -556,37 +556,12 @@ fn authorization_and_timing_contracts_remain_bounded() {
     let ParsedCommand::Run(args) = parse_args(a).expect("valid acceptance args") else {
         panic!("expected run command")
     };
-    assert_eq!(args.down_late_grace_us, ACCEPTANCE_DOWN_LATE_GRACE_US);
     assert_eq!(args.timing_margin_us, ACCEPTANCE_TIMING_MARGIN_US);
     assert_eq!(acceptance_min_hold_us(800), 17_467);
     assert_eq!(acceptance_min_release_gap_us(800), 17_467);
     assert_eq!(acceptance_min_hold_us(0), 16_667);
     assert_eq!(acceptance_min_release_gap_us(0), 16_667);
     assert!(focus_evidence_clean(true, 1, 0, true, true));
-}
-#[test]
-fn down_late_tolerance_override_accepts_the_user_setting_range_and_step() {
-    for grace in ["0", "500", "1000", "2000", "5000"] {
-        let mut args = base_arguments("canonical-single");
-        args.extend(
-            ["--down-late-grace-us", grace]
-                .into_iter()
-                .map(str::to_owned),
-        );
-        let ParsedCommand::Run(run) = parse_args(args).expect("valid grace override") else {
-            panic!("expected run command")
-        };
-        assert_eq!(run.down_late_grace_us, grace.parse::<u64>().unwrap());
-    }
-    for grace in ["1", "99", "101", "5001"] {
-        let mut args = base_arguments("canonical-single");
-        args.extend(
-            ["--down-late-grace-us", grace]
-                .into_iter()
-                .map(str::to_owned),
-        );
-        assert!(parse_args(args).is_err(), "invalid tolerance {grace}");
-    }
 }
 #[test]
 fn timing_margin_override_accepts_only_bounded_hundred_microsecond_values() {
@@ -679,19 +654,18 @@ fn stress_qualification_requires_enough_hold_and_release_samples() {
     );
 }
 #[test]
-fn changing_down_grace_changes_only_the_cutoff_not_authored_timing() {
+fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
     let authored_hold = acceptance_min_hold_us(ACCEPTANCE_TIMING_MARGIN_US);
     let authored_gap = acceptance_min_release_gap_us(ACCEPTANCE_TIMING_MARGIN_US);
     let plan = scenario_plan(Scenario::CanonicalSingle, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
-    for grace in [0, 500, 1_000, 2_000, 5_000] {
-        let options = production_options(
-            plan.schedule.clone(),
-            None,
-            grace,
-            ACCEPTANCE_TIMING_MARGIN_US,
-        );
-        assert_eq!(options.timing.min_hold_us, authored_hold);
-        assert_eq!(options.timing.min_release_gap_us, authored_gap);
-        assert_eq!(options.timing.down_late_grace_us, grace);
-    }
+    let options = production_options(
+        plan.schedule,
+        None,
+        ACCEPTANCE_TIMING_MARGIN_US,
+    );
+    assert_eq!(options.timing.min_hold_us, authored_hold);
+    assert_eq!(options.timing.min_release_gap_us, authored_gap);
+    assert_eq!(options.timing.frame_us, ACCEPTANCE_FRAME_US);
+    assert_eq!(options.timing.frame_base_hold_us, ACCEPTANCE_FRAME_US);
+    assert_eq!(options.timing.timing_margin_us, ACCEPTANCE_TIMING_MARGIN_US);
 }

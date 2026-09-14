@@ -232,9 +232,9 @@ impl Default for WorkerConfig {
                 game_fps: 60,
                 min_hold_us: 10_000,
                 min_release_gap_us: 16_667,
-                // Test-support baseline only. Production sessions receive
-                // the user-owned cutoff from their explicit timing policy.
-                down_late_grace_us: 500,
+                frame_us: 16_667,
+                frame_base_hold_us: 16_667,
+                timing_margin_us: 0,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
@@ -268,7 +268,9 @@ pub struct TimingOptions {
     pub game_fps: u16,
     pub min_hold_us: u64,
     pub min_release_gap_us: u64,
-    pub down_late_grace_us: u64,
+    pub frame_us: u64,
+    pub frame_base_hold_us: u64,
+    pub timing_margin_us: u64,
     pub strict_timing: bool,
     pub strict_down_completion_late_us: u64,
     pub strict_up_completion_late_us: u64,

@@ -34,7 +34,7 @@ describe('SettingsPanel playback timing', () => {
       'aria-checked',
       'false',
     );
-    expect(screen.getByText('Late Down tolerance').parentElement).toHaveTextContent('2000 µs');
+    expect(screen.queryByText(/Late Down/)).toBeNull();
     expect(screen.getByRole('heading', { name: 'Timing' })).toBeInTheDocument();
     expect(
       screen.getByText('Source: Default fallback (no valid calibration cache)'),

@@ -106,9 +106,8 @@ function TimingPlot({
     );
   }
   const values = availableSamples.map((sample) => sample.max_sendinput_pre_call_lateness_us!);
-  const threshold = availableSamples.at(-1)?.down_late_grace_us ?? null;
   const minimum = 0;
-  const maximum = Math.max(0, ...values, threshold ?? 0);
+  const maximum = Math.max(0, ...values);
   const range = Math.max(1, maximum - minimum);
   const plotTop = 4;
   const plotBottom = height - 4;
@@ -121,7 +120,6 @@ function TimingPlot({
     .join(' ');
   const latest = values.length ? values[values.length - 1] : null;
   const zeroY = yFor(0);
-  const thresholdY = threshold === null ? null : yFor(threshold);
   const latestSample = availableSamples[availableSamples.length - 1];
   return (
     <figure className="diagnostics-plot">
@@ -135,24 +133,15 @@ function TimingPlot({
         </title>
         <desc id="timing-plot-description">
           Cumulative session maximum observed at each diagnostics snapshot; it does not decrease
-          after recovery. Pre-call timing covers physical sends, while the fixed Down late cutoff
-          applies only to Down-bearing sends.
+          after recovery. Completion latency is reported separately.
         </desc>
         <line x1="0" y1={zeroY} x2={width} y2={zeroY} className="plot-zero-axis" />
-        {thresholdY !== null && (
-          <>
-            <line x1="0" y1={thresholdY} x2={width} y2={thresholdY} className="plot-threshold" />
-            <text x={width - 4} y={Math.max(plotTop + 10, thresholdY - 4)} className="plot-label">
-              Late Down tolerance {threshold} μs
-            </text>
-          </>
-        )}
         {points && <polyline points={points} className="plot-line" />}
       </svg>
       <figcaption>
         {latest === null
           ? 'No sender-side timing samples yet.'
-          : `Session max pre-call lateness observed at the latest diagnostics snapshot: ${latest} μs across ${values.length} snapshots. This cumulative value does not decrease after recovery. The fixed Down late cutoff applies only to Down-bearing sends.${
+          : `Session max pre-call lateness observed at the latest diagnostics snapshot: ${latest} μs across ${values.length} snapshots. This cumulative value does not decrease after recovery.${
               latestSample?.p95_ms === null || latestSample?.p95_ms === undefined
                 ? ''
                 : ` Completion p95 observer value ${number(latestSample.p95_ms)} ms.`
@@ -210,9 +199,9 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const senderSuppressionCount = latest
     ? latest.missed_down_boundaries +
       latest.missed_down_keys +
-      latest.missed_backlog_boundaries +
-      latest.missed_hard_late_boundaries +
-      latest.final_gate_cutoff_misses +
+      latest.unobserved_backlog_boundaries +
+      latest.physical_window_expired_boundaries +
+      latest.down_expired_before_send +
       latest.final_gate_control_rejections +
       latest.final_gate_target_changes +
       latest.final_gate_focus_losses +
@@ -256,7 +245,7 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
                 : {
                     status: 'Attention',
-                    detail: `${latest?.missed_hard_late_boundaries ?? 0} hard-late boundaries; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
+                    detail: `${latest?.physical_window_expired_boundaries ?? 0} physical-window expirations; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
                   };
   const handleExportSenderTrace = async () => {
     setTraceExporting(true);
@@ -392,7 +381,6 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                   label="Release gap"
                   value={`${(latest.min_release_gap_us / 1_000).toFixed(3)} ms`}
                 />
-                <Metric label="Late Down tolerance" value={`${latest.down_late_grace_us} µs`} />
                 <Metric
                   label="Recommended sender margin"
                   value={`${latest.timing_margin_recommendation.recommended_timing_margin_us} µs`}
@@ -457,17 +445,17 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                   value={playerMetric(latest.missed_down_boundaries)}
                 />
                 <Metric
-                  label="Hard-late Down boundaries"
-                  value={playerMetric(latest.missed_hard_late_boundaries)}
+                  label="Physical-window expirations"
+                  value={playerMetric(latest.physical_window_expired_boundaries)}
                 />
                 <Metric label="Missed Down keys" value={playerMetric(latest.missed_down_keys)} />
                 <Metric
-                  label="Backlog misses"
-                  value={playerMetric(latest.missed_backlog_boundaries)}
+                  label="Unobserved backlog boundaries"
+                  value={playerMetric(latest.unobserved_backlog_boundaries)}
                 />
                 <Metric
-                  label="Final cutoff misses"
-                  value={playerMetric(latest.final_gate_cutoff_misses)}
+                  label="Sender latest-start expirations"
+                  value={playerMetric(latest.down_expired_before_send)}
                 />
                 <Metric
                   label="Focus gate rejections"

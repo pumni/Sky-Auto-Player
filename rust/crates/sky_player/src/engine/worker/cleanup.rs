@@ -1,7 +1,7 @@
 use super::{
     OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED, RuntimeDispatchCoordinator,
-    TrackedKeyState, WorkerMetricsLocal, WorkerSchedulingGuards, current_process_cpu_time_us,
-    current_thread_cpu_time_us, publish_backend_metrics,
+    TrackedKeyState, WorkerMetricsLocal, WorkerRuntime, WorkerSchedulingGuards,
+    current_process_cpu_time_us, current_thread_cpu_time_us, publish_backend_metrics,
 };
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
@@ -9,7 +9,7 @@ use crate::engine::telemetry::{
 };
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
-use sky_dispatch_core::time::DurationTicks;
+use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
 use sky_dispatch_win32::input::{ReleaseAllOutcome, ReleaseScope};
 use std::any::Any;
@@ -368,17 +368,25 @@ pub(crate) fn record_termination_error(
     }
 }
 
-/// Release physical input before cancelling only generations that still own it.
+/// Release physical input before resolving a pending mixed Down miss and
+/// cancelling the remaining live generations.
 ///
 /// A suspend is resumable: authored generations that have not reached the
 /// backend remain Scheduled. The backend result is checked before coordinator
-/// state is changed, so an inconclusive release cannot be mistaken for a clean
-/// pause.
+/// state is changed, and a frozen miss is committed while its authored Up
+/// ownership is still active.
 pub(crate) fn suspend_live_input(
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
+    runtime: &mut WorkerRuntime,
+    effective_now_ticks: Result<TimelineTicks, String>,
     target_hwnd: isize,
 ) -> Result<Vec<u64>, String> {
+    runtime.invalidate_down_authorization();
+    if let Some(guard) = runtime.physical_timing_guard.as_mut() {
+        guard.invalidate();
+    }
+
     // A suspension is fail-closed: release the whole instrument in a single
     // FSM invocation. The scope is decided before the call so two release
     // FSMs are never chained (which held the total cleanup latency at
@@ -392,12 +400,41 @@ pub(crate) fn suspend_live_input(
     }
 
     debug_assert!(release_state_verified(backend, &release));
+    if let Some(pending) = runtime.pending_up_recovery.as_ref() {
+        let frame = pending.authored_commit.frame;
+        if pending.boundary.first_batch_index != frame.first_batch_index
+            || pending.boundary.packet_index != frame.packet_index
+            || pending.boundary.packet_batch_count != frame.packet_batch_count
+            || pending.boundary.down_mask != frame.down_mask
+            || pending.boundary.up_mask & frame.immediate_up_mask != frame.immediate_up_mask
+            || pending.boundary.down_mask == 0
+            || !pending.admission.is_missed()
+        {
+            return Err("pending Up recovery no longer matches its frozen authored miss".into());
+        }
+        let effective_now_ticks = effective_now_ticks.map_err(|error| {
+            format!("playback clock failure while resolving missed Down: {error}")
+        })?;
+        coordinator
+            .commit_prepared_authored_frame_deadline_miss(
+                &pending.authored_commit,
+                frame.immediate_up_mask,
+                frame.down_mask,
+                effective_now_ticks,
+            )
+            .map_err(|error| format!("coordinator missed Down commit failure: {error}"))?;
+    }
     let cancelled = coordinator
         .cancel_live_generations()
         .map_err(|error| format!("coordinator live cancellation failed: {error}"))?;
     coordinator
         .check_invariants()
         .map_err(|error| format!("coordinator invariant failure after suspension: {error}"))?;
+    runtime.invalidate_down_authorization();
+    if let Some(guard) = runtime.physical_timing_guard.as_mut() {
+        guard.reset();
+    }
+    runtime.pending_up_recovery = None;
     Ok(cancelled)
 }
 

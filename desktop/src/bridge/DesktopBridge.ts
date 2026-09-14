@@ -102,13 +102,9 @@ export type Settings = Omit<SettingsDto, 'theme' | 'update_preferences'> & {
   update_preferences: UpdatePreferences;
 };
 export type PlaybackPatch = Partial<
-  Omit<
-    GeneratedPlaybackPatch,
-    'holdFrames' | 'timingMarginUs' | 'downLateGraceUs' | 'tempoScale' | 'fps'
-  > & {
+  Omit<GeneratedPlaybackPatch, 'holdFrames' | 'timingMarginUs' | 'tempoScale' | 'fps'> & {
     holdFrames: number;
     timingMarginUs: number;
-    downLateGraceUs: number;
     tempoScale: number;
     fps: number;
   }

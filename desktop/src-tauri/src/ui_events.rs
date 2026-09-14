@@ -132,7 +132,6 @@ pub struct DiagnosticsSnapshotDto {
     pub timing_margin_us: u64,
     pub min_hold_us: u64,
     pub min_release_gap_us: u64,
-    pub down_late_grace_us: u64,
     pub timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub pre_call_lt_250us: u64,
     pub pre_call_250_500us: u64,
@@ -147,9 +146,9 @@ pub struct DiagnosticsSnapshotDto {
     pub chord_split_events: u64,
     pub missed_down_boundaries: u64,
     pub missed_down_keys: u64,
-    pub missed_backlog_boundaries: u64,
-    pub missed_hard_late_boundaries: u64,
-    pub final_gate_cutoff_misses: u64,
+    pub unobserved_backlog_boundaries: u64,
+    pub physical_window_expired_boundaries: u64,
+    pub down_expired_before_send: u64,
     pub final_gate_control_rejections: u64,
     pub final_gate_target_changes: u64,
     pub final_gate_focus_losses: u64,
@@ -481,13 +480,6 @@ impl UiEvent {
         {
             return Err("diagnostics max lateness is outside bounds".into());
         }
-        if payload.down_late_grace_us > sky_app_core::settings::MAX_DOWN_LATE_GRACE_US
-            || !payload
-                .down_late_grace_us
-                .is_multiple_of(sky_app_core::settings::DOWN_LATE_GRACE_STEP_US)
-        {
-            return Err("diagnostics Down grace is outside bounds".into());
-        }
         if let Some(last_error) = &payload.last_error {
             validate_text("last_error", last_error)?;
         }
@@ -521,7 +513,7 @@ impl UiEvent {
         }
         if payload
             .recommended_timing_margin_us
-            .is_some_and(|value| value > sky_app_core::settings::MAX_DOWN_LATE_GRACE_US + 100_000)
+            .is_some_and(|value| value > sky_app_core::settings::MAX_TIMING_MARGIN_US)
         {
             return Err("calibration recommendation is outside bounds".into());
         }

@@ -1,61 +1,19 @@
 use super::super::super::{PlaybackClockState, QpcTicks};
 use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime};
-use super::DownBoundaryAdmission;
-use super::observation::{DispatchObservation, DownMissObservation, ObserverLifecycle};
+use super::observation::{
+    DispatchObservation, DownMissKind, DownMissObservation, ObserverLifecycle,
+};
 use super::{
     AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalCommit, RecoveryDescriptor,
 };
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
 use sky_dispatch_win32::input::TrackedKeyState;
 
-pub(super) fn record_rescue_admission(
-    down_admission: DownBoundaryAdmission,
-    admission: &super::authored::AdmissionOutcome,
-    local_metrics: &mut WorkerMetricsLocal,
-) {
-    if !down_admission.is_late_rescue() {
-        return;
-    }
-    match admission {
-        super::authored::AdmissionOutcome::BlockedUnfocused
-        | super::authored::AdmissionOutcome::FocusLost
-        | super::authored::AdmissionOutcome::TargetChanged => {
-            local_metrics.late_discovery_rescue_blocked_focus_or_target = local_metrics
-                .late_discovery_rescue_blocked_focus_or_target
-                .saturating_add(1);
-        }
-        super::authored::AdmissionOutcome::ControlRejected => {
-            local_metrics.late_discovery_rescue_blocked_control = local_metrics
-                .late_discovery_rescue_blocked_control
-                .saturating_add(1);
-        }
-        super::authored::AdmissionOutcome::Allowed { .. }
-        | super::authored::AdmissionOutcome::Guarded { .. } => {}
-    }
-}
-
-pub(super) fn record_rescue_send(
-    local_metrics: &mut WorkerMetricsLocal,
-    down_admission: DownBoundaryAdmission,
-    sender_cutoff: bool,
-) {
-    if !down_admission.is_late_rescue() {
-        return;
-    }
-    if sender_cutoff {
-        local_metrics.late_discovery_rescue_sender_cutoff_misses = local_metrics
-            .late_discovery_rescue_sender_cutoff_misses
-            .saturating_add(1);
-    } else {
-        local_metrics.late_discovery_rescue_sent =
-            local_metrics.late_discovery_rescue_sent.saturating_add(1);
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum DownMissReason {
-    Backlog,
-    HardLate,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DownMissReason {
+    UnobservedBacklog,
+    PhysicalWindowExpired,
+    DownExpiredBeforeSend,
 }
 
 pub(super) fn queue_down_miss_observation(
@@ -81,7 +39,11 @@ pub(super) fn queue_down_miss_observation(
             observed_qpc,
             up_mask: view.packet_masks.up_mask,
             down_mask: view.packet_masks.down_mask,
-            cutoff_miss: matches!(reason, DownMissReason::HardLate),
+            kind: match reason {
+                DownMissReason::UnobservedBacklog => DownMissKind::UnobservedBacklog,
+                DownMissReason::PhysicalWindowExpired => DownMissKind::PhysicalWindowExpired,
+                DownMissReason::DownExpiredBeforeSend => DownMissKind::DownExpiredBeforeSend,
+            },
         }),
         &mut local_metrics.observer_dropped_samples,
         &mut local_metrics.observer_queue_high_watermark,
@@ -98,8 +60,9 @@ fn record_last_missed_down_sample(
 ) {
     local_metrics.last_missed_down_valid = true;
     local_metrics.last_missed_down_reason_code = match reason {
-        DownMissReason::Backlog => 1,
-        DownMissReason::HardLate => 2,
+        DownMissReason::UnobservedBacklog => 1,
+        DownMissReason::PhysicalWindowExpired => 2,
+        DownMissReason::DownExpiredBeforeSend => 3,
     };
     local_metrics.last_missed_down_source_action_index = source_action_index;
     local_metrics.last_missed_down_mask = down_mask;
@@ -129,14 +92,17 @@ pub(super) fn record_missed_down_classification(
         .missed_down_keys
         .saturating_add(u64::from(down_mask.count_ones()));
     match reason {
-        DownMissReason::Backlog => {
-            local_metrics.missed_backlog_boundaries =
-                local_metrics.missed_backlog_boundaries.saturating_add(1);
+        DownMissReason::UnobservedBacklog => {
+            local_metrics.unobserved_backlog_boundaries = local_metrics
+                .unobserved_backlog_boundaries
+                .saturating_add(1);
         }
-        DownMissReason::HardLate => {
-            local_metrics.missed_hard_late_boundaries =
-                local_metrics.missed_hard_late_boundaries.saturating_add(1);
+        DownMissReason::PhysicalWindowExpired => {
+            local_metrics.physical_window_expired_boundaries = local_metrics
+                .physical_window_expired_boundaries
+                .saturating_add(1);
         }
+        DownMissReason::DownExpiredBeforeSend => {}
     }
     if let Ok(lateness) = observed_qpc.checked_duration_since(physical_target_qpc) {
         local_metrics.max_missed_lateness_ticks = local_metrics
@@ -145,21 +111,15 @@ pub(super) fn record_missed_down_classification(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn recover_missed_down_boundary(
+pub(crate) fn classify_missed_down_boundary(
     view: &AuthoredBatchView,
-    config: &WorkerConfig,
-    runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
-    backend: &mut TrackedKeyState,
-    coordinator: &mut RuntimeDispatchCoordinator,
-    clock_state: &mut PlaybackClockState,
+    observer: Option<&PendingObservationQueue>,
+    wake_ticks: sky_dispatch_core::time::TimelineTicks,
     physical_target_qpc: QpcTicks,
     observed_qpc: QpcTicks,
-    wake_ticks: sky_dispatch_core::time::TimelineTicks,
     reason: DownMissReason,
-    observer: Option<&PendingObservationQueue>,
-) -> DispatchStep {
+) {
     queue_down_miss_observation(
         view,
         local_metrics,
@@ -177,10 +137,40 @@ pub(super) fn recover_missed_down_boundary(
         observed_qpc,
         reason,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn recover_missed_down_boundary(
+    view: &AuthoredBatchView,
+    config: &WorkerConfig,
+    runtime: &mut WorkerRuntime,
+    local_metrics: &mut WorkerMetricsLocal,
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    clock_state: &mut PlaybackClockState,
+    physical_target_qpc: QpcTicks,
+    observed_qpc: QpcTicks,
+    wake_ticks: sky_dispatch_core::time::TimelineTicks,
+    reason: DownMissReason,
+    already_classified: bool,
+    observer: Option<&PendingObservationQueue>,
+) -> DispatchStep {
+    if !already_classified {
+        classify_missed_down_boundary(
+            view,
+            local_metrics,
+            observer,
+            wake_ticks,
+            physical_target_qpc,
+            observed_qpc,
+            reason,
+        );
+    }
     if config.timing.strict_timing {
         return DispatchStep::TerminateStatic(match reason {
-            DownMissReason::Backlog => "down_deadline_missed_before_send",
-            DownMissReason::HardLate => "down_hard_late_abort",
+            DownMissReason::UnobservedBacklog => "down_unobserved_backlog",
+            DownMissReason::PhysicalWindowExpired => "down_physical_window_expired",
+            DownMissReason::DownExpiredBeforeSend => "down_expired_before_send",
         });
     }
     let up_mask = view.packet_masks.up_mask;
@@ -215,22 +205,45 @@ pub(super) fn recover_missed_down_boundary(
         let result =
             backend.send_prepared_physical_packet_view_with_cutoff(prepared_up_packet, None);
         if backend.timing_error.take().is_some() {
+            if result.evidence.attempts != 0
+                && let Some(guard) = runtime.physical_timing_guard.as_mut()
+            {
+                guard.invalidate();
+            }
             return DispatchStep::TerminateStatic("QPC failure during missed Down Up recovery");
         }
         if !result.is_success()
             || result.evidence.confirmed_mask != up_mask
             || result.evidence.skipped_mask != 0
         {
-            return DispatchStep::TerminateStatic("missed Down safety Up transport failure");
+            if result.evidence.attempts != 0
+                && let Some(guard) = runtime.physical_timing_guard.as_mut()
+            {
+                guard.invalidate();
+            }
+            return DispatchStep::TerminateStatic(
+                "missed Down Up-prefix recovery transport failure",
+            );
         }
         let Some(started) = result.evidence.started_ticks else {
             return DispatchStep::TerminateStatic("missed Down safety Up missing start boundary");
         };
         let Some(completed) = result.evidence.completed_ticks else {
+            if let Some(guard) = runtime.physical_timing_guard.as_mut() {
+                guard.invalidate();
+            }
             return DispatchStep::TerminateStatic(
-                "missed Down safety Up missing completion boundary",
+                "missed Down Up-prefix recovery missing completion boundary",
             );
         };
+        let Some(guard) = runtime.physical_timing_guard.as_mut() else {
+            return DispatchStep::TerminateStatic("physical timing guard is not initialized");
+        };
+        if let Err(error) = guard.observe_successful_packet(completed, up_mask, 0) {
+            return DispatchStep::Terminate(format!(
+                "physical timing guard recovery update failed: {error:?}"
+            ));
+        }
         runtime
             .production_forensics
             .observe_lifecycle(ObserverLifecycle::RecoveryUp { up_mask });
@@ -293,8 +306,6 @@ pub(super) fn recover_missed_down_boundary(
     }
 
     backend.last_error = None;
-    runtime.last_dispatch_was_missed_down = true;
-    runtime.mark_down_boundary_missed();
     DispatchStep::Dispatched
 }
 
@@ -316,7 +327,7 @@ mod tests {
             0b101,
             QpcTicks::from_raw(1_000),
             QpcTicks::from_raw(1_250),
-            DownMissReason::Backlog,
+            DownMissReason::UnobservedBacklog,
         );
 
         assert!(metrics.last_missed_down_valid);
@@ -327,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn last_missed_down_sample_records_hard_late_evidence() {
+    fn last_missed_down_sample_records_physical_window_expiration() {
         let mut metrics = WorkerMetricsLocal::default();
 
         record_last_missed_down_sample(
@@ -336,7 +347,7 @@ mod tests {
             0b010,
             QpcTicks::from_raw(10_000),
             QpcTicks::from_raw(10_005),
-            DownMissReason::HardLate,
+            DownMissReason::PhysicalWindowExpired,
         );
 
         assert!(metrics.last_missed_down_valid);
@@ -356,13 +367,13 @@ mod tests {
             0b101,
             QpcTicks::from_raw(2_000),
             QpcTicks::from_raw(2_007),
-            DownMissReason::HardLate,
+            DownMissReason::PhysicalWindowExpired,
         );
 
         assert!(metrics.last_missed_down_valid);
         assert_eq!(metrics.missed_down_boundaries, 1);
-        assert_eq!(metrics.missed_hard_late_boundaries, 1);
-        assert_eq!(metrics.missed_backlog_boundaries, 0);
+        assert_eq!(metrics.physical_window_expired_boundaries, 1);
+        assert_eq!(metrics.unobserved_backlog_boundaries, 0);
         assert_eq!(metrics.last_missed_down_lateness_ticks, 7);
     }
 }

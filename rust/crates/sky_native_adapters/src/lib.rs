@@ -14,12 +14,11 @@ use sky_app_core::library::{
     LibraryManifestStore, LibraryManifestV1, LikedSongs,
 };
 use sky_app_core::settings::{
-    ApplicationSettings, DEFAULT_DOWN_LATE_GRACE_US, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES,
-    DEFAULT_PROCESS_NAMES, DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S,
-    DOWN_LATE_GRACE_STEP_US, HOLD_FRAME_OPTIONS, HotkeySettings, MAX_DOWN_LATE_GRACE_US,
-    MAX_TIMING_MARGIN_US, MIN_DOWN_LATE_GRACE_US, MIN_TIMING_MARGIN_US, SafetySettings,
-    SettingsError, SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences,
-    VALID_FPS, normalize_settings,
+    ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
+    DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS,
+    HotkeySettings, MAX_TIMING_MARGIN_US, MIN_TIMING_MARGIN_US, SafetySettings, SettingsError,
+    SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences, VALID_FPS,
+    normalize_settings,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -871,11 +870,6 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
         "default_timing_margin_us",
         sky_app_core::settings::DEFAULT_TIMING_MARGIN_US,
     );
-    settings.playback_defaults.down_late_grace_us = raw_u64(
-        raw,
-        "default_down_late_grace_us",
-        DEFAULT_DOWN_LATE_GRACE_US,
-    );
     settings.playback_defaults.tempo_scale = raw_f64(raw, "default_tempo_scale", 1.0);
     settings.playback_defaults.fps = raw_fps(raw, "game_fps", DEFAULT_GAME_FPS);
     settings.playback_behavior.auto_play = raw_bool(raw, "auto_play", true);
@@ -997,23 +991,9 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
         "default_timing_margin_us".into(),
         Value::from(timing_margin_us),
     );
-    let down_late_grace_us = raw_u64(
-        raw,
-        "default_down_late_grace_us",
-        DEFAULT_DOWN_LATE_GRACE_US,
-    );
-    let down_late_grace_us = if (MIN_DOWN_LATE_GRACE_US..=MAX_DOWN_LATE_GRACE_US)
-        .contains(&down_late_grace_us)
-        && down_late_grace_us.is_multiple_of(DOWN_LATE_GRACE_STEP_US)
-    {
-        down_late_grace_us
-    } else {
-        DEFAULT_DOWN_LATE_GRACE_US
-    };
-    migrated.insert(
-        "default_down_late_grace_us".into(),
-        Value::from(down_late_grace_us),
-    );
+    // Schema 7 removes the independent Late Down allowance. Discard the old
+    // persisted value instead of converting it into authored Timing Margin.
+    migrated.remove("default_down_late_grace_us");
     migrated.insert(
         "auto_play".into(),
         Value::from(raw_bool(raw, "auto_play", true)),
@@ -1259,10 +1239,7 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
         "default_timing_margin_us".into(),
         Value::from(settings.playback_defaults.timing_margin_us),
     );
-    raw.insert(
-        "default_down_late_grace_us".into(),
-        Value::from(settings.playback_defaults.down_late_grace_us),
-    );
+    raw.remove("default_down_late_grace_us");
     raw.insert(
         "default_tempo_scale".into(),
         Value::from(settings.playback_defaults.tempo_scale),
@@ -1466,10 +1443,6 @@ mod tests {
             settings.playback_defaults.timing_margin_us,
             DEFAULT_TIMING_MARGIN_US
         );
-        assert_eq!(
-            settings.playback_defaults.down_late_grace_us,
-            DEFAULT_DOWN_LATE_GRACE_US
-        );
         store.save(&settings).expect("save migrated settings");
         let raw: Value =
             serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("json");
@@ -1582,31 +1555,35 @@ mod tests {
     }
 
     #[test]
-    fn settings_v4_migration_defaults_preserves_and_canonicalizes_down_late_grace() {
+    fn settings_v6_migration_discards_down_late_grace_without_changing_margin() {
         let cases = [
-            (None, DEFAULT_DOWN_LATE_GRACE_US),
-            (Some(2_000), 2_000),
-            (Some(799), DEFAULT_DOWN_LATE_GRACE_US),
-            (Some(5_001), DEFAULT_DOWN_LATE_GRACE_US),
+            ("missing", None),
+            ("default", Some("2000")),
+            ("minimum", Some("0")),
+            ("maximum", Some("5000")),
+            ("malformed_step", Some("799")),
+            ("malformed_type", Some(r#""not-a-number""#)),
         ];
-        for (value, expected) in cases {
+        for (case, value) in cases {
             let root = std::env::temp_dir().join(format!(
-                "sky-v4-down-late-grace-{}-{}",
+                "sky-v6-down-late-grace-{}-{case}",
                 std::process::id(),
-                value.unwrap_or(0)
             ));
             let path = root.join("config.json");
             fs::create_dir_all(&root).expect("temp root");
             let raw_value = value
                 .map(|value| format!(",\"default_down_late_grace_us\":{value}"))
                 .unwrap_or_default();
-            fs::write(&path, format!("{{\"schema_version\":4{raw_value}}}"))
-                .expect("seed schema v4 settings");
+            fs::write(
+                &path,
+                format!("{{\"schema_version\":6,\"default_timing_margin_us\":1200{raw_value}}}"),
+            )
+            .expect("seed schema v6 settings");
 
             let settings = JsonSettingsStore::new(&path)
                 .load()
                 .expect("migrate settings");
-            assert_eq!(settings.playback_defaults.down_late_grace_us, expected);
+            assert_eq!(settings.playback_defaults.timing_margin_us, 1_200);
             assert!(settings.playback_behavior.auto_play);
             let raw: Value =
                 serde_json::from_slice(&fs::read(&path).expect("read migrated config"))
@@ -1615,7 +1592,8 @@ mod tests {
                 raw["schema_version"],
                 sky_app_core::settings::SCHEMA_VERSION
             );
-            assert_eq!(raw["default_down_late_grace_us"], expected);
+            assert!(raw.get("default_down_late_grace_us").is_none());
+            assert_eq!(raw["default_timing_margin_us"], 1_200);
             assert_eq!(raw["auto_play"], true);
             let _ = fs::remove_dir_all(root);
         }

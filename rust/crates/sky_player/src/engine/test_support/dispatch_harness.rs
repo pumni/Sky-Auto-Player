@@ -19,9 +19,9 @@ use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts, TargetStamp,
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitResult, WaitSignals,
     WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
-    WorkerTimingState, dispatch_due_from_plan, plan_next_dispatch, plan_next_dispatch_projected,
-    preflight_prepared_plan, publish_backend_counters, publish_live_metrics_after_dispatch,
-    wait_for_next_boundary,
+    WorkerTimingState, dispatch_due_from_plan, physical_wait_target_for_plan, plan_next_dispatch,
+    plan_next_dispatch_projected, preflight_prepared_plan, publish_backend_counters,
+    publish_live_metrics_after_dispatch, wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, physical_packet_kind};
@@ -132,6 +132,46 @@ impl ProductionDispatchTestHarness {
                 scheduled_us: 1000,
                 scan_codes: vec![0x16].into(),
                 reason: "down2".into(),
+            },
+        ])
+    }
+
+    pub fn new_mixed_then_future_down() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "down1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x15].into(),
+                reason: "up1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x16].into(),
+                reason: "missed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 5_000,
+                scan_codes: vec![0x17].into(),
+                reason: "fresh-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 10_000,
+                scan_codes: vec![0x16, 0x17].into(),
+                reason: "final-up".into(),
             },
         ])
     }
@@ -640,9 +680,9 @@ impl ProductionDispatchTestHarness {
         let health_options = DispatchHealthOptions::default();
         let health = WorkerHealthState::new(health_options);
         let mut timing = WorkerTimingState::create_test_timing();
-        timing.down_late_grace_ticks = qpc_clock
+        timing.timing_margin_ticks = qpc_clock
             .duration_from_us(500)
-            .expect("test down late-grace conversion");
+            .expect("test Timing Margin conversion");
         timing.pre_call_250us_ticks = qpc_clock
             .duration_from_us(250)
             .expect("test pre-call 250us conversion");
@@ -665,15 +705,21 @@ impl ProductionDispatchTestHarness {
             .duration_from_us(20_000)
             .expect("test spin threshold conversion");
 
+        let mut runtime = WorkerRuntime::create_test_runtime(Some(TargetStamp {
+            hwnd: 1,
+            generation: 0,
+        }));
+        runtime.set_physical_timing_guard_for_test(
+            qpc_clock.duration_from_us(10_000).expect("test base hold"),
+            qpc_clock.duration_from_us(16_667).expect("test frame"),
+            timing.timing_margin_ticks,
+        );
         Self {
             config: WorkerConfig::default(),
             resources,
             health,
             timing,
-            runtime: WorkerRuntime::create_test_runtime(Some(TargetStamp {
-                hwnd: 1,
-                generation: 0,
-            })),
+            runtime,
             local_metrics: WorkerMetricsLocal::default(),
             focus_active: AtomicBool::new(true),
             target_hwnd: AtomicIsize::new(1),
@@ -830,9 +876,9 @@ impl ProductionDispatchTestHarness {
             .saturating_sub(deadline.as_u64())
             .saturating_add(margin.as_u64());
         // A zero benchmark margin is the production-boundary mode. Keep the
-        // frozen target just inside the Down grace window so the legacy and
-        // fused senders sample immediately instead of spending milliseconds
-        // spinning on an occasionally future target.
+        // authored target 100 us in the past so both senders sample
+        // immediately instead of spending milliseconds spinning on a future
+        // target.
         let epoch = if margin_us == 0 {
             let past_boundary = self
                 .resources
@@ -937,10 +983,14 @@ impl ProductionDispatchTestHarness {
     /// cannot accidentally replace the production cleanup path with a direct
     /// coordinator mutation.
     pub fn suspend_live_input_for_test(&mut self) -> Result<Vec<u64>, String> {
+        let effective_now_ticks = self.effective_now_ticks;
+        let target_hwnd = self.target_hwnd.load(Ordering::Acquire);
         super::super::worker::suspend_live_input(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
-            self.target_hwnd.load(Ordering::Acquire),
+            &mut self.runtime,
+            Ok(effective_now_ticks),
+            target_hwnd,
         )
     }
 
@@ -1035,7 +1085,7 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.set_packet_emitter(move |packet| {
             let now = clock.now().expect("test QPC");
             SendTransactionOutcome {
-                status: SendTransactionStatus::DeadlineMissedBeforeSend,
+                status: SendTransactionStatus::DownExpiredBeforeSend,
                 evidence: SendEvidence {
                     requested_mask: packet.up_mask | packet.down_mask,
                     confirmed_mask: 0,
@@ -1165,9 +1215,33 @@ impl ProductionDispatchTestHarness {
         &mut self,
         plan: &NextDispatchPlan,
     ) -> Result<DispatchStep, String> {
+        let pre_wait_qpc = self
+            .resources
+            .clock
+            .now()
+            .map_err(|error| format!("benchmark pre-wait QPC: {error:?}"))?;
+        let pre_wait_effective = self
+            .resources
+            .playback
+            .get_elapsed_allow_pre_epoch(pre_wait_qpc, true)
+            .map_err(|error| format!("benchmark pre-wait timeline: {error}"))?;
+        let pre_wait_step = self.dispatch_plan_at_with_sender_option(
+            plan,
+            pre_wait_effective,
+            pre_wait_qpc,
+            false,
+            None,
+            None,
+            false,
+        );
+        if !matches!(pre_wait_step, DispatchStep::NoWork) {
+            return Ok(pre_wait_step);
+        }
+        let physical_wait_target_qpc = physical_wait_target_for_plan(plan, &self.runtime)?
+            .or_else(|| plan.physical_target_qpc());
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
             deadline: WaitDeadline {
-                physical_target_qpc: plan.physical_target_qpc(),
+                physical_target_qpc: physical_wait_target_qpc,
                 spin_threshold_ticks: if matches!(plan, NextDispatchPlan::Physical(_)) {
                     self.timing.effective_spin_threshold_ticks
                 } else {
@@ -1383,6 +1457,43 @@ impl ProductionDispatchTestHarness {
         )
     }
 
+    /// Invoke the production due-plan admission path at a caller-controlled
+    /// QPC sample. This lets tests cross authored or physical floors without
+    /// sleeping, while the production dispatcher still decides whether the
+    /// frozen plan is due and physically feasible.
+    pub fn dispatch_at_qpc_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+        now_ticks: QpcTicks,
+    ) -> DispatchStep {
+        let target = plan
+            .physical_target_qpc()
+            .expect("plan target required for synthetic QPC boundary");
+        let deadline = plan
+            .deadline_ticks()
+            .expect("plan deadline required for synthetic QPC boundary");
+        self.dispatch_plan_at_with_sender_option(
+            plan,
+            deadline,
+            now_ticks,
+            false,
+            Some(target),
+            None,
+            true,
+        )
+    }
+
+    pub fn physical_wait_target_for_test(
+        &self,
+        plan: &NextDispatchPlan,
+    ) -> Result<Option<QpcTicks>, String> {
+        physical_wait_target_for_plan(plan, &self.runtime)
+    }
+
+    pub fn physical_window_expired_boundaries_for_test(&self) -> u64 {
+        self.local_metrics.physical_window_expired_boundaries
+    }
+
     /// Classify a frozen Down plan one QPC tick before its target without the
     /// test-only direct-boundary authorization shortcut. This exercises the
     /// production future-observation branch against the current runtime state.
@@ -1417,6 +1528,9 @@ impl ProductionDispatchTestHarness {
         let target = plan
             .physical_target_qpc()
             .expect("plan target required for synthetic boundary");
+        let wait_target = physical_wait_target_for_plan(plan, &self.runtime)
+            .expect("physical timing window")
+            .unwrap_or(target);
         let deadline = plan
             .deadline_ticks()
             .expect("plan deadline required for synthetic boundary");
@@ -1424,7 +1538,7 @@ impl ProductionDispatchTestHarness {
             .set_deadline_wait_evidence_for_test(Some(target), Some(target));
         // Use the frozen target as a test-controlled exact-boundary sample;
         // this never re-anchors or rewrites the plan after it is frozen.
-        self.dispatch_plan_at(plan, deadline, target, true, Some(target))
+        self.dispatch_plan_at(plan, deadline, wait_target, true, Some(target))
     }
 
     pub fn physical_target_qpc_for_test(&self, plan: &NextDispatchPlan) -> Option<QpcTicks> {
@@ -1449,16 +1563,16 @@ impl ProductionDispatchTestHarness {
     ) -> (QpcTicks, SendTransactionOutcome) {
         let packet = prepared.packet();
         let target = self.resources.clock.now().expect("benchmark sender QPC");
-        let latest_allowed_down_qpc = (packet.down_mask != 0).then(|| {
+        let latest_down_start_qpc = (packet.down_mask != 0).then(|| {
             target
-                .checked_add_duration(self.timing.down_late_grace_ticks)
-                .expect("benchmark Down cutoff")
+                .checked_add_duration(self.timing.timing_margin_ticks)
+                .expect("benchmark Down latest-start")
         });
         let outcome = self.resources.backend.send_phase_a_benchmark_boundary(
             prepared,
             self.resources.clock,
             target,
-            latest_allowed_down_qpc,
+            latest_down_start_qpc,
             target,
         );
         (target, outcome)
@@ -1575,9 +1689,13 @@ impl ProductionDispatchTestHarness {
         let target = plan
             .physical_target_qpc()
             .expect("waiter-entry race requires a physical target");
-        let overdue_now = target
+        let authored_overdue_now = target
             .checked_add_duration(DurationTicks::from_raw(1))
             .expect("overdue test target arithmetic");
+        let physical_wait_target = physical_wait_target_for_plan(plan, &self.runtime)
+            .expect("physical timing window")
+            .unwrap_or(target);
+        let overdue_now = core::cmp::max(authored_overdue_now, physical_wait_target);
         self.runtime.record_due_without_wait_for_test();
         self.dispatch_plan_at_with_sender_option(
             plan,
@@ -1587,87 +1705,6 @@ impl ProductionDispatchTestHarness {
             None,
             None,
             true,
-        )
-    }
-
-    /// Inject a known backlog while strict diagnostic mode also observes a
-    /// lateness greater than the Down grace.  The boundary must retain the
-    /// Backlog classification; strict mode changes the terminal behavior,
-    /// not the reason that the future authorization was missed.
-    pub fn dispatch_known_backlog_with_strict_lateness_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-    ) -> DispatchStep {
-        let view = plan
-            .physical()
-            .expect("strict backlog test requires a physical plan");
-        let target = plan
-            .physical_target_qpc()
-            .expect("strict backlog test requires a physical target");
-        let lateness = self
-            .timing
-            .down_late_grace_ticks
-            .checked_add(DurationTicks::from_raw(1))
-            .expect("strict backlog lateness arithmetic");
-        let effective_now_ticks = TimelineTicks::from_raw(
-            view.authored_view
-                .authored_batch_scheduled_ticks
-                .as_u64()
-                .saturating_add(lateness.as_u64()),
-        );
-        let overdue_now = target
-            .checked_add_duration(lateness)
-            .expect("strict backlog QPC lateness arithmetic");
-        self.config.timing.strict_timing = true;
-        self.runtime.record_due_without_wait_for_test();
-        self.dispatch_plan_at_with_sender_option(
-            plan,
-            effective_now_ticks,
-            overdue_now,
-            false,
-            None,
-            None,
-            false,
-        )
-    }
-
-    /// Inject an authorized boundary whose trusted pre-call sample is beyond
-    /// the session Down late-grace cutoff. The sender must make zero Down calls;
-    /// Production recovery then commits the boundary as missed.
-    pub fn dispatch_same_frozen_plan_after_hard_late_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-    ) -> DispatchStep {
-        self.dispatch_same_frozen_plan_at_lateness_for_test(
-            plan,
-            self.timing
-                .down_late_grace_ticks
-                .checked_add(DurationTicks::from_raw(1))
-                .expect("hard-late test lateness arithmetic"),
-        )
-    }
-
-    /// Inject an authorized boundary with an exact deterministic pre-call
-    /// lateness measured in QPC ticks. The sender must preserve equality at
-    /// the grace cutoff and reject the first tick beyond it.
-    pub fn dispatch_same_frozen_plan_at_lateness_for_test(
-        &mut self,
-        plan: &NextDispatchPlan,
-        lateness: DurationTicks,
-    ) -> DispatchStep {
-        let target = plan
-            .physical_target_qpc()
-            .expect("hard-late race requires a physical target");
-        let overdue_now = target
-            .checked_add_duration(lateness)
-            .expect("hard-late test target arithmetic");
-        self.runtime.set_deadline_wait_evidence_for_test(None, None);
-        self.dispatch_plan_at(
-            plan,
-            plan.deadline_ticks().expect("physical deadline"),
-            overdue_now,
-            false,
-            Some(target),
         )
     }
 
@@ -1683,7 +1720,7 @@ impl ProductionDispatchTestHarness {
             .expect("strict admission requires physical target");
         let late = self
             .timing
-            .down_late_grace_ticks
+            .timing_margin_ticks
             .checked_add(DurationTicks::from_raw(1))
             .expect("strict admission lateness arithmetic");
         let effective_now_ticks = TimelineTicks::from_raw(
@@ -1731,6 +1768,12 @@ impl ProductionDispatchTestHarness {
         lease_timeout_ticks: DurationTicks,
     ) -> DispatchStep {
         let physical_target_qpc = plan.physical_target_qpc().expect("physical target QPC");
+        let physical = plan.physical().expect("physical dispatch plan");
+        let latest_down_start_qpc = self.runtime.latest_down_start_for_test(
+            physical_target_qpc,
+            physical.authored_view.packet_masks.up_mask,
+            physical.authored_view.packet_masks.down_mask,
+        );
         // This direct helper represents the old inner wait with a synthetic
         // exact-boundary sample. The production worker supplies the real
         // crossing from its single wait before entering this function.
@@ -1740,7 +1783,8 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
             physical_target_qpc,
-            down_admission: DownBoundaryAdmission::Normal,
+            latest_down_start_qpc,
+            down_admission: DownBoundaryAdmission::Authorized,
             focus_loss_fault: false,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
             lease_timeout_ticks,

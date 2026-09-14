@@ -22,7 +22,6 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     pre_call_late_2ms: 3,
     pre_call_late_5ms: 2,
     pre_call_late_10ms: 1,
-    down_late_grace_us: 500,
     fps: 60,
     frame_us: 16_667,
     hold_frames: 1,
@@ -48,9 +47,9 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     chord_split_events: 2,
     missed_down_boundaries: 0,
     missed_down_keys: 0,
-    missed_backlog_boundaries: 0,
-    missed_hard_late_boundaries: 0,
-    final_gate_cutoff_misses: 0,
+    unobserved_backlog_boundaries: 0,
+    physical_window_expired_boundaries: 0,
+    down_expired_before_send: 0,
     final_gate_control_rejections: 0,
     final_gate_target_changes: 0,
     final_gate_focus_losses: 0,
@@ -101,9 +100,9 @@ describe('DiagnosticsView', () => {
             release_late_2ms: 0,
             missed_down_boundaries: 2,
             missed_down_keys: 3,
-            missed_backlog_boundaries: 1,
-            missed_hard_late_boundaries: 2,
-            final_gate_cutoff_misses: 2,
+            unobserved_backlog_boundaries: 1,
+            physical_window_expired_boundaries: 2,
+            down_expired_before_send: 2,
             final_gate_control_rejections: 1,
             final_gate_target_changes: 1,
             final_gate_focus_losses: 1,
@@ -129,13 +128,13 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Max pre-call lateness')).toBeInTheDocument();
     expect(screen.getByText('Pre-call > 10 ms')).toBeInTheDocument();
     expect(screen.getByText('Pre-call 500–750 μs')).toBeInTheDocument();
-    expect(screen.getByText('Late Down tolerance')).toBeInTheDocument();
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('17.467 ms');
     expect(screen.getByText('Release gap').parentElement).toHaveTextContent('17.467 ms');
-    expect(screen.getByText('Hard-late Down boundaries')).toBeInTheDocument();
+    expect(screen.getByText('Physical-window expirations')).toBeInTheDocument();
     expect(screen.getByText('Missed Down keys')).toBeInTheDocument();
-    expect(screen.getByText('Backlog misses')).toBeInTheDocument();
+    expect(screen.getByText('Unobserved backlog boundaries')).toBeInTheDocument();
+    expect(screen.getByText('Sender latest-start expirations')).toBeInTheDocument();
     expect(screen.getByText('Focus gate rejections')).toBeInTheDocument();
     expect(screen.getByText('Target changes')).toBeInTheDocument();
     expect(screen.getByText('Lease expirations')).toBeInTheDocument();
@@ -159,13 +158,10 @@ describe('DiagnosticsView', () => {
     expect(
       screen.getByText(/This cumulative value does not decrease after recovery/),
     ).toBeInTheDocument();
-    expect(
-      screen.getAllByText(/fixed Down late cutoff applies only to Down-bearing sends/),
-    ).toHaveLength(2);
-    expect(screen.getByText('Late Down tolerance 500 μs')).toBeInTheDocument();
+    expect(screen.queryByText(/Late Down|fixed Down late cutoff/)).toBeNull();
   });
 
-  it('shows the frozen user margin separately from the Late Down tolerance', () => {
+  it('shows the frozen physical timing floors and calibration recommendation', () => {
     const store = createDesktopStore(createMockBridge());
     const sessionId = 'd'.repeat(32);
     store.setState({
@@ -178,7 +174,6 @@ describe('DiagnosticsView', () => {
             timing_margin_us: 0,
             min_hold_us: 16_667,
             min_release_gap_us: 16_667,
-            down_late_grace_us: 500,
             timing_margin_recommendation: {
               recommended_timing_margin_us: 800,
               qualified: false,
@@ -195,7 +190,6 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('0 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('16.667 ms');
     expect(screen.getByText('Release gap').parentElement).toHaveTextContent('16.667 ms');
-    expect(screen.getByText('Late Down tolerance').parentElement).toHaveTextContent('500 µs');
     expect(screen.getByText('Recommended sender margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Recommendation source').parentElement).toHaveTextContent(
       'Default fallback (no valid calibration cache)',
@@ -303,7 +297,7 @@ describe('DiagnosticsView', () => {
         /Session max pre-call lateness observed at the latest diagnostics snapshot: 327 μs/,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText('Late Down tolerance 500 μs')).toBeInTheDocument();
+    expect(screen.queryByText(/Late Down/)).toBeNull();
   });
 
   it('distinguishes an attached physical player with no sender samples yet', () => {
@@ -440,7 +434,7 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Error');
     for (const label of [
       'Missed Down boundaries',
-      'Final cutoff misses',
+      'Sender latest-start expirations',
       'SendInput partial events',
       'Dropped keys',
       'Active keys',

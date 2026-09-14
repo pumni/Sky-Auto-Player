@@ -75,7 +75,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 14;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 15;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -90,7 +90,7 @@ pub(crate) const TRACE_SEND_STATUS_PREPARATION_REJECTED: u8 = 1;
 pub(crate) const TRACE_SEND_STATUS_ZERO_PROGRESS: u8 = 2;
 pub(crate) const TRACE_SEND_STATUS_PARTIAL_PROGRESS: u8 = 3;
 pub(crate) const TRACE_SEND_STATUS_INTEGRITY_LOST: u8 = 4;
-pub(crate) const TRACE_SEND_STATUS_DEADLINE_MISSED: u8 = 5;
+pub(crate) const TRACE_SEND_STATUS_DOWN_EXPIRED: u8 = 5;
 pub(crate) const TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND: u8 = 6;
 pub(crate) const TRACE_SEND_STATUS_CLOCK_FAILURE_AFTER_SEND: u8 = 7;
 pub(crate) const TRACE_SEND_STATUS_NOT_ATTEMPTED: u8 = 8;
@@ -102,7 +102,7 @@ pub(crate) const fn trace_send_status_code(status: SendTransactionStatus) -> u8 
         SendTransactionStatus::ZeroProgress => TRACE_SEND_STATUS_ZERO_PROGRESS,
         SendTransactionStatus::PartialProgress => TRACE_SEND_STATUS_PARTIAL_PROGRESS,
         SendTransactionStatus::IntegrityLost => TRACE_SEND_STATUS_INTEGRITY_LOST,
-        SendTransactionStatus::DeadlineMissedBeforeSend => TRACE_SEND_STATUS_DEADLINE_MISSED,
+        SendTransactionStatus::DownExpiredBeforeSend => TRACE_SEND_STATUS_DOWN_EXPIRED,
         SendTransactionStatus::ClockFailureBeforeSend => {
             TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND
         }
@@ -239,8 +239,9 @@ pub(crate) fn trace_outcome_code(outcome: &str) -> u8 {
         "strict_completion_slo_exceeded" => 6,
         "chord_integrity_lost" => 7,
         "aborted" => 8,
-        "down_cutoff_miss" => 9,
-        "down_backlog_miss" => 10,
+        "down_expired_before_send" => 9,
+        "down_unobserved_backlog" => 10,
+        "physical_window_expired" => 11,
         _ => 255,
     }
 }

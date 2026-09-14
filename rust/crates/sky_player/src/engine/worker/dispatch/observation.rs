@@ -58,6 +58,13 @@ pub struct BlockedUnfocusedObservation {
     pub down_mask: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DownMissKind {
+    UnobservedBacklog,
+    PhysicalWindowExpired,
+    DownExpiredBeforeSend,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct DownMissObservation {
     pub source_action_index: u32,
@@ -69,7 +76,7 @@ pub struct DownMissObservation {
     pub observed_qpc: QpcTicks,
     pub up_mask: u16,
     pub down_mask: u16,
-    pub cutoff_miss: bool,
+    pub kind: DownMissKind,
 }
 
 #[derive(Clone, Copy, Debug)]

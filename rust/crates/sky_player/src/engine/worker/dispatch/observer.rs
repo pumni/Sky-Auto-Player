@@ -474,7 +474,7 @@ pub(crate) fn drain_down_send_outcome(
         clean_dispatch_sample,
         local_metrics,
         qpc_clock,
-        timing.down_late_grace_ticks,
+        timing.timing_margin_ticks,
     )?;
     let strict_completion_late = timing.strict_timing
         && clean_dispatch_sample
