@@ -63,14 +63,5 @@ Packaging, Windows timing acceptance, release, and benchmark scripts are special
   - [adr/ADR-0007-single-repository-v4-release-architecture.md](adr/ADR-0007-single-repository-v4-release-architecture.md)
   - [adr/ADR-0008-v4-builtin-song-catalog.md](adr/ADR-0008-v4-builtin-song-catalog.md)
   - [adr/ADR-0009-v4-github-latest-policy.md](adr/ADR-0009-v4-github-latest-policy.md)
-- `docs/releases/` — Release-specific acceptance evidence and verification records.
-- `docs/perf-baselines/` — Measured performance baselines for specific environments and revisions.
-- `docs/evidence/` — Raw experimental and verification evidence.
-
-## Historical evidence and superseded contracts
-
-- [history/timing-experiments.md](history/timing-experiments.md) — Historical timing experiments and calibration procedures (non-normative).
-- [history/protocol-9-raw-input.md](history/protocol-9-raw-input.md) — Historical protocol-9 Raw Input observer mechanics (superseded).
-- [history/v3/distribution-and-update.md](history/v3/distribution-and-update.md) — Historical v3 portable ZIP and standalone updater mechanics (superseded).
-- `docs/history/migrations/` — Past transition summaries (`wave2` through `wave6`, `architecture-target.md`, `v4-clean-distribution-execution.md`, retirement ledgers) preserving past transition evidence.
-- Completed plans, superseded audits, and historical implementation work orders live in Git history (`git log`).
+- `docs/releases/` — Release-specific qualification and acceptance records.
+- Completed experiments, past migration records, raw measurement evidence, and historical performance baselines have been retired from the active documentation tree and remain preserved in Git history (`git log`).

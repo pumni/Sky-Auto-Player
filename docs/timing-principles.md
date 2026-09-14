@@ -182,9 +182,8 @@ timestamps, queue timestamps, and observer failures must never affect sender
 quantiles, clean-pair counts, retry decisions, candidate margin, or cache
 trust, and must never be written as production margin evidence.
 
-### 2.2 Historical protocol-9 Raw Input observer (superseded)
-
-The historical protocol-9 Raw Input observer mechanics and qualification formulas have been retired from active production contracts and relocated to [history/protocol-9-raw-input.md](history/protocol-9-raw-input.md).
+Historical protocol-9 Raw Input observer mechanics have been retired from active
+production contracts and remain preserved in Git history.
 
 ## 3. Planning and physical target
 

@@ -70,7 +70,3 @@ SHA-256 and verifies:
 Release orchestration remains subject to the single-repository runbook in
 [`v4-release-authority.md`](v4-release-authority.md) and the execution topology
 in [`v4-release-execution-topology.md`](v4-release-execution-topology.md).
-
-## 5. Historical v3 distribution (superseded)
-
-The legacy v3 distribution model (portable ZIP packaging, Ed25519 `MANIFEST.json`, and standalone `Sky-Auto-Player-Updater.exe` transactional replacement) has been retired from the active product architecture and relocated to [history/v3/distribution-and-update.md](history/v3/distribution-and-update.md).

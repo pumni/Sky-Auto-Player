@@ -11,11 +11,7 @@ const ROOTS: &[&str] = &[
     ".github/workflows",
     ".github/actions",
 ];
-const HISTORICAL_PREFIXES: &[&str] = &[
-    "scripts/bench_phase",
-    "docs/evidence/desktop-phase",
-    "tests/test_phase",
-];
+const HISTORICAL_PREFIXES: &[&str] = &["scripts/bench_phase", "tests/test_phase"];
 const IGNORED_DIRS: &[&str] = &[".git", "node_modules", "target", "dist"];
 
 fn is_historical(path: &str) -> bool {

@@ -69,7 +69,7 @@ try {
         supply_chain_required = "false"; site_required = "false"
     }
     Assert-Result "readme" $falseLanes @("README.md")
-    Assert-Result "docs-evidence" $falseLanes @("docs/evidence/foo.png")
+    Assert-Result "docs-general" $falseLanes @("docs/architecture.md")
     Assert-ReasonContains "static-only-with-readme" @(".config/rust_architecture_allowlist.json", "README.md") "static-only"
     Assert-Result "static-only-with-site" (@{ site_required = "true" }) @(".config/rust_architecture_allowlist.json", "site/src/pages/index.astro")
     Assert-ReasonContains "static-only-with-site-reason" @(".config/rust_architecture_allowlist.json", "site/src/pages/index.astro") "static-only"
