@@ -29,6 +29,8 @@ const DEFAULT_ITERATIONS: usize = 10_000;
 const DUE_US: u64 = 10_000;
 const SYNTHETIC_TRANSPORT_COMPLETION_US: u64 = 8;
 const C0_PASSES: usize = 3;
+const C1_PASSES: usize = 3;
+const C1_NORMAL_TOLERANCE_US: u64 = 2_500;
 const LATE_RESCUE_GRACES_US: [u64; 7] = [0, 250, 500, 1_000, 1_500, 2_500, 4_500];
 
 fn due_us() -> u64 {
@@ -85,6 +87,7 @@ enum BenchmarkScope {
     PhaseASparseGap,
     PhaseBB0,
     PhaseCC0,
+    PhaseCC1,
 }
 
 impl BenchmarkScope {
@@ -97,8 +100,9 @@ impl BenchmarkScope {
             Ok("phase_a_sparse_gap") => Ok(Self::PhaseASparseGap),
             Ok("phase_b0") => Ok(Self::PhaseBB0),
             Ok("phase_c0") => Ok(Self::PhaseCC0),
+            Ok("phase_c1") => Ok(Self::PhaseCC1),
             Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, or phase_c0, got {value:?}"
+                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, or phase_c1, got {value:?}"
             )),
             Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
@@ -113,6 +117,7 @@ impl BenchmarkScope {
             Self::PhaseASparseGap => "phase_a_sparse_gap",
             Self::PhaseBB0 => "phase_b0",
             Self::PhaseCC0 => "phase_c0",
+            Self::PhaseCC1 => "phase_c1",
         }
     }
 }
@@ -193,6 +198,11 @@ struct Samples {
     missed_down_unobserved_backlog: usize,
     missed_down_physical_window_expired: usize,
     missed_down_final_sender_window_expired: usize,
+    late_rescued_down_boundaries: usize,
+    late_rescued_down_keys: usize,
+    late_rescued_down_lateness_us: Vec<u64>,
+    late_rescued_down_excess_us: Vec<u64>,
+    transport_anomaly_count: usize,
     spin_time_us: Vec<u64>,
     wall_time_us: Vec<u64>,
 }
@@ -232,6 +242,8 @@ impl Samples {
             wait_wake_lateness_us,
             missed_pre_call_lateness_us,
             missed_excess_beyond_latest_start_us,
+            late_rescued_down_lateness_us,
+            late_rescued_down_excess_us,
             spin_time_us,
             wall_time_us,
         );
@@ -272,6 +284,15 @@ impl Samples {
         self.missed_down_final_sender_window_expired = self
             .missed_down_final_sender_window_expired
             .saturating_add(other.missed_down_final_sender_window_expired);
+        self.late_rescued_down_boundaries = self
+            .late_rescued_down_boundaries
+            .saturating_add(other.late_rescued_down_boundaries);
+        self.late_rescued_down_keys = self
+            .late_rescued_down_keys
+            .saturating_add(other.late_rescued_down_keys);
+        self.transport_anomaly_count = self
+            .transport_anomaly_count
+            .saturating_add(other.transport_anomaly_count);
         for (reason, count) in other.failure_reasons {
             *self.failure_reasons.entry(reason).or_default() += count;
         }
@@ -907,6 +928,32 @@ fn record_wait_metrics(
     Ok(())
 }
 
+fn record_c1_harness_metrics(
+    samples: &mut Samples,
+    harness: &mut ProductionDispatchTestHarness,
+) -> Result<(), String> {
+    let (boundaries, keys, lateness_us, excess_us) =
+        harness.late_rescued_down_metrics_us_for_test()?;
+    samples.late_rescued_down_boundaries = samples
+        .late_rescued_down_boundaries
+        .saturating_add(usize::try_from(boundaries).unwrap_or(usize::MAX));
+    samples.late_rescued_down_keys = samples
+        .late_rescued_down_keys
+        .saturating_add(usize::try_from(keys).unwrap_or(usize::MAX));
+    if boundaries != 0 {
+        samples.late_rescued_down_lateness_us.push(lateness_us);
+        samples.late_rescued_down_excess_us.push(excess_us);
+    }
+    let (partial, zero_progress, integrity_lost) = harness.transport_anomaly_counts_for_test();
+    let anomalies = partial
+        .saturating_add(zero_progress)
+        .saturating_add(integrity_lost);
+    samples.transport_anomaly_count = samples
+        .transport_anomaly_count
+        .saturating_add(usize::try_from(anomalies).unwrap_or(usize::MAX));
+    Ok(())
+}
+
 fn record_wait_evidence(
     samples: &mut Samples,
     harness: &ProductionDispatchTestHarness,
@@ -975,6 +1022,17 @@ fn run_down_iteration(
     benchmark_mode: BenchmarkMode,
     gap_us: u64,
 ) -> Result<(), String> {
+    run_down_iteration_with_tolerance(samples, key_count, mode, benchmark_mode, gap_us, 0)
+}
+
+fn run_down_iteration_with_tolerance(
+    samples: &mut Samples,
+    key_count: usize,
+    mode: WaitMode,
+    benchmark_mode: BenchmarkMode,
+    gap_us: u64,
+    continuity_tolerance_us: u64,
+) -> Result<(), String> {
     let iteration_started = Instant::now();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
     harness.enable_dispatch_ready_timing_for_benchmark();
@@ -985,6 +1043,7 @@ fn run_down_iteration(
     };
     harness.align_next_plan_to_benchmark_margin_for_test(alignment_margin_us);
     harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
+    harness.configure_normal_down_start_tolerance_for_test(continuity_tolerance_us)?;
     harness.reset_preparation_counts_for_test();
     let mut plan = NextDispatchPlan::default();
     let plan_started = Instant::now();
@@ -995,6 +1054,7 @@ fn run_down_iteration(
         elapsed_ns(plan_started),
     );
     if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, samples)?.is_none() {
+        record_c1_harness_metrics(samples, &mut harness)?;
         samples
             .wall_time_us
             .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
@@ -1003,6 +1063,7 @@ fn run_down_iteration(
     samples.physical_dispatches += 1;
     record_wait_metrics(samples, &harness, benchmark_mode)?;
     drain_observations(&mut harness, samples);
+    record_c1_harness_metrics(samples, &mut harness)?;
     samples
         .wall_time_us
         .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
@@ -1566,6 +1627,171 @@ fn phase_c0_report() -> serde_json::Value {
     })
 }
 
+fn run_phase_c1_interleaved_scenario(
+    key_count: usize,
+    gap_us: u64,
+    scenario_index: usize,
+    mode: WaitMode,
+) -> Result<[Samples; 2], String> {
+    let mut samples = [new_samples(), new_samples()];
+    for iteration in 0..iterations() {
+        let first_arm = (scenario_index + iteration) % 2;
+        for offset in 0..2 {
+            let arm = (first_arm + offset) % 2;
+            let tolerance_us = if arm == 0 { 0 } else { C1_NORMAL_TOLERANCE_US };
+            run_down_iteration_with_tolerance(
+                &mut samples[arm],
+                key_count,
+                mode,
+                BenchmarkMode::RealWait,
+                gap_us,
+                tolerance_us,
+            )?;
+        }
+    }
+    Ok(samples)
+}
+
+fn phase_c1_report() -> serde_json::Value {
+    let benchmark_started = Instant::now();
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let gaps_us = [5_000, 20_000, 25_000, 100_000, 250_000, 500_000, 1_000_000];
+    let key_counts = [1, 5, 15];
+    let scenario_count = gaps_us.len() * key_counts.len();
+    let expected_attempts_per_scenario = C1_PASSES.saturating_mul(iterations());
+    let expected_attempts_per_pass_per_arm = scenario_count.saturating_mul(iterations());
+    let expected_total_attempts = scenario_count
+        .saturating_mul(C1_PASSES)
+        .saturating_mul(iterations())
+        .saturating_mul(2);
+    let timing_margin_us = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 0)
+        .timing_margin_us_for_benchmark()
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut aggregate_by_scenario = (0..scenario_count)
+        .map(|_| [new_samples(), new_samples()])
+        .collect::<Vec<_>>();
+    let mut aggregate_all = [new_samples(), new_samples()];
+    let mut pass_reports = Vec::with_capacity(C1_PASSES);
+    let mut actual_spin_threshold_us_by_pass = Vec::with_capacity(C1_PASSES);
+
+    for pass_index in 0..C1_PASSES {
+        let mode = build_wait_mode("production_calibrated", true, true, true);
+        let start_scenario_index = (pass_index * 7) % scenario_count;
+        let mut pass_scenarios = [serde_json::Map::new(), serde_json::Map::new()];
+        let mut pass_aggregate = [new_samples(), new_samples()];
+        let mut scenario_order = Vec::with_capacity(scenario_count);
+        for offset in 0..scenario_count {
+            let scenario_index = (start_scenario_index + offset) % scenario_count;
+            let gap_us = gaps_us[scenario_index / key_counts.len()];
+            let key_count = key_counts[scenario_index % key_counts.len()];
+            let scenario_name = format!("down_only_{key_count}_gap_{gap_us}us");
+            let samples =
+                run_phase_c1_interleaved_scenario(key_count, gap_us, scenario_index, mode)
+                    .unwrap_or_else(|error| panic!("{error}"));
+            scenario_order.push(scenario_name.clone());
+            for arm in 0..2 {
+                pass_scenarios[arm].insert(scenario_name.clone(), summarize(samples[arm].clone()));
+                pass_aggregate[arm].append(samples[arm].clone());
+                aggregate_by_scenario[scenario_index][arm].append(samples[arm].clone());
+                aggregate_all[arm].append(samples[arm].clone());
+            }
+        }
+        actual_spin_threshold_us_by_pass.push(mode.effective_spin_threshold_us);
+        pass_reports.push(json!({
+            "pass": pass_index + 1,
+            "start_scenario_index": start_scenario_index,
+            "scenario_order": scenario_order,
+            "iterations_per_scenario_per_arm": iterations(),
+            "actual_spin_threshold_us": mode.effective_spin_threshold_us,
+            "startup_wake_error_us": wake_error_json(mode.startup_wake_error),
+            "arms": {
+                "current_cutoff": {
+                    "sender_cutoff_policy": "physical_latest_down_start",
+                    "scenarios": pass_scenarios[0],
+                    "aggregate": summarize_for_attempts(
+                        pass_aggregate[0].clone(),
+                        expected_attempts_per_pass_per_arm,
+                    ),
+                },
+                "c1_non_additive_2500us": {
+                    "sender_cutoff_policy": "max(physical_latest_down_start, authored_target_plus_2500us)",
+                    "scenarios": pass_scenarios[1],
+                    "aggregate": summarize_for_attempts(
+                        pass_aggregate[1].clone(),
+                        expected_attempts_per_pass_per_arm,
+                    ),
+                },
+            },
+        }));
+    }
+
+    let mut aggregate_scenarios = [serde_json::Map::new(), serde_json::Map::new()];
+    for (scenario_index, samples) in aggregate_by_scenario.into_iter().enumerate() {
+        let gap_us = gaps_us[scenario_index / key_counts.len()];
+        let key_count = key_counts[scenario_index % key_counts.len()];
+        let scenario_name = format!("down_only_{key_count}_gap_{gap_us}us");
+        for arm in 0..2 {
+            aggregate_scenarios[arm].insert(
+                scenario_name.clone(),
+                summarize_for_attempts(samples[arm].clone(), expected_attempts_per_scenario),
+            );
+        }
+    }
+
+    let modes = json!({
+        "current_cutoff": {
+            "sender_cutoff_policy": "physical_latest_down_start",
+            "scenarios": aggregate_scenarios[0],
+            "aggregate": summarize_for_attempts(
+                aggregate_all[0].clone(),
+                expected_attempts_per_scenario.saturating_mul(scenario_count),
+            ),
+        },
+        "c1_non_additive_2500us": {
+            "sender_cutoff_policy": "max(physical_latest_down_start, authored_target_plus_2500us)",
+            "scenarios": aggregate_scenarios[1],
+            "aggregate": summarize_for_attempts(
+                aggregate_all[1].clone(),
+                expected_attempts_per_scenario.saturating_mul(scenario_count),
+            ),
+        },
+    });
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    json!({
+        "scope": "Phase-C1 paired A/B real HybridWaiter qualification; C1 normal playback cutoff is enabled only on arm B",
+        "waitable_timer_enabled": true,
+        "event_wait_enabled": true,
+        "adaptive_spin_enabled": true,
+        "waiter_constructor": "HybridWaiter::production",
+        "production_spin_policy": "startup_calibrated_unchanged",
+        "sender_cutoff_policies": {
+            "current_cutoff": "physical_latest_down_start",
+            "c1_non_additive_2500us": "max(physical_latest_down_start, authored_target_plus_2500us)",
+        },
+        "strict_sender_cutoff": "physical_latest_down_start",
+        "physical_timing_window": "unchanged; PhysicalWindowExpired and UnobservedBacklog are never rescued",
+        "normal_playback_total_tolerance_us": C1_NORMAL_TOLERANCE_US,
+        "timing_margin_us": timing_margin_us,
+        "gap_matrix_us": gaps_us,
+        "key_count_matrix": key_counts,
+        "pass_count": C1_PASSES,
+        "iterations_per_scenario_per_arm_per_pass": iterations(),
+        "scenario_count": scenario_count,
+        "total_attempts": expected_total_attempts,
+        "ab_order": "rotates by (scenario_index + iteration) parity; both arms use the same pass calibration threshold",
+        "transport": "deterministic mock transport; waiter timing is real",
+        "actual_spin_threshold_us_by_pass": actual_spin_threshold_us_by_pass,
+        "passes": pass_reports,
+        "modes": modes,
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+        "process_cpu_duty_percent": cpu_duty_percent(
+            cpu_started_us,
+            cpu_finished_us,
+            benchmark_started,
+        ),
+    })
+}
+
 fn summarize(samples: Samples) -> serde_json::Value {
     summarize_for_attempts(samples, iterations())
 }
@@ -1692,6 +1918,15 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "missed_excess_beyond_latest_start_us": signed_summary(
             samples.missed_excess_beyond_latest_start_us,
         ),
+        "late_rescue": {
+            "rescued_down_boundaries": samples.late_rescued_down_boundaries,
+            "rescued_down_keys": samples.late_rescued_down_keys,
+            "total_lateness_us": unsigned_summary(samples.late_rescued_down_lateness_us),
+            "excess_beyond_physical_latest_us": unsigned_summary(
+                samples.late_rescued_down_excess_us,
+            ),
+        },
+        "transport_anomaly_count": samples.transport_anomaly_count,
         "counterfactual_late_rescue": counterfactual_rescue,
         "spin_time_us": unsigned_summary(samples.spin_time_us),
         "wall_time_us": unsigned_summary(samples.wall_time_us),
@@ -1824,6 +2059,11 @@ fn main() {
     {
         panic!("phase_c0 requires real_wait benchmark mode");
     }
+    if matches!(benchmark_scope, BenchmarkScope::PhaseCC1)
+        && !matches!(benchmark_mode, BenchmarkMode::RealWait)
+    {
+        panic!("phase_c1 requires real_wait benchmark mode");
+    }
     if matches!(benchmark_scope, BenchmarkScope::RealWaitCore)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
     {
@@ -1939,6 +2179,8 @@ fn main() {
         mode_reports.insert("phase_b0".to_string(), phase_b0_report());
     } else if matches!(benchmark_scope, BenchmarkScope::PhaseCC0) {
         mode_reports.insert("phase_c0".to_string(), phase_c0_report());
+    } else if matches!(benchmark_scope, BenchmarkScope::PhaseCC1) {
+        mode_reports.insert("phase_c1".to_string(), phase_c1_report());
     } else {
         mode_reports.insert(
             "phase_a_sender_only".to_string(),
@@ -1998,6 +2240,8 @@ fn main() {
             (BenchmarkScope::PhaseBB0, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::PhaseCC0, BenchmarkMode::RealWait) => "Phase-C0 calibrated-only stability benchmark and counterfactual late-rescue analysis through the production coordinator and real HybridWaiter with deterministic mock transport; no production wait policy, authored target, physical feasibility, or sender cutoff is changed; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseCC0, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::PhaseCC1, BenchmarkMode::RealWait) => "Phase-C1 paired A/B benchmark through the production coordinator and real HybridWaiter with deterministic mock transport; arm A uses the current physical cutoff and arm B uses the approved non-additive 2500us normal-playback continuity cutoff; physical feasibility, strict mode, and spin policy remain unchanged; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseCC1, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,

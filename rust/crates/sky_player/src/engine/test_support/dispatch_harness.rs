@@ -85,6 +85,35 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    /// Build two independent Down boundaries five milliseconds apart.  The
+    /// first boundary is used for a controlled late-rescue send; the second
+    /// proves that its authored target remains unchanged.
+    pub fn new_dense_future_boundary_for_test() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "dense-a-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 5_000,
+                scan_codes: vec![0x16].into(),
+                reason: "dense-b-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "dense-cleanup".into(),
+            },
+        ])
+    }
+
     /// Build a DownOnly chord whose physical deadline is at 1 ms.
     pub fn new_down_chord(key_count: usize) -> Self {
         Self::new_down_chord_with_gap(key_count, 1_000)
@@ -775,6 +804,23 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
+    pub fn configure_normal_down_start_tolerance_for_test(
+        &mut self,
+        tolerance_us: u64,
+    ) -> Result<(), String> {
+        self.timing.normal_down_start_tolerance_ticks = self
+            .resources
+            .clock
+            .duration_from_us(tolerance_us)
+            .map_err(|error| format!("test Down continuity tolerance conversion: {error:?}"))?;
+        Ok(())
+    }
+
+    pub fn set_strict_timing_for_test(&mut self, strict: bool) {
+        self.config.timing.strict_timing = strict;
+        self.timing.strict_timing = strict;
+    }
+
     pub fn timing_margin_us_for_benchmark(&self) -> Result<u64, String> {
         self.resources
             .clock
@@ -927,6 +973,40 @@ impl ProductionDispatchTestHarness {
     /// Query coordinator chord integrity lost count.
     pub fn chord_integrity_lost_count(&self) -> u64 {
         self.runtime.chord_integrity_lost_count()
+    }
+
+    pub fn late_rescued_down_metrics_for_test(&self) -> (u64, u64, u64, u64) {
+        (
+            self.local_metrics.late_rescued_down_boundaries,
+            self.local_metrics.late_rescued_down_keys,
+            self.local_metrics.max_late_rescued_down_lateness_ticks,
+            self.local_metrics.max_late_rescued_down_excess_ticks,
+        )
+    }
+
+    pub fn late_rescued_down_metrics_us_for_test(&self) -> Result<(u64, u64, u64, u64), String> {
+        let (boundaries, keys, lateness_ticks, excess_ticks) =
+            self.late_rescued_down_metrics_for_test();
+        let lateness_us = self
+            .resources
+            .clock
+            .duration_to_us(DurationTicks::from_raw(lateness_ticks))
+            .map_err(|error| format!("late-rescue lateness conversion: {error:?}"))?;
+        let excess_us = self
+            .resources
+            .clock
+            .duration_to_us(DurationTicks::from_raw(excess_ticks))
+            .map_err(|error| format!("late-rescue excess conversion: {error:?}"))?;
+        Ok((boundaries, keys, lateness_us, excess_us))
+    }
+
+    pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
+        publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
+        (
+            self.local_metrics.sendinput_partial_events,
+            self.local_metrics.sendinput_zero_progress_failures,
+            self.local_metrics.chord_integrity_lost,
+        )
     }
 
     pub fn fine_pre_call_bucket_counts_for_test(&self) -> [u64; 7] {
@@ -1869,7 +1949,7 @@ impl ProductionDispatchTestHarness {
     ) -> DispatchStep {
         let physical_target_qpc = plan.physical_target_qpc().expect("physical target QPC");
         let physical = plan.physical().expect("physical dispatch plan");
-        let latest_down_start_qpc = self.runtime.latest_down_start_for_test(
+        let physical_latest_down_start_qpc = self.runtime.latest_down_start_for_test(
             physical_target_qpc,
             physical.authored_view.packet_masks.up_mask,
             physical.authored_view.packet_masks.down_mask,
@@ -1891,7 +1971,7 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
             physical_timing_window,
-            latest_down_start_qpc,
+            physical_latest_down_start_qpc,
             down_admission: DownBoundaryAdmission::Authorized,
             focus_loss_fault: false,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,

@@ -255,6 +255,17 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
+    let normal_down_start_tolerance_ticks =
+        match qpc_clock.duration_from_us(super::NORMAL_PLAYBACK_DOWN_START_TOLERANCE_US) {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("normal Down continuity tolerance conversion failed: {error:?}"),
+                );
+            }
+        };
     core.runtime.physical_timing_guard =
         Some(super::physical_timing_guard::PhysicalTimingGuard::new(
             frame_base_hold_ticks,
@@ -599,6 +610,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.timing = Some(WorkerTimingState {
         strict_timing: config.timing.strict_timing,
         timing_margin_ticks,
+        normal_down_start_tolerance_ticks,
         strict_down_completion_late_ticks,
         strict_up_completion_late_ticks,
         focus_restore_grace_ticks,

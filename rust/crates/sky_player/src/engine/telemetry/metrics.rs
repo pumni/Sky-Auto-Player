@@ -91,6 +91,10 @@ pub struct WorkerMetricsLocal {
     pub final_gate_focus_losses: u64,
     pub final_gate_lease_expirations: u64,
     pub final_sender_window_expirations: u64,
+    pub(crate) late_rescued_down_boundaries: u64,
+    pub(crate) late_rescued_down_keys: u64,
+    pub(crate) max_late_rescued_down_lateness_ticks: u64,
+    pub(crate) max_late_rescued_down_excess_ticks: u64,
     /// Missed Down boundaries where a prior-Up release floor itself exceeded
     /// the latest feasible Down start.
     pub release_floor_infeasible_boundaries: u64,

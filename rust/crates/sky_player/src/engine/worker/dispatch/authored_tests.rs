@@ -1,3 +1,4 @@
+use super::super::recovery::effective_down_sender_cutoff;
 use super::super::{PhysicalCommit, RecoveryDescriptor};
 use super::*;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
@@ -127,4 +128,60 @@ fn anchored_target_math_supports_explicit_offset() {
         .expect("startup target");
         assert_eq!(target, QpcTicks::from_raw(expected_target));
     }
+}
+
+#[test]
+fn c1_normal_cutoff_is_non_additive_and_strict_cutoff_is_unchanged() {
+    let target = QpcTicks::from_raw(10_000);
+    let tolerance = DurationTicks::from_raw(2_500);
+    let mut timing = WorkerTimingState::create_test_timing();
+    timing.strict_timing = false;
+    timing.normal_down_start_tolerance_ticks = tolerance;
+
+    for (margin, expected) in [
+        (0, 12_500),
+        (500, 12_500),
+        (1_000, 12_500),
+        (2_000, 12_500),
+        (3_000, 13_000),
+    ] {
+        let latest = target
+            .checked_add_duration(DurationTicks::from_raw(margin))
+            .expect("physical latest start");
+        let window = PhysicalTimingWindow {
+            authored_target_qpc: target,
+            musical_up_not_before_qpc: target,
+            down_not_before_qpc: target,
+            packet_not_before_qpc: target,
+            latest_down_start_qpc: Some(latest),
+            hold_floor_mask: 0,
+            release_floor_mask: 0,
+        };
+        assert_eq!(
+            effective_down_sender_cutoff(window, &timing)
+                .expect("normal C1 cutoff")
+                .expect("Down cutoff"),
+            QpcTicks::from_raw(expected)
+        );
+    }
+
+    timing.strict_timing = true;
+    let latest = target
+        .checked_add_duration(DurationTicks::from_raw(500))
+        .expect("strict physical latest start");
+    let window = PhysicalTimingWindow {
+        authored_target_qpc: target,
+        musical_up_not_before_qpc: target,
+        down_not_before_qpc: target,
+        packet_not_before_qpc: target,
+        latest_down_start_qpc: Some(latest),
+        hold_floor_mask: 0,
+        release_floor_mask: 0,
+    };
+    assert_eq!(
+        effective_down_sender_cutoff(window, &timing)
+            .expect("strict C1 cutoff")
+            .expect("strict Down cutoff"),
+        latest
+    );
 }
