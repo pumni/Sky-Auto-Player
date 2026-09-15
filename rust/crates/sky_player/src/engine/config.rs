@@ -266,7 +266,11 @@ impl Default for WorkerConfig {
 }
 
 pub const DEFAULT_NORMAL_DOWN_START_TOLERANCE_US: u64 = 2_500;
+pub const MIN_NORMAL_DOWN_START_TOLERANCE_US: u64 = 2_500;
+pub const MAX_NORMAL_DOWN_START_TOLERANCE_US: u64 = 5_000;
+pub const STEP_NORMAL_DOWN_START_TOLERANCE_US: u64 = 500;
 
+#[derive(Clone, Copy, Debug)]
 pub struct TimingOptions {
     pub game_fps: u16,
     pub min_hold_us: u64,

@@ -40,7 +40,7 @@ Setting key: normal_down_start_tolerance_us
 UI label:    "Late note tolerance"
 Default:     2,500 µs (2.5 ms)
 Minimum:     2,500 µs (2.5 ms)
-Maximum:     5,000 µs (5.0 ms)
+Maximum:     5,000 µs (5.0 ms, provisionally bounded and empirically qualified)
 Step:          500 µs (0.5 ms)
 ```
 
@@ -63,14 +63,24 @@ strict sender cutoff = physical_latest_down_start
 - Strict playback mode never applies continuity tolerance; its sender cutoff
   remains strictly `physical_latest_down_start`.
 
-### 2. UI presentation and qualification boundaries
+### 2. UI presentation, guidance, and qualification evidence
 
 - The control is placed exclusively in **Settings → Advanced** (not in quick
   playback profiles and not in Settings → Playback).
 - The qualified, canonical default is **2.5 ms**.
+- Clear user copy guides configuration:
+  *"If notes are still dropped on fast chords under load, increase this step-by-step. Rescued notes may play slightly later than their authored time."*
 - When configured above 2.5 ms, an inline warning informs the user:
-  *"Values above 2.5 ms may degrade rhythmic tightness on fast passages."*
+  *"Values above 2.5 ms increase late-note continuity at the cost of authored timing accuracy under load."*
 - A dedicated **"Reset to 2.5 ms"** button is provided alongside the control.
+- **Empirical qualification evidence:** Phase-F1.1 real-wait sequential dense-probe qualification
+  across 3 passes and 5 gaps (1, 2, 3, 4, 5 ms) comparing arms 2.5 ms, 3.5 ms, and provisional
+  5.0 ms confirmed:
+  - 0 timeline rebases across all arms.
+  - `UnobservedBacklog == actually_overdue` on every iteration (no false backlogs).
+  - No systematic second-boundary degradation (450/450 successful second sends on 5.0 ms arm).
+  - Sparse 100 ms gap comparison proved Note-Ons with 2.6–5.0 ms wake lateness are 100% rescued
+    under 5.0 ms (dropped under 2.5 ms) and fail closed at 5.5 ms.
 
 ### 3. Session-freezing invariant
 
@@ -85,13 +95,15 @@ frozen for the lifetime of that playback session:
   `normal_down_start_tolerance_us`, invalidating cached session preparation when
   modified.
 
-### 4. Configuration schema migration
+### 4. Configuration schema migration and validation
 
 - The settings schema version is incremented from **7** to **8**.
 - Older configuration files migrate cleanly by populating
   `normal_down_start_tolerance_us: 2500`.
-- Clamped normalization ensures any out-of-range persisted value is brought into
-  the `[2_500, 5_000]` range with `500 µs` step alignment.
+- If an invalid persisted value is encountered (outside `[2_500, 5_000]` or unaligned
+  to 500 µs steps), it is reset to the 2.5 ms default (not clamped).
+- At the native engine boundary, `NativeDispatchSession` self-rejects timing contracts
+  with tolerance outside `[2_500, 5_000]` or unaligned with 500 µs steps, failing closed.
 
 ### 5. Invariants and non-claims
 

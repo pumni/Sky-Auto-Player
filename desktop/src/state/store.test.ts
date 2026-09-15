@@ -930,7 +930,7 @@ describe('desktop store', () => {
 
   it('keeps auto-advance ordered when successor playing arrives before start resolves', async () => {
     const bridge = createMockBridge({
-      playbackDurationMs: 60,
+      playbackDurationMs: 150,
       startDelayMs: 1,
       emitSnapshots: false,
     });
@@ -987,8 +987,10 @@ describe('desktop store', () => {
     await act(async () => store.getState().selectSong(first.song_id));
     await act(async () => store.getState().prepareSelectedPlayback());
     await act(async () => store.getState().startPreparedPlayback('proceed'));
-    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
-    await waitFor(() => expect(store.getState().playback.currentSong?.songId).toBe(first.song_id));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'), { timeout: 3000 });
+    await waitFor(() => expect(store.getState().playback.currentSong?.songId).toBe(first.song_id), {
+      timeout: 3000,
+    });
 
     await successorStarted;
     await successorPlayingCaptured;

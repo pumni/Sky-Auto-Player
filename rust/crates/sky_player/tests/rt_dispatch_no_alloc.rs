@@ -827,3 +827,57 @@ fn production_authorized_expired_before_send_recovery_no_alloc() {
     );
     assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
 }
+
+#[test]
+fn production_late_rescued_down_dispatch_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness =
+        ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(5_000);
+    harness
+        .configure_normal_down_start_tolerance_for_test(3_500)
+        .expect("valid tolerance");
+    let timing_margin_us = harness
+        .timing_margin_us_for_benchmark()
+        .expect("timing margin");
+    let packets = harness.configure_packet_capture();
+    let plan = harness.plan_current_dispatch();
+    let target = harness
+        .physical_target_qpc_for_test(&plan)
+        .expect("physical target");
+    // Target pre-call time is strictly between physical_latest_down_start (target + margin)
+    // and normal_sender_cutoff (target + 3_500 us) to exercise an actual late rescue.
+    let late_offset_us = timing_margin_us + 1_000;
+    let late_now = target
+        .checked_add_duration(
+            harness
+                .qpc_duration_from_us_for_test(late_offset_us)
+                .expect("duration conversion"),
+        )
+        .expect("late QPC");
+
+    // Observe future boundary before target outside the allocation measurement window.
+    let before_target =
+        QpcTicks::from_raw(target.as_u64().checked_sub(1).expect("target is nonzero"));
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&plan, before_target),
+        DispatchStep::NoWork
+    ));
+
+    enable_counting();
+    let step = harness.dispatch_at_qpc_for_test(&plan, late_now);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "late rescue allocated {allocs} time(s)");
+    assert!(
+        matches!(step, DispatchStep::Dispatched),
+        "late rescue must dispatch cleanly: step={step:?}"
+    );
+    assert_eq!(
+        packets.lock().unwrap().len(),
+        1,
+        "late rescue must emit exactly 1 packet"
+    );
+    let (rescued_boundaries, rescued_keys, _, _) = harness.late_rescued_down_metrics_for_test();
+    assert_eq!(rescued_boundaries, 1, "must record 1 late rescued boundary");
+    assert_eq!(rescued_keys, 1, "must record 1 late rescued key");
+}

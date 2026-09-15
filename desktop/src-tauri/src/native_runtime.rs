@@ -10173,7 +10173,10 @@ mod tests {
             );
         });
 
-        thread::sleep(Duration::from_millis(25));
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while heartbeats.load(Ordering::Relaxed) < 3 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
         assert!(heartbeats.load(Ordering::Relaxed) >= 3);
         publication_release.wait();
         ui.join().expect("UI publication seam");

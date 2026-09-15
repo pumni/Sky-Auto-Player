@@ -31,6 +31,11 @@ describe('LateNoteToleranceControl', () => {
     expect(screen.getByRole('button', { name: 'Decrease Late note tolerance' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Increase Late note tolerance' })).toBeEnabled();
     expect(
+      screen.getByText(
+        'If notes are still dropped on fast chords under load, increase this step-by-step. Rescued notes may play slightly later than their authored time.',
+      ),
+    ).toBeInTheDocument();
+    expect(
       screen.queryByRole('button', { name: 'Reset Late note tolerance to default' }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

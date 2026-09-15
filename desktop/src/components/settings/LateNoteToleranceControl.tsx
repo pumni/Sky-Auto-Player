@@ -86,6 +86,10 @@ export function LateNoteToleranceControl({
           </button>
         )}
       </div>
+      <span className="settings-note">
+        If notes are still dropped on fast chords under load, increase this step-by-step. Rescued
+        notes may play slightly later than their authored time.
+      </span>
       {isAboveDefault && (
         <span className="settings-note late-note-tolerance-warning" role="alert">
           Values above 2.5 ms increase late-note continuity at the cost of authored timing accuracy
