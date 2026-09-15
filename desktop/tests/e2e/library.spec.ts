@@ -712,7 +712,8 @@ test('Player transport geometry stays fixed when song timing labels appear', asy
 test('natural finish retires the old session and starts the next context song', async ({
   page,
 }) => {
-  await page.goto('/?mockPlaybackDurationMs=2500,120000&mockStartDelayMs=20');
+  // Keep the successor transition observable without extending the assertion timeout.
+  await page.goto('/?mockPlaybackDurationMs=2500,120000&mockStartDelayMs=100');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
