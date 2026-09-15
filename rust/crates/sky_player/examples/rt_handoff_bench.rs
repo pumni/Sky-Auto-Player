@@ -1484,6 +1484,7 @@ fn phase_c0_report() -> serde_json::Value {
         let mode = build_wait_mode("production_calibrated", true, true, true);
         let start_scenario_index = (pass_index * 7) % scenario_count;
         let mut pass_scenarios = serde_json::Map::new();
+        let mut pass_aggregate = new_samples();
         let mut scenario_order = Vec::with_capacity(scenario_count);
         for offset in 0..scenario_count {
             let scenario_index = (start_scenario_index + offset) % scenario_count;
@@ -1494,6 +1495,7 @@ fn phase_c0_report() -> serde_json::Value {
                 .unwrap_or_else(|error| panic!("{error}"));
             scenario_order.push(scenario_name.clone());
             pass_scenarios.insert(scenario_name, summarize(samples.clone()));
+            pass_aggregate.append(samples.clone());
             aggregate_by_scenario[scenario_index].append(samples.clone());
             aggregate_all.append(samples);
         }
@@ -1506,6 +1508,10 @@ fn phase_c0_report() -> serde_json::Value {
             "actual_spin_threshold_us": mode.effective_spin_threshold_us,
             "startup_wake_error_us": wake_error_json(mode.startup_wake_error),
             "scenarios": pass_scenarios,
+            "aggregate": summarize_for_attempts(
+                pass_aggregate,
+                scenario_count.saturating_mul(iterations()),
+            ),
         }));
     }
 
