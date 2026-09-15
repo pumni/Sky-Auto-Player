@@ -103,6 +103,11 @@ impl DownMissObservation {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub fn physical_latest_down_start_qpc(&self) -> Option<QpcTicks> {
+        self.physical_timing_window.latest_down_start_qpc
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn test_fixture(n: u64) -> Self {
         let authored_target_qpc = QpcTicks::from_raw(n);
         Self {
