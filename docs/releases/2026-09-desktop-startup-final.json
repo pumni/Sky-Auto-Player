@@ -1,0 +1,3676 @@
+{
+  "schema_version": 1,
+  "executable_name": "sky_desktop_shell.exe",
+  "methodology": {
+    "measured_runs_per_mode": 10,
+    "discarded_warmup_runs_per_mode": 1,
+    "coldish_definition": "Each run uses a fresh app-data root and a fresh manifest; Windows filesystem/OS caches are not cleared.",
+    "warm_definition": "Runs reuse one app-data root per fixture after a discarded warm-up; process restart remains part of every sample.",
+    "launch": "--selftest-desktop-gui with SKY_STARTUP_TELEMETRY_PATH; telemetry is independent of smoke phase logging.",
+    "fixtures": {
+      "minimal": {
+        "imported_entries": 0
+      },
+      "representative": {
+        "imported_entries": 12
+      },
+      "large": {
+        "imported_entries": 1280
+      }
+    }
+  },
+  "results": {
+    "minimal": {
+      "coldish": {
+        "measured_runs": 10,
+        "summary": {
+          "process_to_shell_ready_ms": {
+            "median": 807.271,
+            "p95": 932.846,
+            "raw": [
+              870.756,
+              780.298,
+              826.313,
+              821.671,
+              932.846,
+              747.14,
+              779.902,
+              807.271,
+              727.665,
+              839.555
+            ]
+          },
+          "frontend_initialize_to_shell_ready_ms": {
+            "median": 91.2,
+            "p95": 131.6,
+            "raw": [
+              93.1,
+              95.8,
+              131.6,
+              83.2,
+              115.5,
+              76.9,
+              85.8,
+              91.2,
+              95.4,
+              86.6
+            ]
+          },
+          "native_create_ms": {
+            "median": 5.309,
+            "p95": 7.112,
+            "raw": [
+              5.845,
+              5.125,
+              6.041,
+              7.112,
+              6.974,
+              5.252,
+              4.37,
+              6.035,
+              5.178,
+              5.309
+            ]
+          },
+          "bootstrap_ms": {
+            "median": 0.276,
+            "p95": 0.441,
+            "raw": [
+              0.441,
+              0.288,
+              0.272,
+              0.334,
+              0.288,
+              0.215,
+              0.285,
+              0.276,
+              0.212,
+              0.27
+            ]
+          },
+          "catalog_compose_ms": {
+            "median": 17.613,
+            "p95": 29.664,
+            "raw": [
+              17.819,
+              19.252,
+              29.664,
+              15.267,
+              19.14,
+              13.602,
+              17.308,
+              17.613,
+              17.959,
+              16.003
+            ]
+          },
+          "catalog_index_ms": {
+            "median": 0.658,
+            "p95": 2.092,
+            "raw": [
+              0.501,
+              0.68,
+              0.847,
+              0.44,
+              0.507,
+              0.429,
+              0.743,
+              0.658,
+              0.954,
+              2.092
+            ]
+          },
+          "catalog_compose_to_index_ms": {
+            "median": 23.311,
+            "p95": 36.977,
+            "raw": [
+              22.526,
+              25.925,
+              36.977,
+              19.053,
+              24.235,
+              17.996,
+              23.311,
+              22.772,
+              25.142,
+              23.756
+            ]
+          },
+          "catalog_ready_ms": {
+            "median": 757.854,
+            "p95": 871.318,
+            "raw": [
+              815.031,
+              726.823,
+              757.854,
+              772.267,
+              871.318,
+              701.065,
+              732.513,
+              758.726,
+              670.658,
+              792.171
+            ]
+          },
+          "shell_ready_ms": {
+            "median": 807.672,
+            "p95": 933.532,
+            "raw": [
+              871.749,
+              780.878,
+              826.731,
+              822.051,
+              933.532,
+              747.532,
+              780.342,
+              807.672,
+              728.058,
+              839.946
+            ]
+          },
+          "catalog_reconciled_ms": {
+            "median": 997.229,
+            "p95": 1123.428,
+            "raw": [
+              1082.116,
+              973.476,
+              1026.316,
+              1006.332,
+              1123.428,
+              961.637,
+              959.051,
+              997.229,
+              903.867,
+              1027.789
+            ]
+          },
+          "cached_catalog_available_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "cached_catalog_available_at_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "background_reconciliation_complete_ms": {
+            "median": 763.825,
+            "p95": 875.504,
+            "raw": [
+              822.06,
+              732.073,
+              763.974,
+              778.096,
+              875.504,
+              704.961,
+              736.96,
+              763.825,
+              684.489,
+              796.711
+            ]
+          },
+          "cold_no_cache_rebuild_ms": {
+            "median": 28.566,
+            "p95": 43.239,
+            "raw": [
+              29.634,
+              31.281,
+              43.239,
+              24.953,
+              28.603,
+              21.976,
+              27.938,
+              27.98,
+              39.237,
+              28.566
+            ]
+          }
+        },
+        "samples": [
+          {
+            "run": 1,
+            "process_to_shell_ready_ms": 870.756,
+            "frontend_initialize_to_shell_ready_ms": 93.1,
+            "native_create_ms": 5.845,
+            "bootstrap_ms": 0.441,
+            "catalog_compose_ms": 17.819,
+            "catalog_index_ms": 0.501,
+            "catalog_compose_to_index_ms": 22.526,
+            "catalog_ready_ms": 815.031,
+            "shell_ready_ms": 871.749,
+            "catalog_reconciled_ms": 1082.116,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 822.06,
+            "cold_no_cache_rebuild_ms": 29.634,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 16,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 2,
+            "process_to_shell_ready_ms": 780.298,
+            "frontend_initialize_to_shell_ready_ms": 95.8,
+            "native_create_ms": 5.125,
+            "bootstrap_ms": 0.288,
+            "catalog_compose_ms": 19.252,
+            "catalog_index_ms": 0.68,
+            "catalog_compose_to_index_ms": 25.925,
+            "catalog_ready_ms": 726.823,
+            "shell_ready_ms": 780.878,
+            "catalog_reconciled_ms": 973.476,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 732.073,
+            "cold_no_cache_rebuild_ms": 31.281,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 17,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 3,
+            "process_to_shell_ready_ms": 826.313,
+            "frontend_initialize_to_shell_ready_ms": 131.6,
+            "native_create_ms": 6.041,
+            "bootstrap_ms": 0.272,
+            "catalog_compose_ms": 29.664,
+            "catalog_index_ms": 0.847,
+            "catalog_compose_to_index_ms": 36.977,
+            "catalog_ready_ms": 757.854,
+            "shell_ready_ms": 826.731,
+            "catalog_reconciled_ms": 1026.316,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 763.974,
+            "cold_no_cache_rebuild_ms": 43.239,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 27,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 4,
+            "process_to_shell_ready_ms": 821.671,
+            "frontend_initialize_to_shell_ready_ms": 83.2,
+            "native_create_ms": 7.112,
+            "bootstrap_ms": 0.334,
+            "catalog_compose_ms": 15.267,
+            "catalog_index_ms": 0.44,
+            "catalog_compose_to_index_ms": 19.053,
+            "catalog_ready_ms": 772.267,
+            "shell_ready_ms": 822.051,
+            "catalog_reconciled_ms": 1006.332,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 778.096,
+            "cold_no_cache_rebuild_ms": 24.953,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 5,
+            "process_to_shell_ready_ms": 932.846,
+            "frontend_initialize_to_shell_ready_ms": 115.5,
+            "native_create_ms": 6.974,
+            "bootstrap_ms": 0.288,
+            "catalog_compose_ms": 19.14,
+            "catalog_index_ms": 0.507,
+            "catalog_compose_to_index_ms": 24.235,
+            "catalog_ready_ms": 871.318,
+            "shell_ready_ms": 933.532,
+            "catalog_reconciled_ms": 1123.428,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 875.504,
+            "cold_no_cache_rebuild_ms": 28.603,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 17,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 6,
+            "process_to_shell_ready_ms": 747.14,
+            "frontend_initialize_to_shell_ready_ms": 76.9,
+            "native_create_ms": 5.252,
+            "bootstrap_ms": 0.215,
+            "catalog_compose_ms": 13.602,
+            "catalog_index_ms": 0.429,
+            "catalog_compose_to_index_ms": 17.996,
+            "catalog_ready_ms": 701.065,
+            "shell_ready_ms": 747.532,
+            "catalog_reconciled_ms": 961.637,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 704.961,
+            "cold_no_cache_rebuild_ms": 21.976,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 12,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 7,
+            "process_to_shell_ready_ms": 779.902,
+            "frontend_initialize_to_shell_ready_ms": 85.8,
+            "native_create_ms": 4.37,
+            "bootstrap_ms": 0.285,
+            "catalog_compose_ms": 17.308,
+            "catalog_index_ms": 0.743,
+            "catalog_compose_to_index_ms": 23.311,
+            "catalog_ready_ms": 732.513,
+            "shell_ready_ms": 780.342,
+            "catalog_reconciled_ms": 959.051,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 736.96,
+            "cold_no_cache_rebuild_ms": 27.938,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 8,
+            "process_to_shell_ready_ms": 807.271,
+            "frontend_initialize_to_shell_ready_ms": 91.2,
+            "native_create_ms": 6.035,
+            "bootstrap_ms": 0.276,
+            "catalog_compose_ms": 17.613,
+            "catalog_index_ms": 0.658,
+            "catalog_compose_to_index_ms": 22.772,
+            "catalog_ready_ms": 758.726,
+            "shell_ready_ms": 807.672,
+            "catalog_reconciled_ms": 997.229,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 763.825,
+            "cold_no_cache_rebuild_ms": 27.98,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 16,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 9,
+            "process_to_shell_ready_ms": 727.665,
+            "frontend_initialize_to_shell_ready_ms": 95.4,
+            "native_create_ms": 5.178,
+            "bootstrap_ms": 0.212,
+            "catalog_compose_ms": 17.959,
+            "catalog_index_ms": 0.954,
+            "catalog_compose_to_index_ms": 25.142,
+            "catalog_ready_ms": 670.658,
+            "shell_ready_ms": 728.058,
+            "catalog_reconciled_ms": 903.867,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 684.489,
+            "cold_no_cache_rebuild_ms": 39.237,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 1,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 10,
+            "process_to_shell_ready_ms": 839.555,
+            "frontend_initialize_to_shell_ready_ms": 86.6,
+            "native_create_ms": 5.309,
+            "bootstrap_ms": 0.27,
+            "catalog_compose_ms": 16.003,
+            "catalog_index_ms": 2.092,
+            "catalog_compose_to_index_ms": 23.756,
+            "catalog_ready_ms": 792.171,
+            "shell_ready_ms": 839.946,
+            "catalog_reconciled_ms": 1027.789,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 796.711,
+            "cold_no_cache_rebuild_ms": 28.566,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          }
+        ]
+      },
+      "warm": {
+        "measured_runs": 10,
+        "summary": {
+          "process_to_shell_ready_ms": {
+            "median": 827.012,
+            "p95": 952.788,
+            "raw": [
+              815.222,
+              891.133,
+              812.432,
+              879.797,
+              900.963,
+              827.012,
+              914.284,
+              952.788,
+              774.745,
+              738.533
+            ]
+          },
+          "frontend_initialize_to_shell_ready_ms": {
+            "median": 90.9,
+            "p95": 118.6,
+            "raw": [
+              118.6,
+              87.3,
+              89.7,
+              102.4,
+              116.9,
+              90.9,
+              92.7,
+              100.7,
+              86.8,
+              86.6
+            ]
+          },
+          "native_create_ms": {
+            "median": 15.152,
+            "p95": 20.414,
+            "raw": [
+              14.248,
+              15.188,
+              14.94,
+              19.865,
+              20.414,
+              17.528,
+              15.152,
+              19.117,
+              14.093,
+              14.75
+            ]
+          },
+          "bootstrap_ms": {
+            "median": 0.627,
+            "p95": 0.945,
+            "raw": [
+              0.593,
+              0.708,
+              0.598,
+              0.673,
+              0.945,
+              0.627,
+              0.867,
+              0.792,
+              0.472,
+              0.626
+            ]
+          },
+          "catalog_compose_ms": {
+            "median": 16.36,
+            "p95": 19.033,
+            "raw": [
+              13.644,
+              13.433,
+              16.426,
+              16.457,
+              19.033,
+              17.615,
+              16.36,
+              15.279,
+              16.832,
+              12.104
+            ]
+          },
+          "catalog_index_ms": {
+            "median": 0.428,
+            "p95": 0.807,
+            "raw": [
+              0.359,
+              0.386,
+              0.428,
+              0.428,
+              0.676,
+              0.378,
+              0.807,
+              0.464,
+              0.368,
+              0.571
+            ]
+          },
+          "catalog_compose_to_index_ms": {
+            "median": 20.836,
+            "p95": 25.988,
+            "raw": [
+              17.525,
+              18.981,
+              21.27,
+              21.288,
+              25.988,
+              21.436,
+              20.836,
+              22.093,
+              20.318,
+              17.14
+            ]
+          },
+          "catalog_ready_ms": {
+            "median": 779.26,
+            "p95": 902.584,
+            "raw": [
+              734.333,
+              842.985,
+              761.78,
+              826.195,
+              839.729,
+              779.26,
+              855.631,
+              902.584,
+              729.327,
+              689.028
+            ]
+          },
+          "shell_ready_ms": {
+            "median": 827.354,
+            "p95": 953.839,
+            "raw": [
+              818.511,
+              891.631,
+              812.873,
+              880.219,
+              901.317,
+              827.354,
+              915.037,
+              953.839,
+              775.219,
+              738.958
+            ]
+          },
+          "catalog_reconciled_ms": {
+            "median": 967.507,
+            "p95": 1079.674,
+            "raw": [
+              967.507,
+              980.966,
+              916.747,
+              982.47,
+              1032.827,
+              921.478,
+              1061.714,
+              1079.674,
+              857.304,
+              832.533
+            ]
+          },
+          "cached_catalog_available_ms": {
+            "median": 15.004,
+            "p95": 20.264,
+            "raw": [
+              14.163,
+              15.089,
+              14.856,
+              19.77,
+              20.264,
+              17.426,
+              15.004,
+              18.998,
+              14.013,
+              14.662
+            ]
+          },
+          "cached_catalog_available_at_ms": {
+            "median": 756.568,
+            "p95": 878.99,
+            "raw": [
+              715.636,
+              822.632,
+              739.309,
+              803.572,
+              811.818,
+              756.568,
+              833.116,
+              878.99,
+              707.986,
+              670.64
+            ]
+          },
+          "background_reconciliation_complete_ms": {
+            "median": 783.512,
+            "p95": 906.548,
+            "raw": [
+              738.632,
+              847.022,
+              765.197,
+              831.691,
+              845.679,
+              783.512,
+              859.447,
+              906.548,
+              732.952,
+              692.806
+            ]
+          },
+          "cold_no_cache_rebuild_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          }
+        },
+        "samples": [
+          {
+            "run": 1,
+            "process_to_shell_ready_ms": 815.222,
+            "frontend_initialize_to_shell_ready_ms": 118.6,
+            "native_create_ms": 14.248,
+            "bootstrap_ms": 0.593,
+            "catalog_compose_ms": 13.644,
+            "catalog_index_ms": 0.359,
+            "catalog_compose_to_index_ms": 17.525,
+            "catalog_ready_ms": 734.333,
+            "shell_ready_ms": 818.511,
+            "catalog_reconciled_ms": 967.507,
+            "cached_catalog_available_ms": 14.163,
+            "cached_catalog_available_at_ms": 715.636,
+            "background_reconciliation_complete_ms": 738.632,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 12,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 2,
+            "process_to_shell_ready_ms": 891.133,
+            "frontend_initialize_to_shell_ready_ms": 87.3,
+            "native_create_ms": 15.188,
+            "bootstrap_ms": 0.708,
+            "catalog_compose_ms": 13.433,
+            "catalog_index_ms": 0.386,
+            "catalog_compose_to_index_ms": 18.981,
+            "catalog_ready_ms": 842.985,
+            "shell_ready_ms": 891.631,
+            "catalog_reconciled_ms": 980.966,
+            "cached_catalog_available_ms": 15.089,
+            "cached_catalog_available_at_ms": 822.632,
+            "background_reconciliation_complete_ms": 847.022,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 12,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 3,
+            "process_to_shell_ready_ms": 812.432,
+            "frontend_initialize_to_shell_ready_ms": 89.7,
+            "native_create_ms": 14.94,
+            "bootstrap_ms": 0.598,
+            "catalog_compose_ms": 16.426,
+            "catalog_index_ms": 0.428,
+            "catalog_compose_to_index_ms": 21.27,
+            "catalog_ready_ms": 761.78,
+            "shell_ready_ms": 812.873,
+            "catalog_reconciled_ms": 916.747,
+            "cached_catalog_available_ms": 14.856,
+            "cached_catalog_available_at_ms": 739.309,
+            "background_reconciliation_complete_ms": 765.197,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 4,
+            "process_to_shell_ready_ms": 879.797,
+            "frontend_initialize_to_shell_ready_ms": 102.4,
+            "native_create_ms": 19.865,
+            "bootstrap_ms": 0.673,
+            "catalog_compose_ms": 16.457,
+            "catalog_index_ms": 0.428,
+            "catalog_compose_to_index_ms": 21.288,
+            "catalog_ready_ms": 826.195,
+            "shell_ready_ms": 880.219,
+            "catalog_reconciled_ms": 982.47,
+            "cached_catalog_available_ms": 19.77,
+            "cached_catalog_available_at_ms": 803.572,
+            "background_reconciliation_complete_ms": 831.691,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 5,
+            "process_to_shell_ready_ms": 900.963,
+            "frontend_initialize_to_shell_ready_ms": 116.9,
+            "native_create_ms": 20.414,
+            "bootstrap_ms": 0.945,
+            "catalog_compose_ms": 19.033,
+            "catalog_index_ms": 0.676,
+            "catalog_compose_to_index_ms": 25.988,
+            "catalog_ready_ms": 839.729,
+            "shell_ready_ms": 901.317,
+            "catalog_reconciled_ms": 1032.827,
+            "cached_catalog_available_ms": 20.264,
+            "cached_catalog_available_at_ms": 811.818,
+            "background_reconciliation_complete_ms": 845.679,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 17,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 6,
+            "process_to_shell_ready_ms": 827.012,
+            "frontend_initialize_to_shell_ready_ms": 90.9,
+            "native_create_ms": 17.528,
+            "bootstrap_ms": 0.627,
+            "catalog_compose_ms": 17.615,
+            "catalog_index_ms": 0.378,
+            "catalog_compose_to_index_ms": 21.436,
+            "catalog_ready_ms": 779.26,
+            "shell_ready_ms": 827.354,
+            "catalog_reconciled_ms": 921.478,
+            "cached_catalog_available_ms": 17.426,
+            "cached_catalog_available_at_ms": 756.568,
+            "background_reconciliation_complete_ms": 783.512,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 7,
+            "process_to_shell_ready_ms": 914.284,
+            "frontend_initialize_to_shell_ready_ms": 92.7,
+            "native_create_ms": 15.152,
+            "bootstrap_ms": 0.867,
+            "catalog_compose_ms": 16.36,
+            "catalog_index_ms": 0.807,
+            "catalog_compose_to_index_ms": 20.836,
+            "catalog_ready_ms": 855.631,
+            "shell_ready_ms": 915.037,
+            "catalog_reconciled_ms": 1061.714,
+            "cached_catalog_available_ms": 15.004,
+            "cached_catalog_available_at_ms": 833.116,
+            "background_reconciliation_complete_ms": 859.447,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 8,
+            "process_to_shell_ready_ms": 952.788,
+            "frontend_initialize_to_shell_ready_ms": 100.7,
+            "native_create_ms": 19.117,
+            "bootstrap_ms": 0.792,
+            "catalog_compose_ms": 15.279,
+            "catalog_index_ms": 0.464,
+            "catalog_compose_to_index_ms": 22.093,
+            "catalog_ready_ms": 902.584,
+            "shell_ready_ms": 953.839,
+            "catalog_reconciled_ms": 1079.674,
+            "cached_catalog_available_ms": 18.998,
+            "cached_catalog_available_at_ms": 878.99,
+            "background_reconciliation_complete_ms": 906.548,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 13,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 9,
+            "process_to_shell_ready_ms": 774.745,
+            "frontend_initialize_to_shell_ready_ms": 86.8,
+            "native_create_ms": 14.093,
+            "bootstrap_ms": 0.472,
+            "catalog_compose_ms": 16.832,
+            "catalog_index_ms": 0.368,
+            "catalog_compose_to_index_ms": 20.318,
+            "catalog_ready_ms": 729.327,
+            "shell_ready_ms": 775.219,
+            "catalog_reconciled_ms": 857.304,
+            "cached_catalog_available_ms": 14.013,
+            "cached_catalog_available_at_ms": 707.986,
+            "background_reconciliation_complete_ms": 732.952,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 10,
+            "process_to_shell_ready_ms": 738.533,
+            "frontend_initialize_to_shell_ready_ms": 86.6,
+            "native_create_ms": 14.75,
+            "bootstrap_ms": 0.626,
+            "catalog_compose_ms": 12.104,
+            "catalog_index_ms": 0.571,
+            "catalog_compose_to_index_ms": 17.14,
+            "catalog_ready_ms": 689.028,
+            "shell_ready_ms": 738.958,
+            "catalog_reconciled_ms": 832.533,
+            "cached_catalog_available_ms": 14.662,
+            "cached_catalog_available_at_ms": 670.64,
+            "background_reconciliation_complete_ms": 692.806,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 11,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "representative": {
+      "coldish": {
+        "measured_runs": 10,
+        "summary": {
+          "process_to_shell_ready_ms": {
+            "median": 755.366,
+            "p95": 1057.874,
+            "raw": [
+              851.124,
+              935.065,
+              769.333,
+              778.362,
+              733.111,
+              736.535,
+              753.319,
+              748.567,
+              755.366,
+              1057.874
+            ]
+          },
+          "frontend_initialize_to_shell_ready_ms": {
+            "median": 88.9,
+            "p95": 133.2,
+            "raw": [
+              104,
+              133.2,
+              93.8,
+              86.3,
+              88,
+              89.6,
+              88.5,
+              80.8,
+              88.9,
+              124.3
+            ]
+          },
+          "native_create_ms": {
+            "median": 9.584,
+            "p95": 12.711,
+            "raw": [
+              10.511,
+              12.711,
+              9.236,
+              9.584,
+              8.064,
+              9.556,
+              10.045,
+              7.567,
+              9.778,
+              12.088
+            ]
+          },
+          "bootstrap_ms": {
+            "median": 0.276,
+            "p95": 0.546,
+            "raw": [
+              0.276,
+              0.448,
+              0.28,
+              0.249,
+              0.256,
+              0.382,
+              0.286,
+              0.249,
+              0.247,
+              0.546
+            ]
+          },
+          "catalog_compose_ms": {
+            "median": 21.795,
+            "p95": 26.804,
+            "raw": [
+              21.795,
+              26.804,
+              23.467,
+              18.566,
+              18.691,
+              23.534,
+              22.151,
+              18.095,
+              21.529,
+              25.826
+            ]
+          },
+          "catalog_index_ms": {
+            "median": 0.542,
+            "p95": 1.117,
+            "raw": [
+              0.646,
+              1.117,
+              0.821,
+              0.505,
+              0.541,
+              0.512,
+              0.641,
+              0.483,
+              0.542,
+              0.817
+            ]
+          },
+          "catalog_compose_to_index_ms": {
+            "median": 27.195,
+            "p95": 38.764,
+            "raw": [
+              26.611,
+              38.764,
+              30.14,
+              23.314,
+              24.48,
+              28.696,
+              27.195,
+              23.567,
+              27.292,
+              34.16
+            ]
+          },
+          "catalog_ready_ms": {
+            "median": 710.936,
+            "p95": 993.092,
+            "raw": [
+              796.446,
+              864.45,
+              724.515,
+              734.153,
+              686.639,
+              693.062,
+              710.763,
+              706.471,
+              710.936,
+              993.092
+            ]
+          },
+          "shell_ready_ms": {
+            "median": 755.789,
+            "p95": 1058.218,
+            "raw": [
+              851.575,
+              935.734,
+              769.806,
+              778.7,
+              733.652,
+              736.853,
+              753.658,
+              749.078,
+              755.789,
+              1058.218
+            ]
+          },
+          "catalog_reconciled_ms": {
+            "median": 956.251,
+            "p95": 1273.813,
+            "raw": [
+              1039.1,
+              1109.353,
+              954.564,
+              978.17,
+              895.505,
+              923.473,
+              931.084,
+              970.438,
+              956.251,
+              1273.813
+            ]
+          },
+          "cached_catalog_available_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "cached_catalog_available_at_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "background_reconciliation_complete_ms": {
+            "median": 715.86,
+            "p95": 998.545,
+            "raw": [
+              801.983,
+              874.573,
+              729.208,
+              738.099,
+              690.556,
+              697.567,
+              715.86,
+              710.156,
+              714.935,
+              998.545
+            ]
+          },
+          "cold_no_cache_rebuild_ms": {
+            "median": 32.261,
+            "p95": 49.092,
+            "raw": [
+              32.261,
+              49.092,
+              35.031,
+              27.332,
+              28.483,
+              33.269,
+              32.452,
+              27.364,
+              31.358,
+              39.777
+            ]
+          }
+        },
+        "samples": [
+          {
+            "run": 1,
+            "process_to_shell_ready_ms": 851.124,
+            "frontend_initialize_to_shell_ready_ms": 104,
+            "native_create_ms": 10.511,
+            "bootstrap_ms": 0.276,
+            "catalog_compose_ms": 21.795,
+            "catalog_index_ms": 0.646,
+            "catalog_compose_to_index_ms": 26.611,
+            "catalog_ready_ms": 796.446,
+            "shell_ready_ms": 851.575,
+            "catalog_reconciled_ms": 1039.1,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 801.983,
+            "cold_no_cache_rebuild_ms": 32.261,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 4,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 2,
+            "process_to_shell_ready_ms": 935.065,
+            "frontend_initialize_to_shell_ready_ms": 133.2,
+            "native_create_ms": 12.711,
+            "bootstrap_ms": 0.448,
+            "catalog_compose_ms": 26.804,
+            "catalog_index_ms": 1.117,
+            "catalog_compose_to_index_ms": 38.764,
+            "catalog_ready_ms": 864.45,
+            "shell_ready_ms": 935.734,
+            "catalog_reconciled_ms": 1109.353,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 874.573,
+            "cold_no_cache_rebuild_ms": 49.092,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 20,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 3,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 3,
+            "process_to_shell_ready_ms": 769.333,
+            "frontend_initialize_to_shell_ready_ms": 93.8,
+            "native_create_ms": 9.236,
+            "bootstrap_ms": 0.28,
+            "catalog_compose_ms": 23.467,
+            "catalog_index_ms": 0.821,
+            "catalog_compose_to_index_ms": 30.14,
+            "catalog_ready_ms": 724.515,
+            "shell_ready_ms": 769.806,
+            "catalog_reconciled_ms": 954.564,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 729.208,
+            "cold_no_cache_rebuild_ms": 35.031,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 17,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 3,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 4,
+            "process_to_shell_ready_ms": 778.362,
+            "frontend_initialize_to_shell_ready_ms": 86.3,
+            "native_create_ms": 9.584,
+            "bootstrap_ms": 0.249,
+            "catalog_compose_ms": 18.566,
+            "catalog_index_ms": 0.505,
+            "catalog_compose_to_index_ms": 23.314,
+            "catalog_ready_ms": 734.153,
+            "shell_ready_ms": 778.7,
+            "catalog_reconciled_ms": 978.17,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 738.099,
+            "cold_no_cache_rebuild_ms": 27.332,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 5,
+            "process_to_shell_ready_ms": 733.111,
+            "frontend_initialize_to_shell_ready_ms": 88,
+            "native_create_ms": 8.064,
+            "bootstrap_ms": 0.256,
+            "catalog_compose_ms": 18.691,
+            "catalog_index_ms": 0.541,
+            "catalog_compose_to_index_ms": 24.48,
+            "catalog_ready_ms": 686.639,
+            "shell_ready_ms": 733.652,
+            "catalog_reconciled_ms": 895.505,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 690.556,
+            "cold_no_cache_rebuild_ms": 28.483,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 13,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 6,
+            "process_to_shell_ready_ms": 736.535,
+            "frontend_initialize_to_shell_ready_ms": 89.6,
+            "native_create_ms": 9.556,
+            "bootstrap_ms": 0.382,
+            "catalog_compose_ms": 23.534,
+            "catalog_index_ms": 0.512,
+            "catalog_compose_to_index_ms": 28.696,
+            "catalog_ready_ms": 693.062,
+            "shell_ready_ms": 736.853,
+            "catalog_reconciled_ms": 923.473,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 697.567,
+            "cold_no_cache_rebuild_ms": 33.269,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 17,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 4,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 7,
+            "process_to_shell_ready_ms": 753.319,
+            "frontend_initialize_to_shell_ready_ms": 88.5,
+            "native_create_ms": 10.045,
+            "bootstrap_ms": 0.286,
+            "catalog_compose_ms": 22.151,
+            "catalog_index_ms": 0.641,
+            "catalog_compose_to_index_ms": 27.195,
+            "catalog_ready_ms": 710.763,
+            "shell_ready_ms": 753.658,
+            "catalog_reconciled_ms": 931.084,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 715.86,
+            "cold_no_cache_rebuild_ms": 32.452,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 16,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 1,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 8,
+            "process_to_shell_ready_ms": 748.567,
+            "frontend_initialize_to_shell_ready_ms": 80.8,
+            "native_create_ms": 7.567,
+            "bootstrap_ms": 0.249,
+            "catalog_compose_ms": 18.095,
+            "catalog_index_ms": 0.483,
+            "catalog_compose_to_index_ms": 23.567,
+            "catalog_ready_ms": 706.471,
+            "shell_ready_ms": 749.078,
+            "catalog_reconciled_ms": 970.438,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 710.156,
+            "cold_no_cache_rebuild_ms": 27.364,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 13,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 9,
+            "process_to_shell_ready_ms": 755.366,
+            "frontend_initialize_to_shell_ready_ms": 88.9,
+            "native_create_ms": 9.778,
+            "bootstrap_ms": 0.247,
+            "catalog_compose_ms": 21.529,
+            "catalog_index_ms": 0.542,
+            "catalog_compose_to_index_ms": 27.292,
+            "catalog_ready_ms": 710.936,
+            "shell_ready_ms": 755.789,
+            "catalog_reconciled_ms": 956.251,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 714.935,
+            "cold_no_cache_rebuild_ms": 31.358,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 17,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 10,
+            "process_to_shell_ready_ms": 1057.874,
+            "frontend_initialize_to_shell_ready_ms": 124.3,
+            "native_create_ms": 12.088,
+            "bootstrap_ms": 0.546,
+            "catalog_compose_ms": 25.826,
+            "catalog_index_ms": 0.817,
+            "catalog_compose_to_index_ms": 34.16,
+            "catalog_ready_ms": 993.092,
+            "shell_ready_ms": 1058.218,
+            "catalog_reconciled_ms": 1273.813,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 998.545,
+            "cold_no_cache_rebuild_ms": 39.777,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 19,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 3,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          }
+        ]
+      },
+      "warm": {
+        "measured_runs": 10,
+        "summary": {
+          "process_to_shell_ready_ms": {
+            "median": 828.459,
+            "p95": 1093.915,
+            "raw": [
+              831.642,
+              784.117,
+              783.274,
+              844.84,
+              813.901,
+              768.729,
+              828.459,
+              881.026,
+              967.708,
+              1093.915
+            ]
+          },
+          "frontend_initialize_to_shell_ready_ms": {
+            "median": 94.8,
+            "p95": 117.4,
+            "raw": [
+              105,
+              97.5,
+              92.9,
+              103.4,
+              94,
+              89.9,
+              90.9,
+              100.4,
+              117.4,
+              94.8
+            ]
+          },
+          "native_create_ms": {
+            "median": 19.245,
+            "p95": 23.735,
+            "raw": [
+              21.253,
+              20.34,
+              15.774,
+              20.518,
+              17.618,
+              19.479,
+              19.245,
+              17.464,
+              23.735,
+              16.943
+            ]
+          },
+          "bootstrap_ms": {
+            "median": 0.649,
+            "p95": 1.107,
+            "raw": [
+              0.675,
+              0.595,
+              0.548,
+              0.713,
+              0.884,
+              0.649,
+              0.719,
+              0.492,
+              1.107,
+              0.543
+            ]
+          },
+          "catalog_compose_ms": {
+            "median": 18.611,
+            "p95": 23.615,
+            "raw": [
+              20.271,
+              17.37,
+              16.918,
+              23.494,
+              19.103,
+              16.409,
+              18.454,
+              18.611,
+              23.615,
+              21.413
+            ]
+          },
+          "catalog_index_ms": {
+            "median": 0.44,
+            "p95": 0.581,
+            "raw": [
+              0.44,
+              0.535,
+              0.401,
+              0.439,
+              0.581,
+              0.41,
+              0.457,
+              0.469,
+              0.446,
+              0.43
+            ]
+          },
+          "catalog_compose_to_index_ms": {
+            "median": 23.283,
+            "p95": 29.774,
+            "raw": [
+              24.815,
+              22.604,
+              21.177,
+              29.774,
+              25.162,
+              20.568,
+              23.157,
+              23.283,
+              28.254,
+              26.114
+            ]
+          },
+          "catalog_ready_ms": {
+            "median": 780.163,
+            "p95": 1047.121,
+            "raw": [
+              780.163,
+              736.819,
+              731.463,
+              799.001,
+              768.652,
+              724.638,
+              783.795,
+              828.185,
+              912.993,
+              1047.121
+            ]
+          },
+          "shell_ready_ms": {
+            "median": 828.795,
+            "p95": 1094.28,
+            "raw": [
+              833.004,
+              784.514,
+              783.715,
+              845.209,
+              814.212,
+              769.259,
+              828.795,
+              881.363,
+              968.038,
+              1094.28
+            ]
+          },
+          "catalog_reconciled_ms": {
+            "median": 925.605,
+            "p95": 1210.683,
+            "raw": [
+              937.185,
+              883.296,
+              883.73,
+              951.272,
+              906.808,
+              860.269,
+              925.605,
+              982.461,
+              1073.172,
+              1210.683
+            ]
+          },
+          "cached_catalog_available_ms": {
+            "median": 19.141,
+            "p95": 23.553,
+            "raw": [
+              21.146,
+              20.234,
+              15.691,
+              20.428,
+              17.48,
+              19.393,
+              19.141,
+              17.377,
+              23.553,
+              16.86
+            ]
+          },
+          "cached_catalog_available_at_ms": {
+            "median": 754.005,
+            "p95": 1019.875,
+            "raw": [
+              754.005,
+              712.97,
+              709.176,
+              767.634,
+              741.875,
+              702.835,
+              759.212,
+              803.815,
+              882.608,
+              1019.875
+            ]
+          },
+          "background_reconciliation_complete_ms": {
+            "median": 785.22,
+            "p95": 1050.548,
+            "raw": [
+              785.22,
+              740.733,
+              735.58,
+              802.811,
+              773.306,
+              728.406,
+              788.194,
+              842.789,
+              930.992,
+              1050.548
+            ]
+          },
+          "cold_no_cache_rebuild_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          }
+        },
+        "samples": [
+          {
+            "run": 1,
+            "process_to_shell_ready_ms": 831.642,
+            "frontend_initialize_to_shell_ready_ms": 105,
+            "native_create_ms": 21.253,
+            "bootstrap_ms": 0.675,
+            "catalog_compose_ms": 20.271,
+            "catalog_index_ms": 0.44,
+            "catalog_compose_to_index_ms": 24.815,
+            "catalog_ready_ms": 780.163,
+            "shell_ready_ms": 833.004,
+            "catalog_reconciled_ms": 937.185,
+            "cached_catalog_available_ms": 21.146,
+            "cached_catalog_available_at_ms": 754.005,
+            "background_reconciliation_complete_ms": 785.22,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 16,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 2,
+            "process_to_shell_ready_ms": 784.117,
+            "frontend_initialize_to_shell_ready_ms": 97.5,
+            "native_create_ms": 20.34,
+            "bootstrap_ms": 0.595,
+            "catalog_compose_ms": 17.37,
+            "catalog_index_ms": 0.535,
+            "catalog_compose_to_index_ms": 22.604,
+            "catalog_ready_ms": 736.819,
+            "shell_ready_ms": 784.514,
+            "catalog_reconciled_ms": 883.296,
+            "cached_catalog_available_ms": 20.234,
+            "cached_catalog_available_at_ms": 712.97,
+            "background_reconciliation_complete_ms": 740.733,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 13,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 3,
+            "process_to_shell_ready_ms": 783.274,
+            "frontend_initialize_to_shell_ready_ms": 92.9,
+            "native_create_ms": 15.774,
+            "bootstrap_ms": 0.548,
+            "catalog_compose_ms": 16.918,
+            "catalog_index_ms": 0.401,
+            "catalog_compose_to_index_ms": 21.177,
+            "catalog_ready_ms": 731.463,
+            "shell_ready_ms": 783.715,
+            "catalog_reconciled_ms": 883.73,
+            "cached_catalog_available_ms": 15.691,
+            "cached_catalog_available_at_ms": 709.176,
+            "background_reconciliation_complete_ms": 735.58,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 13,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 4,
+            "process_to_shell_ready_ms": 844.84,
+            "frontend_initialize_to_shell_ready_ms": 103.4,
+            "native_create_ms": 20.518,
+            "bootstrap_ms": 0.713,
+            "catalog_compose_ms": 23.494,
+            "catalog_index_ms": 0.439,
+            "catalog_compose_to_index_ms": 29.774,
+            "catalog_ready_ms": 799.001,
+            "shell_ready_ms": 845.209,
+            "catalog_reconciled_ms": 951.272,
+            "cached_catalog_available_ms": 20.428,
+            "cached_catalog_available_at_ms": 767.634,
+            "background_reconciliation_complete_ms": 802.811,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 18,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 5,
+            "process_to_shell_ready_ms": 813.901,
+            "frontend_initialize_to_shell_ready_ms": 94,
+            "native_create_ms": 17.618,
+            "bootstrap_ms": 0.884,
+            "catalog_compose_ms": 19.103,
+            "catalog_index_ms": 0.581,
+            "catalog_compose_to_index_ms": 25.162,
+            "catalog_ready_ms": 768.652,
+            "shell_ready_ms": 814.212,
+            "catalog_reconciled_ms": 906.808,
+            "cached_catalog_available_ms": 17.48,
+            "cached_catalog_available_at_ms": 741.875,
+            "background_reconciliation_complete_ms": 773.306,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 6,
+            "process_to_shell_ready_ms": 768.729,
+            "frontend_initialize_to_shell_ready_ms": 89.9,
+            "native_create_ms": 19.479,
+            "bootstrap_ms": 0.649,
+            "catalog_compose_ms": 16.409,
+            "catalog_index_ms": 0.41,
+            "catalog_compose_to_index_ms": 20.568,
+            "catalog_ready_ms": 724.638,
+            "shell_ready_ms": 769.259,
+            "catalog_reconciled_ms": 860.269,
+            "cached_catalog_available_ms": 19.393,
+            "cached_catalog_available_at_ms": 702.835,
+            "background_reconciliation_complete_ms": 728.406,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 12,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 1,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 7,
+            "process_to_shell_ready_ms": 828.459,
+            "frontend_initialize_to_shell_ready_ms": 90.9,
+            "native_create_ms": 19.245,
+            "bootstrap_ms": 0.719,
+            "catalog_compose_ms": 18.454,
+            "catalog_index_ms": 0.457,
+            "catalog_compose_to_index_ms": 23.157,
+            "catalog_ready_ms": 783.795,
+            "shell_ready_ms": 828.795,
+            "catalog_reconciled_ms": 925.605,
+            "cached_catalog_available_ms": 19.141,
+            "cached_catalog_available_at_ms": 759.212,
+            "background_reconciliation_complete_ms": 788.194,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 8,
+            "process_to_shell_ready_ms": 881.026,
+            "frontend_initialize_to_shell_ready_ms": 100.4,
+            "native_create_ms": 17.464,
+            "bootstrap_ms": 0.492,
+            "catalog_compose_ms": 18.611,
+            "catalog_index_ms": 0.469,
+            "catalog_compose_to_index_ms": 23.283,
+            "catalog_ready_ms": 828.185,
+            "shell_ready_ms": 881.363,
+            "catalog_reconciled_ms": 982.461,
+            "cached_catalog_available_ms": 17.377,
+            "cached_catalog_available_at_ms": 803.815,
+            "background_reconciliation_complete_ms": 842.789,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 9,
+            "process_to_shell_ready_ms": 967.708,
+            "frontend_initialize_to_shell_ready_ms": 117.4,
+            "native_create_ms": 23.735,
+            "bootstrap_ms": 1.107,
+            "catalog_compose_ms": 23.615,
+            "catalog_index_ms": 0.446,
+            "catalog_compose_to_index_ms": 28.254,
+            "catalog_ready_ms": 912.993,
+            "shell_ready_ms": 968.038,
+            "catalog_reconciled_ms": 1073.172,
+            "cached_catalog_available_ms": 23.553,
+            "cached_catalog_available_at_ms": 882.608,
+            "background_reconciliation_complete_ms": 930.992,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 19,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 10,
+            "process_to_shell_ready_ms": 1093.915,
+            "frontend_initialize_to_shell_ready_ms": 94.8,
+            "native_create_ms": 16.943,
+            "bootstrap_ms": 0.543,
+            "catalog_compose_ms": 21.413,
+            "catalog_index_ms": 0.43,
+            "catalog_compose_to_index_ms": 26.114,
+            "catalog_ready_ms": 1047.121,
+            "shell_ready_ms": 1094.28,
+            "catalog_reconciled_ms": 1210.683,
+            "cached_catalog_available_ms": 16.86,
+            "cached_catalog_available_at_ms": 1019.875,
+            "background_reconciliation_complete_ms": 1050.548,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 17,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 2,
+                "directories_visited": 3,
+                "files_visited": 12,
+                "supported_files": 12
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "large": {
+      "coldish": {
+        "measured_runs": 10,
+        "summary": {
+          "process_to_shell_ready_ms": {
+            "median": 805.676,
+            "p95": 930.8,
+            "raw": [
+              784.191,
+              809.706,
+              930.8,
+              791.425,
+              761.068,
+              815.979,
+              824.098,
+              805.676,
+              811.357,
+              790.718
+            ]
+          },
+          "frontend_initialize_to_shell_ready_ms": {
+            "median": 94.6,
+            "p95": 118.6,
+            "raw": [
+              87.1,
+              96.7,
+              116.4,
+              102,
+              86.6,
+              93,
+              94.6,
+              118.6,
+              90.1,
+              96.1
+            ]
+          },
+          "native_create_ms": {
+            "median": 9.331,
+            "p95": 12.216,
+            "raw": [
+              9.099,
+              10.378,
+              11.997,
+              11.121,
+              8.917,
+              9.276,
+              9.492,
+              12.216,
+              9.09,
+              9.331
+            ]
+          },
+          "bootstrap_ms": {
+            "median": 0.299,
+            "p95": 0.415,
+            "raw": [
+              0.276,
+              0.301,
+              0.318,
+              0.306,
+              0.315,
+              0.295,
+              0.293,
+              0.415,
+              0.265,
+              0.299
+            ]
+          },
+          "catalog_compose_ms": {
+            "median": 198.982,
+            "p95": 316.476,
+            "raw": [
+              195.109,
+              203.076,
+              236.624,
+              219.019,
+              181.262,
+              198.982,
+              205.152,
+              316.476,
+              194.695,
+              195.417
+            ]
+          },
+          "catalog_index_ms": {
+            "median": 5.455,
+            "p95": 8.614,
+            "raw": [
+              5.455,
+              5.835,
+              8.614,
+              5.9,
+              5.412,
+              5.292,
+              7.017,
+              8.314,
+              5.413,
+              5.355
+            ]
+          },
+          "catalog_compose_to_index_ms": {
+            "median": 247.964,
+            "p95": 399.689,
+            "raw": [
+              241.925,
+              250.595,
+              300.115,
+              266.525,
+              225.938,
+              247.964,
+              261.255,
+              399.689,
+              241.891,
+              241.92
+            ]
+          },
+          "catalog_ready_ms": {
+            "median": 983.099,
+            "p95": 1135.693,
+            "raw": [
+              957.774,
+              983.099,
+              1135.693,
+              978.383,
+              919.091,
+              990.376,
+              1008.654,
+              1111.936,
+              984.936,
+              956.265
+            ]
+          },
+          "shell_ready_ms": {
+            "median": 806.025,
+            "p95": 931.301,
+            "raw": [
+              784.695,
+              810.134,
+              931.301,
+              791.79,
+              761.414,
+              816.363,
+              824.619,
+              806.025,
+              816.078,
+              791.039
+            ]
+          },
+          "catalog_reconciled_ms": {
+            "median": 1053.341,
+            "p95": 1370.417,
+            "raw": [
+              1037.851,
+              1120.299,
+              1370.417,
+              1048.822,
+              1039.034,
+              1068.97,
+              1095.655,
+              1196.768,
+              1053.341,
+              1024.474
+            ]
+          },
+          "cached_catalog_available_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "cached_catalog_available_at_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "background_reconciliation_complete_ms": {
+            "median": 996.432,
+            "p95": 1152.412,
+            "raw": [
+              970.392,
+              997.896,
+              1152.412,
+              990.25,
+              932.2,
+              1002.27,
+              1022.152,
+              1127.744,
+              996.432,
+              967.018
+            ]
+          },
+          "cold_no_cache_rebuild_ms": {
+            "median": 260.038,
+            "p95": 415.768,
+            "raw": [
+              254.988,
+              265.577,
+              317.057,
+              278.591,
+              239.201,
+              260.038,
+              274.974,
+              415.768,
+              253.595,
+              252.927
+            ]
+          }
+        },
+        "samples": [
+          {
+            "run": 1,
+            "process_to_shell_ready_ms": 784.191,
+            "frontend_initialize_to_shell_ready_ms": 87.1,
+            "native_create_ms": 9.099,
+            "bootstrap_ms": 0.276,
+            "catalog_compose_ms": 195.109,
+            "catalog_index_ms": 5.455,
+            "catalog_compose_to_index_ms": 241.925,
+            "catalog_ready_ms": 957.774,
+            "shell_ready_ms": 784.695,
+            "catalog_reconciled_ms": 1037.851,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 970.392,
+            "cold_no_cache_rebuild_ms": 254.988,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 178,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 2,
+            "process_to_shell_ready_ms": 809.706,
+            "frontend_initialize_to_shell_ready_ms": 96.7,
+            "native_create_ms": 10.378,
+            "bootstrap_ms": 0.301,
+            "catalog_compose_ms": 203.076,
+            "catalog_index_ms": 5.835,
+            "catalog_compose_to_index_ms": 250.595,
+            "catalog_ready_ms": 983.099,
+            "shell_ready_ms": 810.134,
+            "catalog_reconciled_ms": 1120.299,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 997.896,
+            "cold_no_cache_rebuild_ms": 265.577,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 185,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 3,
+            "process_to_shell_ready_ms": 930.8,
+            "frontend_initialize_to_shell_ready_ms": 116.4,
+            "native_create_ms": 11.997,
+            "bootstrap_ms": 0.318,
+            "catalog_compose_ms": 236.624,
+            "catalog_index_ms": 8.614,
+            "catalog_compose_to_index_ms": 300.115,
+            "catalog_ready_ms": 1135.693,
+            "shell_ready_ms": 931.301,
+            "catalog_reconciled_ms": 1370.417,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 1152.412,
+            "cold_no_cache_rebuild_ms": 317.057,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 220,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 4,
+            "process_to_shell_ready_ms": 791.425,
+            "frontend_initialize_to_shell_ready_ms": 102,
+            "native_create_ms": 11.121,
+            "bootstrap_ms": 0.306,
+            "catalog_compose_ms": 219.019,
+            "catalog_index_ms": 5.9,
+            "catalog_compose_to_index_ms": 266.525,
+            "catalog_ready_ms": 978.383,
+            "shell_ready_ms": 791.79,
+            "catalog_reconciled_ms": 1048.822,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 990.25,
+            "cold_no_cache_rebuild_ms": 278.591,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 20,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 196,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 5,
+            "process_to_shell_ready_ms": 761.068,
+            "frontend_initialize_to_shell_ready_ms": 86.6,
+            "native_create_ms": 8.917,
+            "bootstrap_ms": 0.315,
+            "catalog_compose_ms": 181.262,
+            "catalog_index_ms": 5.412,
+            "catalog_compose_to_index_ms": 225.938,
+            "catalog_ready_ms": 919.091,
+            "shell_ready_ms": 761.414,
+            "catalog_reconciled_ms": 1039.034,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 932.2,
+            "cold_no_cache_rebuild_ms": 239.201,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 12,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 166,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 6,
+            "process_to_shell_ready_ms": 815.979,
+            "frontend_initialize_to_shell_ready_ms": 93,
+            "native_create_ms": 9.276,
+            "bootstrap_ms": 0.295,
+            "catalog_compose_ms": 198.982,
+            "catalog_index_ms": 5.292,
+            "catalog_compose_to_index_ms": 247.964,
+            "catalog_ready_ms": 990.376,
+            "shell_ready_ms": 816.363,
+            "catalog_reconciled_ms": 1068.97,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 1002.27,
+            "cold_no_cache_rebuild_ms": 260.038,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 182,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 7,
+            "process_to_shell_ready_ms": 824.098,
+            "frontend_initialize_to_shell_ready_ms": 94.6,
+            "native_create_ms": 9.492,
+            "bootstrap_ms": 0.293,
+            "catalog_compose_ms": 205.152,
+            "catalog_index_ms": 7.017,
+            "catalog_compose_to_index_ms": 261.255,
+            "catalog_ready_ms": 1008.654,
+            "shell_ready_ms": 824.619,
+            "catalog_reconciled_ms": 1095.655,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 1022.152,
+            "cold_no_cache_rebuild_ms": 274.974,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 188,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 8,
+            "process_to_shell_ready_ms": 805.676,
+            "frontend_initialize_to_shell_ready_ms": 118.6,
+            "native_create_ms": 12.216,
+            "bootstrap_ms": 0.415,
+            "catalog_compose_ms": 316.476,
+            "catalog_index_ms": 8.314,
+            "catalog_compose_to_index_ms": 399.689,
+            "catalog_ready_ms": 1111.936,
+            "shell_ready_ms": 806.025,
+            "catalog_reconciled_ms": 1196.768,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 1127.744,
+            "cold_no_cache_rebuild_ms": 415.768,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 25,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 287,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 9,
+            "process_to_shell_ready_ms": 811.357,
+            "frontend_initialize_to_shell_ready_ms": 90.1,
+            "native_create_ms": 9.09,
+            "bootstrap_ms": 0.265,
+            "catalog_compose_ms": 194.695,
+            "catalog_index_ms": 5.413,
+            "catalog_compose_to_index_ms": 241.891,
+            "catalog_ready_ms": 984.936,
+            "shell_ready_ms": 816.078,
+            "catalog_reconciled_ms": 1053.341,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 996.432,
+            "cold_no_cache_rebuild_ms": 253.595,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 13,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 179,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 10,
+            "process_to_shell_ready_ms": 790.718,
+            "frontend_initialize_to_shell_ready_ms": 96.1,
+            "native_create_ms": 9.331,
+            "bootstrap_ms": 0.299,
+            "catalog_compose_ms": 195.417,
+            "catalog_index_ms": 5.355,
+            "catalog_compose_to_index_ms": 241.92,
+            "catalog_ready_ms": 956.265,
+            "shell_ready_ms": 791.039,
+            "catalog_reconciled_ms": 1024.474,
+            "cached_catalog_available_ms": null,
+            "cached_catalog_available_at_ms": null,
+            "background_reconciliation_complete_ms": 967.018,
+            "cold_no_cache_rebuild_ms": 252.927,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 13,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 180,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          }
+        ]
+      },
+      "warm": {
+        "measured_runs": 10,
+        "summary": {
+          "process_to_shell_ready_ms": {
+            "median": 815.257,
+            "p95": 886.054,
+            "raw": [
+              804.476,
+              843.847,
+              819.301,
+              826.158,
+              803.516,
+              815.257,
+              799.381,
+              797.787,
+              856.208,
+              886.054
+            ]
+          },
+          "frontend_initialize_to_shell_ready_ms": {
+            "median": 117,
+            "p95": 140.9,
+            "raw": [
+              116.4,
+              136.9,
+              115.9,
+              108.7,
+              117,
+              117,
+              119.8,
+              108.9,
+              136.3,
+              140.9
+            ]
+          },
+          "native_create_ms": {
+            "median": 44.342,
+            "p95": 54.184,
+            "raw": [
+              43.039,
+              54.184,
+              45.091,
+              42.431,
+              43.644,
+              44.342,
+              45.429,
+              42.137,
+              50.565,
+              46.803
+            ]
+          },
+          "bootstrap_ms": {
+            "median": 0.683,
+            "p95": 0.763,
+            "raw": [
+              0.683,
+              0.683,
+              0.663,
+              0.598,
+              0.621,
+              0.697,
+              0.629,
+              0.698,
+              0.763,
+              0.694
+            ]
+          },
+          "catalog_compose_ms": {
+            "median": 236.208,
+            "p95": 246.27,
+            "raw": [
+              245.832,
+              246.27,
+              231.567,
+              218.758,
+              236.208,
+              242.134,
+              231.413,
+              210.446,
+              244.104,
+              243.351
+            ]
+          },
+          "catalog_index_ms": {
+            "median": 7.58,
+            "p95": 10.225,
+            "raw": [
+              8.641,
+              10.225,
+              7.58,
+              8.352,
+              8.4,
+              8.18,
+              7.328,
+              7.555,
+              7.156,
+              6.423
+            ]
+          },
+          "catalog_compose_to_index_ms": {
+            "median": 306.229,
+            "p95": 323.014,
+            "raw": [
+              316.74,
+              322.452,
+              294.499,
+              287.955,
+              310.835,
+              309.188,
+              291.605,
+              273.657,
+              323.014,
+              306.229
+            ]
+          },
+          "catalog_ready_ms": {
+            "median": 1052.923,
+            "p95": 1104.56,
+            "raw": [
+              1056.897,
+              1089.374,
+              1049.532,
+              1052.923,
+              1045.809,
+              1058.002,
+              1020.032,
+              1012.135,
+              1102.102,
+              1104.56
+            ]
+          },
+          "shell_ready_ms": {
+            "median": 815.631,
+            "p95": 886.639,
+            "raw": [
+              807.938,
+              844.479,
+              819.69,
+              826.575,
+              804.63,
+              815.631,
+              799.901,
+              798.178,
+              857.02,
+              886.639
+            ]
+          },
+          "catalog_reconciled_ms": {
+            "median": 912.206,
+            "p95": 972.612,
+            "raw": [
+              908.973,
+              941.798,
+              912.206,
+              917.626,
+              899.738,
+              913.083,
+              890.362,
+              888.125,
+              950.315,
+              972.612
+            ]
+          },
+          "cached_catalog_available_ms": {
+            "median": 43.863,
+            "p95": 53.625,
+            "raw": [
+              42.547,
+              53.625,
+              44.625,
+              42.049,
+              43.162,
+              43.863,
+              44.916,
+              41.66,
+              49.968,
+              46.191
+            ]
+          },
+          "cached_catalog_available_at_ms": {
+            "median": 746.669,
+            "p95": 796.266,
+            "raw": [
+              737.904,
+              764.826,
+              752.962,
+              763.138,
+              733.022,
+              746.669,
+              726.551,
+              736.351,
+              776.943,
+              796.266
+            ]
+          },
+          "background_reconciliation_complete_ms": {
+            "median": 1069.719,
+            "p95": 1119.085,
+            "raw": [
+              1075.293,
+              1106.821,
+              1063.664,
+              1069.719,
+              1062.883,
+              1073.355,
+              1032.414,
+              1026.785,
+              1118.708,
+              1119.085
+            ]
+          },
+          "cold_no_cache_rebuild_ms": {
+            "median": null,
+            "p95": null,
+            "raw": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          }
+        },
+        "samples": [
+          {
+            "run": 1,
+            "process_to_shell_ready_ms": 804.476,
+            "frontend_initialize_to_shell_ready_ms": 116.4,
+            "native_create_ms": 43.039,
+            "bootstrap_ms": 0.683,
+            "catalog_compose_ms": 245.832,
+            "catalog_index_ms": 8.641,
+            "catalog_compose_to_index_ms": 316.74,
+            "catalog_ready_ms": 1056.897,
+            "shell_ready_ms": 807.938,
+            "catalog_reconciled_ms": 908.973,
+            "cached_catalog_available_ms": 42.547,
+            "cached_catalog_available_at_ms": 737.904,
+            "background_reconciliation_complete_ms": 1075.293,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 11,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 231,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 2,
+            "process_to_shell_ready_ms": 843.847,
+            "frontend_initialize_to_shell_ready_ms": 136.9,
+            "native_create_ms": 54.184,
+            "bootstrap_ms": 0.683,
+            "catalog_compose_ms": 246.27,
+            "catalog_index_ms": 10.225,
+            "catalog_compose_to_index_ms": 322.452,
+            "catalog_ready_ms": 1089.374,
+            "shell_ready_ms": 844.479,
+            "catalog_reconciled_ms": 941.798,
+            "cached_catalog_available_ms": 53.625,
+            "cached_catalog_available_at_ms": 764.826,
+            "background_reconciliation_complete_ms": 1106.821,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 12,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 231,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 3,
+            "process_to_shell_ready_ms": 819.301,
+            "frontend_initialize_to_shell_ready_ms": 115.9,
+            "native_create_ms": 45.091,
+            "bootstrap_ms": 0.663,
+            "catalog_compose_ms": 231.567,
+            "catalog_index_ms": 7.58,
+            "catalog_compose_to_index_ms": 294.499,
+            "catalog_ready_ms": 1049.532,
+            "shell_ready_ms": 819.69,
+            "catalog_reconciled_ms": 912.206,
+            "cached_catalog_available_ms": 44.625,
+            "cached_catalog_available_at_ms": 752.962,
+            "background_reconciliation_complete_ms": 1063.664,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 11,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 217,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 4,
+            "process_to_shell_ready_ms": 826.158,
+            "frontend_initialize_to_shell_ready_ms": 108.7,
+            "native_create_ms": 42.431,
+            "bootstrap_ms": 0.598,
+            "catalog_compose_ms": 218.758,
+            "catalog_index_ms": 8.352,
+            "catalog_compose_to_index_ms": 287.955,
+            "catalog_ready_ms": 1052.923,
+            "shell_ready_ms": 826.575,
+            "catalog_reconciled_ms": 917.626,
+            "cached_catalog_available_ms": 42.049,
+            "cached_catalog_available_at_ms": 763.138,
+            "background_reconciliation_complete_ms": 1069.719,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 10,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 204,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 5,
+            "process_to_shell_ready_ms": 803.516,
+            "frontend_initialize_to_shell_ready_ms": 117,
+            "native_create_ms": 43.644,
+            "bootstrap_ms": 0.621,
+            "catalog_compose_ms": 236.208,
+            "catalog_index_ms": 8.4,
+            "catalog_compose_to_index_ms": 310.835,
+            "catalog_ready_ms": 1045.809,
+            "shell_ready_ms": 804.63,
+            "catalog_reconciled_ms": 899.738,
+            "cached_catalog_available_ms": 43.162,
+            "cached_catalog_available_at_ms": 733.022,
+            "background_reconciliation_complete_ms": 1062.883,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 11,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 222,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 6,
+            "process_to_shell_ready_ms": 815.257,
+            "frontend_initialize_to_shell_ready_ms": 117,
+            "native_create_ms": 44.342,
+            "bootstrap_ms": 0.697,
+            "catalog_compose_ms": 242.134,
+            "catalog_index_ms": 8.18,
+            "catalog_compose_to_index_ms": 309.188,
+            "catalog_ready_ms": 1058.002,
+            "shell_ready_ms": 815.631,
+            "catalog_reconciled_ms": 913.083,
+            "cached_catalog_available_ms": 43.863,
+            "cached_catalog_available_at_ms": 746.669,
+            "background_reconciliation_complete_ms": 1073.355,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 11,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 227,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 7,
+            "process_to_shell_ready_ms": 799.381,
+            "frontend_initialize_to_shell_ready_ms": 119.8,
+            "native_create_ms": 45.429,
+            "bootstrap_ms": 0.629,
+            "catalog_compose_ms": 231.413,
+            "catalog_index_ms": 7.328,
+            "catalog_compose_to_index_ms": 291.605,
+            "catalog_ready_ms": 1020.032,
+            "shell_ready_ms": 799.901,
+            "catalog_reconciled_ms": 890.362,
+            "cached_catalog_available_ms": 44.916,
+            "cached_catalog_available_at_ms": 726.551,
+            "background_reconciliation_complete_ms": 1032.414,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 11,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 217,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 8,
+            "process_to_shell_ready_ms": 797.787,
+            "frontend_initialize_to_shell_ready_ms": 108.9,
+            "native_create_ms": 42.137,
+            "bootstrap_ms": 0.698,
+            "catalog_compose_ms": 210.446,
+            "catalog_index_ms": 7.555,
+            "catalog_compose_to_index_ms": 273.657,
+            "catalog_ready_ms": 1012.135,
+            "shell_ready_ms": 798.178,
+            "catalog_reconciled_ms": 888.125,
+            "cached_catalog_available_ms": 41.66,
+            "cached_catalog_available_at_ms": 736.351,
+            "background_reconciliation_complete_ms": 1026.785,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 10,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 197,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 9,
+            "process_to_shell_ready_ms": 856.208,
+            "frontend_initialize_to_shell_ready_ms": 136.3,
+            "native_create_ms": 50.565,
+            "bootstrap_ms": 0.763,
+            "catalog_compose_ms": 244.104,
+            "catalog_index_ms": 7.156,
+            "catalog_compose_to_index_ms": 323.014,
+            "catalog_ready_ms": 1102.102,
+            "shell_ready_ms": 857.02,
+            "catalog_reconciled_ms": 950.315,
+            "cached_catalog_available_ms": 49.968,
+            "cached_catalog_available_at_ms": 776.943,
+            "background_reconciliation_complete_ms": 1118.708,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 15,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 225,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          },
+          {
+            "run": 10,
+            "process_to_shell_ready_ms": 886.054,
+            "frontend_initialize_to_shell_ready_ms": 140.9,
+            "native_create_ms": 46.803,
+            "bootstrap_ms": 0.694,
+            "catalog_compose_ms": 243.351,
+            "catalog_index_ms": 6.423,
+            "catalog_compose_to_index_ms": 306.229,
+            "catalog_ready_ms": 1104.56,
+            "shell_ready_ms": 886.639,
+            "catalog_reconciled_ms": 972.612,
+            "cached_catalog_available_ms": 46.191,
+            "cached_catalog_available_at_ms": 796.266,
+            "background_reconciliation_complete_ms": 1119.085,
+            "cold_no_cache_rebuild_ms": null,
+            "catalog_sources": [
+              {
+                "marker": "catalog.builtin.end",
+                "duration_ms": 14,
+                "directories_visited": 1,
+                "files_visited": 96,
+                "supported_files": 96
+              },
+              {
+                "marker": "catalog.import.source_0.end",
+                "duration_ms": 225,
+                "directories_visited": 41,
+                "files_visited": 1280,
+                "supported_files": 1280
+              },
+              {
+                "marker": "catalog.user.end",
+                "duration_ms": 0,
+                "directories_visited": 1,
+                "files_visited": 0,
+                "supported_files": 0
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
