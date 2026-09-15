@@ -1,7 +1,7 @@
 import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
-import type { SearchRequest, SettingsPatch } from '../bridge/DesktopBridge';
+import type { SearchRequest, SettingsPatch, UiEvent } from '../bridge/DesktopBridge';
 import {
   AUTO_PLAY_HANDOFF_MS,
   createShuffleTraversal,
@@ -926,6 +926,86 @@ describe('desktop store', () => {
     expect(store.getState().playback.sessionId).not.toBe(firstSession);
     expect(store.getState().playback.context?.currentIndex).toBe(1);
     expect(store.getState().playback.error).toBeNull();
+  });
+
+  it('keeps auto-advance ordered when successor playing arrives before start resolves', async () => {
+    const bridge = createMockBridge({
+      playbackDurationMs: 60,
+      startDelayMs: 1,
+      emitSnapshots: false,
+    });
+    const originalSubscribe = bridge.subscribeUiEvents;
+    const originalStart = bridge.startPlayback;
+    let forwardEvent: ((event: UiEvent) => void) | undefined;
+    let holdSuccessorPlaying = false;
+    let heldPlaying: UiEvent | null = null;
+    let releaseSuccessorStart!: () => void;
+    let resolveSuccessorStart!: () => void;
+    const successorStartReleased = new Promise<void>((resolve) => {
+      releaseSuccessorStart = resolve;
+    });
+    const successorStarted = new Promise<void>((resolve) => {
+      resolveSuccessorStart = resolve;
+    });
+    let resolveSuccessorPlaying!: () => void;
+    const successorPlayingCaptured = new Promise<void>((resolve) => {
+      resolveSuccessorPlaying = resolve;
+    });
+
+    bridge.subscribeUiEvents = async (listener) => {
+      forwardEvent = listener;
+      return originalSubscribe((event) => {
+        if (
+          holdSuccessorPlaying &&
+          event.name === 'playback.state_changed' &&
+          event.payload.state === 'playing'
+        ) {
+          heldPlaying = event;
+          resolveSuccessorPlaying();
+          return;
+        }
+        listener(event);
+      });
+    };
+    let startCount = 0;
+    bridge.startPlayback = async (request) => {
+      const successor = startCount++ === 1;
+      if (successor) {
+        holdSuccessorPlaying = true;
+        resolveSuccessorStart();
+      }
+      const session = await originalStart(request);
+      if (successor) await successorStartReleased;
+      return session;
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    const second = rowAt(store, 1);
+    if (!first || !second) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    await waitFor(() => expect(store.getState().playback.currentSong?.songId).toBe(first.song_id));
+
+    await successorStarted;
+    await successorPlayingCaptured;
+    expect(store.getState().playback.currentSong?.songId).toBe(second.song_id);
+    expect(store.getState().playback.transportOperation).toBe('advancing');
+    expect(heldPlaying).not.toBeNull();
+
+    forwardEvent?.(heldPlaying!);
+    expect(store.getState().playback.currentSong?.songId).toBe(second.song_id);
+    expect(store.getState().playback.state).toBe('playing');
+    expect(store.getState().playback.transportOperation).toBeNull();
+
+    releaseSuccessorStart();
+    await waitFor(() => expect(store.getState().playback.sessionId).not.toBeNull());
+    expect(store.getState().playback.currentSong?.songId).toBe(second.song_id);
+    expect(store.getState().playback.state).toBe('playing');
+    expect(store.getState().playback.transportOperation).toBeNull();
   });
 
   it('waits for the Auto Play handoff after natural retirement', async () => {

@@ -674,11 +674,17 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       if (oldest === undefined) break;
       pendingStarts.delete(oldest);
     }
+    const startingPlayback = get().playback;
+    const transportOperation =
+      startingPlayback.transportOperation === 'advancing' ||
+      startingPlayback.transportOperation === 'restarting'
+        ? startingPlayback.transportOperation
+        : 'starting';
     set({
       playback: {
-        ...get().playback,
+        ...startingPlayback,
         startRequestId: startEpoch,
-        transportOperation: 'starting',
+        transportOperation,
         error: null,
       },
     });
@@ -883,7 +889,10 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
       const playbackContext = pending?.context ?? current.context;
       const confirmsOperation =
-        (current.transportOperation === 'starting' && event.payload.state === 'playing') ||
+        ((current.transportOperation === 'starting' ||
+          current.transportOperation === 'advancing' ||
+          current.transportOperation === 'restarting') &&
+          event.payload.state === 'playing') ||
         (current.transportOperation === 'pausing' && event.payload.state === 'paused') ||
         (current.transportOperation === 'resuming' && event.payload.state === 'playing');
       if (confirmsOperation) clearOperationFromEvent();
@@ -920,7 +929,10 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
       const playbackContext = pending?.context ?? current.context;
       const confirmsOperation =
-        (current.transportOperation === 'starting' && event.payload.state === 'playing') ||
+        ((current.transportOperation === 'starting' ||
+          current.transportOperation === 'advancing' ||
+          current.transportOperation === 'restarting') &&
+          event.payload.state === 'playing') ||
         (current.transportOperation === 'pausing' && event.payload.state === 'paused') ||
         (current.transportOperation === 'resuming' && event.payload.state === 'playing');
       if (confirmsOperation) clearOperationFromEvent();
