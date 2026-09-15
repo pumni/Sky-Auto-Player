@@ -30,7 +30,7 @@ describe('desktop application shell', () => {
 
     const settingsButton = screen.getByRole('button', { name: 'Open settings' });
     fireEvent.click(settingsButton);
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     expect(screen.getByLabelText('Theme')).toHaveValue('aurora');
     fireEvent.click(screen.getByRole('button', { name: 'About' }));
@@ -120,7 +120,7 @@ describe('desktop application shell', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Runtime' }));
     const diagnostics = await screen.findByRole('region', { name: 'Utility: Diagnostics' });
     expect(utility).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Performance' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Performance' })).toBeInTheDocument();
     fireEvent.keyDown(diagnostics, { key: 'Escape' });
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: 'Utility: Diagnostics' })).toBeNull(),

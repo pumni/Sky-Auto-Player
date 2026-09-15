@@ -1,8 +1,9 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createMockBridge, createTauriBridge } from './bridge';
+import { createTauriBridge } from './bridge/tauriBridge';
 import { App } from './app/App';
 import { ErrorBoundary } from './app/ErrorBoundary';
+import { isTauriRuntime } from './platform/runtime';
 import { recordStartupTelemetry } from './bridge/startupTelemetry';
 import './styles/tokens.css';
 import './styles/reset.css';
@@ -15,15 +16,6 @@ import './styles/player.css';
 import './styles/overlays.css';
 import './styles/themes.css';
 
-// Tauri's bundled API uses the internal bridge, while the Windows WebView2
-// page can expose the Tauri origin before that property is observable to the
-// entry module. Keep browser/Playwright runs on the mock bridge, but recognize
-// both stable Tauri origins for the packaged shell.
-const isTauri =
-  '__TAURI_INTERNALS__' in window ||
-  'isTauri' in window ||
-  window.location.protocol === 'tauri:' ||
-  window.location.hostname === 'tauri.localhost';
 recordStartupTelemetry('frontend.entry');
 const mockDurations = (
   new URLSearchParams(window.location.search).get('mockPlaybackDurationMs') ?? ''
@@ -54,43 +46,47 @@ const mockStartFailures: Record<string, { code: string; message: string }> = {
       'The validated Sky window could not be focused. Bring Sky to the foreground and try again.',
   },
 };
-const bridge = isTauri
-  ? createTauriBridge()
-  : createMockBridge({
-      ...(mockDurations.length === 1 && mockDurations[0] !== undefined
-        ? { playbackDurationMs: mockDurations[0] }
-        : mockDurations.length > 1 && mockDurations[0] !== undefined
-          ? {
-              playbackDurationMs: mockDurations[0],
-              playbackDurationsMs: mockDurations,
-            }
-          : {}),
-      ...(Number.isFinite(mockStartDelay) && mockStartDelay > 0
-        ? { startDelayMs: Math.min(mockStartDelay, 15_000) }
+const createBrowserBridge = async () => {
+  const { createMockBridge } = await import('./bridge/mockBridge');
+  return createMockBridge({
+    ...(mockDurations.length === 1 && mockDurations[0] !== undefined
+      ? { playbackDurationMs: mockDurations[0] }
+      : mockDurations.length > 1 && mockDurations[0] !== undefined
+        ? {
+            playbackDurationMs: mockDurations[0],
+            playbackDurationsMs: mockDurations,
+          }
         : {}),
-      ...(Number.isFinite(mockStartResponseDelay) && mockStartResponseDelay > 0
-        ? { startResponseDelayMs: Math.min(mockStartResponseDelay, 60_000) }
-        : {}),
-      ...(Number.isFinite(mockStatusQueryFailures) && mockStatusQueryFailures > 0
-        ? { statusQueryFailures: Math.min(mockStatusQueryFailures, 10) }
-        : {}),
-      ...(mockParams.get('mockNeverCreateSession') === '1' ? { neverCreateSession: true } : {}),
-      ...(mockParams.get('mockDropPlaybackSnapshots') === '1' ? { emitSnapshots: false } : {}),
-      ...(mockParams.get('mockDropPlaybackStartConfirmation') === '1'
-        ? { dropPlaybackStartConfirmation: true }
-        : {}),
-      ...(mockStartFailureCode && mockStartFailures[mockStartFailureCode]
-        ? { startFailure: mockStartFailures[mockStartFailureCode] }
-        : {}),
-    });
+    ...(Number.isFinite(mockStartDelay) && mockStartDelay > 0
+      ? { startDelayMs: Math.min(mockStartDelay, 15_000) }
+      : {}),
+    ...(Number.isFinite(mockStartResponseDelay) && mockStartResponseDelay > 0
+      ? { startResponseDelayMs: Math.min(mockStartResponseDelay, 60_000) }
+      : {}),
+    ...(Number.isFinite(mockStatusQueryFailures) && mockStatusQueryFailures > 0
+      ? { statusQueryFailures: Math.min(mockStatusQueryFailures, 10) }
+      : {}),
+    ...(mockParams.get('mockNeverCreateSession') === '1' ? { neverCreateSession: true } : {}),
+    ...(mockParams.get('mockDropPlaybackSnapshots') === '1' ? { emitSnapshots: false } : {}),
+    ...(mockParams.get('mockDropPlaybackStartConfirmation') === '1'
+      ? { dropPlaybackStartConfirmation: true }
+      : {}),
+    ...(mockStartFailureCode && mockStartFailures[mockStartFailureCode]
+      ? { startFailure: mockStartFailures[mockStartFailureCode] }
+      : {}),
+  });
+};
 const root = document.getElementById('root');
 
 if (!root) throw new Error('desktop root element is missing');
 
-createRoot(root).render(
-  <StrictMode>
-    <ErrorBoundary>
-      <App bridge={bridge} />
-    </ErrorBoundary>
-  </StrictMode>,
-);
+const bridge = isTauriRuntime() ? Promise.resolve(createTauriBridge()) : createBrowserBridge();
+void bridge.then((resolvedBridge) => {
+  createRoot(root).render(
+    <StrictMode>
+      <ErrorBoundary>
+        <App bridge={resolvedBridge} />
+      </ErrorBoundary>
+    </StrictMode>,
+  );
+});
