@@ -420,6 +420,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         theme: settings.theme,
         telemetry_enabled: settings.telemetry_enabled,
         update_preferences: settings.update_preferences,
+        catalog_state: 'ready',
         catalog_generation: generation,
       };
     },

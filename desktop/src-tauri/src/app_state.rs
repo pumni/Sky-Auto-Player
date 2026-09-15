@@ -1,5 +1,6 @@
-use crate::native_runtime::{NativeDesktopRuntime, TestSeams};
+use crate::native_runtime::{NativeDesktopRuntime, NativeEventHub, TestSeams};
 use crate::native_update::UpdateService;
+use crate::ui_events::UiEvent;
 #[cfg(any(test, feature = "tauri-test"))]
 use sky_native_adapters::AppPaths;
 use sky_native_adapters::AppResources;
@@ -7,6 +8,7 @@ use sky_native_adapters::AppResources;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use tauri::ipc::Channel;
 
 /// Single non-realtime admission authority for operations that can own the
 /// physical input/calibration boundary.
@@ -203,6 +205,7 @@ pub struct AppState {
 
 struct AppStateInner {
     native: Mutex<Option<Arc<NativeDesktopRuntime>>>,
+    events: Arc<Mutex<NativeEventHub>>,
     update_service: Mutex<Option<Arc<UpdateService<crate::ShellRuntime>>>>,
     settings_writes: Mutex<()>,
     coherence: Mutex<()>,
@@ -221,6 +224,7 @@ impl Default for AppState {
         Self {
             inner: Arc::new(AppStateInner {
                 native: Mutex::new(None),
+                events: Arc::new(Mutex::new(NativeEventHub::default())),
                 update_service: Mutex::new(None),
                 settings_writes: Mutex::new(()),
                 coherence: Mutex::new(()),
@@ -274,26 +278,56 @@ impl AppState {
             .unwrap_or_else(|| AppResources::from_resource_dir(paths.install_root()));
         crate::startup_telemetry::record("native.create.start");
         let runtime = Arc::new(
-            NativeDesktopRuntime::from_paths_with_activity_and_seams_and_update_service(
+            NativeDesktopRuntime::from_paths_with_activity_and_seams_and_update_service_with_events(
                 paths,
                 resources,
                 self.activity(),
                 test_seams,
                 self.update_service()
                     .map_err(|_| "native update service state poisoned".to_string())?,
+                self.event_hub(),
             )?,
         );
         crate::startup_telemetry::record("native.create.end");
+        if self.is_closing() {
+            runtime.shutdown();
+            return Err("Desktop application is closing".into());
+        }
         *native = Some(Arc::clone(&runtime));
         Ok(runtime)
     }
 
     pub fn shutdown_native(&self) {
-        if let Ok(native) = self.inner.native.lock()
-            && let Some(runtime) = &*native
-        {
+        let runtime = self
+            .inner
+            .native
+            .lock()
+            .ok()
+            .and_then(|native| native.as_ref().cloned());
+        if let Some(runtime) = runtime {
             let _ = runtime.dispatch("app.shutdown", serde_json::json!({}));
+        } else if let Ok(mut events) = self.inner.events.lock() {
+            events.close();
         }
+    }
+
+    pub(crate) fn subscribe_events(&self, channel: Channel<UiEvent>) -> Result<(), String> {
+        if self.is_closing() {
+            return Err("Desktop application is closing".into());
+        }
+        let mut events = self
+            .inner
+            .events
+            .lock()
+            .map_err(|_| "native event hub lock poisoned".to_string())?;
+        if self.is_closing() {
+            return Err("Desktop application is closing".into());
+        }
+        events.subscribe(channel)
+    }
+
+    pub(crate) fn event_hub(&self) -> Arc<Mutex<NativeEventHub>> {
+        Arc::clone(&self.inner.events)
     }
 
     pub(crate) fn activity(&self) -> ActivityCoordinator {
@@ -416,6 +450,7 @@ mod tests {
     use super::{ActivityCoordinator, ActivityReservationError, AppState};
     use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
+    use tauri::ipc::Channel;
 
     #[test]
     fn close_transition_is_idempotent() {
@@ -423,6 +458,15 @@ mod tests {
         assert!(state.begin_close());
         assert!(!state.begin_close());
         assert!(state.is_closing());
+    }
+
+    #[test]
+    fn event_subscription_does_not_construct_native_runtime() {
+        let state = AppState::default();
+        let channel: Channel<crate::ui_events::UiEvent> = Channel::new(|_| Ok(()));
+
+        state.subscribe_events(channel).expect("event subscription");
+        assert!(state.inner.native.lock().expect("native state").is_none());
     }
 
     #[test]

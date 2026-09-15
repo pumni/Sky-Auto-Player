@@ -37,6 +37,23 @@ describe('desktop store', () => {
     expect(store.getState().settings?.auto_play).toBe(true);
   });
 
+  it('keeps catalog loading and failure states separate from shell readiness', () => {
+    const store = createDesktopStore(createMockBridge());
+    store.setState({
+      library: { ...store.getState().library, loading: true, error: null },
+    });
+
+    store.getState().applyEvent({
+      v: 1,
+      name: 'catalog.load_failed',
+      payload: { message: 'catalog source is unavailable' },
+    });
+
+    expect(store.getState().bootstrapState).toBe('idle');
+    expect(store.getState().library.loading).toBe(false);
+    expect(store.getState().library.error).toBe('catalog source is unavailable');
+  });
+
   it('derives Now Playing from playback identity without changing the selected song', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());

@@ -481,7 +481,6 @@ pub fn selftest_packaged_shell() -> i32 {
         if bootstrap.native_build.native_build_commit.is_empty() {
             return Err("bootstrap omitted native build identity".into());
         }
-        let mut catalog_generation = bootstrap.catalog_generation;
         let builtin_count = match runtime.builtin_catalog_status()? {
             sky_native_adapters::BuiltinCatalogStatus::Available { song_count }
                 if song_count > 0 =>
@@ -507,6 +506,7 @@ pub fn selftest_packaged_shell() -> i32 {
                 initial_catalog.total
             ));
         }
+        let mut catalog_generation = Some(initial_catalog.generation);
         if std::env::var_os("SKY_BUILTIN_CATALOG_FRESH_SELFTEST").is_some() {
             selftest_paths
                 .ensure_mutable_directories()
@@ -542,7 +542,7 @@ pub fn selftest_packaged_shell() -> i32 {
                     composed.total
                 ));
             }
-            catalog_generation = reloaded.generation;
+            catalog_generation = Some(reloaded.generation);
             std::fs::remove_file(&user_song)
                 .map_err(|error| format!("fresh user song cleanup failed: {error}"))?;
         }
@@ -835,6 +835,7 @@ mod ipc_tests {
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
+                super::commands::reload_library,
                 super::commands::prepare_playback,
                 super::commands::start_playback,
                 super::commands::get_playback_status,
@@ -846,12 +847,11 @@ mod ipc_tests {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
-        let bootstrap = tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 1))
-            .expect("native bootstrap should succeed");
-        let bootstrap_value: serde_json::Value = bootstrap.deserialize().expect("bootstrap JSON");
-        let generation = bootstrap_value["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let reload =
+            tauri::test::get_ipc_response(&webview, request("reload_library", json!({}), 3))
+                .expect("native catalog reload should succeed");
+        let reload: serde_json::Value = reload.deserialize().expect("reload JSON");
+        let generation = reload["generation"].as_u64().expect("generation");
         let idle_status =
             tauri::test::get_ipc_response(&webview, request("get_playback_status", json!({}), 6))
                 .expect("playback status command should succeed before start");
@@ -927,6 +927,7 @@ mod ipc_tests {
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
+                super::commands::reload_library,
                 super::commands::prepare_playback,
                 super::commands::patch_settings,
                 super::commands::start_playback,
@@ -937,13 +938,11 @@ mod ipc_tests {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
-        let bootstrap =
-            tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 60))
-                .expect("native bootstrap");
-        let bootstrap: serde_json::Value = bootstrap.deserialize().expect("bootstrap JSON");
-        let generation = bootstrap["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let reload =
+            tauri::test::get_ipc_response(&webview, request("reload_library", json!({}), 61))
+                .expect("native catalog reload");
+        let reload: serde_json::Value = reload.deserialize().expect("reload JSON");
+        let generation = reload["generation"].as_u64().expect("generation");
         let search = tauri::test::get_ipc_response(
             &webview,
             request(
