@@ -29,6 +29,7 @@ import { rememberRetiredSession } from './retiredSessions';
 import { recordStartupTelemetry } from '../bridge/startupTelemetry';
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'fatal';
+const MAX_CATALOG_RECONCILIATION_ATTEMPTS = 3;
 type PlaybackUiState =
   'idle' | 'starting' | 'playing' | 'paused' | 'stopping' | 'finished' | 'failed';
 export type TransportOperation =
@@ -562,12 +563,29 @@ export function createDesktopStore(bridge: DesktopBridge) {
     const reconcileCatalog = (): Promise<void> => {
       catalogReconciliationTail = catalogReconciliationTail.then(async () => {
         if (get().bootstrapState !== 'ready' || get().library.error !== null) return;
-        await get().search();
-        await get().loadLibraryNavigation();
-        if (!catalogReadyRecorded && get().library.error === null) {
-          catalogReadyRecorded = true;
-          recordStartupTelemetry('react.catalog_ready');
+        for (let attempt = 0; attempt < MAX_CATALOG_RECONCILIATION_ATTEMPTS; attempt += 1) {
+          const requestedGeneration = get().library.generation;
+          await get().search();
+          const afterSearch = get().library;
+          if (afterSearch.error !== null) return;
+          if (afterSearch.loading || afterSearch.generation !== requestedGeneration) continue;
+
+          await get().loadLibraryNavigation();
+          const settled = get().library;
+          if (
+            settled.error !== null ||
+            settled.loading ||
+            settled.generation !== requestedGeneration
+          )
+            continue;
+          if (!catalogReadyRecorded) {
+            catalogReadyRecorded = true;
+            recordStartupTelemetry('react.catalog_ready');
+          }
+          return;
         }
+        // A catalog.changed event queues another reconciliation after this
+        // bounded attempt window. Do not spin on a moving generation here.
       });
       return catalogReconciliationTail;
     };
@@ -2000,6 +2018,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           });
         } catch (error) {
           if (get().library.searchRequestGeneration !== token) return;
+          if (get().library.generation !== current.generation) return;
           const message = error instanceof Error ? error.message : String(error);
           set({ library: { ...get().library, loading: false, error: message } });
         }

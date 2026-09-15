@@ -32,6 +32,7 @@ const requiredMarkers = [
   'catalog.index.start',
   'catalog.index.end',
   'catalog.ready',
+  'catalog.reconciled',
   'react.shell_ready',
   'react.catalog_ready',
 ];
@@ -204,7 +205,7 @@ function assertMarkerOrder(first, markers, label) {
   }
 }
 
-function validateTrace(events, fixture) {
+function validateTrace(events, fixture, mode, expectCached) {
   if (events.length === 0) throw new Error('telemetry run produced no events');
   const first = new Map();
   let previousElapsed = -1;
@@ -241,18 +242,69 @@ function validateTrace(events, fixture) {
     ],
     'native subscription markers',
   );
+  assertMarkerOrder(first, ['bootstrap.start', 'bootstrap.end'], 'bootstrap markers');
+  const cached = first.has('catalog.cached_available');
+  if (expectCached && !cached) {
+    throw new Error('warm benchmark run did not publish a cached catalog');
+  }
+  if (mode === 'coldish' && cached) {
+    throw new Error('cold-ish benchmark run unexpectedly published a cached catalog');
+  }
+  if (cached) {
+    assertMarkerOrder(
+      first,
+      ['catalog.cached_available', 'bootstrap.start'],
+      'cached catalog markers',
+    );
+  }
+
+  const phaseStartName = cached ? 'catalog.reconcile.start' : 'catalog.rebuild.start';
+  const phaseEndName = cached ? 'catalog.reconcile.end' : 'catalog.rebuild.end';
+  const phaseStart = first.get(phaseStartName);
+  const phaseEnd = first.get(phaseEndName);
+  if (!phaseStart || !phaseEnd) {
+    throw new Error(`catalog phase is missing ${phaseStartName} or ${phaseEndName}`);
+  }
+  if (phaseStart.elapsed_us < first.get('bootstrap.end').elapsed_us) {
+    throw new Error('catalog phase started before bootstrap ended');
+  }
+  const phaseEvent = (marker, minimumElapsed = phaseStart.elapsed_us) => {
+    const event = events.find(
+      (candidate) => candidate.marker === marker && candidate.elapsed_us >= minimumElapsed,
+    );
+    if (!event) throw new Error(`catalog phase is missing ${marker}`);
+    return event;
+  };
+  const phaseMarkers = new Map([
+    [phaseStartName, phaseStart],
+    ['catalog.compose.start', phaseEvent('catalog.compose.start')],
+  ]);
+  const composeEnd = phaseEvent(
+    'catalog.compose.end',
+    phaseMarkers.get('catalog.compose.start').elapsed_us,
+  );
+  phaseMarkers.set('catalog.compose.end', composeEnd);
+  const indexStart = phaseEvent('catalog.index.start', composeEnd.elapsed_us);
+  phaseMarkers.set('catalog.index.start', indexStart);
+  const indexEnd = phaseEvent('catalog.index.end', indexStart.elapsed_us);
+  phaseMarkers.set('catalog.index.end', indexEnd);
+  const catalogReady = phaseEvent('catalog.ready', indexEnd.elapsed_us);
+  phaseMarkers.set('catalog.ready', catalogReady);
+  phaseMarkers.set(phaseEndName, phaseEnd);
+  phaseMarkers.set('catalog.reconciled', phaseEvent('catalog.reconciled', phaseEnd.elapsed_us));
   assertMarkerOrder(
-    first,
+    phaseMarkers,
     [
-      'bootstrap.start',
-      'bootstrap.end',
+      phaseStartName,
       'catalog.compose.start',
       'catalog.compose.end',
       'catalog.index.start',
       'catalog.index.end',
       'catalog.ready',
+      phaseEndName,
+      'catalog.reconciled',
     ],
-    'bootstrap markers',
+    'catalog phase markers',
   );
   assertMarkerOrder(
     first,
@@ -327,10 +379,19 @@ function validateTrace(events, fixture) {
       }
     }
   }
-  return { first, sourceCounters };
+  return { first, sourceCounters, phaseMarkers };
 }
 
-async function runOnce(exe, installRoot, appDataRoot, telemetryPath, fixture, timeoutMs) {
+async function runOnce(
+  exe,
+  installRoot,
+  appDataRoot,
+  telemetryPath,
+  fixture,
+  mode,
+  expectCached,
+  timeoutMs,
+) {
   const child = spawn(exe, ['--selftest-desktop-gui'], {
     cwd: installRoot,
     env: {
@@ -353,8 +414,14 @@ async function runOnce(exe, installRoot, appDataRoot, telemetryPath, fixture, ti
       `packaged startup run failed with ${result.signal ?? `exit code ${result.code}`}`,
     );
   }
-  const { first, sourceCounters } = validateTrace(events, fixture);
+  const { first, sourceCounters, phaseMarkers } = validateTrace(
+    events,
+    fixture,
+    mode,
+    expectCached,
+  );
   const elapsed = (marker) => first.get(marker).elapsed_us;
+  const phaseElapsed = (marker) => phaseMarkers.get(marker).elapsed_us;
   const duration = (start, end) => elapsed(end) - elapsed(start);
   const frontendElapsed = (marker) => first.get(marker).frontend_elapsed_us;
   const frontendDuration = (start, end) => frontendElapsed(end) - frontendElapsed(start);
@@ -371,12 +438,25 @@ async function runOnce(exe, installRoot, appDataRoot, telemetryPath, fixture, ti
       frontendDuration('react.initialize.start', 'react.shell_ready') / 1000,
     native_create_ms: duration('native.create.start', 'native.create.end') / 1000,
     bootstrap_ms: duration('bootstrap.start', 'bootstrap.end') / 1000,
-    catalog_compose_ms: duration('catalog.compose.start', 'catalog.compose.end') / 1000,
-    catalog_index_ms: duration('catalog.index.start', 'catalog.index.end') / 1000,
-    catalog_compose_to_index_ms: duration('catalog.compose.start', 'catalog.index.end') / 1000,
-    catalog_ready_ms: elapsed('catalog.ready') / 1000,
+    catalog_compose_ms:
+      (phaseElapsed('catalog.compose.end') - phaseElapsed('catalog.compose.start')) / 1000,
+    catalog_index_ms:
+      (phaseElapsed('catalog.index.end') - phaseElapsed('catalog.index.start')) / 1000,
+    catalog_compose_to_index_ms:
+      (phaseElapsed('catalog.index.end') - phaseElapsed('catalog.compose.start')) / 1000,
+    catalog_ready_ms: phaseElapsed('catalog.ready') / 1000,
     shell_ready_ms: elapsed('react.shell_ready') / 1000,
     catalog_reconciled_ms: elapsed('react.catalog_ready') / 1000,
+    cached_catalog_available_ms: first.has('catalog.cached_available')
+      ? duration('native.create.start', 'catalog.cached_available') / 1000
+      : null,
+    cached_catalog_available_at_ms: first.has('catalog.cached_available')
+      ? elapsed('catalog.cached_available') / 1000
+      : null,
+    background_reconciliation_complete_ms: elapsed('catalog.reconciled') / 1000,
+    cold_no_cache_rebuild_ms: first.has('catalog.rebuild.start')
+      ? duration('catalog.rebuild.start', 'catalog.rebuild.end') / 1000
+      : null,
     catalog_sources: catalogSources,
   };
 }
@@ -392,9 +472,19 @@ function summarize(samples) {
   return Object.fromEntries(
     metricNames.map((name) => {
       const values = samples.map((sample) => sample[name]);
+      const numericValues = values.filter(
+        (value) => typeof value === 'number' && Number.isFinite(value),
+      );
+      if (numericValues.length === 0) {
+        return [name, { median: null, p95: null, raw: values }];
+      }
       return [
         name,
-        { median: percentile(values, 0.5), p95: percentile(values, 0.95), raw: values },
+        {
+          median: percentile(numericValues, 0.5),
+          p95: percentile(numericValues, 0.95),
+          raw: values,
+        },
       ];
     }),
   );
@@ -446,6 +536,8 @@ async function main() {
             appDataRoot,
             telemetryPath,
             fixture,
+            mode,
+            mode === 'warm' && run > 0,
             options.timeoutMs,
           );
           if (run > 0) samples.push({ run: run, ...sample });

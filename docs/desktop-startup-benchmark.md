@@ -13,7 +13,12 @@ that clock rather than the time when the native IPC request is received.
 
 The startup milestones are intentionally separate:
 
-- `catalog.ready` means the native catalog index has been replaced and is queryable.
+- `catalog.cached_available` means a structurally valid private cache index has
+  been published and is queryable before source reconciliation.
+- `catalog.ready` means the native catalog index has been coherently replaced by
+  a complete source composition.
+- `catalog.reconciled` means background source reconciliation and cache
+  persistence have completed.
 - `react.shell_ready` means the React shell has rendered after native bootstrap and settings.
 - `react.catalog_ready` means the initial catalog search and navigation reconciliation completed.
 
@@ -23,6 +28,14 @@ settings refresh boundary after bootstrap, not to the initial shell bootstrap
 critical path. The packaged smoke refresh occurs only after
 `react.catalog_ready`, and the validator enforces that no settings reload is
 observed before that milestone.
+
+Catalog performance is reported as separate milestones: shell ready,
+`cached_catalog_available_ms`, `background_reconciliation_complete_ms`, and
+`cold_no_cache_rebuild_ms`. `cached_catalog_available_ms` measures the native
+cache-to-queryable duration from `native.create.start`; the accompanying
+`cached_catalog_available_at_ms` is the process-relative milestone timestamp.
+Canonical paths remain native-only cache data and are never included in IPC or
+telemetry.
 
 Build and run the reproducible packaged benchmark from PowerShell:
 
