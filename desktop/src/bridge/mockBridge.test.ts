@@ -20,6 +20,18 @@ describe('mock bridge timing contracts', () => {
     unsubscribe();
   });
 
+  it('rejects impossible Down-key accounting', () => {
+    expect(() =>
+      assertMissReasonAccounting({
+        missed_down_boundaries: 2,
+        missed_down_keys: 1,
+        missed_unobserved_backlog_boundaries: 0,
+        missed_physical_window_boundaries: 1,
+        final_sender_window_expirations: 1,
+      }),
+    ).toThrow('missed Down key accounting drift');
+  });
+
   it('exports the current sender-trace envelope and timing-policy schemas', async () => {
     const bridge = createMockBridge();
     const trace = JSON.parse(await bridge.exportSenderTrace()) as {

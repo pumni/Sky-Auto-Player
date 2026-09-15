@@ -120,7 +120,7 @@ describe('DiagnosticsView', () => {
             session_id: sessionId,
             release_late_2ms: 0,
             missed_down_boundaries: 5,
-            missed_down_keys: 3,
+            missed_down_keys: 5,
             missed_unobserved_backlog_boundaries: 1,
             missed_physical_window_boundaries: 2,
             final_sender_window_expirations: 2,

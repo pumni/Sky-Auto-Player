@@ -216,7 +216,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         keys_dropped: 0,
         chord_split_events: 0,
         missed_down_boundaries: 2,
-        missed_down_keys: 1,
+        missed_down_keys: 2,
         missed_unobserved_backlog_boundaries: 0,
         missed_physical_window_boundaries: 1,
         final_sender_window_expirations: 1,
