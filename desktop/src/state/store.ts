@@ -561,7 +561,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
     const reconcileCatalog = (): Promise<void> => {
       catalogReconciliationTail = catalogReconciliationTail.then(async () => {
-        if (get().bootstrapState !== 'ready') return;
+        if (get().bootstrapState !== 'ready' || get().library.error !== null) return;
         await get().search();
         await get().loadLibraryNavigation();
         if (!catalogReadyRecorded && get().library.error === null) {
@@ -1574,19 +1574,23 @@ export function createDesktopStore(bridge: DesktopBridge) {
           await bridge.subscribeUiEvents((event) => get().applyEvent(event));
           const bootstrap = await bridge.bootstrap();
           const settings = await bridge.getSettings();
+          const currentLibrary = get().library;
+          const catalogFailed =
+            currentLibrary.error !== null || bootstrap.catalog_state === 'failed';
           set({
             bootstrap,
             bootstrapState: 'ready',
             settings,
             settingsState: 'ready',
             library: {
-              ...get().library,
-              generation: Math.max(get().library.generation, bootstrap.catalog_generation ?? 0),
-              loading: bootstrap.catalog_state !== 'failed',
-              error:
-                bootstrap.catalog_state === 'failed'
-                  ? (get().library.error ?? 'Catalog load failed. Retry the library.')
-                  : get().library.error,
+              ...currentLibrary,
+              generation: Math.max(currentLibrary.generation, bootstrap.catalog_generation ?? 0),
+              loading: catalogFailed
+                ? false
+                : bootstrap.catalog_state !== 'ready' || currentLibrary.loading,
+              error: catalogFailed
+                ? (currentLibrary.error ?? 'Catalog load failed. Retry the library.')
+                : currentLibrary.error,
             },
           });
           if (bootstrap.catalog_state === 'ready' || get().library.generation > 0) {

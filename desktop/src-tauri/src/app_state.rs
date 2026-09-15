@@ -448,9 +448,11 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::{ActivityCoordinator, ActivityReservationError, AppState};
+    use sky_native_adapters::AppPaths;
     use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
-    use tauri::ipc::Channel;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tauri::ipc::{Channel, InvokeResponseBody};
 
     #[test]
     fn close_transition_is_idempotent() {
@@ -467,6 +469,53 @@ mod tests {
 
         state.subscribe_events(channel).expect("event subscription");
         assert!(state.inner.native.lock().expect("native state").is_none());
+    }
+
+    #[test]
+    fn pre_runtime_subscription_receives_ordered_runtime_lifecycle_events() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-app-state-event-order-{suffix}"));
+        let paths = AppPaths::from_test_sandbox(&root);
+        std::fs::create_dir_all(paths.user_music_root()).expect("songs root");
+        std::fs::create_dir_all(paths.config_root()).expect("config root");
+        std::fs::write(
+            paths.config_root().join("config.json"),
+            "{\"schema_version\":3}\n",
+        )
+        .expect("config");
+        let state = AppState::with_test_paths(paths);
+        let received = Arc::new(Mutex::new(Vec::<String>::new()));
+        let observed = Arc::clone(&received);
+        let channel: Channel<crate::ui_events::UiEvent> = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(payload) = body
+                && let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload)
+                && let Some(name) = value.get("name").and_then(serde_json::Value::as_str)
+            {
+                observed.lock().expect("event log").push(name.to_string());
+            }
+            Ok(())
+        });
+        state
+            .subscribe_events(channel)
+            .expect("pre-runtime subscription");
+
+        let runtime = state.ensure_native_blocking().expect("runtime creation");
+        runtime
+            .dispatch("app.bootstrap", serde_json::json!({}))
+            .expect("bootstrap event");
+        runtime
+            .dispatch("catalog.reload", serde_json::json!({}))
+            .expect("catalog event");
+
+        assert_eq!(
+            *received.lock().expect("event log"),
+            vec!["core.ready", "catalog.changed"]
+        );
+        runtime.shutdown();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

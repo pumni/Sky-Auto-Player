@@ -231,13 +231,13 @@ function validateTrace(events, fixture) {
     first,
     [
       'events.subscribe.start',
+      'events.subscribe.end',
       'native.create.start',
       'settings.load.start',
       'settings.load.end',
       'manifest.load.start',
       'manifest.load.end',
       'native.create.end',
-      'events.subscribe.end',
     ],
     'native subscription markers',
   );
@@ -245,14 +245,14 @@ function validateTrace(events, fixture) {
     first,
     [
       'bootstrap.start',
+      'settings.reload.start',
+      'settings.reload.end',
+      'bootstrap.end',
       'catalog.compose.start',
       'catalog.compose.end',
       'catalog.index.start',
       'catalog.index.end',
       'catalog.ready',
-      'settings.reload.start',
-      'settings.reload.end',
-      'bootstrap.end',
     ],
     'bootstrap markers',
   );

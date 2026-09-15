@@ -1369,19 +1369,18 @@ struct CatalogState {
     builtin_status: BuiltinCatalogStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum CatalogLoadState {
+    #[default]
     Uninitialized,
     Loading,
-    Ready { generation: u64 },
-    Failed { message: String },
+    Ready {
+        generation: u64,
+    },
+    Failed {
+        message: String,
+    },
     Closing,
-}
-
-impl Default for CatalogLoadState {
-    fn default() -> Self {
-        Self::Uninitialized
-    }
 }
 
 impl CatalogMetadata {

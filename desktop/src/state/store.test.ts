@@ -54,6 +54,45 @@ describe('desktop store', () => {
     expect(store.getState().library.error).toBe('catalog source is unavailable');
   });
 
+  it('does not overwrite a catalog failure received while settings are loading', async () => {
+    const bridge = createMockBridge();
+    const originalBootstrap = bridge.bootstrap;
+    const originalGetSettings = bridge.getSettings;
+    let signalSettingsStarted!: () => void;
+    const settingsStarted = new Promise<void>((resolve) => {
+      signalSettingsStarted = resolve;
+    });
+    let releaseSettings!: () => void;
+    const settingsRelease = new Promise<void>((resolve) => {
+      releaseSettings = resolve;
+    });
+    bridge.bootstrap = async () => ({
+      ...(await originalBootstrap()),
+      catalog_state: 'loading',
+      catalog_generation: null,
+    });
+    bridge.getSettings = async () => {
+      signalSettingsStarted();
+      await settingsRelease;
+      return originalGetSettings();
+    };
+    const store = createDesktopStore(bridge);
+    const initialization = store.getState().initialize();
+
+    await settingsStarted;
+    store.getState().applyEvent({
+      v: 1,
+      name: 'catalog.load_failed',
+      payload: { message: 'catalog source is unavailable' },
+    });
+    releaseSettings();
+    await act(async () => initialization);
+
+    expect(store.getState().bootstrapState).toBe('ready');
+    expect(store.getState().library.loading).toBe(false);
+    expect(store.getState().library.error).toBe('catalog source is unavailable');
+  });
+
   it('derives Now Playing from playback identity without changing the selected song', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
