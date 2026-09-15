@@ -1928,11 +1928,8 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
                 authored_ticks: 0,
                 effective_deadline_ticks: 0,
                 wake_ticks: 0,
-                wake_available: false,
-                final_policy_ticks: 0,
                 authored_target_qpc_ticks: 0,
                 authored_target_qpc_available: false,
-                final_policy_available: false,
                 physical_not_before_qpc_ticks: 0,
                 physical_not_before_qpc_available: false,
                 hold_floor_qpc_ticks: 0,
@@ -3994,7 +3991,6 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(13),
-            wake_available: true,
             physical_target_qpc_ticks: Some(100),
             physical_not_before_qpc_ticks: Some(105),
             hold_floor_qpc_ticks: Some(103),
@@ -4032,8 +4028,6 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(record.send_completed_ticks, 25);
     assert_eq!(record.authored_target_qpc_ticks, 100);
     assert!(record.authored_target_qpc_available);
-    assert_eq!(record.final_policy_ticks, 20);
-    assert!(record.final_policy_available);
     assert_eq!(record.physical_not_before_qpc_ticks, 105);
     assert!(record.physical_not_before_qpc_available);
     assert_eq!(record.hold_floor_qpc_ticks, 103);
@@ -4075,7 +4069,6 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            wake_available: false,
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
@@ -4129,7 +4122,6 @@ fn native_summary_ignores_non_backend_trace() {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            wake_available: false,
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,

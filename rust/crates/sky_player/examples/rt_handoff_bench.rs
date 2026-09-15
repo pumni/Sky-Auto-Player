@@ -81,6 +81,7 @@ enum BenchmarkScope {
     PhaseASenderOnly,
     PhaseAProductionMatrix,
     PhaseASparseGap,
+    PhaseBB0,
 }
 
 impl BenchmarkScope {
@@ -91,8 +92,9 @@ impl BenchmarkScope {
             Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
             Ok("phase_a_production_matrix") => Ok(Self::PhaseAProductionMatrix),
             Ok("phase_a_sparse_gap") => Ok(Self::PhaseASparseGap),
+            Ok("phase_b0") => Ok(Self::PhaseBB0),
             Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, or phase_a_sparse_gap, got {value:?}"
+                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, or phase_b0, got {value:?}"
             )),
             Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
@@ -105,6 +107,7 @@ impl BenchmarkScope {
             Self::PhaseASenderOnly => "phase_a_sender_only",
             Self::PhaseAProductionMatrix => "phase_a_production_matrix",
             Self::PhaseASparseGap => "phase_a_sparse_gap",
+            Self::PhaseBB0 => "phase_b0",
         }
     }
 }
@@ -139,7 +142,7 @@ impl BenchmarkMode {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Samples {
     plan_build_us: Vec<u64>,
     packet_header_reads_per_plan: Vec<u64>,
@@ -177,6 +180,7 @@ struct Samples {
     wait_wake_lateness_us: Vec<i64>,
     hot_wait_count: usize,
     cold_wait_count: usize,
+    missed_pre_call_lateness_us: Vec<i64>,
     missed_down_unobserved_backlog: usize,
     missed_down_physical_window_expired: usize,
     missed_down_final_sender_window_expired: usize,
@@ -185,6 +189,76 @@ struct Samples {
 }
 
 impl Samples {
+    fn append(&mut self, mut other: Self) {
+        macro_rules! append_vecs {
+            ($($field:ident),+ $(,)?) => {
+                $(self.$field.append(&mut other.$field);)+
+            };
+        }
+        append_vecs!(
+            plan_build_us,
+            packet_header_reads_per_plan,
+            expected_up_intents_per_plan,
+            expected_down_intents_per_plan,
+            up_intent_visits_per_plan,
+            down_intent_visits_per_plan,
+            secondary_batch_visits_per_plan,
+            secondary_batch_visit_bounds_per_plan,
+            intent_visits_per_plan,
+            registry_lookups_per_plan,
+            view_packet_calls_per_plan,
+            commit_freeze_calls_per_plan,
+            admission_wake_to_precision_wake_us,
+            target_crossing_error_us,
+            target_crossing_to_final_policy_us,
+            wake_to_final_policy_us,
+            final_policy_to_pre_call_us,
+            final_policy_to_true_pre_call_us,
+            dispatch_start_error_us,
+            pre_call_to_completion_us,
+            completion_to_rt_ready_us,
+            target_to_completion_us,
+            completion_error_us,
+            planned_wait_gap_us,
+            wait_wake_lateness_us,
+            missed_pre_call_lateness_us,
+            spin_time_us,
+            wall_time_us,
+        );
+        self.physical_dispatches = self
+            .physical_dispatches
+            .saturating_add(other.physical_dispatches);
+        self.wait_count = self.wait_count.saturating_add(other.wait_count);
+        self.overdue_dispatch_count = self
+            .overdue_dispatch_count
+            .saturating_add(other.overdue_dispatch_count);
+        self.early_dispatch_count = self
+            .early_dispatch_count
+            .saturating_add(other.early_dispatch_count);
+        self.non_dispatches = self.non_dispatches.saturating_add(other.non_dispatches);
+        self.deadline_missed_count = self
+            .deadline_missed_count
+            .saturating_add(other.deadline_missed_count);
+        self.observation_count = self
+            .observation_count
+            .saturating_add(other.observation_count);
+        self.observation_gaps = self.observation_gaps.saturating_add(other.observation_gaps);
+        self.hot_wait_count = self.hot_wait_count.saturating_add(other.hot_wait_count);
+        self.cold_wait_count = self.cold_wait_count.saturating_add(other.cold_wait_count);
+        self.missed_down_unobserved_backlog = self
+            .missed_down_unobserved_backlog
+            .saturating_add(other.missed_down_unobserved_backlog);
+        self.missed_down_physical_window_expired = self
+            .missed_down_physical_window_expired
+            .saturating_add(other.missed_down_physical_window_expired);
+        self.missed_down_final_sender_window_expired = self
+            .missed_down_final_sender_window_expired
+            .saturating_add(other.missed_down_final_sender_window_expired);
+        for (reason, count) in other.failure_reasons {
+            *self.failure_reasons.entry(reason).or_default() += count;
+        }
+    }
+
     fn record_failure(&mut self, reason: impl Into<String>) {
         self.non_dispatches += 1;
         *self.failure_reasons.entry(reason.into()).or_default() += 1;
@@ -536,6 +610,11 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 }
                 DownMissKind::DownExpiredBeforeSend => {
                     samples.missed_down_final_sender_window_expired += 1;
+                    samples.missed_pre_call_lateness_us.push(signed_qpc_us(
+                        qpc_clock,
+                        value.observed_qpc,
+                        value.physical_authored_target_qpc(),
+                    ));
                     "down_final_sender_window_expired"
                 }
             };
@@ -824,6 +903,47 @@ fn run_down(
     run_down_with_gap(key_count, mode, benchmark_mode, due_us())
 }
 
+fn run_down_iteration(
+    samples: &mut Samples,
+    key_count: usize,
+    mode: WaitMode,
+    benchmark_mode: BenchmarkMode,
+    gap_us: u64,
+) -> Result<(), String> {
+    let iteration_started = Instant::now();
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
+    harness.enable_dispatch_ready_timing_for_benchmark();
+    let alignment_margin_us = if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+        0
+    } else {
+        gap_us
+    };
+    harness.align_next_plan_to_benchmark_margin_for_test(alignment_margin_us);
+    harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
+    harness.reset_preparation_counts_for_test();
+    let mut plan = NextDispatchPlan::default();
+    let plan_started = Instant::now();
+    plan_projected(&mut harness, &mut plan);
+    record_preparation_sample(
+        samples,
+        harness.preparation_counts(),
+        elapsed_ns(plan_started),
+    );
+    if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, samples)?.is_none() {
+        samples
+            .wall_time_us
+            .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        return Ok(());
+    }
+    samples.physical_dispatches += 1;
+    record_wait_metrics(samples, &harness, benchmark_mode)?;
+    drain_observations(&mut harness, samples);
+    samples
+        .wall_time_us
+        .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+    Ok(())
+}
+
 fn run_down_with_gap(
     key_count: usize,
     mode: WaitMode,
@@ -832,39 +952,7 @@ fn run_down_with_gap(
 ) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
-        let iteration_started = Instant::now();
-        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
-        harness.enable_dispatch_ready_timing_for_benchmark();
-        let alignment_margin_us =
-            if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
-                0
-            } else {
-                gap_us
-            };
-        harness.align_next_plan_to_benchmark_margin_for_test(alignment_margin_us);
-        harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
-        harness.reset_preparation_counts_for_test();
-        let mut plan = NextDispatchPlan::default();
-        let plan_started = Instant::now();
-        plan_projected(&mut harness, &mut plan);
-        record_preparation_sample(
-            &mut samples,
-            harness.preparation_counts(),
-            elapsed_ns(plan_started),
-        );
-        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
-        {
-            samples
-                .wall_time_us
-                .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
-            continue;
-        }
-        samples.physical_dispatches += 1;
-        record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
-        drain_observations(&mut harness, &mut samples);
-        samples
-            .wall_time_us
-            .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        run_down_iteration(&mut samples, key_count, mode, benchmark_mode, gap_us)?;
     }
     Ok(samples)
 }
@@ -1144,14 +1232,145 @@ fn phase_a_sparse_gap_report() -> serde_json::Value {
     })
 }
 
-fn summarize(mut samples: Samples) -> serde_json::Value {
+fn phase_b0_wait_modes() -> Vec<WaitMode> {
+    vec![
+        build_wait_mode("production_calibrated", true, true, true),
+        build_fixed_wait_mode("fixed_spin_500us", 500),
+        build_fixed_wait_mode("fixed_spin_750us", 750),
+        build_fixed_wait_mode("fixed_spin_1000us", 1_000),
+        build_fixed_wait_mode("fixed_spin_1500us", 1_500),
+        build_fixed_wait_mode("fixed_spin_2000us", 2_000),
+    ]
+}
+
+fn run_phase_b0_interleaved_scenario(
+    key_count: usize,
+    gap_us: u64,
+    scenario_index: usize,
+    modes: &[WaitMode],
+) -> Result<Vec<Samples>, String> {
+    let mut samples = vec![Samples::default(); modes.len()];
+    for iteration in 0..iterations() {
+        let first_mode = (scenario_index + iteration) % modes.len();
+        for offset in 0..modes.len() {
+            let mode_index = (first_mode + offset) % modes.len();
+            run_down_iteration(
+                &mut samples[mode_index],
+                key_count,
+                modes[mode_index],
+                BenchmarkMode::RealWait,
+                gap_us,
+            )?;
+        }
+    }
+    Ok(samples)
+}
+
+fn phase_b0_report() -> serde_json::Value {
+    let modes = phase_b0_wait_modes();
+    let benchmark_started = Instant::now();
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let timing_margin_us = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 0)
+        .timing_margin_us_for_benchmark()
+        .unwrap_or_else(|error| panic!("{error}"));
+    let gaps_us = [5_000, 20_000, 25_000, 100_000, 250_000, 500_000, 1_000_000];
+    let key_counts = [1, 5, 15];
+    let scenario_count = gaps_us.len() * key_counts.len();
+    let mut scenarios_by_mode = vec![serde_json::Map::new(); modes.len()];
+    let mut aggregate_by_mode = vec![Samples::default(); modes.len()];
+    let mut scenario_index = 0;
+    for gap_us in gaps_us {
+        for key_count in key_counts {
+            let scenario_samples =
+                run_phase_b0_interleaved_scenario(key_count, gap_us, scenario_index, &modes)
+                    .unwrap_or_else(|error| panic!("{error}"));
+            let scenario_name = format!("down_only_{key_count}_gap_{gap_us}us");
+            for (mode_index, samples) in scenario_samples.into_iter().enumerate() {
+                scenarios_by_mode[mode_index]
+                    .insert(scenario_name.clone(), summarize(samples.clone()));
+                aggregate_by_mode[mode_index].append(samples);
+            }
+            scenario_index += 1;
+        }
+    }
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let mode_order = modes.iter().map(|mode| mode.name).collect::<Vec<_>>();
+    let mode_reports = modes
+        .iter()
+        .zip(scenarios_by_mode)
+        .zip(aggregate_by_mode)
+        .map(|((mode, scenarios), aggregate)| {
+            let configured_spin_threshold_us = if mode.name == "production_calibrated" {
+                serde_json::Value::String("startup_calibrated".to_string())
+            } else {
+                json!(mode.effective_spin_threshold_us)
+            };
+            (
+                mode.name.to_string(),
+                json!({
+                    "configured_spin_threshold_us": configured_spin_threshold_us,
+                    "actual_spin_threshold_us": mode.effective_spin_threshold_us,
+                    "waitable_timer_enabled": mode.waitable_timer_enabled,
+                    "event_wait_enabled": mode.event_wait_enabled,
+                    "adaptive_spin_enabled": mode.adaptive_spin_enabled,
+                    "startup_wake_error_us": wake_error_json(mode.startup_wake_error),
+                    "scenarios": scenarios,
+                    "aggregate": summarize_for_attempts(
+                        aggregate,
+                        scenario_count.saturating_mul(iterations()),
+                    ),
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    json!({
+        "scope": "Phase-B0 benchmark-only interleaved real HybridWaiter qualification; production wait behavior is unchanged",
+        "waitable_timer_enabled": true,
+        "event_wait_enabled": true,
+        "waiter_constructor": "HybridWaiter::production",
+        "requested_wait_policy": "benchmark_only_spin_threshold_probe",
+        "effective_wait_policy": "benchmark_only_spin_threshold_probe",
+        "gap_matrix_us": gaps_us,
+        "key_count_matrix": key_counts,
+        "iterations_per_scenario_per_mode": iterations(),
+        "scenario_count": scenario_count,
+        "mode_count": modes.len(),
+        "mode_order": mode_order,
+        "rotation": {
+            "kind": "deterministic_round_robin",
+            "scenario_order": "gap-major, then key-count ascending",
+            "first_mode_index": "(scenario_index + iteration) mod mode_count",
+            "within_iteration": "each mode runs once in mode_order wrapping at mode_count",
+        },
+        "timing_window": {
+            "timing_margin_us": timing_margin_us,
+            "latest_down_start_allowance_us": timing_margin_us,
+            "latest_down_start_definition": "physical authored target QPC + Timing Margin",
+        },
+        "cold_gap_threshold_us": SEND_COLD_THRESHOLD_US,
+        "transport": "deterministic mock transport; waiter timing is real",
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+        "process_cpu_duty_percent": cpu_duty_percent(
+            cpu_started_us,
+            cpu_finished_us,
+            benchmark_started,
+        ),
+        "modes": mode_reports,
+    })
+}
+
+fn summarize(samples: Samples) -> serde_json::Value {
+    summarize_for_attempts(samples, iterations())
+}
+
+fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> serde_json::Value {
     assert!(
         samples.dispatch_start_error_us.len() <= samples.observation_count,
         "timing samples cannot exceed collected observations"
     );
     assert_eq!(
         samples.physical_dispatches + samples.non_dispatches,
-        iterations(),
+        expected_attempts,
         "scenario did not account for every benchmark attempt"
     );
     let mut acceptance_failure_reasons = Vec::new();
@@ -1177,7 +1396,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         acceptance_failure_reasons.push("missing_start_error_samples");
     }
     let acceptance_clean = acceptance_failure_reasons.is_empty();
-    let statistics_eligible = acceptance_clean && iterations() >= 10_000;
+    let statistics_eligible = acceptance_clean && expected_attempts >= 10_000;
     let sender_cutoff_exercised = true;
     let total_spin_time_us = samples.spin_time_us.iter().copied().sum::<u64>();
     let total_wall_time_us = samples.wall_time_us.iter().copied().sum::<u64>();
@@ -1261,6 +1480,7 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "physical_window_expired": samples.missed_down_physical_window_expired,
             "final_sender_window_expired": samples.missed_down_final_sender_window_expired,
         },
+        "missed_pre_call_lateness_us": signed_summary(samples.missed_pre_call_lateness_us),
         "spin_time_us": unsigned_summary(samples.spin_time_us),
         "wall_time_us": unsigned_summary(samples.wall_time_us),
         "total_spin_time_us": total_spin_time_us,
@@ -1271,16 +1491,27 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
 
 fn all_scenarios_clean(mode_reports: &serde_json::Map<String, serde_json::Value>) -> bool {
     mode_reports.values().all(|mode| {
-        mode.get("scenarios")
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(|scenarios| {
-                scenarios.values().all(|scenario| {
-                    scenario
-                        .get("acceptance_clean")
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(true)
-                })
+        let scenarios_clean = |scenarios: &serde_json::Map<String, serde_json::Value>| {
+            scenarios.values().all(|scenario| {
+                scenario
+                    .get("acceptance_clean")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
             })
+        };
+        if let Some(scenarios) = mode.get("scenarios").and_then(serde_json::Value::as_object) {
+            scenarios_clean(scenarios)
+        } else {
+            mode.get("modes")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|modes| {
+                    modes.values().all(|mode| {
+                        mode.get("scenarios")
+                            .and_then(serde_json::Value::as_object)
+                            .is_some_and(scenarios_clean)
+                    })
+                })
+        }
     })
 }
 
@@ -1370,6 +1601,11 @@ fn main() {
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
     {
         panic!("phase_a_sparse_gap requires real_wait benchmark mode");
+    }
+    if matches!(benchmark_scope, BenchmarkScope::PhaseBB0)
+        && !matches!(benchmark_mode, BenchmarkMode::RealWait)
+    {
+        panic!("phase_b0 requires real_wait benchmark mode");
     }
     if matches!(benchmark_scope, BenchmarkScope::RealWaitCore)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
@@ -1482,6 +1718,8 @@ fn main() {
             "phase_a_sparse_gap".to_string(),
             phase_a_sparse_gap_report(),
         );
+    } else if matches!(benchmark_scope, BenchmarkScope::PhaseBB0) {
+        mode_reports.insert("phase_b0".to_string(), phase_b0_report());
     } else {
         mode_reports.insert(
             "phase_a_sender_only".to_string(),
@@ -1537,6 +1775,8 @@ fn main() {
             (BenchmarkScope::PhaseAProductionMatrix, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::PhaseASparseGap, BenchmarkMode::RealWait) => "Phase-A sparse-gap evidence through the production coordinator and real HybridWaiter with deterministic mock transport; no playback wait policy or authored target is changed; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASparseGap, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::PhaseBB0, BenchmarkMode::RealWait) => "Phase-B0 benchmark-only interleaved spin-threshold qualification through the production coordinator and real HybridWaiter with deterministic mock transport; no production wait policy or authored target is changed; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseBB0, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,

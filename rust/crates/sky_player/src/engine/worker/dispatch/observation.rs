@@ -98,6 +98,11 @@ pub struct DownMissObservation {
 
 impl DownMissObservation {
     #[cfg(any(test, feature = "test-support"))]
+    pub fn physical_authored_target_qpc(&self) -> QpcTicks {
+        self.physical_timing_window.authored_target_qpc
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn test_fixture(n: u64) -> Self {
         let authored_target_qpc = QpcTicks::from_raw(n);
         Self {
@@ -448,7 +453,6 @@ pub(super) fn record_down_send_telemetry(
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks,
-                wake_available: observation.wake_qpc.is_some(),
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: Some(
                     observation
@@ -555,7 +559,6 @@ pub(super) fn record_release_telemetry(
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: trace.wake_ticks,
-                wake_available: observation.wake_qpc.is_some(),
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
@@ -646,19 +649,6 @@ pub(crate) fn drain_wait_observation(
                     "wait observer threshold conversion failure: {error:?}"
                 ))
             })?;
-    local_metrics.wait_planned_gap_max_ticks = local_metrics
-        .wait_planned_gap_max_ticks
-        .max(observation.planned_wait_ticks.as_u64());
-    match classify_wait_gap(observation.planned_wait_ticks, cold_threshold_ticks) {
-        WaitGapClass::Hot => {
-            local_metrics.wait_planned_gap_hot_count =
-                local_metrics.wait_planned_gap_hot_count.saturating_add(1);
-        }
-        WaitGapClass::Cold => {
-            local_metrics.wait_planned_gap_cold_count =
-                local_metrics.wait_planned_gap_cold_count.saturating_add(1);
-        }
-    }
     let spin_us = qpc_clock
         .duration_to_us(observation.spin_ticks)
         .map_err(|error| {
@@ -672,6 +662,19 @@ pub(crate) fn drain_wait_observation(
     let wake_qpc = observation.wake_qpc.ok_or_else(|| {
         DispatchStep::Terminate("wait observer missing deadline QPC evidence".to_string())
     })?;
+    local_metrics.wait_planned_gap_max_ticks = local_metrics
+        .wait_planned_gap_max_ticks
+        .max(observation.planned_wait_ticks.as_u64());
+    match classify_wait_gap(observation.planned_wait_ticks, cold_threshold_ticks) {
+        WaitGapClass::Hot => {
+            local_metrics.wait_planned_gap_hot_count =
+                local_metrics.wait_planned_gap_hot_count.saturating_add(1);
+        }
+        WaitGapClass::Cold => {
+            local_metrics.wait_planned_gap_cold_count =
+                local_metrics.wait_planned_gap_cold_count.saturating_add(1);
+        }
+    }
     let target_to_wake_ticks = if wake_qpc >= observation.physical_target_qpc {
         wake_qpc
             .checked_duration_since(observation.physical_target_qpc)
@@ -812,5 +815,36 @@ mod tests {
             ),
             WaitGapClass::Cold
         );
+    }
+
+    #[test]
+    fn interrupted_wait_is_excluded_from_deadline_gap_population() {
+        let qpc_clock = sky_dispatch_win32::clock::QpcClock::from_frequency_hz(
+            NonZeroU64::new(1_000_000).unwrap(),
+        );
+        let mut health = WorkerHealthState::new(DispatchHealthOptions::default());
+        let mut local_metrics = WorkerMetricsLocal::default();
+        let observation = WaitObservation {
+            outcome: WaitOutcome::Interrupted,
+            wake_qpc: None,
+            spin_ticks: DurationTicks::from_raw(100),
+            physical_target_qpc: QpcTicks::from_raw(2_000),
+            planned_wait_ticks: DurationTicks::from_raw(25_000),
+            deadline_ticks: TimelineTicks::from_raw(1_000),
+            epoch_qpc: QpcTicks::from_raw(1_000),
+            allow_pre_epoch_startup_dispatch: false,
+        };
+
+        drain_wait_observation(&observation, &mut health, &mut local_metrics, qpc_clock)
+            .expect("interrupted wait observation should be drainable");
+
+        assert_eq!(local_metrics.idle_wake_count, 1);
+        assert_eq!(local_metrics.spin_time_us, 100);
+        assert_eq!(local_metrics.wait_planned_gap_hot_count, 0);
+        assert_eq!(local_metrics.wait_planned_gap_cold_count, 0);
+        assert_eq!(local_metrics.wait_planned_gap_max_us, 0);
+        assert_eq!(local_metrics.physical_target_to_wake_max_ticks, 0);
+        assert_eq!(local_metrics.wait_degraded_samples, 0);
+        assert_eq!(local_metrics.wait_window_sample_count, 0);
     }
 }

@@ -775,6 +775,13 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
+    pub fn timing_margin_us_for_benchmark(&self) -> Result<u64, String> {
+        self.resources
+            .clock
+            .duration_to_us(self.timing.timing_margin_ticks)
+            .map_err(|error| format!("benchmark Timing Margin conversion: {error:?}"))
+    }
+
     /// Enable the test-only observer profile so timing benchmarks can report
     /// the post-SendInput ready boundary without changing production policy.
     pub fn enable_dispatch_ready_timing_for_benchmark(&mut self) {

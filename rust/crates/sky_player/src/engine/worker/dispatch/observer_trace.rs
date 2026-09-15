@@ -33,7 +33,6 @@ pub(super) fn drain_stale_metadata_observation(
                 authored_ticks: observation.effective_scheduled_ticks,
                 effective_deadline_ticks: observation.effective_scheduled_ticks,
                 wake_ticks: observation.effective_now_ticks,
-                wake_available: false,
                 physical_target_qpc_ticks: None,
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
@@ -126,7 +125,6 @@ pub(super) fn drain_down_miss(
                 authored_ticks: observation.authored_ticks,
                 effective_deadline_ticks: observation.effective_deadline_ticks,
                 wake_ticks: observation.wake_ticks,
-                wake_available: false,
                 physical_target_qpc_ticks: Some(
                     observation
                         .physical_timing_window
@@ -214,7 +212,6 @@ pub(super) fn drain_blocked_unfocused_observation(
                 authored_ticks: observation.authored_ticks,
                 effective_deadline_ticks: observation.effective_deadline_ticks,
                 wake_ticks: observation.effective_now_ticks,
-                wake_available: false,
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
