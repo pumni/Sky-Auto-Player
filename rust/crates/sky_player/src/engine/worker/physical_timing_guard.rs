@@ -232,12 +232,112 @@ mod tests {
         PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS, MARGIN_TICKS)
     }
 
+    fn production_guard() -> PhysicalTimingGuard {
+        PhysicalTimingGuard::new(
+            DurationTicks::from_raw(10_000),
+            DurationTicks::from_raw(16_667),
+            DurationTicks::from_raw(500),
+        )
+    }
+
     fn qpc(value: u64) -> QpcTicks {
         QpcTicks::from_raw(value)
     }
 
     fn bit(slot: usize) -> u16 {
         1_u16 << slot
+    }
+
+    #[test]
+    fn hypothetical_late_down_uses_actual_completion_for_slack_chain() {
+        let mut guard = production_guard();
+        let key = bit(0);
+
+        guard
+            .observe_successful_packet(qpc(101_500), 0, key)
+            .unwrap();
+        let up_target = qpc(110_000);
+        let up_window = guard.query(up_target, key, 0).unwrap();
+        assert_eq!(up_window.musical_up_not_before_qpc, qpc(111_500));
+        assert!(up_window.musical_up_not_before_qpc > up_target);
+
+        guard
+            .observe_successful_packet(qpc(111_500), key, 0)
+            .unwrap();
+        let next_down_target = qpc(140_000);
+        let next_down_window = guard.query(next_down_target, 0, key).unwrap();
+        assert_eq!(next_down_window.down_not_before_qpc, next_down_target);
+        assert_eq!(next_down_window.latest_down_start_qpc, Some(qpc(140_500)));
+    }
+
+    #[test]
+    fn late_down_delays_minimum_valid_hold_by_actual_lateness() {
+        for lateness_us in [750, 1_000, 1_500, 2_000] {
+            let mut guard = production_guard();
+            let completed_down = qpc(100_000 + lateness_us);
+            guard
+                .observe_successful_packet(completed_down, 0, bit(0))
+                .unwrap();
+
+            let authored_up = qpc(110_000);
+            let window = guard.query(authored_up, bit(0), 0).unwrap();
+            assert_eq!(window.musical_up_not_before_qpc, qpc(110_000 + lateness_us));
+            assert!(window.musical_up_not_before_qpc > authored_up);
+        }
+    }
+
+    #[test]
+    fn repeated_late_same_key_chain_preserves_floors_without_rebasing() {
+        let mut guard = production_guard();
+        let key = bit(0);
+        let mut down_target_us = 100_000_u64;
+
+        for _ in 0..3 {
+            let down_completion = qpc(down_target_us + 750);
+            guard
+                .observe_successful_packet(down_completion, 0, key)
+                .unwrap();
+
+            let up_target_us = down_target_us + 750 + 10_000;
+            let up_target = qpc(up_target_us);
+            let up_window = guard.query(up_target, key, 0).unwrap();
+            assert_eq!(up_window.musical_up_not_before_qpc, up_target);
+            guard.observe_successful_packet(up_target, key, 0).unwrap();
+
+            let next_down_target_us = up_target_us + 16_667;
+            let next_down_target = qpc(next_down_target_us);
+            let next_down_window = guard.query(next_down_target, 0, key).unwrap();
+            assert_eq!(next_down_window.down_not_before_qpc, next_down_target);
+            assert_eq!(
+                next_down_window.latest_down_start_qpc,
+                Some(qpc(next_down_target_us + 500))
+            );
+            assert_eq!(next_down_window.authored_target_qpc, next_down_target);
+            down_target_us = next_down_target_us;
+        }
+
+        let infeasible_target_us = down_target_us - 501;
+        let infeasible = guard.query(qpc(infeasible_target_us), 0, key).unwrap();
+        assert!(infeasible.packet_not_before_qpc > infeasible.latest_down_start_qpc.unwrap());
+    }
+
+    #[test]
+    fn hypothetical_late_mixed_packet_remains_one_physical_window() {
+        let mut guard = production_guard();
+        let up_key = bit(0);
+        let down_key = bit(1);
+        guard
+            .observe_successful_packet(qpc(100_000), 0, up_key)
+            .unwrap();
+
+        let window = guard.query(qpc(109_000), up_key, down_key).unwrap();
+        assert_eq!(window.hold_floor_mask, up_key);
+        assert_eq!(window.release_floor_mask, 0);
+        assert_eq!(window.musical_up_not_before_qpc, qpc(110_000));
+        assert_eq!(window.down_not_before_qpc, qpc(109_000));
+        assert_eq!(window.packet_not_before_qpc, qpc(110_000));
+        assert_eq!(window.latest_down_start_qpc, Some(qpc(109_500)));
+        assert!(window.packet_not_before_qpc > window.latest_down_start_qpc.unwrap());
     }
 
     #[test]

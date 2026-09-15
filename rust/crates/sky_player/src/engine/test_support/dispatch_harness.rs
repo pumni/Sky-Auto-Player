@@ -16,11 +16,12 @@ use crate::engine::worker::dispatch::{
 };
 use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts, TargetStamp,
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitResult, WaitSignals,
-    WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
-    WorkerTimingState, dispatch_due_from_plan, physical_wait_target_for_plan, plan_next_dispatch,
-    plan_next_dispatch_projected, preflight_prepared_plan, publish_backend_counters,
-    publish_live_metrics_after_dispatch, wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitObservation, WaitResult,
+    WaitSignals, WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime,
+    WorkerSchedulingGuards, WorkerTimingState, dispatch_due_from_plan,
+    physical_wait_target_for_plan, plan_next_dispatch, plan_next_dispatch_projected,
+    preflight_prepared_plan, publish_backend_counters, publish_live_metrics_after_dispatch,
+    wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, physical_packet_kind};
@@ -59,6 +60,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) observer: PendingObservationQueue,
     pub(crate) interrupt: OwnedEvent,
     pub(crate) last_wait_result: Option<WaitResult>,
+    pub(crate) last_wait_observation: Option<WaitObservation>,
     effective_now_ticks: TimelineTicks,
 }
 
@@ -79,6 +81,43 @@ impl ProductionDispatchTestHarness {
                 scheduled_us: 10_000,
                 scan_codes: vec![0x15].into(),
                 reason: "up".into(),
+            },
+        ])
+    }
+
+    /// Build two independent Down boundaries five milliseconds apart.  The
+    /// first boundary is used for a controlled late-rescue send; the second
+    /// proves that its authored target remains unchanged.
+    pub fn new_dense_future_boundary_for_test() -> Self {
+        Self::new_dense_future_boundary_with_gap_for_test(5_000)
+    }
+
+    /// Build two independent Down boundaries with a caller-selected authored
+    /// gap.  This keeps dense-boundary qualification on the same production
+    /// dispatch path while allowing the next target to be placed immediately
+    /// after a synthetic first-note wake slip.
+    pub fn new_dense_future_boundary_with_gap_for_test(gap_us: u64) -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "dense-a-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: gap_us,
+                scan_codes: vec![0x16].into(),
+                reason: "dense-b-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: gap_us.saturating_add(20_000),
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "dense-cleanup".into(),
             },
         ])
     }
@@ -734,6 +773,7 @@ impl ProductionDispatchTestHarness {
             observer: PendingObservationQueue::default(),
             interrupt: OwnedEvent::new_auto_reset().expect("test interrupt event"),
             last_wait_result: None,
+            last_wait_observation: None,
             effective_now_ticks: TimelineTicks::ZERO,
         }
     }
@@ -772,6 +812,30 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
+    pub fn configure_normal_down_start_tolerance_for_test(
+        &mut self,
+        tolerance_us: u64,
+    ) -> Result<(), String> {
+        self.timing.normal_down_start_tolerance_ticks = self
+            .resources
+            .clock
+            .duration_from_us(tolerance_us)
+            .map_err(|error| format!("test Down continuity tolerance conversion: {error:?}"))?;
+        Ok(())
+    }
+
+    pub fn set_strict_timing_for_test(&mut self, strict: bool) {
+        self.config.timing.strict_timing = strict;
+        self.timing.strict_timing = strict;
+    }
+
+    pub fn timing_margin_us_for_benchmark(&self) -> Result<u64, String> {
+        self.resources
+            .clock
+            .duration_to_us(self.timing.timing_margin_ticks)
+            .map_err(|error| format!("benchmark Timing Margin conversion: {error:?}"))
+    }
+
     /// Enable the test-only observer profile so timing benchmarks can report
     /// the post-SendInput ready boundary without changing production policy.
     pub fn enable_dispatch_ready_timing_for_benchmark(&mut self) {
@@ -780,6 +844,10 @@ impl ProductionDispatchTestHarness {
 
     pub fn last_wait_result(&self) -> Option<WaitResult> {
         self.last_wait_result
+    }
+
+    pub fn last_wait_observation(&self) -> Option<WaitObservation> {
+        self.last_wait_observation
     }
 
     pub fn last_wait_spin_us(&self) -> Result<u64, String> {
@@ -913,6 +981,48 @@ impl ProductionDispatchTestHarness {
     /// Query coordinator chord integrity lost count.
     pub fn chord_integrity_lost_count(&self) -> u64 {
         self.runtime.chord_integrity_lost_count()
+    }
+
+    pub fn late_rescued_down_metrics_for_test(&self) -> (u64, u64, u64, u64) {
+        (
+            self.local_metrics.late_rescued_down_boundaries,
+            self.local_metrics.late_rescued_down_keys,
+            self.local_metrics.max_late_rescued_down_lateness_ticks,
+            self.local_metrics.max_late_rescued_down_excess_ticks,
+        )
+    }
+
+    pub fn late_rescued_down_metrics_us_for_test(&self) -> Result<(u64, u64, u64, u64), String> {
+        let (boundaries, keys, lateness_ticks, excess_ticks) =
+            self.late_rescued_down_metrics_for_test();
+        let lateness_us = self
+            .resources
+            .clock
+            .duration_to_us(DurationTicks::from_raw(lateness_ticks))
+            .map_err(|error| format!("late-rescue lateness conversion: {error:?}"))?;
+        let excess_us = self
+            .resources
+            .clock
+            .duration_to_us(DurationTicks::from_raw(excess_ticks))
+            .map_err(|error| format!("late-rescue excess conversion: {error:?}"))?;
+        Ok((boundaries, keys, lateness_us, excess_us))
+    }
+
+    pub fn final_sender_window_expirations_for_test(&self) -> u64 {
+        self.local_metrics.final_sender_window_expirations
+    }
+
+    pub fn missed_unobserved_backlog_boundaries_for_test(&self) -> u64 {
+        self.local_metrics.missed_unobserved_backlog_boundaries
+    }
+
+    pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
+        publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
+        (
+            self.local_metrics.sendinput_partial_events,
+            self.local_metrics.sendinput_zero_progress_failures,
+            self.local_metrics.chord_integrity_lost,
+        )
     }
 
     pub fn fine_pre_call_bucket_counts_for_test(&self) -> [u64; 7] {
@@ -1283,6 +1393,7 @@ impl ProductionDispatchTestHarness {
         &mut self,
         plan: &NextDispatchPlan,
     ) -> Result<DispatchStep, String> {
+        self.last_wait_observation = None;
         let pre_wait_qpc = self
             .resources
             .clock
@@ -1331,23 +1442,38 @@ impl ProductionDispatchTestHarness {
                 terminal_error: &mut self.runtime.terminal_error,
             },
         });
-        let (wait_result, dispatch_qpc) = match boundary {
+        let wait_deadline_ticks = plan
+            .deadline_ticks()
+            .ok_or_else(|| "benchmark wait plan has no deadline".to_string())?;
+        let (wait_result, dispatch_qpc, wait_observation) = match boundary {
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
+                target_qpc,
                 dispatch_qpc,
+                planned_wait_ticks,
                 ..
             } => {
                 self.runtime.set_deadline_wait_evidence_for_test(
                     Some(dispatch_qpc),
                     plan.physical_target_qpc(),
                 );
-                (Some(wait_result), dispatch_qpc)
+                let observation = WaitObservation {
+                    outcome: wait_result.outcome,
+                    wake_qpc: wait_result.wake_qpc,
+                    spin_ticks: wait_result.spin_ticks,
+                    physical_target_qpc: target_qpc,
+                    planned_wait_ticks,
+                    deadline_ticks: wait_deadline_ticks,
+                    epoch_qpc: self.resources.playback.epoch,
+                    allow_pre_epoch_startup_dispatch: true,
+                };
+                (Some(wait_result), dispatch_qpc, Some(observation))
             }
             WaitBoundary::Due {
                 wait_result: None,
                 dispatch_qpc,
                 ..
-            } => (None, dispatch_qpc),
+            } => (None, dispatch_qpc, None),
             WaitBoundary::Replan { .. } => {
                 return Err("benchmark wait unexpectedly required replan".to_string());
             }
@@ -1360,6 +1486,7 @@ impl ProductionDispatchTestHarness {
             }
         };
         self.last_wait_result = wait_result;
+        self.last_wait_observation = wait_observation;
         self.runtime.set_deadline_wait_evidence_for_test(
             wait_result.and_then(|result| result.wake_qpc),
             plan.physical_target_qpc(),
@@ -1614,6 +1741,27 @@ impl ProductionDispatchTestHarness {
         plan.physical_target_qpc()
     }
 
+    pub fn qpc_now_for_test(&self) -> Result<QpcTicks, String> {
+        self.resources
+            .clock
+            .now()
+            .map_err(|error| format!("test QPC now: {error:?}"))
+    }
+
+    pub fn qpc_duration_from_us_for_test(&self, us: u64) -> Result<DurationTicks, String> {
+        self.resources
+            .clock
+            .duration_from_us(us)
+            .map_err(|error| format!("test QPC duration conversion: {error:?}"))
+    }
+
+    pub fn qpc_duration_to_us_for_test(&self, duration: DurationTicks) -> Result<u64, String> {
+        self.resources
+            .clock
+            .duration_to_us(duration)
+            .map_err(|error| format!("test QPC duration conversion: {error:?}"))
+    }
+
     pub fn send_phase_a_packet_for_test(
         &mut self,
         packet: PhysicalPacket,
@@ -1838,7 +1986,7 @@ impl ProductionDispatchTestHarness {
     ) -> DispatchStep {
         let physical_target_qpc = plan.physical_target_qpc().expect("physical target QPC");
         let physical = plan.physical().expect("physical dispatch plan");
-        let latest_down_start_qpc = self.runtime.latest_down_start_for_test(
+        let physical_latest_down_start_qpc = self.runtime.latest_down_start_for_test(
             physical_target_qpc,
             physical.authored_view.packet_masks.up_mask,
             physical.authored_view.packet_masks.down_mask,
@@ -1860,7 +2008,7 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
             physical_timing_window,
-            latest_down_start_qpc,
+            physical_latest_down_start_qpc,
             down_admission: DownBoundaryAdmission::Authorized,
             focus_loss_fault: false,
             supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
