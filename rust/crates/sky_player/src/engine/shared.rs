@@ -199,6 +199,15 @@ impl SystemPowerState {
                 self.duplicate_count.fetch_add(1, Ordering::Relaxed);
                 return false;
             }
+            if suspended {
+                // Publish the boundary before exposing SUSPEND_PENDING. A
+                // worker that observes the state immediately after the CAS
+                // must never be able to see a missing boundary.
+                self.suspend_boundary_qpc.store(
+                    suspend_boundary_qpc.map_or(0, QpcTicks::as_u64),
+                    Ordering::Release,
+                );
+            }
             let next = if suspended {
                 current
                     | SYSTEM_POWER_OS_SUSPENDED
@@ -215,13 +224,6 @@ impl SystemPowerState {
                 .is_ok()
             {
                 if suspended {
-                    // A callback-side QPC sample is authoritative. A missing
-                    // sample remains fail-closed; the worker may only use its
-                    // own timestamp as a last-resort safety fallback.
-                    self.suspend_boundary_qpc.store(
-                        suspend_boundary_qpc.map_or(0, QpcTicks::as_u64),
-                        Ordering::Release,
-                    );
                     self.suspend_count.fetch_add(1, Ordering::Relaxed);
                 } else {
                     self.resume_count.fetch_add(1, Ordering::Relaxed);
