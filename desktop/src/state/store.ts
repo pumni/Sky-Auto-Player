@@ -529,6 +529,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
         return `${event.payload.code}: ${event.payload.message}`;
       case 'catalog.changed':
         return `Generation ${event.payload.generation}, ${event.payload.total} songs`;
+      case 'catalog.load_failed':
+        return `Catalog load failed: ${event.payload.message}`;
       case 'diagnostics.snapshot':
         return `p95 ${event.payload.p95_ms === null ? 'unavailable' : `${event.payload.p95_ms.toFixed(2)} ms`}; max ${event.payload.max_lateness_us === null ? 'unavailable' : `${event.payload.max_lateness_us} μs`}`;
       case 'calibration.progress':
@@ -554,6 +556,22 @@ export function createDesktopStore(bridge: DesktopBridge) {
 
   let pendingAutoAdvanceHandoff: PendingAutoAdvanceHandoff | null = null;
   const store = create<DesktopStore>((set, get) => {
+    let catalogReconciliationTail: Promise<void> = Promise.resolve();
+    let catalogReadyRecorded = false;
+
+    const reconcileCatalog = (): Promise<void> => {
+      catalogReconciliationTail = catalogReconciliationTail.then(async () => {
+        if (get().bootstrapState !== 'ready' || get().library.error !== null) return;
+        await get().search();
+        await get().loadLibraryNavigation();
+        if (!catalogReadyRecorded && get().library.error === null) {
+          catalogReadyRecorded = true;
+          recordStartupTelemetry('react.catalog_ready');
+        }
+      });
+      return catalogReconciliationTail;
+    };
+
     const invalidatePlaybackMembershipContext = (source: LibrarySource): void => {
       const key = sourceKey(source);
       sourceMembershipRevisions.set(key, (sourceMembershipRevisions.get(key) ?? 0) + 1);
@@ -1556,16 +1574,28 @@ export function createDesktopStore(bridge: DesktopBridge) {
           await bridge.subscribeUiEvents((event) => get().applyEvent(event));
           const bootstrap = await bridge.bootstrap();
           const settings = await bridge.getSettings();
+          const currentLibrary = get().library;
+          const catalogFailed =
+            currentLibrary.error !== null || bootstrap.catalog_state === 'failed';
           set({
             bootstrap,
             bootstrapState: 'ready',
             settings,
             settingsState: 'ready',
-            library: { ...get().library, generation: bootstrap.catalog_generation },
+            library: {
+              ...currentLibrary,
+              generation: Math.max(currentLibrary.generation, bootstrap.catalog_generation ?? 0),
+              loading: catalogFailed
+                ? false
+                : bootstrap.catalog_state !== 'ready' || currentLibrary.loading,
+              error: catalogFailed
+                ? (currentLibrary.error ?? 'Catalog load failed. Retry the library.')
+                : currentLibrary.error,
+            },
           });
-          await get().search();
-          await get().loadLibraryNavigation();
-          recordStartupTelemetry('react.catalog_ready');
+          if (bootstrap.catalog_state === 'ready' || get().library.generation > 0) {
+            await reconcileCatalog();
+          }
           if (bootstrap.update_preferences.auto_check) void get().checkForUpdate();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -1678,8 +1708,18 @@ export function createDesktopStore(bridge: DesktopBridge) {
             },
           });
           set({ details: { bySongId: new Map() } });
-          void get().search();
-          void get().loadLibraryNavigation();
+          void reconcileCatalog();
+          return;
+        }
+        if (event.name === 'catalog.load_failed') {
+          set({
+            library: {
+              ...get().library,
+              loading: false,
+              error: event.payload.message,
+            },
+          });
+          return;
         }
         if (event.name === 'playback.state_changed') {
           const current = get().playback;

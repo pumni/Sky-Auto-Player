@@ -28,10 +28,10 @@ use crate::power_lifecycle::{
 };
 use crate::ui_events::{
     CalibrationFinishedPayload, CalibrationMode, CalibrationOutcome, CalibrationProgressPayload,
-    CalibrationState, CatalogChangedPayload, CoreReadyPayload, DiagnosticsBackendStatus,
-    NativeBuildPayload, PlaybackEventState, PlaybackFailedPayload, PlaybackFinishedPayload,
-    PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload, PlaybackStateChangedPayload,
-    UiEvent,
+    CalibrationState, CatalogChangedPayload, CatalogLoadFailedPayload, CatalogReadiness,
+    CoreReadyPayload, DiagnosticsBackendStatus, NativeBuildPayload, PlaybackEventState,
+    PlaybackFailedPayload, PlaybackFinishedPayload, PlaybackFocusState, PlaybackHealthState,
+    PlaybackSnapshotPayload, PlaybackStateChangedPayload, UiEvent,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -1330,6 +1330,7 @@ pub(crate) struct NativeDesktopRuntime {
     library_manifest: Mutex<LibraryManifestService<JsonLibraryManifestStore>>,
     catalog_composer: CatalogComposer,
     catalog: Mutex<CatalogState>,
+    catalog_load: Mutex<CatalogLoadState>,
     analysis_cache: Mutex<HashMap<String, CachedSongAnalysis>>,
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
@@ -1366,6 +1367,20 @@ struct CatalogState {
     imported_membership: HashMap<String, BTreeSet<String>>,
     imported_status: Vec<ImportedSourceCatalogStatus>,
     builtin_status: BuiltinCatalogStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum CatalogLoadState {
+    #[default]
+    Uninitialized,
+    Loading,
+    Ready {
+        generation: u64,
+    },
+    Failed {
+        message: String,
+    },
+    Closing,
 }
 
 impl CatalogMetadata {
@@ -1445,8 +1460,33 @@ impl NativeDesktopRuntime {
         test_seams: TestSeams,
         update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
     ) -> Result<Self, String> {
+        Self::from_paths_with_activity_and_seams_and_update_service_with_events(
+            paths,
+            resources,
+            activity,
+            test_seams,
+            update_service,
+            Arc::new(Mutex::new(NativeEventHub::default())),
+        )
+    }
+
+    pub(crate) fn from_paths_with_activity_and_seams_and_update_service_with_events(
+        paths: AppPaths,
+        resources: AppResources,
+        activity: ActivityCoordinator,
+        test_seams: TestSeams,
+        update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
+        events: Arc<Mutex<NativeEventHub>>,
+    ) -> Result<Self, String> {
         paths.assert_clean_boundary()?;
-        Self::from_paths_internal(paths, resources, activity, test_seams, update_service)
+        Self::from_paths_internal(
+            paths,
+            resources,
+            activity,
+            test_seams,
+            update_service,
+            events,
+        )
     }
 
     fn from_paths_internal(
@@ -1455,6 +1495,7 @@ impl NativeDesktopRuntime {
         activity: ActivityCoordinator,
         test_seams: TestSeams,
         update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
+        events: Arc<Mutex<NativeEventHub>>,
     ) -> Result<Self, String> {
         let settings_path = paths.settings_path();
         let settings_store = JsonSettingsStore::new(settings_path);
@@ -1470,7 +1511,6 @@ impl NativeDesktopRuntime {
         let songs_dir = paths
             .resolve_songs_dir(&settings.snapshot().songs_dir)
             .unwrap_or_else(|_| paths.user_music_root().to_path_buf());
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let playback = Arc::new(NativePlaybackService::new(activity.clone()));
         let calibration = Arc::new(NativeCalibrationService::new(
             paths.clone(),
@@ -1510,6 +1550,7 @@ impl NativeDesktopRuntime {
                 FileCatalogSource::new(songs_dir),
             ),
             catalog: Mutex::new(CatalogState::default()),
+            catalog_load: Mutex::new(CatalogLoadState::default()),
             analysis_cache: Mutex::new(HashMap::new()),
             events,
             playback,
@@ -1537,7 +1578,14 @@ impl NativeDesktopRuntime {
             install_root.join("songs"),
         );
         let resources = AppResources::from_resource_dir(&install_root);
-        Self::from_paths_internal(paths, resources, activity, test_seams, None)
+        Self::from_paths_internal(
+            paths,
+            resources,
+            activity,
+            test_seams,
+            None,
+            Arc::new(Mutex::new(NativeEventHub::default())),
+        )
     }
 
     #[allow(dead_code)]
@@ -1707,8 +1755,8 @@ impl NativeDesktopRuntime {
 
     pub(crate) fn bootstrap(&self) -> Result<BootstrapDto, String> {
         crate::startup_telemetry::record("bootstrap.start");
-        let snapshot = self.ensure_catalog_loaded()?;
         let settings = self.settings_snapshot()?;
+        let (catalog_state, catalog_generation) = self.catalog_readiness()?;
         let timing_margin_recommendation = self.timing_margin_recommendation();
         let result = BootstrapDto {
             app_version: env!("CARGO_PKG_VERSION").into(),
@@ -1727,7 +1775,8 @@ impl NativeDesktopRuntime {
             theme: settings.theme.clone(),
             telemetry_enabled: settings.telemetry_enabled,
             update_preferences: update_preferences_dto(&settings),
-            catalog_generation: snapshot.generation,
+            catalog_state,
+            catalog_generation,
         };
         if !self.ready_emitted.swap(true, Ordering::AcqRel) {
             self.publish(UiEvent::CoreReady {
@@ -1890,65 +1939,190 @@ impl NativeDesktopRuntime {
         Ok(update_preferences_dto(snapshot))
     }
 
-    fn ensure_catalog_loaded(&self) -> Result<sky_app_core::catalog::CatalogSnapshot, String> {
-        let needs_load = self
-            .catalog
+    pub(crate) fn catalog_readiness(&self) -> Result<(CatalogReadiness, Option<u64>), String> {
+        let state = self
+            .catalog_load
             .lock()
-            .map_err(|_| "native catalog lock poisoned".to_string())?
-            .index
-            .generation()
-            == 0;
-        if needs_load {
-            crate::startup_telemetry::record("catalog.compose.start");
-            let composition = self.catalog_composition()?;
-            crate::startup_telemetry::record("catalog.compose.end");
-            let mut catalog = self
-                .catalog
-                .lock()
-                .map_err(|_| "native catalog lock poisoned".to_string())?;
-            if catalog.index.generation() == 0 {
-                crate::startup_telemetry::record("catalog.index.start");
-                let snapshot = catalog
-                    .index
-                    .replace_entries(composition.entries)
-                    .map_err(catalog_error)?;
-                crate::startup_telemetry::record("catalog.index.end");
-                catalog.library_membership = composition.library_membership;
-                catalog.builtin_membership = composition.builtin_membership;
-                catalog.user_membership = composition.user_membership;
-                catalog.imported_membership = composition.imported_membership;
-                catalog.imported_status = composition.imported_status;
-                catalog.builtin_status = composition.builtin_status;
-                crate::startup_telemetry::record("catalog.ready");
-                return Ok(snapshot);
+            .map_err(|_| "native catalog load state lock poisoned".to_string())?;
+        Ok(match &*state {
+            CatalogLoadState::Uninitialized => (CatalogReadiness::Uninitialized, None),
+            CatalogLoadState::Loading => (CatalogReadiness::Loading, None),
+            CatalogLoadState::Ready { generation } => (CatalogReadiness::Ready, Some(*generation)),
+            CatalogLoadState::Failed { .. } | CatalogLoadState::Closing => {
+                (CatalogReadiness::Failed, None)
+            }
+        })
+    }
+
+    pub(crate) fn start_catalog_load(self: &Arc<Self>) -> Result<(), String> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err("closing: desktop application is closing".into());
+        }
+        let should_start = self.claim_catalog_load()?;
+        if should_start {
+            let runtime = Arc::clone(self);
+            tauri::async_runtime::spawn_blocking(move || runtime.run_catalog_load());
+        }
+        Ok(())
+    }
+
+    fn claim_catalog_load(&self) -> Result<bool, String> {
+        let mut state = self
+            .catalog_load
+            .lock()
+            .map_err(|_| "native catalog load state lock poisoned".to_string())?;
+        match &*state {
+            CatalogLoadState::Loading | CatalogLoadState::Ready { .. } => Ok(false),
+            CatalogLoadState::Closing => Err("closing: desktop application is closing".into()),
+            CatalogLoadState::Uninitialized | CatalogLoadState::Failed { .. } => {
+                *state = CatalogLoadState::Loading;
+                Ok(true)
             }
         }
-        self.catalog
+    }
+
+    fn run_catalog_load(&self) {
+        crate::startup_telemetry::record("catalog.compose.start");
+        let composition = self.catalog_composition();
+        crate::startup_telemetry::record("catalog.compose.end");
+        let Ok(mut state) = self.catalog_load.lock() else {
+            return;
+        };
+        if self.closed.load(Ordering::Acquire) || matches!(*state, CatalogLoadState::Closing) {
+            *state = CatalogLoadState::Closing;
+            return;
+        }
+        match composition.and_then(|composition| self.apply_catalog_composition(composition, false))
+        {
+            Ok((snapshot, library_total)) => {
+                *state = CatalogLoadState::Ready {
+                    generation: snapshot.generation,
+                };
+                let _ = self.publish(UiEvent::CatalogChanged {
+                    v: crate::DESKTOP_PROTOCOL_VERSION,
+                    payload: CatalogChangedPayload {
+                        generation: snapshot.generation,
+                        total: library_total as u64,
+                    },
+                });
+            }
+            Err(error) => {
+                *state = CatalogLoadState::Failed {
+                    message: error.clone(),
+                };
+                let event_message = bounded_text(&error);
+                let _ = self.publish(UiEvent::CatalogLoadFailed {
+                    v: crate::DESKTOP_PROTOCOL_VERSION,
+                    payload: CatalogLoadFailedPayload {
+                        message: event_message,
+                    },
+                });
+            }
+        }
+    }
+
+    fn ensure_catalog_loaded(&self) -> Result<sky_app_core::catalog::CatalogSnapshot, String> {
+        {
+            let mut state = self
+                .catalog_load
+                .lock()
+                .map_err(|_| "native catalog load state lock poisoned".to_string())?;
+            match &*state {
+                CatalogLoadState::Ready { .. } => {
+                    return self
+                        .catalog
+                        .lock()
+                        .map_err(|_| "native catalog lock poisoned".to_string())
+                        .map(|catalog| catalog.index.snapshot());
+                }
+                CatalogLoadState::Loading => {
+                    return Err("catalog_loading: catalog is still loading".into());
+                }
+                CatalogLoadState::Failed { message } => {
+                    return Err(format!("catalog_failed: {message}"));
+                }
+                CatalogLoadState::Closing => {
+                    return Err("closing: desktop application is closing".into());
+                }
+                CatalogLoadState::Uninitialized => *state = CatalogLoadState::Loading,
+            }
+        }
+
+        crate::startup_telemetry::record("catalog.compose.start");
+        let composition = self.catalog_composition();
+        crate::startup_telemetry::record("catalog.compose.end");
+        let mut state = self
+            .catalog_load
             .lock()
-            .map_err(|_| "native catalog lock poisoned".to_string())
-            .map(|catalog| catalog.index.snapshot())
+            .map_err(|_| "native catalog load state lock poisoned".to_string())?;
+        if self.closed.load(Ordering::Acquire) || matches!(*state, CatalogLoadState::Closing) {
+            *state = CatalogLoadState::Closing;
+            return Err("closing: desktop application is closing".into());
+        }
+        match composition.and_then(|composition| self.apply_catalog_composition(composition, false))
+        {
+            Ok((snapshot, _)) => {
+                *state = CatalogLoadState::Ready {
+                    generation: snapshot.generation,
+                };
+                Ok(snapshot)
+            }
+            Err(error) => {
+                *state = CatalogLoadState::Failed {
+                    message: error.clone(),
+                };
+                Err(error)
+            }
+        }
     }
 
     fn reload(&self) -> Result<CatalogReloadDto, String> {
-        let composition = self.catalog_composition()?;
-        let mut catalog = self
-            .catalog
+        {
+            let mut state = self
+                .catalog_load
+                .lock()
+                .map_err(|_| "native catalog load state lock poisoned".to_string())?;
+            if self.closed.load(Ordering::Acquire) || matches!(*state, CatalogLoadState::Closing) {
+                return Err("closing: desktop application is closing".into());
+            }
+            if matches!(*state, CatalogLoadState::Loading) {
+                return Err("catalog_loading: catalog is still loading".into());
+            }
+            *state = CatalogLoadState::Loading;
+        }
+
+        crate::startup_telemetry::record("catalog.compose.start");
+        let composition = self.catalog_composition();
+        crate::startup_telemetry::record("catalog.compose.end");
+        let mut state = self
+            .catalog_load
             .lock()
-            .map_err(|_| "native catalog lock poisoned".to_string())?;
-        let snapshot = catalog
-            .index
-            .replace_entries(composition.entries)
-            .map_err(catalog_error)?;
-        catalog.library_membership = composition.library_membership;
-        catalog.builtin_membership = composition.builtin_membership;
-        catalog.user_membership = composition.user_membership;
-        catalog.imported_membership = composition.imported_membership;
-        catalog.imported_status = composition.imported_status;
-        catalog.builtin_status = composition.builtin_status;
-        drop(catalog);
-        self.invalidate_analysis_cache();
-        self.playback.invalidate_catalog(snapshot.generation);
-        let library_total = self.library_catalog_total(snapshot.generation)?;
+            .map_err(|_| "native catalog load state lock poisoned".to_string())?;
+        if self.closed.load(Ordering::Acquire) || matches!(*state, CatalogLoadState::Closing) {
+            *state = CatalogLoadState::Closing;
+            return Err("closing: desktop application is closing".into());
+        }
+        let (snapshot, library_total) = match composition
+            .and_then(|composition| self.apply_catalog_composition(composition, true))
+        {
+            Ok(result) => result,
+            Err(error) => {
+                *state = CatalogLoadState::Failed {
+                    message: error.clone(),
+                };
+                let event_message = bounded_text(&error);
+                let _ = self.publish(UiEvent::CatalogLoadFailed {
+                    v: crate::DESKTOP_PROTOCOL_VERSION,
+                    payload: CatalogLoadFailedPayload {
+                        message: event_message,
+                    },
+                });
+                return Err(error);
+            }
+        };
+        *state = CatalogLoadState::Ready {
+            generation: snapshot.generation,
+        };
         self.publish(UiEvent::CatalogChanged {
             v: crate::DESKTOP_PROTOCOL_VERSION,
             payload: CatalogChangedPayload {
@@ -1962,15 +2136,38 @@ impl NativeDesktopRuntime {
         })
     }
 
-    fn library_catalog_total(&self, generation: u64) -> Result<usize, String> {
-        let catalog = self
+    fn apply_catalog_composition(
+        &self,
+        composition: CatalogComposition,
+        invalidate: bool,
+    ) -> Result<(sky_app_core::catalog::CatalogSnapshot, usize), String> {
+        let mut catalog = self
             .catalog
             .lock()
             .map_err(|_| "native catalog lock poisoned".to_string())?;
-        catalog
+        crate::startup_telemetry::record("catalog.index.start");
+        let snapshot = catalog
             .index
-            .count_allowed_ids(&catalog.library_membership, Some(generation))
-            .map_err(catalog_error)
+            .replace_entries(composition.entries)
+            .map_err(catalog_error)?;
+        crate::startup_telemetry::record("catalog.index.end");
+        catalog.library_membership = composition.library_membership;
+        catalog.builtin_membership = composition.builtin_membership;
+        catalog.user_membership = composition.user_membership;
+        catalog.imported_membership = composition.imported_membership;
+        catalog.imported_status = composition.imported_status;
+        catalog.builtin_status = composition.builtin_status;
+        let library_total = catalog
+            .index
+            .count_allowed_ids(&catalog.library_membership, Some(snapshot.generation))
+            .map_err(catalog_error)?;
+        drop(catalog);
+        if invalidate {
+            self.invalidate_analysis_cache();
+            self.playback.invalidate_catalog(snapshot.generation);
+        }
+        crate::startup_telemetry::record("catalog.ready");
+        Ok((snapshot, library_total))
     }
 
     pub(crate) fn builtin_catalog_status(&self) -> Result<BuiltinCatalogStatus, String> {
@@ -2707,13 +2904,6 @@ impl NativeDesktopRuntime {
         self.calibration.wait_for_terminal(timeout)
     }
 
-    pub(crate) fn subscribe(&self, channel: Channel<UiEvent>) -> Result<(), String> {
-        self.events
-            .lock()
-            .map_err(|_| "native event hub lock poisoned".to_string())?
-            .subscribe(channel)
-    }
-
     fn publish(&self, event: UiEvent) -> Result<(), String> {
         self.events
             .lock()
@@ -2722,7 +2912,13 @@ impl NativeDesktopRuntime {
     }
 
     pub(crate) fn shutdown(&self) {
+        let mut catalog_load = self
+            .catalog_load
+            .lock()
+            .expect("native catalog load state poisoned");
         if !self.closed.swap(true, Ordering::AcqRel) {
+            *catalog_load = CatalogLoadState::Closing;
+            drop(catalog_load);
             (self.pre_exit_safety)();
         }
     }
@@ -5642,7 +5838,7 @@ fn catalog_error(error: CatalogError) -> String {
 }
 
 #[derive(Default)]
-struct NativeEventHub {
+pub(crate) struct NativeEventHub {
     buffered: VecDeque<UiEvent>,
     channel: Option<Channel<UiEvent>>,
     closed: bool,
@@ -5693,7 +5889,7 @@ impl NativeEventHub {
         Ok(())
     }
 
-    fn subscribe(&mut self, channel: Channel<UiEvent>) -> Result<(), String> {
+    pub(crate) fn subscribe(&mut self, channel: Channel<UiEvent>) -> Result<(), String> {
         if self.closed {
             return Err("native event hub is closed".into());
         }
@@ -5709,7 +5905,7 @@ impl NativeEventHub {
         Ok(())
     }
 
-    fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         self.closed = true;
         self.channel = None;
         self.buffered.clear();
@@ -5721,6 +5917,9 @@ fn validate_ui_event(event: &UiEvent) -> Result<(), String> {
         UiEvent::CoreReady { payload, .. } => UiEvent::validate_ready(payload),
         UiEvent::CoreFatal { payload, .. } => UiEvent::validate_fatal(payload),
         UiEvent::CatalogChanged { payload, .. } => UiEvent::validate_catalog_changed(payload),
+        UiEvent::CatalogLoadFailed { payload, .. } => {
+            UiEvent::validate_catalog_load_failed(payload)
+        }
         UiEvent::PlaybackStateChanged { payload, .. } => {
             UiEvent::validate_playback_state_changed(payload)
         }
@@ -5840,6 +6039,17 @@ mod tests {
     use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    fn catalog_generation(runtime: &NativeDesktopRuntime) -> u64 {
+        runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":1}),
+            )
+            .expect("catalog search")["generation"]
+            .as_u64()
+            .expect("catalog generation")
+    }
 
     fn active_for_control(
         state: PlaybackSessionState,
@@ -6732,6 +6942,54 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_catalog_start_is_single_flight() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-catalog-single-flight-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+
+        assert!(runtime.claim_catalog_load().expect("first claim"));
+        assert!(!runtime.claim_catalog_load().expect("duplicate claim"));
+        assert!(matches!(
+            *runtime.catalog_load.lock().expect("catalog load state"),
+            super::CatalogLoadState::Loading
+        ));
+
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_worker_cannot_mutate_after_shutdown_claims_closing() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-catalog-shutdown-race-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+
+        assert!(runtime.claim_catalog_load().expect("claim"));
+        runtime.shutdown();
+        runtime.run_catalog_load();
+
+        assert!(matches!(
+            *runtime.catalog_load.lock().expect("catalog load state"),
+            super::CatalogLoadState::Closing
+        ));
+        assert_eq!(
+            runtime.catalog.lock().expect("catalog").index.generation(),
+            0
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn catalog_viewport_hydrates_metadata_and_liked_songs_persist_by_song_id() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -6747,12 +7005,7 @@ mod tests {
         .expect("song");
 
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
-        let bootstrap = runtime
-            .dispatch("app.bootstrap", Value::Object(Default::default()))
-            .expect("bootstrap");
-        let generation = bootstrap["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let generation = catalog_generation(&runtime);
         let search = runtime
             .dispatch(
                 "catalog.search",
@@ -6862,12 +7115,7 @@ mod tests {
             .dispatch("library.list_playlists", serde_json::json!({}))
             .expect("list playlists");
         assert_eq!(listed["playlists"].as_array().expect("playlists").len(), 0);
-        let initial_bootstrap = runtime
-            .dispatch("app.bootstrap", serde_json::json!({}))
-            .expect("initial bootstrap");
-        let initial_generation = initial_bootstrap["catalog_generation"]
-            .as_u64()
-            .expect("initial generation");
+        let initial_generation = catalog_generation(&runtime);
         let primary_id = runtime
             .dispatch(
                 "catalog.search",
@@ -7005,11 +7253,7 @@ mod tests {
                 .contains(&missing_path.to_string_lossy().to_string())
         );
 
-        let generation = runtime
-            .dispatch("app.bootstrap", serde_json::json!({}))
-            .expect("bootstrap")["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let generation = catalog_generation(&runtime);
         let all_songs = runtime
             .dispatch(
                 "catalog.search",
@@ -7844,12 +8088,7 @@ mod tests {
         )
         .expect("song");
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
-        let bootstrap = runtime
-            .dispatch("app.bootstrap", Value::Object(Default::default()))
-            .expect("bootstrap");
-        let generation = bootstrap["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let generation = catalog_generation(&runtime);
         let search = runtime
             .dispatch(
                 "catalog.search",
@@ -8196,20 +8435,20 @@ mod tests {
             )
             .expect("song");
             let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
-            let bootstrap = runtime.bootstrap().expect("bootstrap");
+            runtime.bootstrap().expect("bootstrap");
             let search = runtime
                 .search(crate::commands::CatalogSearchRequest {
                     query: String::new(),
                     offset: 0,
                     limit: 10,
-                    generation: Some(bootstrap.catalog_generation),
+                    generation: None,
                     source: crate::commands::LibrarySource::default(),
                 })
                 .expect("search");
             let detail = runtime
                 .detail(crate::commands::CatalogDetailRequest {
                     song_id: search.items[0].song_id.clone(),
-                    generation: Some(bootstrap.catalog_generation),
+                    generation: Some(search.generation),
                 })
                 .expect("detail");
             let actual = serde_json::to_value(&detail).expect("detail JSON");
@@ -8249,12 +8488,7 @@ mod tests {
         )
         .expect("song");
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
-        let bootstrap = runtime
-            .dispatch("app.bootstrap", Value::Object(Default::default()))
-            .expect("bootstrap");
-        let generation = bootstrap["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let generation = catalog_generation(&runtime);
         let search = runtime
             .dispatch(
                 "catalog.search",
@@ -8333,12 +8567,7 @@ mod tests {
         )
         .expect("song");
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
-        let bootstrap = runtime
-            .dispatch("app.bootstrap", Value::Object(Default::default()))
-            .expect("bootstrap");
-        let generation = bootstrap["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let generation = catalog_generation(&runtime);
         let search = runtime
             .dispatch(
                 "catalog.search",
@@ -8431,12 +8660,7 @@ mod tests {
         )
         .expect("song");
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
-        let bootstrap = runtime
-            .dispatch("app.bootstrap", Value::Object(Default::default()))
-            .expect("bootstrap");
-        let generation = bootstrap["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let generation = catalog_generation(&runtime);
         let search = runtime
             .dispatch(
                 "catalog.search",

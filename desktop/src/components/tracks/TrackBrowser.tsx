@@ -14,6 +14,7 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
   const resultTotal = useStore((store: DesktopStore) => store.library.resultTotal);
   const loading = useStore((store: DesktopStore) => store.library.loading);
   const error = useStore((store: DesktopStore) => store.library.error);
+  const reloadLibrary = useStore((store: DesktopStore) => store.reloadLibrary);
   const playlistAddMode = useStore((store: DesktopStore) => store.library.playlistAddMode);
   const openPlaylistAdd = useStore((store: DesktopStore) => store.openPlaylistAdd);
   const exitPlaylistAdd = useStore((store: DesktopStore) => store.exitPlaylistAdd);
@@ -60,12 +61,25 @@ export function TrackBrowser({ useStore }: TrackBrowserProps) {
           </div>
         )}
       </header>
-      {error && (
+      {error && resultTotal > 0 && (
         <p className="inline-error" role="status">
           {error}
         </p>
       )}
-      {!loading && resultTotal === 0 ? (
+      {loading && resultTotal === 0 ? (
+        <div className="empty-state" role="status" aria-busy="true">
+          <strong>Loading library…</strong>
+          <span className="muted">Reading your song catalog.</span>
+        </div>
+      ) : error && resultTotal === 0 ? (
+        <div className="empty-state" role="alert">
+          <strong>Library unavailable</strong>
+          <span className="muted">{error}</span>
+          <Button className="button button-primary" onPress={() => void reloadLibrary()}>
+            Retry
+          </Button>
+        </div>
+      ) : !loading && resultTotal === 0 ? (
         <div className="empty-state">
           <strong>
             {isPlaylist && !isPlaylistAddMode ? 'Add songs to this playlist' : 'No songs found'}
