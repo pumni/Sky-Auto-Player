@@ -165,6 +165,19 @@ pub struct DiagnosticsSnapshotDto {
     pub release_late_2ms: Option<u64>,
     pub session_id: Option<String>,
     pub last_error: Option<String>,
+    pub power_request_created: bool,
+    pub power_request_active: bool,
+    pub power_request_create_failures: u64,
+    pub power_request_set_failures: u64,
+    pub power_request_clear_failures: u64,
+    pub power_request_close_failures: u64,
+    pub suspend_resume_registered: bool,
+    pub suspend_resume_registration_failures: u64,
+    pub suspend_resume_unregistration_failures: u64,
+    pub system_suspend_active: bool,
+    pub system_suspend_notifications: u64,
+    pub system_resume_notifications: u64,
+    pub duplicate_system_power_notifications: u64,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]

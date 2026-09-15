@@ -189,12 +189,15 @@ mod tests {
         dispatch_deadline_wake_is_due, record_wait_failure, spin_threshold_for_bounded_target,
         wait_for_next_boundary,
     };
+    use crate::engine::shared::{SYSTEM_POWER_SUSPEND_PENDING, SystemPowerState};
     use crate::engine::telemetry::WorkerMetricsLocal;
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
     use sky_dispatch_win32::event::OwnedEvent;
     use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure};
+    use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
+    use std::time::Duration;
 
     #[test]
     fn physical_wait_uses_the_frozen_precision_spin_threshold() {
@@ -329,6 +332,117 @@ mod tests {
             WaitBoundary::Replan { wait_result, .. }
                 if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
         ));
+        assert!(!force_full_cleanup);
+        assert!(terminal_error.is_none());
+    }
+
+    #[test]
+    fn lifecycle_interrupt_wakes_an_armed_relative_wait() {
+        let qpc_clock = QpcClock::initialize().expect("qpc clock");
+        let epoch = qpc_clock.now().expect("qpc epoch");
+        let deadline_delta = qpc_clock
+            .duration_from_us(5_000_000)
+            .expect("deadline conversion");
+        let deadline = TimelineTicks::from_raw(deadline_delta.as_u64());
+        let heartbeat = AtomicU64::new(epoch.as_u64());
+        let waiter = HybridWaiter::new();
+        let interrupt = Arc::new(OwnedEvent::new_auto_reset().expect("interrupt event"));
+        let signal_event = Arc::clone(&interrupt);
+        let system_power = Arc::new(SystemPowerState::default());
+        let signal_power = Arc::clone(&system_power);
+        let signaler = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            assert!(signal_power.notify(true, &signal_event));
+        });
+        let mut local_metrics = WorkerMetricsLocal::default();
+        let mut force_full_cleanup = false;
+        let mut terminal_error = None;
+
+        let boundary = wait_for_next_boundary(WaitBoundaryInput {
+            deadline: WaitDeadline {
+                physical_target_qpc: Some(
+                    epoch
+                        .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+                        .expect("target"),
+                ),
+                spin_threshold_ticks: DurationTicks::from_raw(1),
+                qpc_clock,
+            },
+            timing: WaitTiming {
+                lease_timeout_ticks: qpc_clock.duration_from_us(10_000_000).expect("lease"),
+                supervisor_heartbeat_ticks: &heartbeat,
+            },
+            signals: WaitSignals {
+                waiter: &waiter,
+                interrupt: &interrupt,
+            },
+            mutable: WaitMutable {
+                local_metrics: &mut local_metrics,
+                force_full_cleanup: &mut force_full_cleanup,
+                terminal_error: &mut terminal_error,
+            },
+        });
+        signaler.join().expect("signal thread");
+
+        assert!(matches!(
+            boundary,
+            WaitBoundary::Replan { wait_result, .. }
+                if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
+        ));
+        assert_eq!(system_power.take_pending(), SYSTEM_POWER_SUSPEND_PENDING);
+        assert!(system_power.down_blocked());
+        assert!(!force_full_cleanup);
+        assert!(terminal_error.is_none());
+    }
+
+    #[test]
+    fn system_suspend_signal_before_wait_arm_is_not_lost() {
+        let qpc_clock = QpcClock::initialize().expect("qpc clock");
+        let epoch = qpc_clock.now().expect("qpc epoch");
+        let deadline_delta = qpc_clock
+            .duration_from_us(5_000_000)
+            .expect("deadline conversion");
+        let deadline = TimelineTicks::from_raw(deadline_delta.as_u64());
+        let heartbeat = AtomicU64::new(epoch.as_u64());
+        let waiter = HybridWaiter::new();
+        let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
+        let system_power = SystemPowerState::default();
+        assert!(system_power.notify(true, &interrupt));
+        let mut local_metrics = WorkerMetricsLocal::default();
+        let mut force_full_cleanup = false;
+        let mut terminal_error = None;
+
+        let boundary = wait_for_next_boundary(WaitBoundaryInput {
+            deadline: WaitDeadline {
+                physical_target_qpc: Some(
+                    epoch
+                        .checked_add_duration(DurationTicks::from_raw(deadline.as_u64()))
+                        .expect("target"),
+                ),
+                spin_threshold_ticks: DurationTicks::from_raw(1),
+                qpc_clock,
+            },
+            timing: WaitTiming {
+                lease_timeout_ticks: qpc_clock.duration_from_us(10_000_000).expect("lease"),
+                supervisor_heartbeat_ticks: &heartbeat,
+            },
+            signals: WaitSignals {
+                waiter: &waiter,
+                interrupt: &interrupt,
+            },
+            mutable: WaitMutable {
+                local_metrics: &mut local_metrics,
+                force_full_cleanup: &mut force_full_cleanup,
+                terminal_error: &mut terminal_error,
+            },
+        });
+
+        assert!(matches!(
+            boundary,
+            WaitBoundary::Replan { wait_result, .. }
+                if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
+        ));
+        assert!(system_power.down_blocked());
         assert!(!force_full_cleanup);
         assert!(terminal_error.is_none());
     }

@@ -7,6 +7,7 @@ use crate::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
 pub enum PauseReason {
     Manual = 1,
     Focus = 2,
+    SystemSuspend = 4,
 }
 
 impl PauseReason {
@@ -14,6 +15,7 @@ impl PauseReason {
         match self {
             Self::Manual => "manual",
             Self::Focus => "focus",
+            Self::SystemSuspend => "system_suspend",
         }
     }
 

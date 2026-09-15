@@ -21,6 +21,11 @@ use crate::commands::{
     RiskDecisionDto, RiskSummaryDto, SettingsDto, SettingsPatch, SongDetailDto, UpdateCheckDto,
     UpdateHandoffDto, UpdatePreferencesDto, UpdatePreferencesPatch,
 };
+use crate::power_lifecycle::{
+    PowerLifecycleDiagnostics, PowerLifecycleSnapshot, SuspendResumeRegistration,
+    SystemRequiredPowerRequest, acquire_playback_power_resources, system_power_endpoint,
+    system_power_platform,
+};
 use crate::ui_events::{
     CalibrationFinishedPayload, CalibrationMode, CalibrationOutcome, CalibrationProgressPayload,
     CalibrationState, CatalogChangedPayload, CoreReadyPayload, DiagnosticsBackendStatus,
@@ -2792,6 +2797,20 @@ impl DiagnosticsPublicationGate {
     where
         F: FnOnce(u64) -> Result<(), String>,
     {
+        self.publish(sample_time, false, publish)
+    }
+
+    fn force_publish<F>(&self, sample_time: Instant, publish: F) -> Result<bool, String>
+    where
+        F: FnOnce(u64) -> Result<(), String>,
+    {
+        self.publish(sample_time, true, publish)
+    }
+
+    fn publish<F>(&self, sample_time: Instant, force: bool, publish: F) -> Result<bool, String>
+    where
+        F: FnOnce(u64) -> Result<(), String>,
+    {
         let mut state = self
             .state
             .lock()
@@ -2799,9 +2818,10 @@ impl DiagnosticsPublicationGate {
         if !state.enabled {
             return Ok(false);
         }
-        if state
-            .last_emit_at
-            .is_some_and(|last| sample_time.saturating_duration_since(last) < DIAGNOSTICS_INTERVAL)
+        if !force
+            && state.last_emit_at.is_some_and(|last| {
+                sample_time.saturating_duration_since(last) < DIAGNOSTICS_INTERVAL
+            })
         {
             return Ok(false);
         }
@@ -2863,6 +2883,9 @@ struct NativeActivePlayback {
     state: Mutex<PlaybackSessionState>,
     pending: Mutex<Option<PlaybackPendingControl>>,
     player: Option<Arc<NativeDispatchSession>>,
+    power_lifecycle: Arc<PowerLifecycleDiagnostics>,
+    power_request: Mutex<Option<SystemRequiredPowerRequest>>,
+    suspend_resume_registration: Mutex<Option<SuspendResumeRegistration>>,
     started_at: Instant,
     paused_since: Mutex<Option<Instant>>,
     paused_total: Mutex<Duration>,
@@ -2872,6 +2895,33 @@ struct NativeActivePlayback {
     heartbeat_stop: AtomicBool,
     heartbeat_thread: Mutex<Option<thread::JoinHandle<()>>>,
     sequence: AtomicU64,
+}
+
+impl NativeActivePlayback {
+    fn release_power_request(&self) {
+        if let Ok(mut owner) = self.power_request.lock()
+            && let Some(mut request) = owner.take()
+        {
+            request.release();
+        }
+    }
+
+    fn release_power_resources(&self) {
+        if let Some(player) = &self.player {
+            player.deactivate_system_power();
+        }
+        self.release_power_request();
+        if let Ok(mut owner) = self.suspend_resume_registration.lock()
+            && let Some(mut registration) = owner.take()
+        {
+            registration.unregister();
+        }
+        self.power_lifecycle.mark_registration_inactive();
+    }
+
+    fn power_lifecycle_snapshot(&self) -> PowerLifecycleSnapshot {
+        self.power_lifecycle.snapshot()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3505,81 +3555,108 @@ impl NativePlaybackService {
             .expect("prepared record was found above");
         prepared.remove(prepared_index);
         drop(prepared);
-        let (player, target_hwnd) = if variant.config.dry_run {
-            (None, None)
+        let power_lifecycle = Arc::new(PowerLifecycleDiagnostics::default());
+        let power_platform = system_power_platform();
+        let mut power_request = None;
+        let mut suspend_resume_registration = None;
+        let physical_creation = if variant.config.dry_run {
+            Ok((None, None))
         } else {
-            match self.create_native_player(
+            self.create_native_player(
                 &variant.schedule,
                 &variant.config,
                 &variant.timing_policy,
                 settings,
-            ) {
-                Ok((player, target)) => (Some(player), Some(target)),
-                Err(error) => {
-                    // Match the Python supervisor's observable failure path:
-                    // a start that cannot pass focus/target admission still
-                    // has an ordered starting -> failed -> failed-event trace.
-                    let failed_active = Arc::new(NativeActivePlayback {
-                        session_id: session_id.clone(),
-                        prepared_id: request.prepared_id.clone(),
-                        song_id: record.song_id.clone(),
-                        title: record.song.name.clone(),
-                        total_us: variant.schedule.duration_us,
-                        config: variant.config.clone(),
-                        timing_policy: variant.timing_policy.clone(),
-                        timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
-                        plan_fingerprint: variant.fingerprint.clone(),
-                        physical: true,
-                        activity_lease: Mutex::new(activity_lease),
-                        target_hwnd: None,
-                        state: Mutex::new(PlaybackSessionState::Starting),
-                        pending: Mutex::new(None),
-                        player: None,
-                        started_at: Instant::now(),
-                        paused_since: Mutex::new(None),
-                        paused_total: Mutex::new(Duration::ZERO),
-                        stop_requested: AtomicBool::new(false),
-                        skip_requested: AtomicBool::new(false),
-                        done: AtomicBool::new(false),
-                        heartbeat_stop: AtomicBool::new(true),
-                        heartbeat_thread: Mutex::new(None),
-                        sequence: AtomicU64::new(0),
-                    });
-                    let _ = publish_playback_state(
-                        &events,
-                        &failed_active,
-                        PlaybackEventState::Starting,
-                        None,
-                        None,
-                    );
-                    let mut last_event_state = PlaybackEventState::Starting;
-                    let (code, message) = physical_startup_failure(&error);
-                    let fallback_publication = PlaybackTerminalPublication::Failed {
-                        code: code.into(),
-                        message: message.into(),
-                    };
-                    let publication = match publish_terminal_failure_state(
-                        &events,
-                        &failed_active,
-                        &mut last_event_state,
-                        code,
-                        message,
-                    ) {
-                        Ok(publication) => publication,
-                        Err(_) => fallback_publication,
-                    };
-                    if let Err(error) = retire_pre_activation_failure(
-                        &self.last_terminal,
-                        &failed_active,
-                        &publication,
-                    ) {
-                        return Err(format!(
-                            "{code}: {message}; pre-activation retirement failed: {error}"
-                        ));
-                    }
-                    let _ = publish_terminal_event(&events, &failed_active, &publication);
-                    return Err(format!("{code}: {message}"));
+            )
+            .and_then(|(player, target)| {
+                let result: Result<_, String> = (|| {
+                    (power_request, suspend_resume_registration) =
+                        acquire_playback_power_resources(
+                            Some(Arc::downgrade(&player)),
+                            power_platform.clone(),
+                            power_lifecycle.clone(),
+                        )?;
+                    player.arm(0)?;
+                    Ok((Some(player.clone()), Some(target)))
+                })();
+                if result.is_err() {
+                    player.deactivate_system_power();
                 }
+                result
+            })
+        };
+        let (player, target_hwnd) = match physical_creation {
+            Ok(value) => value,
+            Err(error) => {
+                // Match the Python supervisor's observable failure path:
+                // a start that cannot pass focus/target admission still
+                // has an ordered starting -> failed -> failed-event trace.
+                let failed_active = Arc::new(NativeActivePlayback {
+                    session_id: session_id.clone(),
+                    prepared_id: request.prepared_id.clone(),
+                    song_id: record.song_id.clone(),
+                    title: record.song.name.clone(),
+                    total_us: variant.schedule.duration_us,
+                    config: variant.config.clone(),
+                    timing_policy: variant.timing_policy.clone(),
+                    timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
+                    plan_fingerprint: variant.fingerprint.clone(),
+                    physical: true,
+                    activity_lease: Mutex::new(activity_lease),
+                    target_hwnd: None,
+                    state: Mutex::new(PlaybackSessionState::Starting),
+                    pending: Mutex::new(None),
+                    player: None,
+                    power_lifecycle: power_lifecycle.clone(),
+                    power_request: Mutex::new(power_request.take()),
+                    suspend_resume_registration: Mutex::new(suspend_resume_registration.take()),
+                    started_at: Instant::now(),
+                    paused_since: Mutex::new(None),
+                    paused_total: Mutex::new(Duration::ZERO),
+                    stop_requested: AtomicBool::new(false),
+                    skip_requested: AtomicBool::new(false),
+                    done: AtomicBool::new(false),
+                    heartbeat_stop: AtomicBool::new(true),
+                    heartbeat_thread: Mutex::new(None),
+                    sequence: AtomicU64::new(0),
+                });
+                let _ = publish_playback_state(
+                    &events,
+                    &failed_active,
+                    PlaybackEventState::Starting,
+                    None,
+                    None,
+                );
+                let mut last_event_state = PlaybackEventState::Starting;
+                let (code, message) = physical_startup_failure(&error);
+                let fallback_publication = PlaybackTerminalPublication::Failed {
+                    code: code.into(),
+                    message: message.into(),
+                };
+                let publication = match publish_terminal_failure_state(
+                    &events,
+                    &failed_active,
+                    &mut last_event_state,
+                    code,
+                    message,
+                ) {
+                    Ok(publication) => publication,
+                    Err(_) => fallback_publication,
+                };
+                if let Err(error) =
+                    retire_pre_activation_failure(&self.last_terminal, &failed_active, &publication)
+                {
+                    return Err(format!(
+                        "{code}: {message}; pre-activation retirement failed: {error}"
+                    ));
+                }
+                let _ = publish_final_diagnostics_snapshot_for_active(
+                    &events,
+                    &failed_active,
+                    &self.diagnostics_gate,
+                );
+                let _ = publish_terminal_event(&events, &failed_active, &publication);
+                return Err(format!("{code}: {message}; {error}"));
             }
         };
         let active = Arc::new(NativeActivePlayback {
@@ -3598,6 +3675,9 @@ impl NativePlaybackService {
             state: Mutex::new(PlaybackSessionState::Starting),
             pending: Mutex::new(None),
             player,
+            power_lifecycle: power_lifecycle.clone(),
+            power_request: Mutex::new(power_request),
+            suspend_resume_registration: Mutex::new(suspend_resume_registration),
             started_at: Instant::now(),
             paused_since: Mutex::new(None),
             paused_total: Mutex::new(Duration::ZERO),
@@ -3822,57 +3902,59 @@ impl NativePlaybackService {
         if !sky_dispatch_win32::focus::focus_window_and_verify(target, Duration::from_millis(100)) {
             return Err("validated Sky window could not be focused".into());
         }
-        let player = Arc::new(NativeDispatchSession::new(NativeSessionOptions {
-            schedule: runtime_schedule,
-            backend: BackendConfig::Production,
-            profile: DispatchProfile::Production,
-            timing: TimingOptions {
-                game_fps: config.fps,
-                min_hold_us: policy.min_hold_us,
-                min_release_gap_us: policy.min_release_gap_us,
-                frame_us: policy.frame_us,
-                frame_base_hold_us: policy.frame_base_hold_us,
-                timing_margin_us: policy.timing_margin_us,
-                strict_timing: false,
-                strict_down_completion_late_us: 2_000,
-                strict_up_completion_late_us: 2_000,
-                input_path_warn_us: 300,
-            },
-            focus: FocusOptions {
-                require_focus: true,
-                focus_restore_grace_us: policy.focus_restore_grace_us,
-            },
-            wait: WaitOptions {
-                enable_waitable_timer: true,
-                enable_event_wait: true,
-                supervisor_lease_timeout_us:
-                    sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+        let player = Arc::new(NativeDispatchSession::new_with_power_endpoint(
+            NativeSessionOptions {
+                schedule: runtime_schedule,
+                backend: BackendConfig::Production,
+                profile: DispatchProfile::Production,
+                timing: TimingOptions {
+                    game_fps: config.fps,
+                    min_hold_us: policy.min_hold_us,
+                    min_release_gap_us: policy.min_release_gap_us,
+                    frame_us: policy.frame_us,
+                    frame_base_hold_us: policy.frame_base_hold_us,
+                    timing_margin_us: policy.timing_margin_us,
+                    strict_timing: false,
+                    strict_down_completion_late_us: 2_000,
+                    strict_up_completion_late_us: 2_000,
+                    input_path_warn_us: 300,
+                },
+                focus: FocusOptions {
+                    require_focus: true,
+                    focus_restore_grace_us: policy.focus_restore_grace_us,
+                },
+                wait: WaitOptions {
+                    enable_waitable_timer: true,
+                    enable_event_wait: true,
+                    supervisor_lease_timeout_us:
+                        sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+                    #[cfg(feature = "tauri-test")]
+                    test_spin_threshold_us: None,
+                    #[cfg(feature = "tauri-test")]
+                    test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                },
+                telemetry: TelemetryOptions {
+                    mode: TelemetryMode::Ring,
+                    // RtTraceRecord is fixed-width; 8192 records bound capture to
+                    // about 1.5 MiB on x64 before export while covering typical songs.
+                    capacity: 8_192,
+                },
+                priority: PriorityOptions {
+                    mode: PriorityMode::Auto,
+                },
+                instrument_key_profile: None,
                 #[cfg(feature = "tauri-test")]
-                test_spin_threshold_us: None,
+                startup_ordering_hook: None,
                 #[cfg(feature = "tauri-test")]
-                test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                restore_race_hook: None,
+                #[cfg(feature = "tauri-test")]
+                timer_lifecycle_context: None,
             },
-            telemetry: TelemetryOptions {
-                mode: TelemetryMode::Ring,
-                // RtTraceRecord is fixed-width; 8192 records bound capture to
-                // about 1.5 MiB on x64 before export while covering typical songs.
-                capacity: 8_192,
-            },
-            priority: PriorityOptions {
-                mode: PriorityMode::Auto,
-            },
-            instrument_key_profile: None,
-            #[cfg(feature = "tauri-test")]
-            startup_ordering_hook: None,
-            #[cfg(feature = "tauri-test")]
-            restore_race_hook: None,
-            #[cfg(feature = "tauri-test")]
-            timer_lifecycle_context: None,
-        })?);
+            system_power_endpoint()?,
+        )?);
         player.set_target_hwnd(target);
         player.set_focus_hint(true);
         player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());
-        player.arm(0)?;
         Ok((player, target))
     }
 
@@ -3999,6 +4081,12 @@ impl NativePlaybackService {
             let _ = player.panic_release();
             let _ = player.quit();
             let _ = player.join(Duration::from_secs(5));
+        }
+        active.release_power_resources();
+        if publish_final_diagnostics_snapshot_for_active(&events, &active, &self.diagnostics_gate)
+            .is_err()
+        {
+            cleanup_failed_event_delivery(&active);
         }
         if active.physical
             && let Ok(mut trace_state) = self.sender_trace_state.lock()
@@ -4455,6 +4543,23 @@ fn publish_diagnostics_snapshot_for_active(
     active: &NativeActivePlayback,
     gate: &DiagnosticsPublicationGate,
 ) -> Result<(), String> {
+    publish_diagnostics_snapshot_inner(events, active, gate, false)
+}
+
+fn publish_final_diagnostics_snapshot_for_active(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    gate: &DiagnosticsPublicationGate,
+) -> Result<(), String> {
+    publish_diagnostics_snapshot_inner(events, active, gate, true)
+}
+
+fn publish_diagnostics_snapshot_inner(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    gate: &DiagnosticsPublicationGate,
+    final_sample: bool,
+) -> Result<(), String> {
     let sample = active
         .player
         .as_ref()
@@ -4462,9 +4567,14 @@ fn publish_diagnostics_snapshot_for_active(
         .unwrap_or_else(|| NativeDiagnosticsSample::unavailable(active.physical));
     let player_attached = active.player.is_some();
     let session_id = active.session_id.clone();
+    let power = active.power_lifecycle_snapshot();
+    let system_power = active
+        .player
+        .as_ref()
+        .map(|player| player.system_power_snapshot());
     let completion_samples_available =
         sample.recent_latency_samples_available && !sample.recent_latencies_us.is_empty();
-    let _published = gate.try_publish(Instant::now(), |sequence| {
+    let publish = |sequence| {
         let payload = crate::ui_events::DiagnosticsSnapshotDto {
             seq: sequence,
             physical_session: active.physical,
@@ -4524,6 +4634,22 @@ fn publish_diagnostics_snapshot_for_active(
             release_late_2ms: sample.release_late_2ms,
             session_id: Some(session_id),
             last_error: sample.last_error.clone(),
+            power_request_created: power.request_created,
+            power_request_active: power.request_active,
+            power_request_create_failures: power.request_create_failures,
+            power_request_set_failures: power.request_set_failures,
+            power_request_clear_failures: power.request_clear_failures,
+            power_request_close_failures: power.request_close_failures,
+            suspend_resume_registered: power.registration_active,
+            suspend_resume_registration_failures: power.registration_failures,
+            suspend_resume_unregistration_failures: power.unregistration_failures,
+            system_suspend_active: system_power.is_some_and(|snapshot| snapshot.down_blocked),
+            system_suspend_notifications: system_power
+                .map_or(0, |snapshot| snapshot.suspend_notifications),
+            system_resume_notifications: system_power
+                .map_or(0, |snapshot| snapshot.resume_notifications),
+            duplicate_system_power_notifications: system_power
+                .map_or(0, |snapshot| snapshot.duplicate_notifications),
         };
         events
             .lock()
@@ -4532,7 +4658,12 @@ fn publish_diagnostics_snapshot_for_active(
                 v: crate::DESKTOP_PROTOCOL_VERSION,
                 payload: Box::new(payload),
             })
-    })?;
+    };
+    let _published = if final_sample {
+        gate.force_publish(Instant::now(), publish)
+    } else {
+        gate.try_publish(Instant::now(), publish)
+    }?;
     Ok(())
 }
 
@@ -4979,7 +5110,12 @@ fn publish_terminal_failure_state(
 }
 
 fn physical_startup_failure(error: &str) -> (&'static str, &'static str) {
-    if error == "no admissible visible Sky window was found" {
+    if error.starts_with("suspend_resume_registration_failed") {
+        (
+            "system_power_notifications_unavailable",
+            "Windows suspend and resume notifications could not be registered, so physical playback was stopped safely.",
+        )
+    } else if error == "no admissible visible Sky window was found" {
         (
             "target_not_found",
             "Sky window was not found. Open Sky and make sure its window is visible, then try again.",
@@ -5070,6 +5206,7 @@ fn release_terminal_ownership(
     active: &Arc<NativeActivePlayback>,
     publication: Option<&PlaybackTerminalPublication>,
 ) -> Result<(), String> {
+    active.release_power_resources();
     active
         .pending
         .lock()
@@ -5104,6 +5241,7 @@ fn retire_pre_activation_failure(
     active: &Arc<NativeActivePlayback>,
     publication: &PlaybackTerminalPublication,
 ) -> Result<(), String> {
+    active.release_power_resources();
     active
         .pending
         .lock()
@@ -5620,18 +5758,19 @@ mod tests {
         PlaybackTerminalPublication, PlaybackTerminalStatusDto, SenderTraceState, TestSeams,
         calibration_budget, diagnostics_backend_status, opaque_native_id, percentile_ms,
         physical_startup_failure, plan_fingerprint, population_sigma_ms, publish_calibration_cache,
-        publish_diagnostics_snapshot_for_active, publish_playback_state,
-        publish_retirement_barrier, publish_stopped_completion, publish_terminal_poll_result,
-        recommended_calibrated_timing_margin_us, release_terminal_ownership,
-        remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
-        safe_calibration_evidence, sender_sample_summary, sender_trace_export_json,
-        settings_fingerprint, supervisor_heartbeat_loop, timing_margin_recommendation,
-        validate_playback_start_request,
+        publish_diagnostics_snapshot_for_active, publish_final_diagnostics_snapshot_for_active,
+        publish_playback_state, publish_retirement_barrier, publish_stopped_completion,
+        publish_terminal_poll_result, recommended_calibrated_timing_margin_us,
+        release_terminal_ownership, remove_oldest_snapshot, resolve_install_root,
+        retain_prepared_capacity, safe_calibration_evidence, sender_sample_summary,
+        sender_trace_export_json, settings_fingerprint, supervisor_heartbeat_loop,
+        timing_margin_recommendation, validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
         CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest,
     };
+    use crate::power_lifecycle::PowerLifecycleDiagnostics;
     use crate::ui_events::{
         CalibrationMode, CalibrationState, DiagnosticsBackendStatus, PlaybackEventState,
         PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload, UiEvent,
@@ -5685,6 +5824,9 @@ mod tests {
             state: Mutex::new(state),
             pending: Mutex::new(pending),
             player: None,
+            power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
+            power_request: Mutex::new(None),
+            suspend_resume_registration: Mutex::new(None),
             started_at: Instant::now(),
             paused_since: Mutex::new(None),
             paused_total: Mutex::new(Duration::ZERO),
@@ -7045,6 +7187,26 @@ mod tests {
             .expect("fresh sampling window")
         );
         assert_eq!(sequences, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn final_diagnostics_snapshot_bypasses_sampling_interval() {
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let gate = DiagnosticsPublicationGate::default();
+        gate.set_enabled(true).expect("enable");
+        let active = active_for_control(PlaybackSessionState::Playing, None);
+
+        publish_diagnostics_snapshot_for_active(&events, &active, &gate)
+            .expect("regular diagnostics");
+        publish_final_diagnostics_snapshot_for_active(&events, &active, &gate)
+            .expect("final diagnostics");
+
+        let hub = events.lock().expect("event hub");
+        assert_eq!(hub.buffered.len(), 1, "snapshot events coalesce to latest");
+        let UiEvent::DiagnosticsSnapshot { payload, .. } = &hub.buffered[0] else {
+            panic!("expected final diagnostics snapshot");
+        };
+        assert_eq!(payload.seq, 2);
     }
 
     #[test]

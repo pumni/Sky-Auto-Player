@@ -510,6 +510,58 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <Metric label="Stuck keys" value={playerMetric(latest.stuck_keys)} />
                 <Metric label="Active keys" value={playerMetric(latest.active_keys)} />
               </MetricGroup>
+              <MetricGroup title="Windows power lifecycle">
+                <Metric
+                  label="Suspend/resume notifications"
+                  value={latest.suspend_resume_registered ? 'Registered' : 'Unavailable'}
+                />
+                <Metric
+                  label="System power state"
+                  value={
+                    latest.system_suspend_active ? 'Suspended / re-admission blocked' : 'Running'
+                  }
+                />
+                <Metric
+                  label="Suspend notifications"
+                  value={String(latest.system_suspend_notifications)}
+                />
+                <Metric
+                  label="Resume notifications"
+                  value={String(latest.system_resume_notifications)}
+                />
+                <Metric
+                  label="Duplicate notifications"
+                  value={String(latest.duplicate_system_power_notifications)}
+                />
+                <Metric
+                  label="Power request active"
+                  value={latest.power_request_active ? 'Yes' : 'No'}
+                />
+                <Metric
+                  label="Power request create failures"
+                  value={String(latest.power_request_create_failures)}
+                />
+                <Metric
+                  label="Power request set failures"
+                  value={String(latest.power_request_set_failures)}
+                />
+                <Metric
+                  label="Power request clear failures"
+                  value={String(latest.power_request_clear_failures)}
+                />
+                <Metric
+                  label="Power request close failures"
+                  value={String(latest.power_request_close_failures)}
+                />
+                <Metric
+                  label="Notification registration failures"
+                  value={String(latest.suspend_resume_registration_failures)}
+                />
+                <Metric
+                  label="Notification unregistration failures"
+                  value={String(latest.suspend_resume_unregistration_failures)}
+                />
+              </MetricGroup>
               <MetricGroup title="Release">
                 <Metric
                   label="Max release lateness"

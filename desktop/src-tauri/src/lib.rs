@@ -6,6 +6,7 @@ mod ipc_contract;
 mod lifecycle;
 mod native_runtime;
 mod native_update;
+mod power_lifecycle;
 #[cfg(windows)]
 mod single_instance;
 mod ui_events;

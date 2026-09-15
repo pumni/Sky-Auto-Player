@@ -1,3 +1,6 @@
+use super::super::shared::{
+    SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING, SystemPowerState,
+};
 use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
 use super::wait::WaitObservation;
@@ -7,8 +10,8 @@ use super::{
     WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker, ensure_preflight_for_target,
     enter_focus_pause, focus_matches, focus_matches_hwnd, lease_bounded_ticks, load_target_stamp,
     plan_next_dispatch_projected, process_command_control, publish_backend_counters,
-    publish_backend_metrics, record_wait_failure, suspend_live_input, target_stamp_still_current,
-    wait_for_next_boundary,
+    publish_backend_metrics, record_wait_failure, supervisor_lease_expired, suspend_live_input,
+    target_stamp_still_current, wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
@@ -179,6 +182,7 @@ pub(crate) fn dispatch_due_from_plan(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
+    system_power: &SystemPowerState,
     supervisor_heartbeat_ticks: &AtomicU64,
     lease_timeout_ticks: DurationTicks,
     progress_clock: &crate::engine::shared::SharedProgressClock,
@@ -208,6 +212,14 @@ pub(crate) fn dispatch_due_from_plan(
         return super::DispatchStep::NoWork;
     }
     /* stale authored metadata is drained by the outer global metadata phase */
+    // A suspend notification blocks new Down authorization immediately. Do
+    // this before inspecting a future target so a worker wake racing the OS
+    // callback cannot publish FutureAuthorized while the gate is closed.
+    if plan.physical().is_some_and(|physical| {
+        physical.authored_view.packet_masks.down_mask != 0 && system_power.down_blocked()
+    }) {
+        return super::DispatchStep::NoWork;
+    }
     #[cfg(any(test, feature = "test-support"))]
     let test_direct_boundary = test_physical_target_qpc.is_some();
     let candidate_target_qpc = {
@@ -404,6 +416,7 @@ pub(crate) fn dispatch_due_from_plan(
         skip_requested,
         panic_requested,
         desired_pause,
+        system_power,
         progress_clock,
         observer,
     );
@@ -411,6 +424,119 @@ pub(crate) fn dispatch_due_from_plan(
         runtime.pending_up_recovery = None;
     }
     authored_step
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_system_suspend_transition(
+    backend: &mut sky_dispatch_win32::input::TrackedKeyState,
+    coordinator: &mut sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
+    runtime: &mut super::WorkerRuntime,
+    playback: &mut sky_dispatch_core::clock::PlaybackClockState,
+    progress_clock: &super::super::shared::SharedProgressClock,
+    now_ticks: sky_dispatch_win32::clock::QpcTicks,
+    suspend_boundary_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
+    target_hwnd: isize,
+) -> Result<(), String> {
+    runtime.reset_wait_state_after_system_suspend();
+    runtime.invalidate_down_authorization();
+    runtime.verified_target = None;
+    let effective_now = playback
+        .get_elapsed_allow_pre_epoch(now_ticks, true)
+        .map_err(|error| error.to_string());
+    suspend_live_input(backend, coordinator, runtime, effective_now, target_hwnd)?;
+    if let Some(guard) = runtime.physical_timing_guard.as_mut() {
+        guard.reset();
+    }
+    runtime
+        .production_forensics
+        .observe_lifecycle(super::dispatch::observation::ObserverLifecycle::ResetAll);
+    playback
+        .enter_pause(
+            PauseReason::SystemSuspend,
+            suspend_boundary_qpc
+                .ok_or_else(|| "system suspend QPC boundary was not captured".to_string())?,
+        )
+        .map_err(|error| format!("playback clock failure: {error}"))?;
+    progress_clock.publish(playback);
+    Ok(())
+}
+
+pub(crate) struct SystemResumeTransition<'a> {
+    pub(crate) system_power: &'a SystemPowerState,
+    pub(crate) config: &'a super::WorkerConfig,
+    pub(crate) backend: &'a sky_dispatch_win32::input::TrackedKeyState,
+    pub(crate) runtime: &'a mut super::WorkerRuntime,
+    pub(crate) playback: &'a mut sky_dispatch_core::clock::PlaybackClockState,
+    pub(crate) progress_clock: &'a super::super::shared::SharedProgressClock,
+    pub(crate) qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    pub(crate) focus_active: &'a AtomicBool,
+    pub(crate) target_hwnd: &'a AtomicIsize,
+    pub(crate) target_generation: &'a AtomicU64,
+    pub(crate) lease_timeout_ticks: DurationTicks,
+    pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
+}
+
+pub(crate) fn try_complete_system_resume_transition(
+    suspend_applied: &mut bool,
+    resume_pending: &mut bool,
+    transition: SystemResumeTransition<'_>,
+) -> Result<bool, String> {
+    let SystemResumeTransition {
+        system_power,
+        config,
+        backend,
+        runtime,
+        playback,
+        progress_clock,
+        qpc_clock,
+        focus_active,
+        target_hwnd,
+        target_generation,
+        lease_timeout_ticks,
+        supervisor_heartbeat_ticks,
+    } = transition;
+    if !*suspend_applied || !*resume_pending || system_power.os_suspended() {
+        return Ok(false);
+    }
+    let resume_target = load_target_stamp(target_hwnd, target_generation);
+    let target_and_focus_current =
+        target_stamp_still_current(target_hwnd, target_generation, resume_target)
+            && focus_matches_hwnd(config.focus.require_focus, focus_active, resume_target.hwnd);
+    if !target_and_focus_current {
+        runtime.verified_target = None;
+        return Ok(false);
+    }
+    ensure_preflight_for_target(backend, resume_target, &mut runtime.verified_target)
+        .map_err(|error| format!("instrument key preflight failed after system resume: {error}"))?;
+    let post_preflight_target = load_target_stamp(target_hwnd, target_generation);
+    let preflight_and_focus_current = post_preflight_target == resume_target
+        && target_stamp_still_current(target_hwnd, target_generation, resume_target)
+        && focus_matches_hwnd(config.focus.require_focus, focus_active, resume_target.hwnd);
+    let resumed_ticks = qpc_clock
+        .now()
+        .map_err(|error| format!("system resume lease QPC failure: {error:?}"))?;
+    let lease_expired = supervisor_lease_expired(
+        resumed_ticks,
+        lease_timeout_ticks,
+        supervisor_heartbeat_ticks,
+    )
+    .map_err(|error| format!("system resume lease QPC failure: {error:?}"))?;
+    if !preflight_and_focus_current || lease_expired || !system_power.complete_resume() {
+        runtime.verified_target = None;
+        return Ok(false);
+    }
+    playback
+        .exit_pause(PauseReason::SystemSuspend, resumed_ticks)
+        .map_err(|error| format!("system resume playback clock failure: {error}"))?;
+    system_power.clear_suspend_boundary();
+    progress_clock.publish(playback);
+    runtime.invalidate_down_authorization();
+    if let Some(guard) = runtime.physical_timing_guard.as_mut() {
+        guard.reset();
+    }
+    *suspend_applied = false;
+    *resume_pending = false;
+    Ok(true)
 }
 
 pub(super) fn dispatch(
@@ -426,6 +552,7 @@ pub(super) fn dispatch(
     let skip_requested = &shared.commands.skip_requested;
     let panic_requested = &shared.commands.panic_requested;
     let focus_active = &shared.commands.focus_active;
+    let system_power = &shared.commands.system_power;
     let target_hwnd = &shared.target.target_hwnd;
     let target_generation = &shared.target.target_generation;
     let metrics = &shared.publication.metrics;
@@ -482,6 +609,8 @@ pub(super) fn dispatch(
             .as_mut()
             .expect("worker resources initialized");
         let qpc_clock = resources.clock;
+        let mut system_suspend_applied = false;
+        let mut system_resume_pending = false;
         while !resources.coordinator.is_finished() {
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
@@ -520,6 +649,28 @@ pub(super) fn dispatch(
             }
 
             let now_ticks = qpc_ticks_or_terminal!();
+            let pending_power = system_power.take_pending();
+            if pending_power & SYSTEM_POWER_RESUME_PENDING != 0 {
+                system_resume_pending = true;
+            }
+            if pending_power & SYSTEM_POWER_SUSPEND_PENDING != 0 && !system_suspend_applied {
+                if let Err(error) = apply_system_suspend_transition(
+                    &mut resources.backend,
+                    &mut resources.coordinator,
+                    &mut core.runtime,
+                    &mut resources.playback,
+                    &shared.publication.progress_clock,
+                    now_ticks,
+                    system_power.suspend_boundary_qpc(),
+                    target_hwnd.load(Ordering::Acquire),
+                ) {
+                    core.runtime.force_full_cleanup = true;
+                    core.runtime.terminal_error =
+                        Some(format!("system suspend safety release failed: {error}"));
+                    break;
+                }
+                system_suspend_applied = true;
+            }
             let focus_ok = focus_matches(config.focus.require_focus, focus_active);
             if startup_focus_loss_is_terminal(
                 focus_ok,
@@ -553,7 +704,7 @@ pub(super) fn dispatch(
                 break;
             }
 
-            if !focus_ok {
+            if !system_suspend_applied && !focus_ok {
                 let entered_focus_pause = match enter_focus_pause(
                     &mut resources.playback,
                     &mut core.runtime,
@@ -583,7 +734,9 @@ pub(super) fn dispatch(
                         true,
                     );
                 }
-            } else if resources.playback.has_pause_reason(PauseReason::Focus) {
+            } else if !system_suspend_applied
+                && resources.playback.has_pause_reason(PauseReason::Focus)
+            {
                 let restored_at = *core
                     .runtime
                     .focus_restore_started_ticks
@@ -809,6 +962,29 @@ pub(super) fn dispatch(
                 }
             }
 
+            if let Err(error) = try_complete_system_resume_transition(
+                &mut system_suspend_applied,
+                &mut system_resume_pending,
+                SystemResumeTransition {
+                    system_power,
+                    config,
+                    backend: &resources.backend,
+                    runtime: &mut core.runtime,
+                    playback: &mut resources.playback,
+                    progress_clock: &shared.publication.progress_clock,
+                    qpc_clock,
+                    focus_active,
+                    target_hwnd,
+                    target_generation,
+                    lease_timeout_ticks: timing.lease_timeout_ticks,
+                    supervisor_heartbeat_ticks,
+                },
+            ) {
+                core.runtime.force_full_cleanup = true;
+                core.runtime.terminal_error = Some(error);
+                break;
+            }
+
             #[cfg(any(test, feature = "test-support"))]
             if resources.playback.has_pause_reason(PauseReason::Manual)
                 && command_timing.needs_acknowledgment()
@@ -1016,6 +1192,7 @@ pub(super) fn dispatch(
                 skip_requested,
                 panic_requested,
                 desired_pause,
+                system_power,
                 supervisor_heartbeat_ticks,
                 timing.lease_timeout_ticks,
                 &shared.publication.progress_clock,
@@ -1155,6 +1332,7 @@ pub(super) fn dispatch(
                         skip_requested,
                         panic_requested,
                         desired_pause,
+                        system_power,
                         supervisor_heartbeat_ticks,
                         timing.lease_timeout_ticks,
                         &shared.publication.progress_clock,
@@ -1227,6 +1405,7 @@ mod tests {
         physical_target_qpc_for_work, physical_wait_target_for_plan,
         publish_live_metrics_after_dispatch,
     };
+    use crate::engine::shared::{SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING};
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
     use crate::engine::worker::{
@@ -1255,6 +1434,14 @@ mod tests {
                 .checked_sub(duration.as_u64())
                 .expect("test QPC subtraction"),
         )
+    }
+
+    struct ForegroundOverrideResetGuard;
+
+    impl Drop for ForegroundOverrideResetGuard {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+        }
     }
 
     fn set_zero_timing_margin(harness: &mut ProductionDispatchTestHarness) {
@@ -1604,7 +1791,11 @@ mod tests {
 
     #[test]
     fn lifecycle_suspension_terminalizes_pending_mixed_miss_before_resume() {
-        for pause_reason in [PauseReason::Manual, PauseReason::Focus] {
+        for pause_reason in [
+            PauseReason::Manual,
+            PauseReason::Focus,
+            PauseReason::SystemSuspend,
+        ] {
             let mut harness = ProductionDispatchTestHarness::new_mixed_then_future_down();
             let packets = harness.configure_packet_capture();
             let first = harness.plan_current_dispatch();
@@ -1677,6 +1868,14 @@ mod tests {
                 "the Down miss is classified before the later Up recovery floor"
             );
 
+            if pause_reason == PauseReason::SystemSuspend {
+                assert!(harness.notify_system_power_for_test(true));
+                assert_eq!(
+                    harness.take_system_power_pending_for_test(),
+                    SYSTEM_POWER_SUSPEND_PENDING
+                );
+                assert!(harness.system_power_down_blocked_for_test());
+            }
             if pause_reason == PauseReason::Focus {
                 harness
                     .resources
@@ -1684,15 +1883,50 @@ mod tests {
                     .enter_pause(pause_reason, mixed_target)
                     .expect("focus suspension starts");
             }
-            harness
-                .suspend_live_input_for_test()
-                .expect("lifecycle safety release resolves the frozen miss");
+            if pause_reason == PauseReason::SystemSuspend {
+                let suspend_qpc = harness.resources.clock.now().expect("suspend QPC");
+                harness
+                    .apply_system_suspend_for_test(suspend_qpc)
+                    .expect("system suspend resolves the frozen miss and enters pause");
+                let reset_window = harness
+                    .runtime
+                    .physical_timing_guard
+                    .as_ref()
+                    .expect("physical guard remains initialized")
+                    .query(mixed_target, 1, 2)
+                    .expect("suspend invalidates prior QPC floors");
+                assert_eq!(reset_window.musical_up_not_before_qpc, mixed_target);
+                assert_eq!(reset_window.down_not_before_qpc, mixed_target);
+                harness.runtime.production_forensics.observe_packet_result(
+                    PhysicalPacket::new(1, 0),
+                    2,
+                    mixed_target,
+                    mixed_target,
+                    mixed_target,
+                    sky_dispatch_win32::input::SendTransactionStatus::Complete,
+                    &mut harness.local_metrics,
+                );
+                assert_eq!(harness.local_metrics.production_hold_pair_samples, 0);
+            } else {
+                harness
+                    .suspend_live_input_for_test()
+                    .expect("lifecycle safety release resolves the frozen miss");
+            }
             if pause_reason == PauseReason::Manual {
                 harness
                     .resources
                     .playback
                     .enter_pause(pause_reason, mixed_target)
-                    .expect("manual pause starts after safety release");
+                    .expect("pause starts after safety release");
+            }
+            if pause_reason == PauseReason::SystemSuspend {
+                assert!(harness.notify_system_power_for_test(false));
+                assert_eq!(
+                    harness.take_system_power_pending_for_test(),
+                    SYSTEM_POWER_RESUME_PENDING
+                );
+                assert!(harness.system_power_down_blocked_for_test());
+                assert!(harness.complete_system_resume_for_test());
             }
             harness
                 .resources
@@ -1774,6 +2008,152 @@ mod tests {
                 Some(&1)
             );
         }
+    }
+
+    #[test]
+    fn system_suspend_invalidates_future_down_and_resume_requires_fresh_authorization() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_packet_capture();
+        let down = harness.plan_current_dispatch();
+        let target = down.physical_target_qpc().expect("Down target");
+
+        assert_no_work(harness.classify_future_plan_without_authorization_shortcut_for_test(&down));
+        assert!(matches!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::FutureAuthorized(_)
+        ));
+        assert!(harness.notify_system_power_for_test(true));
+        assert_eq!(
+            harness.take_system_power_pending_for_test(),
+            SYSTEM_POWER_SUSPEND_PENDING
+        );
+        assert!(harness.system_power_down_blocked_for_test());
+        let suspend_qpc = harness.resources.clock.now().expect("suspend QPC");
+        harness
+            .apply_system_suspend_for_test(suspend_qpc)
+            .expect("suspend safety release and pause");
+        assert_eq!(harness.full_instrument_release_calls(), 1);
+        assert_eq!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture
+        );
+        assert!(harness.system_power_down_blocked_for_test());
+        assert!(packets.lock().expect("packet capture").is_empty());
+        assert_no_work(harness.dispatch_at_qpc_for_test(&down, target));
+        assert!(packets.lock().expect("packet capture").is_empty());
+
+        assert!(harness.notify_system_power_for_test(false));
+        assert_eq!(
+            harness.take_system_power_pending_for_test(),
+            SYSTEM_POWER_RESUME_PENDING
+        );
+        assert!(harness.system_power_down_blocked_for_test());
+        assert!(
+            harness
+                .try_system_resume_for_test(DurationTicks::ZERO)
+                .expect("system resume gates")
+        );
+        assert_eq!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture
+        );
+        assert_no_work(harness.classify_future_plan_without_authorization_shortcut_for_test(&down));
+        assert!(matches!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::FutureAuthorized(_)
+        ));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&down, target));
+        assert_eq!(
+            packets.lock().expect("packet capture").as_slice(),
+            &[PhysicalPacket::new(0, 1)]
+        );
+    }
+
+    #[test]
+    fn blocked_future_down_stays_awaiting_future_before_classification() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let down = harness.plan_current_dispatch();
+        let target = down.physical_target_qpc().expect("Down target");
+        assert!(harness.notify_system_power_at_for_test(true, Some(QpcTicks::from_raw(123_456)),));
+
+        assert_no_work(harness.dispatch_due_from_plan_for_test(&down));
+        assert_eq!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture,
+            "suspend blocks authorization before future classification"
+        );
+        assert_no_work(harness.dispatch_at_qpc_for_test(&down, target));
+        assert_eq!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture
+        );
+    }
+
+    #[test]
+    fn system_resume_remains_blocked_until_focus_and_lease_are_fresh() {
+        let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+        let _foreground_reset = ForegroundOverrideResetGuard;
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let _down = harness.plan_current_dispatch();
+        assert!(harness.notify_system_power_for_test(true));
+        assert_eq!(
+            harness.take_system_power_pending_for_test(),
+            SYSTEM_POWER_SUSPEND_PENDING
+        );
+        let suspend_qpc = harness.resources.clock.now().expect("suspend QPC");
+        harness
+            .apply_system_suspend_for_test(suspend_qpc)
+            .expect("suspend transition");
+        assert!(harness.notify_system_power_for_test(false));
+        assert_eq!(
+            harness.take_system_power_pending_for_test(),
+            SYSTEM_POWER_RESUME_PENDING
+        );
+
+        harness.config.focus.require_focus = true;
+        harness.focus_active.store(false, Ordering::Release);
+        assert!(
+            !harness
+                .try_system_resume_for_test(DurationTicks::ZERO)
+                .expect("focus rejection")
+        );
+        assert!(harness.system_power_down_blocked_for_test());
+        assert!(
+            harness
+                .resources
+                .playback
+                .has_pause_reason(PauseReason::SystemSuspend)
+        );
+
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+        harness.focus_active.store(true, Ordering::Release);
+        harness.set_supervisor_heartbeat_for_test(QpcTicks::from_raw(1));
+        let lease_timeout = DurationTicks::from_raw(5_000_000);
+        assert!(
+            !harness
+                .try_system_resume_for_test(lease_timeout)
+                .expect("expired lease rejection")
+        );
+        assert!(harness.system_power_down_blocked_for_test());
+
+        let fresh_heartbeat = harness.resources.clock.now().expect("fresh QPC");
+        harness.set_supervisor_heartbeat_for_test(fresh_heartbeat);
+        assert!(
+            harness
+                .try_system_resume_for_test(lease_timeout)
+                .expect("fully revalidated resume")
+        );
+        assert!(!harness.system_power_down_blocked_for_test());
+        assert!(
+            !harness
+                .resources
+                .playback
+                .has_pause_reason(PauseReason::SystemSuspend)
+        );
+        assert_eq!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture
+        );
     }
 
     #[test]
