@@ -39,10 +39,12 @@ min_release_gap_us = frame_us + timing_margin_us
 
 The user-owned Timing Margin defaults to `500 µs`, ranges from `0` through
 `3,000 µs` in `100 µs` steps, and applies equally to Hold and Release Gap.
-It defines the physical latest Down start: a physically feasible Down may begin
-no later than its authored target plus this margin. Normal playback also uses
-the fixed internal `2,500 µs` total continuity bound from the authored target,
-without adding it to Timing Margin. Calibration never supplies part of the
+It defines the physical latest Down start: `packet_not_before` must not exceed
+`physical_latest_down_start = authored target + this margin`. This is a
+physical-feasibility boundary, not a universal limit on the actual normal-mode
+sender pre-call. Normal playback also uses the fixed internal `2,500 µs` total
+continuity bound from the authored target, without adding it to Timing Margin.
+Calibration never supplies part of the
 authored timing equation. Qualified calibration may produce an advisory
 recommendation from measured transport reserve plus a fixed `100 µs` guard.
 Without qualified evidence, the informational fallback recommendation is the

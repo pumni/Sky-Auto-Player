@@ -264,8 +264,10 @@ that physical boundary.
 The sender performs no target wait or policy recheck after receiving the
 prepared packet.
 The transport reports `sendinput_completion_qpc`; production does not subtract
-a learned send cost from the target. Completion is used for diagnostics and
-ownership evidence only; it does not create a completion-relative hold floor.
+a learned send cost from the target. A successful musical completion QPC is
+trusted transport and ownership evidence and advances the existing
+completion-relative hold/release floors; it does not alter authored targets or
+create a new dispatch target.
 
 The primary sender-side timing evidence is the signed start residual:
 
