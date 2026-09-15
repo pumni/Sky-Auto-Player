@@ -74,10 +74,15 @@ export type UpdatePatch = Partial<{
   channel: GeneratedUpdateChannel;
   skipVersion: string;
 }>;
-export type Bootstrap = Omit<BootstrapDto, 'theme' | 'update_preferences'> & {
-  theme: ThemeId;
-  update_preferences: UpdatePreferences;
-};
+export type Bootstrap = Omit<
+  BootstrapDto,
+  | 'settings'
+  | 'playback_defaults'
+  | 'timing_margin_recommendation'
+  | 'theme'
+  | 'telemetry_enabled'
+  | 'update_preferences'
+> & { settings: Settings };
 export type SearchRequest = Omit<CatalogSearchRequest, 'generation'> & {
   generation?: number;
 };

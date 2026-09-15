@@ -54,43 +54,56 @@ describe('desktop store', () => {
     expect(store.getState().library.error).toBe('catalog source is unavailable');
   });
 
-  it('does not overwrite a catalog failure received while settings are loading', async () => {
+  it('does not overwrite a catalog failure received while bootstrap is loading', async () => {
     const bridge = createMockBridge();
     const originalBootstrap = bridge.bootstrap;
-    const originalGetSettings = bridge.getSettings;
-    let signalSettingsStarted!: () => void;
-    const settingsStarted = new Promise<void>((resolve) => {
-      signalSettingsStarted = resolve;
+    let signalBootstrapStarted!: () => void;
+    const bootstrapStarted = new Promise<void>((resolve) => {
+      signalBootstrapStarted = resolve;
     });
-    let releaseSettings!: () => void;
-    const settingsRelease = new Promise<void>((resolve) => {
-      releaseSettings = resolve;
+    let releaseBootstrap!: () => void;
+    const bootstrapRelease = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
     });
-    bridge.bootstrap = async () => ({
-      ...(await originalBootstrap()),
-      catalog_state: 'loading',
-      catalog_generation: null,
-    });
-    bridge.getSettings = async () => {
-      signalSettingsStarted();
-      await settingsRelease;
-      return originalGetSettings();
+    bridge.bootstrap = async () => {
+      signalBootstrapStarted();
+      await bootstrapRelease;
+      return {
+        ...(await originalBootstrap()),
+        catalog_state: 'loading',
+        catalog_generation: null,
+      };
     };
     const store = createDesktopStore(bridge);
     const initialization = store.getState().initialize();
 
-    await settingsStarted;
+    await bootstrapStarted;
     store.getState().applyEvent({
       v: 1,
       name: 'catalog.load_failed',
       payload: { message: 'catalog source is unavailable' },
     });
-    releaseSettings();
+    releaseBootstrap();
     await act(async () => initialization);
 
     expect(store.getState().bootstrapState).toBe('ready');
     expect(store.getState().library.loading).toBe(false);
     expect(store.getState().library.error).toBe('catalog source is unavailable');
+  });
+
+  it('uses the authoritative settings snapshot from bootstrap', async () => {
+    const bridge = createMockBridge();
+    const getSettings = vi.spyOn(bridge, 'getSettings');
+    const store = createDesktopStore(bridge);
+
+    await act(async () => store.getState().initialize());
+
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(store.getState().settings).toMatchObject({
+      theme: 'aurora',
+      auto_play: true,
+      verbose_hud: false,
+    });
   });
 
   it('derives Now Playing from playback identity without changing the selected song', async () => {

@@ -36,7 +36,7 @@ export function App({ bridge }: AppProps) {
   }, [bootstrap, useStore]);
 
   useEffect(() => {
-    if (bootstrap) document.documentElement.dataset.theme = bootstrap.theme;
+    if (bootstrap) document.documentElement.dataset.theme = bootstrap.settings.theme;
   }, [bootstrap]);
 
   useEffect(() => {

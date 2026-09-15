@@ -17,6 +17,13 @@ The startup milestones are intentionally separate:
 - `react.shell_ready` means the React shell has rendered after native bootstrap and settings.
 - `react.catalog_ready` means the initial catalog search and navigation reconciliation completed.
 
+The initial bootstrap uses the settings snapshot loaded during native runtime
+construction. `settings.reload.start/end` therefore belong to an explicit
+settings refresh boundary after bootstrap, not to the initial shell bootstrap
+critical path. The packaged smoke refresh occurs only after
+`react.catalog_ready`, and the validator enforces that no settings reload is
+observed before that milestone.
+
 Build and run the reproducible packaged benchmark from PowerShell:
 
 ```powershell

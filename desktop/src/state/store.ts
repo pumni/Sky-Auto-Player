@@ -1573,7 +1573,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         try {
           await bridge.subscribeUiEvents((event) => get().applyEvent(event));
           const bootstrap = await bridge.bootstrap();
-          const settings = await bridge.getSettings();
+          const settings = bootstrap.settings;
           const currentLibrary = get().library;
           const catalogFailed =
             currentLibrary.error !== null || bootstrap.catalog_state === 'failed';
@@ -1596,7 +1596,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (bootstrap.catalog_state === 'ready' || get().library.generation > 0) {
             await reconcileCatalog();
           }
-          if (bootstrap.update_preferences.auto_check) void get().checkForUpdate();
+          if (settings.update_preferences.auto_check) void get().checkForUpdate();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           set({ bootstrapState: 'fatal', fatal: message });

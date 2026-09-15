@@ -245,8 +245,6 @@ function validateTrace(events, fixture) {
     first,
     [
       'bootstrap.start',
-      'settings.reload.start',
-      'settings.reload.end',
       'bootstrap.end',
       'catalog.compose.start',
       'catalog.compose.end',
@@ -255,6 +253,11 @@ function validateTrace(events, fixture) {
       'catalog.ready',
     ],
     'bootstrap markers',
+  );
+  assertMarkerOrder(
+    first,
+    ['react.catalog_ready', 'settings.reload.start', 'settings.reload.end'],
+    'explicit settings refresh markers',
   );
 
   const frontendMarkers = [

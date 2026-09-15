@@ -1681,7 +1681,7 @@ impl NativeDesktopRuntime {
                     serde_json::from_value(params).map_err(json_error)?;
                 encode_result(self.import_paths(request, ImportedSourceKind::Folder))
             }
-            "settings.get" => encode_result(self.settings_dto()),
+            "settings.get" => encode_result(self.reload_settings_dto()),
             "settings.patch" => {
                 let request: NativeSettingsPatch =
                     serde_json::from_value(params).map_err(json_error)?;
@@ -1757,13 +1757,14 @@ impl NativeDesktopRuntime {
         crate::startup_telemetry::record("bootstrap.start");
         let settings = self.settings_snapshot()?;
         let (catalog_state, catalog_generation) = self.catalog_readiness()?;
-        let timing_margin_recommendation = self.timing_margin_recommendation();
+        let settings_dto = settings_dto(&settings, self.timing_margin_recommendation());
         let result = BootstrapDto {
             app_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: crate::DESKTOP_PROTOCOL_VERSION,
             native_build: native_build_dto(),
-            playback_defaults: playback_defaults(&settings),
-            timing_margin_recommendation: timing_margin_recommendation.clone(),
+            settings: settings_dto.clone(),
+            playback_defaults: settings_dto.playback_defaults.clone(),
+            timing_margin_recommendation: settings_dto.timing_margin_recommendation.clone(),
             option_sets: crate::commands::PlaybackOptionSetsDto {
                 hold_frames: vec![1.0, 1.25, 1.5],
                 tempo_scales: vec![0.90, 0.95, 1.0, 1.05, 1.10],
@@ -1772,9 +1773,9 @@ impl NativeDesktopRuntime {
                 timing_margin_max_us: sky_app_core::settings::MAX_TIMING_MARGIN_US,
                 timing_margin_step_us: sky_app_core::settings::TIMING_MARGIN_STEP_US,
             },
-            theme: settings.theme.clone(),
-            telemetry_enabled: settings.telemetry_enabled,
-            update_preferences: update_preferences_dto(&settings),
+            theme: settings_dto.theme.clone(),
+            telemetry_enabled: settings_dto.telemetry_enabled,
+            update_preferences: settings_dto.update_preferences.clone(),
             catalog_state,
             catalog_generation,
         };
@@ -1800,13 +1801,22 @@ impl NativeDesktopRuntime {
     }
 
     fn settings_snapshot(&self) -> Result<ApplicationSettings, String> {
+        let service = self
+            .settings
+            .lock()
+            .map_err(|_| "native settings lock poisoned".to_string())?;
+        Ok(service.snapshot().clone())
+    }
+
+    fn reload_settings_snapshot(&self) -> Result<ApplicationSettings, String> {
+        // External settings-file edits become authoritative only at explicit
+        // refresh boundaries. Normal startup reads use the coherent in-memory
+        // snapshot so background work cannot silently change startup state.
         crate::startup_telemetry::record("settings.reload.start");
         let mut service = self
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
-        // Reloading from the one Native-owned store keeps every application
-        // service on the same persisted snapshot across process restarts.
         service
             .reload()
             .map_err(|error| format!("native settings reload failed: {error}"))?;
@@ -1815,8 +1825,8 @@ impl NativeDesktopRuntime {
         Ok(snapshot)
     }
 
-    fn settings_dto(&self) -> Result<SettingsDto, String> {
-        let settings = self.settings_snapshot()?;
+    fn reload_settings_dto(&self) -> Result<SettingsDto, String> {
+        let settings = self.reload_settings_snapshot()?;
         Ok(settings_dto(&settings, self.timing_margin_recommendation()))
     }
 
@@ -1875,7 +1885,7 @@ impl NativeDesktopRuntime {
     }
 
     fn update_preferences(&self) -> Result<UpdatePreferencesDto, String> {
-        let settings = self.settings_snapshot()?;
+        let settings = self.reload_settings_snapshot()?;
         Ok(update_preferences_dto(&settings))
     }
 
@@ -1884,9 +1894,6 @@ impl NativeDesktopRuntime {
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
-        settings
-            .reload()
-            .map_err(|error| format!("native settings reload failed: {error}"))?;
         self.update_service
             .as_ref()
             .ok_or_else(|| {
@@ -1899,7 +1906,7 @@ impl NativeDesktopRuntime {
         if target_version.is_empty() || target_version.len() > 64 || target_version.contains('\0') {
             return Err("invalid_params: target_version is invalid".into());
         }
-        let settings = self.settings_snapshot()?;
+        let settings = self.reload_settings_snapshot()?;
         self.update_service
             .as_ref()
             .ok_or_else(|| {
@@ -6920,7 +6927,22 @@ mod tests {
             .expect("bootstrap");
         assert!(value.get("app_version").is_some());
         assert!(value.get("Ok").is_none());
+        assert_eq!(value["settings"]["theme"], "aurora");
+        assert_eq!(value["settings"]["theme"], value["theme"]);
         assert_eq!(runtime.install_root(), root.as_path());
+        fs::write(
+            root.join("config.json"),
+            "{\"schema_version\":3,\"theme\":\"slate\"}\n",
+        )
+        .expect("external settings update");
+        let cached_bootstrap = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("cached bootstrap");
+        assert_eq!(cached_bootstrap["settings"]["theme"], "aurora");
+        let refreshed_settings = runtime
+            .dispatch("settings.get", Value::Object(Default::default()))
+            .expect("settings refresh");
+        assert_eq!(refreshed_settings["theme"], "slate");
         assert!(
             runtime
                 .dispatch("settings.get", Value::Object(Default::default()))
@@ -6938,6 +6960,41 @@ mod tests {
                 .expect("idempotent shutdown"),
             Value::Null
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn update_check_uses_cached_settings_without_refreshing_external_file() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-update-check-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+
+        let initial = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("bootstrap");
+        assert_eq!(initial["settings"]["theme"], "aurora");
+
+        fs::write(
+            root.join("config.json"),
+            "{\"schema_version\":3,\"theme\":\"slate\"}\n",
+        )
+        .expect("external settings update");
+        let error = runtime
+            .dispatch("update.check", Value::Object(Default::default()))
+            .expect_err("install-root runtime has no update service");
+        assert!(error.starts_with("update_service_unavailable"));
+
+        let cached = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("cached bootstrap");
+        assert_eq!(cached["settings"]["theme"], "aurora");
+
+        runtime.shutdown();
         let _ = fs::remove_dir_all(root);
     }
 

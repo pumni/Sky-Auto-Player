@@ -77,7 +77,7 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
       ) {
         throw new Error('packaged GUI library store postcondition failed');
       }
-      const expectedTheme = state.bootstrap?.theme ?? 'aurora';
+      const expectedTheme = state.settings?.theme ?? 'aurora';
       const smokeTheme = expectedTheme === 'aurora' ? 'slate' : 'aurora';
       const patched = await bridge.patchSettings({ theme: smokeTheme });
       if (patched.theme !== smokeTheme) {
