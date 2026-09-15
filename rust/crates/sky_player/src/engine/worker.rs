@@ -103,6 +103,7 @@ pub(crate) use timing::{
     lease_bounded_ticks, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
     supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
 };
+pub use wait::WaitObservation;
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
     record_wait_failure, wait_for_next_boundary,
@@ -116,6 +117,8 @@ use sky_dispatch_core::model::RuntimeSchedule;
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+
+pub(crate) const NORMAL_PLAYBACK_DOWN_START_TOLERANCE_US: u64 = 2_500;
 
 /// Test-only accounting for the immutable preparation boundary.
 ///
@@ -416,6 +419,7 @@ pub(super) struct WorkerErrorState {
 pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
     pub(super) timing_margin_ticks: DurationTicks,
+    pub(super) normal_down_start_tolerance_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
@@ -446,6 +450,7 @@ impl WorkerTimingState {
         Self {
             strict_timing: false,
             timing_margin_ticks: DurationTicks::ZERO,
+            normal_down_start_tolerance_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,

@@ -11,9 +11,12 @@ pub(crate) enum WaitBoundary {
         wait_result: Option<WaitResult>,
         target_qpc: QpcTicks,
         dispatch_qpc: QpcTicks,
+        planned_wait_ticks: DurationTicks,
     },
     Replan {
         wait_result: WaitResult,
+        target_qpc: QpcTicks,
+        planned_wait_ticks: DurationTicks,
     },
     Exit,
 }
@@ -23,6 +26,8 @@ pub struct WaitObservation {
     pub outcome: WaitOutcome,
     pub wake_qpc: Option<QpcTicks>,
     pub spin_ticks: DurationTicks,
+    pub physical_target_qpc: QpcTicks,
+    pub planned_wait_ticks: DurationTicks,
     pub deadline_ticks: TimelineTicks,
     pub epoch_qpc: QpcTicks,
     pub allow_pre_epoch_startup_dispatch: bool,
@@ -133,8 +138,17 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             wait_result: None,
             target_qpc: physical_target_qpc,
             dispatch_qpc: target_sample_ticks,
+            planned_wait_ticks: DurationTicks::ZERO,
         };
     }
+    let planned_wait_ticks = match target_qpc.checked_duration_since(target_sample_ticks) {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            *force_full_cleanup = true;
+            *terminal_error = Some(format!("QPC planned wait arithmetic failure: {error:?}"));
+            return WaitBoundary::Exit;
+        }
+    };
     let bounded_target =
         match lease_bounded_ticks(target_qpc, lease_timeout_ticks, supervisor_heartbeat_ticks) {
             Ok(target) => target,
@@ -159,6 +173,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
                 wait_result: Some(wait_result),
                 target_qpc: physical_target_qpc,
                 dispatch_qpc,
+                planned_wait_ticks,
             }
         }
         WaitOutcome::Deadline => WaitBoundary::Replan {
@@ -169,6 +184,8 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
                 outcome: WaitOutcome::Interrupted,
                 ..wait_result
             },
+            target_qpc: physical_target_qpc,
+            planned_wait_ticks,
         },
         WaitOutcome::Failed(failure) => {
             record_wait_failure(failure, local_metrics, force_full_cleanup, terminal_error);
@@ -177,7 +194,11 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         WaitOutcome::Interrupted => {
             local_metrics.wait_interrupted_count =
                 local_metrics.wait_interrupted_count.saturating_add(1);
-            WaitBoundary::Replan { wait_result }
+            WaitBoundary::Replan {
+                wait_result,
+                target_qpc: physical_target_qpc,
+                planned_wait_ticks,
+            }
         }
     }
 }

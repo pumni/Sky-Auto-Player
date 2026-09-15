@@ -17,7 +17,10 @@ use super::super::{
 use super::DownBoundaryAdmission;
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
-use super::recovery::{DownMissReason, recover_missed_down_boundary};
+use super::recovery::{
+    DownMissReason, effective_down_sender_cutoff, record_late_rescued_down,
+    recover_missed_down_boundary,
+};
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::{SharedProgressClock, SystemPowerState};
@@ -47,7 +50,7 @@ pub(crate) fn dispatch_authored_packet(
         effective_now_ticks,
         now_ticks,
         physical_timing_window,
-        latest_down_start_qpc,
+        physical_latest_down_start_qpc,
         down_admission,
         focus_loss_fault,
         supervisor_heartbeat_ticks,
@@ -96,7 +99,7 @@ pub(crate) fn dispatch_authored_packet(
         now_ticks,
         physical_target_qpc,
         physical_timing_window,
-        latest_down_start_qpc,
+        physical_latest_down_start_qpc,
         down_admission,
         focus_loss_fault,
         physical_plan.target_proof.verified_target(),
@@ -135,7 +138,7 @@ fn commit_down_send_outcome(
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
     physical_timing_window: PhysicalTimingWindow,
-    latest_down_start_qpc: Option<QpcTicks>,
+    physical_latest_down_start_qpc: Option<QpcTicks>,
     down_admission: DownBoundaryAdmission,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
@@ -243,7 +246,7 @@ fn commit_down_send_outcome(
         now_ticks,
         physical_target_qpc,
         physical_timing_window,
-        latest_down_start_qpc,
+        physical_latest_down_start_qpc,
         &admission,
         #[cfg(any(test, feature = "test-support"))]
         test_inject_sender_start.then_some(now_ticks),
@@ -575,7 +578,7 @@ fn record_down_send_outcome(
     _now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
     physical_timing_window: PhysicalTimingWindow,
-    latest_down_start_qpc: Option<QpcTicks>,
+    physical_latest_down_start_qpc: Option<QpcTicks>,
     admission: &AdmissionOutcome,
     test_now_ticks: Option<QpcTicks>,
     observer: Option<&PendingObservationQueue>,
@@ -590,6 +593,13 @@ fn record_down_send_outcome(
     };
     let packet = view.packet_masks;
     let prepared_packet = &view.prepared_packet;
+    let sender_cutoff_qpc = match effective_down_sender_cutoff(physical_timing_window, timing) {
+        Ok(sender_cutoff_qpc) => sender_cutoff_qpc,
+        Err(error) => return DispatchStep::TerminateStatic(error),
+    };
+    if packet.down_mask != 0 && sender_cutoff_qpc.is_none() {
+        return DispatchStep::TerminateStatic("Down packet is missing sender cutoff");
+    }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
         hook.mark_first_physical_send_started();
@@ -597,7 +607,7 @@ fn record_down_send_outcome(
     debug_assert_eq!(prepared_packet.packet(), packet);
     let result = backend.send_prepared_physical_packet_at_final_boundary(
         prepared_packet,
-        latest_down_start_qpc,
+        sender_cutoff_qpc,
         test_now_ticks,
     );
     if let Some(started_qpc) = result.evidence.started_ticks
@@ -687,6 +697,15 @@ fn record_down_send_outcome(
             "physical timing guard completion update failed: {error:?}"
         ));
     }
+    record_late_rescued_down(
+        local_metrics,
+        physical_target_qpc,
+        physical_latest_down_start_qpc,
+        sender_cutoff_qpc,
+        result_started_ticks,
+        result_success,
+        packet.down_mask,
+    );
     let trace_kind = *trace_kind;
     finalize_down_send_outcome(
         view,

@@ -314,7 +314,7 @@ pub(crate) fn dispatch_due_from_plan(
         // comes from the nonblocking observation that precedes the waiter.
         runtime.observe_future_down_boundary(boundary_stamp);
     }
-    let latest_down_start_qpc = window.latest_down_start_qpc;
+    let physical_latest_down_start_qpc = window.latest_down_start_qpc;
     let down_admission = if let Some((_, admission)) = pending_up_recovery {
         admission
     } else if let Some(boundary) = boundary {
@@ -393,7 +393,7 @@ pub(crate) fn dispatch_due_from_plan(
             now_ticks,
             physical_timing_window: window,
             down_admission,
-            latest_down_start_qpc,
+            physical_latest_down_start_qpc,
             focus_loss_fault,
             supervisor_heartbeat_ticks,
             lease_timeout_ticks,
@@ -1275,6 +1275,7 @@ pub(super) fn dispatch(
                     wait_result,
                     target_qpc,
                     dispatch_qpc,
+                    planned_wait_ticks,
                 } => {
                     // This is the global wait boundary only. Physical target
                     // attribution is resolved from the selected work below.
@@ -1293,6 +1294,8 @@ pub(super) fn dispatch(
                                 outcome: wait_result.outcome,
                                 wake_qpc: wait_result.wake_qpc,
                                 spin_ticks: wait_result.spin_ticks,
+                                physical_target_qpc: target_qpc,
+                                planned_wait_ticks,
                                 deadline_ticks: wait_deadline_ticks,
                                 epoch_qpc: resources.playback.epoch,
                                 allow_pre_epoch_startup_dispatch: true,
@@ -1371,7 +1374,11 @@ pub(super) fn dispatch(
                         | super::DispatchStep::NoWork => continue,
                     }
                 }
-                WaitBoundary::Replan { wait_result } => {
+                WaitBoundary::Replan {
+                    wait_result,
+                    target_qpc,
+                    planned_wait_ticks,
+                } => {
                     core.runtime.future_physical_wait_target_qpc = None;
                     let Some(wait_deadline_ticks) = deadline_ticks else {
                         core.runtime.force_full_cleanup = true;
@@ -1383,6 +1390,8 @@ pub(super) fn dispatch(
                         outcome: wait_result.outcome,
                         wake_qpc: wait_result.wake_qpc,
                         spin_ticks: wait_result.spin_ticks,
+                        physical_target_qpc: target_qpc,
+                        planned_wait_ticks,
                         deadline_ticks: wait_deadline_ticks,
                         epoch_qpc: resources.playback.epoch,
                         allow_pre_epoch_startup_dispatch: true,
@@ -1415,7 +1424,10 @@ mod tests {
     use sky_dispatch_core::clock::PauseReason;
     use sky_dispatch_core::time::{DurationTicks, QpcTicks};
     use sky_dispatch_win32::clock::QpcClock;
-    use sky_dispatch_win32::input::PhysicalPacket;
+    use sky_dispatch_win32::input::{
+        PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome,
+        SendTransactionStatus,
+    };
     use std::num::NonZeroU64;
     use std::sync::atomic::Ordering;
 
@@ -1694,6 +1706,442 @@ mod tests {
         );
         assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
         assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
+    }
+
+    fn add_us(harness: &ProductionDispatchTestHarness, target: QpcTicks, us: u64) -> QpcTicks {
+        target
+            .checked_add_duration(
+                harness
+                    .resources
+                    .clock
+                    .duration_from_us(us)
+                    .expect("QPC us"),
+            )
+            .expect("test QPC addition")
+    }
+
+    #[test]
+    fn c1_normal_cutoff_truth_table_uses_total_lateness() {
+        for (offset_us, rescued) in [(500, false), (501, true), (2_216, true), (2_500, true)] {
+            let mut harness = ProductionDispatchTestHarness::new_down_only();
+            harness
+                .configure_normal_down_start_tolerance_for_test(2_500)
+                .expect("C1 tolerance");
+            let packets = harness.configure_packet_capture();
+            let plan = harness.plan_current_dispatch();
+            let target = plan.physical_target_qpc().expect("Down target");
+            assert_no_work(harness.dispatch_at_qpc_for_test(
+                &plan,
+                subtract_duration(target, DurationTicks::from_raw(1)),
+            ));
+            assert_dispatched(
+                harness.dispatch_at_qpc_for_test(&plan, add_us(&harness, target, offset_us)),
+            );
+            assert_eq!(
+                packets.lock().expect("packet capture").len(),
+                1,
+                "offset {offset_us}us should send"
+            );
+            assert_eq!(
+                harness.local_metrics.final_sender_window_expirations, 0,
+                "offset {offset_us}us must not be a sender miss"
+            );
+            assert_eq!(
+                harness.late_rescued_down_metrics_for_test().0,
+                u64::from(rescued),
+                "offset {offset_us}us rescue classification"
+            );
+        }
+
+        let mut stale = ProductionDispatchTestHarness::new_down_only();
+        stale
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        let packets = stale.configure_packet_capture();
+        let plan = stale.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert_no_work(stale.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(stale.dispatch_at_qpc_for_test(&plan, add_us(&stale, target, 2_501)));
+        assert!(packets.lock().expect("packet capture").is_empty());
+        assert_eq!(stale.local_metrics.final_sender_window_expirations, 1);
+        assert_eq!(stale.late_rescued_down_metrics_for_test().0, 0);
+
+        let mut exact_stale = ProductionDispatchTestHarness::new_down_only();
+        exact_stale
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        let packets = exact_stale.configure_packet_capture();
+        let plan = exact_stale.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert_no_work(exact_stale.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        let continuity_cutoff = add_us(&exact_stale, target, 2_500);
+        let one_tick_beyond = continuity_cutoff
+            .checked_add_duration(DurationTicks::from_raw(1))
+            .expect("one tick beyond C1 cutoff");
+        assert_dispatched(exact_stale.dispatch_at_qpc_for_test(&plan, one_tick_beyond));
+        assert!(packets.lock().expect("packet capture").is_empty());
+        assert_eq!(exact_stale.local_metrics.final_sender_window_expirations, 1);
+    }
+
+    #[test]
+    fn c1_strict_cutoff_remains_physical_latest_start() {
+        let mut allowed = ProductionDispatchTestHarness::new_down_only();
+        allowed
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        allowed.set_strict_timing_for_test(true);
+        allowed.timing.strict_down_completion_late_ticks = allowed
+            .resources
+            .clock
+            .duration_from_us(3_000)
+            .expect("strict completion test allowance");
+        let packets = allowed.configure_packet_capture();
+        let plan = allowed.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert_no_work(allowed.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(allowed.dispatch_at_qpc_for_test(&plan, add_us(&allowed, target, 500)));
+        assert_eq!(packets.lock().expect("packet capture").len(), 1);
+        assert_eq!(allowed.local_metrics.final_sender_window_expirations, 0);
+        assert_eq!(allowed.late_rescued_down_metrics_for_test().0, 0);
+
+        let mut rejected = ProductionDispatchTestHarness::new_down_only();
+        rejected
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        rejected.set_strict_timing_for_test(true);
+        rejected.timing.strict_down_completion_late_ticks = rejected
+            .resources
+            .clock
+            .duration_from_us(3_000)
+            .expect("strict completion test allowance");
+        let packets = rejected.configure_packet_capture();
+        let plan = rejected.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert_no_work(rejected.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        let physical_cutoff = add_us(&rejected, target, 500);
+        let one_tick_beyond = physical_cutoff
+            .checked_add_duration(DurationTicks::from_raw(1))
+            .expect("one tick beyond strict cutoff");
+        assert!(matches!(
+            rejected.dispatch_at_qpc_for_test(&plan, one_tick_beyond),
+            DispatchStep::TerminateStatic("down_final_sender_window_expired")
+        ));
+        assert!(packets.lock().expect("packet capture").is_empty());
+        assert_eq!(rejected.local_metrics.final_sender_window_expirations, 1);
+        assert_eq!(rejected.late_rescued_down_metrics_for_test().0, 0);
+    }
+
+    #[test]
+    fn c1_physical_infeasibility_precedes_continuity_rescue() {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord(2);
+        harness
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        let packets = harness.configure_packet_capture();
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        let clock = harness.resources.clock;
+        let frame = clock.duration_from_us(16_667).expect("frame ticks");
+        let beyond_latest = harness
+            .timing
+            .timing_margin_ticks
+            .checked_add(DurationTicks::from_raw(1))
+            .expect("latest-start plus one tick");
+        let release_floor = target
+            .checked_add_duration(beyond_latest)
+            .expect("release floor");
+        let completed_up = release_floor
+            .as_u64()
+            .checked_sub(frame.as_u64())
+            .map(QpcTicks::from_raw)
+            .expect("prior Up completion");
+        harness
+            .runtime
+            .physical_timing_guard
+            .as_mut()
+            .expect("production guard initialized")
+            .observe_successful_packet(completed_up, 1, 0)
+            .expect("seed trusted prior Up completion");
+
+        assert!(release_floor < add_us(&harness, target, 2_500));
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, target));
+        assert!(packets.lock().expect("packet capture").is_empty());
+        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 1);
+        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
+    }
+
+    #[test]
+    fn c1_mixed_rescue_sends_the_prepared_whole_packet() {
+        let mut harness = ProductionDispatchTestHarness::new_mixed_events_with_gap(2, 100_000);
+        harness
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        let packets = harness.configure_packet_capture();
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("mixed target");
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, add_us(&harness, target, 1_000)));
+        assert_eq!(
+            packets.lock().expect("packet capture").as_slice(),
+            &[PhysicalPacket::new(1, 2)]
+        );
+        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 1);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 1);
+        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
+        assert_eq!(harness.chord_integrity_lost_count(), 0);
+    }
+
+    #[test]
+    fn c1_transport_failure_in_rescue_region_is_not_rescued() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        harness
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        let clock = harness.resources.clock;
+        harness.resources.backend.set_packet_emitter(move |packet| {
+            let requested_mask = packet.up_mask | packet.down_mask;
+            SendTransactionOutcome {
+                status: SendTransactionStatus::ZeroProgress,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: requested_mask,
+                    first_inserted: 0,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: Some(5),
+                    last_win32_error: Some(5),
+                    started_ticks: Some(clock.now().expect("test QPC")),
+                    completed_ticks: None,
+                    timing_error: None,
+                },
+            }
+        });
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert!(matches!(
+            harness.dispatch_at_qpc_for_test(&plan, add_us(&harness, target, 1_000)),
+            DispatchStep::Terminate(_)
+        ));
+        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
+        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
+    }
+
+    #[test]
+    fn c1_complete_without_completion_qpc_is_not_recorded_as_rescue() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        harness
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        let clock = harness.resources.clock;
+        harness.resources.backend.set_packet_emitter(move |packet| {
+            let requested_mask = packet.up_mask | packet.down_mask;
+            SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask: requested_mask,
+                    skipped_mask: 0,
+                    first_inserted: requested_mask.count_ones() as u8,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(clock.now().expect("test QPC")),
+                    completed_ticks: None,
+                    timing_error: None,
+                },
+            }
+        });
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        assert!(matches!(
+            harness.dispatch_at_qpc_for_test(&plan, add_us(&harness, target, 1_000)),
+            DispatchStep::TerminateStatic("successful Down missing completion QPC")
+        ));
+        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 0);
+        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
+        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
+        assert_eq!(
+            harness.local_metrics.missed_unobserved_backlog_boundaries,
+            0
+        );
+    }
+
+    #[test]
+    fn c1_dense_future_boundary_keeps_authored_target_and_no_backlog() {
+        let mut harness = ProductionDispatchTestHarness::new_dense_future_boundary_for_test();
+        harness
+            .configure_normal_down_start_tolerance_for_test(2_500)
+            .expect("C1 tolerance");
+        let packets = harness.configure_packet_capture();
+        let first = harness.plan_current_dispatch();
+        let first_target = first.physical_target_qpc().expect("first target");
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &first,
+            subtract_duration(first_target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(
+            harness.dispatch_at_qpc_for_test(&first, add_us(&harness, first_target, 2_200)),
+        );
+
+        let second = harness.plan_current_dispatch();
+        let second_target = second.physical_target_qpc().expect("second target");
+        let authored_gap = harness
+            .resources
+            .clock
+            .duration_to_us(
+                second_target
+                    .checked_duration_since(first_target)
+                    .expect("future boundary ordering"),
+            )
+            .expect("future authored gap");
+        assert_eq!(authored_gap, 5_000);
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &second,
+            subtract_duration(second_target, DurationTicks::from_raw(1)),
+        ));
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&second, second_target));
+        assert_eq!(
+            packets.lock().expect("packet capture").as_slice(),
+            &[PhysicalPacket::new(0, 1), PhysicalPacket::new(0, 2)]
+        );
+        assert_eq!(
+            harness.local_metrics.missed_unobserved_backlog_boundaries,
+            0
+        );
+        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 1);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 1);
+    }
+
+    #[test]
+    fn c1_1_dense_boundary_matrix_preserves_authored_targets_and_safety() {
+        const GAPS_US: [u64; 7] = [1_000, 1_500, 2_000, 2_500, 3_000, 4_000, 5_000];
+        const OFFSETS_US: [u64; 6] = [600, 1_000, 1_400, 1_600, 2_200, 2_500];
+
+        for tolerance_us in [1_500, 2_500] {
+            for gap_us in GAPS_US {
+                for offset_us in OFFSETS_US {
+                    let mut harness =
+                        ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(
+                            gap_us,
+                        );
+                    harness
+                        .configure_normal_down_start_tolerance_for_test(tolerance_us)
+                        .expect("C1.1 tolerance");
+                    let timing_margin_us = harness
+                        .resources
+                        .clock
+                        .duration_to_us(harness.timing.timing_margin_ticks)
+                        .expect("Timing Margin conversion");
+                    let packets = harness.configure_packet_capture();
+                    let first = harness.plan_current_dispatch();
+                    let first_target = first.physical_target_qpc().expect("first target");
+                    assert_no_work(harness.dispatch_at_qpc_for_test(
+                        &first,
+                        subtract_duration(first_target, DurationTicks::from_raw(1)),
+                    ));
+                    let first_now = add_us(&harness, first_target, offset_us);
+                    assert_dispatched(harness.dispatch_at_qpc_for_test(&first, first_now));
+
+                    let first_allowed = offset_us <= timing_margin_us.max(tolerance_us);
+                    let first_rescued = offset_us > timing_margin_us
+                        && offset_us <= timing_margin_us.max(tolerance_us);
+                    assert_eq!(
+                        packets.lock().expect("packet capture").len(),
+                        if first_allowed { 1 } else { 0 },
+                        "first packet classification for tolerance={tolerance_us} gap={gap_us} offset={offset_us}"
+                    );
+                    assert_eq!(
+                        harness.late_rescued_down_metrics_for_test().0,
+                        u64::from(first_rescued),
+                        "first rescue classification for tolerance={tolerance_us} gap={gap_us} offset={offset_us}"
+                    );
+
+                    let second = harness.plan_current_dispatch();
+                    let second_target = second.physical_target_qpc().expect("second target");
+                    let authored_gap = harness
+                        .resources
+                        .clock
+                        .duration_to_us(
+                            second_target
+                                .checked_duration_since(first_target)
+                                .expect("second target follows first"),
+                        )
+                        .expect("authored gap conversion");
+                    assert_eq!(
+                        authored_gap, gap_us,
+                        "second target must retain authored gap for tolerance={tolerance_us} offset={offset_us}"
+                    );
+
+                    let second_is_future = second_target > first_now;
+                    if second_is_future {
+                        assert_no_work(harness.dispatch_at_qpc_for_test(
+                            &second,
+                            subtract_duration(second_target, DurationTicks::from_raw(1)),
+                        ));
+                        assert_dispatched(harness.dispatch_at_qpc_for_test(&second, second_target));
+                        assert_eq!(
+                            harness.missed_unobserved_backlog_boundaries_for_test(),
+                            0,
+                            "future second boundary must not become false backlog"
+                        );
+                    } else {
+                        assert_dispatched(harness.dispatch_at_qpc_for_test(&second, first_now));
+                        assert_eq!(
+                            harness.missed_unobserved_backlog_boundaries_for_test(),
+                            1,
+                            "overdue second boundary must follow existing backlog contract"
+                        );
+                    }
+
+                    let expected_packets = (if first_allowed { 1 } else { 0 })
+                        + (if second_is_future { 1 } else { 0 });
+                    assert_eq!(
+                        packets.lock().expect("packet capture").len(),
+                        expected_packets,
+                        "no catch-up or packet split for tolerance={tolerance_us} gap={gap_us} offset={offset_us}"
+                    );
+                    assert_eq!(
+                        harness.missed_physical_window_boundaries_for_test(),
+                        0,
+                        "continuity must not bypass physical timing rules"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

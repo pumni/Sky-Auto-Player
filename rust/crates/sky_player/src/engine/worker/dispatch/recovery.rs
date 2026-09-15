@@ -1,6 +1,6 @@
 use super::super::super::{PlaybackClockState, QpcTicks};
 use super::super::physical_timing_guard::PhysicalTimingWindow;
-use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime};
+use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime, WorkerTimingState};
 use super::observation::{DispatchObservation, DownMissKind, DownMissObservation};
 use super::{
     AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalCommit, RecoveryDescriptor,
@@ -13,6 +13,60 @@ pub(crate) enum DownMissReason {
     UnobservedBacklog,
     PhysicalWindowExpired,
     DownExpiredBeforeSend,
+}
+
+pub(super) fn effective_down_sender_cutoff(
+    physical_timing_window: PhysicalTimingWindow,
+    timing: &WorkerTimingState,
+) -> Result<Option<QpcTicks>, &'static str> {
+    let Some(physical_latest) = physical_timing_window.latest_down_start_qpc else {
+        return Ok(None);
+    };
+    if timing.strict_timing {
+        return Ok(Some(physical_latest));
+    }
+    let continuity_cutoff = physical_timing_window
+        .authored_target_qpc
+        .checked_add_duration(timing.normal_down_start_tolerance_ticks)
+        .map_err(|_| "normal Down continuity cutoff arithmetic overflow")?;
+    Ok(Some(physical_latest.max(continuity_cutoff)))
+}
+
+pub(super) fn record_late_rescued_down(
+    local_metrics: &mut WorkerMetricsLocal,
+    physical_target_qpc: QpcTicks,
+    physical_latest_down_start_qpc: Option<QpcTicks>,
+    sender_cutoff_qpc: Option<QpcTicks>,
+    started_qpc: Option<QpcTicks>,
+    result_success: bool,
+    down_mask: u16,
+) {
+    let Some(((physical_latest, sender_cutoff), started)) = physical_latest_down_start_qpc
+        .zip(sender_cutoff_qpc)
+        .zip(started_qpc)
+    else {
+        return;
+    };
+    if !result_success || down_mask == 0 || started <= physical_latest || started > sender_cutoff {
+        return;
+    }
+    let Some(lateness_ticks) = started.checked_duration_since(physical_target_qpc).ok() else {
+        return;
+    };
+    let Some(excess_ticks) = started.checked_duration_since(physical_latest).ok() else {
+        return;
+    };
+    local_metrics.late_rescued_down_boundaries =
+        local_metrics.late_rescued_down_boundaries.saturating_add(1);
+    local_metrics.late_rescued_down_keys = local_metrics
+        .late_rescued_down_keys
+        .saturating_add(u64::from(down_mask.count_ones()));
+    local_metrics.max_late_rescued_down_lateness_ticks = local_metrics
+        .max_late_rescued_down_lateness_ticks
+        .max(lateness_ticks.as_u64());
+    local_metrics.max_late_rescued_down_excess_ticks = local_metrics
+        .max_late_rescued_down_excess_ticks
+        .max(excess_ticks.as_u64());
 }
 
 pub(super) fn queue_down_miss_observation(

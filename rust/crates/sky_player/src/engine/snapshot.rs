@@ -205,8 +205,17 @@ pub struct EngineSnapshot {
     pub send_mixed_warn_threshold_us: u64,
     pub wait_target_error_us: u64,
     pub idle_wake_count: u64,
+    pub wait_planned_gap_max_us: u64,
+    pub wait_planned_gap_hot_count: u64,
+    pub wait_planned_gap_cold_count: u64,
+    pub wait_planned_gap_hot_lateness_max_us: u64,
+    pub wait_planned_gap_cold_lateness_max_us: u64,
+    pub physical_target_to_wake_max_us: u64,
     /// Typed `dispatch_ready - sender_completed` peak (§8.13).
     pub core_post_send_max_us: u64,
+    pub wake_to_final_policy_max_us: u64,
+    pub final_policy_to_pre_call_max_us: u64,
+    pub sendinput_duration_max_us: u64,
     /// Peak QPC duration from a blocking deadline wake to the next
     /// `SendInput` call entry (§8.13).
     pub wake_to_send_max_us: u64,
