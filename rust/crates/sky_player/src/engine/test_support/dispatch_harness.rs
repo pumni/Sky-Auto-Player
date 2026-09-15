@@ -89,6 +89,14 @@ impl ProductionDispatchTestHarness {
     /// first boundary is used for a controlled late-rescue send; the second
     /// proves that its authored target remains unchanged.
     pub fn new_dense_future_boundary_for_test() -> Self {
+        Self::new_dense_future_boundary_with_gap_for_test(5_000)
+    }
+
+    /// Build two independent Down boundaries with a caller-selected authored
+    /// gap.  This keeps dense-boundary qualification on the same production
+    /// dispatch path while allowing the next target to be placed immediately
+    /// after a synthetic first-note wake slip.
+    pub fn new_dense_future_boundary_with_gap_for_test(gap_us: u64) -> Self {
         Self::create_harness(&[
             KeyActionInput {
                 source_action_index: 0,
@@ -100,14 +108,14 @@ impl ProductionDispatchTestHarness {
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Down,
-                scheduled_us: 5_000,
+                scheduled_us: gap_us,
                 scan_codes: vec![0x16].into(),
                 reason: "dense-b-down".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Up,
-                scheduled_us: 20_000,
+                scheduled_us: gap_us.saturating_add(20_000),
                 scan_codes: vec![0x15, 0x16].into(),
                 reason: "dense-cleanup".into(),
             },
@@ -1000,6 +1008,14 @@ impl ProductionDispatchTestHarness {
         Ok((boundaries, keys, lateness_us, excess_us))
     }
 
+    pub fn final_sender_window_expirations_for_test(&self) -> u64 {
+        self.local_metrics.final_sender_window_expirations
+    }
+
+    pub fn missed_unobserved_backlog_boundaries_for_test(&self) -> u64 {
+        self.local_metrics.missed_unobserved_backlog_boundaries
+    }
+
     pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
         publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
         (
@@ -1723,6 +1739,27 @@ impl ProductionDispatchTestHarness {
 
     pub fn physical_target_qpc_for_test(&self, plan: &NextDispatchPlan) -> Option<QpcTicks> {
         plan.physical_target_qpc()
+    }
+
+    pub fn qpc_now_for_test(&self) -> Result<QpcTicks, String> {
+        self.resources
+            .clock
+            .now()
+            .map_err(|error| format!("test QPC now: {error:?}"))
+    }
+
+    pub fn qpc_duration_from_us_for_test(&self, us: u64) -> Result<DurationTicks, String> {
+        self.resources
+            .clock
+            .duration_from_us(us)
+            .map_err(|error| format!("test QPC duration conversion: {error:?}"))
+    }
+
+    pub fn qpc_duration_to_us_for_test(&self, duration: DurationTicks) -> Result<u64, String> {
+        self.resources
+            .clock
+            .duration_to_us(duration)
+            .map_err(|error| format!("test QPC duration conversion: {error:?}"))
     }
 
     pub fn send_phase_a_packet_for_test(

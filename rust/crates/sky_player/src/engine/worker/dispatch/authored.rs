@@ -635,15 +635,6 @@ fn record_down_send_outcome(
     let result_skipped_mask = result.evidence.skipped_mask;
     let result_send_attempts = result.evidence.attempts;
     let result_retry_reason = result.evidence.retry_reason;
-    record_late_rescued_down(
-        local_metrics,
-        physical_target_qpc,
-        physical_latest_down_start_qpc,
-        sender_cutoff_qpc,
-        result_started_ticks,
-        result_success,
-        packet.down_mask,
-    );
     let result_chord_integrity_lost = matches!(
         result.status,
         sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
@@ -706,6 +697,15 @@ fn record_down_send_outcome(
             "physical timing guard completion update failed: {error:?}"
         ));
     }
+    record_late_rescued_down(
+        local_metrics,
+        physical_target_qpc,
+        physical_latest_down_start_qpc,
+        sender_cutoff_qpc,
+        result_started_ticks,
+        result_success,
+        packet.down_mask,
+    );
     let trace_kind = *trace_kind;
     finalize_down_send_outcome(
         view,
