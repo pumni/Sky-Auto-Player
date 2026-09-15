@@ -303,6 +303,9 @@ pub struct BootstrapDto {
     pub app_version: String,
     pub protocol_version: u64,
     pub native_build: NativeBuildDto,
+    /// Authoritative coherent settings snapshot for initial frontend state.
+    pub settings: SettingsDto,
+    /// Flattened fields remain additive compatibility aliases for protocol v1 clients.
     pub playback_defaults: PlaybackDefaultsDto,
     pub timing_margin_recommendation: TimingMarginRecommendationDto,
     pub option_sets: PlaybackOptionSetsDto,

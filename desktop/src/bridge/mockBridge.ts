@@ -407,6 +407,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         app_version: '3.5.0-mock',
         protocol_version: 1,
         native_build: MOCK_NATIVE,
+        settings: { ...settings },
         playback_defaults: settings.playback_defaults,
         timing_margin_recommendation: settings.timing_margin_recommendation,
         option_sets: {

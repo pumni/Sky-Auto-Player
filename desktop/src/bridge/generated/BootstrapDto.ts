@@ -3,7 +3,16 @@ import type { CatalogReadiness } from "./CatalogReadiness";
 import type { NativeBuildDto } from "./NativeBuildDto";
 import type { PlaybackDefaultsDto } from "./PlaybackDefaultsDto";
 import type { PlaybackOptionSetsDto } from "./PlaybackOptionSetsDto";
+import type { SettingsDto } from "./SettingsDto";
 import type { TimingMarginRecommendationDto } from "./TimingMarginRecommendationDto";
 import type { UpdatePreferencesDto } from "./UpdatePreferencesDto";
 
-export type BootstrapDto = { app_version: string, protocol_version: number, native_build: NativeBuildDto, playback_defaults: PlaybackDefaultsDto, timing_margin_recommendation: TimingMarginRecommendationDto, option_sets: PlaybackOptionSetsDto, theme: string, telemetry_enabled: boolean, update_preferences: UpdatePreferencesDto, catalog_state: CatalogReadiness, catalog_generation: number | null, };
+export type BootstrapDto = { app_version: string, protocol_version: number, native_build: NativeBuildDto, 
+/**
+ * Authoritative coherent settings snapshot for initial frontend state.
+ */
+settings: SettingsDto, 
+/**
+ * Flattened fields remain additive compatibility aliases for protocol v1 clients.
+ */
+playback_defaults: PlaybackDefaultsDto, timing_margin_recommendation: TimingMarginRecommendationDto, option_sets: PlaybackOptionSetsDto, theme: string, telemetry_enabled: boolean, update_preferences: UpdatePreferencesDto, catalog_state: CatalogReadiness, catalog_generation: number | null, };
