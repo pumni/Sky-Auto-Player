@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { createMockBridge, createTauriBridge } from './bridge';
 import { App } from './app/App';
 import { ErrorBoundary } from './app/ErrorBoundary';
+import { recordStartupTelemetry } from './bridge/startupTelemetry';
 import './styles/tokens.css';
 import './styles/reset.css';
 import './styles/base.css';
@@ -23,6 +24,7 @@ const isTauri =
   'isTauri' in window ||
   window.location.protocol === 'tauri:' ||
   window.location.hostname === 'tauri.localhost';
+recordStartupTelemetry('frontend.entry');
 const mockDurations = (
   new URLSearchParams(window.location.search).get('mockPlaybackDurationMs') ?? ''
 )

@@ -272,6 +272,7 @@ impl AppState {
             .map_err(|_| "native resource state poisoned".to_string())?
             .clone()
             .unwrap_or_else(|| AppResources::from_resource_dir(paths.install_root()));
+        crate::startup_telemetry::record("native.create.start");
         let runtime = Arc::new(
             NativeDesktopRuntime::from_paths_with_activity_and_seams_and_update_service(
                 paths,
@@ -282,6 +283,7 @@ impl AppState {
                     .map_err(|_| "native update service state poisoned".to_string())?,
             )?,
         );
+        crate::startup_telemetry::record("native.create.end");
         *native = Some(Arc::clone(&runtime));
         Ok(runtime)
     }

@@ -1458,11 +1458,15 @@ impl NativeDesktopRuntime {
     ) -> Result<Self, String> {
         let settings_path = paths.settings_path();
         let settings_store = JsonSettingsStore::new(settings_path);
+        crate::startup_telemetry::record("settings.load.start");
         let settings = SettingsService::load(settings_store)
             .map_err(|error| format!("native settings startup failed: {error}"))?;
+        crate::startup_telemetry::record("settings.load.end");
         let manifest_store = JsonLibraryManifestStore::new(paths.library_manifest_path());
+        crate::startup_telemetry::record("manifest.load.start");
         let library_manifest = LibraryManifestService::load(manifest_store)
             .map_err(|error| format!("native library manifest startup failed: {error}"))?;
+        crate::startup_telemetry::record("manifest.load.end");
         let songs_dir = paths
             .resolve_songs_dir(&settings.snapshot().songs_dir)
             .unwrap_or_else(|_| paths.user_music_root().to_path_buf());
@@ -1702,6 +1706,7 @@ impl NativeDesktopRuntime {
     }
 
     pub(crate) fn bootstrap(&self) -> Result<BootstrapDto, String> {
+        crate::startup_telemetry::record("bootstrap.start");
         let snapshot = self.ensure_catalog_loaded()?;
         let settings = self.settings_snapshot()?;
         let timing_margin_recommendation = self.timing_margin_recommendation();
@@ -1741,10 +1746,12 @@ impl NativeDesktopRuntime {
                 },
             })?;
         }
+        crate::startup_telemetry::record("bootstrap.end");
         Ok(result)
     }
 
     fn settings_snapshot(&self) -> Result<ApplicationSettings, String> {
+        crate::startup_telemetry::record("settings.reload.start");
         let mut service = self
             .settings
             .lock()
@@ -1754,7 +1761,9 @@ impl NativeDesktopRuntime {
         service
             .reload()
             .map_err(|error| format!("native settings reload failed: {error}"))?;
-        Ok(service.snapshot().clone())
+        let snapshot = service.snapshot().clone();
+        crate::startup_telemetry::record("settings.reload.end");
+        Ok(snapshot)
     }
 
     fn settings_dto(&self) -> Result<SettingsDto, String> {
@@ -1890,22 +1899,27 @@ impl NativeDesktopRuntime {
             .generation()
             == 0;
         if needs_load {
+            crate::startup_telemetry::record("catalog.compose.start");
             let composition = self.catalog_composition()?;
+            crate::startup_telemetry::record("catalog.compose.end");
             let mut catalog = self
                 .catalog
                 .lock()
                 .map_err(|_| "native catalog lock poisoned".to_string())?;
             if catalog.index.generation() == 0 {
+                crate::startup_telemetry::record("catalog.index.start");
                 let snapshot = catalog
                     .index
                     .replace_entries(composition.entries)
                     .map_err(catalog_error)?;
+                crate::startup_telemetry::record("catalog.index.end");
                 catalog.library_membership = composition.library_membership;
                 catalog.builtin_membership = composition.builtin_membership;
                 catalog.user_membership = composition.user_membership;
                 catalog.imported_membership = composition.imported_membership;
                 catalog.imported_status = composition.imported_status;
                 catalog.builtin_status = composition.builtin_status;
+                crate::startup_telemetry::record("catalog.ready");
                 return Ok(snapshot);
             }
         }
@@ -1975,9 +1989,33 @@ impl NativeDesktopRuntime {
             .snapshot()
             .imports
             .clone();
-        self.catalog_composer
-            .compose(&imports)
-            .map_err(catalog_error)
+        if crate::startup_telemetry::enabled() {
+            self.catalog_composer
+                .compose_with_observer(&imports, |event| match event {
+                    sky_native_adapters::CatalogCompositionEvent::SourceStarted(source) => {
+                        crate::startup_telemetry::record(&catalog_source_marker(source, "start"));
+                    }
+                    sky_native_adapters::CatalogCompositionEvent::SourceFinished {
+                        source,
+                        metrics,
+                        duration_ms,
+                    } => {
+                        let marker = catalog_source_marker(source, "end");
+                        crate::startup_telemetry::record_counters(
+                            &marker,
+                            metrics.directories_visited,
+                            metrics.files_visited,
+                            metrics.supported_files,
+                            Some(duration_ms),
+                        );
+                    }
+                })
+                .map_err(catalog_error)
+        } else {
+            self.catalog_composer
+                .compose(&imports)
+                .map_err(catalog_error)
+        }
     }
 
     fn list_playlists(&self) -> Result<LibraryNavigationDto, String> {
@@ -5544,6 +5582,24 @@ fn encode_result<T: serde::Serialize>(result: Result<T, String>) -> Result<Value
         .map_err(|error| error.to_string())
         .and_then(|value| serde_json::to_value(value).map_err(json_error))
 }
+
+fn catalog_source_marker(
+    source: sky_native_adapters::CatalogCompositionSource,
+    suffix: &str,
+) -> String {
+    match source {
+        sky_native_adapters::CatalogCompositionSource::Builtin => {
+            format!("catalog.builtin.{suffix}")
+        }
+        sky_native_adapters::CatalogCompositionSource::User => {
+            format!("catalog.user.{suffix}")
+        }
+        sky_native_adapters::CatalogCompositionSource::Imported { index } => {
+            format!("catalog.import.source_{index}.{suffix}")
+        }
+    }
+}
+
 fn settings_error(error: SettingsError) -> String {
     error.to_string()
 }

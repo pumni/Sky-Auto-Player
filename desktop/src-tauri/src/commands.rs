@@ -948,15 +948,30 @@ pub async fn export_sender_trace(state: State<'_, AppState>) -> Result<String, S
 pub async fn subscribe_ui_events(
     state: State<'_, AppState>,
     channel: Channel<UiEvent>,
+    params: Option<StartupTelemetryRequest>,
 ) -> Result<(), String> {
+    if let Some(params) = params {
+        return crate::startup_telemetry::record_frontend_marker(&params.marker);
+    }
     let _command_name = crate::ipc_contract::UI_EVENTS_COMMAND;
+    crate::startup_telemetry::record("events.subscribe.start");
     let app_state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let native = app_state.ensure_native_blocking()?;
         native.subscribe(channel)
     })
     .await
-    .map_err(|error| format!("Native event worker failed: {error}"))?
+    .map_err(|error| format!("Native event worker failed: {error}"))?;
+    if result.is_ok() {
+        crate::startup_telemetry::record("events.subscribe.end");
+    }
+    result
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupTelemetryRequest {
+    pub marker: String,
 }
 
 #[tauri::command]

@@ -24,6 +24,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 pub mod paths;
 pub use paths::{AppPaths, AppResources, CALIBRATION_EXE, V4_APP_IDENTIFIER, snapshot_directory};
@@ -538,6 +539,30 @@ pub struct CatalogComposition {
     pub builtin_status: BuiltinCatalogStatus,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CatalogScanMetrics {
+    pub directories_visited: u64,
+    pub files_visited: u64,
+    pub supported_files: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogCompositionSource {
+    Builtin,
+    User,
+    Imported { index: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogCompositionEvent {
+    SourceStarted(CatalogCompositionSource),
+    SourceFinished {
+        source: CatalogCompositionSource,
+        metrics: CatalogScanMetrics,
+        duration_ms: u64,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuiltinCatalogFailureCode {
     ResourceUnavailable,
@@ -682,8 +707,81 @@ impl CatalogComposer {
         &self,
         imports: &[ImportedSourceRef],
     ) -> Result<CatalogComposition, CatalogError> {
+        self.compose_internal(imports, None)
+    }
+
+    pub fn compose_with_observer<F>(
+        &self,
+        imports: &[ImportedSourceRef],
+        mut observer: F,
+    ) -> Result<CatalogComposition, CatalogError>
+    where
+        F: FnMut(CatalogCompositionEvent),
+    {
+        self.compose_internal(imports, Some(&mut observer))
+    }
+
+    fn compose_internal(
+        &self,
+        imports: &[ImportedSourceRef],
+        mut observer: Option<&mut dyn FnMut(CatalogCompositionEvent)>,
+    ) -> Result<CatalogComposition, CatalogError> {
+        let source_started = observer.is_some().then(Instant::now);
+        notify_composition_observer(
+            &mut observer,
+            CatalogCompositionEvent::SourceStarted(CatalogCompositionSource::Builtin),
+        );
         let (builtin_entries, builtin_membership, builtin_status) = self.builtin.load();
-        let user_entries = self.user.entries()?;
+        let builtin_metrics = if observer.is_some() {
+            CatalogScanMetrics {
+                directories_visited: u64::from(
+                    self.builtin.resources.builtin_catalog_root().is_dir(),
+                ),
+                files_visited: builtin_entries.len() as u64,
+                supported_files: builtin_entries.len() as u64,
+            }
+        } else {
+            CatalogScanMetrics::default()
+        };
+        notify_composition_observer(
+            &mut observer,
+            CatalogCompositionEvent::SourceFinished {
+                source: CatalogCompositionSource::Builtin,
+                metrics: builtin_metrics,
+                duration_ms: elapsed_ms(source_started),
+            },
+        );
+        notify_composition_observer(
+            &mut observer,
+            CatalogCompositionEvent::SourceStarted(CatalogCompositionSource::User),
+        );
+        let source_started = observer.is_some().then(Instant::now);
+        let (user_entries, user_metrics) = if observer.is_some() {
+            match self.user.entries_with_metrics() {
+                Ok(result) => result,
+                Err(error) => {
+                    notify_composition_observer(
+                        &mut observer,
+                        CatalogCompositionEvent::SourceFinished {
+                            source: CatalogCompositionSource::User,
+                            metrics: CatalogScanMetrics::default(),
+                            duration_ms: elapsed_ms(source_started),
+                        },
+                    );
+                    return Err(error);
+                }
+            }
+        } else {
+            (self.user.entries()?, CatalogScanMetrics::default())
+        };
+        notify_composition_observer(
+            &mut observer,
+            CatalogCompositionEvent::SourceFinished {
+                source: CatalogCompositionSource::User,
+                metrics: user_metrics,
+                duration_ms: elapsed_ms(source_started),
+            },
+        );
         let user_membership = user_entries
             .iter()
             .map(|entry| song_id_for_canonical_path(&entry.canonical_path))
@@ -700,21 +798,50 @@ impl CatalogComposer {
             ..Default::default()
         };
         composition.entries.extend(user_entries);
-        for import in imports {
+        for (index, import) in imports.iter().enumerate() {
+            let source = CatalogCompositionSource::Imported { index };
+            let source_started = observer.is_some().then(Instant::now);
+            notify_composition_observer(
+                &mut observer,
+                CatalogCompositionEvent::SourceStarted(source),
+            );
             let path = PathBuf::from(&import.canonical_path);
             let display_name = import_display_name(&path, import.kind);
             if !path.exists() {
                 record_missing_import(&mut composition, import, display_name);
+                notify_composition_observer(
+                    &mut observer,
+                    CatalogCompositionEvent::SourceFinished {
+                        source,
+                        metrics: CatalogScanMetrics::default(),
+                        duration_ms: elapsed_ms(source_started),
+                    },
+                );
                 continue;
             }
-            let imported = match import.kind {
-                ImportedSourceKind::File => entries_from_file(&path),
-                ImportedSourceKind::Folder => entries_from_directory(&path, true),
+            let imported = match (import.kind, observer.is_some()) {
+                (ImportedSourceKind::File, true) => entries_from_file_with_metrics(&path),
+                (ImportedSourceKind::Folder, true) => {
+                    entries_from_directory_with_metrics(&path, true)
+                }
+                (ImportedSourceKind::File, false) => {
+                    entries_from_file(&path).map(|entries| (entries, CatalogScanMetrics::default()))
+                }
+                (ImportedSourceKind::Folder, false) => entries_from_directory(&path, true)
+                    .map(|entries| (entries, CatalogScanMetrics::default())),
             };
-            let imported = match imported {
-                Ok(entries) => entries,
+            let (imported, metrics) = match imported {
+                Ok(result) => result,
                 Err(_) => {
                     record_missing_import(&mut composition, import, display_name);
+                    notify_composition_observer(
+                        &mut observer,
+                        CatalogCompositionEvent::SourceFinished {
+                            source,
+                            metrics: CatalogScanMetrics::default(),
+                            duration_ms: elapsed_ms(source_started),
+                        },
+                    );
                     continue;
                 }
             };
@@ -735,11 +862,34 @@ impl CatalogComposer {
                 .imported_membership
                 .insert(import.source_id.clone(), membership);
             composition.entries.extend(imported);
+            notify_composition_observer(
+                &mut observer,
+                CatalogCompositionEvent::SourceFinished {
+                    source,
+                    metrics,
+                    duration_ms: elapsed_ms(source_started),
+                },
+            );
         }
         composition
             .entries
             .sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
         Ok(composition)
+    }
+}
+
+fn elapsed_ms(started: Option<Instant>) -> u64 {
+    started
+        .map(|started| started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
+}
+
+fn notify_composition_observer(
+    observer: &mut Option<&mut dyn FnMut(CatalogCompositionEvent)>,
+    event: CatalogCompositionEvent,
+) {
+    if let Some(observer) = observer.as_deref_mut() {
+        observer(event);
     }
 }
 
@@ -778,6 +928,12 @@ impl FileCatalogSource {
     pub fn root(&self) -> &Path {
         &self.root
     }
+
+    pub fn entries_with_metrics(
+        &self,
+    ) -> Result<(Vec<CatalogSourceEntry>, CatalogScanMetrics), CatalogError> {
+        entries_from_directory_with_metrics(&self.root, false)
+    }
 }
 
 impl SongSource for FileCatalogSource {
@@ -787,25 +943,46 @@ impl SongSource for FileCatalogSource {
 }
 
 fn entries_from_file(path: &Path) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
+    entries_from_file_with_metrics(path).map(|(entries, _)| entries)
+}
+
+fn entries_from_file_with_metrics(
+    path: &Path,
+) -> Result<(Vec<CatalogSourceEntry>, CatalogScanMetrics), CatalogError> {
+    let mut metrics = CatalogScanMetrics::default();
+    if path.exists() && path.is_file() {
+        metrics.files_visited = 1;
+        metrics.supported_files = u64::from(is_supported(path));
+    }
     if !path.is_file() || !is_supported(path) {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), metrics));
     }
     let canonical = fs::canonicalize(path)
         .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
-    Ok(vec![CatalogSourceEntry::path_derived(
-        canonical.to_string_lossy(),
-        path.file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default(),
-    )])
+    Ok((
+        vec![CatalogSourceEntry::path_derived(
+            canonical.to_string_lossy(),
+            path.file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default(),
+        )],
+        metrics,
+    ))
 }
 
 fn entries_from_directory(
     root: &Path,
     recursive: bool,
 ) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
+    entries_from_directory_with_metrics(root, recursive).map(|(entries, _)| entries)
+}
+
+fn entries_from_directory_with_metrics(
+    root: &Path,
+    recursive: bool,
+) -> Result<(Vec<CatalogSourceEntry>, CatalogScanMetrics), CatalogError> {
     if !root.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), CatalogScanMetrics::default()));
     }
     if !root.is_dir() {
         return Err(CatalogError::SourceUnavailable(
@@ -813,8 +990,10 @@ fn entries_from_directory(
         ));
     }
     let mut entries = Vec::new();
+    let mut metrics = CatalogScanMetrics::default();
     let mut directories = vec![root.to_owned()];
     while let Some(directory) = directories.pop() {
+        metrics.directories_visited = metrics.directories_visited.saturating_add(1);
         let read_dir = fs::read_dir(&directory)
             .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
         for item in read_dir {
@@ -826,6 +1005,10 @@ fn entries_from_directory(
             if recursive && file_type.is_dir() {
                 directories.push(path);
             } else if file_type.is_file() {
+                metrics.files_visited = metrics.files_visited.saturating_add(1);
+                metrics.supported_files = metrics
+                    .supported_files
+                    .saturating_add(u64::from(is_supported(&path)));
                 entries.extend(entries_from_file(&path)?);
             }
         }
@@ -834,7 +1017,7 @@ fn entries_from_directory(
         }
     }
     entries.sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
-    Ok(entries)
+    Ok((entries, metrics))
 }
 
 fn is_supported(path: &Path) -> bool {

@@ -32,6 +32,7 @@ Historical plans, audit reports, issue text, and obsolete work orders do not ove
 - [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md) — v4 production Authenticode provider seam specification.
 - [v4-release-execution-topology.md](v4-release-execution-topology.md) — v4 production release execution topology, candidate lifecycle, and provenance boundary.
 - [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler and workspace toolchain policy.
+- [desktop-startup-benchmark.md](desktop-startup-benchmark.md) — Opt-in startup markers, milestone definitions, and packaged benchmark methodology.
 
 ## Development and verification
 

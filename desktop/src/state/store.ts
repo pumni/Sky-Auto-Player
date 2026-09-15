@@ -26,6 +26,7 @@ import type {
 } from '../bridge/DesktopBridge';
 import { initialEventState, reduceEvent } from './eventReducer';
 import { rememberRetiredSession } from './retiredSessions';
+import { recordStartupTelemetry } from '../bridge/startupTelemetry';
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'fatal';
 type PlaybackUiState =
@@ -1564,6 +1565,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           });
           await get().search();
           await get().loadLibraryNavigation();
+          recordStartupTelemetry('react.catalog_ready');
           if (bootstrap.update_preferences.auto_check) void get().checkForUpdate();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

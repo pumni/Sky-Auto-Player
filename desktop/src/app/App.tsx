@@ -10,6 +10,7 @@ import { UpdateDialog } from '../components/updates/UpdateDialog';
 import { createDesktopStore } from '../state/store';
 import { createWindowControls } from '../platform/windowControls';
 import { usePackagedSmokeTest } from './usePackagedSmokeTest';
+import { recordStartupTelemetry } from '../bridge/startupTelemetry';
 
 interface AppProps {
   bridge: DesktopBridge;
@@ -25,8 +26,14 @@ export function App({ bridge }: AppProps) {
   const windowControls = useMemo(() => createWindowControls(), []);
 
   useEffect(() => {
+    recordStartupTelemetry('react.initialize.start');
     void useStore.getState().initialize();
   }, [useStore]);
+
+  useEffect(() => {
+    if (useStore.getState().bootstrapState !== 'ready') return;
+    recordStartupTelemetry('react.shell_ready');
+  }, [bootstrap, useStore]);
 
   useEffect(() => {
     if (bootstrap) document.documentElement.dataset.theme = bootstrap.theme;
