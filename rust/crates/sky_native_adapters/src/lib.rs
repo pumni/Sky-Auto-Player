@@ -26,7 +26,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+pub mod catalog_cache;
 pub mod paths;
+pub use catalog_cache::{
+    CATALOG_CACHE_SCHEMA_VERSION, CatalogCache, CatalogCacheEntry, CatalogCacheSource,
+    CatalogCacheSourceKind, CatalogCacheStore,
+};
 pub use paths::{AppPaths, AppResources, CALIBRATION_EXE, V4_APP_IDENTIFIER, snapshot_directory};
 
 pub const DEFAULT_TRANSPORT_MARGIN_US: u64 = 300;

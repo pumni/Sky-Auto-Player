@@ -562,11 +562,26 @@ export function createDesktopStore(bridge: DesktopBridge) {
     const reconcileCatalog = (): Promise<void> => {
       catalogReconciliationTail = catalogReconciliationTail.then(async () => {
         if (get().bootstrapState !== 'ready' || get().library.error !== null) return;
-        await get().search();
-        await get().loadLibraryNavigation();
-        if (!catalogReadyRecorded && get().library.error === null) {
-          catalogReadyRecorded = true;
-          recordStartupTelemetry('react.catalog_ready');
+        for (;;) {
+          const requestedGeneration = get().library.generation;
+          await get().search();
+          const afterSearch = get().library;
+          if (afterSearch.error !== null) return;
+          if (afterSearch.loading || afterSearch.generation !== requestedGeneration) continue;
+
+          await get().loadLibraryNavigation();
+          const settled = get().library;
+          if (
+            settled.error !== null ||
+            settled.loading ||
+            settled.generation !== requestedGeneration
+          )
+            continue;
+          if (!catalogReadyRecorded) {
+            catalogReadyRecorded = true;
+            recordStartupTelemetry('react.catalog_ready');
+          }
+          return;
         }
       });
       return catalogReconciliationTail;
@@ -2000,6 +2015,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           });
         } catch (error) {
           if (get().library.searchRequestGeneration !== token) return;
+          if (get().library.generation !== current.generation) return;
           const message = error instanceof Error ? error.message : String(error);
           set({ library: { ...get().library, loading: false, error: message } });
         }

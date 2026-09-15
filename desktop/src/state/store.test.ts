@@ -215,6 +215,39 @@ describe('desktop store', () => {
     expect(store.getState().settings?.verbose_hud).toBe(true);
   });
 
+  it('retries cached catalog hydration when reconciliation changes the generation mid-search', async () => {
+    const bridge = createMockBridge();
+    const originalSubscribe = bridge.subscribeUiEvents;
+    const originalSearch = bridge.searchSongs;
+    let listener: ((event: import('../bridge/DesktopBridge').UiEvent) => void) | undefined;
+    let firstSearch = true;
+    bridge.subscribeUiEvents = async (next) => {
+      listener = next;
+      return originalSubscribe(next);
+    };
+    bridge.searchSongs = async (request) => {
+      if (firstSearch && request.generation === 1) {
+        firstSearch = false;
+        listener?.({
+          v: 1,
+          name: 'catalog.changed',
+          payload: { generation: 2, total: 500 },
+        });
+        throw new Error('catalog generation is stale');
+      }
+      const result = await originalSearch(request);
+      return request.generation === 2 ? { ...result, generation: 2 } : result;
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    expect(store.getState().library.generation).toBe(2);
+    expect(store.getState().library.loading).toBe(false);
+    expect(store.getState().library.error).toBeNull();
+    expect(store.getState().library.pages.get(0)?.length).toBeGreaterThan(0);
+  });
+
   it('discards an older search response', async () => {
     let releaseSlow: (() => void) | undefined;
     const bridge = createMockBridge();

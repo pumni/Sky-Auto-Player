@@ -36,7 +36,10 @@ use crate::ui_events::{
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sky_app_core::catalog::{CatalogError, CatalogIndex, WRatioRanker};
+use sky_app_core::catalog::{
+    CatalogError, CatalogIndex, CatalogSourceIdentity, StableSongId, WRatioRanker,
+    song_id_for_canonical_path,
+};
 use sky_app_core::library::{
     ImportedSourceKind, ImportedSourceRef, LibraryError, LibraryManifestService,
 };
@@ -50,13 +53,15 @@ use sky_app_core::song::{
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_native_adapters::{
-    AppPaths, AppResources, BuiltinCatalogSource, BuiltinCatalogStatus,
+    AppPaths, AppResources, BuiltinCatalogFailureCode, BuiltinCatalogSource, BuiltinCatalogStatus,
     CALIBRATION_ARTIFACT_SCHEMA_VERSION, CALIBRATION_CACHE_VERSION, CALIBRATION_EVIDENCE_KIND,
     CALIBRATION_HOST_FINGERPRINT_VERSION, CALIBRATION_MAX_SHRINK_US,
     CALIBRATION_MEASUREMENT_PROTOCOL_VERSION, CALIBRATION_NATIVE_VERSION,
     CALIBRATION_REQUIRED_BUCKETS, CALIBRATION_SAMPLE_COUNT, CALIBRATION_SOURCE_FORMULA_VERSION,
-    CatalogComposer, CatalogComposition, FileCatalogSource, ImportedSourceCatalogStatus,
-    JsonLibraryManifestStore, JsonSettingsStore, load_calibration_resolution,
+    CATALOG_CACHE_SCHEMA_VERSION, CatalogCache, CatalogCacheEntry, CatalogCacheSource,
+    CatalogCacheSourceKind, CatalogCacheStore, CatalogComposer, CatalogComposition,
+    FileCatalogSource, ImportedSourceCatalogStatus, JsonLibraryManifestStore, JsonSettingsStore,
+    load_calibration_resolution,
 };
 use sky_player::adapter_support::{
     ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
@@ -74,7 +79,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::ipc::Channel;
 
 pub(crate) const MAX_NATIVE_EVENTS: usize = 128;
@@ -1329,6 +1334,8 @@ pub(crate) struct NativeDesktopRuntime {
     settings: Mutex<SettingsService<JsonSettingsStore>>,
     library_manifest: Mutex<LibraryManifestService<JsonLibraryManifestStore>>,
     catalog_composer: CatalogComposer,
+    catalog_cache: CatalogCacheStore,
+    cached_catalog: Mutex<Option<CatalogCache>>,
     catalog: Mutex<CatalogState>,
     catalog_load: Mutex<CatalogLoadState>,
     analysis_cache: Mutex<HashMap<String, CachedSongAnalysis>>,
@@ -1373,6 +1380,12 @@ struct CatalogState {
 enum CatalogLoadState {
     #[default]
     Uninitialized,
+    Cached {
+        generation: u64,
+    },
+    Reconciling {
+        generation: u64,
+    },
     Loading,
     Ready {
         generation: u64,
@@ -1381,6 +1394,12 @@ enum CatalogLoadState {
         message: String,
     },
     Closing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogLoadWork {
+    Rebuild,
+    Reconcile,
 }
 
 impl CatalogMetadata {
@@ -1508,6 +1527,8 @@ impl NativeDesktopRuntime {
         let library_manifest = LibraryManifestService::load(manifest_store)
             .map_err(|error| format!("native library manifest startup failed: {error}"))?;
         crate::startup_telemetry::record("manifest.load.end");
+        let catalog_cache = CatalogCacheStore::new(paths.catalog_cache_path());
+        let persisted_catalog = catalog_cache.load().ok().flatten();
         let songs_dir = paths
             .resolve_songs_dir(&settings.snapshot().songs_dir)
             .unwrap_or_else(|_| paths.user_music_root().to_path_buf());
@@ -1541,7 +1562,7 @@ impl NativeDesktopRuntime {
         if let Some(service) = &update_service {
             service.set_pre_exit_safety(Arc::clone(&pre_exit_safety));
         }
-        Ok(Self {
+        let runtime = Self {
             paths,
             settings: Mutex::new(settings),
             library_manifest: Mutex::new(library_manifest),
@@ -1549,6 +1570,8 @@ impl NativeDesktopRuntime {
                 BuiltinCatalogSource::new(resources),
                 FileCatalogSource::new(songs_dir),
             ),
+            catalog_cache,
+            cached_catalog: Mutex::new(None),
             catalog: Mutex::new(CatalogState::default()),
             catalog_load: Mutex::new(CatalogLoadState::default()),
             analysis_cache: Mutex::new(HashMap::new()),
@@ -1559,7 +1582,14 @@ impl NativeDesktopRuntime {
             pre_exit_safety,
             ready_emitted: AtomicBool::new(false),
             closed: AtomicBool::new(false),
-        })
+        };
+        if let Some(cache) = persisted_catalog
+            && runtime.hydrate_cached_catalog(cache.clone()).is_ok()
+            && let Ok(mut cached_catalog) = runtime.cached_catalog.lock()
+        {
+            *cached_catalog = Some(cache);
+        }
+        Ok(runtime)
     }
 
     #[allow(dead_code)]
@@ -1954,7 +1984,11 @@ impl NativeDesktopRuntime {
         Ok(match &*state {
             CatalogLoadState::Uninitialized => (CatalogReadiness::Uninitialized, None),
             CatalogLoadState::Loading => (CatalogReadiness::Loading, None),
-            CatalogLoadState::Ready { generation } => (CatalogReadiness::Ready, Some(*generation)),
+            CatalogLoadState::Cached { generation }
+            | CatalogLoadState::Reconciling { generation }
+            | CatalogLoadState::Ready { generation } => {
+                (CatalogReadiness::Ready, Some(*generation))
+            }
             CatalogLoadState::Failed { .. } | CatalogLoadState::Closing => {
                 (CatalogReadiness::Failed, None)
             }
@@ -1965,30 +1999,42 @@ impl NativeDesktopRuntime {
         if self.closed.load(Ordering::Acquire) {
             return Err("closing: desktop application is closing".into());
         }
-        let should_start = self.claim_catalog_load()?;
-        if should_start {
+        let work = self.claim_catalog_load()?;
+        if let Some(work) = work {
             let runtime = Arc::clone(self);
-            tauri::async_runtime::spawn_blocking(move || runtime.run_catalog_load());
+            tauri::async_runtime::spawn_blocking(move || runtime.run_catalog_load(work));
         }
         Ok(())
     }
 
-    fn claim_catalog_load(&self) -> Result<bool, String> {
+    fn claim_catalog_load(&self) -> Result<Option<CatalogLoadWork>, String> {
         let mut state = self
             .catalog_load
             .lock()
             .map_err(|_| "native catalog load state lock poisoned".to_string())?;
         match &*state {
-            CatalogLoadState::Loading | CatalogLoadState::Ready { .. } => Ok(false),
+            CatalogLoadState::Loading
+            | CatalogLoadState::Reconciling { .. }
+            | CatalogLoadState::Ready { .. } => Ok(None),
             CatalogLoadState::Closing => Err("closing: desktop application is closing".into()),
+            CatalogLoadState::Cached { generation } => {
+                *state = CatalogLoadState::Reconciling {
+                    generation: *generation,
+                };
+                Ok(Some(CatalogLoadWork::Reconcile))
+            }
             CatalogLoadState::Uninitialized | CatalogLoadState::Failed { .. } => {
                 *state = CatalogLoadState::Loading;
-                Ok(true)
+                Ok(Some(CatalogLoadWork::Rebuild))
             }
         }
     }
 
-    fn run_catalog_load(&self) {
+    fn run_catalog_load(&self, work: CatalogLoadWork) {
+        crate::startup_telemetry::record(match work {
+            CatalogLoadWork::Reconcile => "catalog.reconcile.start",
+            CatalogLoadWork::Rebuild => "catalog.rebuild.start",
+        });
         crate::startup_telemetry::record("catalog.compose.start");
         let composition = self.catalog_composition();
         crate::startup_telemetry::record("catalog.compose.end");
@@ -1999,12 +2045,27 @@ impl NativeDesktopRuntime {
             *state = CatalogLoadState::Closing;
             return;
         }
-        match composition.and_then(|composition| self.apply_catalog_composition(composition, false))
-        {
-            Ok((snapshot, library_total)) => {
+        let result = match composition {
+            Ok(composition) => {
+                let cache = self.catalog_cache_from_composition(&composition).ok();
+                self.apply_catalog_composition(composition, false, true)
+                    .map(|result| (result, cache))
+            }
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(((snapshot, library_total), cache)) => {
+                if let Some(cache) = cache {
+                    self.persist_catalog_cache(&cache);
+                }
                 *state = CatalogLoadState::Ready {
                     generation: snapshot.generation,
                 };
+                crate::startup_telemetry::record(match work {
+                    CatalogLoadWork::Reconcile => "catalog.reconcile.end",
+                    CatalogLoadWork::Rebuild => "catalog.rebuild.end",
+                });
+                crate::startup_telemetry::record("catalog.reconciled");
                 let _ = self.publish(UiEvent::CatalogChanged {
                     v: crate::DESKTOP_PROTOCOL_VERSION,
                     payload: CatalogChangedPayload {
@@ -2028,6 +2089,215 @@ impl NativeDesktopRuntime {
         }
     }
 
+    fn hydrate_cached_catalog(&self, cache: CatalogCache) -> Result<(), String> {
+        let composition = cached_composition(&cache)?;
+        let (snapshot, _) = self.apply_catalog_composition(composition, false, false)?;
+        let mut state = self
+            .catalog_load
+            .lock()
+            .map_err(|_| "native catalog load state lock poisoned".to_string())?;
+        *state = CatalogLoadState::Cached {
+            generation: snapshot.generation,
+        };
+        crate::startup_telemetry::record("catalog.cached_available");
+        Ok(())
+    }
+
+    fn persist_catalog_cache(&self, cache: &CatalogCache) {
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
+        let _ = self.catalog_cache.save(cache);
+        if !self.closed.load(Ordering::Acquire)
+            && let Ok(mut cached_catalog) = self.cached_catalog.lock()
+        {
+            *cached_catalog = Some(cache.clone());
+        }
+    }
+
+    fn catalog_cache_from_composition(
+        &self,
+        composition: &CatalogComposition,
+    ) -> Result<CatalogCache, String> {
+        // Size and mtime are persisted for cache metadata and diagnostics only.
+        // Reconciliation always comes from a complete CatalogComposer pass, so
+        // a same-size, same-mtime content mutation cannot be hidden by a
+        // metadata-only validity shortcut.
+        let mut sources = vec![
+            CatalogCacheSource {
+                source_id: "builtin".into(),
+                kind: CatalogCacheSourceKind::Builtin,
+                import_kind: None,
+                display_name: "Built-in library".into(),
+                available: matches!(
+                    composition.builtin_status,
+                    BuiltinCatalogStatus::Available { .. }
+                ),
+                song_ids: composition.builtin_membership.iter().cloned().collect(),
+            },
+            CatalogCacheSource {
+                source_id: "user".into(),
+                kind: CatalogCacheSourceKind::User,
+                import_kind: None,
+                display_name: "User library".into(),
+                available: true,
+                song_ids: composition.user_membership.iter().cloned().collect(),
+            },
+        ];
+        for status in &composition.imported_status {
+            sources.push(CatalogCacheSource {
+                source_id: status.source_id.clone(),
+                kind: CatalogCacheSourceKind::Imported,
+                import_kind: Some(status.kind),
+                display_name: status.display_name.clone(),
+                available: status.available,
+                song_ids: composition
+                    .imported_membership
+                    .get(&status.source_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+            });
+        }
+        let previous_cache = self.cached_catalog_snapshot()?;
+        let mut entries = Vec::with_capacity(composition.entries.len());
+        for entry in &composition.entries {
+            let song_id = match &entry.identity {
+                CatalogSourceIdentity::PathDerived => {
+                    song_id_for_canonical_path(&entry.canonical_path)
+                }
+                CatalogSourceIdentity::Stable(song_id) => song_id.as_str().to_owned(),
+            };
+            let (source_id, kind) = cache_source_for_song(composition, &song_id);
+            let previous_entry = previous_cache.as_ref().and_then(|cache| {
+                cache.entries.iter().find(|cached| {
+                    cached.canonical_path == entry.canonical_path && cached.song_id == song_id
+                })
+            });
+            let metadata = fs::metadata(&entry.canonical_path).ok();
+            let (file_size, modified_unix_ms) = if let Some(metadata) = metadata {
+                let modified_unix_ms = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+                    .or_else(|| previous_entry.map(|cached| cached.modified_unix_ms))
+                    .ok_or_else(|| "catalog cache metadata timestamp unavailable".to_string())?;
+                (metadata.len(), modified_unix_ms)
+            } else if let Some(previous_entry) = previous_entry {
+                (previous_entry.file_size, previous_entry.modified_unix_ms)
+            } else {
+                return Err("catalog cache metadata unavailable".into());
+            };
+            entries.push(CatalogCacheEntry {
+                source_id,
+                kind,
+                canonical_path: entry.canonical_path.clone(),
+                song_id,
+                title: entry.title.clone(),
+                file_size,
+                modified_unix_ms,
+            });
+        }
+        let cache_generation = self
+            .cached_catalog
+            .lock()
+            .ok()
+            .and_then(|cache| {
+                cache
+                    .as_ref()
+                    .map(|cache| cache.cache_generation.saturating_add(1).max(1))
+            })
+            .unwrap_or(1);
+        Ok(CatalogCache {
+            schema_version: CATALOG_CACHE_SCHEMA_VERSION,
+            cache_generation,
+            sources,
+            entries,
+        })
+    }
+
+    fn catalog_composition(&self) -> Result<CatalogComposition, String> {
+        let imports = self
+            .library_manifest
+            .lock()
+            .map_err(|_| "native library manifest lock poisoned".to_string())?
+            .snapshot()
+            .imports
+            .clone();
+        let mut composition = if crate::startup_telemetry::enabled() {
+            self.catalog_composer
+                .compose_with_observer(&imports, |event| match event {
+                    sky_native_adapters::CatalogCompositionEvent::SourceStarted(source) => {
+                        crate::startup_telemetry::record(&catalog_source_marker(source, "start"));
+                    }
+                    sky_native_adapters::CatalogCompositionEvent::SourceFinished {
+                        source,
+                        metrics,
+                        duration_ms,
+                    } => {
+                        let marker = catalog_source_marker(source, "end");
+                        crate::startup_telemetry::record_counters(
+                            &marker,
+                            metrics.directories_visited,
+                            metrics.files_visited,
+                            metrics.supported_files,
+                            Some(duration_ms),
+                        );
+                    }
+                })
+                .map_err(catalog_error)?
+        } else {
+            self.catalog_composer
+                .compose(&imports)
+                .map_err(catalog_error)?
+        };
+        self.preserve_unavailable_cached_imports(&mut composition);
+        Ok(composition)
+    }
+
+    fn preserve_unavailable_cached_imports(&self, composition: &mut CatalogComposition) {
+        let Ok(Some(cache)) = self.cached_catalog_snapshot() else {
+            return;
+        };
+        for status in composition
+            .imported_status
+            .iter_mut()
+            .filter(|status| !status.available)
+        {
+            let Some(source) = cache.sources.iter().find(|source| {
+                source.kind == CatalogCacheSourceKind::Imported
+                    && source.source_id == status.source_id
+            }) else {
+                continue;
+            };
+            let cached_ids = source.song_ids.iter().collect::<BTreeSet<_>>();
+            status.song_count = cached_ids.len();
+            for entry in &cache.entries {
+                if entry.kind == CatalogCacheSourceKind::Imported
+                    && cached_ids.contains(&entry.song_id)
+                    && !composition
+                        .entries
+                        .iter()
+                        .any(|current| current.canonical_path == entry.canonical_path)
+                {
+                    composition.entries.push(cached_entry_to_source(entry));
+                }
+            }
+            composition.imported_membership.insert(
+                status.source_id.clone(),
+                source.song_ids.iter().cloned().collect(),
+            );
+            composition
+                .library_membership
+                .extend(source.song_ids.iter().cloned());
+        }
+        composition
+            .entries
+            .sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
+    }
+
     fn ensure_catalog_loaded(&self) -> Result<sky_app_core::catalog::CatalogSnapshot, String> {
         {
             let mut state = self
@@ -2035,7 +2305,9 @@ impl NativeDesktopRuntime {
                 .lock()
                 .map_err(|_| "native catalog load state lock poisoned".to_string())?;
             match &*state {
-                CatalogLoadState::Ready { .. } => {
+                CatalogLoadState::Cached { .. }
+                | CatalogLoadState::Reconciling { .. }
+                | CatalogLoadState::Ready { .. } => {
                     return self
                         .catalog
                         .lock()
@@ -2066,9 +2338,19 @@ impl NativeDesktopRuntime {
             *state = CatalogLoadState::Closing;
             return Err("closing: desktop application is closing".into());
         }
-        match composition.and_then(|composition| self.apply_catalog_composition(composition, false))
-        {
-            Ok((snapshot, _)) => {
+        let result = match composition {
+            Ok(composition) => {
+                let cache = self.catalog_cache_from_composition(&composition).ok();
+                self.apply_catalog_composition(composition, false, true)
+                    .map(|result| (result, cache))
+            }
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(((snapshot, _), cache)) => {
+                if let Some(cache) = cache {
+                    self.persist_catalog_cache(&cache);
+                }
                 *state = CatalogLoadState::Ready {
                     generation: snapshot.generation,
                 };
@@ -2109,10 +2391,26 @@ impl NativeDesktopRuntime {
             *state = CatalogLoadState::Closing;
             return Err("closing: desktop application is closing".into());
         }
-        let (snapshot, library_total) = match composition
-            .and_then(|composition| self.apply_catalog_composition(composition, true))
-        {
-            Ok(result) => result,
+        let (snapshot, library_total, cache) = match composition {
+            Ok(composition) => {
+                let cache = self.catalog_cache_from_composition(&composition).ok();
+                match self.apply_catalog_composition(composition, true, true) {
+                    Ok((snapshot, library_total)) => (snapshot, library_total, cache),
+                    Err(error) => {
+                        *state = CatalogLoadState::Failed {
+                            message: error.clone(),
+                        };
+                        let event_message = bounded_text(&error);
+                        let _ = self.publish(UiEvent::CatalogLoadFailed {
+                            v: crate::DESKTOP_PROTOCOL_VERSION,
+                            payload: CatalogLoadFailedPayload {
+                                message: event_message,
+                            },
+                        });
+                        return Err(error);
+                    }
+                }
+            }
             Err(error) => {
                 *state = CatalogLoadState::Failed {
                     message: error.clone(),
@@ -2127,6 +2425,9 @@ impl NativeDesktopRuntime {
                 return Err(error);
             }
         };
+        if let Some(cache) = cache {
+            self.persist_catalog_cache(&cache);
+        }
         *state = CatalogLoadState::Ready {
             generation: snapshot.generation,
         };
@@ -2147,6 +2448,7 @@ impl NativeDesktopRuntime {
         &self,
         composition: CatalogComposition,
         invalidate: bool,
+        record_ready: bool,
     ) -> Result<(sky_app_core::catalog::CatalogSnapshot, usize), String> {
         let mut catalog = self
             .catalog
@@ -2173,8 +2475,17 @@ impl NativeDesktopRuntime {
             self.invalidate_analysis_cache();
             self.playback.invalidate_catalog(snapshot.generation);
         }
-        crate::startup_telemetry::record("catalog.ready");
+        if record_ready {
+            crate::startup_telemetry::record("catalog.ready");
+        }
         Ok((snapshot, library_total))
+    }
+
+    fn cached_catalog_snapshot(&self) -> Result<Option<CatalogCache>, String> {
+        self.cached_catalog
+            .lock()
+            .map_err(|_| "native catalog cache lock poisoned".to_string())
+            .map(|cache| cache.clone())
     }
 
     pub(crate) fn builtin_catalog_status(&self) -> Result<BuiltinCatalogStatus, String> {
@@ -2183,43 +2494,6 @@ impl NativeDesktopRuntime {
             .lock()
             .map_err(|_| "native catalog lock poisoned".to_string())
             .map(|catalog| catalog.builtin_status.clone())
-    }
-
-    fn catalog_composition(&self) -> Result<CatalogComposition, String> {
-        let imports = self
-            .library_manifest
-            .lock()
-            .map_err(|_| "native library manifest lock poisoned".to_string())?
-            .snapshot()
-            .imports
-            .clone();
-        if crate::startup_telemetry::enabled() {
-            self.catalog_composer
-                .compose_with_observer(&imports, |event| match event {
-                    sky_native_adapters::CatalogCompositionEvent::SourceStarted(source) => {
-                        crate::startup_telemetry::record(&catalog_source_marker(source, "start"));
-                    }
-                    sky_native_adapters::CatalogCompositionEvent::SourceFinished {
-                        source,
-                        metrics,
-                        duration_ms,
-                    } => {
-                        let marker = catalog_source_marker(source, "end");
-                        crate::startup_telemetry::record_counters(
-                            &marker,
-                            metrics.directories_visited,
-                            metrics.files_visited,
-                            metrics.supported_files,
-                            Some(duration_ms),
-                        );
-                    }
-                })
-                .map_err(catalog_error)
-        } else {
-            self.catalog_composer
-                .compose(&imports)
-                .map_err(catalog_error)
-        }
     }
 
     fn list_playlists(&self) -> Result<LibraryNavigationDto, String> {
@@ -2929,6 +3203,100 @@ impl NativeDesktopRuntime {
             (self.pre_exit_safety)();
         }
     }
+}
+
+fn cached_composition(cache: &CatalogCache) -> Result<CatalogComposition, String> {
+    cache.validate()?;
+    let mut composition = CatalogComposition::default();
+    for source in &cache.sources {
+        match source.kind {
+            CatalogCacheSourceKind::Builtin => {
+                composition
+                    .builtin_membership
+                    .extend(source.song_ids.iter().cloned());
+                composition
+                    .library_membership
+                    .extend(source.song_ids.iter().cloned());
+                composition.builtin_status = if source.available {
+                    BuiltinCatalogStatus::Available {
+                        song_count: source.song_ids.len(),
+                    }
+                } else {
+                    BuiltinCatalogStatus::Unavailable {
+                        code: BuiltinCatalogFailureCode::ResourceUnavailable,
+                    }
+                };
+            }
+            CatalogCacheSourceKind::User => {
+                composition
+                    .user_membership
+                    .extend(source.song_ids.iter().cloned());
+                composition
+                    .library_membership
+                    .extend(source.song_ids.iter().cloned());
+            }
+            CatalogCacheSourceKind::Imported => {
+                composition.imported_membership.insert(
+                    source.source_id.clone(),
+                    source.song_ids.iter().cloned().collect(),
+                );
+                composition
+                    .library_membership
+                    .extend(source.song_ids.iter().cloned());
+                composition
+                    .imported_status
+                    .push(ImportedSourceCatalogStatus {
+                        source_id: source.source_id.clone(),
+                        kind: source.import_kind.unwrap_or(ImportedSourceKind::Folder),
+                        display_name: source.display_name.clone(),
+                        song_count: source.song_ids.len(),
+                        available: source.available,
+                    });
+            }
+        }
+    }
+    composition.entries = cache.entries.iter().map(cached_entry_to_source).collect();
+    composition
+        .entries
+        .sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
+    Ok(composition)
+}
+
+fn cached_entry_to_source(entry: &CatalogCacheEntry) -> sky_app_core::catalog::CatalogSourceEntry {
+    let identity = match entry.kind {
+        CatalogCacheSourceKind::Builtin => CatalogSourceIdentity::Stable(
+            StableSongId::new(entry.song_id.clone()).expect("validated cached stable song ID"),
+        ),
+        CatalogCacheSourceKind::User | CatalogCacheSourceKind::Imported => {
+            CatalogSourceIdentity::PathDerived
+        }
+    };
+    sky_app_core::catalog::CatalogSourceEntry {
+        canonical_path: entry.canonical_path.clone(),
+        title: entry.title.clone(),
+        identity,
+    }
+}
+
+fn cache_source_for_song(
+    composition: &CatalogComposition,
+    song_id: &str,
+) -> (String, CatalogCacheSourceKind) {
+    if composition.builtin_membership.contains(song_id) {
+        return ("builtin".into(), CatalogCacheSourceKind::Builtin);
+    }
+    if composition.user_membership.contains(song_id) {
+        return ("user".into(), CatalogCacheSourceKind::User);
+    }
+    if let Some(source_id) = composition
+        .imported_membership
+        .iter()
+        .filter_map(|(source_id, song_ids)| song_ids.contains(song_id).then_some(source_id))
+        .min()
+    {
+        return (source_id.clone(), CatalogCacheSourceKind::Imported);
+    }
+    ("user".into(), CatalogCacheSourceKind::User)
 }
 
 /// Application-side playback control plane.  The realtime worker remains in
@@ -6038,10 +6406,15 @@ mod tests {
         PlaybackFocusState, PlaybackHealthState, PlaybackSnapshotPayload, UiEvent,
     };
     use serde_json::Value;
+    use sky_app_core::catalog::song_id_for_canonical_path;
     use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
-    use sky_native_adapters::{AppPaths, load_calibration_resolution};
+    use sky_native_adapters::{
+        AppPaths, CATALOG_CACHE_SCHEMA_VERSION, CatalogCache, CatalogCacheEntry,
+        CatalogCacheSource, CatalogCacheSourceKind, CatalogCacheStore, load_calibration_resolution,
+    };
     use std::fs;
+    use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
     use std::thread;
@@ -6056,6 +6429,44 @@ mod tests {
             .expect("catalog search")["generation"]
             .as_u64()
             .expect("catalog generation")
+    }
+
+    fn user_cache_entry(path: &Path, title: &str, file_size: u64) -> CatalogCacheEntry {
+        CatalogCacheEntry {
+            source_id: "user".into(),
+            kind: CatalogCacheSourceKind::User,
+            canonical_path: fs::canonicalize(path)
+                .expect("canonical cache path")
+                .to_string_lossy()
+                .into_owned(),
+            song_id: song_id_for_canonical_path(
+                &fs::canonicalize(path)
+                    .expect("canonical cache ID path")
+                    .to_string_lossy(),
+            ),
+            title: title.into(),
+            file_size,
+            modified_unix_ms: 1,
+        }
+    }
+
+    fn write_catalog_cache(root: &Path, entries: Vec<CatalogCacheEntry>) {
+        let song_ids = entries.iter().map(|entry| entry.song_id.clone()).collect();
+        CatalogCacheStore::new(root.join("cache/catalog-index.json"))
+            .save(&CatalogCache {
+                schema_version: CATALOG_CACHE_SCHEMA_VERSION,
+                cache_generation: 1,
+                sources: vec![CatalogCacheSource {
+                    source_id: "user".into(),
+                    kind: CatalogCacheSourceKind::User,
+                    import_kind: None,
+                    display_name: "User library".into(),
+                    available: true,
+                    song_ids,
+                }],
+                entries,
+            })
+            .expect("write catalog cache");
     }
 
     fn active_for_control(
@@ -6999,6 +7410,371 @@ mod tests {
     }
 
     #[test]
+    fn catalog_cache_reconciles_add_change_delete_and_matches_clean_compose() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-catalog-cache-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let keep = root.join("songs/keep.json");
+        let deleted = root.join("songs/deleted.json");
+        fs::write(&keep, b"keep").expect("keep song");
+        fs::write(&deleted, b"deleted").expect("deleted song");
+        write_catalog_cache(
+            &root,
+            vec![
+                user_cache_entry(&keep, "Cached keep", 4),
+                user_cache_entry(&deleted, "Cached deleted", 7),
+            ],
+        );
+
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let cached = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":20,"source":{"kind":"smart","id":"all"}}),
+            )
+            .expect("cached search");
+        assert!(
+            cached["items"]
+                .as_array()
+                .expect("cached items")
+                .iter()
+                .any(|item| item["title"] == "Cached keep")
+        );
+
+        fs::write(&keep, vec![b'k'; 41]).expect("changed song");
+        fs::remove_file(&deleted).expect("delete song");
+        fs::write(root.join("songs/added.json"), b"added").expect("add song");
+        assert!(
+            runtime
+                .claim_catalog_load()
+                .expect("reconcile claim")
+                .is_some()
+        );
+        runtime.run_catalog_load(super::CatalogLoadWork::Reconcile);
+
+        let reconciled = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":20,"source":{"kind":"smart","id":"all"}}),
+            )
+            .expect("reconciled search");
+        let reconciled_items = reconciled["items"].as_array().expect("reconciled items");
+        assert!(reconciled_items.iter().any(|item| item["title"] == "keep"));
+        assert!(reconciled_items.iter().any(|item| item["title"] == "added"));
+        assert!(
+            !reconciled_items
+                .iter()
+                .any(|item| item["title"] == "deleted")
+        );
+
+        let persisted = CatalogCacheStore::new(root.join("cache/catalog-index.json"))
+            .load()
+            .expect("load reconciled cache")
+            .expect("reconciled cache");
+        assert_eq!(persisted.entries.len(), 2);
+        assert_eq!(
+            persisted
+                .entries
+                .iter()
+                .find(|entry| entry.canonical_path
+                    == fs::canonicalize(&keep).unwrap().to_string_lossy())
+                .expect("changed cache entry")
+                .file_size,
+            41
+        );
+        assert!(
+            !persisted
+                .entries
+                .iter()
+                .any(|entry| entry.canonical_path.ends_with("deleted.json"))
+        );
+
+        runtime.shutdown();
+        fs::remove_file(root.join("cache/catalog-index.json")).expect("remove cache");
+        let clean_runtime =
+            NativeDesktopRuntime::from_install_root(root.clone()).expect("clean runtime");
+        let clean = clean_runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":20,"source":{"kind":"smart","id":"all"}}),
+            )
+            .expect("clean search");
+        assert_eq!(clean["items"], reconciled["items"]);
+        clean_runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn same_size_same_mtime_content_mutation_still_matches_clean_compose() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("sky-native-catalog-cache-same-metadata-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let song = root.join("songs/content.json");
+        let original = br#"{"name":"Alpha","songNotes":[{"time":0,"key":"1Key0"}]}"#;
+        let replacement = br#"{"name":"Bravo","songNotes":[{"time":0,"key":"1Key0"}]}"#;
+        assert_eq!(original.len(), replacement.len());
+        fs::write(&song, original).expect("original song");
+
+        let initial_runtime =
+            NativeDesktopRuntime::from_install_root(root.clone()).expect("initial runtime");
+        let _ = catalog_generation(&initial_runtime);
+        initial_runtime.shutdown();
+        let original_modified = fs::metadata(&song)
+            .expect("original metadata")
+            .modified()
+            .expect("original mtime");
+
+        fs::write(&song, replacement).expect("replacement song");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&song)
+            .expect("open replacement")
+            .set_times(fs::FileTimes::new().set_modified(original_modified))
+            .expect("restore original mtime");
+        let replacement_metadata = fs::metadata(&song).expect("replacement metadata");
+        assert_eq!(replacement_metadata.len(), original.len() as u64);
+        assert_eq!(
+            replacement_metadata.modified().expect("replacement mtime"),
+            original_modified
+        );
+
+        let runtime =
+            NativeDesktopRuntime::from_install_root(root.clone()).expect("cached runtime");
+        assert!(
+            runtime
+                .claim_catalog_load()
+                .expect("reconcile claim")
+                .is_some()
+        );
+        runtime.run_catalog_load(super::CatalogLoadWork::Reconcile);
+        let reconciled = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":20,"source":{"kind":"smart","id":"all"}}),
+            )
+            .expect("reconciled search");
+        runtime.shutdown();
+
+        fs::remove_file(root.join("cache/catalog-index.json")).expect("remove cache");
+        let clean_runtime =
+            NativeDesktopRuntime::from_install_root(root.clone()).expect("clean runtime");
+        let clean = clean_runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":20,"source":{"kind":"smart","id":"all"}}),
+            )
+            .expect("clean search");
+        assert_eq!(reconciled["items"], clean["items"]);
+        clean_runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unavailable_import_preserves_cached_entries_and_manifest_intent() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-catalog-unavailable-{suffix}"));
+        let imported_root = root.join("imported");
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::create_dir_all(&imported_root).expect("import root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(imported_root.join("imported.json"), b"imported").expect("imported song");
+        let source_id = "a".repeat(32);
+        fs::write(
+            root.join("library-manifest.json"),
+            serde_json::json!({
+                "version": 1,
+                "imports": [{"source_id": source_id, "canonical_path": fs::canonicalize(&imported_root).unwrap(), "kind": "folder"}],
+                "collections": []
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+
+        let initial_runtime =
+            NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let _ = catalog_generation(&initial_runtime);
+        initial_runtime.shutdown();
+        fs::remove_dir_all(&imported_root).expect("temporarily unavailable import");
+
+        let runtime =
+            NativeDesktopRuntime::from_install_root(root.clone()).expect("cached runtime");
+        let _cached = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"","offset":0,"limit":20,"source":{"kind":"smart","id":"all"}}),
+            )
+            .expect("cached unavailable search");
+        assert_eq!(
+            runtime
+                .catalog
+                .lock()
+                .expect("catalog lock")
+                .index
+                .snapshot()
+                .total,
+            1
+        );
+        assert!(
+            runtime
+                .claim_catalog_load()
+                .expect("reconcile claim")
+                .is_some()
+        );
+        runtime.run_catalog_load(super::CatalogLoadWork::Reconcile);
+        let status = runtime
+            .catalog
+            .lock()
+            .expect("catalog lock")
+            .imported_status
+            .first()
+            .cloned()
+            .expect("import status");
+        assert!(!status.available);
+        assert_eq!(status.song_count, 1);
+        assert_eq!(
+            runtime
+                .catalog
+                .lock()
+                .expect("catalog lock")
+                .index
+                .snapshot()
+                .total,
+            1
+        );
+        assert!(
+            String::from_utf8(fs::read(root.join("library-manifest.json")).unwrap())
+                .unwrap()
+                .contains(&source_id)
+        );
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn duplicate_imports_share_cached_entries_without_losing_source_status() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-catalog-duplicates-{suffix}"));
+        let imported_root = root.join("imported");
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::create_dir_all(&imported_root).expect("import root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(imported_root.join("one.json"), b"one").expect("song");
+        let canonical = fs::canonicalize(&imported_root).expect("canonical import");
+        fs::write(
+            root.join("library-manifest.json"),
+            serde_json::json!({
+                "version": 1,
+                "imports": [
+                    {"source_id": "b".repeat(32), "canonical_path": canonical, "kind": "folder"},
+                    {"source_id": "c".repeat(32), "canonical_path": fs::canonicalize(&imported_root).unwrap(), "kind": "folder"}
+                ],
+                "collections": []
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let _ = catalog_generation(&runtime);
+        let catalog = runtime.catalog.lock().expect("catalog lock");
+        assert_eq!(catalog.imported_status.len(), 2);
+        drop(catalog);
+        assert_eq!(
+            runtime
+                .catalog
+                .lock()
+                .expect("catalog lock")
+                .index
+                .snapshot()
+                .total,
+            1
+        );
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_cache_falls_back_to_cold_rebuild() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-catalog-corrupt-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(root.join("songs/one.json"), b"one").expect("song");
+        fs::create_dir_all(root.join("cache")).expect("cache root");
+        fs::write(
+            root.join("cache/catalog-index.json"),
+            b"{\"schema_version\":1",
+        )
+        .expect("truncated cache");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        assert!(matches!(
+            *runtime.catalog_load.lock().expect("catalog state"),
+            super::CatalogLoadState::Uninitialized
+        ));
+        assert_eq!(catalog_generation(&runtime), 1);
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shutdown_fences_background_reconciliation_and_cache_write() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-catalog-shutdown-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let song = root.join("songs/one.json");
+        fs::write(&song, b"one").expect("song");
+        write_catalog_cache(&root, vec![user_cache_entry(&song, "one", 3)]);
+        let cache_path = root.join("cache/catalog-index.json");
+        let before = fs::read(&cache_path).expect("cache before reconcile");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        let generation = catalog_generation(&runtime);
+        assert!(
+            runtime
+                .claim_catalog_load()
+                .expect("reconcile claim")
+                .is_some()
+        );
+        runtime.shutdown();
+        runtime.run_catalog_load(super::CatalogLoadWork::Reconcile);
+        assert!(matches!(
+            *runtime.catalog_load.lock().expect("catalog state"),
+            super::CatalogLoadState::Closing
+        ));
+        assert_eq!(
+            runtime
+                .catalog
+                .lock()
+                .expect("catalog lock")
+                .index
+                .generation(),
+            generation
+        );
+        assert_eq!(fs::read(cache_path).expect("cache after shutdown"), before);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn duplicate_catalog_start_is_single_flight() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -7009,8 +7785,13 @@ mod tests {
         fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
 
-        assert!(runtime.claim_catalog_load().expect("first claim"));
-        assert!(!runtime.claim_catalog_load().expect("duplicate claim"));
+        assert!(runtime.claim_catalog_load().expect("first claim").is_some());
+        assert!(
+            runtime
+                .claim_catalog_load()
+                .expect("duplicate claim")
+                .is_none()
+        );
         assert!(matches!(
             *runtime.catalog_load.lock().expect("catalog load state"),
             super::CatalogLoadState::Loading
@@ -7031,9 +7812,9 @@ mod tests {
         fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
         let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
 
-        assert!(runtime.claim_catalog_load().expect("claim"));
+        assert!(runtime.claim_catalog_load().expect("claim").is_some());
         runtime.shutdown();
-        runtime.run_catalog_load();
+        runtime.run_catalog_load(super::CatalogLoadWork::Rebuild);
 
         assert!(matches!(
             *runtime.catalog_load.lock().expect("catalog load state"),
