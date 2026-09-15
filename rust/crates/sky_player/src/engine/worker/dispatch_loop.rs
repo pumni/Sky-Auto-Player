@@ -1275,6 +1275,7 @@ pub(super) fn dispatch(
                     wait_result,
                     target_qpc,
                     dispatch_qpc,
+                    planned_wait_ticks,
                 } => {
                     // This is the global wait boundary only. Physical target
                     // attribution is resolved from the selected work below.
@@ -1293,6 +1294,8 @@ pub(super) fn dispatch(
                                 outcome: wait_result.outcome,
                                 wake_qpc: wait_result.wake_qpc,
                                 spin_ticks: wait_result.spin_ticks,
+                                physical_target_qpc: target_qpc,
+                                planned_wait_ticks,
                                 deadline_ticks: wait_deadline_ticks,
                                 epoch_qpc: resources.playback.epoch,
                                 allow_pre_epoch_startup_dispatch: true,
@@ -1371,7 +1374,11 @@ pub(super) fn dispatch(
                         | super::DispatchStep::NoWork => continue,
                     }
                 }
-                WaitBoundary::Replan { wait_result } => {
+                WaitBoundary::Replan {
+                    wait_result,
+                    target_qpc,
+                    planned_wait_ticks,
+                } => {
                     core.runtime.future_physical_wait_target_qpc = None;
                     let Some(wait_deadline_ticks) = deadline_ticks else {
                         core.runtime.force_full_cleanup = true;
@@ -1383,6 +1390,8 @@ pub(super) fn dispatch(
                         outcome: wait_result.outcome,
                         wake_qpc: wait_result.wake_qpc,
                         spin_ticks: wait_result.spin_ticks,
+                        physical_target_qpc: target_qpc,
+                        planned_wait_ticks,
                         deadline_ticks: wait_deadline_ticks,
                         epoch_qpc: resources.playback.epoch,
                         allow_pre_epoch_startup_dispatch: true,

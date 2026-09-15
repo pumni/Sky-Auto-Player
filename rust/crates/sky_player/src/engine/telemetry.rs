@@ -22,6 +22,10 @@ pub struct RtTraceRecord {
     pub authored_ticks: u64,
     pub effective_deadline_ticks: u64,
     pub wake_ticks: u64,
+    pub wake_available: bool,
+    /// Effective timeline of the final target/focus/control policy proof.
+    /// The paired availability field distinguishes a missing proof from zero.
+    pub final_policy_ticks: u64,
     /// Raw QPC values must be interpreted only when their paired availability
     /// field is true; zero is a valid QPC value.
     pub authored_target_qpc_ticks: u64,
@@ -64,6 +68,7 @@ pub struct RtTraceRecord {
     /// Availability fields distinguish missing QPC samples from valid zero.
     pub compiled_packet_index_available: bool,
     pub authored_target_qpc_available: bool,
+    pub final_policy_available: bool,
     pub physical_not_before_qpc_available: bool,
     pub hold_floor_qpc_available: bool,
     pub release_floor_qpc_available: bool,
@@ -83,7 +88,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 16;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 17;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -123,6 +128,7 @@ pub(crate) struct TraceTiming {
     pub(crate) authored_ticks: TimelineTicks,
     pub(crate) effective_deadline_ticks: TimelineTicks,
     pub(crate) wake_ticks: TimelineTicks,
+    pub(crate) wake_available: bool,
     pub(crate) physical_target_qpc_ticks: Option<u64>,
     pub(crate) physical_not_before_qpc_ticks: Option<u64>,
     pub(crate) hold_floor_qpc_ticks: Option<u64>,
@@ -179,7 +185,6 @@ impl RtTraceRecord {
         timing: TraceTiming,
         delivery: TraceDelivery,
     ) -> Result<Self, TimeArithmeticError> {
-        let _final_policy_ticks = timing.final_policy_ticks;
         if delivery.sent > delivery.requested
             || delivery.skipped > delivery.requested
             || delivery.sent.saturating_add(delivery.skipped) > delivery.requested
@@ -212,6 +217,9 @@ impl RtTraceRecord {
             authored_ticks: timing.authored_ticks.as_u64(),
             effective_deadline_ticks: timing.effective_deadline_ticks.as_u64(),
             wake_ticks: timing.wake_ticks.as_u64(),
+            wake_available: timing.wake_available,
+            final_policy_ticks: timing.final_policy_ticks.map_or(0, TimelineTicks::as_u64),
+            final_policy_available: timing.final_policy_ticks.is_some(),
             authored_target_qpc_ticks: timing.physical_target_qpc_ticks.unwrap_or_default(),
             authored_target_qpc_available: timing.physical_target_qpc_ticks.is_some(),
             physical_not_before_qpc_ticks: timing.physical_not_before_qpc_ticks.unwrap_or_default(),
@@ -500,6 +508,7 @@ mod tests {
                 authored_ticks: TimelineTicks::ZERO,
                 effective_deadline_ticks: TimelineTicks::ZERO,
                 wake_ticks: TimelineTicks::ZERO,
+                wake_available: false,
                 physical_target_qpc_ticks: None,
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,

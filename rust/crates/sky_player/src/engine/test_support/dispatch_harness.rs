@@ -16,11 +16,12 @@ use crate::engine::worker::dispatch::{
 };
 use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts, TargetStamp,
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitResult, WaitSignals,
-    WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
-    WorkerTimingState, dispatch_due_from_plan, physical_wait_target_for_plan, plan_next_dispatch,
-    plan_next_dispatch_projected, preflight_prepared_plan, publish_backend_counters,
-    publish_live_metrics_after_dispatch, wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitObservation, WaitResult,
+    WaitSignals, WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime,
+    WorkerSchedulingGuards, WorkerTimingState, dispatch_due_from_plan,
+    physical_wait_target_for_plan, plan_next_dispatch, plan_next_dispatch_projected,
+    preflight_prepared_plan, publish_backend_counters, publish_live_metrics_after_dispatch,
+    wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, physical_packet_kind};
@@ -59,6 +60,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) observer: PendingObservationQueue,
     pub(crate) interrupt: OwnedEvent,
     pub(crate) last_wait_result: Option<WaitResult>,
+    pub(crate) last_wait_observation: Option<WaitObservation>,
     effective_now_ticks: TimelineTicks,
 }
 
@@ -734,6 +736,7 @@ impl ProductionDispatchTestHarness {
             observer: PendingObservationQueue::default(),
             interrupt: OwnedEvent::new_auto_reset().expect("test interrupt event"),
             last_wait_result: None,
+            last_wait_observation: None,
             effective_now_ticks: TimelineTicks::ZERO,
         }
     }
@@ -780,6 +783,10 @@ impl ProductionDispatchTestHarness {
 
     pub fn last_wait_result(&self) -> Option<WaitResult> {
         self.last_wait_result
+    }
+
+    pub fn last_wait_observation(&self) -> Option<WaitObservation> {
+        self.last_wait_observation
     }
 
     pub fn last_wait_spin_us(&self) -> Result<u64, String> {
@@ -1283,6 +1290,7 @@ impl ProductionDispatchTestHarness {
         &mut self,
         plan: &NextDispatchPlan,
     ) -> Result<DispatchStep, String> {
+        self.last_wait_observation = None;
         let pre_wait_qpc = self
             .resources
             .clock
@@ -1331,23 +1339,38 @@ impl ProductionDispatchTestHarness {
                 terminal_error: &mut self.runtime.terminal_error,
             },
         });
-        let (wait_result, dispatch_qpc) = match boundary {
+        let wait_deadline_ticks = plan
+            .deadline_ticks()
+            .ok_or_else(|| "benchmark wait plan has no deadline".to_string())?;
+        let (wait_result, dispatch_qpc, wait_observation) = match boundary {
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
+                target_qpc,
                 dispatch_qpc,
+                planned_wait_ticks,
                 ..
             } => {
                 self.runtime.set_deadline_wait_evidence_for_test(
                     Some(dispatch_qpc),
                     plan.physical_target_qpc(),
                 );
-                (Some(wait_result), dispatch_qpc)
+                let observation = WaitObservation {
+                    outcome: wait_result.outcome,
+                    wake_qpc: wait_result.wake_qpc,
+                    spin_ticks: wait_result.spin_ticks,
+                    physical_target_qpc: target_qpc,
+                    planned_wait_ticks,
+                    deadline_ticks: wait_deadline_ticks,
+                    epoch_qpc: self.resources.playback.epoch,
+                    allow_pre_epoch_startup_dispatch: true,
+                };
+                (Some(wait_result), dispatch_qpc, Some(observation))
             }
             WaitBoundary::Due {
                 wait_result: None,
                 dispatch_qpc,
                 ..
-            } => (None, dispatch_qpc),
+            } => (None, dispatch_qpc, None),
             WaitBoundary::Replan { .. } => {
                 return Err("benchmark wait unexpectedly required replan".to_string());
             }
@@ -1360,6 +1383,7 @@ impl ProductionDispatchTestHarness {
             }
         };
         self.last_wait_result = wait_result;
+        self.last_wait_observation = wait_observation;
         self.runtime.set_deadline_wait_evidence_for_test(
             wait_result.and_then(|result| result.wake_qpc),
             plan.physical_target_qpc(),

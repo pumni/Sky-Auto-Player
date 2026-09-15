@@ -103,6 +103,7 @@ pub(crate) use timing::{
     lease_bounded_ticks, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
     supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
 };
+pub use wait::WaitObservation;
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
     record_wait_failure, wait_for_next_boundary,

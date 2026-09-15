@@ -11,11 +11,29 @@ use super::super::{
 };
 use super::timing::DispatchObservationEvidence;
 use crate::engine::telemetry::WorkerMetricsLocal;
+use sky_dispatch_core::time::SEND_COLD_THRESHOLD_US;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 use sky_dispatch_win32::wait::WaitOutcome;
 
 pub const OBSERVATION_QUEUE_CAPACITY: usize = 64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WaitGapClass {
+    Hot,
+    Cold,
+}
+
+fn classify_wait_gap(
+    planned_wait_ticks: DurationTicks,
+    cold_threshold_ticks: DurationTicks,
+) -> WaitGapClass {
+    if planned_wait_ticks < cold_threshold_ticks {
+        WaitGapClass::Hot
+    } else {
+        WaitGapClass::Cold
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum ObserverLifecycle {
@@ -430,6 +448,7 @@ pub(super) fn record_down_send_telemetry(
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks,
+                wake_available: observation.wake_qpc.is_some(),
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: Some(
                     observation
@@ -536,6 +555,7 @@ pub(super) fn record_release_telemetry(
                 authored_ticks: trace.authored_ticks,
                 effective_deadline_ticks: trace.effective_deadline_ticks,
                 wake_ticks: trace.wake_ticks,
+                wake_available: observation.wake_qpc.is_some(),
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
@@ -618,6 +638,27 @@ pub(crate) fn drain_wait_observation(
     local_metrics: &mut WorkerMetricsLocal,
     qpc_clock: sky_dispatch_win32::clock::QpcClock,
 ) -> Result<(), DispatchStep> {
+    let cold_threshold_ticks =
+        qpc_clock
+            .duration_from_us(SEND_COLD_THRESHOLD_US)
+            .map_err(|error| {
+                DispatchStep::Terminate(format!(
+                    "wait observer threshold conversion failure: {error:?}"
+                ))
+            })?;
+    local_metrics.wait_planned_gap_max_ticks = local_metrics
+        .wait_planned_gap_max_ticks
+        .max(observation.planned_wait_ticks.as_u64());
+    match classify_wait_gap(observation.planned_wait_ticks, cold_threshold_ticks) {
+        WaitGapClass::Hot => {
+            local_metrics.wait_planned_gap_hot_count =
+                local_metrics.wait_planned_gap_hot_count.saturating_add(1);
+        }
+        WaitGapClass::Cold => {
+            local_metrics.wait_planned_gap_cold_count =
+                local_metrics.wait_planned_gap_cold_count.saturating_add(1);
+        }
+    }
     let spin_us = qpc_clock
         .duration_to_us(observation.spin_ticks)
         .map_err(|error| {
@@ -631,6 +672,32 @@ pub(crate) fn drain_wait_observation(
     let wake_qpc = observation.wake_qpc.ok_or_else(|| {
         DispatchStep::Terminate("wait observer missing deadline QPC evidence".to_string())
     })?;
+    let target_to_wake_ticks = if wake_qpc >= observation.physical_target_qpc {
+        wake_qpc
+            .checked_duration_since(observation.physical_target_qpc)
+            .map_err(|error| {
+                DispatchStep::Terminate(format!(
+                    "wait observer physical target ordering failure: {error:?}"
+                ))
+            })?
+    } else {
+        DurationTicks::ZERO
+    };
+    local_metrics.physical_target_to_wake_max_ticks = local_metrics
+        .physical_target_to_wake_max_ticks
+        .max(target_to_wake_ticks.as_u64());
+    match classify_wait_gap(observation.planned_wait_ticks, cold_threshold_ticks) {
+        WaitGapClass::Hot => {
+            local_metrics.wait_planned_gap_hot_lateness_max_ticks = local_metrics
+                .wait_planned_gap_hot_lateness_max_ticks
+                .max(target_to_wake_ticks.as_u64());
+        }
+        WaitGapClass::Cold => {
+            local_metrics.wait_planned_gap_cold_lateness_max_ticks = local_metrics
+                .wait_planned_gap_cold_lateness_max_ticks
+                .max(target_to_wake_ticks.as_u64());
+        }
+    }
     let wake_elapsed_ticks = if observation.allow_pre_epoch_startup_dispatch
         && wake_qpc < observation.epoch_qpc
     {
@@ -708,6 +775,8 @@ mod tests {
             outcome: WaitOutcome::Deadline,
             wake_qpc: Some(QpcTicks::from_raw(2_500)),
             spin_ticks: DurationTicks::from_raw(100),
+            physical_target_qpc: QpcTicks::from_raw(2_000),
+            planned_wait_ticks: DurationTicks::from_raw(25_000),
             deadline_ticks: TimelineTicks::from_raw(1_000),
             epoch_qpc: QpcTicks::from_raw(1_000),
             allow_pre_epoch_startup_dispatch: false,
@@ -719,7 +788,29 @@ mod tests {
         assert_eq!(local_metrics.idle_wake_count, 1);
         assert_eq!(local_metrics.spin_time_us, 100);
         assert_eq!(local_metrics.wait_target_error_us, 500);
+        assert_eq!(local_metrics.wait_planned_gap_cold_count, 1);
+        assert_eq!(local_metrics.wait_planned_gap_hot_count, 0);
+        assert_eq!(local_metrics.wait_planned_gap_max_us, 0);
+        assert_eq!(local_metrics.physical_target_to_wake_max_ticks, 500);
         assert_eq!(local_metrics.wait_degraded_samples, 1);
         assert_eq!(local_metrics.wait_window_sample_count, 1);
+    }
+
+    #[test]
+    fn wait_gap_classification_uses_existing_cold_threshold_boundary() {
+        assert_eq!(
+            classify_wait_gap(
+                DurationTicks::from_raw(19_999),
+                DurationTicks::from_raw(20_000)
+            ),
+            WaitGapClass::Hot
+        );
+        assert_eq!(
+            classify_wait_gap(
+                DurationTicks::from_raw(20_000),
+                DurationTicks::from_raw(20_000)
+            ),
+            WaitGapClass::Cold
+        );
     }
 }

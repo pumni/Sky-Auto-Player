@@ -9,7 +9,7 @@
 #![cfg(feature = "test-support")]
 
 use serde_json::json;
-use sky_dispatch_core::time::TimelineTicks;
+use sky_dispatch_core::time::{SEND_COLD_THRESHOLD_US, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
@@ -80,6 +80,7 @@ enum BenchmarkScope {
     RealWaitCore,
     PhaseASenderOnly,
     PhaseAProductionMatrix,
+    PhaseASparseGap,
 }
 
 impl BenchmarkScope {
@@ -89,8 +90,9 @@ impl BenchmarkScope {
             Ok("real_wait_core") => Ok(Self::RealWaitCore),
             Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
             Ok("phase_a_production_matrix") => Ok(Self::PhaseAProductionMatrix),
+            Ok("phase_a_sparse_gap") => Ok(Self::PhaseASparseGap),
             Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, or phase_a_production_matrix, got {value:?}"
+                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, or phase_a_sparse_gap, got {value:?}"
             )),
             Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
@@ -102,6 +104,7 @@ impl BenchmarkScope {
             Self::RealWaitCore => "real_wait_core",
             Self::PhaseASenderOnly => "phase_a_sender_only",
             Self::PhaseAProductionMatrix => "phase_a_production_matrix",
+            Self::PhaseASparseGap => "phase_a_sparse_gap",
         }
     }
 }
@@ -168,6 +171,10 @@ struct Samples {
     failure_reasons: BTreeMap<String, usize>,
     observation_count: usize,
     observation_gaps: usize,
+    planned_wait_gap_us: Vec<u64>,
+    wait_wake_lateness_us: Vec<i64>,
+    hot_wait_count: usize,
+    cold_wait_count: usize,
     spin_time_us: Vec<u64>,
     wall_time_us: Vec<u64>,
 }
@@ -500,7 +507,11 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
         }
         DispatchObservation::DownMiss(value) => {
             let _ = value;
-            samples.record_failure("down_missed");
+            // A recovered Down miss is a diagnostic companion to the
+            // successful recovery dispatch, not a second failed benchmark
+            // attempt. Keep it in the evidence/failure-reason report without
+            // double-counting the attempt accounting.
+            samples.record_observation_failure("down_missed");
         }
         DispatchObservation::Up(value) => {
             record_precision_handoff(
@@ -649,6 +660,7 @@ fn wait_and_dispatch_or_record(
                 // sample and must make waiter qualification ineligible.
                 samples.overdue_dispatch_count += 1;
             }
+            record_wait_evidence(samples, harness)?;
             step
         }
         BenchmarkMode::PhaseASyntheticTargetPlusOneTick => {
@@ -709,6 +721,37 @@ fn record_wait_metrics(
     Ok(())
 }
 
+fn record_wait_evidence(
+    samples: &mut Samples,
+    harness: &ProductionDispatchTestHarness,
+) -> Result<(), String> {
+    let Some(observation) = harness.last_wait_observation() else {
+        return Ok(());
+    };
+    let qpc_clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
+    samples.planned_wait_gap_us.push(
+        qpc_clock
+            .duration_to_us(observation.planned_wait_ticks)
+            .map_err(|error| format!("planned wait conversion: {error:?}"))?,
+    );
+    let cold_threshold_ticks = qpc_clock
+        .duration_from_us(SEND_COLD_THRESHOLD_US)
+        .map_err(|error| format!("cold threshold conversion: {error:?}"))?;
+    if observation.planned_wait_ticks < cold_threshold_ticks {
+        samples.hot_wait_count += 1;
+    } else {
+        samples.cold_wait_count += 1;
+    }
+    if let Some(wake_qpc) = observation.wake_qpc {
+        samples.wait_wake_lateness_us.push(signed_qpc_us(
+            qpc_clock,
+            wake_qpc,
+            observation.physical_target_qpc,
+        ));
+    }
+    Ok(())
+}
+
 fn spin_duty_cycle_ppm(spin_time_us: &[u64], wall_time_us: &[u64]) -> u64 {
     let spin_total = spin_time_us
         .iter()
@@ -733,17 +776,25 @@ fn run_down(
     mode: WaitMode,
     benchmark_mode: BenchmarkMode,
 ) -> Result<Samples, String> {
+    run_down_with_gap(key_count, mode, benchmark_mode, due_us())
+}
+
+fn run_down_with_gap(
+    key_count: usize,
+    mode: WaitMode,
+    benchmark_mode: BenchmarkMode,
+    gap_us: u64,
+) -> Result<Samples, String> {
     let mut samples = Samples::default();
     for _ in 0..iterations() {
         let iteration_started = Instant::now();
-        let mut harness =
-            ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, due_us());
+        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
         harness.enable_dispatch_ready_timing_for_benchmark();
         let alignment_margin_us =
             if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
                 0
             } else {
-                due_us()
+                gap_us
             };
         harness.align_next_plan_to_benchmark_margin_for_test(alignment_margin_us);
         harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
@@ -1006,6 +1057,48 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
     })
 }
 
+fn phase_a_sparse_gap_report() -> serde_json::Value {
+    let mode = build_wait_mode("phase_a_sparse_gap", true, true, true);
+    let benchmark_mode = BenchmarkMode::RealWait;
+    let mode_started = Instant::now();
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let gaps_us = [5_000, 20_000, 25_000, 100_000, 250_000, 500_000, 1_000_000];
+    let key_counts = [1, 5, 15];
+    let mut scenarios = serde_json::Map::new();
+    for gap_us in gaps_us {
+        for key_count in key_counts {
+            scenarios.insert(
+                format!("down_only_{key_count}_gap_{gap_us}us"),
+                summarize(
+                    run_down_with_gap(key_count, mode, benchmark_mode, gap_us)
+                        .unwrap_or_else(|error| panic!("{error}")),
+                ),
+            );
+        }
+    }
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    serde_json::json!({
+        "scope": "Phase-A sparse-gap real HybridWaiter evidence; authored targets and wait policy are unchanged",
+        "waitable_timer_enabled": mode.waitable_timer_enabled,
+        "event_wait_enabled": mode.event_wait_enabled,
+        "adaptive_spin_enabled": mode.adaptive_spin_enabled,
+        "spin_floor_us": sky_player::engine::dispatch_primitives::PRODUCTION_MIN_SPIN_THRESHOLD_US,
+        "calibration_samples": sky_player::engine::dispatch_primitives::PRODUCTION_CALIBRATION_SAMPLES,
+        "calibration_budget_us": sky_player::engine::dispatch_primitives::PRODUCTION_CALIBRATION_BUDGET_US,
+        "startup_readiness_reserve_us": sky_player::engine::dispatch_primitives::PRODUCTION_STARTUP_READINESS_RESERVE_US,
+        "startup_kernel_timer_wake_error_us": wake_error_json(mode.startup_wake_error),
+        "effective_spin_threshold_us": mode.effective_spin_threshold_us,
+        "cold_gap_threshold_us": SEND_COLD_THRESHOLD_US,
+        "gap_matrix_us": gaps_us,
+        "key_count_matrix": key_counts,
+        "transport": "deterministic mock transport; waiter timing is real",
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+        "process_cpu_duty_percent": cpu_duty_percent(cpu_started_us, cpu_finished_us, mode_started),
+        "scenarios": scenarios,
+        "iterations": iterations(),
+    })
+}
+
 fn summarize(mut samples: Samples) -> serde_json::Value {
     assert!(
         samples.dispatch_start_error_us.len() <= samples.observation_count,
@@ -1109,6 +1202,13 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "observation_count": samples.observation_count,
         "observation_gaps": samples.observation_gaps,
         "observation_queue": "bounded_nonblocking_on",
+        "wait_evidence": {
+            "planned_gap_us": unsigned_summary(samples.planned_wait_gap_us),
+            "wake_lateness_us": signed_summary(samples.wait_wake_lateness_us),
+            "hot_count": samples.hot_wait_count,
+            "cold_count": samples.cold_wait_count,
+            "cold_threshold_us": SEND_COLD_THRESHOLD_US,
+        },
         "spin_time_us": unsigned_summary(samples.spin_time_us),
         "wall_time_us": unsigned_summary(samples.wall_time_us),
         "total_spin_time_us": total_spin_time_us,
@@ -1213,6 +1313,11 @@ fn main() {
         && !matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary)
     {
         panic!("phase_a_production_matrix requires phase_a_production_boundary benchmark mode");
+    }
+    if matches!(benchmark_scope, BenchmarkScope::PhaseASparseGap)
+        && !matches!(benchmark_mode, BenchmarkMode::RealWait)
+    {
+        panic!("phase_a_sparse_gap requires real_wait benchmark mode");
     }
     if matches!(benchmark_scope, BenchmarkScope::RealWaitCore)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
@@ -1320,6 +1425,11 @@ fn main() {
             "phase_a_production_boundary".to_string(),
             phase_a_production_matrix_report(),
         );
+    } else if matches!(benchmark_scope, BenchmarkScope::PhaseASparseGap) {
+        mode_reports.insert(
+            "phase_a_sparse_gap".to_string(),
+            phase_a_sparse_gap_report(),
+        );
     } else {
         mode_reports.insert(
             "phase_a_sender_only".to_string(),
@@ -1373,6 +1483,8 @@ fn main() {
             (BenchmarkScope::PhaseASenderOnly, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::PhaseAProductionMatrix, BenchmarkMode::PhaseAProductionBoundary) => "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; a test-only direct boundary supplies the frozen crossing QPC and the mock transport records an immediate sender-boundary QPC; waiter scheduling and the real SendInput syscall are excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseAProductionMatrix, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::PhaseASparseGap, BenchmarkMode::RealWait) => "Phase-A sparse-gap evidence through the production coordinator and real HybridWaiter with deterministic mock transport; no playback wait policy or authored target is changed; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseASparseGap, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,

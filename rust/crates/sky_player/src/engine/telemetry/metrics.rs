@@ -207,9 +207,26 @@ pub struct WorkerMetricsLocal {
     pub send_mixed_warn_threshold_us: u64,
     pub wait_target_error_us: u64,
     pub idle_wake_count: u64,
+    /// Planned physical wait gaps classified against the existing cold-gap
+    /// threshold. These are observer-side evidence only; wait policy is not
+    /// changed by the classification.
+    pub wait_planned_gap_hot_count: u64,
+    pub wait_planned_gap_cold_count: u64,
+    pub(crate) wait_planned_gap_max_ticks: u64,
+    pub wait_planned_gap_max_us: u64,
+    pub(crate) wait_planned_gap_hot_lateness_max_ticks: u64,
+    pub wait_planned_gap_hot_lateness_max_us: u64,
+    pub(crate) wait_planned_gap_cold_lateness_max_ticks: u64,
+    pub wait_planned_gap_cold_lateness_max_us: u64,
+    pub(crate) physical_target_to_wake_max_ticks: u64,
+    pub physical_target_to_wake_max_us: u64,
     /// Time between `sender_completed` and `dispatch_ready` on the hard
     /// critical path (typed QPC derivation), in microseconds.
     pub core_post_send_max_us: u64,
+    /// Decomposition of the physical handoff after the wait wake.
+    pub wake_to_final_policy_max_us: u64,
+    pub final_policy_to_pre_call_max_us: u64,
+    pub sendinput_duration_max_us: u64,
     /// Peak QPC duration from a blocking deadline wake to the next
     /// `SendInput` call entry (us). Only dispatches that followed a blocking
     /// deadline wait contribute a sample.
@@ -298,12 +315,48 @@ impl WorkerMetricsLocal {
         self.send_mixed_degraded_samples = self
             .send_mixed_degraded_samples
             .saturating_add(observer.send_mixed_degraded_samples);
+        self.wait_planned_gap_hot_count = self
+            .wait_planned_gap_hot_count
+            .saturating_add(observer.wait_planned_gap_hot_count);
+        self.wait_planned_gap_cold_count = self
+            .wait_planned_gap_cold_count
+            .saturating_add(observer.wait_planned_gap_cold_count);
+        self.wait_planned_gap_max_ticks = self
+            .wait_planned_gap_max_ticks
+            .max(observer.wait_planned_gap_max_ticks);
+        self.wait_planned_gap_hot_lateness_max_ticks = self
+            .wait_planned_gap_hot_lateness_max_ticks
+            .max(observer.wait_planned_gap_hot_lateness_max_ticks);
+        self.wait_planned_gap_cold_lateness_max_ticks = self
+            .wait_planned_gap_cold_lateness_max_ticks
+            .max(observer.wait_planned_gap_cold_lateness_max_ticks);
+        self.physical_target_to_wake_max_ticks = self
+            .physical_target_to_wake_max_ticks
+            .max(observer.physical_target_to_wake_max_ticks);
+        self.wait_planned_gap_hot_lateness_max_us = self
+            .wait_planned_gap_hot_lateness_max_us
+            .max(observer.wait_planned_gap_hot_lateness_max_us);
+        self.wait_planned_gap_cold_lateness_max_us = self
+            .wait_planned_gap_cold_lateness_max_us
+            .max(observer.wait_planned_gap_cold_lateness_max_us);
+        self.physical_target_to_wake_max_us = self
+            .physical_target_to_wake_max_us
+            .max(observer.physical_target_to_wake_max_us);
         self.dispatch_occupancy_max_us = self
             .dispatch_occupancy_max_us
             .max(observer.dispatch_occupancy_max_us);
         self.core_post_send_max_us = self
             .core_post_send_max_us
             .max(observer.core_post_send_max_us);
+        self.wake_to_final_policy_max_us = self
+            .wake_to_final_policy_max_us
+            .max(observer.wake_to_final_policy_max_us);
+        self.final_policy_to_pre_call_max_us = self
+            .final_policy_to_pre_call_max_us
+            .max(observer.final_policy_to_pre_call_max_us);
+        self.sendinput_duration_max_us = self
+            .sendinput_duration_max_us
+            .max(observer.sendinput_duration_max_us);
         self.wake_to_send_max_us = self.wake_to_send_max_us.max(observer.wake_to_send_max_us);
         self.observer_duration_max_us = self
             .observer_duration_max_us
@@ -440,6 +493,24 @@ pub(crate) fn try_publish_metrics(
     published.max_release_floor_delay_us = qpc_clock
         .duration_to_us(DurationTicks::from_raw(local.max_release_floor_delay_ticks))
         .unwrap_or_default();
+    published.wait_planned_gap_hot_lateness_max_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(
+            local.wait_planned_gap_hot_lateness_max_ticks,
+        ))
+        .unwrap_or_default();
+    published.wait_planned_gap_max_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(local.wait_planned_gap_max_ticks))
+        .unwrap_or_default();
+    published.wait_planned_gap_cold_lateness_max_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(
+            local.wait_planned_gap_cold_lateness_max_ticks,
+        ))
+        .unwrap_or_default();
+    published.physical_target_to_wake_max_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(
+            local.physical_target_to_wake_max_ticks,
+        ))
+        .unwrap_or_default();
     if shared.snapshot.try_publish(&published) {
         shared.last_publish_us.store(now_us, Ordering::Relaxed);
         #[cfg(test)]
@@ -508,6 +579,8 @@ mod tests {
         let local = WorkerMetricsLocal {
             max_sendinput_pre_call_lateness_ticks: 1_234,
             max_sendinput_pre_call_lateness_us: 999_999,
+            wait_planned_gap_max_ticks: 2_345,
+            physical_target_to_wake_max_ticks: 3_456,
             ..WorkerMetricsLocal::default()
         };
         let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
@@ -517,6 +590,8 @@ mod tests {
         let published = shared.snapshot.load();
         assert_eq!(published.max_sendinput_pre_call_lateness_ticks, 1_234);
         assert_eq!(published.max_sendinput_pre_call_lateness_us, 1_234);
+        assert_eq!(published.wait_planned_gap_max_us, 2_345);
+        assert_eq!(published.physical_target_to_wake_max_us, 3_456);
     }
 
     #[test]

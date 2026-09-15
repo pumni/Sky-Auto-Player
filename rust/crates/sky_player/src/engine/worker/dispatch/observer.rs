@@ -22,12 +22,27 @@ use super::recovery::record_physical_floor_delays;
 use super::timing::{DownSendTiming, is_clean_dispatch_observation};
 use super::{AuthoredBatchView, DispatchStep};
 use crossbeam_queue::ArrayQueue;
+use sky_dispatch_core::time::QpcTicks;
 use sky_dispatch_win32::input::PacketRetryReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+
+fn qpc_span_us(
+    qpc_clock: QpcClock,
+    start: QpcTicks,
+    end: QpcTicks,
+    context: &'static str,
+) -> Result<u64, DispatchStep> {
+    let ticks = end.checked_duration_since(start).map_err(|error| {
+        DispatchStep::Terminate(format!("{context} QPC ordering failure: {error:?}"))
+    })?;
+    qpc_clock.duration_to_us(ticks).map_err(|error| {
+        DispatchStep::Terminate(format!("{context} duration conversion failure: {error:?}"))
+    })
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publisher_down_send_outcome(
     view: &AuthoredBatchView,
@@ -427,19 +442,34 @@ pub(crate) fn drain_down_send_outcome(
         })
         .transpose()?
         .unwrap_or(0);
+    let wake_to_final_policy_us = observation
+        .wake_qpc
+        .map(|wake| {
+            qpc_span_us(
+                qpc_clock,
+                wake,
+                observation.final_policy_qpc,
+                "note-on wake-to-final-policy",
+            )
+        })
+        .transpose()?;
+    let final_policy_to_pre_call_us = qpc_span_us(
+        qpc_clock,
+        observation.final_policy_qpc,
+        observation.pre_call_qpc,
+        "note-on final-policy-to-pre-call",
+    )?;
     let wake_to_send_start_us = observation
         .wake_qpc
-        .and_then(|wake| {
-            observation
-                .final_policy_qpc
-                .checked_duration_since(wake)
-                .ok()
+        .map(|wake| {
+            qpc_span_us(
+                qpc_clock,
+                wake,
+                observation.pre_call_qpc,
+                "note-on wake-to-pre-call",
+            )
         })
-        .map(|ticks| qpc_clock.duration_to_us(ticks))
-        .transpose()
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-on wake conversion failure: {error:?}"))
-        })?;
+        .transpose()?;
     local_metrics.sendinput_warn_threshold_us = send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
     local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
@@ -528,6 +558,17 @@ pub(crate) fn drain_down_send_outcome(
         local_metrics.core_post_send_max_us.max(core_post_send_us);
     if let Some(wake_to_send_us) = wake_to_send_start_us {
         local_metrics.wake_to_send_max_us = local_metrics.wake_to_send_max_us.max(wake_to_send_us);
+    }
+    local_metrics.sendinput_duration_max_us = local_metrics
+        .sendinput_duration_max_us
+        .max(pre_call_to_completion_us);
+    local_metrics.final_policy_to_pre_call_max_us = local_metrics
+        .final_policy_to_pre_call_max_us
+        .max(final_policy_to_pre_call_us);
+    if let Some(wake_to_final_policy_us) = wake_to_final_policy_us {
+        local_metrics.wake_to_final_policy_max_us = local_metrics
+            .wake_to_final_policy_max_us
+            .max(wake_to_final_policy_us);
     }
     record_lateness(
         signed_delta(completed_effective_us, authored_batch_scheduled_us),
@@ -632,19 +673,34 @@ pub(crate) fn drain_up_send_outcome(
         })
         .transpose()?
         .unwrap_or(0);
+    let wake_to_final_policy_us = observation
+        .wake_qpc
+        .map(|wake| {
+            qpc_span_us(
+                qpc_clock,
+                wake,
+                observation.final_policy_qpc,
+                "note-off wake-to-final-policy",
+            )
+        })
+        .transpose()?;
+    let final_policy_to_pre_call_us = qpc_span_us(
+        qpc_clock,
+        observation.final_policy_qpc,
+        observation.pre_call_qpc,
+        "note-off final-policy-to-pre-call",
+    )?;
     let wake_to_send_start_us = observation
         .wake_qpc
-        .and_then(|wake| {
-            observation
-                .final_policy_qpc
-                .checked_duration_since(wake)
-                .ok()
+        .map(|wake| {
+            qpc_span_us(
+                qpc_clock,
+                wake,
+                observation.pre_call_qpc,
+                "note-off wake-to-pre-call",
+            )
         })
-        .map(|ticks| qpc_clock.duration_to_us(ticks))
-        .transpose()
-        .map_err(|error| {
-            DispatchStep::Terminate(format!("note-off wake conversion failure: {error:?}"))
-        })?;
+        .transpose()?;
     local_metrics.sendinput_warn_threshold_us = send_warn_us;
     local_metrics.core_post_send_warn_threshold_us = core_post_send_warn_us;
     local_metrics.post_send_metrics_available |= observation.dispatch_ready_qpc.is_some();
@@ -669,6 +725,17 @@ pub(crate) fn drain_up_send_outcome(
     }
     local_metrics.core_post_send_max_us =
         local_metrics.core_post_send_max_us.max(core_post_send_us);
+    local_metrics.sendinput_duration_max_us = local_metrics
+        .sendinput_duration_max_us
+        .max(pre_call_to_completion_us);
+    local_metrics.final_policy_to_pre_call_max_us = local_metrics
+        .final_policy_to_pre_call_max_us
+        .max(final_policy_to_pre_call_us);
+    if let Some(wake_to_final_policy_us) = wake_to_final_policy_us {
+        local_metrics.wake_to_final_policy_max_us = local_metrics
+            .wake_to_final_policy_max_us
+            .max(wake_to_final_policy_us);
+    }
     record_lateness(
         signed_delta(completed_effective_us, scheduled_us),
         true,
