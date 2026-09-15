@@ -256,7 +256,7 @@ function validateTrace(events, fixture) {
   );
   assertMarkerOrder(
     first,
-    ['bootstrap.end', 'settings.reload.start', 'settings.reload.end'],
+    ['react.catalog_ready', 'settings.reload.start', 'settings.reload.end'],
     'explicit settings refresh markers',
   );
 

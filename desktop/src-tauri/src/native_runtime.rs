@@ -1809,6 +1809,9 @@ impl NativeDesktopRuntime {
     }
 
     fn reload_settings_snapshot(&self) -> Result<ApplicationSettings, String> {
+        // External settings-file edits become authoritative only at explicit
+        // refresh boundaries. Normal startup reads use the coherent in-memory
+        // snapshot so background work cannot silently change startup state.
         crate::startup_telemetry::record("settings.reload.start");
         let mut service = self
             .settings
@@ -1891,9 +1894,6 @@ impl NativeDesktopRuntime {
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
-        settings
-            .reload()
-            .map_err(|error| format!("native settings reload failed: {error}"))?;
         self.update_service
             .as_ref()
             .ok_or_else(|| {
@@ -6960,6 +6960,41 @@ mod tests {
                 .expect("idempotent shutdown"),
             Value::Null
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn update_check_uses_cached_settings_without_refreshing_external_file() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-native-update-check-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+
+        let initial = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("bootstrap");
+        assert_eq!(initial["settings"]["theme"], "aurora");
+
+        fs::write(
+            root.join("config.json"),
+            "{\"schema_version\":3,\"theme\":\"slate\"}\n",
+        )
+        .expect("external settings update");
+        let error = runtime
+            .dispatch("update.check", Value::Object(Default::default()))
+            .expect_err("install-root runtime has no update service");
+        assert!(error.starts_with("update_service_unavailable"));
+
+        let cached = runtime
+            .dispatch("app.bootstrap", Value::Object(Default::default()))
+            .expect("cached bootstrap");
+        assert_eq!(cached["settings"]["theme"], "aurora");
+
+        runtime.shutdown();
         let _ = fs::remove_dir_all(root);
     }
 

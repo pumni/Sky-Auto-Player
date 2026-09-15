@@ -20,7 +20,9 @@ The startup milestones are intentionally separate:
 The initial bootstrap uses the settings snapshot loaded during native runtime
 construction. `settings.reload.start/end` therefore belong to an explicit
 settings refresh boundary after bootstrap, not to the initial shell bootstrap
-critical path.
+critical path. The packaged smoke refresh occurs only after
+`react.catalog_ready`, and the validator enforces that no settings reload is
+observed before that milestone.
 
 Build and run the reproducible packaged benchmark from PowerShell:
 
