@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { DesktopBridge } from '../bridge/DesktopBridge';
 import { BootstrapGate } from './BootstrapGate';
 import { AppTitleBar } from '../components/chrome/AppTitleBar';
@@ -41,7 +41,7 @@ export function App({ bridge }: AppProps) {
   const calibrationOpen = useStore((store) => store.calibration.open);
   const updateDialogOpen = useStore((store) => store.update.dialogOpen);
   const windowControls = useMemo(() => createWindowControls(), []);
-  const wasSettingsOpen = useRef(false);
+  const [settingsMounted, setSettingsMounted] = useState(false);
 
   useEffect(() => {
     recordStartupTelemetry('react.initialize.start');
@@ -56,13 +56,6 @@ export function App({ bridge }: AppProps) {
   useEffect(() => {
     if (bootstrap) document.documentElement.dataset.theme = bootstrap.settings.theme;
   }, [bootstrap]);
-
-  useEffect(() => {
-    if (!settingsOpen && wasSettingsOpen.current) {
-      window.setTimeout(() => settingsTriggerRef.current?.focus(), 0);
-    }
-    wasSettingsOpen.current = settingsOpen;
-  }, [settingsOpen, settingsTriggerRef]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -90,11 +83,12 @@ export function App({ bridge }: AppProps) {
             settingsTriggerRef={settingsTriggerRef}
             searchInputRef={searchInputRef}
             windowControls={windowControls}
+            onSettingsOpen={() => setSettingsMounted(true)}
           />
           <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
           <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
           <Suspense fallback={null}>
-            {settingsOpen && (
+            {(settingsOpen || settingsMounted) && (
               <SettingsPanel
                 bootstrap={bootstrap}
                 useStore={useStore}

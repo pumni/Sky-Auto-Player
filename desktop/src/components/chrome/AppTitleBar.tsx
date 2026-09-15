@@ -17,6 +17,7 @@ interface AppTitleBarProps {
   useStore: DesktopStoreHook;
   settingsTriggerRef?: RefObject<HTMLButtonElement | null>;
   windowControls?: WindowControls;
+  onSettingsOpen?: () => void;
 }
 
 export function AppTitleBar({
@@ -24,6 +25,7 @@ export function AppTitleBar({
   useStore,
   settingsTriggerRef,
   windowControls,
+  onSettingsOpen,
 }: AppTitleBarProps) {
   const controls = useMemo(() => windowControls ?? createWindowControls(), [windowControls]);
   const reload = useStore((store: DesktopStore) => store.reloadLibrary);
@@ -79,7 +81,10 @@ export function AppTitleBar({
           className="icon-button"
           aria-label="Open settings"
           title="Open settings"
-          onPress={() => setSettingsOpen(true)}
+          onPress={() => {
+            onSettingsOpen?.();
+            setSettingsOpen(true);
+          }}
         >
           <Settings size={17} aria-hidden="true" />
         </Button>

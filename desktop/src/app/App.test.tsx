@@ -42,6 +42,14 @@ describe('desktop application shell', () => {
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Settings' }), { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
     expect(document.activeElement).toBe(settingsButton);
+
+    fireEvent.click(settingsButton);
+    const reopenedSettings = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(reopenedSettings).toHaveTextContent('About Sky Auto Player');
+    expect(screen.getByRole('button', { name: 'About' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.keyDown(reopenedSettings, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+    expect(document.activeElement).toBe(settingsButton);
   });
 
   it('supports keyboard navigation in the virtualized track table', async () => {
