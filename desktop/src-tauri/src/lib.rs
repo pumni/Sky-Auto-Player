@@ -9,6 +9,7 @@ mod native_update;
 mod power_lifecycle;
 #[cfg(windows)]
 mod single_instance;
+mod startup_telemetry;
 mod ui_events;
 #[cfg(windows)]
 mod windows_caption;
@@ -16,6 +17,11 @@ mod windows_caption;
 mod windows_icon;
 
 pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
+
+pub fn startup_process_entry() {
+    startup_telemetry::initialize();
+    startup_telemetry::record("process.entry");
+}
 
 use lifecycle::close_window;
 use native_runtime::TestSeams;
@@ -190,6 +196,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
         record_gui_smoke_phase("app_state.ready");
         record_gui_smoke_phase("tauri.builder.create");
     }
+    startup_telemetry::record("tauri.builder.start");
     let mut builder = tauri::Builder::<ShellRuntime>::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -197,6 +204,8 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
         .manage(app_state)
         .setup(move |app| {
             use tauri::{Manager, path::BaseDirectory};
+
+            startup_telemetry::record("tauri.setup.start");
 
             match app
                 .path()
@@ -303,29 +312,38 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
                 record_gui_smoke_phase("watchdog.spawned");
                 record_gui_smoke_phase("tauri.setup.complete");
             }
+            startup_telemetry::record("tauri.setup.end");
             Ok(())
         });
-    if gui_smoke {
-        builder = builder.on_page_load(|webview, payload| match payload.event() {
+    if startup_telemetry::enabled() || gui_smoke {
+        let telemetry_enabled = startup_telemetry::enabled();
+        builder = builder.on_page_load(move |webview, payload| match payload.event() {
             tauri::webview::PageLoadEvent::Started => {
-                record_gui_smoke_phase(&format!(
-                    "webview.page_load.started {}",
-                    payload.url()
-                ));
+                if telemetry_enabled {
+                    let _ = webview.eval("window.__SKY_STARTUP_TELEMETRY_ENABLED__ = true;");
+                }
+                if gui_smoke {
+                    record_gui_smoke_phase(&format!(
+                        "webview.page_load.started {}",
+                        payload.url()
+                    ));
+                }
             }
             tauri::webview::PageLoadEvent::Finished => {
-                record_gui_smoke_phase(&format!(
-                    "webview.page_load.finished {}",
-                    payload.url()
-                ));
-                let result = webview.eval(
-                    "(() => { window.__SKY_DESKTOP_GUI_SMOKE__ = true; const skySmoke = () => window.dispatchEvent(new Event('sky-desktop-gui-smoke')); skySmoke(); window.setTimeout(skySmoke, 100); window.setTimeout(skySmoke, 500); })();",
-                );
-                record_gui_smoke_phase(if result.is_ok() {
-                    "webview.smoke_dispatched"
-                } else {
-                    "webview.smoke_dispatch.failed"
-                });
+                if gui_smoke {
+                    record_gui_smoke_phase(&format!(
+                        "webview.page_load.finished {}",
+                        payload.url()
+                    ));
+                    let result = webview.eval(
+                        "(() => { window.__SKY_DESKTOP_GUI_SMOKE__ = true; const skySmoke = () => window.dispatchEvent(new Event('sky-desktop-gui-smoke')); skySmoke(); window.setTimeout(skySmoke, 100); window.setTimeout(skySmoke, 500); })();",
+                    );
+                    record_gui_smoke_phase(if result.is_ok() {
+                        "webview.smoke_dispatched"
+                    } else {
+                        "webview.smoke_dispatch.failed"
+                    });
+                }
             }
         });
     }
