@@ -1,9 +1,12 @@
+import { lazy, Suspense, type ComponentProps, type ComponentType, type RefObject } from 'react';
 import { Tabs, TabPanel } from 'react-aria-components';
-import type { ComponentProps, ComponentType, RefObject } from 'react';
 import type { DesktopStoreHook, UtilityView } from '../../state/store';
-import { DiagnosticsView } from './DiagnosticsView';
 import { SongDetailsView } from './SongDetailsView';
 import { UtilityHeader } from './UtilityHeader';
+
+const DiagnosticsView = lazy(() =>
+  import('./DiagnosticsView').then(({ DiagnosticsView: component }) => ({ default: component })),
+);
 
 type UtilityTabsProps = ComponentProps<typeof Tabs> & {
   defaultSelectedKey?: UtilityView;
@@ -55,10 +58,20 @@ export function UtilityPane({ utilityTriggerRef, useStore }: UtilityPaneProps) {
         <UtilityHeader activeView={utility.activeView} onClose={close} />
         <div className="utility-content">
           <TabPanel id="details">
-            <SongDetailsView useStore={useStore} />
+            {utility.activeView === 'details' && <SongDetailsView useStore={useStore} />}
           </TabPanel>
           <TabPanel id="diagnostics">
-            <DiagnosticsView useStore={useStore} />
+            {utility.activeView === 'diagnostics' && (
+              <Suspense
+                fallback={
+                  <div className="utility-loading" role="status">
+                    Loading diagnostics…
+                  </div>
+                }
+              >
+                <DiagnosticsView useStore={useStore} />
+              </Suspense>
+            )}
           </TabPanel>
         </div>
       </UtilityTabs>

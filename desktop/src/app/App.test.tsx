@@ -30,7 +30,7 @@ describe('desktop application shell', () => {
 
     const settingsButton = screen.getByRole('button', { name: 'Open settings' });
     fireEvent.click(settingsButton);
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     expect(screen.getByLabelText('Theme')).toHaveValue('aurora');
     fireEvent.click(screen.getByRole('button', { name: 'About' }));
@@ -40,6 +40,14 @@ describe('desktop application shell', () => {
       document.activeElement as HTMLElement,
     );
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Settings' }), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+    expect(document.activeElement).toBe(settingsButton);
+
+    fireEvent.click(settingsButton);
+    const reopenedSettings = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(reopenedSettings).toHaveTextContent('About Sky Auto Player');
+    expect(screen.getByRole('button', { name: 'About' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.keyDown(reopenedSettings, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
     expect(document.activeElement).toBe(settingsButton);
   });
@@ -120,7 +128,7 @@ describe('desktop application shell', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Runtime' }));
     const diagnostics = await screen.findByRole('region', { name: 'Utility: Diagnostics' });
     expect(utility).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Performance' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Performance' })).toBeInTheDocument();
     fireEvent.keyDown(diagnostics, { key: 'Escape' });
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: 'Utility: Diagnostics' })).toBeNull(),

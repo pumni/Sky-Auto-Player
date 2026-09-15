@@ -1,4 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { isTauriRuntime } from './runtime';
 
 export interface WindowControls {
   minimize(): Promise<void>;
@@ -52,10 +53,5 @@ export function createBrowserWindowControls(): WindowControls {
 }
 
 export function createWindowControls(): WindowControls {
-  const isTauri =
-    '__TAURI_INTERNALS__' in window ||
-    'isTauri' in window ||
-    window.location.protocol === 'tauri:' ||
-    window.location.hostname === 'tauri.localhost';
-  return isTauri ? createTauriWindowControls() : createBrowserWindowControls();
+  return isTauriRuntime() ? createTauriWindowControls() : createBrowserWindowControls();
 }

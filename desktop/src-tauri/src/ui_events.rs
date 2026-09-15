@@ -43,6 +43,23 @@ pub struct CatalogChangedPayload {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
+pub enum CatalogReadiness {
+    Uninitialized,
+    Loading,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogLoadFailedPayload {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
 pub enum UpdateChannel {
     Stable,
     Beta,
@@ -346,6 +363,11 @@ pub enum UiEvent {
         v: u64,
         payload: CatalogChangedPayload,
     },
+    #[serde(rename = "catalog.load_failed")]
+    CatalogLoadFailed {
+        v: u64,
+        payload: CatalogLoadFailedPayload,
+    },
     #[serde(rename = "playback.state_changed")]
     PlaybackStateChanged {
         v: u64,
@@ -423,6 +445,12 @@ impl UiEvent {
             return Err("event catalog total exceeds the bounded contract".into());
         }
         Ok(())
+    }
+
+    pub(crate) fn validate_catalog_load_failed(
+        payload: &CatalogLoadFailedPayload,
+    ) -> Result<(), String> {
+        validate_text("message", &payload.message)
     }
 
     pub(crate) fn validate_playback_state_changed(

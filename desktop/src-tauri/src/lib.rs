@@ -9,6 +9,7 @@ mod native_update;
 mod power_lifecycle;
 #[cfg(windows)]
 mod single_instance;
+mod startup_telemetry;
 mod ui_events;
 #[cfg(windows)]
 mod windows_caption;
@@ -16,6 +17,11 @@ mod windows_caption;
 mod windows_icon;
 
 pub(crate) const DESKTOP_PROTOCOL_VERSION: u64 = 1;
+
+pub fn startup_process_entry() {
+    startup_telemetry::initialize();
+    startup_telemetry::record("process.entry");
+}
 
 use lifecycle::close_window;
 use native_runtime::TestSeams;
@@ -190,6 +196,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
         record_gui_smoke_phase("app_state.ready");
         record_gui_smoke_phase("tauri.builder.create");
     }
+    startup_telemetry::record("tauri.builder.start");
     let mut builder = tauri::Builder::<ShellRuntime>::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -197,6 +204,8 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
         .manage(app_state)
         .setup(move |app| {
             use tauri::{Manager, path::BaseDirectory};
+
+            startup_telemetry::record("tauri.setup.start");
 
             match app
                 .path()
@@ -303,29 +312,38 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
                 record_gui_smoke_phase("watchdog.spawned");
                 record_gui_smoke_phase("tauri.setup.complete");
             }
+            startup_telemetry::record("tauri.setup.end");
             Ok(())
         });
-    if gui_smoke {
-        builder = builder.on_page_load(|webview, payload| match payload.event() {
+    if startup_telemetry::enabled() || gui_smoke {
+        let telemetry_enabled = startup_telemetry::enabled();
+        builder = builder.on_page_load(move |webview, payload| match payload.event() {
             tauri::webview::PageLoadEvent::Started => {
-                record_gui_smoke_phase(&format!(
-                    "webview.page_load.started {}",
-                    payload.url()
-                ));
+                if telemetry_enabled {
+                    let _ = webview.eval("window.__SKY_STARTUP_TELEMETRY_ENABLED__ = true;");
+                }
+                if gui_smoke {
+                    record_gui_smoke_phase(&format!(
+                        "webview.page_load.started {}",
+                        payload.url()
+                    ));
+                }
             }
             tauri::webview::PageLoadEvent::Finished => {
-                record_gui_smoke_phase(&format!(
-                    "webview.page_load.finished {}",
-                    payload.url()
-                ));
-                let result = webview.eval(
-                    "(() => { window.__SKY_DESKTOP_GUI_SMOKE__ = true; const skySmoke = () => window.dispatchEvent(new Event('sky-desktop-gui-smoke')); skySmoke(); window.setTimeout(skySmoke, 100); window.setTimeout(skySmoke, 500); })();",
-                );
-                record_gui_smoke_phase(if result.is_ok() {
-                    "webview.smoke_dispatched"
-                } else {
-                    "webview.smoke_dispatch.failed"
-                });
+                if gui_smoke {
+                    record_gui_smoke_phase(&format!(
+                        "webview.page_load.finished {}",
+                        payload.url()
+                    ));
+                    let result = webview.eval(
+                        "(() => { window.__SKY_DESKTOP_GUI_SMOKE__ = true; const skySmoke = () => window.dispatchEvent(new Event('sky-desktop-gui-smoke')); skySmoke(); window.setTimeout(skySmoke, 100); window.setTimeout(skySmoke, 500); })();",
+                    );
+                    record_gui_smoke_phase(if result.is_ok() {
+                        "webview.smoke_dispatched"
+                    } else {
+                        "webview.smoke_dispatch.failed"
+                    });
+                }
             }
         });
     }
@@ -463,7 +481,6 @@ pub fn selftest_packaged_shell() -> i32 {
         if bootstrap.native_build.native_build_commit.is_empty() {
             return Err("bootstrap omitted native build identity".into());
         }
-        let mut catalog_generation = bootstrap.catalog_generation;
         let builtin_count = match runtime.builtin_catalog_status()? {
             sky_native_adapters::BuiltinCatalogStatus::Available { song_count }
                 if song_count > 0 =>
@@ -489,6 +506,7 @@ pub fn selftest_packaged_shell() -> i32 {
                 initial_catalog.total
             ));
         }
+        let mut catalog_generation = Some(initial_catalog.generation);
         if std::env::var_os("SKY_BUILTIN_CATALOG_FRESH_SELFTEST").is_some() {
             selftest_paths
                 .ensure_mutable_directories()
@@ -524,7 +542,7 @@ pub fn selftest_packaged_shell() -> i32 {
                     composed.total
                 ));
             }
-            catalog_generation = reloaded.generation;
+            catalog_generation = Some(reloaded.generation);
             std::fs::remove_file(&user_song)
                 .map_err(|error| format!("fresh user song cleanup failed: {error}"))?;
         }
@@ -817,6 +835,7 @@ mod ipc_tests {
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
+                super::commands::reload_library,
                 super::commands::prepare_playback,
                 super::commands::start_playback,
                 super::commands::get_playback_status,
@@ -828,12 +847,11 @@ mod ipc_tests {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
-        let bootstrap = tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 1))
-            .expect("native bootstrap should succeed");
-        let bootstrap_value: serde_json::Value = bootstrap.deserialize().expect("bootstrap JSON");
-        let generation = bootstrap_value["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let reload =
+            tauri::test::get_ipc_response(&webview, request("reload_library", json!({}), 3))
+                .expect("native catalog reload should succeed");
+        let reload: serde_json::Value = reload.deserialize().expect("reload JSON");
+        let generation = reload["generation"].as_u64().expect("generation");
         let idle_status =
             tauri::test::get_ipc_response(&webview, request("get_playback_status", json!({}), 6))
                 .expect("playback status command should succeed before start");
@@ -909,6 +927,7 @@ mod ipc_tests {
             .invoke_handler(tauri::generate_handler![
                 super::commands::bootstrap,
                 super::commands::search_songs,
+                super::commands::reload_library,
                 super::commands::prepare_playback,
                 super::commands::patch_settings,
                 super::commands::start_playback,
@@ -919,13 +938,11 @@ mod ipc_tests {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
-        let bootstrap =
-            tauri::test::get_ipc_response(&webview, request("bootstrap", json!({}), 60))
-                .expect("native bootstrap");
-        let bootstrap: serde_json::Value = bootstrap.deserialize().expect("bootstrap JSON");
-        let generation = bootstrap["catalog_generation"]
-            .as_u64()
-            .expect("generation");
+        let reload =
+            tauri::test::get_ipc_response(&webview, request("reload_library", json!({}), 61))
+                .expect("native catalog reload");
+        let reload: serde_json::Value = reload.deserialize().expect("reload JSON");
+        let generation = reload["generation"].as_u64().expect("generation");
         let search = tauri::test::get_ipc_response(
             &webview,
             request(

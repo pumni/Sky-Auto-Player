@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:e2e:bundle": "node scripts/run-bundle-e2e.mjs",
+    "benchmark:startup": "node scripts/benchmark-startup.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build --ci -- --profile dist",

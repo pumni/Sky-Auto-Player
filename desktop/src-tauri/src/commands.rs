@@ -1,5 +1,7 @@
 use crate::app_state::AppState;
-use crate::ui_events::{CalibrationMode, CalibrationState, UiEvent, UpdateChannel, UpdateState};
+use crate::ui_events::{
+    CalibrationMode, CalibrationState, CatalogReadiness, UiEvent, UpdateChannel, UpdateState,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -301,13 +303,17 @@ pub struct BootstrapDto {
     pub app_version: String,
     pub protocol_version: u64,
     pub native_build: NativeBuildDto,
+    /// Authoritative coherent settings snapshot for initial frontend state.
+    pub settings: SettingsDto,
+    /// Flattened fields remain additive compatibility aliases for protocol v1 clients.
     pub playback_defaults: PlaybackDefaultsDto,
     pub timing_margin_recommendation: TimingMarginRecommendationDto,
     pub option_sets: PlaybackOptionSetsDto,
     pub theme: String,
     pub telemetry_enabled: bool,
     pub update_preferences: UpdatePreferencesDto,
-    pub catalog_generation: u64,
+    pub catalog_state: CatalogReadiness,
+    pub catalog_generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -658,7 +664,20 @@ where
 
 #[tauri::command]
 pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapDto, String> {
-    blocking_request(state, "app.bootstrap", serde_json::json!({})).await
+    let app_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = app_state.ensure_native_blocking()?;
+        let value = runtime.dispatch("app.bootstrap", serde_json::json!({}))?;
+        let mut result: BootstrapDto = serde_json::from_value(value)
+            .map_err(|error| format!("invalid native app.bootstrap response: {error}"))?;
+        runtime.start_catalog_load()?;
+        let (catalog_state, catalog_generation) = runtime.catalog_readiness()?;
+        result.catalog_state = catalog_state;
+        result.catalog_generation = catalog_generation;
+        Ok(result)
+    })
+    .await
+    .map_err(|error| format!("Native bootstrap worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -948,15 +967,31 @@ pub async fn export_sender_trace(state: State<'_, AppState>) -> Result<String, S
 pub async fn subscribe_ui_events(
     state: State<'_, AppState>,
     channel: Channel<UiEvent>,
+    params: Option<StartupTelemetryRequest>,
 ) -> Result<(), String> {
+    if let Some(params) = params {
+        return crate::startup_telemetry::record_frontend_marker(
+            &params.marker,
+            params.frontend_elapsed_us,
+        );
+    }
     let _command_name = crate::ipc_contract::UI_EVENTS_COMMAND;
+    crate::startup_telemetry::record("events.subscribe.start");
     let app_state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let native = app_state.ensure_native_blocking()?;
-        native.subscribe(channel)
-    })
-    .await
-    .map_err(|error| format!("Native event worker failed: {error}"))?
+    let result = tauri::async_runtime::spawn_blocking(move || app_state.subscribe_events(channel))
+        .await
+        .map_err(|error| format!("Native event worker failed: {error}"))?;
+    if result.is_ok() {
+        crate::startup_telemetry::record("events.subscribe.end");
+    }
+    result
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupTelemetryRequest {
+    pub marker: String,
+    pub frontend_elapsed_us: u64,
 }
 
 #[tauri::command]

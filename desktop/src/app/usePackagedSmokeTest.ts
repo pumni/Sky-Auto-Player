@@ -42,7 +42,11 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
       if (!document.querySelector('.app-shell')) {
         throw new Error('packaged GUI shell did not render');
       }
-      const generation = state.library.generation;
+      await waitForStore(() => {
+        const current = useStore.getState();
+        return !current.library.loading && current.library.error === null;
+      }, 'library');
+      const generation = useStore.getState().library.generation;
       const search = await bridge.searchSongs({
         query: '',
         offset: 0,
@@ -73,7 +77,7 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
       ) {
         throw new Error('packaged GUI library store postcondition failed');
       }
-      const expectedTheme = state.bootstrap?.theme ?? 'aurora';
+      const expectedTheme = state.settings?.theme ?? 'aurora';
       const smokeTheme = expectedTheme === 'aurora' ? 'slate' : 'aurora';
       const patched = await bridge.patchSettings({ theme: smokeTheme });
       if (patched.theme !== smokeTheme) {

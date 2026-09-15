@@ -29,6 +29,9 @@ pub const LIBRARY_MANIFEST_FILE: &str = "library-manifest.json";
 /// Default file name for the device calibration cache.
 pub const CALIBRATION_CACHE_FILE: &str = "input_latency.json";
 
+/// Default file name for the private persistent catalog index.
+pub const CATALOG_CACHE_FILE: &str = "catalog-index.json";
+
 /// Default subdirectory name for cache files under the app-data root.
 pub const CACHE_SUBDIR: &str = "cache";
 
@@ -170,6 +173,11 @@ impl AppPaths {
     /// Always resolves deterministically to `cache_root/input_latency.json`.
     pub fn calibration_cache_path(&self) -> PathBuf {
         self.cache_root.join(CALIBRATION_CACHE_FILE)
+    }
+
+    /// Full path to the private persistent catalog index.
+    pub fn catalog_cache_path(&self) -> PathBuf {
+        self.cache_root.join(CATALOG_CACHE_FILE)
     }
 
     /// Full path to the installer-owned calibration executable.

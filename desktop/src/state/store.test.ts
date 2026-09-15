@@ -1,7 +1,7 @@
 import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
-import type { SearchRequest, SettingsPatch } from '../bridge/DesktopBridge';
+import type { SearchRequest, SettingsPatch, UiEvent } from '../bridge/DesktopBridge';
 import {
   AUTO_PLAY_HANDOFF_MS,
   createShuffleTraversal,
@@ -35,6 +35,75 @@ describe('desktop store', () => {
     await act(async () => store.getState().initialize());
     expect(store.getState().playback.shuffleEnabled).toBe(false);
     expect(store.getState().settings?.auto_play).toBe(true);
+  });
+
+  it('keeps catalog loading and failure states separate from shell readiness', () => {
+    const store = createDesktopStore(createMockBridge());
+    store.setState({
+      library: { ...store.getState().library, loading: true, error: null },
+    });
+
+    store.getState().applyEvent({
+      v: 1,
+      name: 'catalog.load_failed',
+      payload: { message: 'catalog source is unavailable' },
+    });
+
+    expect(store.getState().bootstrapState).toBe('idle');
+    expect(store.getState().library.loading).toBe(false);
+    expect(store.getState().library.error).toBe('catalog source is unavailable');
+  });
+
+  it('does not overwrite a catalog failure received while bootstrap is loading', async () => {
+    const bridge = createMockBridge();
+    const originalBootstrap = bridge.bootstrap;
+    let signalBootstrapStarted!: () => void;
+    const bootstrapStarted = new Promise<void>((resolve) => {
+      signalBootstrapStarted = resolve;
+    });
+    let releaseBootstrap!: () => void;
+    const bootstrapRelease = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    bridge.bootstrap = async () => {
+      signalBootstrapStarted();
+      await bootstrapRelease;
+      return {
+        ...(await originalBootstrap()),
+        catalog_state: 'loading',
+        catalog_generation: null,
+      };
+    };
+    const store = createDesktopStore(bridge);
+    const initialization = store.getState().initialize();
+
+    await bootstrapStarted;
+    store.getState().applyEvent({
+      v: 1,
+      name: 'catalog.load_failed',
+      payload: { message: 'catalog source is unavailable' },
+    });
+    releaseBootstrap();
+    await act(async () => initialization);
+
+    expect(store.getState().bootstrapState).toBe('ready');
+    expect(store.getState().library.loading).toBe(false);
+    expect(store.getState().library.error).toBe('catalog source is unavailable');
+  });
+
+  it('uses the authoritative settings snapshot from bootstrap', async () => {
+    const bridge = createMockBridge();
+    const getSettings = vi.spyOn(bridge, 'getSettings');
+    const store = createDesktopStore(bridge);
+
+    await act(async () => store.getState().initialize());
+
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(store.getState().settings).toMatchObject({
+      theme: 'aurora',
+      auto_play: true,
+      verbose_hud: false,
+    });
   });
 
   it('derives Now Playing from playback identity without changing the selected song', async () => {
@@ -144,6 +213,89 @@ describe('desktop store', () => {
     await act(async () => store.getState().patchSettings({ theme: 'slate', verboseHud: true }));
     expect(store.getState().settings?.theme).toBe('slate');
     expect(store.getState().settings?.verbose_hud).toBe(true);
+  });
+
+  it('retries cached catalog hydration when reconciliation changes the generation mid-search', async () => {
+    const bridge = createMockBridge();
+    const originalSubscribe = bridge.subscribeUiEvents;
+    const originalSearch = bridge.searchSongs;
+    let listener: ((event: import('../bridge/DesktopBridge').UiEvent) => void) | undefined;
+    let firstSearch = true;
+    bridge.subscribeUiEvents = async (next) => {
+      listener = next;
+      return originalSubscribe(next);
+    };
+    bridge.searchSongs = async (request) => {
+      if (firstSearch && request.generation === 1) {
+        firstSearch = false;
+        listener?.({
+          v: 1,
+          name: 'catalog.changed',
+          payload: { generation: 2, total: 500 },
+        });
+        throw new Error('catalog generation is stale');
+      }
+      const result = await originalSearch(request);
+      return request.generation === 2 ? { ...result, generation: 2 } : result;
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    expect(store.getState().library.generation).toBe(2);
+    expect(store.getState().library.loading).toBe(false);
+    expect(store.getState().library.error).toBeNull();
+    expect(store.getState().library.pages.get(0)?.length).toBeGreaterThan(0);
+  });
+
+  it('bounds generation retries and converges through queued catalog changes', async () => {
+    const bridge = createMockBridge();
+    const originalSubscribe = bridge.subscribeUiEvents;
+    const originalSearch = bridge.searchSongs;
+    let listener: ((event: import('../bridge/DesktopBridge').UiEvent) => void) | undefined;
+    const pendingGenerations = [2, 3, 4];
+    let signalStableSearch!: () => void;
+    const stableSearchStarted = new Promise<void>((resolve) => {
+      signalStableSearch = resolve;
+    });
+    let releaseStableSearch!: () => void;
+    const stableSearchRelease = new Promise<void>((resolve) => {
+      releaseStableSearch = resolve;
+    });
+    let searchCalls = 0;
+    bridge.subscribeUiEvents = async (next) => {
+      listener = next;
+      return originalSubscribe(next);
+    };
+    bridge.searchSongs = async (request) => {
+      searchCalls += 1;
+      const nextGeneration = pendingGenerations.shift();
+      if (nextGeneration !== undefined) {
+        listener?.({
+          v: 1,
+          name: 'catalog.changed',
+          payload: { generation: nextGeneration, total: 500 },
+        });
+        throw new Error('catalog generation is stale');
+      }
+      signalStableSearch();
+      await stableSearchRelease;
+      const result = await originalSearch(request);
+      return { ...result, generation: 4 };
+    };
+
+    const store = createDesktopStore(bridge);
+    const initialization = store.getState().initialize();
+
+    await stableSearchStarted;
+    await initialization;
+    expect(searchCalls).toBe(4);
+    releaseStableSearch();
+    await waitFor(() => {
+      expect(store.getState().library.generation).toBe(4);
+      expect(store.getState().library.loading).toBe(false);
+      expect(store.getState().library.error).toBeNull();
+    });
   });
 
   it('discards an older search response', async () => {
@@ -774,6 +926,168 @@ describe('desktop store', () => {
     expect(store.getState().playback.sessionId).not.toBe(firstSession);
     expect(store.getState().playback.context?.currentIndex).toBe(1);
     expect(store.getState().playback.error).toBeNull();
+  });
+
+  it('keeps auto-advance ordered when successor playing arrives before start resolves', async () => {
+    const bridge = createMockBridge({
+      playbackDurationMs: 60,
+      startDelayMs: 1,
+      emitSnapshots: false,
+    });
+    const originalSubscribe = bridge.subscribeUiEvents;
+    const originalStart = bridge.startPlayback;
+    let forwardEvent: ((event: UiEvent) => void) | undefined;
+    let holdSuccessorPlaying = false;
+    let heldPlaying: UiEvent | null = null;
+    let releaseSuccessorStart!: () => void;
+    let resolveSuccessorStart!: () => void;
+    const successorStartReleased = new Promise<void>((resolve) => {
+      releaseSuccessorStart = resolve;
+    });
+    const successorStarted = new Promise<void>((resolve) => {
+      resolveSuccessorStart = resolve;
+    });
+    let resolveSuccessorPlaying!: () => void;
+    const successorPlayingCaptured = new Promise<void>((resolve) => {
+      resolveSuccessorPlaying = resolve;
+    });
+
+    bridge.subscribeUiEvents = async (listener) => {
+      forwardEvent = listener;
+      return originalSubscribe((event) => {
+        if (
+          holdSuccessorPlaying &&
+          event.name === 'playback.state_changed' &&
+          event.payload.state === 'playing'
+        ) {
+          heldPlaying = event;
+          resolveSuccessorPlaying();
+          return;
+        }
+        listener(event);
+      });
+    };
+    let startCount = 0;
+    bridge.startPlayback = async (request) => {
+      const successor = startCount++ === 1;
+      if (successor) {
+        holdSuccessorPlaying = true;
+        resolveSuccessorStart();
+      }
+      const session = await originalStart(request);
+      if (successor) await successorStartReleased;
+      return session;
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    const second = rowAt(store, 1);
+    if (!first || !second) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    await waitFor(() => expect(store.getState().playback.currentSong?.songId).toBe(first.song_id));
+
+    await successorStarted;
+    await successorPlayingCaptured;
+    expect(store.getState().playback.currentSong?.songId).toBe(second.song_id);
+    expect(store.getState().playback.transportOperation).toBe('advancing');
+    expect(heldPlaying).not.toBeNull();
+
+    forwardEvent?.(heldPlaying!);
+    expect(store.getState().playback.currentSong?.songId).toBe(second.song_id);
+    expect(store.getState().playback.state).toBe('playing');
+    expect(store.getState().playback.transportOperation).toBeNull();
+
+    releaseSuccessorStart();
+    await waitFor(() => expect(store.getState().playback.sessionId).not.toBeNull());
+    expect(store.getState().playback.currentSong?.songId).toBe(second.song_id);
+    expect(store.getState().playback.state).toBe('playing');
+    expect(store.getState().playback.transportOperation).toBeNull();
+  });
+
+  it('does not let an old session playing event clear explicit Next', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 1 });
+    const originalSubscribe = bridge.subscribeUiEvents;
+    const originalSkip = bridge.skipPlayback;
+    let forwardEvent: ((event: UiEvent) => void) | undefined;
+    let resolveSkipCalled!: () => void;
+    const skipCalled = new Promise<void>((resolve) => {
+      resolveSkipCalled = resolve;
+    });
+    let releaseSkip!: () => void;
+    const skipRelease = new Promise<void>((resolve) => {
+      releaseSkip = resolve;
+    });
+    bridge.subscribeUiEvents = async (listener) => {
+      forwardEvent = listener;
+      return originalSubscribe(listener);
+    };
+    bridge.skipPlayback = async (request) => {
+      resolveSkipCalled();
+      await skipRelease;
+      return originalSkip(request);
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    const nextSong = rowAt(store, 1);
+    if (!first || !nextSong) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().patchSettings({ autoPlay: false }));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    const oldSession = store.getState().playback.sessionId;
+    if (!oldSession) throw new Error('mock session did not start');
+
+    const nextPromise = store.getState().nextPlayback();
+    await skipCalled;
+    expect(store.getState().playback.transportOperation).toBe('advancing');
+
+    forwardEvent?.({
+      v: 1,
+      name: 'playback.state_changed',
+      payload: {
+        session_id: oldSession,
+        song_id: first.song_id,
+        state: 'playing',
+        physical: false,
+        message: null,
+        outcome: null,
+      },
+    });
+    expect(store.getState().playback.transportOperation).toBe('advancing');
+
+    forwardEvent?.({
+      v: 1,
+      name: 'playback.snapshot',
+      payload: {
+        session_id: oldSession,
+        seq: 99,
+        state: 'playing',
+        song_id: first.song_id,
+        title: first.title,
+        current_us: 1_000,
+        total_us: first.duration_us ?? 1_000_000,
+        pre_roll_remaining_us: 0,
+        focus_state: 'focused',
+        health: 'healthy',
+        input_path_degraded: false,
+        message: null,
+      },
+    });
+    expect(store.getState().playback.transportOperation).toBe('advancing');
+
+    releaseSkip();
+    await nextPromise;
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    expect(store.getState().playback.currentSong?.songId).toBe(nextSong.song_id);
+    expect(store.getState().playback.sessionId).not.toBe(oldSession);
+    expect(store.getState().playback.transportOperation).toBeNull();
   });
 
   it('waits for the Auto Play handoff after natural retirement', async () => {

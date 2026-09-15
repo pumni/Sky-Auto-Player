@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    sky_desktop_shell_lib::startup_process_entry();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if std::env::var_os("SKY_DESKTOP_RESTART_SELFTEST").is_some() {
         std::process::exit(sky_desktop_shell_lib::selftest_packaged_shell());
