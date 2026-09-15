@@ -215,8 +215,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         stuck_keys: 0,
         keys_dropped: 0,
         chord_split_events: 0,
-        missed_down_boundaries: 1,
-        missed_down_keys: 1,
+        missed_down_boundaries: 2,
+        missed_down_keys: 2,
         missed_unobserved_backlog_boundaries: 0,
         missed_physical_window_boundaries: 1,
         final_sender_window_expirations: 1,
@@ -944,7 +944,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     },
     async exportSenderTrace(): Promise<string> {
       return JSON.stringify({
-        export_schema_version: 1,
+        export_schema_version: 2,
         session_id: 'a'.repeat(32),
         song_id: 'fixture-song',
         song_title: 'Fixture Song',
@@ -952,13 +952,14 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         timing_policy: {
           fps: 60,
           frame_period_us: 16_667,
+          hold_frames: 1,
           frame_base_hold_us: 16_667,
           timing_margin_us: 500,
           target_hold_us: 17_167,
           release_gap_us: 17_167,
         },
         telemetry: {
-          schema_version: 15,
+          schema_version: 16,
           qpc_frequency_hz: 10_000_000,
           records: [],
           attempted: 0,
