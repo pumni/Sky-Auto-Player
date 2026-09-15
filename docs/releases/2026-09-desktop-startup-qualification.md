@@ -1,6 +1,6 @@
 # Desktop Startup Qualification — Gate 4
 
-Status: local qualification evidence collected for #267.
+Status: Gate 4 technical and remote qualification evidence recorded for #267.
 
 The comparison uses the locked endpoints:
 
