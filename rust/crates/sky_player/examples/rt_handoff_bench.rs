@@ -288,6 +288,7 @@ fn unsigned_summary(mut values: Vec<u64>) -> serde_json::Value {
 fn signed_summary(mut values: Vec<i64>) -> serde_json::Value {
     let min = values.iter().copied().min();
     let max = values.iter().copied().max();
+    let max_positive = values.iter().copied().filter(|value| *value > 0).max();
     let p50 = quantile(&mut values, 50, 100);
     let p95 = quantile(&mut values, 95, 100);
     let p99 = quantile(&mut values, 99, 100);
@@ -299,6 +300,7 @@ fn signed_summary(mut values: Vec<i64>) -> serde_json::Value {
         "p99": p99,
         "p99_9": p99_9,
         "max": max,
+        "max_positive": max_positive,
         "samples": values.len(),
     })
 }
