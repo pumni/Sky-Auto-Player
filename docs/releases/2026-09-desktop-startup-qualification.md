@@ -61,15 +61,16 @@ shell-startup improvement; process-to-shell is effectively flat at the campaign 
 | large | cold-ish | 869.97 / 981.35 | 806.02 / 931.30 | -7.4% |
 | large | warm | 900.50 / 1,316.71 | 815.63 / 886.64 | -9.4% |
 
-The final candidate's large/warm critical milestones are:
+The final candidate's selected milestones are:
 
-| Milestone | Median |
-| --- | ---: |
-| React initialize → shell ready | 117.00 ms |
-| Fast bootstrap | 0.68 ms |
-| Cached catalog available | 43.86 ms |
-| Catalog reconciled milestone | 1,069.72 ms |
-| Cold/no-cache rebuild | 260.04 ms |
+| Milestone | Mode | Median |
+| --- | --- | ---: |
+| React initialize → shell ready | warm | 117.00 ms |
+| Fast bootstrap | warm | 0.68 ms |
+| Cached catalog available | warm | 43.86 ms |
+| React catalog ready | warm | 912.21 ms |
+| Background reconciliation complete | warm | 1,069.72 ms |
+| Cold/no-cache rebuild | cold-ish | 260.04 ms |
 
 The warm cached catalog target (`≤100 ms`) and warm React/bootstrap targets are met. All shell
 medians are below 1 second. Representative-fixture p95 is above 1 second and is retained here as
@@ -131,8 +132,8 @@ process entry
 | Calibration recommendation update | `calibration_recommendation_never_changes_the_persisted_user_margin` | PASS |
 | Playback prepare/start/stop | Packaged native safe self-test and desktop regression suite | PASS |
 | Shutdown during reconcile | Epoch fencing/shutdown regression and packaged lifecycle smoke | PASS |
-| NSIS install/launch/uninstall | Local exact-candidate installer qualification | PASS |
-| Updater signing/key rotation contract | Candidate contract, updater signature, and rotation self-test | PASS |
+| NSIS install/launch/uninstall | Local exact-candidate installer qualification and CI #1026 packaged qualification | PASS |
+| Updater signing/key rotation contract | Candidate contract, updater signature, rotation self-test, and CI #1026 updater fixture | PASS |
 | Second-instance Windows behavior | Local installed-app probe; first instance remained alive | PASS |
 | Browser/mock and lazy surfaces | Desktop browser E2E and bundle network assertions | PASS |
 
@@ -155,7 +156,9 @@ The following completed successfully on the final integration tree:
   probe, and uninstall;
 - updater key-rotation fixture.
 
-The exact PR #273 head CI was green in [CI #1021](https://github.com/pumni/Sky-Auto-Player/actions/runs/34987656360).
-Its frontend-only classifier skipped the package/updater jobs; the exact final-candidate NSIS and
-updater evidence in this record therefore comes from the local packaged qualification above, while
-production signing policy remains unchanged.
+The exact qualification PR head `903d2a509420b5a63041f3f6fcd98937d406f040` was green in the
+manual full [CI #1026](https://github.com/pumni/Sky-Auto-Player/actions/runs/34996084259), run ID
+`34996084259`. The full remote run executed and passed the Tauri candidate, packaged NSIS,
+updater bridge/fixture, key rotation, release contract, supply-chain, Windows/native, desktop
+browser, and required CI gates. The local package evidence above remains supplementary; remote
+qualification is now the merge gate, and production signing policy remains unchanged.
