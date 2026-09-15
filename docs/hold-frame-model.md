@@ -14,14 +14,14 @@ promised identical latency.
 For a physical boundary, native preparation materializes and validates
 one immutable packet before the interruptible wait. The worker's single
 hybrid wait and bounded QPC spin cross the later of the authored target and
-relevant physical floors. If a Down floor is outside its latest-start window,
-the worker waits only to the authored target, consumes the exact authorization,
-and classifies the Down chord as missed. A mixed packet's Up prefix then waits
-independently for its musical hold floor before recovery. It runs the final
+relevant physical floors. If a Down floor is outside the physical latest-start
+window, the worker waits only to the authored target, consumes the exact
+authorization, and classifies the Down chord as missed. A mixed packet's Up
+prefix then waits independently for its musical hold floor before recovery. It runs the final
 command/control, target, and focus gates, repeats the program-owned atomic
 checks, and evaluates the lease. The worker records `final_policy_qpc` for
 lease admission. The prepared sender then takes the true `pre_call_qpc`
-immediately before the latest-start check and one `SendInput` call.
+immediately before the effective sender-cutoff check and one `SendInput` call.
 Up entries precede Down entries;
 an overlapping Up/Down mask is rejected during preparation. A partial Up is
 reported with partial-progress evidence but is never silently retried by this
@@ -39,8 +39,10 @@ min_release_gap_us = frame_us + timing_margin_us
 
 The user-owned Timing Margin defaults to `500 µs`, ranges from `0` through
 `3,000 µs` in `100 µs` steps, and applies equally to Hold and Release Gap.
-It is also the Down latest-start headroom: a Down may begin no later than its
-authored target plus this margin. Calibration never supplies part of the
+It defines the physical latest Down start: a physically feasible Down may begin
+no later than its authored target plus this margin. Normal playback also uses
+the fixed internal `2,500 µs` total continuity bound from the authored target,
+without adding it to Timing Margin. Calibration never supplies part of the
 authored timing equation. Qualified calibration may produce an advisory
 recommendation from measured transport reserve plus a fixed `100 µs` guard.
 Without qualified evidence, the informational fallback recommendation is the
@@ -69,14 +71,22 @@ using sender QPC evidence:
 ```text
 musical_up_not_before = last_successful_down_completion + frame_base_hold
 down_not_before = last_successful_up_completion + frame
-latest_down_start = authored_down_target + timing_margin
+physical_latest_down_start = authored_down_target + timing_margin
+normal_sender_cutoff = max(
+    physical_latest_down_start,
+    authored_down_target + 2,500 µs,
+)
+strict_sender_cutoff = physical_latest_down_start
 ```
 
 The worker waits until the authored target and relevant physical floor are
-both reached. If a Down floor exceeds its latest-start window, the worker
-classifies the whole Down chord as missed at the authored target. Any Up-prefix
-recovery then waits for its independent hold floor. A true pre-call QPC check closes the remaining race immediately
-before `SendInput`. Authored Up and mixed Up-prefix recovery respect the
+both reached. If a Down floor exceeds `physical_latest_down_start`, the worker
+classifies the whole Down chord as `PhysicalWindowExpired` at the authored
+target; continuity tolerance cannot rescue it. A true pre-call QPC check closes
+the remaining race immediately before `SendInput`. In normal playback, a
+physically feasible pre-call may be later than the physical boundary but must
+remain within the non-additive normal cutoff. Strict mode remains bounded by
+the physical boundary. Authored Up and mixed Up-prefix recovery respect the
 Down-completion hold floor. Emergency, focus-loss, and cleanup Ups bypass
 musical floors so safety release stays immediate. Completion evidence never
 proves that Sky sampled the transition.
@@ -101,10 +111,14 @@ effective_min_hold_us = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
 ```
 
-Timing Margin is the only authored Down execution headroom. Zero is a valid
-strict/no-headroom choice. Equality at the latest-start QPC is allowed; the
-first tick beyond it is a missed Down. A Down chord is never split or retried.
-Up-only safety releases remain exempt from musical floors.
+Timing Margin is the only user-owned authored headroom and remains part of the
+hold/release materialization. Zero is a valid strict/no-headroom choice. In
+strict mode, equality at `physical_latest_down_start` is allowed and the first
+tick beyond it is a missed Down. In normal playback, the same equality rule
+uses `max(physical_latest_down_start, authored_target + 2,500 µs)` for the
+sender cutoff; this internal tolerance is not persisted, a validation input, or
+part of hold/release floors. A Down chord is never split or retried. Up-only
+safety releases remain exempt from musical floors.
 
 At 60 FPS with the default margin:
 
@@ -147,10 +161,13 @@ its floor is reached, but it never changes an authored target or retries a
 missed Down.
 Successful completion also updates the worker's physical floors, so a later
 Up or same-key Down cannot violate a hold or release interval after transport
-latency. Miss classification uses mutually exclusive reasons:
+latency. A normal Down that starts after the physical boundary but within the
+bounded continuity cutoff is called a late rescue only after complete transport
+success and a successful physical-guard update. Miss classification uses
+mutually exclusive reasons:
 `unobserved_backlog`, `physical_window_expired`, or
 `final_sender_window_expired`. Their counters sum to `missed_down_boundaries`;
-a sender latest-start rejection is counted at that boundary once. Hold- and
+a sender effective-cutoff rejection is counted at that boundary once. Hold- and
 release-floor delay counts and maxima are separate evidence, with the latest
 contributing authored and physical QPC targets and masks retained in the
 bounded trace. Each miss preserves authored timestamps and prevents a catch-up
@@ -166,9 +183,10 @@ hold/release floor sample counts, minimum observed intervals, floor violations,
 same-call retriggers, anchor overwrites, unmatched Ups, and ring overwrites.
 Structural anomalies and timing diagnostics have separate counters. Hold- and
 release-floor delay counts and maxima are published independently from the
-exclusive Down miss taxonomy. The production forensics block exposes an
-availability/version marker and never allocates, locks, samples QPC, or
-consults the diagnostic observer.
+exclusive Down miss taxonomy. The fixed rescue scalars count only successful
+completion evidence and do not change schema 16 or claim game observation.
+The production forensics block exposes an availability/version marker and
+never allocates, locks, samples QPC, or consults the diagnostic observer.
 These values are not game-onset or audio-onset measurements. The old estimator
 and adaptive dispatch lead are not part of this model; historical lead fields
 are compatibility-only zeros.

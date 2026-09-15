@@ -133,6 +133,14 @@ The current application default is a `500 µs` user Timing Margin at 60 FPS:
 are `17,167 µs`; focus restore grace remains `100,000 µs`. Historical
 acceptance runs retain their exact recorded values and are not rewritten when
 product defaults change.
+The physical boundary is
+`physical_latest_down_start = authored target + Timing Margin`. Normal playback
+also has the fixed internal `normal_down_start_tolerance = 2,500 µs` total from
+the authored target. Therefore `sender_cutoff` is
+`max(physical_latest_down_start, target + 2,500 µs)` in normal playback and
+`physical_latest_down_start` in strict mode. The tolerance is not persisted,
+user-configurable, adaptive, a dispatch lead, or part of hold/release
+materialization.
 Controlled A/B runs may pass `--timing-margin-us 0..3000` in `100 µs` steps;
 the `timing-margin-sweep` scenario authors its Hold and Release Gap targets
 from that exact value and records the packet timestamps in every report.
@@ -235,7 +243,8 @@ frozen plan
   -> final command/control, target, and foreground proof
   -> cheap program-owned control/target/focus atomic revalidation
   -> final_policy_qpc sample and lease admission
--> sender SetLastError(0), true pre_call_qpc sample, and Down latest-start check
+-> sender SetLastError(0), true pre_call_qpc sample, and mode-specific
+   sender cutoff check
   -> one packetized SendInput call
   -> completion QPC and transport-mask validation
   -> coordinator ownership commit on clean success
@@ -249,7 +258,9 @@ worker's `final_policy_qpc` is the post-revalidation policy/lease evidence
 sample. The trusted prepared sender then resolves the fixed payload pointer
 and length, resets thread-local Win32 error state, takes the true
 `pre_call_qpc` immediately before the syscall, and applies the Down-only
-latest-start boundary against that sample.
+effective sender cutoff against that sample. Physical feasibility was already
+checked against `physical_latest_down_start`; normal continuity does not widen
+that physical boundary.
 The sender performs no target wait or policy recheck after receiving the
 prepared packet.
 The transport reports `sendinput_completion_qpc`; production does not subtract
@@ -363,27 +374,30 @@ once during admission to initialize a fixed-size, per-key
 ```text
 musical_up_not_before[key] = successful_down_completion[key] + frame_base_hold
 down_not_before[key] = successful_up_completion[key] + frame
-latest_down_start = authored_down_target + timing_margin
+physical_latest_down_start = authored_down_target + timing_margin
+normal_sender_cutoff = max(physical_latest_down_start, authored_target + 2,500 µs)
+strict_sender_cutoff = physical_latest_down_start
 ```
 
 Each physical packet waits until its authored target and relevant floors are
-reached. If a Down floor exceeds its latest-start window, the worker waits
-until the authored target and any required Up-prefix hold floor, then expires
-the whole Down chord. The authored target is never moved. Actual completion
-QPC remains in `sky_player`; it does not enter `sky_dispatch_core`. Guard
-arithmetic is checked, and partial, uncertain, or post-send clock failures
-invalidate its evidence. Calibration recommends transport reserve plus a
-fixed `100 µs` guard, rounded up to the margin step; it never changes a
-prepared schedule or setting.
+reached. If a Down floor exceeds `physical_latest_down_start`, the worker
+waits until the authored target and any required Up-prefix hold floor, then
+expires the whole Down chord as `PhysicalWindowExpired`. A normal sender may
+use its bounded cutoff only after this physical-feasibility check. The authored
+target is never moved. Actual completion QPC remains in `sky_player`; it does
+not enter `sky_dispatch_core`. Guard arithmetic is checked, and partial,
+uncertain, or post-send clock failures invalidate its evidence. Calibration
+recommends transport reserve plus a fixed `100 µs` guard, rounded up to the
+margin step; it never changes a prepared schedule or setting.
 
 ## 5. Wait and interrupt ordering
 
 For a future physical plan, the worker uses one high-resolution waitable timer
 and event-interruptible hybrid wait to the absolute target computed from the
 authored target and relevant physical floors. If a Down floor already exceeds
-its latest-start window, it waits to the authored target, consumes authorization,
-and records the miss there. Any required Up-prefix recovery then waits
-independently for its hold floor.
+`physical_latest_down_start`, it waits to the authored target, consumes
+authorization, and records the miss there. Any required Up-prefix recovery
+then waits independently for its hold floor.
 The waiter sleeps while the target is farther away than the frozen spin
 threshold, then performs the bounded QPC spin until the target. There is no
 per-note `T - guard` admission wake and no second precision wait. A lease-only,
@@ -409,7 +423,9 @@ The final precision spin performs only its QPC wait-target comparison and
 are completed before that stage; no interrupt-generation polling or control
 branch is inserted into the final spin. The QPC deadline check remains
 authoritative and cannot be bypassed by an event. The sender independently
-checks the Down latest-start boundary with its true pre-call QPC sample.
+checks the effective mode-specific Down sender cutoff with its true pre-call QPC
+sample; strict mode uses `physical_latest_down_start`, while normal playback
+uses the non-additive `max(physical_latest_down_start, target + 2,500 µs)`.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
 timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
@@ -444,17 +460,22 @@ epoch, pause, focus rebase, or completed/missed commit. A kernel wait result is
 not the musical proof.
 
 A due Down without that exact authorization is `UnobservedBacklog`. A
-future-authorized Down whose physical floors cannot fit inside its authored
-latest-start window is `PhysicalWindowExpired`; the worker waits interruptibly
-to the authored target and any required Up-prefix hold floor before recording
-the miss. The Down portion is omitted, the frozen coordinator frame is
-committed as missed, and playback advances to the next authored target without
-rebasing or changing timestamps. A Mixed frame sends only its required Up
-subset through one borrowed view of the prepared primary packet's canonical Up
-prefix; no second recovery payload is materialized. A failed or uncertain
-safety Up remains terminal. Up-only safety releases bypass musical floors and
-are sent even when late. In every mode, missed Downs are never retried or
-emitted as a catch-up burst.
+future-authorized Down whose physical floors cannot fit inside
+`physical_latest_down_start` is `PhysicalWindowExpired`; the worker waits
+interruptibly to the authored target and any required Up-prefix hold floor
+before recording the miss. A normal Down that is physically feasible but whose
+sender pre-call is after the physical boundary may use the bounded
+non-additive continuity cutoff; only a complete successful send and physical
+guard update count as a late rescue. A sender pre-call beyond that effective
+cutoff is `FinalSenderWindowExpired`. The Down portion is omitted, the frozen
+coordinator frame is committed as missed, and playback advances to the next
+authored target without rebasing or changing timestamps. A Mixed frame sends
+only its required Up subset through one borrowed view of the prepared primary
+packet's canonical Up prefix; no second recovery payload is materialized. A
+failed or uncertain safety Up remains terminal. Up-only safety releases bypass
+musical floors and are sent even when late. In every mode, missed Downs are
+never retried or emitted as a catch-up burst; `PhysicalWindowExpired` and
+`UnobservedBacklog` are never rescued.
 
 ## 7. Failure and publication boundaries
 
@@ -474,6 +495,13 @@ sample, allocation, lock, formatting, or unbounded scan to the production send
 path. Diagnostic observer failure, telemetry overflow, or metric conversion
 failure cannot rewrite physical ownership. The worker terminates through the
 normal cleanup path and preserves the primary and secondary errors.
+
+The internal rescue scalars count only normal-playback Down packets with a
+valid completion QPC and a successful physical-guard update:
+`late_rescued_down_boundaries`, `late_rescued_down_keys`, and the maximum
+rescued lateness. They do not change native telemetry schema 16 and do not
+claim game observation. `FinalSenderWindowExpired`, `PhysicalWindowExpired`,
+and `UnobservedBacklog` remain distinct outcomes.
 
 The live snapshot projects authoritative worker counters and physical forensics.
 The full snapshot includes the last classified missed-Down sample, floor-delay
