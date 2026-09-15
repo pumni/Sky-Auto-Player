@@ -2137,6 +2137,100 @@ mod tests {
     }
 
     #[test]
+    fn catalog_observer_composition_matches_production_composition() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-catalog-observer-parity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let builtin_root = root.join("builtin-songs");
+        let builtin_sheets = builtin_root.join("sheets");
+        let user_root = root.join("user-songs");
+        let imported_root = root.join("imported");
+        fs::create_dir_all(&builtin_sheets).expect("builtin sheets");
+        fs::create_dir_all(&user_root).expect("user songs");
+        fs::create_dir_all(&imported_root).expect("imported songs");
+
+        let builtin_song = builtin_sheets.join("builtin.json");
+        fs::write(
+            &builtin_song,
+            br#"{"name":"Builtin","songNotes":[{"time":0,"key":"1Key0"}]}"#,
+        )
+        .expect("builtin song");
+        let builtin_manifest = BuiltinCatalogManifest {
+            schema_version: 1,
+            songs: vec![sky_app_core::catalog::BuiltinSongManifestEntry {
+                id: "0123456789abcdef0123456789abcdef".into(),
+                path: "sheets/builtin.json".into(),
+                title: "Builtin".into(),
+                sha256: sha256_bytes(&fs::read(&builtin_song).expect("read builtin song")),
+            }],
+            retired_songs: Vec::new(),
+        };
+        fs::write(
+            builtin_root.join("manifest.json"),
+            serde_json::to_vec(&builtin_manifest).expect("builtin manifest JSON"),
+        )
+        .expect("builtin manifest");
+        fs::write(user_root.join("user.json"), "{}").expect("user song");
+        let imported_song = imported_root.join("imported.txt");
+        fs::write(&imported_song, "notes").expect("imported song");
+
+        let imports = vec![
+            ImportedSourceRef {
+                source_id: "a".repeat(32),
+                canonical_path: fs::canonicalize(&imported_song)
+                    .expect("canonical imported song")
+                    .to_string_lossy()
+                    .into_owned(),
+                kind: ImportedSourceKind::File,
+            },
+            ImportedSourceRef {
+                source_id: "b".repeat(32),
+                canonical_path: root.join("unavailable").to_string_lossy().into_owned(),
+                kind: ImportedSourceKind::Folder,
+            },
+        ];
+        let composer = CatalogComposer::new(
+            BuiltinCatalogSource::new(AppResources::from_builtin_catalog_root(builtin_root)),
+            FileCatalogSource::new(user_root),
+        );
+
+        let production = composer.compose(&imports).expect("production composition");
+        let mut events = Vec::new();
+        let observed = composer
+            .compose_with_observer(&imports, |event| events.push(event))
+            .expect("observed composition");
+
+        assert_eq!(production.entries, observed.entries);
+        assert_eq!(production.library_membership, observed.library_membership);
+        assert_eq!(production.builtin_membership, observed.builtin_membership);
+        assert_eq!(production.user_membership, observed.user_membership);
+        assert_eq!(production.imported_membership, observed.imported_membership);
+        assert_eq!(production.imported_status, observed.imported_status);
+        assert_eq!(production.builtin_status, observed.builtin_status);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, CatalogCompositionEvent::SourceStarted(_)))
+                .count(),
+            4
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, CatalogCompositionEvent::SourceFinished { .. }))
+                .count(),
+            4
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn builtin_source_is_manifest_driven_and_fails_as_one_source() {
         let root = std::env::temp_dir().join(format!("sky-v4-builtin-{}", std::process::id()));
         let resource_root = root.join("builtin-songs");
