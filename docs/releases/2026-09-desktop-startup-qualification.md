@@ -160,8 +160,8 @@ The qualification source head `903d2a509420b5a63041f3f6fcd98937d406f040` was gre
 manual full [CI #1026](https://github.com/pumni/Sky-Auto-Player/actions/runs/34996084259), run ID
 `34996084259`. The full remote run executed and passed the Tauri candidate, packaged NSIS,
 updater bridge/fixture, key rotation, release contract, supply-chain, Windows/native, desktop
-browser, and required CI gates. The current PR head
-`7081d954366d490e58b9e4efe7476e103f6b3932` is a docs-only follow-up correcting milestone labels and verification wording; it
-does not change production code, raw JSON, fixtures, parser, or benchmark methodology, so CI #1026
-remains accepted without rerun. The local package evidence above remains supplementary; remote
+browser, and required CI gates. The post-qualification branch revision is a docs-only follow-up
+correcting milestone labels and verification wording; it does not change production code, raw JSON,
+fixtures, parser, or benchmark methodology, so CI #1026 remains accepted without rerun. The local
+package evidence above remains supplementary; remote
 qualification is the merge gate, and production signing policy remains unchanged.
