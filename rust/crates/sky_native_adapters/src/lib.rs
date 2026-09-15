@@ -707,7 +707,64 @@ impl CatalogComposer {
         &self,
         imports: &[ImportedSourceRef],
     ) -> Result<CatalogComposition, CatalogError> {
-        self.compose_internal(imports, None)
+        let (builtin_entries, builtin_membership, builtin_status) = self.builtin.load();
+        let user_entries = self.user.entries()?;
+        let user_membership = user_entries
+            .iter()
+            .map(|entry| song_id_for_canonical_path(&entry.canonical_path))
+            .collect::<BTreeSet<_>>();
+        let mut composition = CatalogComposition {
+            entries: builtin_entries,
+            builtin_membership: builtin_membership.clone(),
+            user_membership: user_membership.clone(),
+            library_membership: builtin_membership
+                .union(&user_membership)
+                .cloned()
+                .collect(),
+            builtin_status,
+            ..Default::default()
+        };
+        composition.entries.extend(user_entries);
+        for import in imports {
+            let path = PathBuf::from(&import.canonical_path);
+            let display_name = import_display_name(&path, import.kind);
+            if !path.exists() {
+                record_missing_import(&mut composition, import, display_name);
+                continue;
+            }
+            let imported = match import.kind {
+                ImportedSourceKind::File => entries_from_file(&path),
+                ImportedSourceKind::Folder => entries_from_directory(&path, true),
+            };
+            let imported = match imported {
+                Ok(entries) => entries,
+                Err(_) => {
+                    record_missing_import(&mut composition, import, display_name);
+                    continue;
+                }
+            };
+            let membership = imported
+                .iter()
+                .map(|entry| song_id_for_canonical_path(&entry.canonical_path))
+                .collect::<BTreeSet<_>>();
+            composition
+                .imported_status
+                .push(ImportedSourceCatalogStatus {
+                    source_id: import.source_id.clone(),
+                    kind: import.kind,
+                    display_name,
+                    song_count: membership.len(),
+                    available: true,
+                });
+            composition
+                .imported_membership
+                .insert(import.source_id.clone(), membership);
+            composition.entries.extend(imported);
+        }
+        composition
+            .entries
+            .sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
+        Ok(composition)
     }
 
     pub fn compose_with_observer<F>(
@@ -943,7 +1000,17 @@ impl SongSource for FileCatalogSource {
 }
 
 fn entries_from_file(path: &Path) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
-    entries_from_file_with_metrics(path).map(|(entries, _)| entries)
+    if !path.is_file() || !is_supported(path) {
+        return Ok(Vec::new());
+    }
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
+    Ok(vec![CatalogSourceEntry::path_derived(
+        canonical.to_string_lossy(),
+        path.file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default(),
+    )])
 }
 
 fn entries_from_file_with_metrics(
@@ -974,7 +1041,37 @@ fn entries_from_directory(
     root: &Path,
     recursive: bool,
 ) -> Result<Vec<CatalogSourceEntry>, CatalogError> {
-    entries_from_directory_with_metrics(root, recursive).map(|(entries, _)| entries)
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    if !root.is_dir() {
+        return Err(CatalogError::SourceUnavailable(
+            "songs directory is not a directory".into(),
+        ));
+    }
+    let mut entries = Vec::new();
+    let mut directories = vec![root.to_owned()];
+    while let Some(directory) = directories.pop() {
+        let read_dir = fs::read_dir(&directory)
+            .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
+        for item in read_dir {
+            let item = item.map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
+            let path = item.path();
+            let file_type = item
+                .file_type()
+                .map_err(|error| CatalogError::SourceUnavailable(error.to_string()))?;
+            if recursive && file_type.is_dir() {
+                directories.push(path);
+            } else if file_type.is_file() {
+                entries.extend(entries_from_file(&path)?);
+            }
+        }
+        if !recursive {
+            break;
+        }
+    }
+    entries.sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
+    Ok(entries)
 }
 
 fn entries_from_directory_with_metrics(

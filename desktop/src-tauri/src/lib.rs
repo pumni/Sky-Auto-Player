@@ -315,14 +315,13 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
             startup_telemetry::record("tauri.setup.end");
             Ok(())
         });
-    builder = builder.on_page_load(move |webview, payload| match payload.event() {
+    if startup_telemetry::enabled() || gui_smoke {
+        let telemetry_enabled = startup_telemetry::enabled();
+        builder = builder.on_page_load(move |webview, payload| match payload.event() {
             tauri::webview::PageLoadEvent::Started => {
-                let telemetry_enabled = startup_telemetry::enabled();
-                let _ = webview.eval(if telemetry_enabled {
-                    "window.__SKY_STARTUP_TELEMETRY_ENABLED__ = true;"
-                } else {
-                    "window.__SKY_STARTUP_TELEMETRY_ENABLED__ = false;"
-                });
+                if telemetry_enabled {
+                    let _ = webview.eval("window.__SKY_STARTUP_TELEMETRY_ENABLED__ = true;");
+                }
                 if gui_smoke {
                     record_gui_smoke_phase(&format!(
                         "webview.page_load.started {}",
@@ -347,6 +346,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
                 }
             }
         });
+    }
     let result = builder
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,

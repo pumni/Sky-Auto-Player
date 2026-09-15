@@ -45,14 +45,16 @@ pub(crate) fn record_counters(
     record_fields(marker, Some(fields));
 }
 
-pub(crate) fn record_frontend_marker(marker: &str) -> Result<(), String> {
+pub(crate) fn record_frontend_marker(marker: &str, frontend_elapsed_us: u64) -> Result<(), String> {
     if !matches!(
         marker,
         "frontend.entry" | "react.initialize.start" | "react.shell_ready" | "react.catalog_ready"
     ) {
         return Err("invalid startup telemetry marker".into());
     }
-    record(marker);
+    let mut fields = Map::new();
+    fields.insert("frontend_elapsed_us".into(), json!(frontend_elapsed_us));
+    record_fields(marker, Some(fields));
     Ok(())
 }
 
@@ -72,18 +74,6 @@ fn record_fields(marker: &str, fields: Option<Map<String, Value>>) {
     let Some(telemetry) = telemetry() else {
         return;
     };
-    let elapsed_us = telemetry
-        .started_at
-        .elapsed()
-        .as_micros()
-        .min(u128::from(u64::MAX)) as u64;
-    let mut event = Map::new();
-    event.insert("schema_version".into(), json!(SCHEMA_VERSION));
-    event.insert("marker".into(), json!(marker));
-    event.insert("elapsed_us".into(), json!(elapsed_us));
-    if let Some(fields) = fields {
-        event.extend(fields);
-    }
     let Ok(mut file) = telemetry.file.lock() else {
         return;
     };
@@ -97,6 +87,18 @@ fn record_fields(marker: &str, fields: Option<Map<String, Value>>) {
     let Some(file) = file.as_mut() else {
         return;
     };
+    let elapsed_us = telemetry
+        .started_at
+        .elapsed()
+        .as_micros()
+        .min(u128::from(u64::MAX)) as u64;
+    let mut event = Map::new();
+    event.insert("schema_version".into(), json!(SCHEMA_VERSION));
+    event.insert("marker".into(), json!(marker));
+    event.insert("elapsed_us".into(), json!(elapsed_us));
+    if let Some(fields) = fields {
+        event.extend(fields);
+    }
     if serde_json::to_writer(&mut *file, &Value::Object(event)).is_ok() {
         let _ = file.write_all(b"\n");
         let _ = file.flush();

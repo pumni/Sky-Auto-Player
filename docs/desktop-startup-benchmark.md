@@ -7,7 +7,9 @@ Telemetry is JSONL with a monotonic `elapsed_us` value relative to
 `process.entry`. It contains marker names and bounded catalog counters only;
 filesystem paths and imported source IDs are never written. Imported sources
 are identified in the trace as `source_0`, `source_1`, and so on in manifest
-order.
+order. Frontend markers also carry `frontend_elapsed_us`, captured from
+`performance.now()` at the marker call site; frontend duration calculations use
+that clock rather than the time when the native IPC request is received.
 
 The startup milestones are intentionally separate:
 
@@ -39,5 +41,8 @@ Each fixture has a cold-ish set and a warm set. Both sets discard one warm-up
 run and then execute 10 measured process restarts. Cold-ish means a fresh
 app-data root and manifest; Windows filesystem/OS caches are not cleared.
 Warm means one app-data root is reused after the discarded warm-up. The JSON
-report contains the raw samples, median, p95, and the methodology used.
-
+report contains the raw samples, median, p95, and the methodology used. Each
+run fails validation unless the required Tauri/native/settings markers are
+present, all elapsed clocks are monotonic, start/end pairs are ordered, and the
+source marker set and counters match the fixture (including the 12-file and
+1,280-file imported trees).

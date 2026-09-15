@@ -10,6 +10,9 @@ const defaultRuns = 10;
 const defaultTimeoutMs = 60_000;
 const requiredMarkers = [
   'process.entry',
+  'tauri.builder.start',
+  'tauri.setup.start',
+  'tauri.setup.end',
   'frontend.entry',
   'react.initialize.start',
   'events.subscribe.start',
@@ -22,6 +25,8 @@ const requiredMarkers = [
   'manifest.load.end',
   'bootstrap.start',
   'bootstrap.end',
+  'settings.reload.start',
+  'settings.reload.end',
   'catalog.compose.start',
   'catalog.compose.end',
   'catalog.index.start',
@@ -97,7 +102,7 @@ function createFixtures(root) {
   const fixtures = {};
   const minimalRoot = join(root, 'minimal');
   mkdirSync(join(minimalRoot, 'songs'), { recursive: true });
-  fixtures.minimal = { importedRoot: null, entries: 0 };
+  fixtures.minimal = { importedRoot: null, entries: 0, expectedImport: null };
 
   const representativeRoot = join(root, 'representative-import');
   for (const folder of ['alpha', 'beta'])
@@ -108,7 +113,11 @@ function createFixtures(root) {
       `Representative ${index}`,
     );
   }
-  fixtures.representative = { importedRoot: representativeRoot, entries: 12 };
+  fixtures.representative = {
+    importedRoot: representativeRoot,
+    entries: 12,
+    expectedImport: { directories_visited: 3, files_visited: 12, supported_files: 12 },
+  };
 
   const largeRoot = join(root, 'large-import');
   const directoryCount = 40;
@@ -123,6 +132,11 @@ function createFixtures(root) {
   fixtures.large = {
     importedRoot: largeRoot,
     entries: directoryCount * filesPerDirectory,
+    expectedImport: {
+      directories_visited: directoryCount + 1,
+      files_visited: directoryCount * filesPerDirectory,
+      supported_files: directoryCount * filesPerDirectory,
+    },
   };
   return fixtures;
 }
@@ -170,7 +184,150 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
-async function runOnce(exe, installRoot, appDataRoot, telemetryPath, timeoutMs) {
+function assertSafeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`);
+  }
+}
+
+function assertMarkerOrder(first, markers, label) {
+  let previousMarker = null;
+  let previousElapsed = -1;
+  for (const marker of markers) {
+    const event = first.get(marker);
+    if (!event) throw new Error(`${label} is missing ${marker}`);
+    if (event.elapsed_us < previousElapsed) {
+      throw new Error(`${label} is out of order: ${previousMarker} before ${marker}`);
+    }
+    previousMarker = marker;
+    previousElapsed = event.elapsed_us;
+  }
+}
+
+function validateTrace(events, fixture) {
+  if (events.length === 0) throw new Error('telemetry run produced no events');
+  const first = new Map();
+  let previousElapsed = -1;
+  for (const [index, event] of events.entries()) {
+    assertSafeInteger(event.elapsed_us, `event ${index} elapsed_us`);
+    if (event.elapsed_us < previousElapsed) {
+      throw new Error(`telemetry elapsed_us is not monotonic at event ${index}`);
+    }
+    previousElapsed = event.elapsed_us;
+    if (!first.has(event.marker)) first.set(event.marker, event);
+  }
+
+  const missing = requiredMarkers.filter((marker) => !first.has(marker));
+  if (missing.length > 0) {
+    throw new Error(`telemetry run is missing markers: ${missing.join(', ')}`);
+  }
+
+  assertMarkerOrder(
+    first,
+    ['process.entry', 'tauri.builder.start', 'tauri.setup.start', 'tauri.setup.end'],
+    'Tauri setup markers',
+  );
+  assertMarkerOrder(
+    first,
+    [
+      'events.subscribe.start',
+      'native.create.start',
+      'settings.load.start',
+      'settings.load.end',
+      'manifest.load.start',
+      'manifest.load.end',
+      'native.create.end',
+      'events.subscribe.end',
+    ],
+    'native subscription markers',
+  );
+  assertMarkerOrder(
+    first,
+    [
+      'bootstrap.start',
+      'catalog.compose.start',
+      'catalog.compose.end',
+      'catalog.index.start',
+      'catalog.index.end',
+      'catalog.ready',
+      'settings.reload.start',
+      'settings.reload.end',
+      'bootstrap.end',
+    ],
+    'bootstrap markers',
+  );
+
+  const frontendMarkers = [
+    'frontend.entry',
+    'react.initialize.start',
+    'react.shell_ready',
+    'react.catalog_ready',
+  ];
+  let previousFrontendElapsed = -1;
+  for (const marker of frontendMarkers) {
+    const event = first.get(marker);
+    assertSafeInteger(event.frontend_elapsed_us, `${marker} frontend_elapsed_us`);
+    if (event.frontend_elapsed_us < previousFrontendElapsed) {
+      throw new Error(`frontend timestamps are not monotonic at ${marker}`);
+    }
+    previousFrontendElapsed = event.frontend_elapsed_us;
+  }
+
+  const sourceNames = [
+    ...new Set(
+      events
+        .map((event) =>
+          event.marker.match(/^(catalog\.(?:builtin|user|import\.source_[0-9]+))\.(?:start|end)$/),
+        )
+        .filter(Boolean)
+        .map((match) => match[1]),
+    ),
+  ].sort();
+  const expectedSourceNames = ['catalog.builtin', 'catalog.user'];
+  if (fixture.expectedImport) expectedSourceNames.push('catalog.import.source_0');
+  expectedSourceNames.sort();
+  if (JSON.stringify(sourceNames) !== JSON.stringify(expectedSourceNames)) {
+    throw new Error(
+      `source marker set mismatch: expected ${expectedSourceNames.join(', ')}, got ${sourceNames.join(', ')}`,
+    );
+  }
+
+  const sourceCounters = new Map();
+  for (const sourceName of sourceNames) {
+    const start = first.get(`${sourceName}.start`);
+    const end = first.get(`${sourceName}.end`);
+    if (!start || !end) throw new Error(`source ${sourceName} must have start and end markers`);
+    if (end.elapsed_us < start.elapsed_us) {
+      throw new Error(`source ${sourceName} markers are out of order`);
+    }
+    assertSafeInteger(end.duration_ms, `${sourceName}.end duration_ms`);
+    for (const field of ['directories_visited', 'files_visited', 'supported_files']) {
+      assertSafeInteger(end[field], `${sourceName}.end ${field}`);
+    }
+    if (end.supported_files > end.files_visited) {
+      throw new Error(`${sourceName}.end supported_files exceeds files_visited`);
+    }
+    sourceCounters.set(sourceName, end);
+  }
+
+  const user = sourceCounters.get('catalog.user');
+  if (user.directories_visited !== 1 || user.files_visited !== 0 || user.supported_files !== 0) {
+    throw new Error('catalog.user counters do not match the empty user fixture');
+  }
+  if (fixture.expectedImport) {
+    const imported = sourceCounters.get('catalog.import.source_0');
+    for (const [field, expected] of Object.entries(fixture.expectedImport)) {
+      if (imported[field] !== expected) {
+        throw new Error(
+          `catalog.import.source_0 ${field} expected ${expected}, got ${imported[field]}`,
+        );
+      }
+    }
+  }
+  return { first, sourceCounters };
+}
+
+async function runOnce(exe, installRoot, appDataRoot, telemetryPath, fixture, timeoutMs) {
   const child = spawn(exe, ['--selftest-desktop-gui'], {
     cwd: installRoot,
     env: {
@@ -193,26 +350,22 @@ async function runOnce(exe, installRoot, appDataRoot, telemetryPath, timeoutMs) 
       `packaged startup run failed with ${result.signal ?? `exit code ${result.code}`}`,
     );
   }
-  const first = new Map();
-  for (const event of events) if (!first.has(event.marker)) first.set(event.marker, event);
-  const missing = requiredMarkers.filter((marker) => !first.has(marker));
-  if (missing.length > 0)
-    throw new Error(`telemetry run is missing markers: ${missing.join(', ')}`);
+  const { first, sourceCounters } = validateTrace(events, fixture);
   const elapsed = (marker) => first.get(marker).elapsed_us;
   const duration = (start, end) => elapsed(end) - elapsed(start);
-  const catalogSources = events
-    .filter((event) => /^catalog\.(builtin|user|import\.source_[0-9]+)\.end$/.test(event.marker))
-    .map((event) => ({
-      marker: event.marker,
-      duration_ms: event.duration_ms,
-      directories_visited: event.directories_visited,
-      files_visited: event.files_visited,
-      supported_files: event.supported_files,
-    }));
+  const frontendElapsed = (marker) => first.get(marker).frontend_elapsed_us;
+  const frontendDuration = (start, end) => frontendElapsed(end) - frontendElapsed(start);
+  const catalogSources = [...sourceCounters.entries()].map(([source, event]) => ({
+    marker: `${source}.end`,
+    duration_ms: event.duration_ms,
+    directories_visited: event.directories_visited,
+    files_visited: event.files_visited,
+    supported_files: event.supported_files,
+  }));
   return {
     process_to_shell_ready_ms: duration('process.entry', 'react.shell_ready') / 1000,
     frontend_initialize_to_shell_ready_ms:
-      duration('react.initialize.start', 'react.shell_ready') / 1000,
+      frontendDuration('react.initialize.start', 'react.shell_ready') / 1000,
     native_create_ms: duration('native.create.start', 'native.create.end') / 1000,
     bootstrap_ms: duration('bootstrap.start', 'bootstrap.end') / 1000,
     catalog_compose_ms: duration('catalog.compose.start', 'catalog.compose.end') / 1000,
@@ -289,6 +442,7 @@ async function main() {
             installRoot,
             appDataRoot,
             telemetryPath,
+            fixture,
             options.timeoutMs,
           );
           if (run > 0) samples.push({ run: run, ...sample });

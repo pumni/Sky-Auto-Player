@@ -951,7 +951,10 @@ pub async fn subscribe_ui_events(
     params: Option<StartupTelemetryRequest>,
 ) -> Result<(), String> {
     if let Some(params) = params {
-        return crate::startup_telemetry::record_frontend_marker(&params.marker);
+        return crate::startup_telemetry::record_frontend_marker(
+            &params.marker,
+            params.frontend_elapsed_us,
+        );
     }
     let _command_name = crate::ipc_contract::UI_EVENTS_COMMAND;
     crate::startup_telemetry::record("events.subscribe.start");
@@ -972,6 +975,7 @@ pub async fn subscribe_ui_events(
 #[serde(deny_unknown_fields)]
 pub struct StartupTelemetryRequest {
     pub marker: String,
+    pub frontend_elapsed_us: u64,
 }
 
 #[tauri::command]
