@@ -179,6 +179,27 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
     return null;
   };
 
+  const confirmsPlaybackStart = (
+    current: DesktopStore['playback'],
+    sessionId: string,
+    songId: string,
+    pending: PendingPlaybackStart | null,
+    state: PlaybackUiState,
+  ): boolean => {
+    if (
+      state !== 'playing' ||
+      !['starting', 'advancing', 'restarting'].includes(current.transportOperation ?? '')
+    )
+      return false;
+    if (pending !== null) return true;
+    return (
+      current.state === 'starting' &&
+      current.sessionId === sessionId &&
+      current.currentSong?.songId === songId &&
+      current.context?.currentSongId === songId
+    );
+  };
+
   const finishRetirementWaiters = (sessionId: string, outcome: 'finished' | 'failed') => {
     const waiters = retirementWaiters.get(sessionId);
     retirementWaiters.delete(sessionId);
@@ -889,10 +910,13 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
       const playbackContext = pending?.context ?? current.context;
       const confirmsOperation =
-        ((current.transportOperation === 'starting' ||
-          current.transportOperation === 'advancing' ||
-          current.transportOperation === 'restarting') &&
-          event.payload.state === 'playing') ||
+        confirmsPlaybackStart(
+          current,
+          event.payload.session_id,
+          event.payload.song_id,
+          pending,
+          event.payload.state,
+        ) ||
         (current.transportOperation === 'pausing' && event.payload.state === 'paused') ||
         (current.transportOperation === 'resuming' && event.payload.state === 'playing');
       if (confirmsOperation) clearOperationFromEvent();
@@ -929,10 +953,13 @@ export function createPlaybackSlice(context: PlaybackSliceContext): PlaybackSlic
       const identity = bindSessionIdentity(event.payload.session_id, event.payload.song_id);
       const playbackContext = pending?.context ?? current.context;
       const confirmsOperation =
-        ((current.transportOperation === 'starting' ||
-          current.transportOperation === 'advancing' ||
-          current.transportOperation === 'restarting') &&
-          event.payload.state === 'playing') ||
+        confirmsPlaybackStart(
+          current,
+          event.payload.session_id,
+          event.payload.song_id,
+          pending,
+          event.payload.state,
+        ) ||
         (current.transportOperation === 'pausing' && event.payload.state === 'paused') ||
         (current.transportOperation === 'resuming' && event.payload.state === 'playing');
       if (confirmsOperation) clearOperationFromEvent();

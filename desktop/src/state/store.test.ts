@@ -1008,6 +1008,88 @@ describe('desktop store', () => {
     expect(store.getState().playback.transportOperation).toBeNull();
   });
 
+  it('does not let an old session playing event clear explicit Next', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 1 });
+    const originalSubscribe = bridge.subscribeUiEvents;
+    const originalSkip = bridge.skipPlayback;
+    let forwardEvent: ((event: UiEvent) => void) | undefined;
+    let resolveSkipCalled!: () => void;
+    const skipCalled = new Promise<void>((resolve) => {
+      resolveSkipCalled = resolve;
+    });
+    let releaseSkip!: () => void;
+    const skipRelease = new Promise<void>((resolve) => {
+      releaseSkip = resolve;
+    });
+    bridge.subscribeUiEvents = async (listener) => {
+      forwardEvent = listener;
+      return originalSubscribe(listener);
+    };
+    bridge.skipPlayback = async (request) => {
+      resolveSkipCalled();
+      await skipRelease;
+      return originalSkip(request);
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = rowAt(store, 0);
+    const nextSong = rowAt(store, 1);
+    if (!first || !nextSong) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+    await act(async () => store.getState().patchSettings({ autoPlay: false }));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    const oldSession = store.getState().playback.sessionId;
+    if (!oldSession) throw new Error('mock session did not start');
+
+    const nextPromise = store.getState().nextPlayback();
+    await skipCalled;
+    expect(store.getState().playback.transportOperation).toBe('advancing');
+
+    forwardEvent?.({
+      v: 1,
+      name: 'playback.state_changed',
+      payload: {
+        session_id: oldSession,
+        song_id: first.song_id,
+        state: 'playing',
+        physical: false,
+        message: null,
+        outcome: null,
+      },
+    });
+    expect(store.getState().playback.transportOperation).toBe('advancing');
+
+    forwardEvent?.({
+      v: 1,
+      name: 'playback.snapshot',
+      payload: {
+        session_id: oldSession,
+        seq: 99,
+        state: 'playing',
+        song_id: first.song_id,
+        title: first.title,
+        current_us: 1_000,
+        total_us: first.duration_us ?? 1_000_000,
+        pre_roll_remaining_us: 0,
+        focus_state: 'focused',
+        health: 'healthy',
+        input_path_degraded: false,
+        message: null,
+      },
+    });
+    expect(store.getState().playback.transportOperation).toBe('advancing');
+
+    releaseSkip();
+    await nextPromise;
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    expect(store.getState().playback.currentSong?.songId).toBe(nextSong.song_id);
+    expect(store.getState().playback.sessionId).not.toBe(oldSession);
+    expect(store.getState().playback.transportOperation).toBeNull();
+  });
+
   it('waits for the Auto Play handoff after natural retirement', async () => {
     const bridge = createMockBridge({ playbackDurationMs: 60_000, startDelayMs: 5 });
     const preparePlayback = vi.spyOn(bridge, 'preparePlayback');
