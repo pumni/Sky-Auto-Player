@@ -1092,6 +1092,7 @@ test('authoritative no-session recovery returns to Play and Try again at 800×56
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/?mockNeverCreateSession=1');
+  await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
   const idleGeometry = await readPlayerBarGeometry(page);
   const player = await startSelectedSong(page);
   await expectRecoveryBannerWithinViewport(page);
