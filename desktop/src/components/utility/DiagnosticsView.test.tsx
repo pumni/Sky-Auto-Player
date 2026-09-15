@@ -1,12 +1,13 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsSnapshot } from '../../bridge/DesktopBridge';
+import { assertMissReasonAccounting } from '../../bridge/diagnosticsTestUtils';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { DiagnosticsView } from './DiagnosticsView';
 
 function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnapshot {
-  return {
+  const value: DiagnosticsSnapshot = {
     seq: 1,
     physical_session: true,
     player_attached: true,
@@ -81,6 +82,8 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     duplicate_system_power_notifications: 0,
     ...overrides,
   };
+  assertMissReasonAccounting(value);
+  return value;
 }
 
 describe('DiagnosticsView', () => {
@@ -116,7 +119,7 @@ describe('DiagnosticsView', () => {
           snapshot({
             session_id: sessionId,
             release_late_2ms: 0,
-            missed_down_boundaries: 2,
+            missed_down_boundaries: 5,
             missed_down_keys: 3,
             missed_unobserved_backlog_boundaries: 1,
             missed_physical_window_boundaries: 2,
