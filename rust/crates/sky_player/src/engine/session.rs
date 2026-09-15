@@ -1,6 +1,7 @@
 use super::config::{AdmittedNativeSessionOptions, DispatchProfile, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
+    SystemPowerEndpoint,
 };
 use super::worker::Worker;
 use super::*;
@@ -119,7 +120,16 @@ pub struct SystemPowerSnapshot {
 }
 
 impl NativeDispatchSession {
-    pub fn new(mut options: NativeSessionOptions) -> Result<Self, String> {
+    pub fn new(options: NativeSessionOptions) -> Result<Self, String> {
+        let endpoint = SystemPowerEndpoint::new()?;
+        Self::new_with_power_endpoint(options, endpoint)
+    }
+
+    pub fn new_with_power_endpoint(
+        mut options: NativeSessionOptions,
+        power_endpoint: Arc<SystemPowerEndpoint>,
+    ) -> Result<Self, String> {
+        power_endpoint.reset_for_new_session();
         validate_timing_constants()?;
         validate_native_timing_contract(&options.timing)?;
         // This is the authoritative native admission boundary.  Python calls
@@ -149,8 +159,7 @@ impl NativeDispatchSession {
         let initial_heartbeat_ticks = qpc_clock
             .now()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
-        let interrupt = OwnedEvent::new_auto_reset()
-            .ok_or_else(|| "failed to create command event".to_string())?;
+        let interrupt = power_endpoint.interrupt();
         let total_us = options
             .schedule
             .batches
@@ -167,7 +176,7 @@ impl NativeDispatchSession {
         let shared = Arc::new(SessionShared {
             commands: SessionCommands {
                 interrupt,
-                system_power: super::shared::SystemPowerState::default(),
+                system_power: power_endpoint.state(),
                 desired_pause: AtomicBool::new(false),
                 quit_requested: AtomicBool::new(false),
                 skip_requested: AtomicBool::new(false),
@@ -588,6 +597,25 @@ impl NativeDispatchSession {
             .commands
             .system_power
             .notify(suspended, &self.shared.commands.interrupt)
+    }
+
+    pub fn notify_system_power_at(
+        &self,
+        suspended: bool,
+        suspend_boundary_qpc: Option<QpcTicks>,
+    ) -> bool {
+        self.shared.commands.system_power.notify_at(
+            suspended,
+            suspend_boundary_qpc,
+            &self.shared.commands.interrupt,
+        )
+    }
+
+    /// Disable callback routing after the worker has completed cleanup. The
+    /// process-level endpoint can then be reused by a later session without
+    /// allowing a stale callback to wake an inactive worker.
+    pub fn deactivate_system_power(&self) {
+        self.shared.commands.system_power.deactivate();
     }
 
     pub fn system_power_snapshot(&self) -> SystemPowerSnapshot {

@@ -212,6 +212,14 @@ pub(crate) fn dispatch_due_from_plan(
         return super::DispatchStep::NoWork;
     }
     /* stale authored metadata is drained by the outer global metadata phase */
+    // A suspend notification blocks new Down authorization immediately. Do
+    // this before inspecting a future target so a worker wake racing the OS
+    // callback cannot publish FutureAuthorized while the gate is closed.
+    if plan.physical().is_some_and(|physical| {
+        physical.authored_view.packet_masks.down_mask != 0 && system_power.down_blocked()
+    }) {
+        return super::DispatchStep::NoWork;
+    }
     #[cfg(any(test, feature = "test-support"))]
     let test_direct_boundary = test_physical_target_qpc.is_some();
     let candidate_target_qpc = {
@@ -252,9 +260,6 @@ pub(crate) fn dispatch_due_from_plan(
         return super::DispatchStep::NoWork;
     };
     let masks = physical.authored_view.packet_masks;
-    if masks.down_mask != 0 && system_power.down_blocked() {
-        return super::DispatchStep::NoWork;
-    }
     let Some(guard) = runtime.physical_timing_guard.as_ref() else {
         return super::DispatchStep::TerminateStatic("physical timing guard is not initialized");
     };
@@ -421,6 +426,7 @@ pub(crate) fn dispatch_due_from_plan(
     authored_step
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_system_suspend_transition(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     coordinator: &mut sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
@@ -428,6 +434,7 @@ pub(crate) fn apply_system_suspend_transition(
     playback: &mut sky_dispatch_core::clock::PlaybackClockState,
     progress_clock: &super::super::shared::SharedProgressClock,
     now_ticks: sky_dispatch_win32::clock::QpcTicks,
+    suspend_boundary_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     target_hwnd: isize,
 ) -> Result<(), String> {
     runtime.reset_wait_state_after_system_suspend();
@@ -444,7 +451,11 @@ pub(crate) fn apply_system_suspend_transition(
         .production_forensics
         .observe_lifecycle(super::dispatch::observation::ObserverLifecycle::ResetAll);
     playback
-        .enter_pause(PauseReason::SystemSuspend, now_ticks)
+        .enter_pause(
+            PauseReason::SystemSuspend,
+            suspend_boundary_qpc
+                .ok_or_else(|| "system suspend QPC boundary was not captured".to_string())?,
+        )
         .map_err(|error| format!("playback clock failure: {error}"))?;
     progress_clock.publish(playback);
     Ok(())
@@ -517,6 +528,7 @@ pub(crate) fn try_complete_system_resume_transition(
     playback
         .exit_pause(PauseReason::SystemSuspend, resumed_ticks)
         .map_err(|error| format!("system resume playback clock failure: {error}"))?;
+    system_power.clear_suspend_boundary();
     progress_clock.publish(playback);
     runtime.invalidate_down_authorization();
     if let Some(guard) = runtime.physical_timing_guard.as_mut() {
@@ -649,6 +661,7 @@ pub(super) fn dispatch(
                     &mut resources.playback,
                     &shared.publication.progress_clock,
                     now_ticks,
+                    system_power.suspend_boundary_qpc(),
                     target_hwnd.load(Ordering::Acquire),
                 ) {
                     core.runtime.force_full_cleanup = true;
@@ -2053,6 +2066,26 @@ mod tests {
         assert_eq!(
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(0, 1)]
+        );
+    }
+
+    #[test]
+    fn blocked_future_down_stays_awaiting_future_before_classification() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let down = harness.plan_current_dispatch();
+        let target = down.physical_target_qpc().expect("Down target");
+        assert!(harness.notify_system_power_at_for_test(true, Some(QpcTicks::from_raw(123_456)),));
+
+        assert_no_work(harness.dispatch_due_from_plan_for_test(&down));
+        assert_eq!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture,
+            "suspend blocks authorization before future classification"
+        );
+        assert_no_work(harness.dispatch_at_qpc_for_test(&down, target));
+        assert_eq!(
+            harness.runtime.down_boundary_state,
+            DownBoundaryState::AwaitingFuture
         );
     }
 

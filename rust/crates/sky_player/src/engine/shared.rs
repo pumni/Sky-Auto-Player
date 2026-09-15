@@ -7,7 +7,7 @@ use sky_dispatch_core::time::{DurationTicks, QpcTicks};
 use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::event::OwnedEvent;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Condvar, Mutex as StdMutex};
+use std::sync::{Arc, Condvar, Mutex as StdMutex};
 
 /// A transition-only projection of the authoritative playback clock.
 ///
@@ -141,8 +141,8 @@ impl ProgressClockSnapshot {
 /// receiving a separate list of atomics and synchronization primitives. The
 /// individual resources retain their existing types and ordering semantics.
 pub(super) struct SessionCommands {
-    pub(super) interrupt: OwnedEvent,
-    pub(super) system_power: SystemPowerState,
+    pub(super) interrupt: Arc<OwnedEvent>,
+    pub(super) system_power: Arc<SystemPowerState>,
     pub(super) desired_pause: AtomicBool,
     pub(super) quit_requested: AtomicBool,
     pub(super) skip_requested: AtomicBool,
@@ -162,6 +162,8 @@ const SYSTEM_POWER_PENDING_MASK: u8 = SYSTEM_POWER_SUSPEND_PENDING | SYSTEM_POWE
 /// The callback only updates atomics and signals the already-owned interrupt.
 pub(crate) struct SystemPowerState {
     state: AtomicU8,
+    active: AtomicBool,
+    suspend_boundary_qpc: AtomicU64,
     suspend_count: AtomicU64,
     resume_count: AtomicU64,
     duplicate_count: AtomicU64,
@@ -171,6 +173,8 @@ impl Default for SystemPowerState {
     fn default() -> Self {
         Self {
             state: AtomicU8::new(0),
+            active: AtomicBool::new(true),
+            suspend_boundary_qpc: AtomicU64::new(0),
             suspend_count: AtomicU64::new(0),
             resume_count: AtomicU64::new(0),
             duplicate_count: AtomicU64::new(0),
@@ -179,7 +183,15 @@ impl Default for SystemPowerState {
 }
 
 impl SystemPowerState {
-    pub(super) fn notify(&self, suspended: bool, interrupt: &OwnedEvent) -> bool {
+    pub(super) fn notify_at(
+        &self,
+        suspended: bool,
+        suspend_boundary_qpc: Option<QpcTicks>,
+        interrupt: &OwnedEvent,
+    ) -> bool {
+        if !self.active.load(Ordering::Acquire) {
+            return false;
+        }
         loop {
             let current = self.state.load(Ordering::Acquire);
             let os_suspended = current & SYSTEM_POWER_OS_SUSPENDED != 0;
@@ -203,6 +215,13 @@ impl SystemPowerState {
                 .is_ok()
             {
                 if suspended {
+                    // A callback-side QPC sample is authoritative. A missing
+                    // sample remains fail-closed; the worker may only use its
+                    // own timestamp as a last-resort safety fallback.
+                    self.suspend_boundary_qpc.store(
+                        suspend_boundary_qpc.map_or(0, QpcTicks::as_u64),
+                        Ordering::Release,
+                    );
                     self.suspend_count.fetch_add(1, Ordering::Relaxed);
                 } else {
                     self.resume_count.fetch_add(1, Ordering::Relaxed);
@@ -211,6 +230,37 @@ impl SystemPowerState {
                 return true;
             }
         }
+    }
+
+    pub(super) fn notify(&self, suspended: bool, interrupt: &OwnedEvent) -> bool {
+        let suspend_boundary_qpc = suspended
+            .then(|| sky_dispatch_win32::clock::qpc_now_ticks_checked().ok())
+            .flatten();
+        self.notify_at(suspended, suspend_boundary_qpc, interrupt)
+    }
+
+    pub(super) fn suspend_boundary_qpc(&self) -> Option<QpcTicks> {
+        let raw = self.suspend_boundary_qpc.load(Ordering::Acquire);
+        (raw != 0).then(|| QpcTicks::from_raw(raw))
+    }
+
+    pub(super) fn clear_suspend_boundary(&self) {
+        self.suspend_boundary_qpc.store(0, Ordering::Release);
+    }
+
+    pub(super) fn reset_for_new_session(&self) {
+        self.state.store(0, Ordering::Release);
+        self.suspend_boundary_qpc.store(0, Ordering::Release);
+        self.suspend_count.store(0, Ordering::Relaxed);
+        self.resume_count.store(0, Ordering::Relaxed);
+        self.duplicate_count.store(0, Ordering::Relaxed);
+        self.active.store(true, Ordering::Release);
+    }
+
+    pub(super) fn deactivate(&self) {
+        self.active.store(false, Ordering::Release);
+        self.state.store(0, Ordering::Release);
+        self.suspend_boundary_qpc.store(0, Ordering::Release);
     }
 
     pub(super) fn take_pending(&self) -> u8 {
@@ -258,6 +308,50 @@ impl SystemPowerState {
             self.resume_count.load(Ordering::Relaxed),
             self.duplicate_count.load(Ordering::Relaxed),
         )
+    }
+}
+
+/// Stable process/runtime endpoint used by the Windows power callback. It
+/// owns the interrupt and notification state so callback registration can
+/// outlive individual playback sessions without retaining per-session raw
+/// pointers or weak references.
+pub struct SystemPowerEndpoint {
+    state: Arc<SystemPowerState>,
+    interrupt: Arc<OwnedEvent>,
+}
+
+impl SystemPowerEndpoint {
+    pub fn new() -> Result<Arc<Self>, String> {
+        let interrupt = OwnedEvent::new_auto_reset()
+            .ok_or_else(|| "failed to create system power command event".to_string())?;
+        Ok(Arc::new(Self {
+            state: Arc::new(SystemPowerState {
+                active: AtomicBool::new(false),
+                ..SystemPowerState::default()
+            }),
+            interrupt: Arc::new(interrupt),
+        }))
+    }
+
+    pub(crate) fn state(&self) -> Arc<SystemPowerState> {
+        self.state.clone()
+    }
+
+    pub(crate) fn interrupt(&self) -> Arc<OwnedEvent> {
+        self.interrupt.clone()
+    }
+
+    pub fn notify_system_power(
+        &self,
+        suspended: bool,
+        suspend_boundary_qpc: Option<QpcTicks>,
+    ) -> bool {
+        self.state
+            .notify_at(suspended, suspend_boundary_qpc, &self.interrupt)
+    }
+
+    pub(crate) fn reset_for_new_session(&self) {
+        self.state.reset_for_new_session();
     }
 }
 
@@ -424,5 +518,46 @@ mod tests {
         assert!(power.notify(true, &interrupt));
         assert!(!power.complete_resume());
         assert!(power.down_blocked());
+    }
+
+    #[test]
+    fn suspend_boundary_is_captured_before_worker_wakes_and_survives_resume_notification() {
+        let endpoint = SystemPowerEndpoint::new().expect("power endpoint");
+        endpoint.reset_for_new_session();
+        let suspend_qpc = QpcTicks::from_raw(10_000);
+        assert!(endpoint.notify_system_power(true, Some(suspend_qpc)));
+        // The worker has not run yet. A resume callback may arrive while it is
+        // asleep; the original suspend boundary must remain available.
+        assert!(endpoint.notify_system_power(false, None));
+        assert_eq!(endpoint.state().suspend_boundary_qpc(), Some(suspend_qpc));
+    }
+
+    #[test]
+    fn callback_suspend_boundary_excludes_sleep_sized_qpc_interval() {
+        let mut clock =
+            PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
+        let endpoint = SystemPowerEndpoint::new().expect("power endpoint");
+        endpoint.reset_for_new_session();
+        let suspend_qpc = QpcTicks::from_raw(2_000);
+        let resume_qpc = QpcTicks::from_raw(2_000_000_000);
+        assert!(endpoint.notify_system_power(true, Some(suspend_qpc)));
+        assert!(endpoint.notify_system_power(false, None));
+        clock
+            .enter_pause(
+                PauseReason::SystemSuspend,
+                endpoint.state().suspend_boundary_qpc().unwrap(),
+            )
+            .unwrap();
+        clock
+            .exit_pause(PauseReason::SystemSuspend, resume_qpc)
+            .unwrap();
+        assert_eq!(
+            test_qpc_clock()
+                .duration_to_us(DurationTicks::from_raw(
+                    clock.get_elapsed(resume_qpc).unwrap().as_u64(),
+                ))
+                .unwrap(),
+            1_000
+        );
     }
 }

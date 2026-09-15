@@ -23,7 +23,8 @@ use crate::commands::{
 };
 use crate::power_lifecycle::{
     PowerLifecycleDiagnostics, PowerLifecycleSnapshot, SuspendResumeRegistration,
-    SystemRequiredPowerRequest, acquire_playback_power_resources, system_power_platform,
+    SystemRequiredPowerRequest, acquire_playback_power_resources, system_power_endpoint,
+    system_power_platform,
 };
 use crate::ui_events::{
     CalibrationFinishedPayload, CalibrationMode, CalibrationOutcome, CalibrationProgressPayload,
@@ -2906,12 +2907,16 @@ impl NativeActivePlayback {
     }
 
     fn release_power_resources(&self) {
+        if let Some(player) = &self.player {
+            player.deactivate_system_power();
+        }
         self.release_power_request();
         if let Ok(mut owner) = self.suspend_resume_registration.lock()
             && let Some(mut registration) = owner.take()
         {
             registration.unregister();
         }
+        self.power_lifecycle.mark_registration_inactive();
     }
 
     fn power_lifecycle_snapshot(&self) -> PowerLifecycleSnapshot {
@@ -3564,13 +3569,20 @@ impl NativePlaybackService {
                 settings,
             )
             .and_then(|(player, target)| {
-                (power_request, suspend_resume_registration) = acquire_playback_power_resources(
-                    Some(Arc::downgrade(&player)),
-                    power_platform.clone(),
-                    power_lifecycle.clone(),
-                )?;
-                player.arm(0)?;
-                Ok((Some(player), Some(target)))
+                let result: Result<_, String> = (|| {
+                    (power_request, suspend_resume_registration) =
+                        acquire_playback_power_resources(
+                            Some(Arc::downgrade(&player)),
+                            power_platform.clone(),
+                            power_lifecycle.clone(),
+                        )?;
+                    player.arm(0)?;
+                    Ok((Some(player.clone()), Some(target)))
+                })();
+                if result.is_err() {
+                    player.deactivate_system_power();
+                }
+                result
             })
         };
         let (player, target_hwnd) = match physical_creation {
@@ -3890,53 +3902,56 @@ impl NativePlaybackService {
         if !sky_dispatch_win32::focus::focus_window_and_verify(target, Duration::from_millis(100)) {
             return Err("validated Sky window could not be focused".into());
         }
-        let player = Arc::new(NativeDispatchSession::new(NativeSessionOptions {
-            schedule: runtime_schedule,
-            backend: BackendConfig::Production,
-            profile: DispatchProfile::Production,
-            timing: TimingOptions {
-                game_fps: config.fps,
-                min_hold_us: policy.min_hold_us,
-                min_release_gap_us: policy.min_release_gap_us,
-                frame_us: policy.frame_us,
-                frame_base_hold_us: policy.frame_base_hold_us,
-                timing_margin_us: policy.timing_margin_us,
-                strict_timing: false,
-                strict_down_completion_late_us: 2_000,
-                strict_up_completion_late_us: 2_000,
-                input_path_warn_us: 300,
-            },
-            focus: FocusOptions {
-                require_focus: true,
-                focus_restore_grace_us: policy.focus_restore_grace_us,
-            },
-            wait: WaitOptions {
-                enable_waitable_timer: true,
-                enable_event_wait: true,
-                supervisor_lease_timeout_us:
-                    sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+        let player = Arc::new(NativeDispatchSession::new_with_power_endpoint(
+            NativeSessionOptions {
+                schedule: runtime_schedule,
+                backend: BackendConfig::Production,
+                profile: DispatchProfile::Production,
+                timing: TimingOptions {
+                    game_fps: config.fps,
+                    min_hold_us: policy.min_hold_us,
+                    min_release_gap_us: policy.min_release_gap_us,
+                    frame_us: policy.frame_us,
+                    frame_base_hold_us: policy.frame_base_hold_us,
+                    timing_margin_us: policy.timing_margin_us,
+                    strict_timing: false,
+                    strict_down_completion_late_us: 2_000,
+                    strict_up_completion_late_us: 2_000,
+                    input_path_warn_us: 300,
+                },
+                focus: FocusOptions {
+                    require_focus: true,
+                    focus_restore_grace_us: policy.focus_restore_grace_us,
+                },
+                wait: WaitOptions {
+                    enable_waitable_timer: true,
+                    enable_event_wait: true,
+                    supervisor_lease_timeout_us:
+                        sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+                    #[cfg(feature = "tauri-test")]
+                    test_spin_threshold_us: None,
+                    #[cfg(feature = "tauri-test")]
+                    test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                },
+                telemetry: TelemetryOptions {
+                    mode: TelemetryMode::Ring,
+                    // RtTraceRecord is fixed-width; 8192 records bound capture to
+                    // about 1.5 MiB on x64 before export while covering typical songs.
+                    capacity: 8_192,
+                },
+                priority: PriorityOptions {
+                    mode: PriorityMode::Auto,
+                },
+                instrument_key_profile: None,
                 #[cfg(feature = "tauri-test")]
-                test_spin_threshold_us: None,
+                startup_ordering_hook: None,
                 #[cfg(feature = "tauri-test")]
-                test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                restore_race_hook: None,
+                #[cfg(feature = "tauri-test")]
+                timer_lifecycle_context: None,
             },
-            telemetry: TelemetryOptions {
-                mode: TelemetryMode::Ring,
-                // RtTraceRecord is fixed-width; 8192 records bound capture to
-                // about 1.5 MiB on x64 before export while covering typical songs.
-                capacity: 8_192,
-            },
-            priority: PriorityOptions {
-                mode: PriorityMode::Auto,
-            },
-            instrument_key_profile: None,
-            #[cfg(feature = "tauri-test")]
-            startup_ordering_hook: None,
-            #[cfg(feature = "tauri-test")]
-            restore_race_hook: None,
-            #[cfg(feature = "tauri-test")]
-            timer_lifecycle_context: None,
-        })?);
+            system_power_endpoint()?,
+        )?);
         player.set_target_hwnd(target);
         player.set_focus_hint(true);
         player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());

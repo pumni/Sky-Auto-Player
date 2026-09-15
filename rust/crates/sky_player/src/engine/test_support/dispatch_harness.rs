@@ -1001,12 +1001,22 @@ impl ProductionDispatchTestHarness {
             &mut self.resources.playback,
             &self.progress_clock,
             now_ticks,
+            self.system_power.suspend_boundary_qpc(),
             self.target_hwnd.load(Ordering::Acquire),
         )
     }
 
     pub fn notify_system_power_for_test(&self, suspended: bool) -> bool {
         self.system_power.notify(suspended, &self.interrupt)
+    }
+
+    pub fn notify_system_power_at_for_test(
+        &self,
+        suspended: bool,
+        suspend_boundary_qpc: Option<QpcTicks>,
+    ) -> bool {
+        self.system_power
+            .notify_at(suspended, suspend_boundary_qpc, &self.interrupt)
     }
 
     pub fn take_system_power_pending_for_test(&self) -> u8 {

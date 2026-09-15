@@ -1,4 +1,5 @@
-use sky_player::engine::NativeDispatchSession;
+use sky_dispatch_win32::clock::QpcClock;
+use sky_player::engine::SystemPowerEndpoint;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -58,6 +59,10 @@ impl PowerLifecycleDiagnostics {
             registration_failures: self.registration_failures.load(Ordering::Relaxed),
             unregistration_failures: self.unregistration_failures.load(Ordering::Relaxed),
         }
+    }
+
+    pub(crate) fn mark_registration_inactive(&self) {
+        self.registration_active.store(false, Ordering::Release);
     }
 }
 
@@ -159,21 +164,77 @@ impl Drop for SystemRequiredPowerRequest {
 }
 
 struct CallbackContext {
-    player: Weak<NativeDispatchSession>,
+    endpoint: Arc<SystemPowerEndpoint>,
+    qpc_clock: QpcClock,
 }
 
-// The Windows unregister API cancels the registration but does not document
-// callback rundown. Retain these weak-only contexts for process lifetime so a
-// callback already in flight cannot dereference freed memory. The callback
-// never takes this lock; retention happens only on the control plane.
-static CALLBACK_CONTEXTS: OnceLock<Mutex<Vec<Arc<CallbackContext>>>> = OnceLock::new();
+// Windows does not document callback rundown at unregister. Keep one stable
+// endpoint/context and one process-lifetime registration instead of retaining
+// one Arc per playback session. The callback only touches atomics and QPC.
+static POWER_ENDPOINT: OnceLock<Result<Arc<SystemPowerEndpoint>, String>> = OnceLock::new();
+static CALLBACK_CONTEXT: OnceLock<Arc<CallbackContext>> = OnceLock::new();
+#[allow(dead_code)]
+static PROCESS_REGISTRATION: OnceLock<Mutex<Option<ProcessRegistration>>> = OnceLock::new();
 
-fn retain_callback_context(context: Arc<CallbackContext>) {
-    CALLBACK_CONTEXTS
-        .get_or_init(Default::default)
+#[allow(dead_code)]
+struct ProcessRegistration {
+    _platform: Arc<dyn PowerPlatform>,
+    _handle: isize,
+    _context: Arc<CallbackContext>,
+}
+
+pub(crate) fn system_power_endpoint() -> Result<Arc<SystemPowerEndpoint>, String> {
+    POWER_ENDPOINT.get_or_init(SystemPowerEndpoint::new).clone()
+}
+
+fn callback_context() -> Result<Arc<CallbackContext>, u32> {
+    if let Some(context) = CALLBACK_CONTEXT.get() {
+        return Ok(context.clone());
+    }
+    let qpc_clock = QpcClock::initialize().map_err(|_| 50u32)?;
+    let context = Arc::new(CallbackContext {
+        endpoint: system_power_endpoint().map_err(|_| 50u32)?,
+        qpc_clock,
+    });
+    let _ = CALLBACK_CONTEXT.set(context);
+    Ok(CALLBACK_CONTEXT
+        .get()
+        .expect("callback context initialized")
+        .clone())
+}
+
+#[allow(dead_code)]
+fn ensure_process_registration(
+    platform: Arc<dyn PowerPlatform>,
+    diagnostics: &Arc<PowerLifecycleDiagnostics>,
+) -> Result<(), u32> {
+    let registration = PROCESS_REGISTRATION.get_or_init(|| Mutex::new(None));
+    let mut guard = registration
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(context);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.is_some() {
+        diagnostics
+            .registration_active
+            .store(true, Ordering::Release);
+        return Ok(());
+    }
+    let context = callback_context()?;
+    let handle = platform
+        .register_suspend_resume(on_suspend_resume, Arc::as_ptr(&context) as *mut c_void)
+        .inspect_err(|_| {
+            diagnostics
+                .registration_failures
+                .fetch_add(1, Ordering::Relaxed);
+        })?;
+    *guard = Some(ProcessRegistration {
+        _platform: platform,
+        _handle: handle,
+        _context: context,
+    });
+    diagnostics
+        .registration_active
+        .store(true, Ordering::Release);
+    Ok(())
 }
 
 pub(crate) struct SuspendResumeRegistration {
@@ -183,12 +244,13 @@ pub(crate) struct SuspendResumeRegistration {
 }
 
 impl SuspendResumeRegistration {
+    #[allow(dead_code)]
     pub(crate) fn register(
         platform: Arc<dyn PowerPlatform>,
-        player: Weak<NativeDispatchSession>,
+        _player: Weak<sky_player::engine::NativeDispatchSession>,
         diagnostics: Arc<PowerLifecycleDiagnostics>,
     ) -> Result<Self, u32> {
-        let context = Arc::new(CallbackContext { player });
+        let context = callback_context()?;
         let result = platform
             .register_suspend_resume(on_suspend_resume, Arc::as_ptr(&context) as *mut c_void);
         let handle = match result {
@@ -200,7 +262,6 @@ impl SuspendResumeRegistration {
                 return Err(error);
             }
         };
-        retain_callback_context(context);
         diagnostics
             .registration_active
             .store(true, Ordering::Release);
@@ -242,25 +303,23 @@ unsafe extern "system" fn on_suspend_resume(
     if context.is_null() {
         return 0;
     }
-    // SAFETY: this pointer is the Arc allocation retained by the successful
-    // registration owner until unregistration completes.
+    // SAFETY: the stable callback context is retained until process exit, so
+    // an in-flight callback remains valid even when a registration is removed.
     let context = unsafe { &*(context as *const CallbackContext) };
-    let Some(player) = context.player.upgrade() else {
-        return 0;
-    };
     #[cfg(windows)]
     match event_type {
         windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMSUSPEND => {
-            player.notify_system_power(true);
+            let suspend_qpc = context.qpc_clock.now().ok();
+            context.endpoint.notify_system_power(true, suspend_qpc);
         }
         windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMRESUMESUSPEND
         | windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMRESUMEAUTOMATIC => {
-            player.notify_system_power(false);
+            context.endpoint.notify_system_power(false, None);
         }
         _ => {}
     }
     #[cfg(not(windows))]
-    let _ = (event_type, player);
+    let _ = event_type;
     0
 }
 
@@ -407,7 +466,7 @@ pub(crate) fn continue_after_power_request_failure() -> bool {
 }
 
 pub(crate) fn acquire_playback_power_resources(
-    player: Option<Weak<NativeDispatchSession>>,
+    player: Option<Weak<sky_player::engine::NativeDispatchSession>>,
     platform: Arc<dyn PowerPlatform>,
     diagnostics: Arc<PowerLifecycleDiagnostics>,
 ) -> Result<
@@ -420,16 +479,32 @@ pub(crate) fn acquire_playback_power_resources(
     let Some(player) = player else {
         return Ok((None, None));
     };
-    let registration =
+    #[cfg(test)]
+    let registration = Some(
         SuspendResumeRegistration::register(platform.clone(), player, diagnostics.clone())
             .map_err(|error| {
                 format!("suspend_resume_registration_failed: Windows error {error}")
-            })?;
+            })?,
+    );
+    #[cfg(not(test))]
+    {
+        let _ = player;
+        ensure_process_registration(platform.clone(), &diagnostics).map_err(|error| {
+            format!("suspend_resume_registration_failed: Windows error {error}")
+        })?;
+    }
     let request = SystemRequiredPowerRequest::acquire(platform, diagnostics);
     if request.is_none() && !continue_after_power_request_failure() {
         return Err("system_required_power_request_failed".into());
     }
-    Ok((request, Some(registration)))
+    #[cfg(test)]
+    {
+        Ok((request, registration))
+    }
+    #[cfg(not(test))]
+    {
+        Ok((request, None))
+    }
 }
 
 #[cfg(test)]
@@ -726,6 +801,27 @@ mod tests {
         assert_eq!(
             *registration_platform.calls.lock().unwrap(),
             vec!["register", "unregister", "unregister"]
+        );
+    }
+
+    #[test]
+    fn callback_context_cardinality_is_bounded_across_session_registration_stress() {
+        let platform = Arc::new(FakePlatform::default());
+        let mut pointers = Vec::new();
+        for _ in 0..32 {
+            let diagnostics = Arc::new(PowerLifecycleDiagnostics::default());
+            let registration =
+                SuspendResumeRegistration::register(platform.clone(), Weak::new(), diagnostics)
+                    .expect("registration");
+            pointers.push(platform.callback_contexts.lock().unwrap().last().unwrap().1);
+            drop(registration);
+        }
+        pointers.sort_unstable();
+        pointers.dedup();
+        assert_eq!(
+            pointers.len(),
+            1,
+            "all sessions use one stable callback context"
         );
     }
 }

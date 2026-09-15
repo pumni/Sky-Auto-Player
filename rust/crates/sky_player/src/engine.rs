@@ -20,6 +20,7 @@ pub use config::{
     PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
 };
 pub use session::{NativeDispatchSession, SystemPowerSnapshot};
+pub use shared::SystemPowerEndpoint;
 pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot};
 pub use telemetry::{
     NATIVE_TELEMETRY_SCHEMA_VERSION, NativeTelemetryOutput, NativeTelemetrySummary, RtTraceRecord,
