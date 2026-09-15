@@ -15,7 +15,7 @@ use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
     PhysicalPacket, PreparedPhysicalPacket, SendTransactionOutcome, SendTransactionStatus,
 };
-use sky_dispatch_win32::wait::{HybridWaiter, WakeErrorStats};
+use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome, WakeErrorStats};
 use sky_player::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, DownMissKind, NextDispatchPlan,
     OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue, PrecisionHandoffEvidence,
@@ -852,6 +852,9 @@ fn record_wait_evidence(
     let Some(observation) = harness.last_wait_observation() else {
         return Ok(());
     };
+    if !matches!(observation.outcome, WaitOutcome::Deadline) {
+        return Ok(());
+    }
     let qpc_clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
     samples.planned_wait_gap_us.push(
         qpc_clock
