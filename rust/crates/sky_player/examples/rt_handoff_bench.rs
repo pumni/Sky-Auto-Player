@@ -17,9 +17,9 @@ use sky_dispatch_win32::input::{
 };
 use sky_dispatch_win32::wait::{HybridWaiter, WakeErrorStats};
 use sky_player::engine::dispatch_primitives::{
-    DispatchObservation, DispatchPath, DispatchStep, NextDispatchPlan, OBSERVATION_QUEUE_CAPACITY,
-    PendingObservationQueue, PrecisionHandoffEvidence, PreparationCounts,
-    ProductionDispatchTestHarness,
+    DispatchObservation, DispatchPath, DispatchStep, DownMissKind, NextDispatchPlan,
+    OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue, PrecisionHandoffEvidence,
+    PreparationCounts, ProductionDispatchTestHarness,
 };
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -156,6 +156,8 @@ struct Samples {
     admission_wake_to_precision_wake_us: Vec<i64>,
     target_crossing_error_us: Vec<i64>,
     target_crossing_to_final_policy_us: Vec<i64>,
+    wake_to_final_policy_us: Vec<i64>,
+    final_policy_to_pre_call_us: Vec<i64>,
     final_policy_to_true_pre_call_us: Vec<i64>,
     dispatch_start_error_us: Vec<i64>,
     pre_call_to_completion_us: Vec<u64>,
@@ -175,6 +177,9 @@ struct Samples {
     wait_wake_lateness_us: Vec<i64>,
     hot_wait_count: usize,
     cold_wait_count: usize,
+    missed_down_unobserved_backlog: usize,
+    missed_down_physical_window_expired: usize,
+    missed_down_final_sender_window_expired: usize,
     spin_time_us: Vec<u64>,
     wall_time_us: Vec<u64>,
 }
@@ -471,6 +476,18 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 value.dispatch_ready_qpc,
                 qpc_clock,
             );
+            if let Some(wake_qpc) = value.wake_qpc {
+                samples.wake_to_final_policy_us.push(signed_qpc_us(
+                    qpc_clock,
+                    value.final_policy_qpc,
+                    wake_qpc,
+                ));
+            }
+            samples.final_policy_to_pre_call_us.push(signed_qpc_us(
+                qpc_clock,
+                value.pre_call_qpc,
+                value.final_policy_qpc,
+            ));
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
                 value.sendinput_completion_qpc,
@@ -506,12 +523,26 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
             ));
         }
         DispatchObservation::DownMiss(value) => {
-            let _ = value;
+            let reason = match value.kind {
+                DownMissKind::UnobservedBacklog => {
+                    samples.missed_down_unobserved_backlog += 1;
+                    "down_unobserved_backlog"
+                }
+                DownMissKind::PhysicalWindowExpired => {
+                    samples.missed_down_physical_window_expired += 1;
+                    "down_physical_window_expired"
+                }
+                DownMissKind::DownExpiredBeforeSend => {
+                    samples.missed_down_final_sender_window_expired += 1;
+                    "down_final_sender_window_expired"
+                }
+            };
             // A recovered Down miss is a diagnostic companion to the
             // successful recovery dispatch, not a second failed benchmark
             // attempt. Keep it in the evidence/failure-reason report without
             // double-counting the attempt accounting.
             samples.record_observation_failure("down_missed");
+            samples.record_observation_failure(reason);
         }
         DispatchObservation::Up(value) => {
             record_precision_handoff(
@@ -523,6 +554,18 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 value.dispatch_ready_qpc,
                 qpc_clock,
             );
+            if let Some(wake_qpc) = value.wake_qpc {
+                samples.wake_to_final_policy_us.push(signed_qpc_us(
+                    qpc_clock,
+                    value.final_policy_qpc,
+                    wake_qpc,
+                ));
+            }
+            samples.final_policy_to_pre_call_us.push(signed_qpc_us(
+                qpc_clock,
+                value.pre_call_qpc,
+                value.final_policy_qpc,
+            ));
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
                 value.sendinput_completion_qpc,
@@ -1179,6 +1222,8 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
         "target_crossing_to_final_policy_us": signed_summary(
             samples.target_crossing_to_final_policy_us,
         ),
+        "wake_to_final_policy_us": signed_summary(samples.wake_to_final_policy_us),
+        "final_policy_to_pre_call_us": signed_summary(samples.final_policy_to_pre_call_us),
         "final_policy_to_true_pre_call_us": signed_summary(samples.final_policy_to_true_pre_call_us),
         "dispatch_start_error_us": signed_summary(samples.dispatch_start_error_us),
         "completion_error_us_diagnostic": {
@@ -1208,6 +1253,11 @@ fn summarize(mut samples: Samples) -> serde_json::Value {
             "hot_count": samples.hot_wait_count,
             "cold_count": samples.cold_wait_count,
             "cold_threshold_us": SEND_COLD_THRESHOLD_US,
+        },
+        "missed_down": {
+            "unobserved_backlog": samples.missed_down_unobserved_backlog,
+            "physical_window_expired": samples.missed_down_physical_window_expired,
+            "final_sender_window_expired": samples.missed_down_final_sender_window_expired,
         },
         "spin_time_us": unsigned_summary(samples.spin_time_us),
         "wall_time_us": unsigned_summary(samples.wall_time_us),
