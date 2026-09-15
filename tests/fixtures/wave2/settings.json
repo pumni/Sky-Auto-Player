@@ -12,7 +12,7 @@
         }
       },
       "normalized_hold_frames": 1.5,
-      "migrated_schema_version": 7,
+      "migrated_schema_version": 8,
       "migrated_has_legacy_profile": false,
       "unknown_field_preserved": null
     },
@@ -49,6 +49,7 @@
           "playback_defaults": {
             "hold_frames": 1.0,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -86,9 +87,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.0
         }
       },
@@ -101,6 +103,7 @@
           "playback_defaults": {
             "hold_frames": 1.0,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -138,9 +141,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.0
         }
       },
@@ -153,6 +157,7 @@
           "playback_defaults": {
             "hold_frames": 1.0,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -190,9 +195,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.0
         }
       },
@@ -208,6 +214,7 @@
           "playback_defaults": {
             "hold_frames": 1.0,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -245,9 +252,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.0
         }
       },
@@ -268,6 +276,7 @@
           "playback_defaults": {
             "hold_frames": 1.5,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -305,9 +314,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.5
         }
       },
@@ -329,6 +339,7 @@
           "playback_defaults": {
             "hold_frames": 1.25,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -366,9 +377,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.25
         }
       },
@@ -389,6 +401,7 @@
           "playback_defaults": {
             "hold_frames": 1.25,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -426,9 +439,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.25
         }
       },
@@ -450,6 +464,7 @@
           "playback_defaults": {
             "hold_frames": 1.5,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 120
           },
@@ -487,9 +502,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "game_fps": 120,
           "default_hold_frames": 1.5
         }
@@ -512,6 +528,7 @@
           "playback_defaults": {
             "hold_frames": 1.25,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 90
           },
@@ -549,9 +566,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "game_fps": 90,
           "default_hold_frames": 1.25
         }
@@ -579,6 +597,7 @@
           "playback_defaults": {
             "hold_frames": 1.0,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -616,9 +635,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "future_field": "preserve",
           "default_hold_frames": 1.0
         }
@@ -663,6 +683,7 @@
           "playback_defaults": {
             "hold_frames": 1.0,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 0.95,
             "fps": 120
           },
@@ -702,9 +723,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.0,
           "default_tempo_scale": "0.95",
           "game_fps": "120",
@@ -762,6 +784,7 @@
           "playback_defaults": {
             "hold_frames": 1.0,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -799,9 +822,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.0,
           "theme": " SLATE ",
           "future_field": {
@@ -838,6 +862,7 @@
           "playback_defaults": {
             "hold_frames": 1.0,
             "timing_margin_us": 500,
+            "normal_down_start_tolerance_us": 2500,
             "tempo_scale": 1.0,
             "fps": 60
           },
@@ -875,9 +900,10 @@
           }
         },
         "migrated": {
-          "schema_version": 7,
+          "schema_version": 8,
           "auto_play": true,
           "default_timing_margin_us": 500,
+          "default_normal_down_start_tolerance_us": 2500,
           "default_hold_frames": 1.0,
           "default_tempo_scale": null,
           "game_fps": null,

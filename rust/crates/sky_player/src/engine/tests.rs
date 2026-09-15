@@ -46,6 +46,7 @@ fn test_session_options(
             frame_us: 16_667,
             frame_base_hold_us: 0,
             timing_margin_us: 500,
+            normal_down_start_tolerance_us: 2_500,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,

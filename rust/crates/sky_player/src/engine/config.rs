@@ -235,6 +235,7 @@ impl Default for WorkerConfig {
                 frame_us: 16_667,
                 frame_base_hold_us: 16_667,
                 timing_margin_us: 0,
+                normal_down_start_tolerance_us: DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
                 strict_timing: false,
                 strict_down_completion_late_us: 2_000,
                 strict_up_completion_late_us: 2_000,
@@ -264,6 +265,8 @@ impl Default for WorkerConfig {
     }
 }
 
+pub const DEFAULT_NORMAL_DOWN_START_TOLERANCE_US: u64 = 2_500;
+
 pub struct TimingOptions {
     pub game_fps: u16,
     pub min_hold_us: u64,
@@ -271,6 +274,7 @@ pub struct TimingOptions {
     pub frame_us: u64,
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,
+    pub normal_down_start_tolerance_us: u64,
     pub strict_timing: bool,
     pub strict_down_completion_late_us: u64,
     pub strict_up_completion_late_us: u64,

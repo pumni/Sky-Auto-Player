@@ -135,12 +135,13 @@ acceptance runs retain their exact recorded values and are not rewritten when
 product defaults change.
 The physical boundary is
 `physical_latest_down_start = authored target + Timing Margin`. Normal playback
-also has the fixed internal `normal_down_start_tolerance = 2,500 µs` total from
+also has user-configurable `normal_down_start_tolerance` in Advanced settings
+(default `2,500 µs`, range `2,500–5,000 µs` in `500 µs` steps) measured from
 the authored target. Therefore `sender_cutoff` is
-`max(physical_latest_down_start, target + 2,500 µs)` in normal playback and
-`physical_latest_down_start` in strict mode. The tolerance is not persisted,
-user-configurable, adaptive, a dispatch lead, or part of hold/release
-materialization.
+`max(physical_latest_down_start, target + normal_down_start_tolerance)` in normal
+playback and `physical_latest_down_start` in strict mode. The tolerance is
+non-additive with Timing Margin, is not adaptive, is not a dispatch lead, and
+does not affect hold/release materialization.
 Controlled A/B runs may pass `--timing-margin-us 0..3000` in `100 µs` steps;
 the `timing-margin-sweep` scenario authors its Hold and Release Gap targets
 from that exact value and records the packet timestamps in every report.

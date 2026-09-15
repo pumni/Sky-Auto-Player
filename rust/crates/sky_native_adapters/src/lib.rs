@@ -14,9 +14,11 @@ use sky_app_core::library::{
     LibraryManifestStore, LibraryManifestV1, LikedSongs,
 };
 use sky_app_core::settings::{
-    ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES, DEFAULT_PROCESS_NAMES,
-    DEFAULT_SONGS_DIR, DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS,
-    HotkeySettings, MAX_TIMING_MARGIN_US, MIN_TIMING_MARGIN_US, SafetySettings, SettingsError,
+    ApplicationSettings, DEFAULT_GAME_FPS, DEFAULT_HOLD_FRAMES,
+    DEFAULT_NORMAL_DOWN_START_TOLERANCE_US, DEFAULT_PROCESS_NAMES, DEFAULT_SONGS_DIR,
+    DEFAULT_TIMING_MARGIN_US, DEFAULT_UPDATE_INTERVAL_S, HOLD_FRAME_OPTIONS, HotkeySettings,
+    MAX_NORMAL_DOWN_START_TOLERANCE_US, MAX_TIMING_MARGIN_US, MIN_NORMAL_DOWN_START_TOLERANCE_US,
+    MIN_TIMING_MARGIN_US, NORMAL_DOWN_START_TOLERANCE_STEP_US, SafetySettings, SettingsError,
     SettingsStore, TIMING_MARGIN_STEP_US, UpdateChannel, UpdatePreferences, VALID_FPS,
     normalize_settings,
 };
@@ -1155,6 +1157,11 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
         "default_timing_margin_us",
         sky_app_core::settings::DEFAULT_TIMING_MARGIN_US,
     );
+    settings.playback_defaults.normal_down_start_tolerance_us = raw_u64(
+        raw,
+        "default_normal_down_start_tolerance_us",
+        sky_app_core::settings::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
+    );
     settings.playback_defaults.tempo_scale = raw_f64(raw, "default_tempo_scale", 1.0);
     settings.playback_defaults.fps = raw_fps(raw, "game_fps", DEFAULT_GAME_FPS);
     settings.playback_behavior.auto_play = raw_bool(raw, "auto_play", true);
@@ -1275,6 +1282,24 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
     migrated.insert(
         "default_timing_margin_us".into(),
         Value::from(timing_margin_us),
+    );
+    let normal_down_start_tolerance_us = raw_u64(
+        raw,
+        "default_normal_down_start_tolerance_us",
+        DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
+    );
+    let normal_down_start_tolerance_us = if (MIN_NORMAL_DOWN_START_TOLERANCE_US
+        ..=MAX_NORMAL_DOWN_START_TOLERANCE_US)
+        .contains(&normal_down_start_tolerance_us)
+        && normal_down_start_tolerance_us.is_multiple_of(NORMAL_DOWN_START_TOLERANCE_STEP_US)
+    {
+        normal_down_start_tolerance_us
+    } else {
+        DEFAULT_NORMAL_DOWN_START_TOLERANCE_US
+    };
+    migrated.insert(
+        "default_normal_down_start_tolerance_us".into(),
+        Value::from(normal_down_start_tolerance_us),
     );
     // Schema 7 removes the independent Late Down allowance. Discard the old
     // persisted value instead of converting it into authored Timing Margin.
@@ -1523,6 +1548,10 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
     raw.insert(
         "default_timing_margin_us".into(),
         Value::from(settings.playback_defaults.timing_margin_us),
+    );
+    raw.insert(
+        "default_normal_down_start_tolerance_us".into(),
+        Value::from(settings.playback_defaults.normal_down_start_tolerance_us),
     );
     raw.remove("default_down_late_grace_us");
     raw.insert(
@@ -1880,6 +1909,90 @@ mod tests {
             assert!(raw.get("default_down_late_grace_us").is_none());
             assert_eq!(raw["default_timing_margin_us"], 1_200);
             assert_eq!(raw["auto_play"], true);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn settings_v7_to_v8_migration_migrates_tolerance_and_preserves_unrelated() {
+        let root =
+            std::env::temp_dir().join(format!("sky-v7-migration-tolerance-{}", std::process::id()));
+        let path = root.join("config.json");
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            &path,
+            br#"{"schema_version":7,"theme":"slate","default_timing_margin_us":1200,"game_fps":120}"#,
+        )
+        .expect("seed schema v7 settings without tolerance");
+
+        let store = JsonSettingsStore::new(&path);
+        let settings = store.load().expect("load settings");
+        assert_eq!(settings.theme, "slate");
+        assert_eq!(settings.playback_defaults.timing_margin_us, 1_200);
+        assert_eq!(settings.playback_defaults.fps, 120);
+        assert_eq!(
+            settings.playback_defaults.normal_down_start_tolerance_us,
+            2_500
+        );
+
+        let raw: Value = serde_json::from_slice(&fs::read(&path).expect("read migrated config"))
+            .expect("valid migrated json");
+        assert_eq!(
+            raw["schema_version"],
+            sky_app_core::settings::SCHEMA_VERSION
+        );
+        assert_eq!(raw["schema_version"], 8);
+        assert_eq!(raw["theme"], "slate");
+        assert_eq!(raw["default_timing_margin_us"], 1_200);
+        assert_eq!(raw["game_fps"], 120);
+        assert_eq!(raw["default_normal_down_start_tolerance_us"], 2_500);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_store_round_trips_exact_normal_down_start_tolerance_and_normalizes_invalid() {
+        for (input, expected) in [
+            (Some(3_500_u64), 3_500_u64),
+            (Some(5_000_u64), 5_000_u64),
+            (Some(2_499_u64), 2_500_u64),
+            (Some(5_001_u64), 2_500_u64),
+            (Some(0_u64), 2_500_u64),
+            (None, 2_500_u64),
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "sky-tolerance-round-trip-{}-{:?}",
+                std::process::id(),
+                input
+            ));
+            let path = root.join("config.json");
+            fs::create_dir_all(&root).expect("temp root");
+            let tol_str = input
+                .map(|v| format!(",\"default_normal_down_start_tolerance_us\":{v}"))
+                .unwrap_or_default();
+            fs::write(
+                &path,
+                format!("{{\"schema_version\":7,\"default_timing_margin_us\":800{tol_str}}}"),
+            )
+            .expect("seed settings");
+
+            let store = JsonSettingsStore::new(&path);
+            let settings = store.load().expect("load settings");
+            assert_eq!(
+                settings.playback_defaults.normal_down_start_tolerance_us,
+                expected
+            );
+            assert_eq!(settings.playback_defaults.timing_margin_us, 800);
+
+            store.save(&settings).expect("save settings");
+            let raw: Value =
+                serde_json::from_slice(&fs::read(&path).expect("read")).expect("valid JSON");
+            assert_eq!(raw["default_normal_down_start_tolerance_us"], expected);
+            assert_eq!(raw["default_timing_margin_us"], 800);
+            assert_eq!(
+                raw["schema_version"],
+                sky_app_core::settings::SCHEMA_VERSION
+            );
             let _ = fs::remove_dir_all(root);
         }
     }

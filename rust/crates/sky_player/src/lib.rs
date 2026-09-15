@@ -21,6 +21,8 @@ pub mod adapter_support {
     pub use sky_dispatch_win32::mmcss::PriorityMode;
 
     pub const SCHEMA_VERSION: u32 = sky_dispatch_core::SCHEMA_VERSION;
+    pub const DEFAULT_NORMAL_DOWN_START_TOLERANCE_US: u64 =
+        crate::engine::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US;
 
     pub fn compile_runtime_intents(
         actions: &[KeyActionInput],

@@ -16,8 +16,9 @@ pub use config::StartupOrderingHook;
 pub use config::TestWaitPolicy;
 use config::WorkerConfig;
 pub use config::{
-    BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, FocusOptions, NativeSessionOptions,
-    PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
+    BackendConfig, DEFAULT_NORMAL_DOWN_START_TOLERANCE_US, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+    FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions,
+    WaitOptions,
 };
 pub use session::{NativeDispatchSession, SystemPowerSnapshot};
 pub use shared::SystemPowerEndpoint;

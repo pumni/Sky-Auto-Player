@@ -83,6 +83,7 @@ pub struct CatalogSetLikedRequest {
 pub struct PlaybackPatch {
     pub hold_frames: Option<f64>,
     pub timing_margin_us: Option<u64>,
+    pub normal_down_start_tolerance_us: Option<u64>,
     pub tempo_scale: Option<f64>,
     pub fps: Option<u16>,
 }
@@ -243,6 +244,7 @@ pub struct NativeBuildDto {
 pub struct PlaybackDefaultsDto {
     pub hold_frames: f64,
     pub timing_margin_us: u64,
+    pub normal_down_start_tolerance_us: u64,
     pub tempo_scale: f64,
     pub fps: u16,
     pub dry_run: bool,
@@ -257,6 +259,10 @@ pub struct PlaybackOptionSetsDto {
     pub timing_margin_min_us: u64,
     pub timing_margin_max_us: u64,
     pub timing_margin_step_us: u64,
+    pub normal_down_start_tolerance_min_us: u64,
+    pub normal_down_start_tolerance_max_us: u64,
+    pub normal_down_start_tolerance_step_us: u64,
+    pub normal_down_start_tolerance_default_us: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]

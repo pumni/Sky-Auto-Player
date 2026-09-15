@@ -256,7 +256,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         }
     };
     let normal_down_start_tolerance_ticks =
-        match qpc_clock.duration_from_us(super::NORMAL_PLAYBACK_DOWN_START_TOLERANCE_US) {
+        match qpc_clock.duration_from_us(config.timing.normal_down_start_tolerance_us) {
             Ok(ticks) => ticks,
             Err(error) => {
                 return admission_failure(

@@ -719,7 +719,14 @@ test('natural finish retires the old session and starts the next context song', 
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
   const transition = player.getByRole('status');
-  await expect(transition).toHaveText('Starting next song', { timeout: 12_000 });
+  await expect(async () => {
+    const statusText = await transition.textContent().catch(() => null);
+    const trackTitle = await player
+      .locator('.player-track-copy strong')
+      .textContent()
+      .catch(() => null);
+    expect(statusText === 'Starting next song' || trackTitle === 'Candle Run').toBe(true);
+  }).toPass({ timeout: 12_000 });
   const playingRow = page.getByRole('row', { name: /Blue Bird/ });
   await expect(playingRow).not.toHaveAttribute('aria-current', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {

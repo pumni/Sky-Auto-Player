@@ -2049,9 +2049,11 @@ mod tests {
     #[test]
     fn c1_1_dense_boundary_matrix_preserves_authored_targets_and_safety() {
         const GAPS_US: [u64; 7] = [1_000, 1_500, 2_000, 2_500, 3_000, 4_000, 5_000];
-        const OFFSETS_US: [u64; 6] = [600, 1_000, 1_400, 1_600, 2_200, 2_500];
+        const OFFSETS_US: [u64; 11] = [
+            600, 1_000, 1_400, 1_600, 2_200, 2_500, 3_000, 3_500, 4_000, 5_000, 5_500,
+        ];
 
-        for tolerance_us in [1_500, 2_500] {
+        for tolerance_us in [1_500, 2_500, 3_000, 4_000, 5_000] {
             for gap_us in GAPS_US {
                 for offset_us in OFFSETS_US {
                     let mut harness =
