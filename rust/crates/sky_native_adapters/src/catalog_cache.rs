@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
-use sky_app_core::catalog::{SUPPORTED_EXTENSIONS, is_valid_song_id};
+use sky_app_core::catalog::{SUPPORTED_EXTENSIONS, is_valid_song_id, song_id_for_canonical_path};
 use sky_app_core::library::ImportedSourceKind;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-pub const CATALOG_CACHE_SCHEMA_VERSION: u32 = 1;
+pub const CATALOG_CACHE_SCHEMA_VERSION: u32 = 2;
 pub const CATALOG_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 pub const CATALOG_CACHE_MAX_ENTRIES: usize = 1_000_000;
 pub const CATALOG_CACHE_MAX_SOURCES: usize = 1_024;
@@ -47,6 +48,7 @@ pub struct CatalogCacheEntry {
 pub struct CatalogCache {
     pub schema_version: u32,
     pub cache_generation: u64,
+    pub source_fingerprint: String,
     pub sources: Vec<CatalogCacheSource>,
     pub entries: Vec<CatalogCacheEntry>,
 }
@@ -62,6 +64,7 @@ impl CatalogCache {
         if self.cache_generation == 0 {
             return Err("catalog cache generation must be positive".into());
         }
+        validate_sha256_hex(&self.source_fingerprint, "source fingerprint")?;
         if self.sources.len() > CATALOG_CACHE_MAX_SOURCES {
             return Err("catalog cache contains too many sources".into());
         }
@@ -93,6 +96,7 @@ impl CatalogCache {
         }
 
         let mut paths = HashMap::new();
+        let mut entry_song_ids = HashSet::new();
         for entry in &self.entries {
             validate_source_id(&entry.source_id, &entry.kind)?;
             if !sources.contains_key(&(entry.kind.clone(), entry.source_id.clone())) {
@@ -108,6 +112,13 @@ impl CatalogCache {
             }
             if !is_valid_song_id(&entry.song_id) {
                 return Err("catalog cache contains an invalid song ID".into());
+            }
+            if matches!(
+                entry.kind,
+                CatalogCacheSourceKind::User | CatalogCacheSourceKind::Imported
+            ) && entry.song_id != song_id_for_canonical_path(&entry.canonical_path)
+            {
+                return Err("catalog cache path-derived song ID does not match its path".into());
             }
             validate_text(&entry.title, 4_096, "catalog cache title")?;
             let normalized_path = entry.canonical_path.to_ascii_lowercase();
@@ -125,6 +136,14 @@ impl CatalogCache {
                 .any(|song_id| song_id == &entry.song_id)
             {
                 return Err("catalog cache entry is absent from source membership".into());
+            }
+            entry_song_ids.insert(entry.song_id.clone());
+        }
+        for source in &self.sources {
+            for song_id in &source.song_ids {
+                if !entry_song_ids.contains(song_id) {
+                    return Err("catalog cache source membership has no cached entry".into());
+                }
             }
         }
         Ok(())
@@ -153,13 +172,15 @@ impl CatalogCacheStore {
         if !self.path.exists() {
             return Ok(None);
         }
-        let size = fs::metadata(&self.path)
+        let mut bytes = Vec::new();
+        fs::File::open(&self.path)
             .map_err(|error| error.to_string())?
-            .len();
-        if size > CATALOG_CACHE_MAX_BYTES {
+            .take(CATALOG_CACHE_MAX_BYTES.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() as u64 > CATALOG_CACHE_MAX_BYTES {
             return Err("catalog cache exceeds the bounded input size".into());
         }
-        let bytes = fs::read(&self.path).map_err(|error| error.to_string())?;
         let cache = serde_json::from_slice::<CatalogCache>(&bytes)
             .map_err(|error| format!("catalog cache decode failed: {error}"))?;
         cache.validate()?;
@@ -176,12 +197,22 @@ impl CatalogCacheStore {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
         let encoded = serde_json::to_vec_pretty(cache).map_err(|error| error.to_string())?;
+        if encoded.len() as u64 > CATALOG_CACHE_MAX_BYTES {
+            return Err("catalog cache exceeds the bounded output size".into());
+        }
         let temp = self.path.with_extension("json.tmp");
         fs::write(&temp, encoded).map_err(|error| error.to_string())?;
         super::replace_file(&temp, &self.path).inspect_err(|_| {
             let _ = fs::remove_file(&temp);
         })
     }
+}
+
+fn validate_sha256_hex(value: &str, label: &str) -> Result<(), String> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("{label} is invalid"));
+    }
+    Ok(())
 }
 
 fn validate_source_id(source_id: &str, kind: &CatalogCacheSourceKind) -> Result<(), String> {
@@ -220,11 +251,12 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn entry(source_id: &str, kind: CatalogCacheSourceKind) -> CatalogCacheEntry {
+        let canonical_path = r"C:\songs\one.json".to_owned();
         CatalogCacheEntry {
             source_id: source_id.into(),
             kind,
-            canonical_path: r"C:\songs\one.json".into(),
-            song_id: "0123456789abcdef0123456789abcdef".into(),
+            song_id: song_id_for_canonical_path(&canonical_path),
+            canonical_path,
             title: "One".into(),
             file_size: 42,
             modified_unix_ms: 1,
@@ -232,18 +264,20 @@ mod tests {
     }
 
     fn cache() -> CatalogCache {
+        let cached_entry = entry("user", CatalogCacheSourceKind::User);
         CatalogCache {
             schema_version: CATALOG_CACHE_SCHEMA_VERSION,
             cache_generation: 1,
+            source_fingerprint: "0".repeat(64),
             sources: vec![CatalogCacheSource {
                 source_id: "user".into(),
                 kind: CatalogCacheSourceKind::User,
                 import_kind: None,
                 display_name: "User library".into(),
                 available: true,
-                song_ids: vec!["0123456789abcdef0123456789abcdef".into()],
+                song_ids: vec![cached_entry.song_id.clone()],
             }],
-            entries: vec![entry("user", CatalogCacheSourceKind::User)],
+            entries: vec![cached_entry],
         }
     }
 
@@ -257,8 +291,14 @@ mod tests {
         invalid_path.entries[0].canonical_path = "relative/song.json".into();
         assert!(invalid_path.validate().is_err());
 
+        let mut invalid_path_identity = cache();
+        invalid_path_identity.entries[0].song_id = "fedcba9876543210fedcba9876543210".into();
+        assert!(invalid_path_identity.validate().is_err());
+
         let mut invalid_membership = cache();
-        invalid_membership.entries[0].song_id = "fedcba9876543210fedcba9876543210".into();
+        invalid_membership.sources[0]
+            .song_ids
+            .push(song_id_for_canonical_path(r"C:\songs\missing.json"));
         assert!(invalid_membership.validate().is_err());
     }
 
@@ -295,6 +335,56 @@ mod tests {
         )
         .expect("schema mismatch cache");
         assert!(store.load().is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_store_rejects_oversized_load_and_save() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-catalog-cache-oversized-{suffix}"));
+        let store = CatalogCacheStore::new(root.join("cache/catalog-index.json"));
+        fs::create_dir_all(root.join("cache")).expect("cache root");
+        fs::write(
+            store.path(),
+            vec![b'x'; (CATALOG_CACHE_MAX_BYTES + 1) as usize],
+        )
+        .expect("oversized cache");
+        assert!(store.load().is_err());
+
+        let title = "x".repeat(4_096);
+        let entries = (0..16_384)
+            .map(|index| {
+                let canonical_path = format!(r"C:\songs\{index:032x}.json");
+                CatalogCacheEntry {
+                    source_id: "user".into(),
+                    kind: CatalogCacheSourceKind::User,
+                    song_id: song_id_for_canonical_path(&canonical_path),
+                    canonical_path,
+                    title: title.clone(),
+                    file_size: 1,
+                    modified_unix_ms: 1,
+                }
+            })
+            .collect::<Vec<_>>();
+        let song_ids = entries.iter().map(|entry| entry.song_id.clone()).collect();
+        let oversized = CatalogCache {
+            schema_version: CATALOG_CACHE_SCHEMA_VERSION,
+            cache_generation: 1,
+            source_fingerprint: "0".repeat(64),
+            sources: vec![CatalogCacheSource {
+                source_id: "user".into(),
+                kind: CatalogCacheSourceKind::User,
+                import_kind: None,
+                display_name: "User library".into(),
+                available: true,
+                song_ids,
+            }],
+            entries,
+        };
+        assert!(store.save(&oversized).is_err());
         let _ = fs::remove_dir_all(root);
     }
 }

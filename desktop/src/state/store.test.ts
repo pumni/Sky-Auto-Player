@@ -248,6 +248,56 @@ describe('desktop store', () => {
     expect(store.getState().library.pages.get(0)?.length).toBeGreaterThan(0);
   });
 
+  it('bounds generation retries and converges through queued catalog changes', async () => {
+    const bridge = createMockBridge();
+    const originalSubscribe = bridge.subscribeUiEvents;
+    const originalSearch = bridge.searchSongs;
+    let listener: ((event: import('../bridge/DesktopBridge').UiEvent) => void) | undefined;
+    const pendingGenerations = [2, 3, 4];
+    let signalStableSearch!: () => void;
+    const stableSearchStarted = new Promise<void>((resolve) => {
+      signalStableSearch = resolve;
+    });
+    let releaseStableSearch!: () => void;
+    const stableSearchRelease = new Promise<void>((resolve) => {
+      releaseStableSearch = resolve;
+    });
+    let searchCalls = 0;
+    bridge.subscribeUiEvents = async (next) => {
+      listener = next;
+      return originalSubscribe(next);
+    };
+    bridge.searchSongs = async (request) => {
+      searchCalls += 1;
+      const nextGeneration = pendingGenerations.shift();
+      if (nextGeneration !== undefined) {
+        listener?.({
+          v: 1,
+          name: 'catalog.changed',
+          payload: { generation: nextGeneration, total: 500 },
+        });
+        throw new Error('catalog generation is stale');
+      }
+      signalStableSearch();
+      await stableSearchRelease;
+      const result = await originalSearch(request);
+      return { ...result, generation: 4 };
+    };
+
+    const store = createDesktopStore(bridge);
+    const initialization = store.getState().initialize();
+
+    await stableSearchStarted;
+    await initialization;
+    expect(searchCalls).toBe(4);
+    releaseStableSearch();
+    await waitFor(() => {
+      expect(store.getState().library.generation).toBe(4);
+      expect(store.getState().library.loading).toBe(false);
+      expect(store.getState().library.error).toBeNull();
+    });
+  });
+
   it('discards an older search response', async () => {
     let releaseSlow: (() => void) | undefined;
     const bridge = createMockBridge();

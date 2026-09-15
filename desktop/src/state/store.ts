@@ -29,6 +29,7 @@ import { rememberRetiredSession } from './retiredSessions';
 import { recordStartupTelemetry } from '../bridge/startupTelemetry';
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'fatal';
+const MAX_CATALOG_RECONCILIATION_ATTEMPTS = 3;
 type PlaybackUiState =
   'idle' | 'starting' | 'playing' | 'paused' | 'stopping' | 'finished' | 'failed';
 export type TransportOperation =
@@ -562,7 +563,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
     const reconcileCatalog = (): Promise<void> => {
       catalogReconciliationTail = catalogReconciliationTail.then(async () => {
         if (get().bootstrapState !== 'ready' || get().library.error !== null) return;
-        for (;;) {
+        for (let attempt = 0; attempt < MAX_CATALOG_RECONCILIATION_ATTEMPTS; attempt += 1) {
           const requestedGeneration = get().library.generation;
           await get().search();
           const afterSearch = get().library;
@@ -583,6 +584,8 @@ export function createDesktopStore(bridge: DesktopBridge) {
           }
           return;
         }
+        // A catalog.changed event queues another reconciliation after this
+        // bounded attempt window. Do not spin on a moving generation here.
       });
       return catalogReconciliationTail;
     };

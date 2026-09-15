@@ -1335,6 +1335,7 @@ pub(crate) struct NativeDesktopRuntime {
     library_manifest: Mutex<LibraryManifestService<JsonLibraryManifestStore>>,
     catalog_composer: CatalogComposer,
     catalog_cache: CatalogCacheStore,
+    catalog_source_fingerprint: String,
     cached_catalog: Mutex<Option<CatalogCache>>,
     catalog: Mutex<CatalogState>,
     catalog_load: Mutex<CatalogLoadState>,
@@ -1532,6 +1533,11 @@ impl NativeDesktopRuntime {
         let songs_dir = paths
             .resolve_songs_dir(&settings.snapshot().songs_dir)
             .unwrap_or_else(|_| paths.user_music_root().to_path_buf());
+        let catalog_source_fingerprint = compute_catalog_source_fingerprint(
+            &resources,
+            &songs_dir,
+            &library_manifest.snapshot().imports,
+        );
         let playback = Arc::new(NativePlaybackService::new(activity.clone()));
         let calibration = Arc::new(NativeCalibrationService::new(
             paths.clone(),
@@ -1571,6 +1577,7 @@ impl NativeDesktopRuntime {
                 FileCatalogSource::new(songs_dir),
             ),
             catalog_cache,
+            catalog_source_fingerprint,
             cached_catalog: Mutex::new(None),
             catalog: Mutex::new(CatalogState::default()),
             catalog_load: Mutex::new(CatalogLoadState::default()),
@@ -2090,6 +2097,9 @@ impl NativeDesktopRuntime {
     }
 
     fn hydrate_cached_catalog(&self, cache: CatalogCache) -> Result<(), String> {
+        if cache.source_fingerprint != self.catalog_source_fingerprint {
+            return Err("catalog cache source fingerprint mismatch".into());
+        }
         let composition = cached_composition(&cache)?;
         let (snapshot, _) = self.apply_catalog_composition(composition, false, false)?;
         let mut state = self
@@ -2213,6 +2223,7 @@ impl NativeDesktopRuntime {
         Ok(CatalogCache {
             schema_version: CATALOG_CACHE_SCHEMA_VERSION,
             cache_generation,
+            source_fingerprint: self.catalog_source_fingerprint.clone(),
             sources,
             entries,
         })
@@ -3635,6 +3646,50 @@ fn imported_source_id(canonical_path: &str, kind: ImportedSourceKind) -> String 
         .finalize()
         .iter()
         .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn compute_catalog_source_fingerprint(
+    resources: &AppResources,
+    user_root: &Path,
+    imports: &[ImportedSourceRef],
+) -> String {
+    let mut normalized_imports = imports.to_vec();
+    for import in &mut normalized_imports {
+        import.canonical_path = source_path_identity(Path::new(&import.canonical_path));
+    }
+    normalized_imports.sort_by(|left, right| {
+        (&left.source_id, &left.canonical_path, left.kind as u8).cmp(&(
+            &right.source_id,
+            &right.canonical_path,
+            right.kind as u8,
+        ))
+    });
+    let builtin_manifest_fingerprint = fs::read(resources.builtin_catalog_manifest_path())
+        .map(|bytes| digest_hex(&bytes))
+        .unwrap_or_else(|_| "unavailable".into());
+    let payload = serde_json::json!({
+        "version": 1,
+        "builtin_root": source_path_identity(resources.builtin_catalog_root()),
+        "builtin_manifest": builtin_manifest_fingerprint,
+        "user_root": source_path_identity(user_root),
+        "imports": normalized_imports,
+    });
+    let bytes = serde_json::to_vec(&payload).expect("catalog source fingerprint payload");
+    digest_hex(&bytes)
+}
+
+fn source_path_identity(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
@@ -6386,15 +6441,16 @@ mod tests {
         NativeCalibrationService, NativeDesktopRuntime, NativeDiagnosticsSample, NativeEventHub,
         NativePlaybackService, PlaybackActiveStatusDto, PlaybackPendingControl,
         PlaybackTerminalPublication, PlaybackTerminalStatusDto, SenderTraceState, TestSeams,
-        calibration_budget, diagnostics_backend_status, opaque_native_id, percentile_ms,
-        physical_startup_failure, plan_fingerprint, population_sigma_ms, publish_calibration_cache,
-        publish_diagnostics_snapshot_for_active, publish_final_diagnostics_snapshot_for_active,
-        publish_playback_state, publish_retirement_barrier, publish_stopped_completion,
-        publish_terminal_poll_result, recommended_calibrated_timing_margin_us,
-        release_terminal_ownership, remove_oldest_snapshot, resolve_install_root,
-        retain_prepared_capacity, safe_calibration_evidence, sender_sample_summary,
-        sender_trace_export_json, settings_fingerprint, supervisor_heartbeat_loop,
-        timing_margin_recommendation, validate_playback_start_request,
+        calibration_budget, compute_catalog_source_fingerprint, diagnostics_backend_status,
+        opaque_native_id, percentile_ms, physical_startup_failure, plan_fingerprint,
+        population_sigma_ms, publish_calibration_cache, publish_diagnostics_snapshot_for_active,
+        publish_final_diagnostics_snapshot_for_active, publish_playback_state,
+        publish_retirement_barrier, publish_stopped_completion, publish_terminal_poll_result,
+        recommended_calibrated_timing_margin_us, release_terminal_ownership,
+        remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
+        safe_calibration_evidence, sender_sample_summary, sender_trace_export_json,
+        settings_fingerprint, supervisor_heartbeat_loop, timing_margin_recommendation,
+        validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
@@ -6410,7 +6466,7 @@ mod tests {
     use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::{build_schedule_with_policy, parse_song_json};
     use sky_native_adapters::{
-        AppPaths, CATALOG_CACHE_SCHEMA_VERSION, CatalogCache, CatalogCacheEntry,
+        AppPaths, AppResources, CATALOG_CACHE_SCHEMA_VERSION, CatalogCache, CatalogCacheEntry,
         CatalogCacheSource, CatalogCacheSourceKind, CatalogCacheStore, load_calibration_resolution,
     };
     use std::fs;
@@ -6456,6 +6512,11 @@ mod tests {
             .save(&CatalogCache {
                 schema_version: CATALOG_CACHE_SCHEMA_VERSION,
                 cache_generation: 1,
+                source_fingerprint: compute_catalog_source_fingerprint(
+                    &AppResources::from_resource_dir(root),
+                    &root.join("songs"),
+                    &[],
+                ),
                 sources: vec![CatalogCacheSource {
                     source_id: "user".into(),
                     kind: CatalogCacheSourceKind::User,
@@ -7731,6 +7792,127 @@ mod tests {
         assert_eq!(catalog_generation(&runtime), 1);
         runtime.shutdown();
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_source_fingerprint_rejects_removed_import_before_hydration() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("sky-native-catalog-cache-removed-import-{suffix}"));
+        let imported_root = root.join("imported");
+        let source_id = "d".repeat(32);
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::create_dir_all(&imported_root).expect("import root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(imported_root.join("old.json"), b"old").expect("imported song");
+        fs::write(
+            root.join("library-manifest.json"),
+            serde_json::json!({
+                "version": 1,
+                "imports": [{"source_id": source_id, "canonical_path": fs::canonicalize(&imported_root).unwrap(), "kind": "folder"}],
+                "collections": []
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+
+        let initial_runtime =
+            NativeDesktopRuntime::from_install_root(root.clone()).expect("initial runtime");
+        let _ = catalog_generation(&initial_runtime);
+        initial_runtime.shutdown();
+        fs::write(
+            root.join("library-manifest.json"),
+            "{\"version\":1,\"imports\":[],\"collections\":[]}\n",
+        )
+        .expect("removed import manifest");
+
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        assert!(matches!(
+            *runtime.catalog_load.lock().expect("catalog state"),
+            super::CatalogLoadState::Uninitialized
+        ));
+        assert_eq!(
+            runtime
+                .catalog
+                .lock()
+                .expect("catalog lock")
+                .index
+                .snapshot()
+                .total,
+            0
+        );
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_source_fingerprint_rejects_changed_user_root_before_hydration() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sky-native-catalog-cache-changed-user-root-{suffix}"
+        ));
+        let old_root = root.join("songs");
+        let new_root =
+            std::env::temp_dir().join(format!("sky-native-catalog-cache-new-user-root-{suffix}"));
+        fs::create_dir_all(&old_root).expect("old songs root");
+        fs::create_dir_all(&new_root).expect("new songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(old_root.join("old.json"), b"old").expect("old song");
+
+        let initial_runtime =
+            NativeDesktopRuntime::from_install_root(root.clone()).expect("initial runtime");
+        let _ = catalog_generation(&initial_runtime);
+        initial_runtime.shutdown();
+        fs::write(
+            root.join("config.json"),
+            format!(
+                "{{\"schema_version\":3,\"songs_dir\":{:?}}}\n",
+                new_root.to_string_lossy()
+            ),
+        )
+        .expect("changed songs root");
+
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+        assert_eq!(
+            runtime
+                .settings
+                .lock()
+                .expect("settings lock")
+                .snapshot()
+                .songs_dir,
+            new_root.to_string_lossy()
+        );
+        let persisted = CatalogCacheStore::new(root.join("cache/catalog-index.json"))
+            .load()
+            .expect("load cache")
+            .expect("cache");
+        assert_ne!(
+            persisted.source_fingerprint, runtime.catalog_source_fingerprint,
+            "changed user root must change the source fingerprint"
+        );
+        assert!(matches!(
+            *runtime.catalog_load.lock().expect("catalog state"),
+            super::CatalogLoadState::Uninitialized
+        ));
+        assert_eq!(
+            runtime
+                .catalog
+                .lock()
+                .expect("catalog lock")
+                .index
+                .snapshot()
+                .total,
+            0
+        );
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(new_root);
     }
 
     #[test]
