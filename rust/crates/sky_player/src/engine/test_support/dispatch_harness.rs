@@ -17,11 +17,10 @@ use crate::engine::worker::dispatch::{
 use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts, TargetStamp,
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitObservation, WaitResult,
-    WaitSignals, WaitTiming, WorkerHealthState, WorkerResources, WorkerRuntime,
-    WorkerSchedulingGuards, WorkerTimingState, dispatch_due_from_plan,
-    physical_wait_target_for_plan, plan_next_dispatch, plan_next_dispatch_projected,
-    preflight_prepared_plan, publish_backend_counters, publish_live_metrics_after_dispatch,
-    wait_for_next_boundary,
+    WaitSignals, WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
+    WorkerTimingState, dispatch_due_from_plan, physical_wait_target_for_plan, plan_next_dispatch,
+    plan_next_dispatch_projected, preflight_prepared_plan, publish_backend_counters,
+    publish_live_metrics_after_dispatch, wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, physical_packet_kind};
@@ -74,6 +73,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) quit_requested: AtomicBool,
     pub(crate) skip_requested: AtomicBool,
     pub(crate) panic_requested: AtomicBool,
+    pub(crate) supervisor_expired: AtomicBool,
     pub(crate) desired_pause: AtomicBool,
     pub(super) system_power: SystemPowerState,
     pub(crate) supervisor_heartbeat_ticks: AtomicU64,
@@ -822,6 +822,7 @@ impl ProductionDispatchTestHarness {
             quit_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
             panic_requested: AtomicBool::new(false),
+            supervisor_expired: AtomicBool::new(false),
             desired_pause: AtomicBool::new(false),
             system_power: SystemPowerState::default(),
             supervisor_heartbeat_ticks: AtomicU64::new(0),
@@ -1522,10 +1523,6 @@ impl ProductionDispatchTestHarness {
                 },
                 qpc_clock: self.resources.clock,
             },
-            timing: WaitTiming {
-                lease_timeout_ticks: self.timing.lease_timeout_ticks,
-                supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
-            },
             signals: WaitSignals {
                 waiter: &self.resources.waiter,
                 interrupt: &self.interrupt,
@@ -1709,10 +1706,9 @@ impl ProductionDispatchTestHarness {
             &self.quit_requested,
             &self.skip_requested,
             &self.panic_requested,
+            &self.supervisor_expired,
             &self.desired_pause,
             &self.system_power,
-            &self.supervisor_heartbeat_ticks,
-            self.timing.lease_timeout_ticks,
             &self.progress_clock,
             Some(&self.observer),
             boundary_crossing_qpc,
@@ -2239,13 +2235,6 @@ impl ProductionDispatchTestHarness {
     }
     /// Dispatch authored packet using an explicit production `NextDispatchPlan`.
     pub fn dispatch_authored_with_plan(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
-        self.dispatch_authored_with_plan_and_lease(plan, DurationTicks::ZERO)
-    }
-    pub fn dispatch_authored_with_plan_and_lease(
-        &mut self,
-        plan: &NextDispatchPlan,
-        lease_timeout_ticks: DurationTicks,
-    ) -> DispatchStep {
         let physical_target_qpc = plan.physical_target_qpc().expect("physical target QPC");
         let physical = plan.physical().expect("physical dispatch plan");
         let physical_latest_down_start_qpc = self.runtime.latest_down_start_for_test(
@@ -2273,8 +2262,7 @@ impl ProductionDispatchTestHarness {
             physical_latest_down_start_qpc,
             down_admission: DownBoundaryAdmission::Authorized,
             focus_loss_fault: false,
-            supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
-            lease_timeout_ticks,
+            supervisor_expired: &self.supervisor_expired,
             // This helper dispatches a frozen plan at its synthetic exact
             // boundary; the worker loop normally supplies this sample from
             // its single wait.

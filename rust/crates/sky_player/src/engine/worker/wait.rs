@@ -1,10 +1,9 @@
-use super::{lease_bounded_ticks, wait_failure_message};
+use super::wait_failure_message;
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure, WaitOutcome, WaitResult};
-use std::sync::atomic::AtomicU64;
 
 pub(crate) enum WaitBoundary {
     Due {
@@ -39,11 +38,6 @@ pub(crate) struct WaitDeadline {
     pub(crate) qpc_clock: QpcClock,
 }
 
-pub(crate) struct WaitTiming<'a> {
-    pub(crate) lease_timeout_ticks: DurationTicks,
-    pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
-}
-
 pub(crate) struct WaitSignals<'a> {
     pub(crate) waiter: &'a HybridWaiter,
     pub(crate) interrupt: &'a OwnedEvent,
@@ -57,7 +51,6 @@ pub(crate) struct WaitMutable<'a> {
 
 pub(crate) struct WaitBoundaryInput<'a> {
     pub(crate) deadline: WaitDeadline,
-    pub(crate) timing: WaitTiming<'a>,
     pub(crate) signals: WaitSignals<'a>,
     pub(crate) mutable: WaitMutable<'a>,
 }
@@ -77,29 +70,9 @@ pub(crate) fn record_wait_failure(
     *terminal_error = Some(wait_failure_message(failure));
 }
 
-fn dispatch_deadline_wake_is_due(bounded_target: QpcTicks, target_qpc: QpcTicks) -> bool {
-    bounded_target == target_qpc
-}
-
-fn spin_threshold_for_bounded_target(
-    bounded_target: QpcTicks,
-    physical_target_qpc: QpcTicks,
-    calibrated_spin_threshold_ticks: DurationTicks,
-) -> DurationTicks {
-    if dispatch_deadline_wake_is_due(bounded_target, physical_target_qpc) {
-        calibrated_spin_threshold_ticks
-    } else {
-        // A lease-only wake is an orchestration heartbeat, not a musical
-        // boundary. Busy-spinning before it spends CPU without improving the
-        // physical dispatch contract.
-        DurationTicks::ZERO
-    }
-}
-
 pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoundary {
     let WaitBoundaryInput {
         deadline,
-        timing,
         signals,
         mutable,
     } = context;
@@ -109,10 +82,6 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
         qpc_clock,
         ..
     } = deadline;
-    let WaitTiming {
-        lease_timeout_ticks,
-        supervisor_heartbeat_ticks,
-    } = timing;
     let WaitSignals { waiter, interrupt } = signals;
     let WaitMutable {
         local_metrics,
@@ -149,25 +118,14 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             return WaitBoundary::Exit;
         }
     };
-    let bounded_target =
-        match lease_bounded_ticks(target_qpc, lease_timeout_ticks, supervisor_heartbeat_ticks) {
-            Ok(target) => target,
-            Err(error) => {
-                *force_full_cleanup = true;
-                *terminal_error = Some(format!("lease deadline failure: {error:?}"));
-                return WaitBoundary::Exit;
-            }
-        };
-    let wait_spin_threshold_ticks =
-        spin_threshold_for_bounded_target(bounded_target, target_qpc, spin_threshold_ticks);
     let wait_result = waiter.wait_until_ticks_with_metrics_typed(
         qpc_clock,
-        bounded_target,
-        wait_spin_threshold_ticks,
+        target_qpc,
+        spin_threshold_ticks,
         interrupt,
     );
     match wait_result.outcome {
-        WaitOutcome::Deadline if dispatch_deadline_wake_is_due(bounded_target, target_qpc) => {
+        WaitOutcome::Deadline => {
             let dispatch_qpc = wait_result.wake_qpc.unwrap_or(target_qpc);
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
@@ -176,17 +134,6 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
                 planned_wait_ticks,
             }
         }
-        WaitOutcome::Deadline => WaitBoundary::Replan {
-            // A lease-only timer wake is orchestration progress, not a
-            // physical dispatch deadline.  Preserve its timing evidence but
-            // make that distinction explicit to the observer path.
-            wait_result: WaitResult {
-                outcome: WaitOutcome::Interrupted,
-                ..wait_result
-            },
-            target_qpc: physical_target_qpc,
-            planned_wait_ticks,
-        },
         WaitOutcome::Failed(failure) => {
             record_wait_failure(failure, local_metrics, force_full_cleanup, terminal_error);
             WaitBoundary::Exit
@@ -206,18 +153,16 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
 #[cfg(test)]
 mod tests {
     use super::{
-        WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
-        dispatch_deadline_wake_is_due, record_wait_failure, spin_threshold_for_bounded_target,
-        wait_for_next_boundary,
+        WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals,
+        record_wait_failure, wait_for_next_boundary,
     };
     use crate::engine::shared::{SYSTEM_POWER_SUSPEND_PENDING, SystemPowerState};
     use crate::engine::telemetry::WorkerMetricsLocal;
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-    use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+    use sky_dispatch_win32::clock::QpcClock;
     use sky_dispatch_win32::event::OwnedEvent;
     use sky_dispatch_win32::wait::{HybridWaiter, WaitFailure};
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
     use std::time::Duration;
 
     #[test]
@@ -229,46 +174,22 @@ mod tests {
             .expect("admission wait implementation");
         assert!(body.contains("physical_target_qpc"));
         assert!(body.contains("wait_until_ticks_with_metrics_typed"));
-        assert!(body.contains("wait_spin_threshold_ticks"));
+        assert!(body.contains("spin_threshold_ticks"));
+        assert!(!body.contains("lease_bounded_ticks"));
+        assert!(!body.contains("supervisor_heartbeat_ticks"));
         assert!(!body.contains("wait_to_precision_boundary"));
     }
 
     #[test]
-    fn lease_boundary_is_not_a_dispatch_deadline() {
-        assert!(dispatch_deadline_wake_is_due(
-            QpcTicks::ZERO,
-            QpcTicks::ZERO
-        ));
-        assert!(!dispatch_deadline_wake_is_due(
-            QpcTicks::from_raw(1),
-            QpcTicks::from_raw(2)
-        ));
-    }
-
-    #[test]
-    fn lease_only_wake_does_not_busy_spin() {
-        let configured = DurationTicks::from_raw(123);
-        assert_eq!(
-            spin_threshold_for_bounded_target(
-                QpcTicks::from_raw(99),
-                QpcTicks::from_raw(100),
-                configured,
-            ),
-            DurationTicks::ZERO
-        );
-    }
-
-    #[test]
-    fn physical_target_wake_keeps_calibrated_spin() {
-        let configured = DurationTicks::from_raw(123);
-        assert_eq!(
-            spin_threshold_for_bounded_target(
-                QpcTicks::from_raw(100),
-                QpcTicks::from_raw(100),
-                configured,
-            ),
-            configured
-        );
+    fn physical_wait_does_not_use_lease_deadline_or_heartbeat_arithmetic() {
+        let source = include_str!("wait.rs");
+        let body = source
+            .split("pub(crate) fn wait_for_next_boundary")
+            .nth(1)
+            .expect("wait implementation");
+        assert!(!body.contains("lease_timeout_ticks"));
+        assert!(!body.contains("supervisor_heartbeat_ticks"));
+        assert!(body.contains("target_qpc"));
     }
 
     #[test]
@@ -307,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn lease_only_timer_wake_replans_instead_of_dispatching() {
+    fn physical_wait_reaches_the_authored_target() {
         let qpc_clock = QpcClock::initialize().expect("qpc clock");
         let epoch = qpc_clock.now().expect("qpc epoch");
         let deadline = TimelineTicks::from_raw(
@@ -316,7 +237,6 @@ mod tests {
                 .expect("deadline conversion")
                 .as_u64(),
         );
-        let heartbeat = AtomicU64::new(epoch.as_u64());
         let waiter = HybridWaiter::new();
         let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
         let mut local_metrics = WorkerMetricsLocal::default();
@@ -333,10 +253,6 @@ mod tests {
                 spin_threshold_ticks: DurationTicks::from_raw(1),
                 qpc_clock,
             },
-            timing: WaitTiming {
-                lease_timeout_ticks: qpc_clock.duration_from_us(1_000).expect("lease conversion"),
-                supervisor_heartbeat_ticks: &heartbeat,
-            },
             signals: WaitSignals {
                 waiter: &waiter,
                 interrupt: &interrupt,
@@ -348,11 +264,7 @@ mod tests {
             },
         });
 
-        assert!(matches!(
-            boundary,
-            WaitBoundary::Replan { wait_result, .. }
-                if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
-        ));
+        assert!(matches!(boundary, WaitBoundary::Due { .. }));
         assert!(!force_full_cleanup);
         assert!(terminal_error.is_none());
     }
@@ -365,7 +277,6 @@ mod tests {
             .duration_from_us(5_000_000)
             .expect("deadline conversion");
         let deadline = TimelineTicks::from_raw(deadline_delta.as_u64());
-        let heartbeat = AtomicU64::new(epoch.as_u64());
         let waiter = HybridWaiter::new();
         let interrupt = Arc::new(OwnedEvent::new_auto_reset().expect("interrupt event"));
         let signal_event = Arc::clone(&interrupt);
@@ -388,10 +299,6 @@ mod tests {
                 ),
                 spin_threshold_ticks: DurationTicks::from_raw(1),
                 qpc_clock,
-            },
-            timing: WaitTiming {
-                lease_timeout_ticks: qpc_clock.duration_from_us(10_000_000).expect("lease"),
-                supervisor_heartbeat_ticks: &heartbeat,
             },
             signals: WaitSignals {
                 waiter: &waiter,
@@ -424,7 +331,6 @@ mod tests {
             .duration_from_us(5_000_000)
             .expect("deadline conversion");
         let deadline = TimelineTicks::from_raw(deadline_delta.as_u64());
-        let heartbeat = AtomicU64::new(epoch.as_u64());
         let waiter = HybridWaiter::new();
         let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
         let system_power = SystemPowerState::default();
@@ -442,10 +348,6 @@ mod tests {
                 ),
                 spin_threshold_ticks: DurationTicks::from_raw(1),
                 qpc_clock,
-            },
-            timing: WaitTiming {
-                lease_timeout_ticks: qpc_clock.duration_from_us(10_000_000).expect("lease"),
-                supervisor_heartbeat_ticks: &heartbeat,
             },
             signals: WaitSignals {
                 waiter: &waiter,
