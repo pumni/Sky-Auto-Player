@@ -444,6 +444,7 @@ pub(crate) fn apply_system_suspend_transition(
         .get_elapsed_allow_pre_epoch(now_ticks, true)
         .map_err(|error| error.to_string());
     suspend_live_input(backend, coordinator, runtime, effective_now, target_hwnd)?;
+    runtime.manual_pause_suspension_pending = false;
     if let Some(guard) = runtime.physical_timing_guard.as_mut() {
         guard.reset();
     }
@@ -755,23 +756,23 @@ pub(super) fn dispatch(
                     let manual_pause_active =
                         manual_pause || resources.playback.has_pause_reason(PauseReason::Manual);
                     core.runtime.verified_target = None;
-                    if !manual_pause_active {
-                        if !focus_matches_hwnd(
-                            config.focus.require_focus,
-                            focus_active,
-                            preflight_target.hwnd,
-                        ) || !target_stamp_still_current(
-                            target_hwnd,
-                            target_generation,
-                            preflight_target,
-                        ) {
-                            if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
-                                guard.invalidate();
-                            }
-                            core.runtime.verified_target = None;
-                            core.runtime.focus_restore_started_ticks = None;
-                            continue;
+                    if !focus_matches_hwnd(
+                        config.focus.require_focus,
+                        focus_active,
+                        preflight_target.hwnd,
+                    ) || !target_stamp_still_current(
+                        target_hwnd,
+                        target_generation,
+                        preflight_target,
+                    ) {
+                        if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
+                            guard.invalidate();
                         }
+                        core.runtime.verified_target = None;
+                        core.runtime.focus_restore_started_ticks = None;
+                        continue;
+                    }
+                    if !manual_pause_active {
                         let lifecycle_effective_now = resources
                             .playback
                             .get_elapsed_allow_pre_epoch(
@@ -792,6 +793,7 @@ pub(super) fn dispatch(
                                 Some(format!("focus restoration failed: {error}"));
                             break;
                         }
+                        core.runtime.manual_pause_suspension_pending = false;
                         core.runtime.production_forensics.observe_lifecycle(
                             super::dispatch::observation::ObserverLifecycle::ResetAll,
                         );
@@ -807,6 +809,31 @@ pub(super) fn dispatch(
                             ));
                             break;
                         }
+                    } else if core.runtime.manual_pause_suspension_pending {
+                        let lifecycle_effective_now = resources
+                            .playback
+                            .get_elapsed_allow_pre_epoch(
+                                now_ticks,
+                                core.runtime.allow_pre_epoch_startup_dispatch,
+                            )
+                            .map_err(|error| error.to_string());
+                        if let Err(error) = suspend_live_input(
+                            &mut resources.backend,
+                            &mut resources.coordinator,
+                            &mut core.runtime,
+                            lifecycle_effective_now,
+                            preflight_target.hwnd,
+                        ) {
+                            core.runtime.verified_target = None;
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error =
+                                Some(format!("focus restoration failed: {error}"));
+                            break;
+                        }
+                        core.runtime.manual_pause_suspension_pending = false;
+                        core.runtime.production_forensics.observe_lifecycle(
+                            super::dispatch::observation::ObserverLifecycle::ResetAll,
+                        );
                     }
                     #[cfg(any(test, feature = "test-support"))]
                     if let Some(hook) = core.runtime.restore_race_hook.as_ref() {
@@ -885,6 +912,7 @@ pub(super) fn dispatch(
                             Some(format!("manual pause suspension failed: {error}"));
                         break;
                     }
+                    core.runtime.manual_pause_suspension_pending = false;
                     core.runtime.production_forensics.observe_lifecycle(
                         super::dispatch::observation::ObserverLifecycle::ResetAll,
                     );
@@ -902,6 +930,12 @@ pub(super) fn dispatch(
                         qpc_us_or_terminal!(),
                         true,
                     );
+                } else if resources.playback.has_pause_reason(PauseReason::Focus)
+                    && !resources
+                        .playback
+                        .has_pause_reason(PauseReason::SystemSuspend)
+                {
+                    core.runtime.manual_pause_suspension_pending = true;
                 }
                 if let Err(error) = resources
                     .playback
@@ -917,6 +951,31 @@ pub(super) fn dispatch(
                     .publish(&resources.playback);
             } else if !manual_pause && resources.playback.has_pause_reason(PauseReason::Manual) {
                 if !resources.playback.has_pause_reason(PauseReason::Focus) {
+                    if core.runtime.manual_pause_suspension_pending {
+                        let lifecycle_effective_now = resources
+                            .playback
+                            .get_elapsed_allow_pre_epoch(
+                                now_ticks,
+                                core.runtime.allow_pre_epoch_startup_dispatch,
+                            )
+                            .map_err(|error| error.to_string());
+                        if let Err(error) = suspend_live_input(
+                            &mut resources.backend,
+                            &mut resources.coordinator,
+                            &mut core.runtime,
+                            lifecycle_effective_now,
+                            target_hwnd.load(Ordering::Acquire),
+                        ) {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error =
+                                Some(format!("manual resume deferred suspension failed: {error}"));
+                            break;
+                        }
+                        core.runtime.manual_pause_suspension_pending = false;
+                        core.runtime.production_forensics.observe_lifecycle(
+                            super::dispatch::observation::ObserverLifecycle::ResetAll,
+                        );
+                    }
                     let preflight_target = load_target_stamp(target_hwnd, target_generation);
                     if let Err(error) = ensure_preflight_for_target(
                         &resources.backend,

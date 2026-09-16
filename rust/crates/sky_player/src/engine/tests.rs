@@ -1,4 +1,5 @@
 use super::telemetry::metrics::RecentLatencyRing;
+use super::test_support::ProductionDispatchTestHarness;
 use super::test_support::command_timing::{
     CommandTimingError, CommandTimingLookup as PauseTimingLookup, PauseTimingPhase,
 };
@@ -18,6 +19,7 @@ use super::{
     supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     wake_lateness_ticks,
 };
+use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
@@ -5954,4 +5956,551 @@ fn invariant_mismatch_prevents_sender_invocation() {
         "sender seam must not be invoked on target stamp mismatch"
     );
     let _ = backend;
+}
+
+#[test]
+fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 25_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "next-down".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("schedule");
+
+    let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.set_target_hwnd(123);
+    start_with_test_wall_clock_slack(&session);
+
+    wait_for_focus_down(&session);
+    assert!(
+        send_call_count.load(Ordering::SeqCst) >= 1,
+        "note Down was sent"
+    );
+
+    // 1. Lose focus -> Focus pause
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    force_inconclusive_probe.store(true, Ordering::Release);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+
+    // 2. Request Manual pause before focus restoration
+    session.pause().expect("request manual pause");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !session
+        .shared_for_test()
+        .commands
+        .desired_pause
+        .load(Ordering::Acquire)
+        && Instant::now() < deadline
+    {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    for _ in 0..10 {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        full_release_count.load(Ordering::SeqCst),
+        0,
+        "no release while unfocused"
+    );
+
+    // 3. Restore exact target/focus and pass grace
+    force_inconclusive_probe.store(false, Ordering::Release);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+
+    let restore_deadline = Instant::now() + Duration::from_secs(2);
+    while full_release_count.load(Ordering::SeqCst) == 0 && Instant::now() < restore_deadline {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    assert_eq!(
+        full_release_count.load(Ordering::SeqCst),
+        1,
+        "exactly one full-instrument suspension occurred"
+    );
+
+    let snap = session.snapshot_lite();
+    assert!(snap.is_paused, "session remains paused due to manual pause");
+    assert_eq!(snap.active_count, 0, "active keys clean after suspension");
+    assert_eq!(snap.possibly_active_count, 0);
+    assert_eq!(snap.failed_release_count, 0);
+    assert!(!snap.has_terminal_error);
+
+    let send_count_before = send_call_count.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(50));
+    session.heartbeat().expect("heartbeat");
+    assert_eq!(
+        send_call_count.load(Ordering::SeqCst),
+        send_count_before,
+        "no gameplay Down during pause"
+    );
+    assert_eq!(
+        full_release_count.load(Ordering::SeqCst),
+        1,
+        "no duplicate suspension"
+    );
+
+    // Resume manual pause
+    session.resume().expect("resume");
+    let resume_deadline = Instant::now() + Duration::from_secs(2);
+    let mut post_snap = session.snapshot_lite();
+    while post_snap.is_paused && Instant::now() < resume_deadline {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(1));
+        post_snap = session.snapshot_lite();
+    }
+    assert!(!post_snap.is_paused, "playback resumed after manual resume");
+    assert_eq!(
+        full_release_count.load(Ordering::SeqCst),
+        1,
+        "no duplicate release on manual resume"
+    );
+
+    session.quit().expect("quit");
+    assert!(session.join(Duration::from_secs(5)).expect("join"));
+}
+
+#[test]
+fn focus_then_manual_then_unfocused_resume_suspends_before_manual_resume() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 22_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "next-down".to_string().into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("schedule");
+
+    let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.set_target_hwnd(123);
+    start_with_test_wall_clock_slack(&session);
+
+    wait_for_focus_down(&session);
+
+    // 1. Lose focus
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    force_inconclusive_probe.store(true, Ordering::Release);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+
+    // 2. Request manual pause
+    session.pause().expect("request manual pause");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !session
+        .shared_for_test()
+        .commands
+        .desired_pause
+        .load(Ordering::Acquire)
+        && Instant::now() < deadline
+    {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    for _ in 0..10 {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+
+    // 3. Request resume while still unfocused
+    session.resume().expect("request resume while unfocused");
+    assert!(
+        !session
+            .shared_for_test()
+            .commands
+            .desired_pause
+            .load(Ordering::Acquire)
+    );
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+
+    // 4. Restore focus
+    force_inconclusive_probe.store(false, Ordering::Release);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+
+    let mut snap = session.snapshot_lite();
+    while snap.is_paused && Instant::now() < deadline {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(1));
+        snap = session.snapshot_lite();
+    }
+    assert!(!snap.is_paused, "session resumed after focus restored");
+    assert_eq!(
+        full_release_count.load(Ordering::SeqCst),
+        1,
+        "exactly one verified suspension occurred"
+    );
+    assert!(!snap.has_terminal_error);
+
+    session.quit().expect("quit");
+    assert!(session.join(Duration::from_secs(5)).expect("join"));
+}
+
+#[test]
+fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("schedule");
+
+    let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.set_target_hwnd(123);
+    start_with_test_wall_clock_slack(&session);
+
+    wait_for_focus_down(&session);
+
+    // 1. Enter Manual pause while focused
+    session.pause().expect("manual pause");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut snap = session.snapshot_lite();
+    while !snap.is_paused && Instant::now() < deadline {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(1));
+        snap = session.snapshot_lite();
+    }
+    assert!(snap.is_paused);
+    assert_eq!(
+        full_release_count.load(Ordering::SeqCst),
+        1,
+        "manual pause performed one suspension"
+    );
+    assert_eq!(session.snapshot_lite().active_count, 0);
+
+    // 2. Lose focus while Manual pause is active
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    force_inconclusive_probe.store(true, Ordering::Release);
+    session.set_focus_hint(false);
+    for _ in 0..10 {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        full_release_count.load(Ordering::SeqCst),
+        1,
+        "no suspension while unfocused"
+    );
+
+    // 3. Restore focus
+    force_inconclusive_probe.store(false, Ordering::Release);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+
+    for _ in 0..20 {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    assert_eq!(
+        full_release_count.load(Ordering::SeqCst),
+        1,
+        "no duplicate suspension on focus restore"
+    );
+    assert!(session.snapshot_lite().is_paused, "still manual paused");
+
+    // Resume
+    session.resume().expect("resume");
+    let resume_deadline = Instant::now() + Duration::from_secs(2);
+    let mut post_snap = session.snapshot_lite();
+    while post_snap.is_paused && Instant::now() < resume_deadline {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(1));
+        post_snap = session.snapshot_lite();
+    }
+    assert!(!post_snap.is_paused, "resumed");
+
+    session.quit().expect("quit");
+    assert!(session.join(Duration::from_secs(5)).expect("join"));
+}
+
+#[test]
+fn deferred_manual_suspension_cleared_by_system_suspend_without_duplicate_cleanup() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let mixed_target = QpcTicks::from_raw(1_000);
+    harness.runtime.musical_physical_commit_started = true;
+    harness.runtime.manual_pause_suspension_pending = true;
+    harness
+        .resources
+        .playback
+        .enter_pause(PauseReason::Focus, mixed_target)
+        .expect("focus pause");
+    harness
+        .resources
+        .playback
+        .enter_pause(PauseReason::Manual, mixed_target)
+        .expect("manual pause");
+
+    assert!(harness.runtime.manual_pause_suspension_pending);
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(PauseReason::Focus)
+    );
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(PauseReason::Manual)
+    );
+
+    assert!(harness.notify_system_power_for_test(true));
+    let suspend_qpc = harness.resources.clock.now().expect("suspend qpc");
+    harness
+        .apply_system_suspend_for_test(suspend_qpc)
+        .expect("system suspend succeeds");
+
+    assert!(
+        !harness.runtime.manual_pause_suspension_pending,
+        "system suspend cleared deferred manual suspension"
+    );
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(PauseReason::SystemSuspend)
+    );
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(PauseReason::Manual)
+    );
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(PauseReason::Focus)
+    );
+}
+
+#[test]
+fn deferred_manual_suspension_failure_terminates_fail_closed() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("schedule");
+
+    let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
+    let force_preflight_failure = Arc::new(AtomicBool::new(false));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+    fault_script.force_preflight_failure = Some(Arc::clone(&force_preflight_failure));
+
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.set_target_hwnd(123);
+    start_with_test_wall_clock_slack(&session);
+
+    wait_for_focus_down(&session);
+
+    // 1. Lose focus -> Focus pause
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    force_inconclusive_probe.store(true, Ordering::Release);
+    session.set_focus_hint(false);
+    wait_for_focus_pause(&session);
+
+    // 2. Request manual pause
+    session.pause().expect("request manual pause");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !session
+        .shared_for_test()
+        .commands
+        .desired_pause
+        .load(Ordering::Acquire)
+        && Instant::now() < deadline
+    {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    for _ in 0..10 {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    // 3. Inject preflight failure for manual resume path
+    force_preflight_failure.store(true, Ordering::Release);
+
+    // 4. Restore focus
+    force_inconclusive_probe.store(false, Ordering::Release);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+
+    for _ in 0..20 {
+        session.heartbeat().expect("heartbeat");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    // Now attempt manual resume with failing preflight -> must fail closed
+    session.resume().expect("resume");
+    let resume_deadline = Instant::now() + Duration::from_secs(2);
+    let mut snap = session.snapshot_lite();
+    while !snap.has_terminal_error && !snap.is_finished && Instant::now() < resume_deadline {
+        let _ = session.heartbeat();
+        std::thread::sleep(Duration::from_millis(1));
+        snap = session.snapshot_lite();
+    }
+    assert!(
+        snap.has_terminal_error || snap.is_finished,
+        "preflight failure terminates fail-closed"
+    );
+
+    let _ = session.quit();
+    let _ = session.join(Duration::from_secs(5));
 }
