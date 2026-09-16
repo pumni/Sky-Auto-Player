@@ -19,12 +19,14 @@ fn dirty_worktree() -> bool {
 fn main() {
     println!("cargo:rerun-if-changed=src/ipc_contract.rs");
     git_metadata::emit_git_metadata_rerun_if_changed("../../rust/build_support/git_metadata.rs");
+    println!("cargo:rerun-if-env-changed=SKY_CI_SOURCE_SHA");
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_DIRTY_WORKTREE");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_SOURCE_FINGERPRINT");
-    let head = std::env::var("GITHUB_SHA")
+    let head = std::env::var("SKY_CI_SOURCE_SHA")
         .ok()
+        .or_else(|| std::env::var("GITHUB_SHA").ok())
         .or_else(|| std::env::var("SKY_NATIVE_BUILD_COMMIT").ok())
         .or_else(|| git_metadata::command_output("git", &["rev-parse", "--verify", "HEAD"]))
         .unwrap_or_else(|| "unknown".to_string());

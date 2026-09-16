@@ -36,6 +36,7 @@ $targetPath = Join-Path $worktreePath "rust/target"
 $trackedEnvironment = @(
     "CARGO_TARGET_DIR",
     "TAURI_CONFIG",
+    "SKY_CI_SOURCE_SHA",
     "GITHUB_SHA",
     "SKY_NATIVE_BUILD_COMMIT",
     "SKY_NATIVE_DIRTY_WORKTREE",
