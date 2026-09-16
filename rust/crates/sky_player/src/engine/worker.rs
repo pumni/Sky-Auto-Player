@@ -424,6 +424,9 @@ pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
     #[allow(dead_code)]
     pub(super) timing_margin_ticks: DurationTicks,
+    /// Persisted normal-playback compatibility value. Normal sender
+    /// admission intentionally keeps this dormant; strict mode uses the
+    /// physical latest-start boundary instead.
     pub(super) normal_down_start_tolerance_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,

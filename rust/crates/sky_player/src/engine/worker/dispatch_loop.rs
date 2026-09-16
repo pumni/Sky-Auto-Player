@@ -1707,7 +1707,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_margin_expires_a_positive_pre_call_lateness_without_grace() {
+    fn normal_mode_sends_positive_pre_call_lateness_without_grace() {
         let mut exact = ProductionDispatchTestHarness::new_down_only();
         set_zero_timing_margin(&mut exact);
         let exact_packets = exact.configure_packet_capture();
@@ -1735,8 +1735,9 @@ mod tests {
             .checked_add_duration(DurationTicks::from_raw(1))
             .expect("one tick beyond zero-margin latest start");
         assert_dispatched(late.dispatch_at_qpc_for_test(&late_plan, one_tick_late));
-        assert!(late_packets.lock().expect("packet capture").is_empty());
-        assert_eq!(late.local_metrics.final_sender_window_expirations, 1);
+        assert_eq!(late_packets.lock().expect("packet capture").len(), 1);
+        assert_eq!(late.local_metrics.final_sender_window_expirations, 0);
+        assert_eq!(late.local_metrics.missed_down_boundaries, 0);
     }
 
     #[test]
@@ -1780,8 +1781,8 @@ mod tests {
     }
 
     #[test]
-    fn c1_normal_cutoff_truth_table_uses_total_lateness() {
-        for (offset_us, rescued) in [(500, false), (501, true), (2_216, true), (2_500, true)] {
+    fn c2_normal_mode_sends_late_authorized_down_at_2_10_and_50_ms() {
+        for offset_us in [2_000, 10_000, 50_000] {
             let mut harness = ProductionDispatchTestHarness::new_down_only();
             harness
                 .configure_normal_down_start_tolerance_for_test(2_500)
@@ -1799,53 +1800,32 @@ mod tests {
             assert_eq!(
                 packets.lock().expect("packet capture").len(),
                 1,
-                "offset {offset_us}us should send"
+                "offset {offset_us}us should make exactly one sender attempt"
+            );
+            assert_eq!(
+                packets.lock().expect("packet capture").as_slice(),
+                &[PhysicalPacket::new(0, 1)],
+                "offset {offset_us}us must preserve one atomic Down packet"
             );
             assert_eq!(
                 harness.local_metrics.final_sender_window_expirations, 0,
                 "offset {offset_us}us must not be a sender miss"
             );
             assert_eq!(
+                harness.local_metrics.missed_down_boundaries, 0,
+                "offset {offset_us}us must not terminalize the Down"
+            );
+            assert_eq!(
+                harness.timeline_rebase_count_for_test(),
+                0,
+                "offset {offset_us}us must not rebase or catch up the timeline"
+            );
+            assert_eq!(
                 harness.late_rescued_down_metrics_for_test().0,
-                u64::from(rescued),
-                "offset {offset_us}us rescue classification"
+                0,
+                "normal lateness is not a rescued-cutoff classification"
             );
         }
-
-        let mut stale = ProductionDispatchTestHarness::new_down_only();
-        stale
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
-        let packets = stale.configure_packet_capture();
-        let plan = stale.plan_current_dispatch();
-        let target = plan.physical_target_qpc().expect("Down target");
-        assert_no_work(stale.dispatch_at_qpc_for_test(
-            &plan,
-            subtract_duration(target, DurationTicks::from_raw(1)),
-        ));
-        assert_dispatched(stale.dispatch_at_qpc_for_test(&plan, add_us(&stale, target, 2_501)));
-        assert!(packets.lock().expect("packet capture").is_empty());
-        assert_eq!(stale.local_metrics.final_sender_window_expirations, 1);
-        assert_eq!(stale.late_rescued_down_metrics_for_test().0, 0);
-
-        let mut exact_stale = ProductionDispatchTestHarness::new_down_only();
-        exact_stale
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
-        let packets = exact_stale.configure_packet_capture();
-        let plan = exact_stale.plan_current_dispatch();
-        let target = plan.physical_target_qpc().expect("Down target");
-        assert_no_work(exact_stale.dispatch_at_qpc_for_test(
-            &plan,
-            subtract_duration(target, DurationTicks::from_raw(1)),
-        ));
-        let continuity_cutoff = add_us(&exact_stale, target, 2_500);
-        let one_tick_beyond = continuity_cutoff
-            .checked_add_duration(DurationTicks::from_raw(1))
-            .expect("one tick beyond C1 cutoff");
-        assert_dispatched(exact_stale.dispatch_at_qpc_for_test(&plan, one_tick_beyond));
-        assert!(packets.lock().expect("packet capture").is_empty());
-        assert_eq!(exact_stale.local_metrics.final_sender_window_expirations, 1);
     }
 
     #[test]
@@ -1935,7 +1915,7 @@ mod tests {
             assert_eq!(rejected.local_metrics.final_sender_window_expirations, 1);
             assert_eq!(rejected.late_rescued_down_metrics_for_test().0, 0);
 
-            // In contrast, under normal timing the note is rescued
+            // In contrast, under normal timing the note is sent without a cutoff.
             let mut normal = ProductionDispatchTestHarness::new_down_only();
             normal
                 .configure_normal_down_start_tolerance_for_test(tolerance_us)
@@ -1953,7 +1933,7 @@ mod tests {
                 normal_packets.lock().expect("normal packet capture").len(),
                 1
             );
-            assert_eq!(normal.late_rescued_down_metrics_for_test().0, 1);
+            assert_eq!(normal.late_rescued_down_metrics_for_test().0, 0);
         }
     }
 
@@ -2002,7 +1982,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_mixed_rescue_sends_the_prepared_whole_packet() {
+    fn c2_mixed_late_start_sends_the_prepared_whole_packet() {
         let mut harness = ProductionDispatchTestHarness::new_mixed_events_with_gap(2, 100_000);
         harness
             .configure_normal_down_start_tolerance_for_test(2_500)
@@ -2019,8 +1999,8 @@ mod tests {
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(1, 2)]
         );
-        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 1);
-        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 1);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 0);
         assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
         assert_eq!(harness.chord_integrity_lost_count(), 0);
     }
@@ -2156,8 +2136,8 @@ mod tests {
             0
         );
         assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
-        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 1);
-        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 1);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
+        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 0);
     }
 
     #[test]
@@ -2177,11 +2157,6 @@ mod tests {
                     harness
                         .configure_normal_down_start_tolerance_for_test(tolerance_us)
                         .expect("C1.1 tolerance");
-                    let timing_margin_us = harness
-                        .resources
-                        .clock
-                        .duration_to_us(harness.timing.timing_margin_ticks)
-                        .expect("Timing Margin conversion");
                     let packets = harness.configure_packet_capture();
                     let first = harness.plan_current_dispatch();
                     let first_target = first.physical_target_qpc().expect("first target");
@@ -2192,9 +2167,8 @@ mod tests {
                     let first_now = add_us(&harness, first_target, offset_us);
                     assert_dispatched(harness.dispatch_at_qpc_for_test(&first, first_now));
 
-                    let first_allowed = offset_us <= timing_margin_us.max(tolerance_us);
-                    let first_rescued = offset_us > timing_margin_us
-                        && offset_us <= timing_margin_us.max(tolerance_us);
+                    let first_allowed = true;
+                    let first_rescued = false;
                     assert_eq!(
                         packets.lock().expect("packet capture").len(),
                         if first_allowed { 1 } else { 0 },
@@ -2261,11 +2235,11 @@ mod tests {
     }
 
     #[test]
-    fn f1_1_sparse_comparison_proves_note_ons_rescued_up_to_5000us() {
+    fn c2_sparse_comparison_sends_authorized_late_note_ons_without_cutoff() {
         let offsets_in_extended_range = [2_800, 3_000, 3_500, 4_000, 4_500, 5_000];
 
         for &offset_us in &offsets_in_extended_range {
-            // Under baseline 2.5 ms: note is DROPPED because offset > 2.5 ms.
+            // The compatibility tolerance does not gate normal sender admission.
             let mut baseline =
                 ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
             baseline
@@ -2284,13 +2258,13 @@ mod tests {
             assert_dispatched(baseline.dispatch_at_qpc_for_test(&plan_baseline, now_baseline));
             assert_eq!(
                 packets_baseline.lock().expect("packet capture").len(),
-                0,
-                "baseline 2.5 ms must drop note at offset {offset_us} us"
+                1,
+                "baseline 2.5 ms must send the authorized note at offset {offset_us} us"
             );
-            assert_eq!(baseline.local_metrics.final_sender_window_expirations, 1);
+            assert_eq!(baseline.local_metrics.final_sender_window_expirations, 0);
             assert_eq!(baseline.late_rescued_down_metrics_for_test().0, 0);
 
-            // Under provisional max 5.0 ms: note is RESCUED because offset <= 5.0 ms.
+            // A different compatibility tolerance has the same normal behavior.
             let mut prov_max =
                 ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
             prov_max
@@ -2308,17 +2282,17 @@ mod tests {
             assert_eq!(
                 packets_prov.lock().expect("packet capture").len(),
                 1,
-                "provisional max 5.0 ms must rescue note at offset {offset_us} us"
+                "provisional max 5.0 ms must send note at offset {offset_us} us"
             );
             assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 0);
             assert_eq!(
                 prov_max.late_rescued_down_metrics_for_test().0,
-                1,
-                "must record 1 late rescued boundary"
+                0,
+                "normal lateness must not be a rescued-cutoff classification"
             );
         }
 
-        // Beyond 5.0 ms (e.g. 5,500 us): provisional max fails closed and drops the note.
+        // Even beyond the old provisional tolerance, an authorized normal Down is sent.
         let offset_beyond_max = 5_500;
         let mut prov_max =
             ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
@@ -2336,10 +2310,10 @@ mod tests {
         assert_dispatched(prov_max.dispatch_at_qpc_for_test(&plan_prov, now_prov));
         assert_eq!(
             packets_prov.lock().expect("packet capture").len(),
-            0,
-            "provisional max 5.0 ms must fail closed beyond 5.0 ms"
+            1,
+            "provisional max 5.0 ms must not gate normal lateness"
         );
-        assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 1);
+        assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 0);
         assert_eq!(prov_max.late_rescued_down_metrics_for_test().0, 0);
     }
 
