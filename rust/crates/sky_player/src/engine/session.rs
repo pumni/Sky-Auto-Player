@@ -1229,7 +1229,10 @@ mod tests {
         };
         assert!(validate_native_timing_contract(&valid).is_ok());
 
-        for tolerance in [2_500, 3_000, 3_500, 4_000, 4_500, 5_000] {
+        for tolerance in [
+            2_000, 2_500, 3_000, 3_500, 4_000, 4_500, 5_000, 5_500, 6_000, 6_500, 7_000, 7_500,
+            8_000, 8_500, 9_000, 9_500, 10_000,
+        ] {
             let mut opts = valid;
             opts.normal_down_start_tolerance_us = tolerance;
             assert!(
@@ -1239,7 +1242,7 @@ mod tests {
         }
 
         for invalid in [
-            0, 1_000, 2_000, 2_499, 2_501, 2_999, 3_250, 5_001, 6_000, 10_000,
+            0, 1_000, 1_500, 1_999, 2_001, 2_499, 2_501, 2_999, 3_250, 10_001, 10_500, 12_000,
         ] {
             let mut opts = valid;
             opts.normal_down_start_tolerance_us = invalid;

@@ -40,7 +40,6 @@ export function LateNoteToleranceControl({
       });
   };
 
-  const isAboveDefault = requestedValue > defaultUs;
   const msDisplay = `${(requestedValue / 1_000).toFixed(1)} ms`;
 
   return (
@@ -75,25 +74,29 @@ export function LateNoteToleranceControl({
         >
           +
         </button>
-        {requestedValue !== defaultUs && (
-          <button
-            className="button button--subtle late-note-tolerance-reset"
-            type="button"
-            aria-label="Reset Late note tolerance to default"
-            onClick={() => requestValue(defaultUs)}
-          >
-            Reset to {(defaultUs / 1_000).toFixed(1)} ms
-          </button>
-        )}
       </div>
-      <span className="settings-note">
-        If notes are still dropped on fast chords under load, increase this step-by-step. Rescued
-        notes may play slightly later than their authored time.
-      </span>
-      {isAboveDefault && (
+      {requestedValue < 2_500 ? (
+        <span className="settings-note">
+          Lower values can tighten late-note timing when they are above the active Timing Margin,
+          but Windows wake jitter may cause more late notes to be dropped.
+        </span>
+      ) : (
+        <span className="settings-note">
+          If notes are still dropped on fast chords under load, increase this step-by-step. Rescued
+          notes may play slightly later than their authored time.
+        </span>
+      )}
+      {requestedValue > 2_500 && requestedValue <= 5_000 && (
         <span className="settings-note late-note-tolerance-warning" role="alert">
           Values above 2.5 ms increase late-note continuity at the cost of authored timing accuracy
           under load.
+        </span>
+      )}
+      {requestedValue > 5_000 && (
+        <span className="settings-note late-note-tolerance-warning" role="alert">
+          High tolerance can rescue very late notes, but in dense passages it may cause following
+          authored notes to become stale or physically infeasible. Use only when lower values still
+          drop notes.
         </span>
       )}
       <span className="settings-note">

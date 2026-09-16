@@ -8,6 +8,9 @@ ADR-0010 and ADR-0011 non-additive formula, strict-mode sender cutoff,
 authored-timeline immutability, transport, safety, and physical feasibility
 floors remain fully in force.
 
+Partially superseded by: [ADR-0013](ADR-0013-extended-normal-down-continuity-range.md)
+(range extended to 2.0–10.0 ms in #288; dedicated Reset button removed in #287).
+
 Parent work order: [#280](https://github.com/pumni/Sky-Auto-Player/issues/280)
 (Follow-up to [#279](https://github.com/pumni/Sky-Auto-Player/issues/279) and
 [#269](https://github.com/pumni/Sky-Auto-Player/issues/269)).
@@ -72,7 +75,7 @@ strict sender cutoff = physical_latest_down_start
   *"If notes are still dropped on fast chords under load, increase this step-by-step. Rescued notes may play slightly later than their authored time."*
 - When configured above 2.5 ms, an inline warning informs the user:
   *"Values above 2.5 ms increase late-note continuity at the cost of authored timing accuracy under load."*
-- A dedicated **"Reset to 2.5 ms"** button is provided alongside the control.
+- A dedicated **"Reset to 2.5 ms"** button was initially provided alongside the control (subsequently removed in #287; users navigate via steppers).
 - **Empirical qualification evidence:** Phase-F1.1 real-wait sequential dense-probe qualification
   across 3 passes and 5 gaps (1, 2, 3, 4, 5 ms) comparing arms 2.5 ms, 3.5 ms, and provisional
   5.0 ms confirmed:

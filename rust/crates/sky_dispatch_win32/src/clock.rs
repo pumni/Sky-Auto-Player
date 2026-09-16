@@ -233,7 +233,10 @@ mod tests {
     fn qpc_conversion_odd_frequency_pm_timer_3579545hz() {
         // Classic ACPI PM-timer / NTSC frequency: 3,579,545 Hz (~0.279 us per tick).
         let clock = QpcClock::from_frequency_hz(NonZeroU64::new(3_579_545).unwrap());
-        let tolerances_us = [2_500, 3_000, 3_500, 4_000, 4_500, 5_000];
+        let tolerances_us = [
+            2_000, 2_500, 3_000, 3_500, 4_000, 4_500, 5_000, 5_500, 6_000, 6_500, 7_000, 7_500,
+            8_000, 8_500, 9_000, 9_500, 10_000,
+        ];
 
         let mut prev_ticks = 0u64;
         for &us in &tolerances_us {

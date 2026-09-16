@@ -1671,7 +1671,9 @@ fn invalid_instrument_profile_is_rejected_before_worker_start() {
 
 #[test]
 fn native_dispatch_session_rejects_invalid_normal_down_start_tolerance() {
-    for invalid in [0, 1_000, 2_499, 2_501, 3_250, 5_001, 10_000] {
+    for invalid in [
+        0, 1_000, 1_500, 1_999, 2_001, 2_499, 2_501, 3_250, 10_001, 10_500, 15_000,
+    ] {
         let mut options = test_session_options(
             startup_boundary_schedule(),
             1,

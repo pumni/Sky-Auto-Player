@@ -288,13 +288,6 @@
   color: var(--warning);
 }
 
-.late-note-tolerance-reset {
-  font-size: 11px;
-  padding: 0 8px;
-  min-height: 26px;
-  white-space: nowrap;
-}
-
 .settings-timing-summary,
 .profile-timing-summary {
   display: grid;

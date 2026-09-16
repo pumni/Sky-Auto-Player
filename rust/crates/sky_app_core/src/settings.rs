@@ -18,8 +18,8 @@ pub const MIN_TIMING_MARGIN_US: u64 = 0;
 pub const MAX_TIMING_MARGIN_US: u64 = 3_000;
 pub const TIMING_MARGIN_STEP_US: u64 = 100;
 pub const DEFAULT_NORMAL_DOWN_START_TOLERANCE_US: u64 = 2_500;
-pub const MIN_NORMAL_DOWN_START_TOLERANCE_US: u64 = 2_500;
-pub const MAX_NORMAL_DOWN_START_TOLERANCE_US: u64 = 5_000;
+pub const MIN_NORMAL_DOWN_START_TOLERANCE_US: u64 = 2_000;
+pub const MAX_NORMAL_DOWN_START_TOLERANCE_US: u64 = 10_000;
 pub const NORMAL_DOWN_START_TOLERANCE_STEP_US: u64 = 500;
 pub const TEMPO_SCALE_OPTIONS: [f64; 5] = [0.90, 0.95, 1.00, 1.05, 1.10];
 pub const DEFAULT_SONGS_DIR: &str = "songs";
@@ -515,7 +515,7 @@ pub fn validate_normal_down_start_tolerance(value: u64) -> Result<u64, SettingsE
     } else {
         Err(SettingsError::InvalidField {
             field: "normal_down_start_tolerance_us".into(),
-            message: "must be between 2500 and 5000 us in 500 us steps".into(),
+            message: "must be between 2000 and 10000 us in 500 us steps".into(),
         })
     }
 }
@@ -717,9 +717,12 @@ mod tests {
             2_500
         );
         assert_eq!(DEFAULT_NORMAL_DOWN_START_TOLERANCE_US, 2_500);
-        assert_eq!(MIN_NORMAL_DOWN_START_TOLERANCE_US, 2_500);
+        assert_eq!(MIN_NORMAL_DOWN_START_TOLERANCE_US, 2_000);
+        assert_eq!(MAX_NORMAL_DOWN_START_TOLERANCE_US, 10_000);
 
-        for invalid in [0, 1_000, 2_499, 2_501, 3_250, 5_001, 10_000] {
+        for invalid in [
+            0, 1_000, 1_500, 1_999, 2_001, 2_499, 2_501, 3_250, 10_001, 10_500, 15_000,
+        ] {
             let mut invalid_persisted = ApplicationSettings::default();
             invalid_persisted
                 .playback_defaults
@@ -733,7 +736,9 @@ mod tests {
             );
         }
 
-        for valid in [2_500, 3_000, 3_500, 4_000, 4_500, 5_000] {
+        for valid in [
+            2_000, 2_500, 3_000, 3_500, 4_000, 4_500, 5_000, 7_500, 10_000,
+        ] {
             let mut valid_persisted = ApplicationSettings::default();
             valid_persisted
                 .playback_defaults
@@ -751,7 +756,9 @@ mod tests {
     #[test]
     fn normal_down_start_tolerance_patch_accepts_valid_steps_and_rejects_invalid_atomically() {
         let defaults = ApplicationSettings::default();
-        for value in [2_500, 3_000, 3_500, 4_000, 4_500, 5_000] {
+        for value in [
+            2_000, 2_500, 3_000, 3_500, 4_000, 4_500, 5_000, 7_500, 10_000,
+        ] {
             let patched = apply_patch(
                 &defaults,
                 &SettingsPatch {
@@ -769,7 +776,9 @@ mod tests {
             );
         }
 
-        for value in [0, 500, 2_000, 2_499, 2_501, 3_200, 5_001, 6_000] {
+        for value in [
+            0, 500, 1_500, 1_999, 2_001, 2_499, 2_501, 3_200, 10_001, 10_500, 11_000,
+        ] {
             let error = apply_patch(
                 &defaults,
                 &SettingsPatch {

@@ -23,7 +23,7 @@ microsecond conversions.
 | `timing_margin` | User-owned persisted value, from `0` through `3,000 µs` in `100 µs` steps; frozen into each prepared session. |
 | `min_hold` | Fixed materialized floor equal to the selected frame-based hold plus the exact user Timing Margin. |
 | `physical_latest_down_start` | `authored_target + Timing Margin`; the physical/musical feasibility boundary for a Down-bearing packet. |
-| `normal_down_start_tolerance` | User-configurable persisted value in Advanced settings (`2,500` through `5,000 µs` in `500 µs` steps, default `2,500 µs`), frozen into each prepared session. Total bound from authored target in normal playback only; not added to Timing Margin, not used in strict mode. |
+| `normal_down_start_tolerance` | User-configurable persisted value in Advanced settings (`2,000` through `10,000 µs` in `500 µs` steps, default `2,500 µs`), frozen into each prepared session. Total bound from authored target in normal playback only; not added to Timing Margin, not used in strict mode. |
 | `sender_cutoff` | Strict mode uses `physical_latest_down_start`; normal playback uses `max(physical_latest_down_start, authored_target + normal_down_start_tolerance)`. |
 | `musical_up_not_before` | Per-key floor from the last successful Down completion plus `frame_base_hold_ticks`. |
 | `down_not_before` | Per-key floor from the last successful Up completion plus `frame_ticks`. |
@@ -107,7 +107,7 @@ Timing Margin remains the only user-owned authored headroom: it extends the
 authored hold and release targets and defines `physical_latest_down_start`.
 The user-configurable `normal_down_start_tolerance` (Settings → Advanced) is
 a normal-playback continuity bound measured from the authored target (default
-`2,500 µs`, range `2,500–5,000 µs` in `500 µs` steps). It is not added to Timing
+`2,500 µs`, range `2,000–10,000 µs` in `500 µs` steps). It is not added to Timing
 Margin, does not extend physical feasibility, is not a dispatch lead, and is
 not adapted dynamically during playback.
 
