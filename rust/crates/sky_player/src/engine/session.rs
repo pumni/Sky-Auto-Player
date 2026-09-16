@@ -353,6 +353,16 @@ impl NativeDispatchSession {
                     .map_err(|error| format!("pre-roll conversion failed: {error:?}"))?,
             )
             .map_err(|error| format!("pre-roll epoch arithmetic failed: {error}"))?;
+        let lease_timeout_us = self
+            .config
+            .lock()
+            .as_ref()
+            .map(|config| config.options.wait.supervisor_lease_timeout_us)
+            .ok_or_else(|| "session configuration is no longer available".to_string())?;
+        let lease_timeout_ticks = qpc_clock
+            .duration_from_us(lease_timeout_us)
+            .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
+
         self.shared
             .lifecycle
             .lifecycle
@@ -368,12 +378,13 @@ impl NativeDispatchSession {
                 .lifecycle
                 .lifecycle
                 .store(LIFECYCLE_POISONED, Ordering::Release);
+            let (done_lock, done_cv) = &self.shared.lifecycle.completed;
+            if let Ok(mut done) = done_lock.lock() {
+                *done = true;
+                done_cv.notify_all();
+            }
             return Err("session configuration is no longer available".to_string());
         };
-
-        let lease_timeout_ticks = qpc_clock
-            .duration_from_us(config.options.wait.supervisor_lease_timeout_us)
-            .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
 
         #[cfg(any(test, feature = "test-support"))]
         let timer_lifecycle_context = config.options.timer_lifecycle_context.clone();
@@ -537,6 +548,14 @@ impl NativeDispatchSession {
                 .publication
                 .supervisor_heartbeat_ticks
                 .load(Ordering::Acquire),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spawn_handles_present_for_test(&self) -> (bool, bool) {
+        (
+            self.thread_handle.lock().is_some(),
+            self.watchdog_handle.lock().is_some(),
         )
     }
 

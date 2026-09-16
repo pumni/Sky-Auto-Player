@@ -4037,6 +4037,50 @@ fn watchdog_age_begins_at_arm_heartbeat_not_construction() {
 }
 
 #[test]
+fn lease_timeout_conversion_failure_stays_pre_spawn_and_non_running() {
+    let qpc_clock = QpcClock::initialize().expect("QPC clock");
+    let frequency = u128::from(qpc_clock.frequency_hz().get());
+    let overflow_lease_us = u64::try_from(
+        (u128::from(u64::MAX) * 1_000_000 / frequency)
+            .checked_add(1)
+            .expect("QPC conversion overflow input must fit in u64 microseconds"),
+    )
+    .expect("Windows QPC frequency must expose a representable overflow input");
+    assert!(qpc_clock.duration_from_us(overflow_lease_us).is_err());
+
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = overflow_lease_us;
+    let session = NativeDispatchSession::new(options).expect("session admission");
+
+    let error = session
+        .arm(0)
+        .expect_err("lease conversion must reject arm");
+    assert!(error.contains("lease timeout conversion failed"), "{error}");
+
+    let poll = session.poll_state();
+    assert_eq!(poll.status.as_str(), "ready");
+    assert!(!poll.is_finished);
+    assert!(!session.snapshot().is_running);
+    assert_eq!(session.spawn_handles_present_for_test(), (false, false));
+    assert_eq!(session.snapshot().sendinput_partial_events, 0);
+    assert_eq!(session.snapshot().sendinput_zero_progress_failures, 0);
+    assert_eq!(
+        session
+            .join(Duration::from_millis(1))
+            .expect_err("pre-spawn failure must remain unstarted"),
+        "session has not been started"
+    );
+}
+
+#[test]
 fn explicit_panic_release_keeps_user_terminal_identity() {
     let actions = vec![
         KeyActionInput {
