@@ -8,6 +8,7 @@
 
 #![cfg(feature = "test-support")]
 
+use serde::Serialize;
 use serde_json::json;
 use sky_dispatch_core::time::{DurationTicks, SEND_COLD_THRESHOLD_US, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks, qpc_frequency_checked};
@@ -23,6 +24,7 @@ use sky_player::engine::dispatch_primitives::{
 };
 use std::collections::BTreeMap;
 use std::hint::black_box;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -93,6 +95,7 @@ enum BenchmarkMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BenchmarkScope {
     Full,
+    Baseline,
     RealWaitCore,
     PhaseASenderOnly,
     PhaseAProductionMatrix,
@@ -128,6 +131,7 @@ impl BenchmarkScope {
 
         match scope_str.as_str() {
             "full" => Ok(Self::Full),
+            "baseline" => Ok(Self::Baseline),
             "real_wait_core" => Ok(Self::RealWaitCore),
             "phase_a_sender_only" => Ok(Self::PhaseASenderOnly),
             "phase_a_production_matrix" => Ok(Self::PhaseAProductionMatrix),
@@ -139,7 +143,7 @@ impl BenchmarkScope {
             "phase_f1_1" => Ok(Self::PhaseF11),
             "phase_extended_range" => Ok(Self::PhaseExtendedRange),
             value => Err(format!(
-                "scope must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, phase_f1_1, or phase_extended_range, got {value:?}"
+                "scope must be full, baseline, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, phase_f1_1, or phase_extended_range, got {value:?}"
             )),
         }
     }
@@ -147,6 +151,7 @@ impl BenchmarkScope {
     const fn name(self) -> &'static str {
         match self {
             Self::Full => "full",
+            Self::Baseline => "baseline",
             Self::RealWaitCore => "real_wait_core",
             Self::PhaseASenderOnly => "phase_a_sender_only",
             Self::PhaseAProductionMatrix => "phase_a_production_matrix",
@@ -484,6 +489,287 @@ fn signed_summary(mut values: Vec<i64>) -> serde_json::Value {
         "max_positive": max_positive,
         "samples": values.len(),
     })
+}
+
+#[derive(Debug, Serialize)]
+struct BaselineBoundaryEvidence {
+    scenario: &'static str,
+    source_action_index: u32,
+    compiled_packet_index: Option<u64>,
+    up_mask: u16,
+    down_mask: u16,
+    physical_target_qpc: u64,
+    crossing_qpc: Option<u64>,
+    wake_qpc: Option<u64>,
+    pre_call_qpc: Option<u64>,
+    completion_qpc: Option<u64>,
+    pre_call_minus_target_us: Option<i64>,
+    completion_minus_pre_call_us: Option<u64>,
+    send_status: Option<&'static str>,
+    delivery: &'static str,
+    non_send_reason: Option<&'static str>,
+}
+
+#[derive(Default)]
+struct BaselineEvidence {
+    boundaries: Vec<BaselineBoundaryEvidence>,
+    successful_sendinput_transactions: usize,
+    non_send_or_drop_boundaries: usize,
+    timeline_rebase_count: u64,
+    transport_anomaly_count: u64,
+}
+
+fn baseline_status_name(status: SendTransactionStatus) -> &'static str {
+    match status {
+        SendTransactionStatus::Complete => "Complete",
+        SendTransactionStatus::PreparationRejected => "PreparationRejected",
+        SendTransactionStatus::ZeroProgress => "ZeroProgress",
+        SendTransactionStatus::PartialProgress => "PartialProgress",
+        SendTransactionStatus::IntegrityLost => "IntegrityLost",
+        SendTransactionStatus::DownExpiredBeforeSend => "DownExpiredBeforeSend",
+        SendTransactionStatus::ClockFailureBeforeSend => "ClockFailureBeforeSend",
+        SendTransactionStatus::ClockFailureAfterSend => "ClockFailureAfterSend",
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn baseline_observation_timing(
+    observation: DispatchObservation,
+) -> (
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<i64>,
+    Option<u64>,
+) {
+    let qpc_clock = QpcClock::initialize().expect("baseline QPC clock");
+    match observation {
+        DispatchObservation::Down(value) => {
+            let crossing_qpc = value
+                .precision_handoff
+                .map(|handoff| handoff.target_crossing_qpc.as_u64());
+            let wake_qpc = value
+                .wake_qpc
+                .or_else(|| {
+                    value
+                        .precision_handoff
+                        .and_then(|handoff| handoff.admission_wake_qpc)
+                })
+                .map(|ticks| ticks.as_u64());
+            let pre_call_qpc = Some(value.pre_call_qpc.as_u64());
+            let completion_qpc = Some(value.sendinput_completion_qpc.as_u64());
+            let completion_duration = qpc_clock
+                .duration_to_us(
+                    value
+                        .sendinput_completion_qpc
+                        .checked_duration_since(value.pre_call_qpc)
+                        .expect("baseline completion ordering"),
+                )
+                .ok();
+            (
+                crossing_qpc,
+                wake_qpc,
+                pre_call_qpc,
+                completion_qpc,
+                Some(signed_qpc_us(
+                    qpc_clock,
+                    value.pre_call_qpc,
+                    value.physical_target_qpc,
+                )),
+                completion_duration,
+            )
+        }
+        DispatchObservation::Up(value) => {
+            let crossing_qpc = value
+                .precision_handoff
+                .map(|handoff| handoff.target_crossing_qpc.as_u64());
+            let wake_qpc = value
+                .wake_qpc
+                .or_else(|| {
+                    value
+                        .precision_handoff
+                        .and_then(|handoff| handoff.admission_wake_qpc)
+                })
+                .map(|ticks| ticks.as_u64());
+            let pre_call_qpc = Some(value.pre_call_qpc.as_u64());
+            let completion_qpc = Some(value.sendinput_completion_qpc.as_u64());
+            let completion_duration = qpc_clock
+                .duration_to_us(value.pre_call_to_completion_ticks)
+                .ok();
+            (
+                crossing_qpc,
+                wake_qpc,
+                pre_call_qpc,
+                completion_qpc,
+                Some(signed_qpc_us(
+                    qpc_clock,
+                    value.pre_call_qpc,
+                    value.physical_target_qpc,
+                )),
+                completion_duration,
+            )
+        }
+        DispatchObservation::DownMiss(value) => {
+            let pre_call_qpc = matches!(value.kind, DownMissKind::DownExpiredBeforeSend)
+                .then_some(value.observed_qpc.as_u64());
+            let pre_call_minus_target_us = pre_call_qpc.map(|pre_call| {
+                signed_qpc_us(
+                    qpc_clock,
+                    QpcTicks::from_raw(pre_call),
+                    value.physical_authored_target_qpc(),
+                )
+            });
+            (
+                None,
+                None,
+                pre_call_qpc,
+                None,
+                pre_call_minus_target_us,
+                None,
+            )
+        }
+        DispatchObservation::Wait(_)
+        | DispatchObservation::StaleMetadata(_)
+        | DispatchObservation::BlockedUnfocused(_) => (None, None, None, None, None, None),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn baseline_record_boundary(
+    evidence: &mut BaselineEvidence,
+    scenario: &'static str,
+    harness: &mut ProductionDispatchTestHarness,
+    plan: &NextDispatchPlan,
+    crossing_lateness_us: u64,
+    now_qpc: Option<QpcTicks>,
+    completion_delay_us: u64,
+    inject_zero_progress_drop: bool,
+    non_send_reason: Option<&'static str>,
+) {
+    let prepared = harness
+        .prepared_boundary_evidence_for_test(plan)
+        .expect("baseline case must prepare one physical boundary");
+    let target = prepared.physical_target_qpc;
+    let crossing = target
+        .checked_add_duration(
+            harness
+                .qpc_duration_from_us_for_test(crossing_lateness_us)
+                .expect("baseline crossing conversion"),
+        )
+        .expect("baseline crossing arithmetic");
+    let prior_sender_expirations = harness.final_sender_window_expirations_for_test();
+    let prior_timeline_rebases = harness.timeline_rebase_count_for_test();
+    let prior_anomalies = harness.transport_anomaly_counts_for_test();
+    let (step, outcome) = match now_qpc {
+        Some(now_qpc) => harness.dispatch_at_baseline_boundary_at_qpc_for_test(
+            plan,
+            now_qpc,
+            crossing,
+            completion_delay_us,
+            inject_zero_progress_drop,
+        ),
+        None => harness.dispatch_at_baseline_boundary_for_test(
+            plan,
+            crossing_lateness_us,
+            completion_delay_us,
+            inject_zero_progress_drop,
+        ),
+    };
+    let observation = harness.pop_observation();
+    let observation_timing = observation.map(baseline_observation_timing);
+    let sender_expired =
+        harness.final_sender_window_expirations_for_test() > prior_sender_expirations;
+    let send_status = outcome
+        .map(|value| baseline_status_name(value.status))
+        .or(sender_expired.then_some("DownExpiredBeforeSend"));
+    let delivery = if outcome.is_some_and(|value| value.is_success()) {
+        evidence.successful_sendinput_transactions =
+            evidence.successful_sendinput_transactions.saturating_add(1);
+        "successful_send"
+    } else {
+        evidence.non_send_or_drop_boundaries =
+            evidence.non_send_or_drop_boundaries.saturating_add(1);
+        "non_send"
+    };
+    let (
+        observation_crossing,
+        wake_qpc,
+        observed_pre_call,
+        observed_completion,
+        observed_residual,
+        observed_duration,
+    ) = observation_timing.unwrap_or((None, None, None, None, None, None));
+    let (outcome_pre_call, outcome_completion, outcome_residual, outcome_duration) = outcome
+        .map(|value| {
+            let pre_call = value.evidence.started_ticks.map(|ticks| ticks.as_u64());
+            let completion = value.evidence.completed_ticks.map(|ticks| ticks.as_u64());
+            let residual = pre_call.map(|ticks| {
+                signed_qpc_us(
+                    QpcClock::initialize().expect("baseline QPC clock"),
+                    QpcTicks::from_raw(ticks),
+                    target,
+                )
+            });
+            let duration = value.evidence.duration_ticks().ok().and_then(|ticks| {
+                QpcClock::initialize()
+                    .ok()
+                    .and_then(|clock| clock.duration_to_us(ticks).ok())
+            });
+            (pre_call, completion, residual, duration)
+        })
+        .unwrap_or((None, None, None, None));
+    let status_is_drop = outcome.is_some_and(|value| {
+        matches!(
+            value.status,
+            SendTransactionStatus::ZeroProgress
+                | SendTransactionStatus::PartialProgress
+                | SendTransactionStatus::IntegrityLost
+        )
+    });
+    let reason = if status_is_drop {
+        Some("injected_zero_progress_drop")
+    } else if sender_expired {
+        Some("normal_late_suppression")
+    } else {
+        non_send_reason
+    };
+    let _ = step;
+    evidence.boundaries.push(BaselineBoundaryEvidence {
+        scenario,
+        source_action_index: prepared.source_action_index,
+        compiled_packet_index: prepared.compiled_packet_index,
+        up_mask: prepared.packet.up_mask,
+        down_mask: prepared.packet.down_mask,
+        physical_target_qpc: target.as_u64(),
+        crossing_qpc: observation_crossing.or(Some(crossing.as_u64())),
+        wake_qpc,
+        pre_call_qpc: outcome_pre_call.or(observed_pre_call),
+        completion_qpc: outcome_completion.or(observed_completion),
+        pre_call_minus_target_us: outcome_residual.or(observed_residual),
+        completion_minus_pre_call_us: outcome_duration.or(observed_duration),
+        send_status,
+        delivery,
+        non_send_reason: reason,
+    });
+    evidence.timeline_rebase_count = evidence.timeline_rebase_count.saturating_add(
+        harness
+            .timeline_rebase_count_for_test()
+            .saturating_sub(prior_timeline_rebases),
+    );
+    let anomalies = harness.transport_anomaly_counts_for_test();
+    evidence.transport_anomaly_count = evidence.transport_anomaly_count.saturating_add(
+        anomalies
+            .0
+            .saturating_add(anomalies.1)
+            .saturating_add(anomalies.2)
+            .saturating_sub(
+                prior_anomalies
+                    .0
+                    .saturating_add(prior_anomalies.1)
+                    .saturating_add(prior_anomalies.2),
+            ),
+    );
 }
 
 /// Paired producer-only A/B measurement. It deliberately avoids a production
@@ -1273,6 +1559,21 @@ fn run_down_with_gap(
     let mut samples = new_samples();
     for _ in 0..iterations() {
         run_down_iteration(&mut samples, key_count, mode, benchmark_mode, gap_us)?;
+    }
+    Ok(samples)
+}
+
+fn run_baseline_real_wait_probe(mode: WaitMode) -> Result<Samples, String> {
+    let mut samples = new_samples();
+    for _ in 0..iterations() {
+        run_down_iteration_with_tolerance(
+            &mut samples,
+            1,
+            mode,
+            BenchmarkMode::RealWait,
+            due_us(),
+            BASELINE_NORMAL_TOLERANCE_US,
+        )?;
     }
     Ok(samples)
 }
@@ -3683,6 +3984,296 @@ fn phase_extended_range_report() -> serde_json::Value {
     })
 }
 
+const BASELINE_COMPLETION_DELAY_US: u64 = 8;
+const BASELINE_NORMAL_TOLERANCE_US: u64 = 2_500;
+
+fn baseline_report() -> serde_json::Value {
+    let mut evidence = BaselineEvidence::default();
+
+    {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 10_000);
+        let plan = harness.plan_current_dispatch();
+        baseline_record_boundary(
+            &mut evidence,
+            "single_note",
+            &mut harness,
+            &plan,
+            0,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            None,
+        );
+    }
+
+    {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(15, 10_000);
+        let plan = harness.plan_current_dispatch();
+        baseline_record_boundary(
+            &mut evidence,
+            "maximum_valid_atomic_chord",
+            &mut harness,
+            &plan,
+            0,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            None,
+        );
+    }
+
+    {
+        let mut harness =
+            ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(1_000);
+        let first = harness.plan_current_dispatch();
+        baseline_record_boundary(
+            &mut evidence,
+            "dense_different_key_boundaries",
+            &mut harness,
+            &first,
+            0,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            None,
+        );
+        let second = harness.plan_current_dispatch();
+        baseline_record_boundary(
+            &mut evidence,
+            "dense_different_key_boundaries",
+            &mut harness,
+            &second,
+            0,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            None,
+        );
+    }
+
+    {
+        let mut harness =
+            ProductionDispatchTestHarness::new_same_key_retrigger_with_gap_for_test(20_000);
+        for _ in 0..4 {
+            let plan = harness.plan_current_dispatch();
+            baseline_record_boundary(
+                &mut evidence,
+                "legal_same_key_sequence",
+                &mut harness,
+                &plan,
+                0,
+                None,
+                BASELINE_COMPLETION_DELAY_US,
+                false,
+                None,
+            );
+        }
+    }
+
+    {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 10_000);
+        harness
+            .configure_normal_down_start_tolerance_for_test(BASELINE_NORMAL_TOLERANCE_US)
+            .expect("baseline normal tolerance");
+        let plan = harness.plan_current_dispatch();
+        baseline_record_boundary(
+            &mut evidence,
+            "late_wake_inside_normal_tolerance",
+            &mut harness,
+            &plan,
+            1_000,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            None,
+        );
+    }
+
+    {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 10_000);
+        harness
+            .configure_normal_down_start_tolerance_for_test(BASELINE_NORMAL_TOLERANCE_US)
+            .expect("baseline normal tolerance");
+        let plan = harness.plan_current_dispatch();
+        baseline_record_boundary(
+            &mut evidence,
+            "late_wake_outside_normal_tolerance",
+            &mut harness,
+            &plan,
+            BASELINE_NORMAL_TOLERANCE_US + 1_500,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            Some("normal_late_suppression"),
+        );
+    }
+
+    {
+        let mut harness =
+            ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(1_000);
+        let first = harness.plan_current_dispatch();
+        let first_target = harness
+            .physical_target_qpc_for_test(&first)
+            .expect("baseline late-first target");
+        let first_crossing = first_target
+            .checked_add_duration(
+                harness
+                    .qpc_duration_from_us_for_test(BASELINE_NORMAL_TOLERANCE_US + 1_500)
+                    .expect("baseline late-first conversion"),
+            )
+            .expect("baseline late-first crossing");
+        baseline_record_boundary(
+            &mut evidence,
+            "late_first_boundary_pressures_following_boundary",
+            &mut harness,
+            &first,
+            BASELINE_NORMAL_TOLERANCE_US + 1_500,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            Some("normal_late_suppression"),
+        );
+        let second = harness.plan_current_dispatch();
+        let second_target = harness
+            .physical_target_qpc_for_test(&second)
+            .expect("baseline pressured second target");
+        let second_lateness_us = harness
+            .qpc_duration_to_us_for_test(
+                first_crossing
+                    .checked_duration_since(second_target)
+                    .expect("baseline pressured target ordering"),
+            )
+            .expect("baseline pressured lateness conversion");
+        baseline_record_boundary(
+            &mut evidence,
+            "late_first_boundary_pressures_following_boundary",
+            &mut harness,
+            &second,
+            second_lateness_us,
+            Some(first_crossing),
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            Some("unobserved_backlog_after_late_first_boundary"),
+        );
+    }
+
+    {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 10_000);
+        harness.set_final_gate_race_hook(
+            |_focus_active,
+             _target_hwnd,
+             _target_generation,
+             quit_requested,
+             _skip_requested,
+             _panic_requested,
+             _desired_pause| {
+                quit_requested.store(true, Ordering::Release);
+            },
+        );
+        let plan = harness.plan_current_dispatch();
+        baseline_record_boundary(
+            &mut evidence,
+            "stop_interrupt_race_at_target",
+            &mut harness,
+            &plan,
+            0,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            false,
+            Some("stop_interrupt_race"),
+        );
+    }
+
+    {
+        let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 10_000);
+        let plan = harness.plan_current_dispatch();
+        baseline_record_boundary(
+            &mut evidence,
+            "intentionally_injected_zero_progress_drop",
+            &mut harness,
+            &plan,
+            0,
+            None,
+            BASELINE_COMPLETION_DELAY_US,
+            true,
+            Some("injected_zero_progress_drop"),
+        );
+    }
+
+    let expected_case_names = [
+        "single_note",
+        "maximum_valid_atomic_chord",
+        "dense_different_key_boundaries",
+        "legal_same_key_sequence",
+        "late_wake_inside_normal_tolerance",
+        "late_wake_outside_normal_tolerance",
+        "late_first_boundary_pressures_following_boundary",
+        "stop_interrupt_race_at_target",
+        "intentionally_injected_zero_progress_drop",
+    ];
+    let prepared_boundary_count = evidence.boundaries.len();
+    let drop_record = evidence
+        .boundaries
+        .iter()
+        .find(|boundary| boundary.scenario == "intentionally_injected_zero_progress_drop");
+    let deterministic_acceptance_clean = expected_case_names.iter().all(|name| {
+        evidence
+            .boundaries
+            .iter()
+            .any(|boundary| boundary.scenario == *name)
+    }) && prepared_boundary_count
+        == evidence
+            .successful_sendinput_transactions
+            .saturating_add(evidence.non_send_or_drop_boundaries)
+        && drop_record.is_some_and(|boundary| {
+            boundary.delivery == "non_send"
+                && boundary.send_status == Some("ZeroProgress")
+                && boundary.non_send_reason == Some("injected_zero_progress_drop")
+        });
+    assert!(
+        deterministic_acceptance_clean,
+        "baseline deterministic evidence contract failed"
+    );
+
+    let real_wait_mode = build_wait_mode("baseline_real_wait", true, true, true);
+    let real_wait = summarize(
+        run_baseline_real_wait_probe(real_wait_mode)
+            .unwrap_or_else(|error| panic!("baseline real-wait probe: {error}")),
+    );
+    let real_wait_acceptance_clean = real_wait
+        .get("acceptance_clean")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    json!({
+        "scope": "Phase 0 deterministic dispatch qualification; production scheduling policy unchanged",
+        "acceptance_clean": deterministic_acceptance_clean && real_wait_acceptance_clean,
+        "deterministic_acceptance_clean": deterministic_acceptance_clean,
+        "expected_cases": expected_case_names,
+        "prepared_boundary_count": prepared_boundary_count,
+        "successful_sendinput_transaction_count": evidence.successful_sendinput_transactions,
+        "non_send_or_drop_boundary_count": evidence.non_send_or_drop_boundaries,
+        "timeline_rebase_count": evidence.timeline_rebase_count,
+        "transport_anomaly_count": evidence.transport_anomaly_count,
+        "boundary_evidence": evidence.boundaries,
+        "real_wait_probe": {
+            "acceptance_clean": real_wait_acceptance_clean,
+            "pre_call_minus_target_us": real_wait["dispatch_start_error_us"],
+            "completion_minus_pre_call_us": real_wait["pre_call_to_completion_us"],
+            "observation_count": real_wait["observation_count"],
+            "non_dispatches": real_wait["non_dispatches"],
+            "overdue_dispatch_count": real_wait["overdue_dispatch_count"],
+            "transport_anomaly_count": real_wait["transport_anomaly_count"],
+            "host_waiter": "HybridWaiter::production",
+        },
+        "healthy_precision_path": {
+            "production_scheduling_semantics_changed": false,
+            "allocations_locks_formatting_blocking_communication_added": false,
+            "no_allocation_gate": "rt_dispatch_no_alloc",
+        },
+        "raw_real_wait_report": real_wait,
+    })
+}
+
 fn summarize(samples: Samples) -> serde_json::Value {
     summarize_for_attempts(samples, iterations())
 }
@@ -3938,6 +4529,11 @@ fn main() {
     {
         panic!("phase_a_sender_only requires phase_a_sender_only benchmark mode");
     }
+    if matches!(benchmark_scope, BenchmarkScope::Baseline)
+        && !matches!(benchmark_mode, BenchmarkMode::RealWait)
+    {
+        panic!("baseline requires real_wait benchmark mode");
+    }
     if matches!(benchmark_scope, BenchmarkScope::PhaseAProductionMatrix)
         && !matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary)
     {
@@ -4069,6 +4665,8 @@ fn main() {
                 }),
             );
         }
+    } else if matches!(benchmark_scope, BenchmarkScope::Baseline) {
+        mode_reports.insert("baseline".to_string(), baseline_report());
     } else if matches!(benchmark_scope, BenchmarkScope::PhaseAProductionMatrix) {
         mode_reports.insert(
             "phase_a_production_boundary".to_string(),
@@ -4141,6 +4739,8 @@ fn main() {
         )
         .then_some(SYNTHETIC_TRANSPORT_COMPLETION_US),
         "evidence_scope": match (benchmark_scope, benchmark_mode) {
+            (BenchmarkScope::Baseline, BenchmarkMode::RealWait) => "baseline prepared-boundary evidence through the production test-support dispatch path, deterministic non-send/drop classification, and a host real HybridWaiter probe; no production scheduling policy or timing control is changed; not Raw Input or game-observed latency",
+            (BenchmarkScope::Baseline, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; test-support sender cutoff seam is exercised but production SendInput cutoff qualification is separate; not Raw Input or game-observed latency",
             (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseASenderOnly, BenchmarkMode::PhaseASenderOnly) => "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",

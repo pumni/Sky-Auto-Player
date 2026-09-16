@@ -49,7 +49,7 @@ pub(crate) use worker::*;
 pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
     //! Do not use in production code.
-    pub use super::test_support::ProductionDispatchTestHarness;
+    pub use super::test_support::{PreparedBoundaryEvidence, ProductionDispatchTestHarness};
     pub use super::worker::WaitObservation;
     pub use super::worker::dispatch::DispatchStep;
     pub use super::worker::dispatch::observation::{

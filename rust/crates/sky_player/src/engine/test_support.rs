@@ -17,4 +17,4 @@ pub(crate) use command_timing::{
     CommandTimingCleanup, CommandTimingLookup as PauseTimingLookup, CommandTimingState,
 };
 #[cfg(any(test, feature = "test-support"))]
-pub use dispatch_harness::ProductionDispatchTestHarness;
+pub use dispatch_harness::{PreparedBoundaryEvidence, ProductionDispatchTestHarness};
