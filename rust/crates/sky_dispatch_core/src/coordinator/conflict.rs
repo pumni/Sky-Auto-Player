@@ -26,11 +26,18 @@ impl RuntimeDispatchCoordinator {
         conflict_mask
     }
 
-    /// Check Down identities in a packet after accounting for the packet's
-    /// canonical Up phase. A same-key retrigger is valid because its old
-    /// generation is released by this very transaction before the new Down.
+    /// Check Down identities in a physical packet.
+    ///
+    /// Compiled and prepared packets have disjoint direction masks. A
+    /// same-key retrigger therefore requires a separately admitted release
+    /// interval; it is not made valid by packet-local Up-before-Down order.
     pub fn check_packet_down_conflicts(&self, up_mask: u16, down_mask: u16) -> u16 {
-        (self.blocked_mask & !up_mask) & down_mask
+        debug_assert_eq!(
+            up_mask & down_mask,
+            0,
+            "physical packet direction masks must be disjoint"
+        );
+        self.blocked_mask & down_mask
     }
 
     /// Terminalize the generations associated with every slot set in

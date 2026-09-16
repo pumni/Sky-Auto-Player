@@ -358,7 +358,7 @@ fn missed_authored_frame_releases_up_drops_down_and_invalidates_later_up() {
 }
 
 #[test]
-fn packet_commit_releases_before_retrigger_down_and_advances_once() {
+fn packet_commit_releases_before_disjoint_down_and_advances_once() {
     let schedule = compile_runtime_intents(
         &[
             KeyActionInput {
@@ -379,8 +379,8 @@ fn packet_commit_releases_before_retrigger_down_and_advances_once() {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 1_000,
-                scan_codes: vec![0x15, 0x16].into(),
-                reason: "retrigger chord".into(),
+                scan_codes: vec![0x16].into(),
+                reason: "disjoint mixed down".into(),
             },
         ],
         &[0x15, 0x16],
@@ -403,8 +403,8 @@ fn packet_commit_releases_before_retrigger_down_and_advances_once() {
 
     let retrigger = coordinator
         .prepare_next_due_authored(TimelineTicks::from_raw(1_000), DurationTicks::ZERO)
-        .expect("prepare retrigger packet")
-        .expect("retrigger packet is due");
+        .expect("prepare disjoint mixed packet")
+        .expect("disjoint mixed packet is due");
     assert_eq!(retrigger.packet_batch_count, 2);
     assert_eq!(retrigger.packet_kind, PhysicalPacketKind::Mixed);
     let packet = coordinator
@@ -412,19 +412,18 @@ fn packet_commit_releases_before_retrigger_down_and_advances_once() {
         .view_packet_ticks(retrigger.packet_index, retrigger.effective_scheduled_ticks)
         .expect("packet view");
     assert_eq!(packet.up_mask(), 0b01);
-    assert_eq!(packet.down_mask(), 0b11);
+    assert_eq!(packet.down_mask(), 0b10);
     coordinator
         .commit_packet_success(
             retrigger,
             TimelineTicks::from_raw(1_010),
             TimelineTicks::from_raw(1_020),
         )
-        .expect("commit retrigger packet");
+        .expect("commit disjoint mixed packet");
 
     assert_eq!(coordinator.cursor, 3);
-    assert_eq!(coordinator.active_mask, 0b11);
-    assert_eq!(coordinator.active_for_slot(0).unwrap().generation_id, 1);
-    assert_eq!(coordinator.active_for_slot(1).unwrap().generation_id, 2);
+    assert_eq!(coordinator.active_mask, 0b10);
+    assert_eq!(coordinator.active_for_slot(1).unwrap().generation_id, 1);
     assert_eq!(
         coordinator
             .generation_status_counts()
@@ -960,8 +959,8 @@ fn late_down_completion_does_not_create_a_new_hold_deadline() {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 400,
-                scan_codes: vec![0x15, 0x16].into(),
-                reason: "retrigger chord".into(),
+                scan_codes: vec![0x16].into(),
+                reason: "disjoint mixed down".into(),
             },
         ],
         &[0x15, 0x16],
@@ -983,7 +982,7 @@ fn late_down_completion_does_not_create_a_new_hold_deadline() {
         .expect("retrigger frame");
     assert_eq!(prepared.authored_ticks, TimelineTicks::from_raw(400));
     assert_eq!(prepared.immediate_up_mask, 0b01);
-    assert_eq!(prepared.down_mask, 0b11);
+    assert_eq!(prepared.down_mask, 0b10);
 }
 
 #[test]

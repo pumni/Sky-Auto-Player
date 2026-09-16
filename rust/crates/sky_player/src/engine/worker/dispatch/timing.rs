@@ -64,9 +64,9 @@ fn physical_event_counts(
 ) -> (usize, usize) {
     let requested_count = usize::from(packet_masks.event_count());
     let confirmed_count = if result_success {
-        // A Complete transaction confirms every event in the packet.  Keep
-        // directional packet identity here: a union mask cannot represent a
-        // same-key Up+Down retrigger as two INPUT events.
+        // A Complete transaction confirms every event in the packet. Physical
+        // packets have disjoint direction masks, so directional identity is
+        // retained without a union-mask ambiguity.
         requested_count
     } else {
         result_confirmed_mask.count_ones() as usize
@@ -609,15 +609,15 @@ mod tests {
     use sky_dispatch_win32::input::{PacketRetryReason, PhysicalPacket, SendTransactionStatus};
 
     #[test]
-    fn mixed_retrigger_retains_directional_event_cardinality() {
-        let same_key = PhysicalPacket::new(0b001, 0b001);
-        let three_events = PhysicalPacket::new(0b001, 0b011);
+    fn mixed_disjoint_packet_retains_directional_event_cardinality() {
+        let mixed_disjoint = PhysicalPacket::new(0b001, 0b010);
+        let three_events = PhysicalPacket::new(0b001, 0b110);
 
-        assert_eq!(same_key.event_count(), 2);
+        assert_eq!(mixed_disjoint.event_count(), 2);
         assert_eq!(three_events.event_count(), 3);
         assert_eq!(
             physical_event_counts(
-                same_key,
+                mixed_disjoint,
                 DispatchPath::Mixed {
                     up_count: 1,
                     down_count: 1,

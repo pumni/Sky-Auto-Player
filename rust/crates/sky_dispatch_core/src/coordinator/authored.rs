@@ -1390,8 +1390,9 @@ impl RuntimeDispatchCoordinator {
     }
 
     /// Commit one physical packet after the sender reported a complete
-    /// transaction. The logical Up transition is applied before Down so a
-    /// same-key retrigger replaces the previous generation atomically.
+    /// transaction. The logical Up transition is applied before Down for
+    /// disjoint mixed packets; same-key retriggers require an admitted
+    /// release interval.
     #[cfg(any(test, feature = "test-support"))]
     pub fn commit_packet_success(
         &mut self,

@@ -4570,7 +4570,7 @@ fn mixed_packet_partial_fault_stops_before_committing_retrigger() {
 }
 
 #[test]
-fn mixed_same_key_retrigger_success_commits_new_generation() {
+fn mixed_disjoint_packet_success_commits_new_generation() {
     // Keep the first authored boundary out of worker startup/preemption. The
     // assertions below cover generation ownership and mixed ordering, not
     // zero-slack dispatch timing.
@@ -4615,7 +4615,7 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
         },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
-        .expect("valid mixed retrigger schedule");
+        .expect("valid disjoint mixed schedule");
     let session = NativeDispatchSession::new(test_session_options(
         schedule,
         2,
@@ -4648,7 +4648,7 @@ fn mixed_same_key_retrigger_success_commits_new_generation() {
         .expect("records array")
         .iter()
         .find(|record| record["kind"].as_u64() == Some(2))
-        .expect("successful mixed record");
+        .expect("successful disjoint mixed record");
     assert_eq!(mixed["requested_count"].as_u64(), Some(2));
     assert_eq!(mixed["sent_count"].as_u64(), Some(2));
     assert_eq!(mixed["polyphony"].as_u64(), Some(2));
@@ -4724,9 +4724,9 @@ fn native_session_rejects_deterministically_infeasible_schedule_before_worker_st
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
-            scheduled_us: 100,
+            scheduled_us: 101,
             scan_codes: smallvec::smallvec![0x15, 0x16],
-            reason: "same-key-chord".to_string().into(),
+            reason: "short-hold-chord".to_string().into(),
         },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
@@ -4747,6 +4747,69 @@ fn native_session_rejects_deterministically_infeasible_schedule_before_worker_st
         result,
         Err(error) if error.contains("native schedule admission failed")
     ));
+}
+
+#[test]
+fn native_session_admission_rejects_positive_short_release_gap_before_worker_start() {
+    fn schedule(next_down_us: u64) -> sky_dispatch_core::model::RuntimeSchedule {
+        sky_dispatch_core::compile::compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 1_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "down-a".to_string().into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 2_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "up-a".to_string().into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: next_down_us,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "down-b".to_string().into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: next_down_us + 1_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "up-b".to_string().into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("positive-gap schedule must compile")
+    }
+
+    let backend = || BackendConfig::Mock {
+        latency_base_us: 0,
+        latency_per_key_us: 0,
+        fault_script: FaultInjectionScript::none(),
+    };
+    let short_schedule = schedule(2_000 + 17_166);
+    let short_result =
+        NativeDispatchSession::new(test_session_options(short_schedule, 1, backend()));
+    assert!(
+        short_result
+            .as_ref()
+            .is_err_and(|error| error.contains("release gap")),
+        "positive but too-short release gap must be rejected before worker start"
+    );
+
+    let legal_schedule = schedule(2_000 + 17_167);
+    let legal_result =
+        NativeDispatchSession::new(test_session_options(legal_schedule, 1, backend()));
+    assert!(
+        legal_result.is_ok(),
+        "release gap at the configured boundary must be admitted"
+    );
 }
 
 #[test]
@@ -5080,7 +5143,7 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
 }
 
 #[test]
-fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
+fn mixed_disjoint_packet_telemetry_preserves_two_events() {
     // Keep the authored epoch comfortably ahead of worker startup. This is a
     // test-only epoch choice made before arm(); the worker must not rebase the
     // frozen schedule after arm or derive a new target from observed runtime.
@@ -5151,7 +5214,7 @@ fn mixed_same_key_retrigger_telemetry_preserves_two_events() {
         .expect("records array")
         .iter()
         .find(|record| record["kind"].as_u64() == Some(2))
-        .expect("successful same-key mixed record");
+        .expect("successful disjoint mixed record");
     assert_eq!(mixed["requested_count"].as_u64(), Some(2));
     assert_eq!(mixed["sent_count"].as_u64(), Some(2));
     assert_eq!(mixed["polyphony"].as_u64(), Some(2));
