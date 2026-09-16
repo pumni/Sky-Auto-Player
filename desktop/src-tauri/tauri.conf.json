@@ -4,6 +4,12 @@
   "identifier": "io.github.pumni.skyautoplayer",
   "build": {
     "beforeDevCommand": "bun run dev -- --host 127.0.0.1",
+    "beforeBuildCommand": "bun run build",
+    "additionalWatchFolders": [
+      "../../rust/crates",
+      "../../rust/Cargo.toml",
+      "../../rust/Cargo.lock"
+    ],
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },

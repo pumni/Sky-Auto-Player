@@ -8,9 +8,11 @@ use std::fmt;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, SetLastError,
 };
-use windows_sys::Win32::System::Threading::CreateMutexW;
+use windows_sys::Win32::System::Threading::{
+    CreateMutexW, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
+    FindWindowW, GetWindowThreadProcessId, SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
 
 const INSTANCE_MUTEX_NAME: &str = r"Local\io.github.pumni.skyautoplayer.single-instance";
@@ -20,6 +22,20 @@ const MAIN_WINDOW_TITLE: &str = "Sky Auto Player";
 pub(crate) enum AcquireError {
     AlreadyRunning,
     Win32(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExistingInstancePolicy {
+    FocusExisting,
+    Refuse,
+}
+
+pub(crate) fn existing_instance_policy(debug_build: bool) -> ExistingInstancePolicy {
+    if debug_build {
+        ExistingInstancePolicy::Refuse
+    } else {
+        ExistingInstancePolicy::FocusExisting
+    }
 }
 
 impl fmt::Display for AcquireError {
@@ -85,6 +101,38 @@ pub(crate) fn focus_existing_instance() {
     }
 }
 
+pub(crate) fn existing_instance_details() -> Option<String> {
+    let title = wide_null(MAIN_WINDOW_TITLE);
+    unsafe {
+        let window = FindWindowW(std::ptr::null(), title.as_ptr());
+        if window.is_null() {
+            return None;
+        }
+
+        let mut pid = 0u32;
+        if GetWindowThreadProcessId(window, &mut pid) == 0 || pid == 0 {
+            return None;
+        }
+
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return Some(format!(" (PID {pid})"));
+        }
+
+        let mut path = [0u16; 4096];
+        let mut path_length = path.len() as u32;
+        let details =
+            if QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut path_length) != 0 {
+                let path = String::from_utf16_lossy(&path[..path_length as usize]);
+                format!(" (PID {pid}, executable {path})")
+            } else {
+                format!(" (PID {pid})")
+            };
+        CloseHandle(process);
+        Some(details)
+    }
+}
+
 fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -113,5 +161,21 @@ mod tests {
 
         drop(first);
         let _reacquired = SingleInstanceGuard::acquire_named(&name).expect("reacquired guard");
+    }
+
+    #[test]
+    fn debug_build_refuses_an_existing_instance() {
+        assert_eq!(
+            existing_instance_policy(true),
+            ExistingInstancePolicy::Refuse
+        );
+    }
+
+    #[test]
+    fn packaged_build_focuses_an_existing_instance() {
+        assert_eq!(
+            existing_instance_policy(false),
+            ExistingInstancePolicy::FocusExisting
+        );
     }
 }

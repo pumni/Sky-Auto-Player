@@ -214,6 +214,107 @@ fn tauri_feature_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<(), String> {
+    let config = serde_json::from_str::<Value>(source)
+        .map_err(|error| format!("invalid Tauri config JSON: {error}"))?;
+    let build = config
+        .get("build")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "Tauri config is missing its build object".to_owned())?;
+    if build.get("beforeBuildCommand").and_then(Value::as_str) != Some("bun run build") {
+        return Err("Tauri packaging must use `bun run build` as beforeBuildCommand".to_owned());
+    }
+    let watch_folders = build
+        .get("additionalWatchFolders")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Tauri config is missing build.additionalWatchFolders".to_owned())?;
+    let watch_folders = watch_folders
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "Tauri additionalWatchFolders must contain strings".to_owned())
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for required in [
+        "../../rust/crates",
+        "../../rust/Cargo.toml",
+        "../../rust/Cargo.lock",
+    ] {
+        if !watch_folders.iter().any(|path| path == required) {
+            return Err(format!(
+                "Tauri additionalWatchFolders is missing `{required}`"
+            ));
+        }
+    }
+    if watch_folders
+        .iter()
+        .any(|path| path == "../../rust" || path == "../../rust/")
+    {
+        return Err(
+            "Tauri additionalWatchFolders must not watch all of rust (including target)".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn tauri_build_freshness_contract(root: &Path) -> Result<()> {
+    let path = root.join("desktop/src-tauri/tauri.conf.json");
+    tauri_build_freshness_contract_manifest(&fs::read_to_string(&path)?)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let diagnostic_path = root.join("desktop/scripts/dev-build-info.mjs");
+    let diagnostic = fs::read_to_string(&diagnostic_path)?;
+    for marker in [
+        "git",
+        "status",
+        "--selftest-build-info",
+        "expected_debug_executable",
+        "rustc",
+        "freshness",
+        "INCOMPLETE",
+        "process.exitCode",
+    ] {
+        if !diagnostic.contains(marker) {
+            return Err(format!(
+                "build freshness diagnostic is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for forbidden in [
+        "rmSync",
+        "writeFile",
+        "unlink",
+        "cargo clean",
+        "Remove-Item",
+    ] {
+        if diagnostic.contains(forbidden) {
+            return Err(format!(
+                "build freshness diagnostic must remain read-only; found {forbidden}"
+            )
+            .into());
+        }
+    }
+    let acceptance_path = root.join("scripts/test_build_provenance_switch.ps1");
+    let acceptance = fs::read_to_string(&acceptance_path)?;
+    for marker in [
+        "checkout --quiet --detach",
+        "CARGO_TARGET_DIR",
+        "--selftest-build-info",
+        "embedded_native_build_commit",
+        "same target, no cargo clean",
+    ] {
+        if !acceptance.contains(marker) {
+            return Err(format!(
+                "build provenance switch acceptance helper is missing its marker: {marker}"
+            )
+            .into());
+        }
+    }
+    println!("[xtask] Tauri build freshness contract: PASS");
+    Ok(())
+}
+
 const LEGACY_RELEASE_TOPOLOGY_MARKERS: &[&str] = &[
     "Sky-Auto-Player-Releases",
     "V4_RELEASE_AUTHORITY_TOKEN",
@@ -1556,8 +1657,8 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "name: Build current Tauri candidate",
         "needs: changes",
         "if: needs.changes.outputs.package_required == 'true' || needs.changes.outputs.updater_required == 'true'",
-        "bun run build",
         "bun run tauri build --ci --config",
+        "dev:build-info",
         "--profile dist",
         "scripts/ci_validate_candidate.ps1",
         "-Mode Create",
@@ -4065,6 +4166,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             }
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
+            tauri_build_freshness_contract(&root)?;
             builtin_catalog::run(&root, "verify", &[])?;
             v4_trust_material_contract(&root)?;
             ci_control_plane_contract(&root)?;
@@ -4199,6 +4301,38 @@ tauri-test = ["tauri/test"]
             resolution.dev,
             ["desktop-runtime".to_owned()].into_iter().collect()
         );
+    }
+
+    #[test]
+    fn tauri_build_freshness_contract_accepts_scoped_watchers_and_build_hook() {
+        let source = r#"{
+            "build": {
+                "beforeBuildCommand": "bun run build",
+                "additionalWatchFolders": [
+                    "../../rust/crates",
+                    "../../rust/Cargo.toml",
+                    "../../rust/Cargo.lock"
+                ]
+            }
+        }"#;
+        assert!(tauri_build_freshness_contract_manifest(source).is_ok());
+    }
+
+    #[test]
+    fn tauri_build_freshness_contract_rejects_the_workspace_root_watch() {
+        let source = r#"{
+            "build": {
+                "beforeBuildCommand": "bun run build",
+                "additionalWatchFolders": [
+                    "../../rust",
+                    "../../rust/crates",
+                    "../../rust/Cargo.toml",
+                    "../../rust/Cargo.lock"
+                ]
+            }
+        }"#;
+        let error = tauri_build_freshness_contract_manifest(source).unwrap_err();
+        assert!(error.contains("must not watch all of rust"));
     }
 
     #[test]
@@ -4699,8 +4833,8 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
     if: needs.changes.outputs.package_required == 'true' || needs.changes.outputs.updater_required == 'true'
     steps:
       - run: bun install --frozen-lockfile
-      - run: bun run build
       - run: bun run tauri build --ci --config candidate.json -- --profile dist
+      - run: bun run dev:build-info -- --exe ..\\rust\\target\\dist\\sky_desktop_shell.exe
       - run: Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath
       - run: scripts/ci_validate_candidate.ps1 -Mode Create -BundleDir $bundleDir -PublicKeyPath $publicKeyPath -OutputRoot $candidateRoot -SourceSha $env:SKY_CI_SOURCE_SHA
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

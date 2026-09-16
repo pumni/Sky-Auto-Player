@@ -148,10 +148,6 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
-      - name: Build pinned desktop frontend for updater bridge
-        working-directory: desktop
-        run: bun run build
-
       - name: Build exactly one updater bridge fixture
         env:
           RUSTUP_TOOLCHAIN: 1.98.1
@@ -746,10 +742,6 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
-      - name: Build pinned desktop frontend once
-        working-directory: desktop
-        run: bun run build
-
       - name: Build exactly one current Tauri candidate
         env:
           RUSTUP_TOOLCHAIN: 1.98.1
@@ -793,6 +785,10 @@ jobs:
           }
           "SKY_CANDIDATE_BUNDLE=$bundleDir" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_CANDIDATE_PUBLIC_KEY=$publicKeyPath" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+
+      - name: Verify current native build provenance
+        working-directory: desktop
+        run: bun run dev:build-info -- --exe ..\rust\target\dist\sky_desktop_shell.exe
 
       - name: Create exact current-candidate contract
         env:

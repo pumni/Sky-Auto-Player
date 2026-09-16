@@ -316,9 +316,6 @@ try {
             & bun install --frozen-lockfile
             if ($LASTEXITCODE -ne 0) { throw "bun install failed with exit code $LASTEXITCODE" }
 
-            & bun run build
-            if ($LASTEXITCODE -ne 0) { throw "bun run build failed with exit code $LASTEXITCODE" }
-
             & bun run tauri build --ci -- --profile dist
             if ($LASTEXITCODE -ne 0) { throw "bun run tauri build failed with exit code $LASTEXITCODE" }
         } finally {

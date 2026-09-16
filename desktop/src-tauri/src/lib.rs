@@ -90,7 +90,7 @@ compile_error!("`packaged-assets` requires `desktop-runtime`");
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    run_inner(false, false);
+    exit_on_failure(run_inner(false, false));
 }
 
 /// Run the production shell with a packaging-only WebView smoke hook.
@@ -100,7 +100,7 @@ pub fn run() {
 /// exercises the production bridge and closes through the normal controlled
 /// lifecycle. No test command or alternate runtime is exposed to the user.
 pub fn run_gui_smoke() {
-    run_inner(true, false);
+    exit_on_failure(run_inner(true, false));
 }
 
 /// Run the real Tauri shell with an updater fixture-driven previous-v4 to
@@ -121,7 +121,7 @@ pub fn run_update_smoke() {
             return;
         }
     }
-    run_inner(false, true);
+    exit_on_failure(run_inner(false, true));
 }
 
 /// Prove the packaged update admission boundary remains fail-closed while
@@ -149,18 +149,35 @@ pub fn selftest_update_install_rejection_during_playback() -> i32 {
     }
 }
 
-fn run_inner(gui_smoke: bool, update_smoke: bool) {
+fn exit_on_failure(exit_code: i32) {
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+}
+
+fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
     #[cfg(windows)]
     let _single_instance_guard = match single_instance::SingleInstanceGuard::acquire() {
         Ok(guard) => guard,
         Err(single_instance::AcquireError::AlreadyRunning) => {
-            single_instance::focus_existing_instance();
-            eprintln!("Sky Auto Player is already running");
-            return;
+            match single_instance::existing_instance_policy(cfg!(debug_assertions)) {
+                single_instance::ExistingInstancePolicy::FocusExisting => {
+                    single_instance::focus_existing_instance();
+                    eprintln!("Sky Auto Player is already running");
+                    return 0;
+                }
+                single_instance::ExistingInstancePolicy::Refuse => {
+                    let details = single_instance::existing_instance_details().unwrap_or_default();
+                    eprintln!(
+                        "Sky Auto Player startup refused: another Sky Auto Player process is active{details}; the newly compiled dev build was not launched"
+                    );
+                    return 1;
+                }
+            }
         }
         Err(error) => {
             eprintln!("Sky Auto Player startup refused: {error}");
-            return;
+            return 1;
         }
     };
 
@@ -179,7 +196,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
             record_gui_smoke_phase("command_ownership.check.failed");
         }
         eprintln!("Sky Auto Player startup refused: incomplete command ownership matrix");
-        return;
+        return 1;
     }
     if gui_smoke {
         record_gui_smoke_phase("command_ownership.check.pass");
@@ -409,9 +426,10 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) {
     }
     if gui_smoke && smoke_state.gui_smoke_exit_code() != 0 {
         record_gui_smoke_phase("tauri.run.return.failed");
-        std::process::exit(smoke_state.gui_smoke_exit_code());
+        return smoke_state.gui_smoke_exit_code();
     }
     result.expect("error while running Sky Auto Player desktop shell");
+    0
 }
 
 fn update_smoke_marker(flag: &str) -> Option<PathBuf> {
