@@ -82,6 +82,25 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
     assert!(control < target);
     assert!(target < pre_call);
 
+    let finalizer_body = finalizer
+        .split("\nfn final_atomic_revalidation")
+        .next()
+        .expect("finalizer body");
+    assert!(!finalizer_body.contains("foreground_window_matches"));
+    assert!(!finalizer_body.contains("focus_matches_hwnd"));
+
+    let admission = include_str!("../admission.rs");
+    let target_admission = admission
+        .split("pub(crate) fn final_down_target_admission")
+        .nth(1)
+        .expect("final target admission");
+    let target_admission_body = target_admission
+        .split("pub(crate) fn enter_focus_pause")
+        .next()
+        .expect("target admission body");
+    assert!(target_admission_body.contains("focus_matches("));
+    assert!(!target_admission_body.contains("focus_matches_hwnd"));
+
     let sender = source
         .split("fn record_down_send_outcome")
         .nth(1)

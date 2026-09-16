@@ -229,9 +229,12 @@ pub(crate) fn final_control_admission_with_lease(
     Ok((admission, Some(now_qpc)))
 }
 
-/// Authoritative target/focus gate for Down-bearing traffic.  Control and
-/// lease decisions are intentionally kept in the shared control gate so an
-/// UpOnly/release send never acquires a focus dependency.
+/// Atomic target/focus gate for Down-bearing traffic at the precision boundary.
+/// Control and lease decisions are intentionally kept in the shared control
+/// gate so an UpOnly/release send never acquires a focus dependency.  The
+/// supervisor's published focus hint is authoritative here: a foreground
+/// transition that has not reached that atomic state is the documented,
+/// bounded observer race and must not trigger a synchronous HWND query.
 pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> DownAdmission {
     if !target_stamp_still_current(
         target.target_hwnd,
@@ -240,11 +243,7 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
     ) {
         return DownAdmission::TargetChanged;
     }
-    if !focus_matches_hwnd(
-        target.require_focus,
-        target.focus_active,
-        target.expected.hwnd,
-    ) {
+    if !focus_matches(target.require_focus, target.focus_active) {
         return DownAdmission::FocusLost;
     }
     #[cfg(any(test, feature = "test-support"))]
