@@ -21,15 +21,13 @@ mod startup;
 mod timing;
 mod wait;
 
-#[cfg(test)]
-pub(crate) use admission::final_control_admission_with_lease;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use admission::invoke_final_gate_race_hook;
 pub(crate) use admission::{
     DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, ensure_preflight_for_target, enter_focus_pause,
-    final_control_admission_at, final_control_precheck, final_down_target_admission, focus_matches,
-    focus_matches_hwnd, handle_final_focus_loss, load_target_stamp, record_final_gate_rejection,
+    final_control_precheck, final_down_target_admission, focus_matches, focus_matches_hwnd,
+    handle_final_focus_loss, load_target_stamp, record_final_gate_rejection,
     target_stamp_still_current, trace_kind_for_packet_kind,
 };
 use cleanup::{
@@ -100,14 +98,14 @@ pub(crate) use timing::{
 #[allow(unused_imports)]
 pub(crate) use timing::{calibrated_spin_threshold_us, derive_spin_threshold_us};
 pub(crate) use timing::{
-    lease_bounded_ticks, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
-    supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
+    signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks, supervisor_lease_expired,
+    wait_failure_message, wake_lateness_ticks,
 };
 #[allow(unused_imports)]
 pub use wait::WaitObservation;
 pub(crate) use wait::{
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
-    record_wait_failure, wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, record_wait_failure,
+    wait_for_next_boundary,
 };
 
 use super::shared::SessionShared;

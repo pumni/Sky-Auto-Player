@@ -1,31 +1,28 @@
 use super::{
     RuntimeDispatchCoordinator, TrackedKeyState, WorkerMetricsLocal,
     cancel_coordinator_or_terminal, describe_release_outcome, publish_backend_metrics,
-    record_termination_error, release_state_verified, supervisor_lease_expired,
-    try_publish_metrics,
+    record_termination_error, release_state_verified, try_publish_metrics,
 };
 use crate::engine::telemetry::SharedMetrics;
 use sky_dispatch_core::time::DurationTicks;
-use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
+use sky_dispatch_win32::clock::{QpcClock, QpcError};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 pub(super) enum CommandControl {
     Continue,
     Exit,
 }
 
-pub(super) struct CommandControlClock<'a> {
-    pub(super) loop_start_ticks: QpcTicks,
+pub(super) struct CommandControlClock {
     pub(super) qpc_clock: QpcClock,
-    pub(super) lease_timeout_ticks: DurationTicks,
-    pub(super) supervisor_heartbeat_ticks: &'a AtomicU64,
 }
 
 pub(super) struct CommandControlSignals<'a> {
     pub(super) quit_requested: &'a AtomicBool,
     pub(super) skip_requested: &'a AtomicBool,
     pub(super) panic_requested: &'a AtomicBool,
+    pub(super) supervisor_expired: &'a AtomicBool,
     pub(super) target_hwnd: &'a AtomicIsize,
 }
 
@@ -45,10 +42,26 @@ pub(super) struct CommandControlMetrics<'a> {
 }
 
 pub(super) struct CommandControlInput<'a> {
-    pub(super) clock: CommandControlClock<'a>,
+    pub(super) clock: CommandControlClock,
     pub(super) signals: CommandControlSignals<'a>,
     pub(super) runtime: CommandControlRuntime<'a>,
     pub(super) metrics: CommandControlMetrics<'a>,
+}
+
+#[inline]
+fn terminal_reason_for_hard_stop(
+    supervisor_expired_before: bool,
+    panic_hard_stop_consumed: bool,
+    supervisor_expired_after: bool,
+) -> Option<&'static str> {
+    if !supervisor_expired_before && !panic_hard_stop_consumed {
+        return None;
+    }
+    Some(if supervisor_expired_before || supervisor_expired_after {
+        "supervisor_lease_expired"
+    } else {
+        "panic_release_requested"
+    })
 }
 
 pub(super) fn process_command_control(context: CommandControlInput<'_>) -> CommandControl {
@@ -58,16 +71,12 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
         runtime,
         metrics,
     } = context;
-    let CommandControlClock {
-        loop_start_ticks,
-        qpc_clock,
-        lease_timeout_ticks,
-        supervisor_heartbeat_ticks,
-    } = clock;
+    let CommandControlClock { qpc_clock } = clock;
     let CommandControlSignals {
         quit_requested,
         skip_requested,
         panic_requested,
+        supervisor_expired,
         target_hwnd,
     } = signals;
     let CommandControlRuntime {
@@ -84,29 +93,12 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
         last_published_error,
     } = metrics;
 
-    match supervisor_lease_expired(
-        loop_start_ticks,
-        lease_timeout_ticks,
-        supervisor_heartbeat_ticks,
-    ) {
-        Ok(true) => {
-            *force_full_cleanup = true;
-            *terminal_error = Some("supervisor_lease_expired".to_string());
-            return CommandControl::Exit;
-        }
-        Ok(false) => {}
-        Err(error) => {
-            *force_full_cleanup = true;
-            *terminal_error = Some(format!("QPC runtime failure: {error:?}"));
-            return CommandControl::Exit;
-        }
-    }
-
-    if quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire) {
-        return CommandControl::Exit;
-    }
-
-    if panic_requested.swap(false, Ordering::AcqRel) {
+    let supervisor_expired_before = supervisor_expired.load(Ordering::Acquire);
+    let command_exit =
+        quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire);
+    let panic_hard_stop_consumed = !command_exit && panic_requested.swap(false, Ordering::AcqRel);
+    let panic_requested = supervisor_expired_before || panic_hard_stop_consumed;
+    if panic_requested {
         let panic_release =
             backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire));
         if !release_state_verified(backend, &panic_release) {
@@ -140,9 +132,53 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
                 return CommandControl::Exit;
             }
         };
-        *terminal_error = Some("panic_release_requested".to_string());
+        let supervisor_expired_after = supervisor_expired.load(Ordering::Acquire);
+        *terminal_error = Some(
+            terminal_reason_for_hard_stop(
+                supervisor_expired_before,
+                panic_hard_stop_consumed,
+                supervisor_expired_after,
+            )
+            .expect("panic cleanup must have a terminal reason")
+            .to_string(),
+        );
+        return CommandControl::Exit;
+    }
+    if command_exit {
         return CommandControl::Exit;
     }
 
     CommandControl::Continue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_reason_for_hard_stop;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn watchdog_expiry_after_worker_sample_keeps_terminal_identity() {
+        let supervisor_expired = AtomicBool::new(false);
+        let panic_requested = AtomicBool::new(true);
+
+        // Deterministic interleaving: the worker sampled the old state, then
+        // the watchdog published expiry before the hard-stop was consumed.
+        let sampled_before = supervisor_expired.load(Ordering::Acquire);
+        supervisor_expired.store(true, Ordering::Release);
+        let hard_stop_consumed = panic_requested.swap(false, Ordering::AcqRel);
+        let sampled_after = supervisor_expired.load(Ordering::Acquire);
+
+        assert_eq!(
+            terminal_reason_for_hard_stop(sampled_before, hard_stop_consumed, sampled_after),
+            Some("supervisor_lease_expired")
+        );
+    }
+
+    #[test]
+    fn explicit_panic_without_supervisor_expiry_keeps_user_terminal_identity() {
+        assert_eq!(
+            terminal_reason_for_hard_stop(false, true, false),
+            Some("panic_release_requested")
+        );
+    }
 }

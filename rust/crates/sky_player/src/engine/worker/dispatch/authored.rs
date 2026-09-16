@@ -1,6 +1,6 @@
 use super::super::super::{
-    ActionKind, DurationTicks, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator,
-    TimelineTicks, TrackedKeyState,
+    ActionKind, PlaybackClockState, QpcClock, QpcTicks, RuntimeDispatchCoordinator, TimelineTicks,
+    TrackedKeyState,
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::super::invoke_final_gate_race_hook;
@@ -8,11 +8,10 @@ use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
-    WorkerResources, WorkerRuntime, WorkerTimingState, enter_focus_pause,
-    final_control_admission_at, final_control_precheck, final_down_target_admission, focus_matches,
-    handle_final_focus_loss, load_target_stamp, record_final_gate_rejection,
-    record_sendinput_pre_call_lateness, signed_ticks_to_us, target_stamp_still_current,
-    trace_kind_for_packet_kind,
+    WorkerResources, WorkerRuntime, WorkerTimingState, enter_focus_pause, final_control_precheck,
+    final_down_target_admission, focus_matches, handle_final_focus_loss, load_target_stamp,
+    record_final_gate_rejection, record_sendinput_pre_call_lateness, signed_ticks_to_us,
+    target_stamp_still_current, trace_kind_for_packet_kind,
 };
 use super::DownBoundaryAdmission;
 use super::observation::BlockedUnfocusedObservation;
@@ -53,8 +52,7 @@ pub(crate) fn dispatch_authored_packet(
         physical_latest_down_start_qpc,
         down_admission,
         focus_loss_fault,
-        supervisor_heartbeat_ticks,
-        lease_timeout_ticks,
+        supervisor_expired,
         boundary_crossing_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
@@ -103,8 +101,7 @@ pub(crate) fn dispatch_authored_packet(
         down_admission,
         focus_loss_fault,
         physical_plan.target_proof.verified_target(),
-        supervisor_heartbeat_ticks,
-        lease_timeout_ticks,
+        supervisor_expired,
         boundary_crossing_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
@@ -142,8 +139,7 @@ fn commit_down_send_outcome(
     down_admission: DownBoundaryAdmission,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
-    supervisor_heartbeat_ticks: &AtomicU64,
-    lease_timeout_ticks: DurationTicks,
+    supervisor_expired: &AtomicBool,
     boundary_crossing_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     #[cfg(any(test, feature = "test-support"))] test_inject_sender_start: bool,
@@ -171,8 +167,7 @@ fn commit_down_send_outcome(
         has_conflicts,
         focus_loss_fault,
         preflight_target,
-        supervisor_heartbeat_ticks,
-        lease_timeout_ticks,
+        supervisor_expired,
         observer,
     ) {
         Ok(admission) => admission,
@@ -196,8 +191,7 @@ fn commit_down_send_outcome(
         progress_clock,
         physical_target_qpc,
         down_admission,
-        supervisor_heartbeat_ticks,
-        lease_timeout_ticks,
+        supervisor_expired,
         boundary_crossing_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_direct_boundary,
@@ -317,8 +311,7 @@ fn admit_authored_down(
     has_conflicts: bool,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
-    supervisor_heartbeat_ticks: &AtomicU64,
-    lease_timeout_ticks: DurationTicks,
+    supervisor_expired: &AtomicBool,
     observer: Option<&PendingObservationQueue>,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let trace_kind = trace_kind_for_packet_kind(view.prepared_batch.packet_kind);
@@ -392,19 +385,11 @@ fn admit_authored_down(
         skip_requested,
         panic_requested,
         desired_pause,
+        supervisor_expired,
         system_power: Some(system_power),
-        supervisor_heartbeat_ticks,
     };
     let control_admission = final_control_precheck(control_signals);
     if !matches!(control_admission, FinalControlAdmission::Allowed) {
-        runtime.verified_target = None;
-        return Ok(AdmissionOutcome::ControlRejected);
-    }
-    let guard_lease = final_control_admission_at(now_ticks, lease_timeout_ticks, control_signals)
-        .map_err(|error| {
-        DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
-    })?;
-    if !matches!(guard_lease, FinalControlAdmission::Allowed) {
         runtime.verified_target = None;
         return Ok(AdmissionOutcome::ControlRejected);
     }
@@ -432,8 +417,7 @@ fn finalize_authored_down_admission(
     progress_clock: &SharedProgressClock,
     physical_target_qpc: QpcTicks,
     down_admission: DownBoundaryAdmission,
-    supervisor_heartbeat_ticks: &AtomicU64,
-    lease_timeout_ticks: DurationTicks,
+    supervisor_expired: &AtomicBool,
     boundary_crossing_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     admission: AdmissionOutcome,
@@ -472,8 +456,8 @@ fn finalize_authored_down_admission(
         skip_requested,
         panic_requested,
         desired_pause,
+        supervisor_expired,
         system_power: Some(system_power),
-        supervisor_heartbeat_ticks,
     };
     let control_admission = final_control_precheck(control_signals);
     if !matches!(control_admission, FinalControlAdmission::Allowed) {
@@ -529,16 +513,6 @@ fn finalize_authored_down_admission(
     let final_policy_qpc = qpc_clock.now().map_err(|error| {
         DispatchStep::Terminate(format!("QPC final policy boundary failure: {error:?}"))
     })?;
-    let lease_admission =
-        final_control_admission_at(final_policy_qpc, lease_timeout_ticks, control_signals)
-            .map_err(|error| {
-                DispatchStep::Terminate(format!("lease admission QPC failure: {error:?}"))
-            })?;
-    if !matches!(lease_admission, FinalControlAdmission::Allowed) {
-        runtime.verified_target = None;
-        record_final_gate_rejection(local_metrics, FinalGateRejection::Lease);
-        return Ok(AdmissionOutcome::ControlRejected);
-    }
     Ok(AdmissionOutcome::Allowed {
         trace_kind,
         target_crossing_qpc,

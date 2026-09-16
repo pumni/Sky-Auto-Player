@@ -7,11 +7,11 @@ use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
     CommandControlRuntime, CommandControlSignals, PlanningInput, WaitBoundary, WaitBoundaryInput,
-    WaitDeadline, WaitMutable, WaitSignals, WaitTiming, Worker, ensure_preflight_for_target,
-    enter_focus_pause, focus_matches, focus_matches_hwnd, lease_bounded_ticks, load_target_stamp,
-    plan_next_dispatch_projected, process_command_control, publish_backend_counters,
-    publish_backend_metrics, record_wait_failure, supervisor_lease_expired, suspend_live_input,
-    target_stamp_still_current, wait_for_next_boundary,
+    WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
+    focus_matches, focus_matches_hwnd, load_target_stamp, plan_next_dispatch_projected,
+    process_command_control, publish_backend_counters, publish_backend_metrics,
+    record_wait_failure, supervisor_lease_expired, suspend_live_input, target_stamp_still_current,
+    wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
@@ -220,10 +220,9 @@ pub(crate) fn dispatch_due_from_plan(
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
+    supervisor_expired: &AtomicBool,
     desired_pause: &AtomicBool,
     system_power: &SystemPowerState,
-    supervisor_heartbeat_ticks: &AtomicU64,
-    lease_timeout_ticks: DurationTicks,
     progress_clock: &crate::engine::shared::SharedProgressClock,
     observer: Option<&super::dispatch::PendingObservationQueue>,
     boundary_crossing_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
@@ -434,8 +433,7 @@ pub(crate) fn dispatch_due_from_plan(
             down_admission,
             physical_latest_down_start_qpc,
             focus_loss_fault,
-            supervisor_heartbeat_ticks,
-            lease_timeout_ticks,
+            supervisor_expired,
             boundary_crossing_qpc,
             #[cfg(any(test, feature = "test-support"))]
             test_direct_boundary,
@@ -591,6 +589,7 @@ pub(super) fn dispatch(
     let quit_requested = &shared.commands.quit_requested;
     let skip_requested = &shared.commands.skip_requested;
     let panic_requested = &shared.commands.panic_requested;
+    let supervisor_expired = &shared.commands.supervisor_expired;
     let focus_active = &shared.commands.focus_active;
     let system_power = &shared.commands.system_power;
     let target_hwnd = &shared.target.target_hwnd;
@@ -657,18 +656,13 @@ pub(super) fn dispatch(
             // after interrupts, replans, command transitions, or failures.
             core.runtime.last_dispatch_deadline_wake_qpc = None;
             core.runtime.last_dispatch_deadline_target_qpc = None;
-            let loop_start_ticks = qpc_ticks_or_terminal!();
             if let CommandControl::Exit = process_command_control(CommandControlInput {
-                clock: CommandControlClock {
-                    loop_start_ticks,
-                    qpc_clock,
-                    lease_timeout_ticks: timing.lease_timeout_ticks,
-                    supervisor_heartbeat_ticks,
-                },
+                clock: CommandControlClock { qpc_clock },
                 signals: CommandControlSignals {
                     quit_requested,
                     skip_requested,
                     panic_requested,
+                    supervisor_expired,
                     target_hwnd,
                 },
                 runtime: CommandControlRuntime {
@@ -1115,19 +1109,6 @@ pub(super) fn dispatch(
                         break;
                     }
                 };
-                let pause_target = match lease_bounded_ticks(
-                    pause_target,
-                    timing.lease_timeout_ticks,
-                    supervisor_heartbeat_ticks,
-                ) {
-                    Ok(target) => target,
-                    Err(error) => {
-                        core.runtime.force_full_cleanup = true;
-                        core.runtime.terminal_error =
-                            Some(format!("pause lease deadline failure: {error:?}"));
-                        break;
-                    }
-                };
                 if let WaitOutcome::Failed(failure) = resources
                     .waiter
                     .wait_until_ticks_with_metrics_typed(
@@ -1293,10 +1274,9 @@ pub(super) fn dispatch(
                 quit_requested,
                 skip_requested,
                 panic_requested,
+                supervisor_expired,
                 desired_pause,
                 system_power,
-                supervisor_heartbeat_ticks,
-                timing.lease_timeout_ticks,
                 &shared.publication.progress_clock,
                 core.observer.pending.as_ref(),
                 None,
@@ -1361,10 +1341,6 @@ pub(super) fn dispatch(
                         DurationTicks::ZERO
                     },
                     qpc_clock,
-                },
-                timing: WaitTiming {
-                    lease_timeout_ticks: timing.lease_timeout_ticks,
-                    supervisor_heartbeat_ticks,
                 },
                 signals: WaitSignals {
                     waiter: &resources.waiter,
@@ -1439,10 +1415,9 @@ pub(super) fn dispatch(
                         quit_requested,
                         skip_requested,
                         panic_requested,
+                        supervisor_expired,
                         desired_pause,
                         system_power,
-                        supervisor_heartbeat_ticks,
-                        timing.lease_timeout_ticks,
                         &shared.publication.progress_clock,
                         core.observer.pending.as_ref(),
                         Some(dispatch_qpc),

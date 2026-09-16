@@ -39,6 +39,75 @@ fn last_missed_down_reason(valid: bool, reason_code: u8) -> Option<String> {
     }
 }
 
+fn signal_supervisor_expiry(shared: &SessionShared) {
+    shared
+        .commands
+        .supervisor_expired
+        .store(true, Ordering::Release);
+    shared
+        .commands
+        .panic_requested
+        .store(true, Ordering::Release);
+    let _ = shared.commands.interrupt.signal();
+}
+
+fn supervisor_watchdog_loop(
+    shared: Arc<SessionShared>,
+    qpc_clock: QpcClock,
+    lease_timeout_ticks: DurationTicks,
+) {
+    let (done_lock, done_cv) = &shared.lifecycle.completed;
+    let Ok(mut done) = done_lock.lock() else {
+        signal_supervisor_expiry(&shared);
+        return;
+    };
+
+    while !*done {
+        let now_ticks = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(_) => {
+                signal_supervisor_expiry(&shared);
+                return;
+            }
+        };
+        match super::worker::supervisor_lease_expired(
+            now_ticks,
+            lease_timeout_ticks,
+            &shared.publication.supervisor_heartbeat_ticks,
+        ) {
+            Ok(true) | Err(_) => {
+                signal_supervisor_expiry(&shared);
+                return;
+            }
+            Ok(false) => {}
+        }
+
+        let heartbeat = shared
+            .publication
+            .supervisor_heartbeat_ticks
+            .load(Ordering::Acquire);
+        let remaining_ticks = if heartbeat == 0 || heartbeat >= now_ticks.as_u64() {
+            lease_timeout_ticks.as_u64()
+        } else {
+            lease_timeout_ticks
+                .as_u64()
+                .saturating_sub(now_ticks.as_u64().saturating_sub(heartbeat))
+        };
+        let remaining_us = qpc_clock
+            .duration_to_us(DurationTicks::from_raw(remaining_ticks))
+            .unwrap_or(1)
+            .max(1);
+        let wait_result = done_cv.wait_timeout(done, Duration::from_micros(remaining_us));
+        match wait_result {
+            Ok((next_done, _)) => done = next_done,
+            Err(_) => {
+                signal_supervisor_expiry(&shared);
+                return;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_native_schedule_timing(
     schedule: &sky_dispatch_core::model::RuntimeSchedule,
@@ -126,6 +195,7 @@ pub struct NativeDispatchSession {
     generation_count: u64,
     shared: Arc<SessionShared>,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+    watchdog_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +269,7 @@ impl NativeDispatchSession {
                 quit_requested: AtomicBool::new(false),
                 skip_requested: AtomicBool::new(false),
                 panic_requested: AtomicBool::new(false),
+                supervisor_expired: AtomicBool::new(false),
                 // Supervisor hint only: the worker still performs the
                 // authoritative foreground-HWND check before every Down.
                 focus_active: AtomicBool::new(true),
@@ -239,6 +310,7 @@ impl NativeDispatchSession {
             generation_count,
             shared,
             thread_handle: Mutex::new(None),
+            watchdog_handle: Mutex::new(None),
         })
     }
 
@@ -281,6 +353,16 @@ impl NativeDispatchSession {
                     .map_err(|error| format!("pre-roll conversion failed: {error:?}"))?,
             )
             .map_err(|error| format!("pre-roll epoch arithmetic failed: {error}"))?;
+        let lease_timeout_us = self
+            .config
+            .lock()
+            .as_ref()
+            .map(|config| config.options.wait.supervisor_lease_timeout_us)
+            .ok_or_else(|| "session configuration is no longer available".to_string())?;
+        let lease_timeout_ticks = qpc_clock
+            .duration_from_us(lease_timeout_us)
+            .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
+
         self.shared
             .lifecycle
             .lifecycle
@@ -296,17 +378,48 @@ impl NativeDispatchSession {
                 .lifecycle
                 .lifecycle
                 .store(LIFECYCLE_POISONED, Ordering::Release);
+            let (done_lock, done_cv) = &self.shared.lifecycle.completed;
+            if let Ok(mut done) = done_lock.lock() {
+                *done = true;
+                done_cv.notify_all();
+            }
             return Err("session configuration is no longer available".to_string());
         };
 
         #[cfg(any(test, feature = "test-support"))]
         let timer_lifecycle_context = config.options.timer_lifecycle_context.clone();
 
-        let shared = Arc::clone(&self.shared);
         self.shared
             .publication
             .supervisor_heartbeat_ticks
             .store(arm_qpc.as_u64(), Ordering::Release);
+
+        let watchdog_handle = if lease_timeout_ticks != DurationTicks::ZERO {
+            let watchdog_shared = Arc::clone(&self.shared);
+            match std::thread::Builder::new()
+                .name("sky-supervisor-watchdog".to_string())
+                .spawn(move || {
+                    supervisor_watchdog_loop(watchdog_shared, qpc_clock, lease_timeout_ticks)
+                }) {
+                Ok(handle) => Some(handle),
+                Err(error) => {
+                    self.shared
+                        .lifecycle
+                        .lifecycle
+                        .store(LIFECYCLE_POISONED, Ordering::Release);
+                    let (done_lock, done_cv) = &self.shared.lifecycle.completed;
+                    if let Ok(mut done) = done_lock.lock() {
+                        *done = true;
+                        done_cv.notify_all();
+                    }
+                    return Err(format!("failed to spawn supervisor watchdog: {error}"));
+                }
+            }
+        } else {
+            None
+        };
+
+        let shared = Arc::clone(&self.shared);
         self.shared
             .publication
             .startup_requested_ticks
@@ -392,6 +505,7 @@ impl NativeDispatchSession {
         match spawn_result {
             Ok(handle) => {
                 *self.thread_handle.lock() = Some(handle);
+                *self.watchdog_handle.lock() = watchdog_handle;
                 Ok(())
             }
             Err(error) => {
@@ -399,6 +513,14 @@ impl NativeDispatchSession {
                     .lifecycle
                     .lifecycle
                     .store(LIFECYCLE_POISONED, Ordering::Release);
+                let (done_lock, done_cv) = &self.shared.lifecycle.completed;
+                if let Ok(mut done) = done_lock.lock() {
+                    *done = true;
+                    done_cv.notify_all();
+                }
+                if let Some(handle) = watchdog_handle {
+                    let _ = handle.join();
+                }
                 Err(format!("failed to spawn native dispatch worker: {error}"))
             }
         }
@@ -417,6 +539,24 @@ impl NativeDispatchSession {
     #[cfg(test)]
     pub(crate) fn pre_roll_us_for_test(&self) -> u64 {
         self.shared.publication.pre_roll_us.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn supervisor_heartbeat_qpc_for_test(&self) -> QpcTicks {
+        QpcTicks::from_raw(
+            self.shared
+                .publication
+                .supervisor_heartbeat_ticks
+                .load(Ordering::Acquire),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spawn_handles_present_for_test(&self) -> (bool, bool) {
+        (
+            self.thread_handle.lock().is_some(),
+            self.watchdog_handle.lock().is_some(),
+        )
     }
 
     fn pre_roll_remaining_at(&self, now: QpcTicks, clock: QpcClock) -> u64 {
@@ -1145,6 +1285,11 @@ impl NativeDispatchSession {
                 .join()
                 .map_err(|_| "native dispatch worker panicked".to_string())?;
         }
+        if let Some(handle) = self.watchdog_handle.lock().take() {
+            handle
+                .join()
+                .map_err(|_| "supervisor watchdog panicked".to_string())?;
+        }
         Ok(true)
     }
 
@@ -1207,6 +1352,32 @@ mod tests {
         publish_focus_hint(&focus_active, &interrupt, false);
         assert_eq!(interrupt.signal_generation(), 1);
         assert!(!interrupt.try_take());
+    }
+
+    #[test]
+    fn supervisor_watchdog_is_session_owned_control_plane_only() {
+        let source = include_str!("session.rs").replace("\r\n", "\n");
+        let watchdog = source
+            .split("fn supervisor_watchdog_loop")
+            .nth(1)
+            .expect("session watchdog implementation");
+        assert!(watchdog.contains("wait_timeout"));
+        assert!(watchdog.contains("supervisor_expired"));
+        assert!(watchdog.contains("panic_requested"));
+        assert!(watchdog.contains("interrupt.signal"));
+        assert!(source.contains("sky-supervisor-watchdog"));
+        assert!(source.contains("watchdog_handle"));
+
+        let heartbeat_store = source
+            .find(".supervisor_heartbeat_ticks\n            .store(arm_qpc.as_u64()")
+            .expect("arm heartbeat publication");
+        let watchdog_spawn = source
+            .find(".name(\"sky-supervisor-watchdog\".to_string())")
+            .expect("watchdog spawn");
+        assert!(
+            heartbeat_store < watchdog_spawn,
+            "watchdog must not observe the construction-time heartbeat"
+        );
     }
 
     #[test]

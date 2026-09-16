@@ -5,24 +5,6 @@ use sky_dispatch_win32::clock::{QpcClock, QpcError};
 use sky_dispatch_win32::wait::{WaitFailure, WakeErrorStats};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub(crate) fn lease_bounded_ticks(
-    target: QpcTicks,
-    timeout_ticks: DurationTicks,
-    heartbeat_ticks: &AtomicU64,
-) -> Result<QpcTicks, QpcError> {
-    if timeout_ticks == DurationTicks::ZERO {
-        return Ok(target);
-    }
-    let heartbeat = heartbeat_ticks.load(Ordering::Acquire);
-    if heartbeat == 0 {
-        return Ok(target);
-    }
-    let lease_deadline = QpcTicks::from_raw(heartbeat)
-        .checked_add_duration(timeout_ticks)
-        .map_err(|_| QpcError::DeadlineOverflow)?;
-    Ok(target.min(lease_deadline))
-}
-
 pub(crate) fn supervisor_lease_expired(
     now_ticks: QpcTicks,
     timeout_ticks: DurationTicks,

@@ -3,6 +3,7 @@ use super::super::{PhysicalCommit, RecoveryDescriptor};
 use super::*;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
 use sky_dispatch_core::model::PhysicalPacketKind;
+use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::input::{PhysicalPacket, PreparedPhysicalPacket};
 use std::num::NonZeroU64;
 
@@ -88,6 +89,9 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .expect("finalizer body");
     assert!(!finalizer_body.contains("foreground_window_matches"));
     assert!(!finalizer_body.contains("focus_matches_hwnd"));
+    assert!(!finalizer_body.contains("supervisor_lease_expired"));
+    assert!(!finalizer_body.contains("lease_timeout_ticks"));
+    assert!(!finalizer_body.contains("supervisor_heartbeat_ticks"));
 
     let admission = include_str!("../admission.rs");
     let target_admission = admission
@@ -116,14 +120,13 @@ fn final_gate_rejection_counters_are_worker_local_and_reason_specific() {
         FinalGateRejection::Control,
         FinalGateRejection::Target,
         FinalGateRejection::Focus,
-        FinalGateRejection::Lease,
     ] {
         super::record_final_gate_rejection(&mut metrics, reason);
     }
     assert_eq!(metrics.final_gate_control_rejections, 1);
     assert_eq!(metrics.final_gate_target_changes, 1);
     assert_eq!(metrics.final_gate_focus_losses, 1);
-    assert_eq!(metrics.final_gate_lease_expirations, 1);
+    assert_eq!(metrics.final_gate_lease_expirations, 0);
     assert_eq!(metrics.final_sender_window_expirations, 0);
 }
 

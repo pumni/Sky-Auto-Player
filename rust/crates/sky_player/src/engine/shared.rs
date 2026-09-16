@@ -147,6 +147,7 @@ pub(super) struct SessionCommands {
     pub(super) quit_requested: AtomicBool,
     pub(super) skip_requested: AtomicBool,
     pub(super) panic_requested: AtomicBool,
+    pub(super) supervisor_expired: AtomicBool,
     pub(super) focus_active: AtomicBool,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) command_timing: CommandTimingState,

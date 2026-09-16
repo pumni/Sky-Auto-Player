@@ -6,8 +6,7 @@ use crate::engine::telemetry::{
     TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP, WorkerMetricsLocal,
 };
 use sky_dispatch_core::clock::PauseReason;
-use sky_dispatch_core::time::DurationTicks;
-use sky_dispatch_win32::clock::{QpcError, QpcTicks};
+use sky_dispatch_win32::clock::QpcTicks;
 use sky_dispatch_win32::input::PhysicalKeyPreflightError;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
@@ -22,7 +21,6 @@ pub(crate) enum FinalGateRejection {
     Control,
     Target,
     Focus,
-    Lease,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -67,10 +65,6 @@ pub(crate) fn record_final_gate_rejection(
         FinalGateRejection::Focus => {
             local_metrics.final_gate_focus_losses =
                 local_metrics.final_gate_focus_losses.saturating_add(1)
-        }
-        FinalGateRejection::Lease => {
-            local_metrics.final_gate_lease_expirations =
-                local_metrics.final_gate_lease_expirations.saturating_add(1)
         }
     }
 }
@@ -133,7 +127,6 @@ pub(crate) enum FinalControlAdmission {
     SkipRequested,
     PauseRequested,
     SystemSuspendRequested,
-    LeaseExpired,
 }
 
 #[derive(Clone, Copy)]
@@ -142,8 +135,8 @@ pub(crate) struct FinalControlSignals<'a> {
     pub(crate) skip_requested: &'a AtomicBool,
     pub(crate) panic_requested: &'a AtomicBool,
     pub(crate) desired_pause: &'a AtomicBool,
+    pub(crate) supervisor_expired: &'a AtomicBool,
     pub(crate) system_power: Option<&'a super::super::shared::SystemPowerState>,
-    pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
 }
 
 pub(crate) struct FinalTargetSignals<'a> {
@@ -158,24 +151,10 @@ pub(crate) struct FinalTargetSignals<'a> {
     pub(crate) post_focus_control_signals: Option<FinalControlSignals<'a>>,
 }
 
-/// Classify lease state from the one authoritative start sample.
-fn classify_final_control(
-    now_qpc: QpcTicks,
-    lease_timeout_ticks: DurationTicks,
-    signals: FinalControlSignals<'_>,
-) -> Result<FinalControlAdmission, QpcError> {
-    if super::supervisor_lease_expired(
-        now_qpc,
-        lease_timeout_ticks,
-        signals.supervisor_heartbeat_ticks,
-    )? {
-        return Ok(FinalControlAdmission::LeaseExpired);
-    }
-    Ok(FinalControlAdmission::Allowed)
-}
-
 pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalControlAdmission {
-    if signals.panic_requested.load(Ordering::Acquire) {
+    if signals.supervisor_expired.load(Ordering::Acquire)
+        || signals.panic_requested.load(Ordering::Acquire)
+    {
         return FinalControlAdmission::PanicRequested;
     }
     if signals.quit_requested.load(Ordering::Acquire) {
@@ -194,39 +173,6 @@ pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalC
         return FinalControlAdmission::SystemSuspendRequested;
     }
     FinalControlAdmission::Allowed
-}
-
-pub(crate) fn final_control_admission_at(
-    final_policy_qpc: QpcTicks,
-    lease_timeout_ticks: DurationTicks,
-    signals: FinalControlSignals<'_>,
-) -> Result<FinalControlAdmission, QpcError> {
-    classify_final_control(final_policy_qpc, lease_timeout_ticks, signals)
-}
-
-/// Compatibility wrapper for test seams and non-physical callers. Production
-/// dispatch uses `final_control_precheck` followed by one caller-owned QPC
-/// sample and `final_control_admission_at`.
-#[cfg(test)]
-pub(crate) fn final_control_admission_with_lease(
-    qpc_clock: QpcClock,
-    lease_timeout_ticks: DurationTicks,
-    signals: FinalControlSignals<'_>,
-) -> Result<(FinalControlAdmission, Option<QpcTicks>), QpcError> {
-    let precheck = final_control_precheck(FinalControlSignals {
-        quit_requested: signals.quit_requested,
-        skip_requested: signals.skip_requested,
-        panic_requested: signals.panic_requested,
-        desired_pause: signals.desired_pause,
-        system_power: signals.system_power,
-        supervisor_heartbeat_ticks: signals.supervisor_heartbeat_ticks,
-    });
-    if !matches!(precheck, FinalControlAdmission::Allowed) {
-        return Ok((precheck, None));
-    }
-    let now_qpc = qpc_clock.now()?;
-    let admission = final_control_admission_at(now_qpc, lease_timeout_ticks, signals)?;
-    Ok((admission, Some(now_qpc)))
 }
 
 /// Atomic target/focus gate for Down-bearing traffic at the precision boundary.

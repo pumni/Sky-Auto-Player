@@ -13,7 +13,7 @@ use super::{
     TrackedKeyState, WaitOptions, WakeErrorStats, Worker, WorkerMetricsLocal,
     adjust_spin_threshold, anchored_dispatch_target_ticks, cpu_metrics_sample_due,
     deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
-    exact_sender_durations, final_control_admission_with_lease, final_down_target_admission,
+    exact_sender_durations, final_control_precheck, final_down_target_admission,
     focus_gate_matches, focus_matches, focus_matches_hwnd, record_input_path_health,
     record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
     supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
@@ -2254,28 +2254,21 @@ fn preroll_manual_pause_cancels_without_entering_pause_clock() {
 
 #[test]
 fn final_control_admission_rejects_each_command_state_in_priority_order() {
-    let qpc_clock = QpcClock::initialize().expect("QPC clock");
     let quit_requested = AtomicBool::new(false);
     let skip_requested = AtomicBool::new(false);
     let panic_requested = AtomicBool::new(true);
     let desired_pause = AtomicBool::new(false);
-    let heartbeat = AtomicU64::new(1);
+    let supervisor_expired = AtomicBool::new(false);
 
     let admission = || {
-        final_control_admission_with_lease(
-            qpc_clock,
-            DurationTicks::ZERO,
-            FinalControlSignals {
-                quit_requested: &quit_requested,
-                skip_requested: &skip_requested,
-                panic_requested: &panic_requested,
-                desired_pause: &desired_pause,
-                system_power: None,
-                supervisor_heartbeat_ticks: &heartbeat,
-            },
-        )
-        .expect("control gate")
-        .0
+        final_control_precheck(FinalControlSignals {
+            quit_requested: &quit_requested,
+            skip_requested: &skip_requested,
+            panic_requested: &panic_requested,
+            desired_pause: &desired_pause,
+            supervisor_expired: &supervisor_expired,
+            system_power: None,
+        })
     };
 
     assert_eq!(admission(), FinalControlAdmission::PanicRequested);
@@ -2295,45 +2288,38 @@ fn system_suspend_after_wait_wake_blocks_final_down_admission_until_revalidated_
     use super::shared::SystemPowerState;
     use sky_dispatch_win32::event::OwnedEvent;
 
-    let qpc_clock = QpcClock::initialize().expect("QPC clock");
     let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
     let system_power = SystemPowerState::default();
     let quit_requested = AtomicBool::new(false);
     let skip_requested = AtomicBool::new(false);
     let panic_requested = AtomicBool::new(false);
     let desired_pause = AtomicBool::new(false);
-    let heartbeat = AtomicU64::new(1);
+    let supervisor_expired = AtomicBool::new(false);
     let signals = || FinalControlSignals {
         quit_requested: &quit_requested,
         skip_requested: &skip_requested,
         panic_requested: &panic_requested,
         desired_pause: &desired_pause,
+        supervisor_expired: &supervisor_expired,
         system_power: Some(&system_power),
-        supervisor_heartbeat_ticks: &heartbeat,
     };
 
     // The direct wait has already woken. A suspend callback arriving before
     // final admission must still win the final atomic gate.
     assert!(system_power.notify(true, &interrupt));
     assert_eq!(
-        final_control_admission_with_lease(qpc_clock, DurationTicks::ZERO, signals())
-            .expect("suspend final gate")
-            .0,
+        final_control_precheck(signals()),
         FinalControlAdmission::SystemSuspendRequested
     );
     system_power.take_pending();
     assert!(system_power.notify(false, &interrupt));
     assert_eq!(
-        final_control_admission_with_lease(qpc_clock, DurationTicks::ZERO, signals())
-            .expect("resume remains blocked until worker admission")
-            .0,
+        final_control_precheck(signals()),
         FinalControlAdmission::SystemSuspendRequested
     );
     assert!(system_power.complete_resume());
     assert_eq!(
-        final_control_admission_with_lease(qpc_clock, DurationTicks::ZERO, signals())
-            .expect("revalidated resume final gate")
-            .0,
+        final_control_precheck(signals()),
         FinalControlAdmission::Allowed
     );
 }
@@ -2382,45 +2368,30 @@ fn shutdown_during_system_suspend_finishes_with_physical_state_released() {
 }
 
 #[test]
-fn authoritative_final_control_gate_uses_fresh_qpc_for_lease() {
-    let qpc_clock = QpcClock::initialize().expect("QPC clock");
-    let quit_requested = AtomicBool::new(true);
-    let skip_requested = AtomicBool::new(true);
-    let panic_requested = AtomicBool::new(true);
-    let desired_pause = AtomicBool::new(true);
-    let heartbeat = AtomicU64::new(1);
+fn final_control_gate_uses_atomic_supervisor_hard_stop_without_lease_qpc() {
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let panic_requested = AtomicBool::new(false);
+    let desired_pause = AtomicBool::new(false);
+    let supervisor_expired = AtomicBool::new(true);
     let signals = || FinalControlSignals {
         quit_requested: &quit_requested,
         skip_requested: &skip_requested,
         panic_requested: &panic_requested,
         desired_pause: &desired_pause,
+        supervisor_expired: &supervisor_expired,
         system_power: None,
-        supervisor_heartbeat_ticks: &heartbeat,
     };
 
     assert_eq!(
-        final_control_admission_with_lease(qpc_clock, DurationTicks::from_raw(1), signals())
-            .expect("gate query")
-            .0,
+        final_control_precheck(signals()),
         FinalControlAdmission::PanicRequested
     );
 
-    panic_requested.store(false, Ordering::Release);
+    supervisor_expired.store(false, Ordering::Release);
     assert_eq!(
-        final_control_admission_with_lease(qpc_clock, DurationTicks::from_raw(1), signals())
-            .expect("gate query")
-            .0,
-        FinalControlAdmission::QuitRequested
-    );
-
-    quit_requested.store(false, Ordering::Release);
-    skip_requested.store(false, Ordering::Release);
-    desired_pause.store(false, Ordering::Release);
-    assert_eq!(
-        final_control_admission_with_lease(qpc_clock, DurationTicks::from_raw(1), signals())
-            .expect("gate query")
-            .0,
-        FinalControlAdmission::LeaseExpired
+        final_control_precheck(signals()),
+        FinalControlAdmission::Allowed
     );
 }
 
@@ -2450,7 +2421,7 @@ fn authored_up_only_does_not_send_after_final_control_rejection() {
 }
 
 #[test]
-fn authored_up_only_does_not_send_after_lease_expiry() {
+fn authored_up_only_ignores_stale_heartbeat_without_watchdog_hard_stop() {
     use super::test_support::ProductionDispatchTestHarness;
 
     let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(100_000);
@@ -2461,12 +2432,12 @@ fn authored_up_only_does_not_send_after_lease_expiry() {
         .supervisor_heartbeat_ticks
         .store(1, Ordering::Release);
 
-    let step = harness.dispatch_authored_with_plan_and_lease(&plan, DurationTicks::from_raw(1));
+    let step = harness.dispatch_authored_with_plan(&plan);
     assert!(
-        matches!(step, super::worker::DispatchStep::Continue),
-        "lease must reject UpOnly before transport: {step:?}"
+        matches!(step, super::worker::DispatchStep::Dispatched),
+        "stale heartbeat must not be a final per-note policy: {step:?}"
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -3913,9 +3884,30 @@ fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
     );
     assert_eq!(heartbeat_snapshot.active_count, 0);
     assert_eq!(heartbeat_snapshot.possibly_active_count, 0);
+    assert_eq!(heartbeat_snapshot.wait_interrupted_count, 0);
+    assert_eq!(heartbeat_snapshot.timeline_rebase_count, 0);
 
+    let long_gap_actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "watchdog-long-gap-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 5_100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "watchdog-long-gap-up".to_string().into(),
+        },
+    ];
+    let long_gap_schedule =
+        sky_dispatch_core::compile::compile_runtime_intents(&long_gap_actions, &[0x15])
+            .expect("valid long-gap watchdog schedule");
     let mut expiry_options = test_session_options(
-        schedule,
+        long_gap_schedule,
         1,
         BackendConfig::Mock {
             latency_base_us: 0,
@@ -3925,6 +3917,7 @@ fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
     );
     expiry_options.wait.supervisor_lease_timeout_us = 50_000;
     let expiry_session = NativeDispatchSession::new(expiry_options).expect("expiry admission");
+    let expiry_started = Instant::now();
     expiry_session.arm(0).expect("expiry session arm");
     assert!(
         expiry_session
@@ -3937,9 +3930,201 @@ fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
         Some("supervisor_lease_expired"),
         "stopped heartbeat must terminate the worker: {expiry_snapshot:?}"
     );
+    let expiry_elapsed = expiry_started.elapsed();
+    eprintln!("watchdog expiry latency: {expiry_elapsed:?}");
+    assert!(
+        expiry_elapsed < Duration::from_millis(500),
+        "watchdog must interrupt the long musical wait promptly: {expiry_elapsed:?}"
+    );
     assert_eq!(expiry_snapshot.active_count, 0);
     assert_eq!(expiry_snapshot.possibly_active_count, 0);
+    assert!(expiry_snapshot.wait_interrupted_count >= 1);
+    assert_eq!(expiry_snapshot.timeline_rebase_count, 0);
     assert!(expiry_snapshot.release_outcome.is_some());
+    let telemetry: serde_json::Value = serde_json::from_str(
+        &expiry_session
+            .take_telemetry_json()
+            .expect("expiry telemetry"),
+    )
+    .expect("valid expiry telemetry");
+    assert!(
+        telemetry["records"]
+            .as_array()
+            .expect("expiry records")
+            .iter()
+            .all(|record| record["send_attempts"].as_u64() == Some(0))
+    );
+}
+
+#[test]
+fn watchdog_age_begins_at_arm_heartbeat_not_construction() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "delayed-arm-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 5_100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "delayed-arm-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid delayed-arm schedule");
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 20_000;
+    let session = NativeDispatchSession::new(options).expect("delayed-arm admission");
+    let construction_heartbeat = session.supervisor_heartbeat_qpc_for_test();
+    std::thread::sleep(Duration::from_millis(50));
+    let now = QpcClock::initialize()
+        .expect("QPC clock")
+        .now()
+        .expect("QPC now");
+    let timeout = DurationTicks::from_raw(
+        QpcClock::initialize()
+            .expect("QPC clock")
+            .duration_from_us(20_000)
+            .expect("lease timeout")
+            .as_u64(),
+    );
+    let stale_construction_heartbeat = AtomicU64::new(construction_heartbeat.as_u64());
+    assert!(
+        supervisor_lease_expired(now, timeout, &stale_construction_heartbeat)
+            .expect("construction heartbeat age")
+    );
+
+    session.arm(0).expect("delayed-arm worker arm");
+    let arm_heartbeat = session.supervisor_heartbeat_qpc_for_test();
+    assert!(arm_heartbeat > construction_heartbeat);
+    let fresh_arm_heartbeat = AtomicU64::new(arm_heartbeat.as_u64());
+    assert!(
+        !supervisor_lease_expired(
+            QpcClock::initialize()
+                .expect("QPC clock")
+                .now()
+                .expect("QPC now"),
+            timeout,
+            &fresh_arm_heartbeat,
+        )
+        .expect("arm heartbeat age")
+    );
+
+    session.quit().expect("quit delayed-arm session");
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("delayed-arm join")
+    );
+    assert_ne!(
+        session.snapshot().terminal_error.as_deref(),
+        Some("supervisor_lease_expired"),
+        "pre-arm construction heartbeat must not terminate the session"
+    );
+    assert_eq!(session.snapshot().timeline_rebase_count, 0);
+}
+
+#[test]
+fn lease_timeout_conversion_failure_stays_pre_spawn_and_non_running() {
+    let qpc_clock = QpcClock::initialize().expect("QPC clock");
+    let frequency = u128::from(qpc_clock.frequency_hz().get());
+    let overflow_lease_us = u64::try_from(
+        (u128::from(u64::MAX) * 1_000_000 / frequency)
+            .checked_add(1)
+            .expect("QPC conversion overflow input must fit in u64 microseconds"),
+    )
+    .expect("Windows QPC frequency must expose a representable overflow input");
+    assert!(qpc_clock.duration_from_us(overflow_lease_us).is_err());
+
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = overflow_lease_us;
+    let session = NativeDispatchSession::new(options).expect("session admission");
+
+    let error = session
+        .arm(0)
+        .expect_err("lease conversion must reject arm");
+    assert!(error.contains("lease timeout conversion failed"), "{error}");
+
+    let poll = session.poll_state();
+    assert_eq!(poll.status.as_str(), "ready");
+    assert!(!poll.is_finished);
+    assert!(!session.snapshot().is_running);
+    assert_eq!(session.spawn_handles_present_for_test(), (false, false));
+    assert_eq!(session.snapshot().sendinput_partial_events, 0);
+    assert_eq!(session.snapshot().sendinput_zero_progress_failures, 0);
+    assert_eq!(
+        session
+            .join(Duration::from_millis(1))
+            .expect_err("pre-spawn failure must remain unstarted"),
+        "session has not been started"
+    );
+}
+
+#[test]
+fn explicit_panic_release_keeps_user_terminal_identity() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "explicit-panic-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 5_100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "explicit-panic-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid explicit-panic schedule");
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("explicit-panic admission");
+    session.arm(0).expect("explicit-panic worker arm");
+    session.panic_release().expect("explicit panic release");
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("explicit-panic join")
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.terminal_error.as_deref(),
+        Some("panic_release_requested")
+    );
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    assert_eq!(snapshot.timeline_rebase_count, 0);
 }
 
 #[test]
@@ -3949,6 +4134,27 @@ fn supervisor_lease_disabled_is_never_expired() {
         supervisor_lease_expired(QpcTicks::from_raw(2), DurationTicks::ZERO, &heartbeat),
         Ok(false)
     );
+
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 0;
+    let session = NativeDispatchSession::new(options).expect("disabled lease admission");
+    session.arm(0).expect("disabled lease arm");
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("disabled lease join")
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(snapshot.outcome, Some("finished".to_string()));
 }
 
 #[test]

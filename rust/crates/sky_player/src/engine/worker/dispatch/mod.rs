@@ -124,8 +124,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) physical_latest_down_start_qpc: Option<QpcTicks>,
     pub(crate) down_admission: DownBoundaryAdmission,
     pub(crate) focus_loss_fault: bool,
-    pub(crate) supervisor_heartbeat_ticks: &'a std::sync::atomic::AtomicU64,
-    pub(crate) lease_timeout_ticks: DurationTicks,
+    pub(crate) supervisor_expired: &'a std::sync::atomic::AtomicBool,
     /// QPC sample returned by the direct target wait. When present, the
     /// final admission gate reuses it instead of entering a second wait.
     pub(crate) boundary_crossing_qpc: Option<QpcTicks>,
@@ -199,7 +198,7 @@ pub(crate) use observation::DispatchObservation;
 pub(crate) use observer::drain_one_observer;
 pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
 
-use super::super::{ActionKind, DurationTicks, QpcTicks, TimelineTicks};
+use super::super::{ActionKind, QpcTicks, TimelineTicks};
 use super::DispatchPath;
 use super::planning::NextDispatchPlan;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
