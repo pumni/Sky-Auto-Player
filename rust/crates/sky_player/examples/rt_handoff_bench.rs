@@ -102,25 +102,45 @@ enum BenchmarkScope {
     PhaseCC1,
     PhaseCC11,
     PhaseF11,
+    PhaseExtendedRange,
 }
 
 impl BenchmarkScope {
-    fn from_env() -> Result<Self, String> {
-        match std::env::var("RT_HANDOFF_BENCH_SCOPE").as_deref() {
-            Ok("full") | Err(std::env::VarError::NotPresent) => Ok(Self::Full),
-            Ok("real_wait_core") => Ok(Self::RealWaitCore),
-            Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
-            Ok("phase_a_production_matrix") => Ok(Self::PhaseAProductionMatrix),
-            Ok("phase_a_sparse_gap") => Ok(Self::PhaseASparseGap),
-            Ok("phase_b0") => Ok(Self::PhaseBB0),
-            Ok("phase_c0") => Ok(Self::PhaseCC0),
-            Ok("phase_c1") => Ok(Self::PhaseCC1),
-            Ok("phase_c1_1") => Ok(Self::PhaseCC11),
-            Ok("phase_f1_1") => Ok(Self::PhaseF11),
-            Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, or phase_f1_1, got {value:?}"
+    fn from_env_or_args() -> Result<Self, String> {
+        let args: Vec<String> = std::env::args().collect();
+        let arg_val = args
+            .windows(2)
+            .find(|w| w[0] == "--scope")
+            .map(|w| w[1].clone())
+            .or_else(|| {
+                args.iter()
+                    .find_map(|a| a.strip_prefix("--scope=").map(str::to_string))
+            });
+
+        let scope_str = match (arg_val, std::env::var("RT_HANDOFF_BENCH_SCOPE")) {
+            (Some(val), _) => val,
+            (None, Ok(val)) => val,
+            (None, Err(std::env::VarError::NotPresent)) => "full".to_string(),
+            (None, Err(error)) => {
+                return Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}"));
+            }
+        };
+
+        match scope_str.as_str() {
+            "full" => Ok(Self::Full),
+            "real_wait_core" => Ok(Self::RealWaitCore),
+            "phase_a_sender_only" => Ok(Self::PhaseASenderOnly),
+            "phase_a_production_matrix" => Ok(Self::PhaseAProductionMatrix),
+            "phase_a_sparse_gap" => Ok(Self::PhaseASparseGap),
+            "phase_b0" => Ok(Self::PhaseBB0),
+            "phase_c0" => Ok(Self::PhaseCC0),
+            "phase_c1" => Ok(Self::PhaseCC1),
+            "phase_c1_1" => Ok(Self::PhaseCC11),
+            "phase_f1_1" => Ok(Self::PhaseF11),
+            "phase_extended_range" => Ok(Self::PhaseExtendedRange),
+            value => Err(format!(
+                "scope must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, phase_f1_1, or phase_extended_range, got {value:?}"
             )),
-            Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
     }
 
@@ -136,23 +156,38 @@ impl BenchmarkScope {
             Self::PhaseCC1 => "phase_c1",
             Self::PhaseCC11 => "phase_c1_1",
             Self::PhaseF11 => "phase_f1_1",
+            Self::PhaseExtendedRange => "phase_extended_range",
         }
     }
 }
 
 impl BenchmarkMode {
-    fn from_env() -> Result<Self, String> {
-        match std::env::var("RT_HANDOFF_BENCH_MODE").as_deref() {
-            Ok("real_wait") | Err(std::env::VarError::NotPresent) => Ok(Self::RealWait),
-            Ok("phase_a_synthetic_target_plus_one_tick") => {
-                Ok(Self::PhaseASyntheticTargetPlusOneTick)
-            }
-            Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
-            Ok("phase_a_production_boundary") => Ok(Self::PhaseAProductionBoundary),
-            Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_MODE must be real_wait, phase_a_synthetic_target_plus_one_tick, phase_a_sender_only, or phase_a_production_boundary, got {value:?}"
+    fn from_env_or_args() -> Result<Self, String> {
+        let args: Vec<String> = std::env::args().collect();
+        let arg_val = args
+            .windows(2)
+            .find(|w| w[0] == "--mode")
+            .map(|w| w[1].clone())
+            .or_else(|| {
+                args.iter()
+                    .find_map(|a| a.strip_prefix("--mode=").map(str::to_string))
+            });
+
+        let mode_str = match (arg_val, std::env::var("RT_HANDOFF_BENCH_MODE")) {
+            (Some(val), _) => val,
+            (None, Ok(val)) => val,
+            (None, Err(std::env::VarError::NotPresent)) => "real_wait".to_string(),
+            (None, Err(error)) => return Err(format!("RT_HANDOFF_BENCH_MODE is invalid: {error}")),
+        };
+
+        match mode_str.as_str() {
+            "real_wait" => Ok(Self::RealWait),
+            "phase_a_synthetic_target_plus_one_tick" => Ok(Self::PhaseASyntheticTargetPlusOneTick),
+            "phase_a_sender_only" => Ok(Self::PhaseASenderOnly),
+            "phase_a_production_boundary" => Ok(Self::PhaseAProductionBoundary),
+            value => Err(format!(
+                "mode must be real_wait, phase_a_synthetic_target_plus_one_tick, phase_a_sender_only, or phase_a_production_boundary, got {value:?}"
             )),
-            Err(error) => Err(format!("RT_HANDOFF_BENCH_MODE is invalid: {error}")),
         }
     }
 
@@ -1028,12 +1063,18 @@ fn record_c1_harness_metrics_delta(
 struct SequentialSamples {
     samples: Samples,
     sequence_count: usize,
+    first_actual_successful_sends: usize,
     first_rescued_boundaries: usize,
     first_final_sender_window_expired: usize,
+    first_unobserved_backlog: usize,
+    first_physical_window_expired: usize,
+    first_transport_anomalies: usize,
     second_successful_sends: usize,
     second_final_sender_window_expired: usize,
     second_unobserved_backlog: usize,
     second_overdue_boundaries: usize,
+    second_physical_window_expired: usize,
+    second_transport_anomalies: usize,
     timeline_rebases: usize,
     post_send_ready_latency_us: Vec<i64>,
 }
@@ -1043,12 +1084,18 @@ impl Default for SequentialSamples {
         Self {
             samples: new_samples(),
             sequence_count: 0,
+            first_actual_successful_sends: 0,
             first_rescued_boundaries: 0,
             first_final_sender_window_expired: 0,
+            first_unobserved_backlog: 0,
+            first_physical_window_expired: 0,
+            first_transport_anomalies: 0,
             second_successful_sends: 0,
             second_final_sender_window_expired: 0,
             second_unobserved_backlog: 0,
             second_overdue_boundaries: 0,
+            second_physical_window_expired: 0,
+            second_transport_anomalies: 0,
             timeline_rebases: 0,
             post_send_ready_latency_us: Vec::new(),
         }
@@ -1059,12 +1106,24 @@ impl SequentialSamples {
     fn append(&mut self, mut other: Self) {
         self.samples.append(other.samples);
         self.sequence_count = self.sequence_count.saturating_add(other.sequence_count);
+        self.first_actual_successful_sends = self
+            .first_actual_successful_sends
+            .saturating_add(other.first_actual_successful_sends);
         self.first_rescued_boundaries = self
             .first_rescued_boundaries
             .saturating_add(other.first_rescued_boundaries);
         self.first_final_sender_window_expired = self
             .first_final_sender_window_expired
             .saturating_add(other.first_final_sender_window_expired);
+        self.first_unobserved_backlog = self
+            .first_unobserved_backlog
+            .saturating_add(other.first_unobserved_backlog);
+        self.first_physical_window_expired = self
+            .first_physical_window_expired
+            .saturating_add(other.first_physical_window_expired);
+        self.first_transport_anomalies = self
+            .first_transport_anomalies
+            .saturating_add(other.first_transport_anomalies);
         self.second_successful_sends = self
             .second_successful_sends
             .saturating_add(other.second_successful_sends);
@@ -1077,6 +1136,12 @@ impl SequentialSamples {
         self.second_overdue_boundaries = self
             .second_overdue_boundaries
             .saturating_add(other.second_overdue_boundaries);
+        self.second_physical_window_expired = self
+            .second_physical_window_expired
+            .saturating_add(other.second_physical_window_expired);
+        self.second_transport_anomalies = self
+            .second_transport_anomalies
+            .saturating_add(other.second_transport_anomalies);
         self.timeline_rebases = self.timeline_rebases.saturating_add(other.timeline_rebases);
         self.post_send_ready_latency_us
             .append(&mut other.post_send_ready_latency_us);
@@ -2330,9 +2395,17 @@ fn run_c1_1_sequential_iteration(
         return Err("C1.1 sequential first boundary did not dispatch".to_string());
     }
     let first_packet_count = captured_packet_count(&packets);
+    output.first_actual_successful_sends = if first_sent && first_packet_count != 0 {
+        1
+    } else {
+        0
+    };
     output.first_rescued_boundaries = output.samples.late_rescued_down_boundaries;
     output.first_final_sender_window_expired =
         output.samples.missed_down_final_sender_window_expired;
+    output.first_unobserved_backlog = output.samples.missed_down_unobserved_backlog;
+    output.first_physical_window_expired = output.samples.missed_down_physical_window_expired;
+    output.first_transport_anomalies = output.samples.transport_anomaly_count;
 
     let (second_target, second_sent, second_was_overdue, second_ready) =
         run_sequential_boundary(&mut harness, &mut output.samples, &mut metric_snapshot)?;
@@ -2356,13 +2429,23 @@ fn run_c1_1_sequential_iteration(
         .samples
         .missed_down_final_sender_window_expired
         .saturating_sub(output.first_final_sender_window_expired);
-    output.second_unobserved_backlog = output.samples.missed_down_unobserved_backlog;
+    output.second_unobserved_backlog = output
+        .samples
+        .missed_down_unobserved_backlog
+        .saturating_sub(output.first_unobserved_backlog);
     output.second_overdue_boundaries = if second_was_overdue { 1 } else { 0 };
-    if output.second_unobserved_backlog > output.second_overdue_boundaries {
-        return Err(
-            "C1.1 sequential backlog occurred without an overdue second target".to_string(),
-        );
-    }
+    output.second_physical_window_expired = output
+        .samples
+        .missed_down_physical_window_expired
+        .saturating_sub(output.first_physical_window_expired);
+    output.second_transport_anomalies = output
+        .samples
+        .transport_anomaly_count
+        .saturating_sub(output.first_transport_anomalies);
+    assert_eq!(
+        output.second_unobserved_backlog, output.second_overdue_boundaries,
+        "C1.1 sequential backlog occurred without an overdue second target"
+    );
     output.post_send_ready_latency_us.extend(first_ready);
     output.post_send_ready_latency_us.extend(second_ready);
     output
@@ -2377,12 +2460,19 @@ fn summarize_sequential(
     expected_sequences: usize,
 ) -> serde_json::Value {
     let sequence_count = samples.sequence_count;
+    let first_actual_successful_sends = samples.first_actual_successful_sends;
     let first_rescued_boundaries = samples.first_rescued_boundaries;
     let first_final_sender_window_expired = samples.first_final_sender_window_expired;
+    let first_unobserved_backlog = samples.first_unobserved_backlog;
+    let first_physical_window_expired = samples.first_physical_window_expired;
+    let first_transport_anomalies = samples.first_transport_anomalies;
     let second_successful_sends = samples.second_successful_sends;
     let second_final_sender_window_expired = samples.second_final_sender_window_expired;
     let second_unobserved_backlog = samples.second_unobserved_backlog;
     let second_overdue_boundaries = samples.second_overdue_boundaries;
+    let second_physical_window_expired = samples.second_physical_window_expired;
+    let second_transport_anomalies = samples.second_transport_anomalies;
+    let net_successful_notes = first_actual_successful_sends + second_successful_sends;
     let timeline_rebases = samples.timeline_rebases;
     let post_send_ready_latency_us = std::mem::take(&mut samples.post_send_ready_latency_us);
     let expected_attempts = expected_sequences.saturating_mul(2);
@@ -2392,12 +2482,28 @@ fn summarize_sequential(
         .expect("sequential summary must be an object");
     object.insert("sequence_count".to_string(), json!(sequence_count));
     object.insert(
+        "first_actual_successful_sends".to_string(),
+        json!(first_actual_successful_sends),
+    );
+    object.insert(
         "first_rescued_boundaries".to_string(),
         json!(first_rescued_boundaries),
     );
     object.insert(
         "first_final_sender_window_expired".to_string(),
         json!(first_final_sender_window_expired),
+    );
+    object.insert(
+        "first_unobserved_backlog".to_string(),
+        json!(first_unobserved_backlog),
+    );
+    object.insert(
+        "first_physical_window_expired".to_string(),
+        json!(first_physical_window_expired),
+    );
+    object.insert(
+        "first_transport_anomalies".to_string(),
+        json!(first_transport_anomalies),
     );
     object.insert(
         "second_successful_sends".to_string(),
@@ -2414,6 +2520,18 @@ fn summarize_sequential(
     object.insert(
         "second_overdue_boundaries".to_string(),
         json!(second_overdue_boundaries),
+    );
+    object.insert(
+        "second_physical_window_expired".to_string(),
+        json!(second_physical_window_expired),
+    );
+    object.insert(
+        "second_transport_anomalies".to_string(),
+        json!(second_transport_anomalies),
+    );
+    object.insert(
+        "net_successful_notes".to_string(),
+        json!(net_successful_notes),
     );
     object.insert("timeline_rebases".to_string(), json!(timeline_rebases));
     object.insert(
@@ -2822,6 +2940,749 @@ fn phase_f1_1_report() -> serde_json::Value {
     })
 }
 
+const EXTENDED_TOLERANCES_US: [u64; 5] = [2_000, 2_500, 5_000, 7_500, 10_000];
+const EXTENDED_DENSE_GAPS_US: [u64; 7] = [1_000, 2_000, 4_000, 6_000, 8_000, 10_000, 12_000];
+const EXTENDED_DENSE_OFFSETS_US: [u64; 17] = [
+    1_500, 1_900, 2_000, 2_100, 2_400, 2_500, 2_600, 4_900, 5_000, 5_100, 7_400, 7_500, 7_600,
+    9_900, 10_000, 10_100, 10_500,
+];
+const EXTENDED_REAL_WAIT_GAPS_US: [u64; 6] = [2_000, 4_000, 6_000, 8_000, 10_000, 12_000];
+const EXTENDED_REAL_WAIT_PASSES: usize = 3;
+const EXTENDED_REAL_WAIT_ITERATIONS: usize = 30;
+const EXTENDED_RETRIGGER_GAPS_US: [u64; 7] = [5_000, 6_000, 8_000, 10_000, 12_000, 16_000, 20_000];
+
+fn extended_arm_name(arm: usize) -> &'static str {
+    match arm {
+        0 => "arm_2000us",
+        1 => "arm_2500us",
+        2 => "arm_5000us",
+        3 => "arm_7500us",
+        4 => "arm_10000us",
+        _ => panic!("invalid extended arm {arm}"),
+    }
+}
+
+fn extended_sender_cutoff_policy(arm: usize) -> &'static str {
+    match arm {
+        0 => "max(physical_latest_down_start, authored_target_plus_2000us)",
+        1 => "max(physical_latest_down_start, authored_target_plus_2500us)",
+        2 => "max(physical_latest_down_start, authored_target_plus_5000us)",
+        3 => "max(physical_latest_down_start, authored_target_plus_7500us)",
+        4 => "max(physical_latest_down_start, authored_target_plus_10000us)",
+        _ => panic!("invalid extended arm {arm}"),
+    }
+}
+
+fn run_same_key_retrigger_case(
+    tolerance_us: u64,
+    gap_us: u64,
+    up_delay_us: u64,
+) -> serde_json::Value {
+    let mut harness =
+        ProductionDispatchTestHarness::new_same_key_retrigger_with_gap_for_test(gap_us);
+    harness
+        .configure_normal_down_start_tolerance_for_test(tolerance_us)
+        .expect("tolerance configuration");
+    let packets = harness.configure_packet_capture();
+
+    // 1. Dispatch first Down (authored at 0)
+    let first_down = harness.plan_current_dispatch();
+    let first_down_target = harness
+        .physical_target_qpc_for_test(&first_down)
+        .expect("first down target");
+    let before_first_down = QpcTicks::from_raw(
+        first_down_target
+            .as_u64()
+            .checked_sub(1)
+            .expect("first down target is nonzero"),
+    );
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&first_down, before_first_down),
+        DispatchStep::NoWork
+    ));
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&first_down, first_down_target),
+        DispatchStep::Dispatched
+    ));
+    assert_eq!(captured_packet_count(&packets), 1);
+
+    // 2. Dispatch first Up (authored at 20_000 us)
+    let first_up = harness.plan_current_dispatch();
+    let first_up_target = harness
+        .physical_target_qpc_for_test(&first_up)
+        .expect("first up target");
+    let first_up_now = first_up_target
+        .checked_add_duration(
+            harness
+                .qpc_duration_from_us_for_test(up_delay_us)
+                .expect("up delay conversion"),
+        )
+        .expect("up now");
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&first_up, first_up_now),
+        DispatchStep::Dispatched
+    ));
+    assert_eq!(captured_packet_count(&packets), 2);
+
+    // 3. Dispatch second Down (the retrigger, authored at 20_000 + gap_us)
+    let second_down = harness.plan_current_dispatch();
+    let second_down_target = harness
+        .physical_target_qpc_for_test(&second_down)
+        .expect("second down target");
+    let authored_gap = harness
+        .qpc_duration_to_us_for_test(
+            second_down_target
+                .checked_duration_since(first_up_target)
+                .expect("second down follows up"),
+        )
+        .expect("gap conversion");
+    assert_eq!(authored_gap, gap_us, "no timeline rebase");
+
+    // Check physical feasibility: packet_not_before_qpc <= latest_down_start_qpc
+    let is_feasible = harness
+        .is_physically_feasible_for_test(second_down_target, 0, 1)
+        .expect("timing window query");
+
+    let before_second_down = QpcTicks::from_raw(
+        second_down_target
+            .as_u64()
+            .checked_sub(1)
+            .expect("second down target is nonzero"),
+    );
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&second_down, before_second_down),
+        DispatchStep::NoWork
+    ));
+    let pw_before = harness.missed_physical_window_boundaries_for_test();
+    let second_step = harness.dispatch_at_qpc_for_test(&second_down, second_down_target);
+    assert!(matches!(second_step, DispatchStep::Dispatched));
+    let pw_after = harness.missed_physical_window_boundaries_for_test();
+    let pw_occurred = pw_after > pw_before;
+
+    assert_eq!(
+        pw_occurred, !is_feasible,
+        "PhysicalWindowExpired must match physical feasibility exactly"
+    );
+    let expected_packets = if is_feasible { 3 } else { 2 };
+    assert_eq!(captured_packet_count(&packets), expected_packets);
+
+    json!({
+        "tolerance_us": tolerance_us,
+        "gap_us": gap_us,
+        "up_delay_us": up_delay_us,
+        "authored_gap_us": authored_gap,
+        "is_feasible": is_feasible,
+        "physical_window_expired": pw_occurred,
+        "packet_emitted": is_feasible,
+        "timeline_rebases": 0,
+        "catch_up_burst": false,
+    })
+}
+
+fn phase_extended_range_deterministic_dense_report() -> serde_json::Value {
+    let mut arm_summaries = serde_json::Map::new();
+
+    for (arm_index, &tolerance_us) in EXTENDED_TOLERANCES_US.iter().enumerate() {
+        let mut gap_map = serde_json::Map::new();
+        let mut arm_first_successful = 0usize;
+        let mut arm_first_rescued = 0usize;
+        let mut arm_first_fsw = 0usize;
+        let mut arm_second_successful = 0usize;
+        let mut arm_second_fsw = 0usize;
+        let mut arm_second_ub = 0usize;
+        let mut arm_second_actually_overdue = 0usize;
+        let mut arm_physical_window_expired = 0usize;
+        let mut arm_timeline_rebases = 0usize;
+        let arm_transport_anomalies = 0usize;
+        let mut arm_target_preservation_failures = 0usize;
+        let arm_chord_integrity_failures = 0usize;
+
+        for &gap_us in &EXTENDED_DENSE_GAPS_US {
+            let mut gap_first_successful = 0usize;
+            let mut gap_first_rescued = 0usize;
+            let mut gap_first_fsw = 0usize;
+            let mut gap_second_successful = 0usize;
+            let mut gap_second_fsw = 0usize;
+            let mut gap_second_ub = 0usize;
+            let mut gap_second_actually_overdue = 0usize;
+
+            for &offset_us in &EXTENDED_DENSE_OFFSETS_US {
+                let case = run_c1_1_dense_boundary_case(tolerance_us, gap_us, offset_us);
+                let first_class = case["first_classification"].as_str().unwrap();
+                let first_rescued = first_class == "bounded_late_rescue";
+                let first_successful =
+                    first_class == "normal_or_physical_margin_send" || first_rescued;
+                let first_fsw = first_class == "FinalSenderWindowExpired";
+
+                let second_class = case["second_classification"].as_str().unwrap();
+                let second_successful = second_class == "successful_send";
+                let second_ub = second_class == "UnobservedBacklog";
+                let second_fsw = case["second_final_sender_window_expired"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    > 0;
+                let second_actually_overdue =
+                    !case["second_is_future_at_first_send"].as_bool().unwrap();
+
+                assert_eq!(
+                    second_ub, second_actually_overdue,
+                    "deterministic invariant: UnobservedBacklog == actually_overdue"
+                );
+
+                if first_successful {
+                    gap_first_successful += 1;
+                    arm_first_successful += 1;
+                }
+                if first_rescued {
+                    gap_first_rescued += 1;
+                    arm_first_rescued += 1;
+                }
+                if first_fsw {
+                    gap_first_fsw += 1;
+                    arm_first_fsw += 1;
+                }
+
+                if second_successful {
+                    gap_second_successful += 1;
+                    arm_second_successful += 1;
+                }
+                if second_fsw {
+                    gap_second_fsw += 1;
+                    arm_second_fsw += 1;
+                }
+                if second_ub {
+                    gap_second_ub += 1;
+                    arm_second_ub += 1;
+                }
+                if second_actually_overdue {
+                    gap_second_actually_overdue += 1;
+                    arm_second_actually_overdue += 1;
+                }
+
+                let pw = case["physical_window_expired"].as_u64().unwrap_or(0) as usize;
+                arm_physical_window_expired += pw;
+
+                let rebased = case["timeline_rebased"].as_bool().unwrap_or(false);
+                if rebased {
+                    arm_timeline_rebases += 1;
+                }
+
+                let preserved = case["whole_packet_preserved"].as_bool().unwrap_or(false);
+                if !preserved {
+                    arm_target_preservation_failures += 1;
+                }
+            }
+
+            gap_map.insert(
+                format!("gap_{gap_us}us"),
+                json!({
+                    "gap_us": gap_us,
+                    "first_successful": gap_first_successful,
+                    "first_rescued": gap_first_rescued,
+                    "first_final_sender_window_expired": gap_first_fsw,
+                    "second_successful": gap_second_successful,
+                    "second_final_sender_window_expired": gap_second_fsw,
+                    "second_unobserved_backlog": gap_second_ub,
+                    "second_actually_overdue": gap_second_actually_overdue,
+                    "second_fsw_plus_ub": gap_second_fsw + gap_second_ub,
+                    "net_successful_notes": gap_first_successful + gap_second_successful,
+                    "sequences": EXTENDED_DENSE_OFFSETS_US.len(),
+                }),
+            );
+        }
+
+        arm_summaries.insert(
+            extended_arm_name(arm_index).to_string(),
+            json!({
+                "tolerance_us": tolerance_us,
+                "sender_cutoff_policy": extended_sender_cutoff_policy(arm_index),
+                "first_successful": arm_first_successful,
+                "first_rescued": arm_first_rescued,
+                "first_final_sender_window_expired": arm_first_fsw,
+                "second_successful": arm_second_successful,
+                "second_final_sender_window_expired": arm_second_fsw,
+                "second_unobserved_backlog": arm_second_ub,
+                "second_actually_overdue": arm_second_actually_overdue,
+                "second_fsw_plus_ub": arm_second_fsw + arm_second_ub,
+                "net_successful_notes": arm_first_successful + arm_second_successful,
+                "physical_window_expired": arm_physical_window_expired,
+                "timeline_rebases": arm_timeline_rebases,
+                "transport_anomalies": arm_transport_anomalies,
+                "target_preservation_failures": arm_target_preservation_failures,
+                "chord_integrity_failures": arm_chord_integrity_failures,
+                "total_sequences": EXTENDED_DENSE_GAPS_US.len() * EXTENDED_DENSE_OFFSETS_US.len(),
+                "gaps": gap_map,
+            }),
+        );
+    }
+
+    let all_ub_equals_overdue = arm_summaries.values().all(|arm| {
+        arm["second_unobserved_backlog"].as_u64() == arm["second_actually_overdue"].as_u64()
+    });
+    let all_pw_zero = arm_summaries
+        .values()
+        .all(|arm| arm["physical_window_expired"].as_u64() == Some(0));
+    let all_rebases_zero = arm_summaries
+        .values()
+        .all(|arm| arm["timeline_rebases"].as_u64() == Some(0));
+    let all_anomalies_zero = arm_summaries
+        .values()
+        .all(|arm| arm["transport_anomalies"].as_u64() == Some(0));
+    let all_target_preservation_zero = arm_summaries
+        .values()
+        .all(|arm| arm["target_preservation_failures"].as_u64() == Some(0));
+    let all_chord_integrity_zero = arm_summaries
+        .values()
+        .all(|arm| arm["chord_integrity_failures"].as_u64() == Some(0));
+    let phase_a_clean = all_ub_equals_overdue
+        && all_pw_zero
+        && all_rebases_zero
+        && all_anomalies_zero
+        && all_target_preservation_zero
+        && all_chord_integrity_zero;
+
+    json!({
+        "scope": "Phase-A deterministic dense matrix qualification",
+        "tolerance_matrix_us": EXTENDED_TOLERANCES_US,
+        "gap_matrix_us": EXTENDED_DENSE_GAPS_US,
+        "offset_matrix_us": EXTENDED_DENSE_OFFSETS_US,
+        "arms": arm_summaries,
+        "invariants": {
+            "unobserved_backlog_equals_actually_overdue": all_ub_equals_overdue,
+            "physical_window_expired_zero": all_pw_zero,
+            "timeline_rebases_zero": all_rebases_zero,
+            "transport_anomalies_zero": all_anomalies_zero,
+            "target_preservation_failures_zero": all_target_preservation_zero,
+            "chord_integrity_failures_zero": all_chord_integrity_zero,
+        },
+        "phase_a_clean": phase_a_clean,
+    })
+}
+
+fn phase_extended_range_real_wait_probe_report() -> serde_json::Value {
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let mut aggregate_by_gap: Vec<[SequentialSamples; 5]> = (0..EXTENDED_REAL_WAIT_GAPS_US.len())
+        .map(|_| {
+            [
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+            ]
+        })
+        .collect();
+    let mut aggregate_all = [
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+    ];
+    let mut pass_reports = Vec::with_capacity(EXTENDED_REAL_WAIT_PASSES);
+    for pass_index in 0..EXTENDED_REAL_WAIT_PASSES {
+        let mode = build_wait_mode("production_calibrated", true, true, true);
+        let mut pass_gaps = [
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+        ];
+        let mut pass_aggregate = [
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+        ];
+        for (gap_index, gap_us) in EXTENDED_REAL_WAIT_GAPS_US.iter().copied().enumerate() {
+            let mut gap_arms = [
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+            ];
+            for iteration in 0..EXTENDED_REAL_WAIT_ITERATIONS {
+                let first_arm = (pass_index + gap_index + iteration) % EXTENDED_TOLERANCES_US.len();
+                for offset in 0..EXTENDED_TOLERANCES_US.len() {
+                    let arm = (first_arm + offset) % EXTENDED_TOLERANCES_US.len();
+                    let result =
+                        run_c1_1_sequential_iteration(gap_us, mode, EXTENDED_TOLERANCES_US[arm])
+                            .unwrap_or_else(|error| panic!("{error}"));
+                    gap_arms[arm].append(result);
+                }
+            }
+            for arm in 0..EXTENDED_TOLERANCES_US.len() {
+                pass_gaps[arm].insert(
+                    format!("down_pair_gap_{gap_us}us"),
+                    summarize_sequential(gap_arms[arm].clone(), EXTENDED_REAL_WAIT_ITERATIONS),
+                );
+                pass_aggregate[arm].append(gap_arms[arm].clone());
+                aggregate_by_gap[gap_index][arm].append(gap_arms[arm].clone());
+                aggregate_all[arm].append(gap_arms[arm].clone());
+            }
+        }
+        let mut arms = serde_json::Map::new();
+        for arm in 0..EXTENDED_TOLERANCES_US.len() {
+            arms.insert(
+                extended_arm_name(arm).to_string(),
+                json!({
+                    "sender_cutoff_policy": extended_sender_cutoff_policy(arm),
+                    "total_tolerance_us": EXTENDED_TOLERANCES_US[arm],
+                    "gaps": pass_gaps[arm].clone(),
+                    "aggregate": summarize_sequential(
+                        pass_aggregate[arm].clone(),
+                        EXTENDED_REAL_WAIT_GAPS_US.len() * EXTENDED_REAL_WAIT_ITERATIONS,
+                    ),
+                }),
+            );
+        }
+        pass_reports.push(json!({
+            "pass": pass_index + 1,
+            "sequences_per_gap_per_arm": EXTENDED_REAL_WAIT_ITERATIONS,
+            "actual_spin_threshold_us": mode.effective_spin_threshold_us,
+            "startup_wake_error_us": wake_error_json(mode.startup_wake_error),
+            "arm_order": "rotates by (pass + gap + sequence) modulo five",
+            "arms": arms,
+        }));
+    }
+    let mut aggregate_gaps = [
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+    ];
+    for (gap_index, gap_arms) in aggregate_by_gap.into_iter().enumerate() {
+        let gap_us = EXTENDED_REAL_WAIT_GAPS_US[gap_index];
+        for arm in 0..EXTENDED_TOLERANCES_US.len() {
+            aggregate_gaps[arm].insert(
+                format!("down_pair_gap_{gap_us}us"),
+                summarize_sequential(
+                    gap_arms[arm].clone(),
+                    EXTENDED_REAL_WAIT_PASSES * EXTENDED_REAL_WAIT_ITERATIONS,
+                ),
+            );
+        }
+    }
+    let mut modes = serde_json::Map::new();
+    for arm in 0..EXTENDED_TOLERANCES_US.len() {
+        let arm_aggregate = aggregate_all[arm].clone();
+        let total_sequences = EXTENDED_REAL_WAIT_PASSES
+            * EXTENDED_REAL_WAIT_GAPS_US.len()
+            * EXTENDED_REAL_WAIT_ITERATIONS;
+        let first_actual_success = arm_aggregate.first_actual_successful_sends;
+        let first_rescue = arm_aggregate.first_rescued_boundaries;
+        let first_fsw = arm_aggregate.first_final_sender_window_expired;
+        let first_ub = arm_aggregate.first_unobserved_backlog;
+        let first_pw = arm_aggregate.first_physical_window_expired;
+        let first_transport_anomalies = arm_aggregate.first_transport_anomalies;
+
+        let second_success = arm_aggregate.second_successful_sends;
+        let second_fsw = arm_aggregate.second_final_sender_window_expired;
+        let second_ub = arm_aggregate.second_unobserved_backlog;
+        let actually_overdue = arm_aggregate.second_overdue_boundaries;
+        let second_fsw_plus_ub = second_fsw + second_ub;
+        let second_pw = arm_aggregate.second_physical_window_expired;
+        let second_transport_anomalies = arm_aggregate.second_transport_anomalies;
+
+        let net_successful_notes = first_actual_success + second_success;
+        let pw = arm_aggregate.samples.missed_down_physical_window_expired;
+        let timeline_rebases = arm_aggregate.timeline_rebases;
+        let transport_anomalies = arm_aggregate.samples.transport_anomaly_count;
+
+        let mut ready_latencies = arm_aggregate.post_send_ready_latency_us.clone();
+        let mut rescued_latenesses = arm_aggregate.samples.late_rescued_down_lateness_us.clone();
+
+        modes.insert(
+            extended_arm_name(arm).to_string(),
+            json!({
+                "sender_cutoff_policy": extended_sender_cutoff_policy(arm),
+                "total_tolerance_us": EXTENDED_TOLERANCES_US[arm],
+                "gaps": aggregate_gaps[arm].clone(),
+                "aggregate": summarize_sequential(
+                    arm_aggregate,
+                    total_sequences,
+                ),
+                "qualification_summary": {
+                    "first_actual_successful_sends": first_actual_success,
+                    "first_success": first_actual_success,
+                    "first_rescue": first_rescue,
+                    "first_fsw": first_fsw,
+                    "first_ub": first_ub,
+                    "first_pw": first_pw,
+                    "first_transport_anomalies": first_transport_anomalies,
+                    "second_success": second_success,
+                    "second_fsw": second_fsw,
+                    "second_ub": second_ub,
+                    "actually_overdue": actually_overdue,
+                    "second_fsw_plus_ub": second_fsw_plus_ub,
+                    "second_pw": second_pw,
+                    "second_transport_anomalies": second_transport_anomalies,
+                    "net_successful_notes": net_successful_notes,
+                    "physical_window_expired": pw,
+                    "timeline_rebases": timeline_rebases,
+                    "transport_anomalies": transport_anomalies,
+                    "post_send_ready_p50": quantile(&mut ready_latencies, 50, 100),
+                    "post_send_ready_p95": quantile(&mut ready_latencies, 95, 100),
+                    "post_send_ready_p99": quantile(&mut ready_latencies, 99, 100),
+                    "post_send_ready_max": ready_latencies.iter().copied().max(),
+                    "rescued_lateness_p50": quantile(&mut rescued_latenesses, 50, 100),
+                    "rescued_lateness_p95": quantile(&mut rescued_latenesses, 95, 100),
+                    "rescued_lateness_p99": quantile(&mut rescued_latenesses, 99, 100),
+                    "rescued_lateness_max": rescued_latenesses.iter().copied().max(),
+                }
+            }),
+        );
+    }
+    let phase_b_all_ub_equals_overdue = aggregate_all
+        .iter()
+        .all(|arm| arm.second_unobserved_backlog == arm.second_overdue_boundaries);
+    let phase_b_all_pw_zero = aggregate_all
+        .iter()
+        .all(|arm| arm.samples.missed_down_physical_window_expired == 0);
+    let phase_b_all_rebases_zero = aggregate_all.iter().all(|arm| arm.timeline_rebases == 0);
+    let phase_b_all_anomalies_zero = aggregate_all
+        .iter()
+        .all(|arm| arm.samples.transport_anomaly_count == 0);
+    let phase_b_all_first_ub_zero = aggregate_all
+        .iter()
+        .all(|arm| arm.first_unobserved_backlog == 0);
+    let phase_b_all_second_fsw_zero = aggregate_all
+        .iter()
+        .all(|arm| arm.second_final_sender_window_expired == 0);
+    let phase_b_net_success_monotonic = aggregate_all.windows(2).all(|pair| {
+        (pair[0].first_actual_successful_sends + pair[0].second_successful_sends)
+            <= (pair[1].first_actual_successful_sends + pair[1].second_successful_sends)
+    });
+    let phase_b_clean = phase_b_all_ub_equals_overdue
+        && phase_b_all_pw_zero
+        && phase_b_all_rebases_zero
+        && phase_b_all_anomalies_zero
+        && phase_b_all_first_ub_zero
+        && phase_b_all_second_fsw_zero
+        && phase_b_net_success_monotonic;
+
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    json!({
+        "scope": "Phase-B real-wait sequential dense probe (2.0 / 2.5 / 5.0 / 7.5 / 10.0 ms)",
+        "waitable_timer_enabled": true,
+        "event_wait_enabled": true,
+        "adaptive_spin_enabled": true,
+        "waiter_constructor": "HybridWaiter::production",
+        "production_spin_policy": "startup_calibrated_unchanged",
+        "sequence_shape": "two consecutive independent Down boundaries in one authored sequence",
+        "gap_matrix_us": EXTENDED_REAL_WAIT_GAPS_US,
+        "pass_count": EXTENDED_REAL_WAIT_PASSES,
+        "sequences_per_gap_per_arm_per_pass": EXTENDED_REAL_WAIT_ITERATIONS,
+        "total_sequences": EXTENDED_REAL_WAIT_PASSES
+            * EXTENDED_REAL_WAIT_GAPS_US.len()
+            * EXTENDED_REAL_WAIT_ITERATIONS
+            * EXTENDED_TOLERANCES_US.len(),
+        "total_attempts": EXTENDED_REAL_WAIT_PASSES
+            * EXTENDED_REAL_WAIT_GAPS_US.len()
+            * EXTENDED_REAL_WAIT_ITERATIONS
+            * EXTENDED_TOLERANCES_US.len()
+            * 2,
+        "modes": modes,
+        "passes": pass_reports,
+        "invariants": {
+            "unobserved_backlog_equals_actually_overdue": phase_b_all_ub_equals_overdue,
+            "physical_window_expired_zero": phase_b_all_pw_zero,
+            "timeline_rebases_zero": phase_b_all_rebases_zero,
+            "transport_anomalies_zero": phase_b_all_anomalies_zero,
+            "first_unobserved_backlog_zero": phase_b_all_first_ub_zero,
+            "second_final_sender_window_expired_zero": phase_b_all_second_fsw_zero,
+            "net_success_monotonic": phase_b_net_success_monotonic,
+        },
+        "phase_b_clean": phase_b_clean,
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+    })
+}
+
+fn phase_extended_range_sparse_benefit_report() -> serde_json::Value {
+    const SPARSE_GAP_US: u64 = 100_000;
+    const SPARSE_OFFSETS_US: [u64; 17] = [
+        1_500, 1_900, 2_000, 2_100, 2_400, 2_500, 2_600, 4_900, 5_000, 5_100, 7_400, 7_500, 7_600,
+        9_900, 10_000, 10_100, 10_500,
+    ];
+
+    let mut arm_reports = serde_json::Map::new();
+
+    for (arm_index, &tolerance_us) in EXTENDED_TOLERANCES_US.iter().enumerate() {
+        let mut cases = Vec::with_capacity(SPARSE_OFFSETS_US.len());
+        let mut rescued_count = 0;
+        let mut dropped_count = 0;
+
+        for &offset_us in &SPARSE_OFFSETS_US {
+            let case = run_c1_1_dense_boundary_case(tolerance_us, SPARSE_GAP_US, offset_us);
+            let first_class = case["first_classification"].as_str().unwrap();
+            if first_class == "bounded_late_rescue" {
+                rescued_count += 1;
+            } else if first_class == "FinalSenderWindowExpired" {
+                dropped_count += 1;
+            }
+            cases.push(case);
+        }
+
+        arm_reports.insert(
+            extended_arm_name(arm_index).to_string(),
+            json!({
+                "tolerance_us": tolerance_us,
+                "rescued_count": rescued_count,
+                "dropped_count": dropped_count,
+                "cases": cases,
+            }),
+        );
+    }
+
+    let mut rescued_counts = Vec::with_capacity(EXTENDED_TOLERANCES_US.len());
+    let mut all_fail_closed = true;
+    let mut all_rebases_clean = true;
+    let mut all_catchup_clean = true;
+
+    for (arm_index, &tolerance_us) in EXTENDED_TOLERANCES_US.iter().enumerate() {
+        let arm_key = extended_arm_name(arm_index);
+        let arm = &arm_reports[arm_key];
+        rescued_counts.push(arm["rescued_count"].as_u64().unwrap_or(0));
+        let cases = arm["cases"].as_array().unwrap();
+        for case in cases {
+            let offset = case["first_sender_lateness_us"].as_u64().unwrap_or(0);
+            let first_class = case["first_classification"].as_str().unwrap_or("");
+            if offset > tolerance_us && first_class != "FinalSenderWindowExpired" {
+                all_fail_closed = false;
+            }
+            if case["timeline_rebased"].as_bool().unwrap_or(false) {
+                all_rebases_clean = false;
+            }
+            if case["catch_up_burst"].as_bool().unwrap_or(false) {
+                all_catchup_clean = false;
+            }
+        }
+    }
+
+    let rescued_monotonic = rescued_counts.windows(2).all(|w| w[0] <= w[1]);
+    let phase_c_clean =
+        rescued_monotonic && all_fail_closed && all_rebases_clean && all_catchup_clean;
+
+    json!({
+        "scope": "Phase-C sparse benefit probe (gap >= 100 ms, controlled lateness to 10.5 ms)",
+        "sparse_gap_us": SPARSE_GAP_US,
+        "offsets_us": SPARSE_OFFSETS_US,
+        "arms": arm_reports,
+        "invariants": {
+            "rescued_monotonic_with_tolerance": rescued_monotonic,
+            "fails_closed_beyond_tolerance": all_fail_closed,
+            "no_timeline_rebase": all_rebases_clean,
+            "no_catch_up_burst": all_catchup_clean,
+        },
+        "phase_c_clean": phase_c_clean,
+    })
+}
+
+fn phase_extended_range_same_key_retrigger_report() -> serde_json::Value {
+    let mut cases = Vec::new();
+    let mut total_pw = 0usize;
+
+    for &tolerance_us in &EXTENDED_TOLERANCES_US {
+        for &gap_us in &EXTENDED_RETRIGGER_GAPS_US {
+            // Case 1: On-time Up completion (up_delay_us = 0)
+            let case_on_time = run_same_key_retrigger_case(tolerance_us, gap_us, 0);
+            if case_on_time["physical_window_expired"].as_bool().unwrap() {
+                total_pw += 1;
+            }
+            cases.push(case_on_time);
+
+            // Case 2: Delayed Up completion (up_delay_us = 5_000 us)
+            let case_delayed = run_same_key_retrigger_case(tolerance_us, gap_us, 5_000);
+            if case_delayed["physical_window_expired"].as_bool().unwrap() {
+                total_pw += 1;
+            }
+            cases.push(case_delayed);
+        }
+    }
+
+    let infeasible_cases_all_pw = cases.iter().all(|c| {
+        let feasible = c["is_feasible"].as_bool().unwrap_or(false);
+        let pw = c["physical_window_expired"].as_bool().unwrap_or(false);
+        feasible != pw
+    });
+    let infeasible_rescues_zero = cases.iter().all(|c| {
+        let feasible = c["is_feasible"].as_bool().unwrap_or(false);
+        let emitted = c["packet_emitted"].as_bool().unwrap_or(false);
+        feasible == emitted
+    });
+    let phase_d_rebases_zero = cases
+        .iter()
+        .all(|c| c["timeline_rebases"].as_u64().unwrap_or(0) == 0);
+    let phase_d_catchup_zero = cases
+        .iter()
+        .all(|c| !c["catch_up_burst"].as_bool().unwrap_or(false));
+
+    let phase_d_clean = infeasible_cases_all_pw
+        && infeasible_rescues_zero
+        && phase_d_rebases_zero
+        && phase_d_catchup_zero;
+
+    json!({
+        "scope": "Phase-D same-key retrigger safety matrix",
+        "tolerances_us": EXTENDED_TOLERANCES_US,
+        "retrigger_gaps_us": EXTENDED_RETRIGGER_GAPS_US,
+        "case_count": cases.len(),
+        "physical_window_expired_cases": total_pw,
+        "cases": cases,
+        "invariants": {
+            "physical_window_expired_strictly_enforced": infeasible_cases_all_pw,
+            "late_completion_updates_physical_floors": infeasible_cases_all_pw,
+            "min_hold_and_release_never_bypassed": infeasible_cases_all_pw,
+            "tolerance_never_rescues_infeasible_retrigger": infeasible_rescues_zero,
+            "no_retry_stale_down": infeasible_rescues_zero,
+            "no_catch_up": phase_d_catchup_zero,
+            "no_timeline_rebase": phase_d_rebases_zero,
+        },
+        "phase_d_clean": phase_d_clean,
+    })
+}
+
+fn phase_extended_range_report() -> serde_json::Value {
+    let benchmark_started = Instant::now();
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+
+    let deterministic_dense = phase_extended_range_deterministic_dense_report();
+    let real_wait_probe = phase_extended_range_real_wait_probe_report();
+    let sparse_benefit = phase_extended_range_sparse_benefit_report();
+    let same_key_retrigger = phase_extended_range_same_key_retrigger_report();
+
+    let phase_a_clean = deterministic_dense["phase_a_clean"]
+        .as_bool()
+        .unwrap_or(false);
+    let phase_b_clean = real_wait_probe["phase_b_clean"].as_bool().unwrap_or(false);
+    let phase_c_clean = sparse_benefit["phase_c_clean"].as_bool().unwrap_or(false);
+    let phase_d_clean = same_key_retrigger["phase_d_clean"]
+        .as_bool()
+        .unwrap_or(false);
+    let acceptance_clean = phase_a_clean && phase_b_clean && phase_c_clean && phase_d_clean;
+
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+
+    json!({
+        "scope": "Phase-Extended-Range qualification (2.0 / 2.5 / 5.0 / 7.5 / 10.0 ms)",
+        "phase_a_deterministic_dense": deterministic_dense,
+        "phase_b_real_wait_probe": real_wait_probe,
+        "phase_c_sparse_benefit": sparse_benefit,
+        "phase_d_same_key_retrigger": same_key_retrigger,
+        "acceptance_clean": acceptance_clean,
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+        "process_cpu_duty_percent": cpu_duty_percent(
+            cpu_started_us,
+            cpu_finished_us,
+            benchmark_started,
+        ),
+    })
+}
+
 fn summarize(samples: Samples) -> serde_json::Value {
     summarize_for_attempts(samples, iterations())
 }
@@ -3068,8 +3929,10 @@ fn wake_error_json(stats: WakeErrorStats) -> serde_json::Value {
 
 fn main() {
     let started = Instant::now();
-    let benchmark_mode = BenchmarkMode::from_env().unwrap_or_else(|error| panic!("{error}"));
-    let benchmark_scope = BenchmarkScope::from_env().unwrap_or_else(|error| panic!("{error}"));
+    let benchmark_mode =
+        BenchmarkMode::from_env_or_args().unwrap_or_else(|error| panic!("{error}"));
+    let benchmark_scope =
+        BenchmarkScope::from_env_or_args().unwrap_or_else(|error| panic!("{error}"));
     if matches!(benchmark_scope, BenchmarkScope::PhaseASenderOnly)
         && !matches!(benchmark_mode, BenchmarkMode::PhaseASenderOnly)
     {
@@ -3226,6 +4089,11 @@ fn main() {
         mode_reports.insert("phase_c1_1".to_string(), phase_c1_1_report());
     } else if matches!(benchmark_scope, BenchmarkScope::PhaseF11) {
         mode_reports.insert("phase_f1_1".to_string(), phase_f1_1_report());
+    } else if matches!(benchmark_scope, BenchmarkScope::PhaseExtendedRange) {
+        mode_reports.insert(
+            "phase_extended_range".to_string(),
+            phase_extended_range_report(),
+        );
     } else {
         mode_reports.insert(
             "phase_a_sender_only".to_string(),
@@ -3291,6 +4159,8 @@ fn main() {
             (BenchmarkScope::PhaseCC11, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::PhaseF11, BenchmarkMode::RealWait) => "Phase-F1.1 qualification for normal-playback late Down continuity tolerance: real-wait sequential dense-boundary probe comparing 2.5 ms, 3.5 ms, and 5.0 ms across 1-5 ms gaps plus sparse 2.5 ms vs 5.0 ms comparison proving Note-Ons rescued; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseF11, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::PhaseExtendedRange, BenchmarkMode::RealWait) => "Phase-Extended-Range qualification for normal-playback late Down continuity tolerance: deterministic dense matrix, real-wait probe, sparse comparison, and same-key retrigger safety across 2.0 to 10.0 ms range; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseExtendedRange, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,

@@ -1953,10 +1953,13 @@ mod tests {
     #[test]
     fn settings_store_round_trips_exact_normal_down_start_tolerance_and_normalizes_invalid() {
         for (input, expected) in [
+            (Some(2_000_u64), 2_000_u64),
             (Some(3_500_u64), 3_500_u64),
             (Some(5_000_u64), 5_000_u64),
+            (Some(10_000_u64), 10_000_u64),
+            (Some(1_999_u64), 2_500_u64),
             (Some(2_499_u64), 2_500_u64),
-            (Some(5_001_u64), 2_500_u64),
+            (Some(10_001_u64), 2_500_u64),
             (Some(0_u64), 2_500_u64),
             (None, 2_500_u64),
         ] {

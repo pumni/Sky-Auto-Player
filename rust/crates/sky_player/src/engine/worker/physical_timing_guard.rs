@@ -16,18 +16,26 @@ const VALID_KEY_MASK: u16 = (1_u16 << MAX_KEYS) - 1;
 /// physical floor is later than the authored target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PhysicalTimingWindow {
-    pub(super) authored_target_qpc: QpcTicks,
-    pub(super) musical_up_not_before_qpc: QpcTicks,
-    pub(super) down_not_before_qpc: QpcTicks,
-    pub(super) packet_not_before_qpc: QpcTicks,
-    pub(super) latest_down_start_qpc: Option<QpcTicks>,
-    pub(super) hold_floor_mask: u16,
-    pub(super) release_floor_mask: u16,
+    pub(crate) authored_target_qpc: QpcTicks,
+    pub(crate) musical_up_not_before_qpc: QpcTicks,
+    pub(crate) down_not_before_qpc: QpcTicks,
+    pub(crate) packet_not_before_qpc: QpcTicks,
+    pub(crate) latest_down_start_qpc: Option<QpcTicks>,
+    pub(crate) hold_floor_mask: u16,
+    pub(crate) release_floor_mask: u16,
+}
+
+impl PhysicalTimingWindow {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn is_down_feasible(&self) -> bool {
+        self.latest_down_start_qpc
+            .is_some_and(|latest| self.packet_not_before_qpc <= latest)
+    }
 }
 
 /// Errors that make a physical timing query or observation unusable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PhysicalTimingGuardError {
+pub(crate) enum PhysicalTimingGuardError {
     Invalidated,
     InvalidPacketMasks,
     ArithmeticOverflow,
@@ -137,7 +145,7 @@ impl PhysicalTimingGuard {
     }
 
     /// Compute packet floors without reading the clock or mutating guard state.
-    pub(super) fn query(
+    pub(crate) fn query(
         &self,
         authored_target_qpc: QpcTicks,
         up_mask: u16,
