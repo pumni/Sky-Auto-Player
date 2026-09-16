@@ -33,12 +33,14 @@ function commandText(program, args, { allowEmpty = false } = {}) {
 
 function parseArgs(argv) {
   let executable = defaultExecutable;
+  let explicitExecutable = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--exe') {
       index += 1;
       if (!argv[index]) throw new Error('Missing value for --exe');
       executable = resolve(repoRoot, argv[index]);
+      explicitExecutable = true;
     } else if (arg === '--help') {
       console.log('Usage: bun run dev:build-info [-- --exe <path>]');
       process.exit(0);
@@ -46,7 +48,7 @@ function parseArgs(argv) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
-  return executable;
+  return { executable, explicitExecutable };
 }
 
 function normalizedCommit(value) {
@@ -55,7 +57,8 @@ function normalizedCommit(value) {
 
 let executable;
 try {
-  executable = parseArgs(process.argv.slice(2));
+  const parsedArgs = parseArgs(process.argv.slice(2));
+  executable = parsedArgs.executable;
   const head = commandText('git', ['rev-parse', '--verify', 'HEAD']).toLowerCase();
   const dirty = commandText('git', ['status', '--porcelain'], { allowEmpty: true }).length > 0;
   const rustc = commandText('rustc', ['--version']);
@@ -67,8 +70,12 @@ try {
   console.log(`rustc: ${rustc}`);
 
   let failed = false;
+  let incomplete = false;
   if (!existsSync(executable)) {
-    console.log('embedded_build_info: SKIP (executable does not exist)');
+    const state = parsedArgs.explicitExecutable ? 'FAIL' : 'INCOMPLETE';
+    console.log(`embedded_build_info: ${state} (executable does not exist)`);
+    failed = parsedArgs.explicitExecutable;
+    incomplete = !parsedArgs.explicitExecutable;
   } else {
     const result = run(executable, ['--selftest-build-info'], { timeout: 30_000 });
     if (result.error || result.status !== 0) {
@@ -93,8 +100,9 @@ try {
     }
   }
 
-  console.log(`result: ${failed ? 'FAIL' : 'PASS'}`);
-  process.exitCode = failed ? 1 : 0;
+  const result = failed ? 'FAIL' : incomplete ? 'INCOMPLETE' : 'PASS';
+  console.log(`result: ${result}`);
+  process.exitCode = failed ? 1 : incomplete ? 2 : 0;
 } catch (error) {
   console.error(`build freshness diagnostic failed: ${error.message}`);
   process.exitCode = 1;

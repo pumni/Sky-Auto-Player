@@ -271,6 +271,8 @@ fn tauri_build_freshness_contract(root: &Path) -> Result<()> {
         "expected_debug_executable",
         "rustc",
         "freshness",
+        "INCOMPLETE",
+        "process.exitCode",
     ] {
         if !diagnostic.contains(marker) {
             return Err(format!(
