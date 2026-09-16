@@ -278,6 +278,8 @@ pub(crate) struct WorkerRuntime {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) restore_race_hook: Option<super::config::RestoreRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
+    pub(crate) focus_pause_hook: Option<super::config::FocusPauseHook>,
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
@@ -593,6 +595,8 @@ impl<'a> Worker<'a> {
                     #[cfg(any(test, feature = "test-support"))]
                     restore_race_hook,
                     #[cfg(any(test, feature = "test-support"))]
+                    focus_pause_hook,
+                    #[cfg(any(test, feature = "test-support"))]
                         timer_lifecycle_context: _,
                     instrument_key_profile: _,
                 },
@@ -602,6 +606,7 @@ impl<'a> Worker<'a> {
         let runtime = WorkerRuntime {
             startup_ordering_hook,
             restore_race_hook,
+            focus_pause_hook,
             ..WorkerRuntime::default()
         };
         #[cfg(not(any(test, feature = "test-support")))]

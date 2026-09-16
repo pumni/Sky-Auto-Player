@@ -429,6 +429,8 @@ fn production_options(
         #[cfg(feature = "test-support")]
         restore_race_hook: None,
         #[cfg(feature = "test-support")]
+        focus_pause_hook: None,
+        #[cfg(feature = "test-support")]
         timer_lifecycle_context: None,
     }
 }
