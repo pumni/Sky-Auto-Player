@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -39,7 +39,14 @@ function parseArgs(argv) {
     if (arg === '--exe') {
       index += 1;
       if (!argv[index]) throw new Error('Missing value for --exe');
-      executable = resolve(repoRoot, argv[index]);
+      const candidate = argv[index];
+      if (isAbsolute(candidate)) {
+        executable = candidate;
+      } else {
+        const cwdExecutable = resolve(process.cwd(), candidate);
+        const repoExecutable = resolve(repoRoot, candidate);
+        executable = existsSync(cwdExecutable) || !existsSync(repoExecutable) ? cwdExecutable : repoExecutable;
+      }
       explicitExecutable = true;
     } else if (arg === '--help') {
       console.log('Usage: bun run dev:build-info [-- --exe <path>]');
