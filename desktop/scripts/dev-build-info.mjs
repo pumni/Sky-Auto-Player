@@ -45,7 +45,8 @@ function parseArgs(argv) {
       } else {
         const cwdExecutable = resolve(process.cwd(), candidate);
         const repoExecutable = resolve(repoRoot, candidate);
-        executable = existsSync(cwdExecutable) || !existsSync(repoExecutable) ? cwdExecutable : repoExecutable;
+        executable =
+          existsSync(cwdExecutable) || !existsSync(repoExecutable) ? cwdExecutable : repoExecutable;
       }
       explicitExecutable = true;
     } else if (arg === '--help') {
