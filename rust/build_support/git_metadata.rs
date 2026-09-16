@@ -1,13 +1,17 @@
 use std::{path::Path, process::Command};
 
 pub(crate) fn command_output(program: &str, args: &[&str]) -> Option<String> {
+    command_output_allow_empty(program, args).filter(|value| !value.is_empty())
+}
+
+pub(crate) fn command_output_allow_empty(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
     let value = String::from_utf8(output.stdout).ok()?;
     let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string())
+    Some(value.to_string())
 }
 
 pub(crate) fn emit_git_metadata_rerun_if_changed(build_support_path: &str) {

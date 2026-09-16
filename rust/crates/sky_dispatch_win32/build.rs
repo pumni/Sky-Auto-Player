@@ -6,7 +6,7 @@ fn dirty_worktree() -> bool {
         Ok("false") => false,
         Ok("true") => true,
         Ok(_) => true,
-        Err(_) => git_metadata::command_output("git", &["status", "--porcelain"])
+        Err(_) => git_metadata::command_output_allow_empty("git", &["status", "--porcelain"])
             .map(|status| !status.is_empty())
             .unwrap_or(true),
     }
