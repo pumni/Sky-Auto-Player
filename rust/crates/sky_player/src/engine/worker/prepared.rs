@@ -11,6 +11,7 @@ use super::{DispatchPreparationProbe, QpcClock};
 use sky_dispatch_core::coordinator::{
     CoordinatorError, PreparedAuthoredCommit, RuntimeDispatchCoordinator,
 };
+use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::QpcTicks;
 use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
@@ -34,6 +35,8 @@ pub(crate) enum PreparedDispatchEntry {
 pub(crate) struct PreparedDispatchStream {
     entries: Box<[PreparedDispatchEntry]>,
     cursor: usize,
+    cancelled_generation_ids: Box<[GenerationId]>,
+    cancelled_generation_count: usize,
 }
 
 impl PreparedDispatchStream {
@@ -126,6 +129,9 @@ impl PreparedDispatchStream {
         }
 
         let schedule = simulator.schedule;
+        let cancellation_capacity = usize::try_from(schedule.generation_count)
+            .map_err(|_| "normal prepared stream generation ledger is too large".to_string())?;
+        let cancelled_generation_ids = vec![0; cancellation_capacity].into_boxed_slice();
         let min_hold_us = simulator.min_hold_us;
         let min_hold_ticks = simulator.min_hold_ticks;
         let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
@@ -143,6 +149,8 @@ impl PreparedDispatchStream {
             Self {
                 entries: entries.into_boxed_slice(),
                 cursor: 0,
+                cancelled_generation_ids,
+                cancelled_generation_count: 0,
             },
             coordinator,
         ))
@@ -165,6 +173,39 @@ impl PreparedDispatchStream {
     #[inline]
     pub(crate) fn is_exhausted(&self) -> bool {
         self.cursor >= self.entries.len()
+    }
+
+    /// Record only generation IDs returned by the shared verified suspension
+    /// path.  The bounded ledger is allocated during stream preparation, so a
+    /// later focus/manual/system suspension does not allocate on the worker's
+    /// dispatch path.
+    pub(crate) fn reconcile_resumable_suspension(
+        &mut self,
+        cancelled_generation_ids: &[GenerationId],
+    ) -> Result<(), String> {
+        for &generation_id in cancelled_generation_ids {
+            if self.cancelled_generation_ids[..self.cancelled_generation_count]
+                .contains(&generation_id)
+            {
+                continue;
+            }
+            let Some(slot) = self
+                .cancelled_generation_ids
+                .get_mut(self.cancelled_generation_count)
+            else {
+                return Err(
+                    "normal prepared stream exceeded its cancellation ledger capacity".to_string(),
+                );
+            };
+            *slot = generation_id;
+            self.cancelled_generation_count += 1;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub(crate) fn explicitly_cancelled_generation_ids(&self) -> &[GenerationId] {
+        &self.cancelled_generation_ids[..self.cancelled_generation_count]
     }
 
     #[cfg(any(test, feature = "test-support"))]

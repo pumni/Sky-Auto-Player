@@ -10,19 +10,18 @@ use super::super::{
     FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
     WorkerResources, WorkerRuntime, WorkerTimingState, enter_focus_pause, final_control_precheck,
     final_down_target_admission, focus_matches, handle_final_focus_loss, load_target_stamp,
-    record_final_gate_rejection, record_sendinput_pre_call_lateness, signed_ticks_to_us,
-    target_stamp_still_current, trace_kind_for_packet_kind,
+    record_final_gate_rejection, signed_ticks_to_us, target_stamp_still_current,
+    trace_kind_for_packet_kind,
 };
 use super::DownBoundaryAdmission;
 use super::observation::BlockedUnfocusedObservation;
 use super::observer::publisher_down_send_outcome;
-use super::recovery::{
-    DownMissReason, effective_down_sender_cutoff, record_late_rescued_down,
-    recover_missed_down_boundary,
-};
+use super::recovery::{DownMissReason, effective_down_sender_cutoff, recover_missed_down_boundary};
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::{SharedProgressClock, SystemPowerState};
+use sky_dispatch_core::model::GenerationId;
+use sky_dispatch_win32::input::SendTransactionOutcome;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_authored_packet(
@@ -246,6 +245,7 @@ fn commit_down_send_outcome(
         test_inject_sender_start.then_some(now_ticks),
         #[cfg(not(any(test, feature = "test-support")))]
         None,
+        &[],
         observer,
     )
 }
@@ -255,10 +255,6 @@ pub(crate) enum AdmissionOutcome {
         trace_kind: u8,
         target_crossing_qpc: Option<QpcTicks>,
         final_policy_qpc: QpcTicks,
-    },
-    PreparedAllowed {
-        trace_kind: u8,
-        target_crossing_qpc: Option<QpcTicks>,
     },
     Guarded {
         trace_kind: u8,
@@ -541,7 +537,7 @@ fn final_atomic_revalidation(
     false
 }
 
-fn observe_strict_completion(
+pub(super) fn observe_strict_completion(
     timing: &WorkerTimingState,
     runtime: &mut WorkerRuntime,
     completed_qpc: QpcTicks,
@@ -583,6 +579,7 @@ pub(super) fn record_down_send_outcome(
     physical_latest_down_start_qpc: Option<QpcTicks>,
     admission: &AdmissionOutcome,
     test_now_ticks: Option<QpcTicks>,
+    explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let (trace_kind, target_crossing_qpc, prepared_final_policy_qpc) = match admission {
@@ -591,10 +588,6 @@ pub(super) fn record_down_send_outcome(
             target_crossing_qpc,
             final_policy_qpc,
         } => (*trace_kind, *target_crossing_qpc, Some(*final_policy_qpc)),
-        AdmissionOutcome::PreparedAllowed {
-            trace_kind,
-            target_crossing_qpc,
-        } => (*trace_kind, *target_crossing_qpc, None),
         _ => return DispatchStep::Continue,
     };
     let packet = view.packet_masks;
@@ -616,100 +609,7 @@ pub(super) fn record_down_send_outcome(
         sender_cutoff_qpc,
         test_now_ticks,
     );
-    if let Some(started_qpc) = result.evidence.started_ticks
-        && let Err(error) = record_sendinput_pre_call_lateness(
-            physical_target_qpc,
-            started_qpc,
-            timing,
-            local_metrics,
-        )
-    {
-        return DispatchStep::Terminate(error);
-    }
-    if let Some(error) = backend.timing_error.take() {
-        if result.evidence.attempts != 0
-            && let Some(guard) = runtime.physical_timing_guard.as_mut()
-        {
-            guard.invalidate();
-        }
-        return DispatchStep::Terminate(format!("QPC failure after note-on: {error:?}"));
-    }
-    let result_success = result.is_success();
-    let result_started_ticks = result.evidence.started_ticks;
-    let result_completed_ticks = result.evidence.completed_ticks;
-    let result_confirmed_mask = result.evidence.confirmed_mask;
-    let result_skipped_mask = result.evidence.skipped_mask;
-    let result_send_attempts = result.evidence.attempts;
-    let result_retry_reason = result.evidence.retry_reason;
-    let result_chord_integrity_lost = matches!(
-        result.status,
-        sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
-    );
-    if matches!(
-        result.status,
-        sky_dispatch_win32::input::SendTransactionStatus::DownExpiredBeforeSend
-    ) && view.packet_masks.down_mask != 0
-        && timing.strict_timing
-    {
-        let Some(observed_qpc) = result.evidence.started_ticks else {
-            return DispatchStep::TerminateStatic(
-                "DownExpiredBeforeSend missing authoritative start boundary",
-            );
-        };
-        return recover_missed_down_boundary(
-            view,
-            config,
-            runtime,
-            local_metrics,
-            backend,
-            coordinator,
-            clock_state,
-            physical_timing_window,
-            observed_qpc,
-            effective_now_ticks,
-            DownMissReason::DownExpiredBeforeSend,
-            false,
-            observer,
-        );
-    }
-    if result_chord_integrity_lost {
-        runtime.chord_integrity_lost = runtime.chord_integrity_lost.saturating_add(1);
-        local_metrics.chord_integrity_lost = local_metrics.chord_integrity_lost.saturating_add(1);
-    }
-    let result_last_win32_error = result.evidence.last_win32_error;
-    if !result_success {
-        if result.evidence.attempts != 0
-            && let Some(guard) = runtime.physical_timing_guard.as_mut()
-        {
-            guard.invalidate();
-        }
-        return DispatchStep::Terminate(format!(
-            "authored Down send integrity failure at action {}",
-            view.batch_source_action_index
-        ));
-    }
-    let Some(completed_qpc) = result_completed_ticks else {
-        if let Some(guard) = runtime.physical_timing_guard.as_mut() {
-            guard.invalidate();
-        }
-        return DispatchStep::TerminateStatic("successful Down missing completion QPC");
-    };
-    if let Err(step) = observe_strict_completion(timing, runtime, completed_qpc, packet) {
-        return step;
-    }
-    record_late_rescued_down(
-        local_metrics,
-        physical_target_qpc,
-        physical_latest_down_start_qpc,
-        sender_cutoff_qpc,
-        result_started_ticks,
-        result_success,
-        packet.down_mask,
-    );
-    let final_policy_qpc = prepared_final_policy_qpc
-        .or(result_started_ticks)
-        .unwrap_or(physical_target_qpc);
-    finalize_down_send_outcome(
+    super::prepared::record_down_send_result(
         view,
         config,
         health,
@@ -717,29 +617,72 @@ pub(super) fn record_down_send_outcome(
         runtime,
         local_metrics,
         qpc_clock,
+        backend,
         coordinator,
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
         physical_timing_window,
+        physical_latest_down_start_qpc,
         target_crossing_qpc,
-        final_policy_qpc,
         trace_kind,
-        result_success,
-        result.status,
-        result_started_ticks,
-        result_completed_ticks,
-        result_confirmed_mask,
-        result_skipped_mask,
-        result_send_attempts,
-        result_retry_reason,
-        result_chord_integrity_lost,
-        result_last_win32_error,
+        prepared_final_policy_qpc,
+        sender_cutoff_qpc,
+        result,
+        explicitly_cancelled_by_suspension,
         observer,
     )
 }
+
 #[allow(clippy::too_many_arguments)]
-fn finalize_down_send_outcome(
+pub(super) fn record_prepared_normal_send_outcome(
+    view: &AuthoredBatchView,
+    config: &WorkerConfig,
+    health: &mut WorkerHealthState,
+    timing: &WorkerTimingState,
+    runtime: &mut WorkerRuntime,
+    local_metrics: &mut WorkerMetricsLocal,
+    qpc_clock: QpcClock,
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    clock_state: &mut PlaybackClockState,
+    effective_now_ticks: TimelineTicks,
+    physical_target_qpc: QpcTicks,
+    physical_timing_window: PhysicalTimingWindow,
+    physical_latest_down_start_qpc: Option<QpcTicks>,
+    target_crossing_qpc: Option<QpcTicks>,
+    result: SendTransactionOutcome,
+    explicitly_cancelled_by_suspension: &[GenerationId],
+    observer: Option<&PendingObservationQueue>,
+) -> DispatchStep {
+    debug_assert!(!timing.strict_timing);
+    super::prepared::record_down_send_result(
+        view,
+        config,
+        health,
+        timing,
+        runtime,
+        local_metrics,
+        qpc_clock,
+        backend,
+        coordinator,
+        clock_state,
+        effective_now_ticks,
+        physical_target_qpc,
+        physical_timing_window,
+        physical_latest_down_start_qpc,
+        target_crossing_qpc,
+        trace_kind_for_packet_kind(view.prepared_batch.packet_kind),
+        None,
+        None,
+        result,
+        explicitly_cancelled_by_suspension,
+        observer,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn finalize_down_send_outcome(
     view: &AuthoredBatchView,
     config: &WorkerConfig,
     health: &mut WorkerHealthState,
@@ -765,6 +708,7 @@ fn finalize_down_send_outcome(
     result_retry_reason: sky_dispatch_win32::input::PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
+    explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let timing_proof = match interpret_down_send_timing(
@@ -789,6 +733,7 @@ fn finalize_down_send_outcome(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
+        explicitly_cancelled_by_suspension,
     ) {
         Ok(value) => value,
         Err(step) => return step,

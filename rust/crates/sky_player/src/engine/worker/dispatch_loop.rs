@@ -13,7 +13,7 @@ use super::{
     record_wait_failure, supervisor_lease_expired, suspend_live_input, target_stamp_still_current,
     wait_for_next_boundary,
 };
-use super::{PreparedDispatchEntry, dispatch_prepared_normal_frame};
+use super::{PreparedDispatchEntry, PreparedDispatchStream, dispatch_prepared_normal_frame};
 use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -503,6 +503,28 @@ pub(crate) fn dispatch_due_from_plan(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn suspend_live_input_and_reconcile_prepared(
+    backend: &mut sky_dispatch_win32::input::TrackedKeyState,
+    coordinator: &mut sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
+    runtime: &mut super::WorkerRuntime,
+    effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
+    target_hwnd: isize,
+    prepared_stream: Option<&mut PreparedDispatchStream>,
+) -> Result<(), String> {
+    let cancelled = suspend_live_input(
+        backend,
+        coordinator,
+        runtime,
+        effective_now_ticks,
+        target_hwnd,
+    )?;
+    if let Some(stream) = prepared_stream {
+        stream.reconcile_resumable_suspension(&cancelled)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_system_suspend_transition(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     coordinator: &mut sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
@@ -512,6 +534,7 @@ pub(crate) fn apply_system_suspend_transition(
     now_ticks: sky_dispatch_win32::clock::QpcTicks,
     suspend_boundary_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     target_hwnd: isize,
+    prepared_stream: Option<&mut PreparedDispatchStream>,
 ) -> Result<(), String> {
     runtime.reset_wait_state_after_system_suspend();
     runtime.invalidate_down_authorization();
@@ -519,7 +542,14 @@ pub(crate) fn apply_system_suspend_transition(
     let effective_now = playback
         .get_elapsed_allow_pre_epoch(now_ticks, true)
         .map_err(|error| error.to_string());
-    suspend_live_input(backend, coordinator, runtime, effective_now, target_hwnd)?;
+    suspend_live_input_and_reconcile_prepared(
+        backend,
+        coordinator,
+        runtime,
+        effective_now,
+        target_hwnd,
+        prepared_stream,
+    )?;
     runtime.manual_pause_suspension_pending = false;
     if let Some(guard) = runtime.physical_timing_guard.as_mut() {
         guard.reset();
@@ -737,6 +767,7 @@ pub(super) fn dispatch(
                     now_ticks,
                     system_power.suspend_boundary_qpc(),
                     target_hwnd.load(Ordering::Acquire),
+                    prepared_stream.as_mut(),
                 ) {
                     core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error =
@@ -857,12 +888,13 @@ pub(super) fn dispatch(
                                 core.runtime.allow_pre_epoch_startup_dispatch,
                             )
                             .map_err(|error| error.to_string());
-                        if let Err(error) = suspend_live_input(
+                        if let Err(error) = suspend_live_input_and_reconcile_prepared(
                             &mut resources.backend,
                             &mut resources.coordinator,
                             &mut core.runtime,
                             lifecycle_effective_now,
                             preflight_target.hwnd,
+                            prepared_stream.as_mut(),
                         ) {
                             core.runtime.verified_target = None;
                             core.runtime.force_full_cleanup = true;
@@ -894,12 +926,13 @@ pub(super) fn dispatch(
                                 core.runtime.allow_pre_epoch_startup_dispatch,
                             )
                             .map_err(|error| error.to_string());
-                        if let Err(error) = suspend_live_input(
+                        if let Err(error) = suspend_live_input_and_reconcile_prepared(
                             &mut resources.backend,
                             &mut resources.coordinator,
                             &mut core.runtime,
                             lifecycle_effective_now,
                             preflight_target.hwnd,
+                            prepared_stream.as_mut(),
                         ) {
                             core.runtime.verified_target = None;
                             core.runtime.force_full_cleanup = true;
@@ -977,12 +1010,13 @@ pub(super) fn dispatch(
                             core.runtime.allow_pre_epoch_startup_dispatch,
                         )
                         .map_err(|error| error.to_string());
-                    if let Err(error) = suspend_live_input(
+                    if let Err(error) = suspend_live_input_and_reconcile_prepared(
                         &mut resources.backend,
                         &mut resources.coordinator,
                         &mut core.runtime,
                         lifecycle_effective_now,
                         target_hwnd.load(Ordering::Acquire),
+                        prepared_stream.as_mut(),
                     ) {
                         core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
@@ -1036,12 +1070,13 @@ pub(super) fn dispatch(
                                 core.runtime.allow_pre_epoch_startup_dispatch,
                             )
                             .map_err(|error| error.to_string());
-                        if let Err(error) = suspend_live_input(
+                        if let Err(error) = suspend_live_input_and_reconcile_prepared(
                             &mut resources.backend,
                             &mut resources.coordinator,
                             &mut core.runtime,
                             lifecycle_effective_now,
                             target_hwnd.load(Ordering::Acquire),
+                            prepared_stream.as_mut(),
                         ) {
                             core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error =
@@ -1408,6 +1443,7 @@ pub(super) fn dispatch(
                         dispatch_qpc,
                         focus_loss_fault,
                         Some(dispatch_qpc),
+                        stream.explicitly_cancelled_generation_ids(),
                         #[cfg(any(test, feature = "test-support"))]
                         false,
                     )

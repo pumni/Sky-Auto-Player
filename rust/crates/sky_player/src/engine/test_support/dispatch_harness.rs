@@ -112,6 +112,34 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    /// Prepared normal stream used to prove that the shared suspension path
+    /// reconciles a frozen Up before the following sentinel Down.
+    pub fn new_prepared_resumable_suspension_sequence_for_test() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared-suspension-down-k".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared-suspension-up-k".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 40_000,
+                scan_codes: vec![0x16].into(),
+                reason: "prepared-suspension-sentinel-j".into(),
+            },
+        ])
+    }
+
     /// Build two independent Down boundaries five milliseconds apart.  The
     /// first boundary is used for a controlled late-rescue send; the second
     /// proves that its authored target remains unchanged.
@@ -1195,13 +1223,17 @@ impl ProductionDispatchTestHarness {
     pub fn suspend_live_input_for_test(&mut self) -> Result<Vec<u64>, String> {
         let effective_now_ticks = self.effective_now_ticks;
         let target_hwnd = self.target_hwnd.load(Ordering::Acquire);
-        super::super::worker::suspend_live_input(
+        let cancelled = super::super::worker::suspend_live_input(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
             &mut self.runtime,
             Ok(effective_now_ticks),
             target_hwnd,
-        )
+        )?;
+        if let Some(stream) = self.prepared_stream_for_test.as_mut() {
+            stream.reconcile_resumable_suspension(&cancelled)?;
+        }
+        Ok(cancelled)
     }
 
     pub fn apply_system_suspend_for_test(&mut self, now_ticks: QpcTicks) -> Result<(), String> {
@@ -1214,6 +1246,7 @@ impl ProductionDispatchTestHarness {
             now_ticks,
             self.system_power.suspend_boundary_qpc(),
             self.target_hwnd.load(Ordering::Acquire),
+            None,
         )
     }
 
@@ -1501,6 +1534,12 @@ impl ProductionDispatchTestHarness {
         (stream.len(), stream.physical_count())
     }
 
+    pub fn prepared_suspension_cancellation_count_for_test(&self) -> usize {
+        self.prepared_stream_for_test.as_ref().map_or(0, |stream| {
+            stream.explicitly_cancelled_generation_ids().len()
+        })
+    }
+
     pub fn prepare_prepared_stream_for_test(&mut self) {
         self.prepared_stream_for_test = Some(self.build_prepared_stream_for_test());
     }
@@ -1639,6 +1678,7 @@ impl ProductionDispatchTestHarness {
             dispatch_qpc,
             false,
             Some(dispatch_qpc),
+            stream.explicitly_cancelled_generation_ids(),
             false,
         );
         if matches!(step, DispatchStep::Dispatched) {
@@ -1736,6 +1776,7 @@ impl ProductionDispatchTestHarness {
             wall_now,
             false,
             Some(wall_now),
+            stream.explicitly_cancelled_generation_ids(),
             false,
         );
         if matches!(step, DispatchStep::Dispatched) {

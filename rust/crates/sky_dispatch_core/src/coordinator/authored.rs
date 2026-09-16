@@ -737,6 +737,21 @@ impl RuntimeDispatchCoordinator {
         up_intents: &[PreparedUpIntent],
         started: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
+        self.commit_prepared_up_intents_frozen_with_resumable_cancellation(
+            prepared,
+            up_intents,
+            started,
+            &[],
+        )
+    }
+
+    fn commit_prepared_up_intents_frozen_with_resumable_cancellation(
+        &mut self,
+        prepared: PreparedAuthoredFrame,
+        up_intents: &[PreparedUpIntent],
+        started: TimelineTicks,
+        explicitly_cancelled_by_suspension: &[GenerationId],
+    ) -> Result<(), CoordinatorError> {
         if prepared.first_batch_index != self.cursor {
             return Err(CoordinatorError::PreparedBatchMismatch {
                 prepared: prepared.first_batch_index,
@@ -752,6 +767,26 @@ impl RuntimeDispatchCoordinator {
             }
             if prepared.immediate_up_mask & bit != 0 {
                 let Some(active) = self.active_for_slot(slot).cloned() else {
+                    if explicitly_cancelled_by_suspension.contains(&generation_id)
+                        && self
+                            .generation_states
+                            .get(usize::try_from(generation_id).map_err(|_| {
+                                CoordinatorError::Invariant(
+                                    CoordinatorInvariantError::UnknownGeneration {
+                                        generation_id,
+                                        generation_count: self.generation_count,
+                                    },
+                                )
+                            })?)
+                            .is_some_and(|state| *state == GenerationStatus::Cancelled)
+                    {
+                        // A resumable suspension has already released this
+                        // physical key and terminalized its old generation.
+                        // The frozen Up remains in the immutable stream, so
+                        // consume its accounting without requiring a
+                        // Cancelled -> Released transition.
+                        continue;
+                    }
                     return Err(CoordinatorError::Invariant(
                         CoordinatorInvariantError::Accounting(
                             "authored immediate Up has no active generation".into(),
@@ -808,6 +843,38 @@ impl RuntimeDispatchCoordinator {
         started: TimelineTicks,
         _completed: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
+        self.commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
+            commit,
+            started,
+            &[],
+        )
+    }
+
+    /// Apply a frozen authored commit after a successful normal prepared send
+    /// when one or more earlier generations were explicitly cancelled by a
+    /// resumable suspension.  Only generation IDs supplied by the suspension
+    /// path and still marked `Cancelled` may bypass the usual immediate-Up
+    /// active-owner check; genuine ownership mismatches remain errors.
+    pub fn commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        started: TimelineTicks,
+        _completed: TimelineTicks,
+        explicitly_cancelled_by_suspension: &[GenerationId],
+    ) -> Result<(), CoordinatorError> {
+        self.commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
+            commit,
+            started,
+            explicitly_cancelled_by_suspension,
+        )
+    }
+
+    fn commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        started: TimelineTicks,
+        explicitly_cancelled_by_suspension: &[GenerationId],
+    ) -> Result<(), CoordinatorError> {
         let prepared = commit.frame;
         if prepared.first_batch_index != self.cursor {
             return Err(CoordinatorError::PreparedBatchMismatch {
@@ -819,7 +886,12 @@ impl RuntimeDispatchCoordinator {
             .authored_ticks
             .checked_add_duration(self.min_hold_ticks)?;
 
-        self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
+        self.commit_prepared_up_intents_frozen_with_resumable_cancellation(
+            prepared,
+            &commit.up_intents,
+            started,
+            explicitly_cancelled_by_suspension,
+        )?;
 
         for down in &commit.down_intents {
             let generation_id = down.intent.generation_id();

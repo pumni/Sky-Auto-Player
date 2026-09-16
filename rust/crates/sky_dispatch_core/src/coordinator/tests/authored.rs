@@ -1,5 +1,5 @@
 use super::*;
-use crate::coordinator::PendingRelease;
+use crate::coordinator::{CoordinatorError, CoordinatorInvariantError, PendingRelease};
 
 #[test]
 fn final_focus_drop_is_terminal_and_cannot_replay_authored_batch() {
@@ -1171,6 +1171,120 @@ fn cancel_live_generations_clears_pending_release_ownership() {
         .check_invariants()
         .expect("cancelled coordinator remains consistent");
     assert!(coordinator.is_finished());
+}
+
+#[test]
+fn frozen_up_after_resumable_suspension_consumes_only_explicit_cancelled_owner() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared suspension down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared suspension up".into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid prepared suspension schedule");
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+    let down = coordinator
+        .prepare_current_authored_packet()
+        .expect("prepare Down")
+        .expect("Down exists");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &down.commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("commit Down");
+    let up_commit = {
+        let up = coordinator
+            .prepare_current_authored_packet()
+            .expect("prepare Up")
+            .expect("Up exists");
+        up.commit.clone()
+    };
+    let cancelled = coordinator
+        .cancel_live_generations()
+        .expect("cancel active generation");
+    assert_eq!(cancelled, vec![0]);
+    coordinator
+        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+            &up_commit,
+            TimelineTicks::from_raw(20_000),
+            TimelineTicks::from_raw(20_000),
+            &cancelled,
+        )
+        .expect("frozen Up is reconciled only for explicit suspension cancellation");
+    assert_eq!(coordinator.active_mask, 0);
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared mismatch down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared mismatch up".into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid mismatch schedule");
+    let mut mismatch =
+        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+    let down = mismatch
+        .prepare_current_authored_packet()
+        .expect("prepare mismatch Down")
+        .expect("mismatch Down exists");
+    mismatch
+        .commit_prepared_authored_frame_success_frozen(
+            &down.commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("commit mismatch Down");
+    let up_commit = {
+        let up = mismatch
+            .prepare_current_authored_packet()
+            .expect("prepare mismatch Up")
+            .expect("mismatch Up exists");
+        up.commit.clone()
+    };
+    let cancelled = mismatch
+        .cancel_live_generations()
+        .expect("cancel mismatch generation");
+    let error = mismatch
+        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+            &up_commit,
+            TimelineTicks::from_raw(20_000),
+            TimelineTicks::from_raw(20_000),
+            &[],
+        )
+        .expect_err("missing explicit cancellation must remain an ownership error");
+    assert!(matches!(
+        error,
+        CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
+    ));
+    assert_eq!(cancelled, vec![0]);
 }
 
 #[test]
