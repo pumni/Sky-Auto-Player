@@ -186,6 +186,40 @@ impl PhysicalTimingGuard {
         })
     }
 
+    /// Derive the normal-mode window from the immutable authored target only.
+    /// Completion evidence remains available to telemetry, but it is not
+    /// scheduling authority for a later packet.
+    pub(crate) fn authored_only_window(
+        &self,
+        authored_target_qpc: QpcTicks,
+        up_mask: u16,
+        down_mask: u16,
+    ) -> Result<PhysicalTimingWindow, PhysicalTimingGuardError> {
+        self.ensure_valid()?;
+        Self::validate_packet_masks(up_mask, down_mask)?;
+        if up_mask == 0 && down_mask == 0 {
+            return Err(PhysicalTimingGuardError::InvalidPacketMasks);
+        }
+        let latest_down_start_qpc = if down_mask == 0 {
+            None
+        } else {
+            Some(
+                authored_target_qpc
+                    .checked_add_duration(self.timing_margin_ticks)
+                    .map_err(|_| PhysicalTimingGuardError::ArithmeticOverflow)?,
+            )
+        };
+        Ok(PhysicalTimingWindow {
+            authored_target_qpc,
+            musical_up_not_before_qpc: authored_target_qpc,
+            down_not_before_qpc: authored_target_qpc,
+            packet_not_before_qpc: authored_target_qpc,
+            latest_down_start_qpc,
+            hold_floor_mask: 0,
+            release_floor_mask: 0,
+        })
+    }
+
     fn ensure_valid(&self) -> Result<(), PhysicalTimingGuardError> {
         if self.valid {
             Ok(())
@@ -363,6 +397,28 @@ mod tests {
                 release_floor_mask: 0,
             }
         );
+    }
+
+    #[test]
+    fn authored_only_window_ignores_completion_floors() {
+        let mut guard = guard();
+        guard
+            .observe_successful_packet(qpc(100), 0, bit(0))
+            .unwrap();
+        guard
+            .observe_successful_packet(qpc(120), bit(0), 0)
+            .unwrap();
+
+        let window = guard
+            .authored_only_window(qpc(110), bit(0), bit(1))
+            .unwrap();
+        assert_eq!(window.authored_target_qpc, qpc(110));
+        assert_eq!(window.musical_up_not_before_qpc, qpc(110));
+        assert_eq!(window.down_not_before_qpc, qpc(110));
+        assert_eq!(window.packet_not_before_qpc, qpc(110));
+        assert_eq!(window.latest_down_start_qpc, Some(qpc(115)));
+        assert_eq!(window.hold_floor_mask, 0);
+        assert_eq!(window.release_floor_mask, 0);
     }
 
     #[test]

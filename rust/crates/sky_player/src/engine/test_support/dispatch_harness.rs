@@ -892,9 +892,12 @@ impl ProductionDispatchTestHarness {
             .physical_timing_guard
             .as_ref()
             .ok_or_else(|| "missing physical timing guard".to_string())?;
-        let window = guard
-            .query(target, up_mask, down_mask)
-            .map_err(|e| format!("timing guard query failed: {e:?}"))?;
+        let window = if self.timing.strict_timing {
+            guard.query(target, up_mask, down_mask)
+        } else {
+            guard.authored_only_window(target, up_mask, down_mask)
+        }
+        .map_err(|e| format!("timing guard query failed: {e:?}"))?;
         Ok(window.is_down_feasible())
     }
 
@@ -1506,8 +1509,9 @@ impl ProductionDispatchTestHarness {
         if !matches!(pre_wait_step, DispatchStep::NoWork) {
             return Ok(pre_wait_step);
         }
-        let physical_wait_target_qpc = physical_wait_target_for_plan(plan, &self.runtime)?
-            .or_else(|| plan.physical_target_qpc());
+        let physical_wait_target_qpc =
+            physical_wait_target_for_plan(plan, &self.runtime, self.timing.strict_timing)?
+                .or_else(|| plan.physical_target_qpc());
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
             deadline: WaitDeadline {
                 physical_target_qpc: physical_wait_target_qpc,
@@ -1773,7 +1777,7 @@ impl ProductionDispatchTestHarness {
         &self,
         plan: &NextDispatchPlan,
     ) -> Result<Option<QpcTicks>, String> {
-        physical_wait_target_for_plan(plan, &self.runtime)
+        physical_wait_target_for_plan(plan, &self.runtime, self.timing.strict_timing)
     }
 
     pub fn missed_physical_window_boundaries_for_test(&self) -> u64 {
@@ -1814,9 +1818,10 @@ impl ProductionDispatchTestHarness {
         let target = plan
             .physical_target_qpc()
             .expect("plan target required for synthetic boundary");
-        let wait_target = physical_wait_target_for_plan(plan, &self.runtime)
-            .expect("physical timing window")
-            .unwrap_or(target);
+        let wait_target =
+            physical_wait_target_for_plan(plan, &self.runtime, self.timing.strict_timing)
+                .expect("physical timing window")
+                .unwrap_or(target);
         let deadline = plan
             .deadline_ticks()
             .expect("plan deadline required for synthetic boundary");
@@ -1862,9 +1867,12 @@ impl ProductionDispatchTestHarness {
         let target = physical.physical_target_qpc;
         let packet = physical.authored_view.packet_masks;
         let guard = self.runtime.physical_timing_guard.as_ref()?;
-        let window = guard
-            .query(target, packet.up_mask, packet.down_mask)
-            .expect("physical timing window evidence");
+        let window = if self.timing.strict_timing {
+            guard.query(target, packet.up_mask, packet.down_mask)
+        } else {
+            guard.authored_only_window(target, packet.up_mask, packet.down_mask)
+        }
+        .expect("physical timing window evidence");
         Some(PhysicalFloorEvidence {
             authored_target_qpc: window.authored_target_qpc,
             musical_up_not_before_qpc: window.musical_up_not_before_qpc,
@@ -2162,9 +2170,10 @@ impl ProductionDispatchTestHarness {
         let authored_overdue_now = target
             .checked_add_duration(DurationTicks::from_raw(1))
             .expect("overdue test target arithmetic");
-        let physical_wait_target = physical_wait_target_for_plan(plan, &self.runtime)
-            .expect("physical timing window")
-            .unwrap_or(target);
+        let physical_wait_target =
+            physical_wait_target_for_plan(plan, &self.runtime, self.timing.strict_timing)
+                .expect("physical timing window")
+                .unwrap_or(target);
         let overdue_now = core::cmp::max(authored_overdue_now, physical_wait_target);
         self.runtime.record_due_without_wait_for_test();
         self.dispatch_plan_at_with_sender_option(

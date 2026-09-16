@@ -931,6 +931,17 @@ fn baseline_completion_floor_variant(
     let floor_n1 = harness
         .physical_floor_evidence_for_test(&packet_n1)
         .expect("completion-floor packet N+1 window");
+    let wait_target_n1 = harness
+        .physical_wait_target_for_test(&packet_n1)
+        .expect("completion-floor packet N+1 wait target")
+        .expect("completion-floor packet N+1 wait target exists");
+    let packets_n1 = harness.configure_packet_capture();
+    let n1_step = harness.dispatch_at_qpc_for_test(&packet_n1, wait_target_n1);
+    let n1_packet_count = packets_n1
+        .lock()
+        .expect("completion-floor packet capture")
+        .len();
+    let n1_send_eligible = matches!(n1_step, DispatchStep::Dispatched) && n1_packet_count == 1;
     json!({
         "variant": scenario,
         "completion_delay_us": completion_delay_us,
@@ -942,6 +953,17 @@ fn baseline_completion_floor_variant(
             "delivery": packet_n_evidence.delivery,
         },
         "packet_n_plus_one": baseline_floor_json(prepared_n1, floor_n1),
+        "packet_n_plus_one_wait_target_qpc": wait_target_n1.as_u64(),
+        "packet_n_plus_one_send_step": format!("{n1_step:?}"),
+        "packet_n_plus_one_send_eligibility": n1_send_eligible,
+        "packet_n_plus_one_classification": if n1_send_eligible {
+            "successful_send"
+        } else {
+            "non_send"
+        },
+        "packet_n_plus_one_packet_count": n1_packet_count,
+        "physical_window_expired_boundaries": harness
+            .missed_physical_window_boundaries_for_test(),
     })
 }
 
@@ -970,23 +992,67 @@ fn baseline_completion_floor_report(evidence: &mut BaselineEvidence) -> serde_js
         && control_next["effective_deadline_ticks"] == delayed_next["effective_deadline_ticks"];
     let same_physical_target =
         control_next["physical_target_qpc"] == delayed_next["physical_target_qpc"];
-    let delayed_floor_moves = delayed_next["packet_not_before_qpc"].as_u64()
-        > delayed_next["authored_target_qpc"].as_u64()
-        && delayed_next["hold_floor_mask"] == json!(1);
+    let same_packet_not_before =
+        control_next["packet_not_before_qpc"] == delayed_next["packet_not_before_qpc"];
+    let same_wait_target = control_report["packet_n_plus_one_wait_target_qpc"]
+        == delayed_report["packet_n_plus_one_wait_target_qpc"];
+    let same_send_eligibility = control_report["packet_n_plus_one_send_eligibility"]
+        == delayed_report["packet_n_plus_one_send_eligibility"];
+    let same_classification = control_report["packet_n_plus_one_classification"]
+        == delayed_report["packet_n_plus_one_classification"];
+    let same_coordinator_authored_timestamps = control_next["authored_ticks"]
+        == delayed_next["authored_ticks"]
+        && control_next["effective_deadline_ticks"] == delayed_next["effective_deadline_ticks"];
+    let normal_floor_masks_zero = [
+        &control_next["hold_floor_mask"],
+        &control_next["release_floor_mask"],
+        &delayed_next["hold_floor_mask"],
+        &delayed_next["release_floor_mask"],
+    ]
+    .into_iter()
+    .all(|mask| mask == &json!(0));
+    let completion_qpc_differs = control_report["packet_n"]["completion_qpc"]
+        != delayed_report["packet_n"]["completion_qpc"];
     let control_is_not_pressured =
         control_next["packet_not_before_qpc"] == control_next["authored_target_qpc"];
+    let delayed_does_not_move_later_scheduling = same_authored_schedule
+        && same_physical_target
+        && same_packet_not_before
+        && same_wait_target
+        && same_send_eligibility
+        && same_classification
+        && same_coordinator_authored_timestamps
+        && normal_floor_masks_zero;
     json!({
         "same_authored_prepared_schedule": same_authored_schedule,
         "same_packet_n_plus_one_target": same_physical_target,
+        "same_packet_n_plus_one_packet_not_before": same_packet_not_before,
+        "same_packet_n_plus_one_wait_target": same_wait_target,
+        "same_packet_n_plus_one_send_eligibility": same_send_eligibility,
+        "same_packet_n_plus_one_classification": same_classification,
+        "same_coordinator_authored_timestamps": same_coordinator_authored_timestamps,
+        "normal_hold_release_floor_masks_zero": normal_floor_masks_zero,
+        "completion_qpc_of_packet_n_differs": completion_qpc_differs,
         "control": control_report,
         "delayed_completion": delayed_report,
-        "delayed_completion_moves_current_physical_floor": delayed_floor_moves,
+        "delayed_completion_does_not_move_later_scheduling": delayed_does_not_move_later_scheduling,
         "control_has_no_downstream_floor_pressure": control_is_not_pressured,
-        "acceptance_clean": same_authored_schedule
-            && same_physical_target
-            && delayed_floor_moves
-            && control_is_not_pressured,
-        "policy_changed": false,
+        "completion_feedback_physical_window_expired": control_report[
+            "physical_window_expired_boundaries"
+        ]
+        .as_u64()
+        .unwrap_or(0)
+            != 0
+            || delayed_report["physical_window_expired_boundaries"]
+                .as_u64()
+                .unwrap_or(0)
+                != 0,
+        "acceptance_clean": delayed_does_not_move_later_scheduling
+            && completion_qpc_differs
+            && control_is_not_pressured
+            && control_report["physical_window_expired_boundaries"] == json!(0)
+            && delayed_report["physical_window_expired_boundaries"] == json!(0),
+        "policy_changed": true,
     })
 }
 
@@ -4671,7 +4737,7 @@ fn baseline_report() -> serde_json::Value {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     json!({
-        "scope": "Phase 2 deterministic dispatch qualification; normal Down sender cutoff disabled while physical timing policy remains unchanged",
+        "scope": "Phase 3 deterministic dispatch qualification; normal physical timing is authored-only and SendInput completion is telemetry-only",
         "acceptance_clean": deterministic_acceptance_clean && real_wait_acceptance_clean,
         "deterministic_acceptance_clean": deterministic_acceptance_clean,
         "expected_cases": expected_case_names,
@@ -4695,6 +4761,7 @@ fn baseline_report() -> serde_json::Value {
         },
         "healthy_precision_path": {
             "production_scheduling_semantics_changed": false,
+            "normal_completion_feedback_removed": true,
             "allocations_locks_formatting_blocking_communication_added": false,
             "no_allocation_gate": "rt_dispatch_no_alloc",
         },
