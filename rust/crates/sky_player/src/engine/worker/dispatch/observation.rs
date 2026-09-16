@@ -759,11 +759,11 @@ mod tests {
     #[test]
     fn raw_down_masks_derive_transport_counts_when_observed() {
         assert_eq!(
-            down_transport_counts(PhysicalPacket::new(0b001, 0b001), 0b001, 0, true,),
+            down_transport_counts(PhysicalPacket::new(0b001, 0b010), 0b010, 0, true,),
             (2, 2, 0)
         );
         assert_eq!(
-            down_transport_counts(PhysicalPacket::new(0b001, 0b011), 0b001, 0, true,),
+            down_transport_counts(PhysicalPacket::new(0b001, 0b110), 0b110, 0, true,),
             (3, 3, 0)
         );
     }

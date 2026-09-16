@@ -55,6 +55,15 @@ pub enum CompileError {
         first_scheduled_us: u64,
         second_scheduled_us: u64,
     },
+    #[error(
+        "matched same-timestamp Up+Down for scan code {scan_code}: up action {up_source_action_index}, down action {down_source_action_index}, timestamp={scheduled_us}"
+    )]
+    MatchedSameTimestampUpDown {
+        scan_code: u16,
+        scheduled_us: u64,
+        up_source_action_index: u32,
+        down_source_action_index: u32,
+    },
     #[error("runtime simulation failed: {0}")]
     Simulation(String),
 }
@@ -185,6 +194,7 @@ pub fn compile_runtime_intents(
             u32::try_from(intents.len()).map_err(|_| CompileError::TooManyActions)?;
         let mut up_mask = 0u16;
         let mut seen_up_mask = 0u16;
+        let mut physical_up_source_action_index_by_slot: [Option<u32>; MAX_KEYS] = [None; MAX_KEYS];
         let mut group_batches: Vec<CompiledBatch> = Vec::with_capacity(group_end - group_start);
         for action in &actions[group_start..group_end] {
             if action.kind != ActionKind::Up {
@@ -212,6 +222,8 @@ pub fn compile_runtime_intents(
                 open_generation_by_slot[key_slot as usize] = None;
                 if generation_id.is_some() {
                     up_mask |= bit;
+                    physical_up_source_action_index_by_slot[key_slot as usize] =
+                        Some(action.source_action_index);
                 }
                 intents.push(CompactIntent::new(
                     generation_id.unwrap_or(NO_GENERATION_ID),
@@ -250,6 +262,16 @@ pub fn compile_runtime_intents(
                     .slot_for(scan_code)
                     .expect("allowlist validation must precede packet compilation");
                 let bit = 1u16 << key_slot;
+                if let Some(up_source_action_index) =
+                    physical_up_source_action_index_by_slot[key_slot as usize]
+                {
+                    return Err(CompileError::MatchedSameTimestampUpDown {
+                        scan_code,
+                        scheduled_us,
+                        up_source_action_index,
+                        down_source_action_index: action.source_action_index,
+                    });
+                }
                 if let Some(open) = open_generation_by_slot[key_slot as usize] {
                     return Err(CompileError::OverlappingSameKeyDown {
                         scan_code,
@@ -288,6 +310,11 @@ pub fn compile_runtime_intents(
         }
         group_batches.sort_unstable_by_key(|batch| batch.source_action_index);
         batches.extend(group_batches);
+        debug_assert_eq!(
+            up_mask & down_mask,
+            0,
+            "compiled physical packet direction masks must be disjoint"
+        );
         let batch_count = u16::try_from(group_end - group_start)
             .map_err(|_| CompileError::TooManyBatchesAtTimestamp { scheduled_us })?;
         packets.push(CompiledPacket {
@@ -417,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_timestamp_packet_canonicalizes_up_before_down() {
+    fn mixed_timestamp_packet_canonicalizes_disjoint_up_before_down() {
         let schedule = compile_runtime_intents(
             &[
                 KeyActionInput {
@@ -429,13 +456,13 @@ mod tests {
                 },
                 // Authored order is deliberately Down-before-Up at this
                 // timestamp. The packet must still release generation 0
-                // before activating generation 1.
+                // before activating the unrelated key's generation 1.
                 KeyActionInput {
                     source_action_index: 1,
                     kind: ActionKind::Down,
                     scheduled_us: 200,
-                    scan_codes: smallvec::smallvec![1, 2],
-                    reason: "retrigger".into(),
+                    scan_codes: smallvec::smallvec![2],
+                    reason: "new key".into(),
                 },
                 KeyActionInput {
                     source_action_index: 2,
@@ -454,13 +481,54 @@ mod tests {
         assert_eq!(schedule.packets[1].packet_id, 1);
         let packet = schedule.view_packet_ticks(1, TimelineTicks::ZERO).unwrap();
         assert_eq!(packet.up_mask(), 0b01);
-        assert_eq!(packet.down_mask(), 0b11);
+        assert_eq!(packet.down_mask(), 0b10);
+        assert_eq!(packet.up_mask() & packet.down_mask(), 0);
         assert_eq!(packet.header.down_source_action_index, Some(1));
         assert_eq!(packet.up_intents[0].generation_id(), 0);
         assert_eq!(packet.down_intents[0].generation_id(), 1);
-        assert_eq!(packet.down_intents[1].generation_id(), 2);
         assert_eq!(schedule.batches[1].kind, ActionKind::Down);
         assert_eq!(schedule.batches[2].kind, ActionKind::Up);
+    }
+
+    #[test]
+    fn matched_same_timestamp_up_down_is_rejected_with_typed_error() {
+        let error = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "first".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 200,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "retrigger".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 200,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "release".into(),
+                },
+            ],
+            &[1],
+        )
+        .expect_err("matched same-timestamp retrigger must be rejected");
+
+        assert_eq!(
+            error,
+            CompileError::MatchedSameTimestampUpDown {
+                scan_code: 1,
+                scheduled_us: 200,
+                up_source_action_index: 2,
+                down_source_action_index: 1,
+            }
+        );
     }
 
     #[test]
@@ -508,6 +576,80 @@ mod tests {
         assert_eq!(packet.up_mask(), 0);
         assert_eq!(packet.up_intents.len(), 1);
         assert_eq!(packet.up_intents[0].generation_id(), NO_GENERATION_ID);
+    }
+
+    #[test]
+    fn stale_same_timestamp_up_does_not_reject_new_down() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "stale release".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "new press".into(),
+                },
+            ],
+            &[1],
+        )
+        .expect("stale logical Up must not conflict with a new Down");
+
+        let packet = schedule.view_packet_ticks(0, TimelineTicks::ZERO).unwrap();
+        assert_eq!(packet.up_mask(), 0);
+        assert_eq!(packet.down_mask(), 1);
+        assert_eq!(packet.up_mask() & packet.down_mask(), 0);
+    }
+
+    #[test]
+    fn successful_compilation_keeps_physical_packet_masks_disjoint() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "down one".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "up one".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![2],
+                    reason: "down two".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 200,
+                    scan_codes: smallvec::smallvec![2],
+                    reason: "up two".into(),
+                },
+            ],
+            &[1, 2],
+        )
+        .expect("disjoint mixed packets must compile");
+
+        assert!(
+            schedule
+                .packets
+                .iter()
+                .all(|packet| packet.up_mask & packet.down_mask == 0)
+        );
     }
 
     #[test]

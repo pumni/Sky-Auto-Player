@@ -360,23 +360,23 @@ mod tests {
     }
 
     #[test]
-    fn accepts_same_timestamp_retrigger_after_valid_old_hold() {
+    fn accepts_same_key_retrigger_after_valid_old_hold() {
         let schedule = schedule(&[
             (ActionKind::Down, 100, 1),
             (ActionKind::Up, 200, 1),
-            (ActionKind::Down, 200, 1),
-            (ActionKind::Up, 300, 1),
+            (ActionKind::Down, 201, 1),
+            (ActionKind::Up, 301, 1),
         ]);
         assert!(validate_min_hold_feasibility(&schedule, 100).is_ok());
     }
 
     #[test]
-    fn rejects_same_timestamp_retrigger_when_release_gap_is_required() {
+    fn rejects_positive_short_retrigger_gap_when_release_gap_is_required() {
         let schedule = schedule(&[
             (ActionKind::Down, 100, 1),
             (ActionKind::Up, 200, 1),
-            (ActionKind::Down, 200, 1),
-            (ActionKind::Up, 300, 1),
+            (ActionKind::Down, 299, 1),
+            (ActionKind::Up, 399, 1),
         ]);
         let error = validate_min_hold_and_release_gap_feasibility(&schedule, 100, 100)
             .expect_err("same-key retrigger must leave one frame of release gap");
@@ -387,11 +387,11 @@ mod tests {
                 previous_up_source_action_index: 1,
                 next_down_source_action_index: 2,
                 previous_up_scheduled_us: 200,
-                next_down_scheduled_us: 200,
-                release_gap_us: 0,
+                next_down_scheduled_us: 299,
+                release_gap_us: 99,
                 required_release_gap_us: 100,
                 previous_up_ticks: 200,
-                next_down_ticks: 200,
+                next_down_ticks: 299,
                 required_release_gap_ticks: 100,
             }
         );

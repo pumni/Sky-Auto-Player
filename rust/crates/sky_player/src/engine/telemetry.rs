@@ -492,6 +492,8 @@ mod tests {
                 },
                 down_mask: if kind == TRACE_KIND_UP {
                     0
+                } else if kind == TRACE_KIND_MIXED {
+                    0b10
                 } else {
                     (1_u16 << requested) - 1
                 },
@@ -584,8 +586,8 @@ mod tests {
 
         assert_eq!(record.kind, TRACE_KIND_MIXED);
         assert_eq!(record.up_mask, 1);
-        assert_eq!(record.down_mask, 0b11);
-        assert_ne!(record.up_mask & record.down_mask, 0, "same-key retrigger");
+        assert_eq!(record.down_mask, 0b10);
+        assert_eq!(record.up_mask & record.down_mask, 0);
         assert_eq!(record.requested_count, 2);
         assert_eq!(record.sent_count, 2);
         assert_eq!(summary.dispatch_count, 1);
