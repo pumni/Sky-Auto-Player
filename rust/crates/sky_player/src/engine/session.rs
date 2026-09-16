@@ -378,6 +378,11 @@ impl NativeDispatchSession {
         #[cfg(any(test, feature = "test-support"))]
         let timer_lifecycle_context = config.options.timer_lifecycle_context.clone();
 
+        self.shared
+            .publication
+            .supervisor_heartbeat_ticks
+            .store(arm_qpc.as_u64(), Ordering::Release);
+
         let watchdog_handle = if lease_timeout_ticks != DurationTicks::ZERO {
             let watchdog_shared = Arc::clone(&self.shared);
             match std::thread::Builder::new()
@@ -404,10 +409,6 @@ impl NativeDispatchSession {
         };
 
         let shared = Arc::clone(&self.shared);
-        self.shared
-            .publication
-            .supervisor_heartbeat_ticks
-            .store(arm_qpc.as_u64(), Ordering::Release);
         self.shared
             .publication
             .startup_requested_ticks
@@ -527,6 +528,16 @@ impl NativeDispatchSession {
     #[cfg(test)]
     pub(crate) fn pre_roll_us_for_test(&self) -> u64 {
         self.shared.publication.pre_roll_us.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn supervisor_heartbeat_qpc_for_test(&self) -> QpcTicks {
+        QpcTicks::from_raw(
+            self.shared
+                .publication
+                .supervisor_heartbeat_ticks
+                .load(Ordering::Acquire),
+        )
     }
 
     fn pre_roll_remaining_at(&self, now: QpcTicks, clock: QpcClock) -> u64 {
@@ -1337,6 +1348,17 @@ mod tests {
         assert!(watchdog.contains("interrupt.signal"));
         assert!(source.contains("sky-supervisor-watchdog"));
         assert!(source.contains("watchdog_handle"));
+
+        let heartbeat_store = source
+            .find(".supervisor_heartbeat_ticks\n            .store(arm_qpc.as_u64()")
+            .expect("arm heartbeat publication");
+        let watchdog_spawn = source
+            .find(".name(\"sky-supervisor-watchdog\".to_string())")
+            .expect("watchdog spawn");
+        assert!(
+            heartbeat_store < watchdog_spawn,
+            "watchdog must not observe the construction-time heartbeat"
+        );
     }
 
     #[test]

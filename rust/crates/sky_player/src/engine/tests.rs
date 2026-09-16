@@ -3957,6 +3957,133 @@ fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
 }
 
 #[test]
+fn watchdog_age_begins_at_arm_heartbeat_not_construction() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "delayed-arm-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 5_100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "delayed-arm-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid delayed-arm schedule");
+    let mut options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 20_000;
+    let session = NativeDispatchSession::new(options).expect("delayed-arm admission");
+    let construction_heartbeat = session.supervisor_heartbeat_qpc_for_test();
+    std::thread::sleep(Duration::from_millis(50));
+    let now = QpcClock::initialize()
+        .expect("QPC clock")
+        .now()
+        .expect("QPC now");
+    let timeout = DurationTicks::from_raw(
+        QpcClock::initialize()
+            .expect("QPC clock")
+            .duration_from_us(20_000)
+            .expect("lease timeout")
+            .as_u64(),
+    );
+    let stale_construction_heartbeat = AtomicU64::new(construction_heartbeat.as_u64());
+    assert!(
+        supervisor_lease_expired(now, timeout, &stale_construction_heartbeat)
+            .expect("construction heartbeat age")
+    );
+
+    session.arm(0).expect("delayed-arm worker arm");
+    let arm_heartbeat = session.supervisor_heartbeat_qpc_for_test();
+    assert!(arm_heartbeat > construction_heartbeat);
+    let fresh_arm_heartbeat = AtomicU64::new(arm_heartbeat.as_u64());
+    assert!(
+        !supervisor_lease_expired(
+            QpcClock::initialize()
+                .expect("QPC clock")
+                .now()
+                .expect("QPC now"),
+            timeout,
+            &fresh_arm_heartbeat,
+        )
+        .expect("arm heartbeat age")
+    );
+
+    session.quit().expect("quit delayed-arm session");
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("delayed-arm join")
+    );
+    assert_ne!(
+        session.snapshot().terminal_error.as_deref(),
+        Some("supervisor_lease_expired"),
+        "pre-arm construction heartbeat must not terminate the session"
+    );
+    assert_eq!(session.snapshot().timeline_rebase_count, 0);
+}
+
+#[test]
+fn explicit_panic_release_keeps_user_terminal_identity() {
+    let actions = vec![
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 5_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "explicit-panic-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 5_100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "explicit-panic-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid explicit-panic schedule");
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    ))
+    .expect("explicit-panic admission");
+    session.arm(0).expect("explicit-panic worker arm");
+    session.panic_release().expect("explicit panic release");
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("explicit-panic join")
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.terminal_error.as_deref(),
+        Some("panic_release_requested")
+    );
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    assert_eq!(snapshot.timeline_rebase_count, 0);
+}
+
+#[test]
 fn supervisor_lease_disabled_is_never_expired() {
     let heartbeat = AtomicU64::new(1);
     assert_eq!(
