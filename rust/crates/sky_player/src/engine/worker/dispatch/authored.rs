@@ -688,15 +688,17 @@ fn record_down_send_outcome(
         }
         return DispatchStep::TerminateStatic("successful Down missing completion QPC");
     };
-    let Some(guard) = runtime.physical_timing_guard.as_mut() else {
-        return DispatchStep::TerminateStatic("physical timing guard is not initialized");
-    };
-    if let Err(error) =
-        guard.observe_successful_packet(completed_qpc, packet.up_mask, packet.down_mask)
-    {
-        return DispatchStep::Terminate(format!(
-            "physical timing guard completion update failed: {error:?}"
-        ));
+    if timing.strict_timing {
+        let Some(guard) = runtime.physical_timing_guard.as_mut() else {
+            return DispatchStep::TerminateStatic("physical timing guard is not initialized");
+        };
+        if let Err(error) =
+            guard.observe_successful_packet(completed_qpc, packet.up_mask, packet.down_mask)
+        {
+            return DispatchStep::Terminate(format!(
+                "physical timing guard completion update failed: {error:?}"
+            ));
+        }
     }
     record_late_rescued_down(
         local_metrics,

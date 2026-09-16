@@ -379,13 +379,15 @@ pub(super) fn recover_missed_down_boundary(
                 "missed Down Up-prefix recovery missing completion boundary",
             );
         };
-        let Some(guard) = runtime.physical_timing_guard.as_mut() else {
-            return DispatchStep::TerminateStatic("physical timing guard is not initialized");
-        };
-        if let Err(error) = guard.observe_successful_packet(completed, up_mask, 0) {
-            return DispatchStep::Terminate(format!(
-                "physical timing guard recovery update failed: {error:?}"
-            ));
+        if config.timing.strict_timing {
+            let Some(guard) = runtime.physical_timing_guard.as_mut() else {
+                return DispatchStep::TerminateStatic("physical timing guard is not initialized");
+            };
+            if let Err(error) = guard.observe_successful_packet(completed, up_mask, 0) {
+                return DispatchStep::Terminate(format!(
+                    "physical timing guard recovery update failed: {error:?}"
+                ));
+            }
         }
         let full_transport_success = result.status
             == sky_dispatch_win32::input::SendTransactionStatus::Complete
