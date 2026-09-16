@@ -1,3 +1,5 @@
+Closes #300
+
 # Issue #300 evidence
 
 Base: `9a32f0b8ce20d26e0fa31e48353ab6abd0822b3a`
