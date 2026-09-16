@@ -76,6 +76,7 @@ fn test_session_options(
         instrument_key_profile: None,
         startup_ordering_hook: None,
         restore_race_hook: None,
+        focus_pause_hook: None,
         timer_lifecycle_context: None,
     }
 }
@@ -2669,6 +2670,88 @@ fn wait_for_focus_pause(session: &NativeDispatchSession) -> super::EngineProgres
         "focus loss did not enter pause: {snapshot:?}"
     );
     snapshot
+}
+
+fn wait_for_pause_ack(session: &NativeDispatchSession, generation: u64) -> CommandTimingResult {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if let Some(result) = session
+            .pause_timing_result(generation)
+            .expect("pause timing result")
+        {
+            return result;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "pause acknowledgment lost the worker: {snapshot:?}; terminal_error={:?}",
+            session.snapshot().terminal_error
+        );
+        assert!(
+            Instant::now() < deadline,
+            "pause acknowledgment timed out: {snapshot:?}"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat while waiting for pause");
+        std::thread::yield_now();
+    }
+}
+
+fn wait_for_clean_suspension(
+    session: &NativeDispatchSession,
+    full_release_count: &AtomicU64,
+) -> super::EngineProgressSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if full_release_count.load(Ordering::Acquire) >= 1
+            && snapshot.active_count == 0
+            && snapshot.possibly_active_count == 0
+        {
+            return snapshot;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "suspension did not complete before worker exit: {snapshot:?}; terminal_error={:?}",
+            session.snapshot().terminal_error
+        );
+        assert!(
+            Instant::now() < deadline,
+            "suspension state publication timed out: {snapshot:?}"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat while waiting for suspension");
+        std::thread::yield_now();
+    }
+}
+
+fn wait_for_lifecycle_ack(
+    session: &NativeDispatchSession,
+    observed: &AtomicBool,
+    transition: &str,
+) -> super::EngineProgressSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if observed.load(Ordering::Acquire) {
+            return snapshot;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "{transition} lost the worker: {snapshot:?}; terminal_error={:?}",
+            session.snapshot().terminal_error
+        );
+        assert!(
+            Instant::now() < deadline,
+            "{transition} acknowledgment timed out: {snapshot:?}"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat while waiting for lifecycle transition");
+        std::thread::yield_now();
+    }
 }
 
 fn wait_for_focus_finish(session: &NativeDispatchSession) -> super::EngineProgressSnapshot {
@@ -6093,22 +6176,11 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     // 2. Request Manual pause before focus restoration
-    session.pause().expect("request manual pause");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !session
-        .shared_for_test()
-        .commands
-        .desired_pause
-        .load(Ordering::Acquire)
-        && Instant::now() < deadline
-    {
-        session.heartbeat().expect("heartbeat");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    for _ in 0..10 {
-        session.heartbeat().expect("heartbeat");
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    let pause_generation = session
+        .pause_with_timing_token()
+        .expect("request manual pause");
+    let pause_ack = wait_for_pause_ack(&session, pause_generation);
+    assert!(pause_ack.completion_latency_us >= pause_ack.observation_latency_us);
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
         0,
@@ -6120,19 +6192,12 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
 
-    let restore_deadline = Instant::now() + Duration::from_secs(2);
-    while full_release_count.load(Ordering::SeqCst) == 0 && Instant::now() < restore_deadline {
-        session.heartbeat().expect("heartbeat");
-        std::thread::sleep(Duration::from_millis(2));
-    }
-
+    let snap = wait_for_clean_suspension(&session, &full_release_count);
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
         1,
         "exactly one full-instrument suspension occurred"
     );
-
-    let snap = session.snapshot_lite();
     assert!(snap.is_paused, "session remains paused due to manual pause");
     assert_eq!(snap.active_count, 0, "active keys clean after suspension");
     assert_eq!(snap.possibly_active_count, 0);
@@ -6140,7 +6205,6 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     assert!(!snap.has_terminal_error);
 
     let send_count_before = send_call_count.load(Ordering::SeqCst);
-    std::thread::sleep(Duration::from_millis(50));
     session.heartbeat().expect("heartbeat");
     assert_eq!(
         send_call_count.load(Ordering::SeqCst),
@@ -6159,10 +6223,15 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     let mut post_snap = session.snapshot_lite();
     while post_snap.is_paused && Instant::now() < resume_deadline {
         session.heartbeat().expect("heartbeat");
-        std::thread::sleep(Duration::from_millis(1));
+        std::thread::yield_now();
         post_snap = session.snapshot_lite();
     }
     assert!(!post_snap.is_paused, "playback resumed after manual resume");
+    assert!(
+        post_snap.is_running,
+        "worker stayed alive after manual resume"
+    );
+    assert!(!post_snap.has_terminal_error);
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
         1,
@@ -6312,13 +6381,22 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "up".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 25_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "lifecycle-sentinel".to_string().into(),
+            },
         ],
-        &[0x15],
+        &[0x15, 0x16],
     )
     .expect("schedule");
 
     let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
     let full_release_count = Arc::new(AtomicU64::new(0));
+    let focus_paused = Arc::new(AtomicBool::new(false));
+    let restored = Arc::new(AtomicBool::new(false));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
     fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
@@ -6333,6 +6411,18 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
         },
     );
     options.focus.require_focus = true;
+    options.focus_pause_hook = Some({
+        let focus_paused = Arc::clone(&focus_paused);
+        Arc::new(move || {
+            focus_paused.store(true, Ordering::Release);
+        })
+    });
+    options.restore_race_hook = Some({
+        let restored = Arc::clone(&restored);
+        Arc::new(move |_, _, _| {
+            restored.store(true, Ordering::Release);
+        })
+    });
 
     let session = NativeDispatchSession::new(options).expect("session admission");
     session.set_target_hwnd(123);
@@ -6341,15 +6431,15 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
     wait_for_focus_down(&session);
 
     // 1. Enter Manual pause while focused
-    session.pause().expect("manual pause");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut snap = session.snapshot_lite();
-    while !snap.is_paused && Instant::now() < deadline {
-        session.heartbeat().expect("heartbeat");
-        std::thread::sleep(Duration::from_millis(1));
-        snap = session.snapshot_lite();
-    }
+    let pause_generation = session.pause_with_timing_token().expect("manual pause");
+    let pause_ack = wait_for_pause_ack(&session, pause_generation);
+    assert!(pause_ack.completion_latency_us >= pause_ack.observation_latency_us);
+    let snap = session.snapshot_lite();
     assert!(snap.is_paused);
+    assert!(
+        snap.is_running,
+        "manual pause acknowledgment kept worker alive"
+    );
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
         1,
@@ -6361,10 +6451,8 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
     force_inconclusive_probe.store(true, Ordering::Release);
     session.set_focus_hint(false);
-    for _ in 0..10 {
-        session.heartbeat().expect("heartbeat");
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    let focus_snapshot = wait_for_lifecycle_ack(&session, &focus_paused, "focus pause");
+    assert!(focus_snapshot.is_running);
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
         1,
@@ -6376,10 +6464,12 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
 
-    for _ in 0..20 {
-        session.heartbeat().expect("heartbeat");
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    let restored_snapshot = wait_for_lifecycle_ack(&session, &restored, "focus restore");
+    assert!(
+        restored_snapshot.is_running,
+        "focus restore acknowledgment kept worker alive: {restored_snapshot:?}"
+    );
+    assert!(restored_snapshot.is_paused, "still manual paused");
 
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
@@ -6394,10 +6484,15 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
     let mut post_snap = session.snapshot_lite();
     while post_snap.is_paused && Instant::now() < resume_deadline {
         session.heartbeat().expect("heartbeat");
-        std::thread::sleep(Duration::from_millis(1));
+        std::thread::yield_now();
         post_snap = session.snapshot_lite();
     }
     assert!(!post_snap.is_paused, "resumed");
+    assert!(
+        post_snap.is_running,
+        "worker stayed alive after manual resume"
+    );
+    assert!(!post_snap.has_terminal_error);
 
     session.quit().expect("quit");
     assert!(session.join(Duration::from_secs(5)).expect("join"));

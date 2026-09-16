@@ -721,6 +721,10 @@ pub(super) fn dispatch(
                 };
                 if entered_focus_pause {
                     *core.errors.abort_counts.entry("focus_lost").or_insert(0) += 1;
+                    #[cfg(any(test, feature = "test-support"))]
+                    if let Some(hook) = core.runtime.focus_pause_hook.as_ref() {
+                        hook();
+                    }
                     publish_backend_metrics(
                         &resources.backend,
                         &mut core.metrics,

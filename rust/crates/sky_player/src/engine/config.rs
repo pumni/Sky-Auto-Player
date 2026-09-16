@@ -95,6 +95,9 @@ use super::FaultInjectionScript;
 pub(crate) type RestoreRaceHook = Arc<dyn Fn(&AtomicBool, &AtomicIsize, &AtomicU64) + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) type FocusPauseHook = Arc<dyn Fn() + Send + Sync>;
+
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) type FinalGateRaceHook = Arc<
     dyn Fn(
             &AtomicBool,
@@ -169,6 +172,8 @@ pub struct NativeSessionOptions {
     pub startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     #[cfg(any(test, feature = "test-support"))]
     pub restore_race_hook: Option<RestoreRaceHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub focus_pause_hook: Option<FocusPauseHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub timer_lifecycle_context:
         Option<sky_dispatch_win32::timer::test_support::TimerLifecycleContext>,

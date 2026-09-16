@@ -4763,6 +4763,8 @@ impl NativePlaybackService {
                 #[cfg(feature = "tauri-test")]
                 restore_race_hook: None,
                 #[cfg(feature = "tauri-test")]
+                focus_pause_hook: None,
+                #[cfg(feature = "tauri-test")]
                 timer_lifecycle_context: None,
             },
             system_power_endpoint()?,
