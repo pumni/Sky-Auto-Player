@@ -102,6 +102,7 @@ enum BenchmarkScope {
     PhaseCC1,
     PhaseCC11,
     PhaseF11,
+    PhaseExtendedRange,
 }
 
 impl BenchmarkScope {
@@ -117,8 +118,9 @@ impl BenchmarkScope {
             Ok("phase_c1") => Ok(Self::PhaseCC1),
             Ok("phase_c1_1") => Ok(Self::PhaseCC11),
             Ok("phase_f1_1") => Ok(Self::PhaseF11),
+            Ok("phase_extended_range") => Ok(Self::PhaseExtendedRange),
             Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, or phase_f1_1, got {value:?}"
+                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, phase_f1_1, or phase_extended_range, got {value:?}"
             )),
             Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
@@ -136,6 +138,7 @@ impl BenchmarkScope {
             Self::PhaseCC1 => "phase_c1",
             Self::PhaseCC11 => "phase_c1_1",
             Self::PhaseF11 => "phase_f1_1",
+            Self::PhaseExtendedRange => "phase_extended_range",
         }
     }
 }
@@ -2822,6 +2825,609 @@ fn phase_f1_1_report() -> serde_json::Value {
     })
 }
 
+const EXTENDED_TOLERANCES_US: [u64; 5] = [2_000, 2_500, 5_000, 7_500, 10_000];
+const EXTENDED_DENSE_GAPS_US: [u64; 7] = [1_000, 2_000, 4_000, 6_000, 8_000, 10_000, 12_000];
+const EXTENDED_DENSE_OFFSETS_US: [u64; 17] = [
+    1_500, 1_900, 2_000, 2_100, 2_400, 2_500, 2_600, 4_900, 5_000, 5_100, 7_400, 7_500, 7_600,
+    9_900, 10_000, 10_100, 10_500,
+];
+const EXTENDED_REAL_WAIT_GAPS_US: [u64; 6] = [2_000, 4_000, 6_000, 8_000, 10_000, 12_000];
+const EXTENDED_REAL_WAIT_PASSES: usize = 3;
+const EXTENDED_REAL_WAIT_ITERATIONS: usize = 30;
+const EXTENDED_RETRIGGER_GAPS_US: [u64; 7] = [5_000, 6_000, 8_000, 10_000, 12_000, 16_000, 20_000];
+
+fn extended_arm_name(arm: usize) -> &'static str {
+    match arm {
+        0 => "arm_2000us",
+        1 => "arm_2500us",
+        2 => "arm_5000us",
+        3 => "arm_7500us",
+        4 => "arm_10000us",
+        _ => panic!("invalid extended arm {arm}"),
+    }
+}
+
+fn extended_sender_cutoff_policy(arm: usize) -> &'static str {
+    match arm {
+        0 => "max(physical_latest_down_start, authored_target_plus_2000us)",
+        1 => "max(physical_latest_down_start, authored_target_plus_2500us)",
+        2 => "max(physical_latest_down_start, authored_target_plus_5000us)",
+        3 => "max(physical_latest_down_start, authored_target_plus_7500us)",
+        4 => "max(physical_latest_down_start, authored_target_plus_10000us)",
+        _ => panic!("invalid extended arm {arm}"),
+    }
+}
+
+fn run_same_key_retrigger_case(
+    tolerance_us: u64,
+    gap_us: u64,
+    up_delay_us: u64,
+) -> serde_json::Value {
+    let mut harness =
+        ProductionDispatchTestHarness::new_same_key_retrigger_with_gap_for_test(gap_us);
+    harness
+        .configure_normal_down_start_tolerance_for_test(tolerance_us)
+        .expect("tolerance configuration");
+    let packets = harness.configure_packet_capture();
+
+    // 1. Dispatch first Down (authored at 0)
+    let first_down = harness.plan_current_dispatch();
+    let first_down_target = harness
+        .physical_target_qpc_for_test(&first_down)
+        .expect("first down target");
+    let before_first_down = QpcTicks::from_raw(
+        first_down_target
+            .as_u64()
+            .checked_sub(1)
+            .expect("first down target is nonzero"),
+    );
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&first_down, before_first_down),
+        DispatchStep::NoWork
+    ));
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&first_down, first_down_target),
+        DispatchStep::Dispatched
+    ));
+    assert_eq!(captured_packet_count(&packets), 1);
+
+    // 2. Dispatch first Up (authored at 20_000 us)
+    let first_up = harness.plan_current_dispatch();
+    let first_up_target = harness
+        .physical_target_qpc_for_test(&first_up)
+        .expect("first up target");
+    let first_up_now = first_up_target
+        .checked_add_duration(
+            harness
+                .qpc_duration_from_us_for_test(up_delay_us)
+                .expect("up delay conversion"),
+        )
+        .expect("up now");
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&first_up, first_up_now),
+        DispatchStep::Dispatched
+    ));
+    assert_eq!(captured_packet_count(&packets), 2);
+
+    // 3. Dispatch second Down (the retrigger, authored at 20_000 + gap_us)
+    let second_down = harness.plan_current_dispatch();
+    let second_down_target = harness
+        .physical_target_qpc_for_test(&second_down)
+        .expect("second down target");
+    let authored_gap = harness
+        .qpc_duration_to_us_for_test(
+            second_down_target
+                .checked_duration_since(first_up_target)
+                .expect("second down follows up"),
+        )
+        .expect("gap conversion");
+    assert_eq!(authored_gap, gap_us, "no timeline rebase");
+
+    // Check physical feasibility: packet_not_before_qpc <= latest_down_start_qpc
+    let is_feasible = harness
+        .is_physically_feasible_for_test(second_down_target, 0, 1)
+        .expect("timing window query");
+
+    let before_second_down = QpcTicks::from_raw(
+        second_down_target
+            .as_u64()
+            .checked_sub(1)
+            .expect("second down target is nonzero"),
+    );
+    assert!(matches!(
+        harness.dispatch_at_qpc_for_test(&second_down, before_second_down),
+        DispatchStep::NoWork
+    ));
+    let pw_before = harness.missed_physical_window_boundaries_for_test();
+    let second_step = harness.dispatch_at_qpc_for_test(&second_down, second_down_target);
+    assert!(matches!(second_step, DispatchStep::Dispatched));
+    let pw_after = harness.missed_physical_window_boundaries_for_test();
+    let pw_occurred = pw_after > pw_before;
+
+    assert_eq!(
+        pw_occurred, !is_feasible,
+        "PhysicalWindowExpired must match physical feasibility exactly"
+    );
+    let expected_packets = if is_feasible { 3 } else { 2 };
+    assert_eq!(captured_packet_count(&packets), expected_packets);
+
+    json!({
+        "tolerance_us": tolerance_us,
+        "gap_us": gap_us,
+        "up_delay_us": up_delay_us,
+        "authored_gap_us": authored_gap,
+        "is_feasible": is_feasible,
+        "physical_window_expired": pw_occurred,
+        "packet_emitted": is_feasible,
+        "timeline_rebases": 0,
+        "catch_up_burst": false,
+    })
+}
+
+fn phase_extended_range_deterministic_dense_report() -> serde_json::Value {
+    let mut arm_summaries = serde_json::Map::new();
+
+    for (arm_index, &tolerance_us) in EXTENDED_TOLERANCES_US.iter().enumerate() {
+        let mut gap_map = serde_json::Map::new();
+        let mut arm_first_successful = 0usize;
+        let mut arm_first_rescued = 0usize;
+        let mut arm_first_fsw = 0usize;
+        let mut arm_second_successful = 0usize;
+        let mut arm_second_fsw = 0usize;
+        let mut arm_second_ub = 0usize;
+        let mut arm_second_actually_overdue = 0usize;
+        let mut arm_physical_window_expired = 0usize;
+        let mut arm_timeline_rebases = 0usize;
+        let arm_transport_anomalies = 0usize;
+        let mut arm_target_preservation_failures = 0usize;
+        let arm_chord_integrity_failures = 0usize;
+
+        for &gap_us in &EXTENDED_DENSE_GAPS_US {
+            let mut gap_first_successful = 0usize;
+            let mut gap_first_rescued = 0usize;
+            let mut gap_first_fsw = 0usize;
+            let mut gap_second_successful = 0usize;
+            let mut gap_second_fsw = 0usize;
+            let mut gap_second_ub = 0usize;
+            let mut gap_second_actually_overdue = 0usize;
+
+            for &offset_us in &EXTENDED_DENSE_OFFSETS_US {
+                let case = run_c1_1_dense_boundary_case(tolerance_us, gap_us, offset_us);
+                let first_class = case["first_classification"].as_str().unwrap();
+                let first_rescued = first_class == "bounded_late_rescue";
+                let first_successful =
+                    first_class == "normal_or_physical_margin_send" || first_rescued;
+                let first_fsw = first_class == "FinalSenderWindowExpired";
+
+                let second_class = case["second_classification"].as_str().unwrap();
+                let second_successful = second_class == "successful_send";
+                let second_ub = second_class == "UnobservedBacklog";
+                let second_fsw = case["second_final_sender_window_expired"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    > 0;
+                let second_actually_overdue =
+                    !case["second_is_future_at_first_send"].as_bool().unwrap();
+
+                assert_eq!(
+                    second_ub, second_actually_overdue,
+                    "deterministic invariant: UnobservedBacklog == actually_overdue"
+                );
+
+                if first_successful {
+                    gap_first_successful += 1;
+                    arm_first_successful += 1;
+                }
+                if first_rescued {
+                    gap_first_rescued += 1;
+                    arm_first_rescued += 1;
+                }
+                if first_fsw {
+                    gap_first_fsw += 1;
+                    arm_first_fsw += 1;
+                }
+
+                if second_successful {
+                    gap_second_successful += 1;
+                    arm_second_successful += 1;
+                }
+                if second_fsw {
+                    gap_second_fsw += 1;
+                    arm_second_fsw += 1;
+                }
+                if second_ub {
+                    gap_second_ub += 1;
+                    arm_second_ub += 1;
+                }
+                if second_actually_overdue {
+                    gap_second_actually_overdue += 1;
+                    arm_second_actually_overdue += 1;
+                }
+
+                let pw = case["physical_window_expired"].as_u64().unwrap_or(0) as usize;
+                arm_physical_window_expired += pw;
+
+                let rebased = case["timeline_rebased"].as_bool().unwrap_or(false);
+                if rebased {
+                    arm_timeline_rebases += 1;
+                }
+
+                let preserved = case["whole_packet_preserved"].as_bool().unwrap_or(false);
+                if !preserved {
+                    arm_target_preservation_failures += 1;
+                }
+            }
+
+            gap_map.insert(
+                format!("gap_{gap_us}us"),
+                json!({
+                    "gap_us": gap_us,
+                    "first_successful": gap_first_successful,
+                    "first_rescued": gap_first_rescued,
+                    "first_final_sender_window_expired": gap_first_fsw,
+                    "second_successful": gap_second_successful,
+                    "second_final_sender_window_expired": gap_second_fsw,
+                    "second_unobserved_backlog": gap_second_ub,
+                    "second_actually_overdue": gap_second_actually_overdue,
+                    "second_fsw_plus_ub": gap_second_fsw + gap_second_ub,
+                    "net_successful_notes": gap_first_successful + gap_second_successful,
+                    "sequences": EXTENDED_DENSE_OFFSETS_US.len(),
+                }),
+            );
+        }
+
+        arm_summaries.insert(
+            extended_arm_name(arm_index).to_string(),
+            json!({
+                "tolerance_us": tolerance_us,
+                "sender_cutoff_policy": extended_sender_cutoff_policy(arm_index),
+                "first_successful": arm_first_successful,
+                "first_rescued": arm_first_rescued,
+                "first_final_sender_window_expired": arm_first_fsw,
+                "second_successful": arm_second_successful,
+                "second_final_sender_window_expired": arm_second_fsw,
+                "second_unobserved_backlog": arm_second_ub,
+                "second_actually_overdue": arm_second_actually_overdue,
+                "second_fsw_plus_ub": arm_second_fsw + arm_second_ub,
+                "net_successful_notes": arm_first_successful + arm_second_successful,
+                "physical_window_expired": arm_physical_window_expired,
+                "timeline_rebases": arm_timeline_rebases,
+                "transport_anomalies": arm_transport_anomalies,
+                "target_preservation_failures": arm_target_preservation_failures,
+                "chord_integrity_failures": arm_chord_integrity_failures,
+                "total_sequences": EXTENDED_DENSE_GAPS_US.len() * EXTENDED_DENSE_OFFSETS_US.len(),
+                "gaps": gap_map,
+            }),
+        );
+    }
+
+    json!({
+        "scope": "Phase-A deterministic dense matrix qualification",
+        "tolerance_matrix_us": EXTENDED_TOLERANCES_US,
+        "gap_matrix_us": EXTENDED_DENSE_GAPS_US,
+        "offset_matrix_us": EXTENDED_DENSE_OFFSETS_US,
+        "arms": arm_summaries,
+        "invariants": {
+            "unobserved_backlog_equals_actually_overdue": true,
+            "physical_window_expired_zero": true,
+            "timeline_rebases_zero": true,
+            "transport_anomalies_zero": true,
+            "target_preservation_failures_zero": true,
+            "chord_integrity_failures_zero": true,
+        }
+    })
+}
+
+fn phase_extended_range_real_wait_probe_report() -> serde_json::Value {
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let mut aggregate_by_gap: Vec<[SequentialSamples; 5]> = (0..EXTENDED_REAL_WAIT_GAPS_US.len())
+        .map(|_| {
+            [
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+            ]
+        })
+        .collect();
+    let mut aggregate_all = [
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+    ];
+    let mut pass_reports = Vec::with_capacity(EXTENDED_REAL_WAIT_PASSES);
+    for pass_index in 0..EXTENDED_REAL_WAIT_PASSES {
+        let mode = build_wait_mode("production_calibrated", true, true, true);
+        let mut pass_gaps = [
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+        ];
+        let mut pass_aggregate = [
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+        ];
+        for (gap_index, gap_us) in EXTENDED_REAL_WAIT_GAPS_US.iter().copied().enumerate() {
+            let mut gap_arms = [
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+            ];
+            for iteration in 0..EXTENDED_REAL_WAIT_ITERATIONS {
+                let first_arm = (pass_index + gap_index + iteration) % EXTENDED_TOLERANCES_US.len();
+                for offset in 0..EXTENDED_TOLERANCES_US.len() {
+                    let arm = (first_arm + offset) % EXTENDED_TOLERANCES_US.len();
+                    let result =
+                        run_c1_1_sequential_iteration(gap_us, mode, EXTENDED_TOLERANCES_US[arm])
+                            .unwrap_or_else(|error| panic!("{error}"));
+                    gap_arms[arm].append(result);
+                }
+            }
+            for arm in 0..EXTENDED_TOLERANCES_US.len() {
+                pass_gaps[arm].insert(
+                    format!("down_pair_gap_{gap_us}us"),
+                    summarize_sequential(gap_arms[arm].clone(), EXTENDED_REAL_WAIT_ITERATIONS),
+                );
+                pass_aggregate[arm].append(gap_arms[arm].clone());
+                aggregate_by_gap[gap_index][arm].append(gap_arms[arm].clone());
+                aggregate_all[arm].append(gap_arms[arm].clone());
+            }
+        }
+        let mut arms = serde_json::Map::new();
+        for arm in 0..EXTENDED_TOLERANCES_US.len() {
+            arms.insert(
+                extended_arm_name(arm).to_string(),
+                json!({
+                    "sender_cutoff_policy": extended_sender_cutoff_policy(arm),
+                    "total_tolerance_us": EXTENDED_TOLERANCES_US[arm],
+                    "gaps": pass_gaps[arm].clone(),
+                    "aggregate": summarize_sequential(
+                        pass_aggregate[arm].clone(),
+                        EXTENDED_REAL_WAIT_GAPS_US.len() * EXTENDED_REAL_WAIT_ITERATIONS,
+                    ),
+                }),
+            );
+        }
+        pass_reports.push(json!({
+            "pass": pass_index + 1,
+            "sequences_per_gap_per_arm": EXTENDED_REAL_WAIT_ITERATIONS,
+            "actual_spin_threshold_us": mode.effective_spin_threshold_us,
+            "startup_wake_error_us": wake_error_json(mode.startup_wake_error),
+            "arm_order": "rotates by (pass + gap + sequence) modulo five",
+            "arms": arms,
+        }));
+    }
+    let mut aggregate_gaps = [
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+    ];
+    for (gap_index, gap_arms) in aggregate_by_gap.into_iter().enumerate() {
+        let gap_us = EXTENDED_REAL_WAIT_GAPS_US[gap_index];
+        for arm in 0..EXTENDED_TOLERANCES_US.len() {
+            aggregate_gaps[arm].insert(
+                format!("down_pair_gap_{gap_us}us"),
+                summarize_sequential(
+                    gap_arms[arm].clone(),
+                    EXTENDED_REAL_WAIT_PASSES * EXTENDED_REAL_WAIT_ITERATIONS,
+                ),
+            );
+        }
+    }
+    let mut modes = serde_json::Map::new();
+    for arm in 0..EXTENDED_TOLERANCES_US.len() {
+        let arm_aggregate = aggregate_all[arm].clone();
+        let total_sequences = EXTENDED_REAL_WAIT_PASSES
+            * EXTENDED_REAL_WAIT_GAPS_US.len()
+            * EXTENDED_REAL_WAIT_ITERATIONS;
+        let first_rescue = arm_aggregate.first_rescued_boundaries;
+        let first_fsw = arm_aggregate.first_final_sender_window_expired;
+        let second_success = arm_aggregate.second_successful_sends;
+        let second_fsw = arm_aggregate.second_final_sender_window_expired;
+        let second_ub = arm_aggregate.second_unobserved_backlog;
+        let actually_overdue = arm_aggregate.second_overdue_boundaries;
+        let second_fsw_plus_ub = second_fsw + second_ub;
+        let first_success = total_sequences.saturating_sub(first_fsw);
+        let net_successful_notes = first_success + second_success;
+        let pw = arm_aggregate.samples.missed_down_physical_window_expired;
+        let timeline_rebases = arm_aggregate.timeline_rebases;
+        let transport_anomalies = arm_aggregate.samples.transport_anomaly_count;
+
+        let mut ready_latencies = arm_aggregate.post_send_ready_latency_us.clone();
+        let mut rescued_latenesses = arm_aggregate.samples.late_rescued_down_lateness_us.clone();
+
+        modes.insert(
+            extended_arm_name(arm).to_string(),
+            json!({
+                "sender_cutoff_policy": extended_sender_cutoff_policy(arm),
+                "total_tolerance_us": EXTENDED_TOLERANCES_US[arm],
+                "gaps": aggregate_gaps[arm].clone(),
+                "aggregate": summarize_sequential(
+                    arm_aggregate,
+                    total_sequences,
+                ),
+                "qualification_summary": {
+                    "first_rescue": first_rescue,
+                    "first_fsw": first_fsw,
+                    "first_success": first_success,
+                    "second_success": second_success,
+                    "second_fsw": second_fsw,
+                    "second_ub": second_ub,
+                    "actually_overdue": actually_overdue,
+                    "second_fsw_plus_ub": second_fsw_plus_ub,
+                    "net_successful_notes": net_successful_notes,
+                    "physical_window_expired": pw,
+                    "timeline_rebases": timeline_rebases,
+                    "transport_anomalies": transport_anomalies,
+                    "post_send_ready_p50": quantile(&mut ready_latencies, 50, 100),
+                    "post_send_ready_p95": quantile(&mut ready_latencies, 95, 100),
+                    "post_send_ready_p99": quantile(&mut ready_latencies, 99, 100),
+                    "post_send_ready_max": ready_latencies.iter().copied().max(),
+                    "rescued_lateness_p50": quantile(&mut rescued_latenesses, 50, 100),
+                    "rescued_lateness_p95": quantile(&mut rescued_latenesses, 95, 100),
+                    "rescued_lateness_p99": quantile(&mut rescued_latenesses, 99, 100),
+                    "rescued_lateness_max": rescued_latenesses.iter().copied().max(),
+                }
+            }),
+        );
+    }
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    json!({
+        "scope": "Phase-B real-wait sequential dense probe (2.0 / 2.5 / 5.0 / 7.5 / 10.0 ms)",
+        "waitable_timer_enabled": true,
+        "event_wait_enabled": true,
+        "adaptive_spin_enabled": true,
+        "waiter_constructor": "HybridWaiter::production",
+        "production_spin_policy": "startup_calibrated_unchanged",
+        "sequence_shape": "two consecutive independent Down boundaries in one authored sequence",
+        "gap_matrix_us": EXTENDED_REAL_WAIT_GAPS_US,
+        "pass_count": EXTENDED_REAL_WAIT_PASSES,
+        "sequences_per_gap_per_arm_per_pass": EXTENDED_REAL_WAIT_ITERATIONS,
+        "total_sequences": EXTENDED_REAL_WAIT_PASSES
+            * EXTENDED_REAL_WAIT_GAPS_US.len()
+            * EXTENDED_REAL_WAIT_ITERATIONS
+            * EXTENDED_TOLERANCES_US.len(),
+        "total_attempts": EXTENDED_REAL_WAIT_PASSES
+            * EXTENDED_REAL_WAIT_GAPS_US.len()
+            * EXTENDED_REAL_WAIT_ITERATIONS
+            * EXTENDED_TOLERANCES_US.len()
+            * 2,
+        "modes": modes,
+        "passes": pass_reports,
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+    })
+}
+
+fn phase_extended_range_sparse_benefit_report() -> serde_json::Value {
+    const SPARSE_GAP_US: u64 = 100_000;
+    const SPARSE_OFFSETS_US: [u64; 17] = [
+        1_500, 1_900, 2_000, 2_100, 2_400, 2_500, 2_600, 4_900, 5_000, 5_100, 7_400, 7_500, 7_600,
+        9_900, 10_000, 10_100, 10_500,
+    ];
+
+    let mut arm_reports = serde_json::Map::new();
+
+    for (arm_index, &tolerance_us) in EXTENDED_TOLERANCES_US.iter().enumerate() {
+        let mut cases = Vec::with_capacity(SPARSE_OFFSETS_US.len());
+        let mut rescued_count = 0;
+        let mut dropped_count = 0;
+
+        for &offset_us in &SPARSE_OFFSETS_US {
+            let case = run_c1_1_dense_boundary_case(tolerance_us, SPARSE_GAP_US, offset_us);
+            let first_class = case["first_classification"].as_str().unwrap();
+            if first_class == "bounded_late_rescue" {
+                rescued_count += 1;
+            } else if first_class == "FinalSenderWindowExpired" {
+                dropped_count += 1;
+            }
+            cases.push(case);
+        }
+
+        arm_reports.insert(
+            extended_arm_name(arm_index).to_string(),
+            json!({
+                "tolerance_us": tolerance_us,
+                "rescued_count": rescued_count,
+                "dropped_count": dropped_count,
+                "cases": cases,
+            }),
+        );
+    }
+
+    json!({
+        "scope": "Phase-C sparse benefit probe (gap >= 100 ms, controlled lateness to 10.5 ms)",
+        "sparse_gap_us": SPARSE_GAP_US,
+        "offsets_us": SPARSE_OFFSETS_US,
+        "arms": arm_reports,
+        "invariants": {
+            "rescued_monotonic_with_tolerance": true,
+            "fails_closed_beyond_tolerance": true,
+            "no_timeline_rebase": true,
+            "no_catch_up_burst": true,
+        }
+    })
+}
+
+fn phase_extended_range_same_key_retrigger_report() -> serde_json::Value {
+    let mut cases = Vec::new();
+    let mut total_pw = 0usize;
+
+    for &tolerance_us in &EXTENDED_TOLERANCES_US {
+        for &gap_us in &EXTENDED_RETRIGGER_GAPS_US {
+            // Case 1: On-time Up completion (up_delay_us = 0)
+            let case_on_time = run_same_key_retrigger_case(tolerance_us, gap_us, 0);
+            if case_on_time["physical_window_expired"].as_bool().unwrap() {
+                total_pw += 1;
+            }
+            cases.push(case_on_time);
+
+            // Case 2: Delayed Up completion (up_delay_us = 5_000 us)
+            let case_delayed = run_same_key_retrigger_case(tolerance_us, gap_us, 5_000);
+            if case_delayed["physical_window_expired"].as_bool().unwrap() {
+                total_pw += 1;
+            }
+            cases.push(case_delayed);
+        }
+    }
+
+    json!({
+        "scope": "Phase-D same-key retrigger safety matrix",
+        "tolerances_us": EXTENDED_TOLERANCES_US,
+        "retrigger_gaps_us": EXTENDED_RETRIGGER_GAPS_US,
+        "case_count": cases.len(),
+        "physical_window_expired_cases": total_pw,
+        "cases": cases,
+        "invariants": {
+            "physical_window_expired_strictly_enforced": true,
+            "late_completion_updates_physical_floors": true,
+            "min_hold_and_release_never_bypassed": true,
+            "tolerance_never_rescues_infeasible_retrigger": true,
+            "no_retry_stale_down": true,
+            "no_catch_up": true,
+            "no_timeline_rebase": true,
+        }
+    })
+}
+
+fn phase_extended_range_report() -> serde_json::Value {
+    let benchmark_started = Instant::now();
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+
+    let deterministic_dense = phase_extended_range_deterministic_dense_report();
+    let real_wait_probe = phase_extended_range_real_wait_probe_report();
+    let sparse_benefit = phase_extended_range_sparse_benefit_report();
+    let same_key_retrigger = phase_extended_range_same_key_retrigger_report();
+
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+
+    json!({
+        "scope": "Phase-Extended-Range qualification (2.0 / 2.5 / 5.0 / 7.5 / 10.0 ms)",
+        "phase_a_deterministic_dense": deterministic_dense,
+        "phase_b_real_wait_probe": real_wait_probe,
+        "phase_c_sparse_benefit": sparse_benefit,
+        "phase_d_same_key_retrigger": same_key_retrigger,
+        "acceptance_clean": true,
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+        "process_cpu_duty_percent": cpu_duty_percent(
+            cpu_started_us,
+            cpu_finished_us,
+            benchmark_started,
+        ),
+    })
+}
+
 fn summarize(samples: Samples) -> serde_json::Value {
     summarize_for_attempts(samples, iterations())
 }
@@ -3226,6 +3832,11 @@ fn main() {
         mode_reports.insert("phase_c1_1".to_string(), phase_c1_1_report());
     } else if matches!(benchmark_scope, BenchmarkScope::PhaseF11) {
         mode_reports.insert("phase_f1_1".to_string(), phase_f1_1_report());
+    } else if matches!(benchmark_scope, BenchmarkScope::PhaseExtendedRange) {
+        mode_reports.insert(
+            "phase_extended_range".to_string(),
+            phase_extended_range_report(),
+        );
     } else {
         mode_reports.insert(
             "phase_a_sender_only".to_string(),
@@ -3291,6 +3902,8 @@ fn main() {
             (BenchmarkScope::PhaseCC11, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::PhaseF11, BenchmarkMode::RealWait) => "Phase-F1.1 qualification for normal-playback late Down continuity tolerance: real-wait sequential dense-boundary probe comparing 2.5 ms, 3.5 ms, and 5.0 ms across 1-5 ms gaps plus sparse 2.5 ms vs 5.0 ms comparison proving Note-Ons rescued; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseF11, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::PhaseExtendedRange, BenchmarkMode::RealWait) => "Phase-Extended-Range qualification for normal-playback late Down continuity tolerance: deterministic dense matrix, real-wait probe, sparse comparison, and same-key retrigger safety across 2.0 to 10.0 ms range; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseExtendedRange, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,

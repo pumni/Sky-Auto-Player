@@ -10194,5 +10194,29 @@ mod tests {
             sky_app_core::settings::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
             2_500
         );
+        assert_eq!(
+            sky_app_core::settings::MIN_NORMAL_DOWN_START_TOLERANCE_US,
+            sky_player::engine::MIN_NORMAL_DOWN_START_TOLERANCE_US
+        );
+        assert_eq!(
+            sky_app_core::settings::MIN_NORMAL_DOWN_START_TOLERANCE_US,
+            2_000
+        );
+        assert_eq!(
+            sky_app_core::settings::MAX_NORMAL_DOWN_START_TOLERANCE_US,
+            sky_player::engine::MAX_NORMAL_DOWN_START_TOLERANCE_US
+        );
+        assert_eq!(
+            sky_app_core::settings::MAX_NORMAL_DOWN_START_TOLERANCE_US,
+            10_000
+        );
+        assert_eq!(
+            sky_app_core::settings::NORMAL_DOWN_START_TOLERANCE_STEP_US,
+            sky_player::engine::STEP_NORMAL_DOWN_START_TOLERANCE_US
+        );
+        assert_eq!(
+            sky_app_core::settings::NORMAL_DOWN_START_TOLERANCE_STEP_US,
+            500
+        );
     }
 }

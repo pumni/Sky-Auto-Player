@@ -10,8 +10,8 @@ const options: PlaybackOptionSets = {
   timing_margin_min_us: 0,
   timing_margin_max_us: 3_000,
   timing_margin_step_us: 100,
-  normal_down_start_tolerance_min_us: 2_500,
-  normal_down_start_tolerance_max_us: 5_000,
+  normal_down_start_tolerance_min_us: 2_000,
+  normal_down_start_tolerance_max_us: 10_000,
   normal_down_start_tolerance_step_us: 500,
   normal_down_start_tolerance_default_us: 2_500,
 };

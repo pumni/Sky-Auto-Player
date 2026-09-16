@@ -1904,7 +1904,7 @@ mod tests {
 
     #[test]
     fn c1_1_strict_timing_ignores_configured_tolerances_3_4_5_ms() {
-        for tolerance_us in [3_000, 4_000, 5_000] {
+        for tolerance_us in [2_000, 2_500, 3_000, 4_000, 5_000, 7_500, 10_000] {
             let mut rejected = ProductionDispatchTestHarness::new_down_only();
             rejected
                 .configure_normal_down_start_tolerance_for_test(tolerance_us)

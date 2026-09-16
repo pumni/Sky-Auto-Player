@@ -187,7 +187,7 @@ fn c1_normal_cutoff_is_non_additive_and_strict_cutoff_is_unchanged() {
 fn c1_1_normal_cutoff_is_non_additive_and_strict_ignores_tolerances_3_4_5_ms() {
     let target = QpcTicks::from_raw(20_000);
 
-    for tolerance_us in [3_000, 4_000, 5_000] {
+    for tolerance_us in [2_000, 2_500, 3_000, 4_000, 5_000, 7_500, 10_000] {
         let tolerance = DurationTicks::from_raw(tolerance_us);
         let mut timing = WorkerTimingState::create_test_timing();
         timing.strict_timing = false;

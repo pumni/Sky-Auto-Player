@@ -122,6 +122,41 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    /// Same-key retrigger with a caller-selected authored gap between
+    /// the release (Up) and the second Down.
+    pub fn new_same_key_retrigger_with_gap_for_test(gap_us: u64) -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "same-key-down1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "same-key-up1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 20_000 + gap_us,
+                scan_codes: vec![0x15].into(),
+                reason: "same-key-down2".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000 + gap_us + 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "same-key-cleanup".into(),
+            },
+        ])
+    }
+
     /// Build a DownOnly chord whose physical deadline is at 1 ms.
     pub fn new_down_chord(key_count: usize) -> Self {
         Self::new_down_chord_with_gap(key_count, 1_000)
@@ -822,6 +857,23 @@ impl ProductionDispatchTestHarness {
             .duration_from_us(tolerance_us)
             .map_err(|error| format!("test Down continuity tolerance conversion: {error:?}"))?;
         Ok(())
+    }
+
+    pub fn is_physically_feasible_for_test(
+        &self,
+        target: QpcTicks,
+        up_mask: u16,
+        down_mask: u16,
+    ) -> Result<bool, String> {
+        let guard = self
+            .runtime
+            .physical_timing_guard
+            .as_ref()
+            .ok_or_else(|| "missing physical timing guard".to_string())?;
+        let window = guard
+            .query(target, up_mask, down_mask)
+            .map_err(|e| format!("timing guard query failed: {e:?}"))?;
+        Ok(window.is_down_feasible())
     }
 
     pub fn set_strict_timing_for_test(&mut self, strict: bool) {
