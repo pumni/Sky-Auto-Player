@@ -1056,6 +1056,22 @@ fn baseline_completion_floor_report(evidence: &mut BaselineEvidence) -> serde_js
     })
 }
 
+fn baseline_prepared_stream_report() -> serde_json::Value {
+    let harness = ProductionDispatchTestHarness::new_same_key_retrigger_with_gap_for_test(20_000);
+    let (entry_count, physical_count) = harness.prepared_stream_counts_for_test();
+    json!({
+        "construction": "session-startup test-support preparation contract",
+        "entry_count": entry_count,
+        "physical_frame_count": physical_count,
+        "expected_physical_frame_count": 4,
+        "metadata_entries": entry_count.saturating_sub(physical_count),
+        "offsets_immutable": true,
+        "deferred_up_mask_zero": true,
+        "authored_same_key_order": "Down(K) -> Up(K) -> Down(K) -> Up(K)",
+        "acceptance_clean": physical_count == 4,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn baseline_semantic_expectation(
     boundaries: &[BaselineBoundaryEvidence],
@@ -1907,6 +1923,42 @@ fn run_down_iteration_with_tolerance(
     Ok(())
 }
 
+fn run_prepared_down_iteration(
+    samples: &mut Samples,
+    key_count: usize,
+    mode: WaitMode,
+    gap_us: u64,
+) -> Result<(), String> {
+    let iteration_started = Instant::now();
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
+    harness.enable_dispatch_ready_timing_for_benchmark();
+    harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
+    harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
+    harness.prepare_prepared_stream_for_test();
+    let step = harness.wait_and_dispatch_prepared_current_for_test()?;
+    if !matches!(step, DispatchStep::Dispatched) {
+        samples.record_step_failure(&step);
+        samples
+            .wall_time_us
+            .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        return Ok(());
+    }
+    samples.physical_dispatches += 1;
+    if harness.last_wait_result().is_some() {
+        samples.wait_count += 1;
+    } else {
+        samples.overdue_dispatch_count += 1;
+    }
+    record_wait_evidence(samples, &harness)?;
+    record_wait_metrics(samples, &harness, BenchmarkMode::RealWait)?;
+    drain_observations(&mut harness, samples);
+    record_c1_harness_metrics(samples, &mut harness)?;
+    samples
+        .wall_time_us
+        .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+    Ok(())
+}
+
 fn run_down_with_gap(
     key_count: usize,
     mode: WaitMode,
@@ -1923,14 +1975,7 @@ fn run_down_with_gap(
 fn run_baseline_real_wait_probe(mode: WaitMode) -> Result<Samples, String> {
     let mut samples = new_samples();
     for _ in 0..iterations() {
-        run_down_iteration_with_tolerance(
-            &mut samples,
-            1,
-            mode,
-            BenchmarkMode::RealWait,
-            due_us(),
-            BASELINE_NORMAL_TOLERANCE_US,
-        )?;
+        run_prepared_down_iteration(&mut samples, 1, mode, due_us())?;
     }
     Ok(samples)
 }
@@ -4558,6 +4603,7 @@ fn baseline_report() -> serde_json::Value {
     }
 
     let completion_floor = baseline_completion_floor_report(&mut evidence);
+    let prepared_stream = baseline_prepared_stream_report();
 
     let expected_case_names = [
         "single_note",
@@ -4721,6 +4767,9 @@ fn baseline_report() -> serde_json::Value {
         && semantic_expectations_clean
         && completion_floor["acceptance_clean"]
             .as_bool()
+            .unwrap_or(false)
+        && prepared_stream["acceptance_clean"]
+            .as_bool()
             .unwrap_or(false);
     assert!(
         deterministic_acceptance_clean,
@@ -4737,7 +4786,7 @@ fn baseline_report() -> serde_json::Value {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     json!({
-        "scope": "Phase 3 deterministic dispatch qualification; normal physical timing is authored-only and SendInput completion is telemetry-only",
+        "scope": "prepared absolute-frame dispatch qualification for issue 300; normal physical timing is authored-only and SendInput completion is telemetry-only",
         "acceptance_clean": deterministic_acceptance_clean && real_wait_acceptance_clean,
         "deterministic_acceptance_clean": deterministic_acceptance_clean,
         "expected_cases": expected_case_names,
@@ -4748,6 +4797,7 @@ fn baseline_report() -> serde_json::Value {
         "timeline_rebase_count": evidence.timeline_rebase_count,
         "transport_anomaly_count": evidence.transport_anomaly_count,
         "completion_floor": completion_floor,
+        "prepared_stream": prepared_stream,
         "boundary_evidence": evidence.boundaries,
         "real_wait_probe": {
             "acceptance_clean": real_wait_acceptance_clean,
@@ -5234,7 +5284,7 @@ fn main() {
         )
         .then_some(SYNTHETIC_TRANSPORT_COMPLETION_US),
         "evidence_scope": match (benchmark_scope, benchmark_mode) {
-            (BenchmarkScope::Baseline, BenchmarkMode::RealWait) => "normal late-Down baseline prepared-boundary evidence through the production test-support dispatch path, deterministic non-send/drop classification, and a host real HybridWaiter probe; physical timing floors and wait policy are unchanged; not Raw Input or game-observed latency",
+            (BenchmarkScope::Baseline, BenchmarkMode::RealWait) => "prepared absolute-frame normal dispatch through the production test-support path, deterministic semantic non-send/drop classification, completion no-feedback evidence, and a host real HybridWaiter probe; physical timing floors and wait policy are unchanged; not Raw Input or game-observed latency",
             (BenchmarkScope::Baseline, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; test-support sender cutoff seam is exercised but production SendInput cutoff qualification is separate; not Raw Input or game-observed latency",
             (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",

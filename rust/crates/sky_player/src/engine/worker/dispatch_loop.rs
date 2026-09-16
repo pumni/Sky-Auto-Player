@@ -13,6 +13,7 @@ use super::{
     record_wait_failure, supervisor_lease_expired, suspend_live_input, target_stamp_still_current,
     wait_for_next_boundary,
 };
+use super::{PreparedDispatchEntry, dispatch_prepared_normal_frame};
 use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -27,6 +28,44 @@ fn physical_target_qpc_for_work(
         return Ok(None);
     };
     Ok((allow_pre_deadline || target <= now).then_some(target))
+}
+
+#[inline]
+fn normal_prepared_target_qpc(
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+    offset_ticks: TimelineTicks,
+) -> Result<sky_dispatch_win32::clock::QpcTicks, String> {
+    epoch_qpc
+        .checked_add_duration(DurationTicks::from_raw(offset_ticks.as_u64()))
+        .map_err(|error| format!("prepared frame target arithmetic failure: {error}"))
+}
+
+#[inline]
+pub(crate) fn normal_prepared_timing_window(
+    physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
+    masks: sky_dispatch_win32::input::PhysicalPacket,
+    timing_margin_ticks: DurationTicks,
+) -> Result<super::physical_timing_guard::PhysicalTimingWindow, String> {
+    let latest_down_start_qpc = if masks.down_mask == 0 {
+        None
+    } else {
+        Some(
+            physical_target_qpc
+                .checked_add_duration(timing_margin_ticks)
+                .map_err(|error| {
+                    format!("prepared Down latest-start arithmetic failure: {error}")
+                })?,
+        )
+    };
+    Ok(super::physical_timing_guard::PhysicalTimingWindow {
+        authored_target_qpc: physical_target_qpc,
+        musical_up_not_before_qpc: physical_target_qpc,
+        down_not_before_qpc: physical_target_qpc,
+        packet_not_before_qpc: physical_target_qpc,
+        latest_down_start_qpc,
+        hold_floor_mask: 0,
+        release_floor_mask: 0,
+    })
 }
 
 #[inline]
@@ -648,6 +687,7 @@ pub(super) fn dispatch(
             .as_mut()
             .expect("worker resources initialized");
         let qpc_clock = resources.clock;
+        let mut prepared_stream = resources.prepared_stream.take();
         let mut system_suspend_applied = false;
         let mut system_resume_pending = false;
         while !resources.coordinator.is_finished() {
@@ -1130,6 +1170,287 @@ pub(super) fn dispatch(
                 continue;
             }
 
+            if prepared_stream
+                .as_ref()
+                .is_some_and(|stream| !stream.is_exhausted())
+            {
+                let (offset_ticks, has_physical) = {
+                    let stream = prepared_stream
+                        .as_ref()
+                        .expect("prepared stream is present");
+                    match stream.current().expect("prepared stream cursor is valid") {
+                        PreparedDispatchEntry::Physical(frame) => (frame.offset_ticks, true),
+                        PreparedDispatchEntry::Metadata { offset_ticks, .. } => {
+                            (*offset_ticks, false)
+                        }
+                    }
+                };
+                let target_qpc =
+                    match normal_prepared_target_qpc(resources.playback.epoch, offset_ticks) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(error);
+                            break;
+                        }
+                    };
+                let preflight_target = if has_physical {
+                    let frame = match prepared_stream.as_ref().and_then(|stream| stream.current()) {
+                        Some(PreparedDispatchEntry::Physical(frame)) => frame,
+                        _ => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(
+                                "prepared physical cursor changed before preflight".to_string(),
+                            );
+                            break;
+                        }
+                    };
+                    if frame.view.packet_masks.down_mask == 0 {
+                        None
+                    } else {
+                        core.runtime.preparation_probe.record_preflight();
+                        let target = load_target_stamp(target_hwnd, target_generation);
+                        if let Err(error) = ensure_preflight_for_target(
+                            &resources.backend,
+                            target,
+                            &mut core.runtime.verified_target,
+                        ) {
+                            core.runtime.verified_target = None;
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(format!(
+                                "instrument key preflight failed before prepared wait; release the 15 instrument keys before playback: {error}"
+                            ));
+                            break;
+                        }
+                        if !target_stamp_still_current(target_hwnd, target_generation, target) {
+                            core.runtime.verified_target = None;
+                            continue;
+                        }
+                        Some(target)
+                    }
+                } else {
+                    None
+                };
+                let timing_window = if has_physical {
+                    let frame = match prepared_stream.as_ref().and_then(|stream| stream.current()) {
+                        Some(PreparedDispatchEntry::Physical(frame)) => frame,
+                        _ => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(
+                                "prepared physical cursor changed before timing window".to_string(),
+                            );
+                            break;
+                        }
+                    };
+                    match normal_prepared_timing_window(
+                        target_qpc,
+                        frame.view.packet_masks,
+                        timing.timing_margin_ticks,
+                    ) {
+                        Ok(window) => Some(window),
+                        Err(error) => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error = Some(error);
+                            break;
+                        }
+                    }
+                } else {
+                    None
+                };
+                core.runtime.future_physical_wait_target_qpc = has_physical.then_some(target_qpc);
+
+                let dispatch_result = if target_qpc <= now_ticks {
+                    Some((None, target_qpc, now_ticks))
+                } else {
+                    match wait_for_next_boundary(WaitBoundaryInput {
+                        deadline: WaitDeadline {
+                            physical_target_qpc: Some(target_qpc),
+                            spin_threshold_ticks: if has_physical {
+                                timing.effective_spin_threshold_ticks
+                            } else {
+                                DurationTicks::ZERO
+                            },
+                            qpc_clock,
+                        },
+                        signals: WaitSignals {
+                            waiter: &resources.waiter,
+                            interrupt,
+                        },
+                        mutable: WaitMutable {
+                            local_metrics: &mut core.metrics,
+                            force_full_cleanup: &mut core.runtime.force_full_cleanup,
+                            terminal_error: &mut core.runtime.terminal_error,
+                        },
+                    }) {
+                        WaitBoundary::Due {
+                            wait_result,
+                            target_qpc,
+                            dispatch_qpc,
+                            planned_wait_ticks,
+                        } => {
+                            if let Some(wait_result) = wait_result {
+                                core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
+                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                                if core.observer.pending.is_some() {
+                                    core.runtime.pending_wait_observation = Some(WaitObservation {
+                                        outcome: wait_result.outcome,
+                                        wake_qpc: wait_result.wake_qpc,
+                                        spin_ticks: wait_result.spin_ticks,
+                                        physical_target_qpc: target_qpc,
+                                        planned_wait_ticks,
+                                        deadline_ticks: offset_ticks,
+                                        epoch_qpc: resources.playback.epoch,
+                                        allow_pre_epoch_startup_dispatch: true,
+                                    });
+                                }
+                            }
+                            Some((wait_result, target_qpc, dispatch_qpc))
+                        }
+                        WaitBoundary::Replan {
+                            wait_result,
+                            target_qpc,
+                            planned_wait_ticks,
+                        } => {
+                            core.runtime.pending_wait_observation = Some(WaitObservation {
+                                outcome: wait_result.outcome,
+                                wake_qpc: wait_result.wake_qpc,
+                                spin_ticks: wait_result.spin_ticks,
+                                physical_target_qpc: target_qpc,
+                                planned_wait_ticks,
+                                deadline_ticks: offset_ticks,
+                                epoch_qpc: resources.playback.epoch,
+                                allow_pre_epoch_startup_dispatch: true,
+                            });
+                            let _ = interrupt.try_take();
+                            None
+                        }
+                        WaitBoundary::Exit => {
+                            core.runtime.future_physical_wait_target_qpc = None;
+                            break;
+                        }
+                    }
+                };
+                let Some((_wait_result, target_qpc, dispatch_qpc)) = dispatch_result else {
+                    continue;
+                };
+                core.runtime.future_physical_wait_target_qpc = None;
+                let effective_now_ticks = match resources
+                    .playback
+                    .get_elapsed_allow_pre_epoch(dispatch_qpc, true)
+                {
+                    Ok(ticks) => ticks,
+                    Err(error) => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(format!(
+                            "playback clock failure at prepared boundary: {error}"
+                        ));
+                        break;
+                    }
+                };
+                let step = if !has_physical {
+                    let stream = prepared_stream
+                        .as_mut()
+                        .expect("prepared stream is present");
+                    let commit = match stream.current() {
+                        Some(PreparedDispatchEntry::Metadata { commit, .. }) => commit,
+                        _ => {
+                            core.runtime.force_full_cleanup = true;
+                            core.runtime.terminal_error =
+                                Some("prepared metadata cursor changed before commit".to_string());
+                            break;
+                        }
+                    };
+                    match resources
+                        .coordinator
+                        .commit_prepared_authored_frame_metadata_frozen(commit)
+                    {
+                        Ok(()) => match stream.advance() {
+                            Ok(()) => super::DispatchStep::Dispatched,
+                            Err(error) => super::DispatchStep::TerminateStatic(error),
+                        },
+                        Err(error) => super::DispatchStep::Terminate(format!(
+                            "prepared metadata commit failure: {error}"
+                        )),
+                    }
+                } else {
+                    let stream = prepared_stream
+                        .as_ref()
+                        .expect("prepared stream is present");
+                    let Some(PreparedDispatchEntry::Physical(frame)) = stream.current() else {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error =
+                            Some("prepared physical cursor changed before dispatch".to_string());
+                        break;
+                    };
+                    dispatch_prepared_normal_frame(
+                        frame,
+                        config,
+                        resources,
+                        core.health.as_mut().unwrap(),
+                        &timing,
+                        &mut core.runtime,
+                        &mut core.metrics,
+                        focus_active,
+                        target_hwnd,
+                        target_generation,
+                        quit_requested,
+                        skip_requested,
+                        panic_requested,
+                        desired_pause,
+                        supervisor_expired,
+                        system_power,
+                        &shared.publication.progress_clock,
+                        core.observer.pending.as_ref(),
+                        preflight_target,
+                        target_qpc,
+                        timing_window.expect("prepared physical timing window"),
+                        effective_now_ticks,
+                        dispatch_qpc,
+                        focus_loss_fault,
+                        Some(dispatch_qpc),
+                        #[cfg(any(test, feature = "test-support"))]
+                        false,
+                    )
+                };
+                if matches!(&step, super::DispatchStep::Dispatched) && has_physical {
+                    if let Some(stream) = prepared_stream.as_mut()
+                        && let Err(error) = stream.advance()
+                    {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(error.to_string());
+                        break;
+                    }
+                    if metrics.live_diagnostics_enabled.load(Ordering::Relaxed) {
+                        publish_backend_counters(&resources.backend, &mut core.metrics);
+                        publish_live_metrics_after_dispatch(
+                            &core.metrics,
+                            metrics,
+                            qpc_clock,
+                            dispatch_qpc,
+                        );
+                    }
+                }
+                match step {
+                    super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
+                    super::DispatchStep::NoWork => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error =
+                            Some("prepared frame did not complete its dispatch step".to_string());
+                        break;
+                    }
+                    super::DispatchStep::Terminate(error) => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(error);
+                        break;
+                    }
+                    super::DispatchStep::TerminateStatic(error) => {
+                        core.runtime.force_full_cleanup = true;
+                        core.runtime.terminal_error = Some(error.to_string());
+                        break;
+                    }
+                }
+            }
+
             // Stale metadata is globally non-physical. Commit at most one
             // compiled packet per outer iteration, regardless of startup
             // phase, so every control/focus/pause/lease gate is re-admitted.
@@ -1491,7 +1812,7 @@ pub(super) fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        physical_target_qpc_for_work, physical_wait_target_for_plan,
+        normal_prepared_timing_window, physical_target_qpc_for_work, physical_wait_target_for_plan,
         publish_live_metrics_after_dispatch,
     };
     use crate::engine::shared::{SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING};
@@ -1689,6 +2010,26 @@ mod tests {
             Some(target),
             "target + 1 tick is overdue work"
         );
+    }
+
+    #[test]
+    fn normal_prepared_timing_window_is_authored_only() {
+        let target = QpcTicks::from_raw(1_000);
+        let margin = DurationTicks::from_raw(50);
+        let window =
+            normal_prepared_timing_window(target, PhysicalPacket::new(0b001, 0b010), margin)
+                .expect("normal prepared timing window");
+
+        assert_eq!(window.authored_target_qpc, target);
+        assert_eq!(window.musical_up_not_before_qpc, target);
+        assert_eq!(window.down_not_before_qpc, target);
+        assert_eq!(window.packet_not_before_qpc, target);
+        assert_eq!(
+            window.latest_down_start_qpc,
+            Some(QpcTicks::from_raw(1_050))
+        );
+        assert_eq!(window.hold_floor_mask, 0);
+        assert_eq!(window.release_floor_mask, 0);
     }
 
     #[test]

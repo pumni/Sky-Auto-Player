@@ -249,11 +249,16 @@ fn commit_down_send_outcome(
         observer,
     )
 }
+
 pub(crate) enum AdmissionOutcome {
     Allowed {
         trace_kind: u8,
         target_crossing_qpc: Option<QpcTicks>,
         final_policy_qpc: QpcTicks,
+    },
+    PreparedAllowed {
+        trace_kind: u8,
+        target_crossing_qpc: Option<QpcTicks>,
     },
     Guarded {
         trace_kind: u8,
@@ -536,8 +541,31 @@ fn final_atomic_revalidation(
     false
 }
 
+fn observe_strict_completion(
+    timing: &WorkerTimingState,
+    runtime: &mut WorkerRuntime,
+    completed_qpc: QpcTicks,
+    packet: sky_dispatch_win32::input::PhysicalPacket,
+) -> Result<(), DispatchStep> {
+    if !timing.strict_timing {
+        return Ok(());
+    }
+    let Some(guard) = runtime.physical_timing_guard.as_mut() else {
+        return Err(DispatchStep::TerminateStatic(
+            "physical timing guard is not initialized",
+        ));
+    };
+    guard
+        .observe_successful_packet(completed_qpc, packet.up_mask, packet.down_mask)
+        .map_err(|error| {
+            DispatchStep::Terminate(format!(
+                "physical timing guard completion update failed: {error:?}"
+            ))
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
-fn record_down_send_outcome(
+pub(super) fn record_down_send_outcome(
     view: &AuthoredBatchView,
     config: &WorkerConfig,
     health: &mut WorkerHealthState,
@@ -557,13 +585,17 @@ fn record_down_send_outcome(
     test_now_ticks: Option<QpcTicks>,
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
-    let AdmissionOutcome::Allowed {
-        trace_kind,
-        target_crossing_qpc,
-        final_policy_qpc,
-    } = admission
-    else {
-        return DispatchStep::Continue;
+    let (trace_kind, target_crossing_qpc, prepared_final_policy_qpc) = match admission {
+        AdmissionOutcome::Allowed {
+            trace_kind,
+            target_crossing_qpc,
+            final_policy_qpc,
+        } => (*trace_kind, *target_crossing_qpc, Some(*final_policy_qpc)),
+        AdmissionOutcome::PreparedAllowed {
+            trace_kind,
+            target_crossing_qpc,
+        } => (*trace_kind, *target_crossing_qpc, None),
+        _ => return DispatchStep::Continue,
     };
     let packet = view.packet_masks;
     let prepared_packet = &view.prepared_packet;
@@ -662,17 +694,8 @@ fn record_down_send_outcome(
         }
         return DispatchStep::TerminateStatic("successful Down missing completion QPC");
     };
-    if timing.strict_timing {
-        let Some(guard) = runtime.physical_timing_guard.as_mut() else {
-            return DispatchStep::TerminateStatic("physical timing guard is not initialized");
-        };
-        if let Err(error) =
-            guard.observe_successful_packet(completed_qpc, packet.up_mask, packet.down_mask)
-        {
-            return DispatchStep::Terminate(format!(
-                "physical timing guard completion update failed: {error:?}"
-            ));
-        }
+    if let Err(step) = observe_strict_completion(timing, runtime, completed_qpc, packet) {
+        return step;
     }
     record_late_rescued_down(
         local_metrics,
@@ -683,7 +706,9 @@ fn record_down_send_outcome(
         result_success,
         packet.down_mask,
     );
-    let trace_kind = *trace_kind;
+    let final_policy_qpc = prepared_final_policy_qpc
+        .or(result_started_ticks)
+        .unwrap_or(physical_target_qpc);
     finalize_down_send_outcome(
         view,
         config,
@@ -697,8 +722,8 @@ fn record_down_send_outcome(
         effective_now_ticks,
         physical_target_qpc,
         physical_timing_window,
-        *target_crossing_qpc,
-        *final_policy_qpc,
+        target_crossing_qpc,
+        final_policy_qpc,
         trace_kind,
         result_success,
         result.status,

@@ -16,7 +16,10 @@ mod health;
 pub(crate) mod health;
 mod orchestration;
 mod physical_timing_guard;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use physical_timing_guard::PhysicalTimingWindow;
 mod planning;
+mod prepared;
 mod startup;
 mod timing;
 mod wait;
@@ -48,12 +51,15 @@ pub(crate) use dispatch::drain_one_observer;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryState, PendingUpRecovery,
-    PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_stale_packet,
+    PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_prepared_normal_frame,
+    dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_system_suspend_transition;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::normal_prepared_timing_window;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::preflight_prepared_plan;
 #[cfg(any(test, feature = "test-support"))]
@@ -85,6 +91,7 @@ pub(crate) use planning::plan_next_dispatch;
 #[cfg(test)]
 pub(crate) use planning::plan_structure_is_valid;
 pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
+pub(crate) use prepared::{PreparedDispatchEntry, PreparedDispatchFrame, PreparedDispatchStream};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
 pub(crate) use startup::WorkerSchedulingGuards;
@@ -511,6 +518,7 @@ pub(crate) struct WorkerResources {
     pub(super) waiter: HybridWaiter,
     pub(super) backend: TrackedKeyState,
     pub(super) coordinator: RuntimeDispatchCoordinator,
+    pub(super) prepared_stream: Option<PreparedDispatchStream>,
     pub(super) playback: PlaybackClockState,
     pub(super) telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
     pub(super) scheduling: WorkerSchedulingGuards,

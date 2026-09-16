@@ -17,6 +17,7 @@ pub(crate) use command_timing::{
     CommandTimingCleanup, CommandTimingLookup as PauseTimingLookup, CommandTimingState,
 };
 #[cfg(any(test, feature = "test-support"))]
+#[allow(unused_imports)]
 pub use dispatch_harness::{
     PhysicalFloorEvidence, PreparedBoundaryEvidence, ProductionDispatchTestHarness,
 };

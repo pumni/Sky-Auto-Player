@@ -793,6 +793,65 @@ fn production_profile_has_no_observer_samples_or_trace_records() {
 }
 
 #[test]
+fn normal_prepared_overdue_boundaries_send_once_without_scheduler_misses() {
+    for lateness_us in [2_000, 10_000, 50_000, 100_000] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let calls = harness.configure_send_counter();
+        let mut stream = harness.build_prepared_stream_for_test();
+
+        let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, lateness_us);
+        assert!(
+            matches!(step, super::worker::DispatchStep::Dispatched),
+            "lateness {lateness_us}us step: {step:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "lateness {lateness_us}us");
+        assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
+        assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
+        assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+        assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    }
+}
+
+#[test]
+fn normal_prepared_final_control_race_suppresses_send_without_cursor_advance() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_send_counter();
+    let mut stream = harness.build_prepared_stream_for_test();
+    harness.set_final_gate_race_hook(
+        |_focus_active,
+         _target_hwnd,
+         _target_generation,
+         quit_requested,
+         _skip_requested,
+         _panic_requested,
+         _desired_pause| {
+            quit_requested.store(true, Ordering::Release);
+        },
+    );
+
+    let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.resources.coordinator.cursor, 0);
+}
+
+#[test]
+fn normal_prepared_zero_progress_is_fail_closed_without_cursor_advance() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_prepared_zero_progress_sender_for_test();
+    let mut stream = harness.build_prepared_stream_for_test();
+
+    let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+
+    assert!(matches!(step, super::worker::DispatchStep::Terminate(_)));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.backend_active_mask(), 0);
+    assert_eq!(harness.backend_possibly_active_mask(), 0);
+}
+
+#[test]
 fn midstream_stale_packet_is_metadata_not_physical_work() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
@@ -5601,6 +5660,7 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
         waiter,
         backend,
         coordinator,
+        prepared_stream: None,
         playback,
         telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
         scheduling: guards,

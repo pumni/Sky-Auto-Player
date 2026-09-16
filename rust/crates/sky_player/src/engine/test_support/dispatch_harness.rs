@@ -15,15 +15,19 @@ use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
 };
 use crate::engine::worker::{
-    DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts, TargetStamp,
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitObservation, WaitResult,
-    WaitSignals, WorkerHealthState, WorkerResources, WorkerRuntime, WorkerSchedulingGuards,
-    WorkerTimingState, dispatch_due_from_plan, physical_wait_target_for_plan, plan_next_dispatch,
-    plan_next_dispatch_projected, preflight_prepared_plan, publish_backend_counters,
-    publish_live_metrics_after_dispatch, wait_for_next_boundary,
+    DispatchHealthOptions, DispatchPath, NextDispatchPlan, PhysicalTimingWindow, PreparationCounts,
+    PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundary, WaitBoundaryInput,
+    WaitDeadline, WaitMutable, WaitObservation, WaitResult, WaitSignals, WorkerHealthState,
+    WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
+    dispatch_due_from_plan, dispatch_prepared_normal_frame, physical_wait_target_for_plan,
+    plan_next_dispatch, plan_next_dispatch_projected, preflight_prepared_plan,
+    publish_backend_counters, publish_live_metrics_after_dispatch, target_stamp_still_current,
+    wait_for_next_boundary,
 };
 use sky_dispatch_core::clock::PlaybackClockState;
-use sky_dispatch_core::coordinator::{RuntimeDispatchCoordinator, physical_packet_kind};
+use sky_dispatch_core::coordinator::{
+    CoordinatorError, RuntimeDispatchCoordinator, physical_packet_kind,
+};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
@@ -84,6 +88,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) last_wait_result: Option<WaitResult>,
     pub(crate) last_wait_observation: Option<WaitObservation>,
     effective_now_ticks: TimelineTicks,
+    prepared_stream_for_test: Option<PreparedDispatchStream>,
 }
 
 #[allow(dead_code)]
@@ -765,6 +770,7 @@ impl ProductionDispatchTestHarness {
             waiter,
             backend,
             coordinator,
+            prepared_stream: None,
             playback,
             telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
             scheduling,
@@ -833,6 +839,7 @@ impl ProductionDispatchTestHarness {
             last_wait_result: None,
             last_wait_observation: None,
             effective_now_ticks: TimelineTicks::ZERO,
+            prepared_stream_for_test: None,
         }
     }
 
@@ -1318,6 +1325,34 @@ impl ProductionDispatchTestHarness {
         calls
     }
 
+    pub fn configure_prepared_zero_progress_sender_for_test(&mut self) -> Arc<AtomicU64> {
+        let calls = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&calls);
+        let clock = self.resources.clock;
+        self.resources.backend.set_packet_emitter(move |packet| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let now = clock.now().expect("prepared zero-progress QPC");
+            SendTransactionOutcome {
+                status: SendTransactionStatus::ZeroProgress,
+                evidence: SendEvidence {
+                    requested_mask: packet.up_mask | packet.down_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: 0,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(now),
+                    completed_ticks: Some(now),
+                    timing_error: None,
+                },
+            }
+        });
+        calls
+    }
+
     /// Capture the exact directional packet masks presented to the production
     /// packet emitter.  This is intentionally a test-support seam: assertions
     /// can distinguish an authored Down chord from a deferred Up or a
@@ -1436,6 +1471,277 @@ impl ProductionDispatchTestHarness {
 
     pub fn reset_preparation_counts_for_test(&mut self) {
         self.runtime.preparation_probe.reset();
+    }
+
+    pub(crate) fn build_prepared_stream_for_test(&self) -> PreparedDispatchStream {
+        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+            self.resources.coordinator.schedule.clone(),
+            self.resources.coordinator.min_hold_us,
+            self.resources.coordinator.min_hold_ticks,
+            |microseconds| {
+                self.resources
+                    .clock
+                    .timeline_from_us(microseconds)
+                    .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
+            },
+        )
+        .expect("prepared stream test coordinator");
+        PreparedDispatchStream::build(
+            coordinator,
+            self.resources.clock,
+            &self.runtime.preparation_probe,
+            self.resources.backend.instrument_key_profile(),
+        )
+        .expect("prepared stream construction")
+        .0
+    }
+
+    pub fn prepared_stream_counts_for_test(&self) -> (usize, usize) {
+        let stream = self.build_prepared_stream_for_test();
+        (stream.len(), stream.physical_count())
+    }
+
+    pub fn prepare_prepared_stream_for_test(&mut self) {
+        self.prepared_stream_for_test = Some(self.build_prepared_stream_for_test());
+    }
+
+    pub fn dispatch_prepared_current_at_lateness_without_stream_for_test(
+        &mut self,
+        lateness_us: u64,
+    ) -> DispatchStep {
+        let mut stream = self
+            .prepared_stream_for_test
+            .take()
+            .expect("prepared stream test setup");
+        let step = self.dispatch_prepared_current_at_lateness_for_test(&mut stream, lateness_us);
+        self.prepared_stream_for_test = Some(stream);
+        step
+    }
+
+    pub fn wait_and_dispatch_prepared_current_for_test(&mut self) -> Result<DispatchStep, String> {
+        self.last_wait_result = None;
+        self.last_wait_observation = None;
+        let mut stream = self
+            .prepared_stream_for_test
+            .take()
+            .ok_or_else(|| "prepared stream test setup".to_string())?;
+        let frame = match stream.current() {
+            Some(PreparedDispatchEntry::Physical(frame)) => frame,
+            Some(PreparedDispatchEntry::Metadata { .. }) => {
+                return Err("prepared wait test requires a physical frame".to_string());
+            }
+            None => return Err("prepared stream test is exhausted".to_string()),
+        };
+        let target_qpc = self
+            .resources
+            .playback
+            .epoch
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .map_err(|error| format!("prepared wait target arithmetic: {error}"))?;
+        let preflight_target = if frame.view.packet_masks.down_mask == 0 {
+            None
+        } else {
+            let target = TargetStamp {
+                hwnd: self.target_hwnd.load(Ordering::Acquire),
+                generation: self.target_generation.load(Ordering::Acquire),
+            };
+            if !target_stamp_still_current(&self.target_hwnd, &self.target_generation, target) {
+                return Err("prepared wait target changed before wait".to_string());
+            }
+            Some(target)
+        };
+        let timing_window = super::super::worker::normal_prepared_timing_window(
+            target_qpc,
+            frame.view.packet_masks,
+            self.timing.timing_margin_ticks,
+        )?;
+        let boundary = wait_for_next_boundary(WaitBoundaryInput {
+            deadline: WaitDeadline {
+                physical_target_qpc: Some(target_qpc),
+                spin_threshold_ticks: self.timing.effective_spin_threshold_ticks,
+                qpc_clock: self.resources.clock,
+            },
+            signals: WaitSignals {
+                waiter: &self.resources.waiter,
+                interrupt: &self.interrupt,
+            },
+            mutable: WaitMutable {
+                local_metrics: &mut self.local_metrics,
+                force_full_cleanup: &mut self.runtime.force_full_cleanup,
+                terminal_error: &mut self.runtime.terminal_error,
+            },
+        });
+        let (wait_result, dispatch_qpc, wait_observation) = match boundary {
+            WaitBoundary::Due {
+                wait_result,
+                target_qpc,
+                dispatch_qpc,
+                planned_wait_ticks,
+            } => {
+                let observation = wait_result.map(|result| WaitObservation {
+                    outcome: result.outcome,
+                    wake_qpc: result.wake_qpc,
+                    spin_ticks: result.spin_ticks,
+                    physical_target_qpc: target_qpc,
+                    planned_wait_ticks,
+                    deadline_ticks: frame.view.prepared_batch.effective_scheduled_ticks,
+                    epoch_qpc: self.resources.playback.epoch,
+                    allow_pre_epoch_startup_dispatch: true,
+                });
+                (wait_result, dispatch_qpc, observation)
+            }
+            WaitBoundary::Replan { .. } => {
+                return Err("prepared wait unexpectedly required a replan".to_string());
+            }
+            WaitBoundary::Exit => {
+                return Err(self
+                    .runtime
+                    .terminal_error
+                    .take()
+                    .unwrap_or_else(|| "prepared wait exited".to_string()));
+            }
+        };
+        self.last_wait_result = wait_result;
+        self.last_wait_observation = wait_observation;
+        self.runtime.set_deadline_wait_evidence_for_test(
+            wait_result.and_then(|result| result.wake_qpc),
+            Some(target_qpc),
+        );
+        let effective_now_ticks = self
+            .resources
+            .playback
+            .get_elapsed_allow_pre_epoch(dispatch_qpc, true)
+            .map_err(|error| format!("prepared wait timeline: {error}"))?;
+        self.effective_now_ticks = effective_now_ticks;
+        let step = dispatch_prepared_normal_frame(
+            frame,
+            &self.config,
+            &mut self.resources,
+            &mut self.health,
+            &self.timing,
+            &mut self.runtime,
+            &mut self.local_metrics,
+            &self.focus_active,
+            &self.target_hwnd,
+            &self.target_generation,
+            &self.quit_requested,
+            &self.skip_requested,
+            &self.panic_requested,
+            &self.desired_pause,
+            &self.supervisor_expired,
+            &self.system_power,
+            &self.progress_clock,
+            Some(&self.observer),
+            preflight_target,
+            target_qpc,
+            timing_window,
+            effective_now_ticks,
+            dispatch_qpc,
+            false,
+            Some(dispatch_qpc),
+            false,
+        );
+        if matches!(step, DispatchStep::Dispatched) {
+            stream.advance().map_err(str::to_owned)?;
+        }
+        self.prepared_stream_for_test = Some(stream);
+        Ok(step)
+    }
+
+    /// Dispatch the current prepared physical frame after a deterministic
+    /// authored-target lateness interval. The sender still owns its real
+    /// authoritative pre-call QPC; only the target/epoch are arranged by the
+    /// test before entering the precision helper.
+    pub(crate) fn dispatch_prepared_current_at_lateness_for_test(
+        &mut self,
+        stream: &mut PreparedDispatchStream,
+        lateness_us: u64,
+    ) -> DispatchStep {
+        let frame = match stream.current() {
+            Some(PreparedDispatchEntry::Physical(frame)) => frame,
+            Some(PreparedDispatchEntry::Metadata { .. }) => {
+                panic!("prepared lateness test requires a physical frame")
+            }
+            None => panic!("prepared stream is exhausted"),
+        };
+        let lateness_ticks = self
+            .resources
+            .clock
+            .duration_from_us(lateness_us)
+            .expect("prepared lateness conversion");
+        let wall_now = self.resources.clock.now().expect("prepared lateness QPC");
+        let physical_target_qpc = QpcTicks::from_raw(
+            wall_now
+                .as_u64()
+                .checked_sub(lateness_ticks.as_u64())
+                .expect("prepared lateness target underflow"),
+        );
+        let epoch = QpcTicks::from_raw(
+            physical_target_qpc
+                .as_u64()
+                .checked_sub(frame.offset_ticks.as_u64())
+                .expect("prepared stream epoch underflow"),
+        );
+        self.resources.playback.epoch = epoch;
+        let effective_now_ticks = TimelineTicks::from_raw(
+            wall_now
+                .as_u64()
+                .checked_sub(epoch.as_u64())
+                .expect("prepared effective now"),
+        );
+        let window = PhysicalTimingWindow {
+            authored_target_qpc: physical_target_qpc,
+            musical_up_not_before_qpc: physical_target_qpc,
+            down_not_before_qpc: physical_target_qpc,
+            packet_not_before_qpc: physical_target_qpc,
+            latest_down_start_qpc: if frame.view.packet_masks.down_mask == 0 {
+                None
+            } else {
+                Some(
+                    physical_target_qpc
+                        .checked_add_duration(self.timing.timing_margin_ticks)
+                        .expect("prepared latest-start target"),
+                )
+            },
+            hold_floor_mask: 0,
+            release_floor_mask: 0,
+        };
+        let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
+            hwnd: self.target_hwnd.load(Ordering::Acquire),
+            generation: self.target_generation.load(Ordering::Acquire),
+        });
+        let step = dispatch_prepared_normal_frame(
+            frame,
+            &self.config,
+            &mut self.resources,
+            &mut self.health,
+            &self.timing,
+            &mut self.runtime,
+            &mut self.local_metrics,
+            &self.focus_active,
+            &self.target_hwnd,
+            &self.target_generation,
+            &self.quit_requested,
+            &self.skip_requested,
+            &self.panic_requested,
+            &self.desired_pause,
+            &self.supervisor_expired,
+            &self.system_power,
+            &self.progress_clock,
+            Some(&self.observer),
+            preflight_target,
+            physical_target_qpc,
+            window,
+            effective_now_ticks,
+            wall_now,
+            false,
+            Some(wall_now),
+            false,
+        );
+        if matches!(step, DispatchStep::Dispatched) {
+            stream.advance().expect("prepared stream advance");
+        }
+        step
     }
 
     pub fn set_force_preflight_failure(&mut self, flag: Arc<AtomicBool>) {
