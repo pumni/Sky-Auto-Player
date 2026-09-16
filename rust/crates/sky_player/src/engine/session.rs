@@ -1337,7 +1337,7 @@ mod tests {
 
     #[test]
     fn supervisor_watchdog_is_session_owned_control_plane_only() {
-        let source = include_str!("session.rs");
+        let source = include_str!("session.rs").replace("\r\n", "\n");
         let watchdog = source
             .split("fn supervisor_watchdog_loop")
             .nth(1)
