@@ -105,17 +105,22 @@ Tested across 5 tolerance arms (`2.0`, `2.5`, `5.0`, `7.5`, `10.0 ms`), 7 inter-
 ### Phase B: Real-Wait Sequential Probe (Production Waiter)
 
 Evaluated across 3 passes, 6 gaps (`2, 4, 6, 8, 10, 12 ms`), 30 sequences/gap/arm/pass = 2,700 total
-sequences (5,400 boundary dispatches):
+sequences (5,400 boundary dispatches) on live Windows thread scheduling:
 
-| Arm (µs) | First Rescued | First FSW | Second Success | Second FSW | Post-Send Ready p99 | Net Successful Notes |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **2,500** | 2 | 26 | 531 | 0 | 54 µs | 1,050 |
-| **5,000** | 10 | 11 | 531 | 0 | 50 µs | 1,058 |
-| **10,000** | **16** | **2** | **532** | **0** | **49 µs** | **1,070** |
+| Arm (µs) | First Sends | Second Sends | First Rescues | First FSW | Second UB / Overdue | Second FSW | PW | Timeline Rebases | Transport Anomalies | Post-Send Ready p99 | Net Successful Notes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **2,000** | 539 | 539 | 4 | 1 | 1 / 1 | 0 | 0 | 0 | 0 | 6 µs | 1,078 |
+| **2,500** | 539 | 539 | 4 | 1 | 1 / 1 | 0 | 0 | 0 | 0 | 6 µs | 1,078 |
+| **5,000** | 540 | 540 | 5 | 0 | 0 / 0 | 0 | 0 | 0 | 0 | 6 µs | 1,080 |
+| **7,500** | 540 | 540 | 7 | 0 | 0 / 0 | 0 | 0 | 0 | 0 | 6 µs | 1,080 |
+| **10,000** | 540 | 540 | 8 | 0 | 0 / 0 | 0 | 0 | 0 | 0 | 6 µs | 1,080 |
 
-- The 10.0 ms arm demonstrated superior rescue performance (16 rescues vs 10 on 5.0 ms and 2 on 2.5 ms).
-- Second boundaries suffered zero Final Sender Window expirations across all arms.
-- Downstream post-send readiness latency remained virtually unchanged (p99 of 49 µs vs 50 µs vs 54 µs).
+- The 10.0 ms arm demonstrated superior rescue performance (8 rescues vs 7 on 7.5 ms, 5 on 5.0 ms, and 4 on 2.5/2.0 ms).
+- Second boundaries suffered zero Final Sender Window expirations (`second FSW = 0`) across all arms.
+- Exact invariant equality maintained: `second UB == actually overdue` (zero false backlogs across all arms).
+- Zero physical window expired (`PW = 0`), zero timeline rebases, zero transport anomalies across all arms.
+- Downstream post-send readiness latency remained flat (p99 of 6 µs across all arms).
+- Net successful notes monotonic across the entire 5-arm range (`1078 <= 1078 <= 1080 <= 1080 <= 1080`).
 
 ### Phase C: Sparse Benefit Probe (100 ms Gap)
 

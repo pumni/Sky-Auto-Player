@@ -3453,10 +3453,10 @@ fn phase_extended_range_real_wait_probe_report() -> serde_json::Value {
     let phase_b_all_second_fsw_zero = aggregate_all
         .iter()
         .all(|arm| arm.second_final_sender_window_expired == 0);
-    let phase_b_net_success_monotonic = aggregate_all[4].first_actual_successful_sends
-        + aggregate_all[4].second_successful_sends
-        >= aggregate_all[2].first_actual_successful_sends
-            + aggregate_all[2].second_successful_sends;
+    let phase_b_net_success_monotonic = aggregate_all.windows(2).all(|pair| {
+        (pair[0].first_actual_successful_sends + pair[0].second_successful_sends)
+            <= (pair[1].first_actual_successful_sends + pair[1].second_successful_sends)
+    });
     let phase_b_clean = phase_b_all_ub_equals_overdue
         && phase_b_all_pw_zero
         && phase_b_all_rebases_zero
