@@ -73,7 +73,7 @@ describe('LateNoteToleranceControl', () => {
     expect(screen.getByRole('button', { name: 'Increase Late note tolerance' })).toBeEnabled();
     expect(
       screen.getByText(
-        'Lower values keep notes closer to authored timing, but Windows wake jitter may cause more late notes to be dropped.',
+        'Lower values can tighten late-note timing when they are above the active Timing Margin, but Windows wake jitter may cause more late notes to be dropped.',
       ),
     ).toBeInTheDocument();
     expect(

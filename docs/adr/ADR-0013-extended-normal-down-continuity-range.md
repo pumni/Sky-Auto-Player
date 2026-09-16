@@ -67,7 +67,7 @@ To ensure safe user operation across the wider range without using misleading or
 the control presents dynamic guidance and tiered warnings based on the active value:
 
 - **Below Default (`< 2.5 ms`):**
-  *"Lower values keep notes closer to authored timing, but Windows wake jitter may cause more late notes to be dropped."*
+  *"Lower values can tighten late-note timing when they are above the active Timing Margin, but Windows wake jitter may cause more late notes to be dropped."*
 - **Default and Above (`>= 2.5 ms`):**
   *"If notes are still dropped on fast chords under load, increase this step-by-step. Rescued notes may play slightly later than their authored time."*
 - **Moderate Tolerance Warning (`> 2.5 ms && <= 5.0 ms`):**
@@ -82,7 +82,7 @@ the control presents dynamic guidance and tiered warnings based on the active va
 ## Empirical Qualification Evidence
 
 Qualification was executed via `rt_handoff_bench --scope phase_extended_range` in release profile on
-native Windows 11 hardware with High Precision Event Timer / QPC clock. All 4 benchmark phases
+native Windows 11 hardware with QPC clock (frequency: 10 MHz). All 4 benchmark phases
 passed 100% clean (`acceptance_clean: true`):
 
 ### Phase A: Deterministic Dense Matrix

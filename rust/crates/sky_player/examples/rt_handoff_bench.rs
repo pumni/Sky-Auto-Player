@@ -106,23 +106,41 @@ enum BenchmarkScope {
 }
 
 impl BenchmarkScope {
-    fn from_env() -> Result<Self, String> {
-        match std::env::var("RT_HANDOFF_BENCH_SCOPE").as_deref() {
-            Ok("full") | Err(std::env::VarError::NotPresent) => Ok(Self::Full),
-            Ok("real_wait_core") => Ok(Self::RealWaitCore),
-            Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
-            Ok("phase_a_production_matrix") => Ok(Self::PhaseAProductionMatrix),
-            Ok("phase_a_sparse_gap") => Ok(Self::PhaseASparseGap),
-            Ok("phase_b0") => Ok(Self::PhaseBB0),
-            Ok("phase_c0") => Ok(Self::PhaseCC0),
-            Ok("phase_c1") => Ok(Self::PhaseCC1),
-            Ok("phase_c1_1") => Ok(Self::PhaseCC11),
-            Ok("phase_f1_1") => Ok(Self::PhaseF11),
-            Ok("phase_extended_range") => Ok(Self::PhaseExtendedRange),
-            Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, phase_f1_1, or phase_extended_range, got {value:?}"
+    fn from_env_or_args() -> Result<Self, String> {
+        let args: Vec<String> = std::env::args().collect();
+        let arg_val = args
+            .windows(2)
+            .find(|w| w[0] == "--scope")
+            .map(|w| w[1].clone())
+            .or_else(|| {
+                args.iter()
+                    .find_map(|a| a.strip_prefix("--scope=").map(str::to_string))
+            });
+
+        let scope_str = match (arg_val, std::env::var("RT_HANDOFF_BENCH_SCOPE")) {
+            (Some(val), _) => val,
+            (None, Ok(val)) => val,
+            (None, Err(std::env::VarError::NotPresent)) => "full".to_string(),
+            (None, Err(error)) => {
+                return Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}"));
+            }
+        };
+
+        match scope_str.as_str() {
+            "full" => Ok(Self::Full),
+            "real_wait_core" => Ok(Self::RealWaitCore),
+            "phase_a_sender_only" => Ok(Self::PhaseASenderOnly),
+            "phase_a_production_matrix" => Ok(Self::PhaseAProductionMatrix),
+            "phase_a_sparse_gap" => Ok(Self::PhaseASparseGap),
+            "phase_b0" => Ok(Self::PhaseBB0),
+            "phase_c0" => Ok(Self::PhaseCC0),
+            "phase_c1" => Ok(Self::PhaseCC1),
+            "phase_c1_1" => Ok(Self::PhaseCC11),
+            "phase_f1_1" => Ok(Self::PhaseF11),
+            "phase_extended_range" => Ok(Self::PhaseExtendedRange),
+            value => Err(format!(
+                "scope must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, phase_f1_1, or phase_extended_range, got {value:?}"
             )),
-            Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
     }
 
@@ -144,18 +162,32 @@ impl BenchmarkScope {
 }
 
 impl BenchmarkMode {
-    fn from_env() -> Result<Self, String> {
-        match std::env::var("RT_HANDOFF_BENCH_MODE").as_deref() {
-            Ok("real_wait") | Err(std::env::VarError::NotPresent) => Ok(Self::RealWait),
-            Ok("phase_a_synthetic_target_plus_one_tick") => {
-                Ok(Self::PhaseASyntheticTargetPlusOneTick)
-            }
-            Ok("phase_a_sender_only") => Ok(Self::PhaseASenderOnly),
-            Ok("phase_a_production_boundary") => Ok(Self::PhaseAProductionBoundary),
-            Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_MODE must be real_wait, phase_a_synthetic_target_plus_one_tick, phase_a_sender_only, or phase_a_production_boundary, got {value:?}"
+    fn from_env_or_args() -> Result<Self, String> {
+        let args: Vec<String> = std::env::args().collect();
+        let arg_val = args
+            .windows(2)
+            .find(|w| w[0] == "--mode")
+            .map(|w| w[1].clone())
+            .or_else(|| {
+                args.iter()
+                    .find_map(|a| a.strip_prefix("--mode=").map(str::to_string))
+            });
+
+        let mode_str = match (arg_val, std::env::var("RT_HANDOFF_BENCH_MODE")) {
+            (Some(val), _) => val,
+            (None, Ok(val)) => val,
+            (None, Err(std::env::VarError::NotPresent)) => "real_wait".to_string(),
+            (None, Err(error)) => return Err(format!("RT_HANDOFF_BENCH_MODE is invalid: {error}")),
+        };
+
+        match mode_str.as_str() {
+            "real_wait" => Ok(Self::RealWait),
+            "phase_a_synthetic_target_plus_one_tick" => Ok(Self::PhaseASyntheticTargetPlusOneTick),
+            "phase_a_sender_only" => Ok(Self::PhaseASenderOnly),
+            "phase_a_production_boundary" => Ok(Self::PhaseAProductionBoundary),
+            value => Err(format!(
+                "mode must be real_wait, phase_a_synthetic_target_plus_one_tick, phase_a_sender_only, or phase_a_production_boundary, got {value:?}"
             )),
-            Err(error) => Err(format!("RT_HANDOFF_BENCH_MODE is invalid: {error}")),
         }
     }
 
@@ -1031,12 +1063,18 @@ fn record_c1_harness_metrics_delta(
 struct SequentialSamples {
     samples: Samples,
     sequence_count: usize,
+    first_actual_successful_sends: usize,
     first_rescued_boundaries: usize,
     first_final_sender_window_expired: usize,
+    first_unobserved_backlog: usize,
+    first_physical_window_expired: usize,
+    first_transport_anomalies: usize,
     second_successful_sends: usize,
     second_final_sender_window_expired: usize,
     second_unobserved_backlog: usize,
     second_overdue_boundaries: usize,
+    second_physical_window_expired: usize,
+    second_transport_anomalies: usize,
     timeline_rebases: usize,
     post_send_ready_latency_us: Vec<i64>,
 }
@@ -1046,12 +1084,18 @@ impl Default for SequentialSamples {
         Self {
             samples: new_samples(),
             sequence_count: 0,
+            first_actual_successful_sends: 0,
             first_rescued_boundaries: 0,
             first_final_sender_window_expired: 0,
+            first_unobserved_backlog: 0,
+            first_physical_window_expired: 0,
+            first_transport_anomalies: 0,
             second_successful_sends: 0,
             second_final_sender_window_expired: 0,
             second_unobserved_backlog: 0,
             second_overdue_boundaries: 0,
+            second_physical_window_expired: 0,
+            second_transport_anomalies: 0,
             timeline_rebases: 0,
             post_send_ready_latency_us: Vec::new(),
         }
@@ -1062,12 +1106,24 @@ impl SequentialSamples {
     fn append(&mut self, mut other: Self) {
         self.samples.append(other.samples);
         self.sequence_count = self.sequence_count.saturating_add(other.sequence_count);
+        self.first_actual_successful_sends = self
+            .first_actual_successful_sends
+            .saturating_add(other.first_actual_successful_sends);
         self.first_rescued_boundaries = self
             .first_rescued_boundaries
             .saturating_add(other.first_rescued_boundaries);
         self.first_final_sender_window_expired = self
             .first_final_sender_window_expired
             .saturating_add(other.first_final_sender_window_expired);
+        self.first_unobserved_backlog = self
+            .first_unobserved_backlog
+            .saturating_add(other.first_unobserved_backlog);
+        self.first_physical_window_expired = self
+            .first_physical_window_expired
+            .saturating_add(other.first_physical_window_expired);
+        self.first_transport_anomalies = self
+            .first_transport_anomalies
+            .saturating_add(other.first_transport_anomalies);
         self.second_successful_sends = self
             .second_successful_sends
             .saturating_add(other.second_successful_sends);
@@ -1080,6 +1136,12 @@ impl SequentialSamples {
         self.second_overdue_boundaries = self
             .second_overdue_boundaries
             .saturating_add(other.second_overdue_boundaries);
+        self.second_physical_window_expired = self
+            .second_physical_window_expired
+            .saturating_add(other.second_physical_window_expired);
+        self.second_transport_anomalies = self
+            .second_transport_anomalies
+            .saturating_add(other.second_transport_anomalies);
         self.timeline_rebases = self.timeline_rebases.saturating_add(other.timeline_rebases);
         self.post_send_ready_latency_us
             .append(&mut other.post_send_ready_latency_us);
@@ -2333,9 +2395,17 @@ fn run_c1_1_sequential_iteration(
         return Err("C1.1 sequential first boundary did not dispatch".to_string());
     }
     let first_packet_count = captured_packet_count(&packets);
+    output.first_actual_successful_sends = if first_sent && first_packet_count != 0 {
+        1
+    } else {
+        0
+    };
     output.first_rescued_boundaries = output.samples.late_rescued_down_boundaries;
     output.first_final_sender_window_expired =
         output.samples.missed_down_final_sender_window_expired;
+    output.first_unobserved_backlog = output.samples.missed_down_unobserved_backlog;
+    output.first_physical_window_expired = output.samples.missed_down_physical_window_expired;
+    output.first_transport_anomalies = output.samples.transport_anomaly_count;
 
     let (second_target, second_sent, second_was_overdue, second_ready) =
         run_sequential_boundary(&mut harness, &mut output.samples, &mut metric_snapshot)?;
@@ -2359,13 +2429,23 @@ fn run_c1_1_sequential_iteration(
         .samples
         .missed_down_final_sender_window_expired
         .saturating_sub(output.first_final_sender_window_expired);
-    output.second_unobserved_backlog = output.samples.missed_down_unobserved_backlog;
+    output.second_unobserved_backlog = output
+        .samples
+        .missed_down_unobserved_backlog
+        .saturating_sub(output.first_unobserved_backlog);
     output.second_overdue_boundaries = if second_was_overdue { 1 } else { 0 };
-    if output.second_unobserved_backlog > output.second_overdue_boundaries {
-        return Err(
-            "C1.1 sequential backlog occurred without an overdue second target".to_string(),
-        );
-    }
+    output.second_physical_window_expired = output
+        .samples
+        .missed_down_physical_window_expired
+        .saturating_sub(output.first_physical_window_expired);
+    output.second_transport_anomalies = output
+        .samples
+        .transport_anomaly_count
+        .saturating_sub(output.first_transport_anomalies);
+    assert_eq!(
+        output.second_unobserved_backlog, output.second_overdue_boundaries,
+        "C1.1 sequential backlog occurred without an overdue second target"
+    );
     output.post_send_ready_latency_us.extend(first_ready);
     output.post_send_ready_latency_us.extend(second_ready);
     output
@@ -2380,12 +2460,19 @@ fn summarize_sequential(
     expected_sequences: usize,
 ) -> serde_json::Value {
     let sequence_count = samples.sequence_count;
+    let first_actual_successful_sends = samples.first_actual_successful_sends;
     let first_rescued_boundaries = samples.first_rescued_boundaries;
     let first_final_sender_window_expired = samples.first_final_sender_window_expired;
+    let first_unobserved_backlog = samples.first_unobserved_backlog;
+    let first_physical_window_expired = samples.first_physical_window_expired;
+    let first_transport_anomalies = samples.first_transport_anomalies;
     let second_successful_sends = samples.second_successful_sends;
     let second_final_sender_window_expired = samples.second_final_sender_window_expired;
     let second_unobserved_backlog = samples.second_unobserved_backlog;
     let second_overdue_boundaries = samples.second_overdue_boundaries;
+    let second_physical_window_expired = samples.second_physical_window_expired;
+    let second_transport_anomalies = samples.second_transport_anomalies;
+    let net_successful_notes = first_actual_successful_sends + second_successful_sends;
     let timeline_rebases = samples.timeline_rebases;
     let post_send_ready_latency_us = std::mem::take(&mut samples.post_send_ready_latency_us);
     let expected_attempts = expected_sequences.saturating_mul(2);
@@ -2395,12 +2482,28 @@ fn summarize_sequential(
         .expect("sequential summary must be an object");
     object.insert("sequence_count".to_string(), json!(sequence_count));
     object.insert(
+        "first_actual_successful_sends".to_string(),
+        json!(first_actual_successful_sends),
+    );
+    object.insert(
         "first_rescued_boundaries".to_string(),
         json!(first_rescued_boundaries),
     );
     object.insert(
         "first_final_sender_window_expired".to_string(),
         json!(first_final_sender_window_expired),
+    );
+    object.insert(
+        "first_unobserved_backlog".to_string(),
+        json!(first_unobserved_backlog),
+    );
+    object.insert(
+        "first_physical_window_expired".to_string(),
+        json!(first_physical_window_expired),
+    );
+    object.insert(
+        "first_transport_anomalies".to_string(),
+        json!(first_transport_anomalies),
     );
     object.insert(
         "second_successful_sends".to_string(),
@@ -2417,6 +2520,18 @@ fn summarize_sequential(
     object.insert(
         "second_overdue_boundaries".to_string(),
         json!(second_overdue_boundaries),
+    );
+    object.insert(
+        "second_physical_window_expired".to_string(),
+        json!(second_physical_window_expired),
+    );
+    object.insert(
+        "second_transport_anomalies".to_string(),
+        json!(second_transport_anomalies),
+    );
+    object.insert(
+        "net_successful_notes".to_string(),
+        json!(net_successful_notes),
     );
     object.insert("timeline_rebases".to_string(), json!(timeline_rebases));
     object.insert(
@@ -3101,6 +3216,31 @@ fn phase_extended_range_deterministic_dense_report() -> serde_json::Value {
         );
     }
 
+    let all_ub_equals_overdue = arm_summaries.values().all(|arm| {
+        arm["second_unobserved_backlog"].as_u64() == arm["second_actually_overdue"].as_u64()
+    });
+    let all_pw_zero = arm_summaries
+        .values()
+        .all(|arm| arm["physical_window_expired"].as_u64() == Some(0));
+    let all_rebases_zero = arm_summaries
+        .values()
+        .all(|arm| arm["timeline_rebases"].as_u64() == Some(0));
+    let all_anomalies_zero = arm_summaries
+        .values()
+        .all(|arm| arm["transport_anomalies"].as_u64() == Some(0));
+    let all_target_preservation_zero = arm_summaries
+        .values()
+        .all(|arm| arm["target_preservation_failures"].as_u64() == Some(0));
+    let all_chord_integrity_zero = arm_summaries
+        .values()
+        .all(|arm| arm["chord_integrity_failures"].as_u64() == Some(0));
+    let phase_a_clean = all_ub_equals_overdue
+        && all_pw_zero
+        && all_rebases_zero
+        && all_anomalies_zero
+        && all_target_preservation_zero
+        && all_chord_integrity_zero;
+
     json!({
         "scope": "Phase-A deterministic dense matrix qualification",
         "tolerance_matrix_us": EXTENDED_TOLERANCES_US,
@@ -3108,13 +3248,14 @@ fn phase_extended_range_deterministic_dense_report() -> serde_json::Value {
         "offset_matrix_us": EXTENDED_DENSE_OFFSETS_US,
         "arms": arm_summaries,
         "invariants": {
-            "unobserved_backlog_equals_actually_overdue": true,
-            "physical_window_expired_zero": true,
-            "timeline_rebases_zero": true,
-            "transport_anomalies_zero": true,
-            "target_preservation_failures_zero": true,
-            "chord_integrity_failures_zero": true,
-        }
+            "unobserved_backlog_equals_actually_overdue": all_ub_equals_overdue,
+            "physical_window_expired_zero": all_pw_zero,
+            "timeline_rebases_zero": all_rebases_zero,
+            "transport_anomalies_zero": all_anomalies_zero,
+            "target_preservation_failures_zero": all_target_preservation_zero,
+            "chord_integrity_failures_zero": all_chord_integrity_zero,
+        },
+        "phase_a_clean": phase_a_clean,
     })
 }
 
@@ -3232,15 +3373,22 @@ fn phase_extended_range_real_wait_probe_report() -> serde_json::Value {
         let total_sequences = EXTENDED_REAL_WAIT_PASSES
             * EXTENDED_REAL_WAIT_GAPS_US.len()
             * EXTENDED_REAL_WAIT_ITERATIONS;
+        let first_actual_success = arm_aggregate.first_actual_successful_sends;
         let first_rescue = arm_aggregate.first_rescued_boundaries;
         let first_fsw = arm_aggregate.first_final_sender_window_expired;
+        let first_ub = arm_aggregate.first_unobserved_backlog;
+        let first_pw = arm_aggregate.first_physical_window_expired;
+        let first_transport_anomalies = arm_aggregate.first_transport_anomalies;
+
         let second_success = arm_aggregate.second_successful_sends;
         let second_fsw = arm_aggregate.second_final_sender_window_expired;
         let second_ub = arm_aggregate.second_unobserved_backlog;
         let actually_overdue = arm_aggregate.second_overdue_boundaries;
         let second_fsw_plus_ub = second_fsw + second_ub;
-        let first_success = total_sequences.saturating_sub(first_fsw);
-        let net_successful_notes = first_success + second_success;
+        let second_pw = arm_aggregate.second_physical_window_expired;
+        let second_transport_anomalies = arm_aggregate.second_transport_anomalies;
+
+        let net_successful_notes = first_actual_success + second_success;
         let pw = arm_aggregate.samples.missed_down_physical_window_expired;
         let timeline_rebases = arm_aggregate.timeline_rebases;
         let transport_anomalies = arm_aggregate.samples.transport_anomaly_count;
@@ -3259,14 +3407,20 @@ fn phase_extended_range_real_wait_probe_report() -> serde_json::Value {
                     total_sequences,
                 ),
                 "qualification_summary": {
+                    "first_actual_successful_sends": first_actual_success,
+                    "first_success": first_actual_success,
                     "first_rescue": first_rescue,
                     "first_fsw": first_fsw,
-                    "first_success": first_success,
+                    "first_ub": first_ub,
+                    "first_pw": first_pw,
+                    "first_transport_anomalies": first_transport_anomalies,
                     "second_success": second_success,
                     "second_fsw": second_fsw,
                     "second_ub": second_ub,
                     "actually_overdue": actually_overdue,
                     "second_fsw_plus_ub": second_fsw_plus_ub,
+                    "second_pw": second_pw,
+                    "second_transport_anomalies": second_transport_anomalies,
                     "net_successful_notes": net_successful_notes,
                     "physical_window_expired": pw,
                     "timeline_rebases": timeline_rebases,
@@ -3283,6 +3437,34 @@ fn phase_extended_range_real_wait_probe_report() -> serde_json::Value {
             }),
         );
     }
+    let phase_b_all_ub_equals_overdue = aggregate_all
+        .iter()
+        .all(|arm| arm.second_unobserved_backlog == arm.second_overdue_boundaries);
+    let phase_b_all_pw_zero = aggregate_all
+        .iter()
+        .all(|arm| arm.samples.missed_down_physical_window_expired == 0);
+    let phase_b_all_rebases_zero = aggregate_all.iter().all(|arm| arm.timeline_rebases == 0);
+    let phase_b_all_anomalies_zero = aggregate_all
+        .iter()
+        .all(|arm| arm.samples.transport_anomaly_count == 0);
+    let phase_b_all_first_ub_zero = aggregate_all
+        .iter()
+        .all(|arm| arm.first_unobserved_backlog == 0);
+    let phase_b_all_second_fsw_zero = aggregate_all
+        .iter()
+        .all(|arm| arm.second_final_sender_window_expired == 0);
+    let phase_b_net_success_monotonic = aggregate_all[4].first_actual_successful_sends
+        + aggregate_all[4].second_successful_sends
+        >= aggregate_all[2].first_actual_successful_sends
+            + aggregate_all[2].second_successful_sends;
+    let phase_b_clean = phase_b_all_ub_equals_overdue
+        && phase_b_all_pw_zero
+        && phase_b_all_rebases_zero
+        && phase_b_all_anomalies_zero
+        && phase_b_all_first_ub_zero
+        && phase_b_all_second_fsw_zero
+        && phase_b_net_success_monotonic;
+
     let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     json!({
         "scope": "Phase-B real-wait sequential dense probe (2.0 / 2.5 / 5.0 / 7.5 / 10.0 ms)",
@@ -3306,6 +3488,16 @@ fn phase_extended_range_real_wait_probe_report() -> serde_json::Value {
             * 2,
         "modes": modes,
         "passes": pass_reports,
+        "invariants": {
+            "unobserved_backlog_equals_actually_overdue": phase_b_all_ub_equals_overdue,
+            "physical_window_expired_zero": phase_b_all_pw_zero,
+            "timeline_rebases_zero": phase_b_all_rebases_zero,
+            "transport_anomalies_zero": phase_b_all_anomalies_zero,
+            "first_unobserved_backlog_zero": phase_b_all_first_ub_zero,
+            "second_final_sender_window_expired_zero": phase_b_all_second_fsw_zero,
+            "net_success_monotonic": phase_b_net_success_monotonic,
+        },
+        "phase_b_clean": phase_b_clean,
         "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
     })
 }
@@ -3346,17 +3538,47 @@ fn phase_extended_range_sparse_benefit_report() -> serde_json::Value {
         );
     }
 
+    let mut rescued_counts = Vec::with_capacity(EXTENDED_TOLERANCES_US.len());
+    let mut all_fail_closed = true;
+    let mut all_rebases_clean = true;
+    let mut all_catchup_clean = true;
+
+    for (arm_index, &tolerance_us) in EXTENDED_TOLERANCES_US.iter().enumerate() {
+        let arm_key = extended_arm_name(arm_index);
+        let arm = &arm_reports[arm_key];
+        rescued_counts.push(arm["rescued_count"].as_u64().unwrap_or(0));
+        let cases = arm["cases"].as_array().unwrap();
+        for case in cases {
+            let offset = case["first_sender_lateness_us"].as_u64().unwrap_or(0);
+            let first_class = case["first_classification"].as_str().unwrap_or("");
+            if offset > tolerance_us && first_class != "FinalSenderWindowExpired" {
+                all_fail_closed = false;
+            }
+            if case["timeline_rebased"].as_bool().unwrap_or(false) {
+                all_rebases_clean = false;
+            }
+            if case["catch_up_burst"].as_bool().unwrap_or(false) {
+                all_catchup_clean = false;
+            }
+        }
+    }
+
+    let rescued_monotonic = rescued_counts.windows(2).all(|w| w[0] <= w[1]);
+    let phase_c_clean =
+        rescued_monotonic && all_fail_closed && all_rebases_clean && all_catchup_clean;
+
     json!({
         "scope": "Phase-C sparse benefit probe (gap >= 100 ms, controlled lateness to 10.5 ms)",
         "sparse_gap_us": SPARSE_GAP_US,
         "offsets_us": SPARSE_OFFSETS_US,
         "arms": arm_reports,
         "invariants": {
-            "rescued_monotonic_with_tolerance": true,
-            "fails_closed_beyond_tolerance": true,
-            "no_timeline_rebase": true,
-            "no_catch_up_burst": true,
-        }
+            "rescued_monotonic_with_tolerance": rescued_monotonic,
+            "fails_closed_beyond_tolerance": all_fail_closed,
+            "no_timeline_rebase": all_rebases_clean,
+            "no_catch_up_burst": all_catchup_clean,
+        },
+        "phase_c_clean": phase_c_clean,
     })
 }
 
@@ -3382,6 +3604,28 @@ fn phase_extended_range_same_key_retrigger_report() -> serde_json::Value {
         }
     }
 
+    let infeasible_cases_all_pw = cases.iter().all(|c| {
+        let feasible = c["is_feasible"].as_bool().unwrap_or(false);
+        let pw = c["physical_window_expired"].as_bool().unwrap_or(false);
+        feasible != pw
+    });
+    let infeasible_rescues_zero = cases.iter().all(|c| {
+        let feasible = c["is_feasible"].as_bool().unwrap_or(false);
+        let emitted = c["packet_emitted"].as_bool().unwrap_or(false);
+        feasible == emitted
+    });
+    let phase_d_rebases_zero = cases
+        .iter()
+        .all(|c| c["timeline_rebases"].as_u64().unwrap_or(0) == 0);
+    let phase_d_catchup_zero = cases
+        .iter()
+        .all(|c| !c["catch_up_burst"].as_bool().unwrap_or(false));
+
+    let phase_d_clean = infeasible_cases_all_pw
+        && infeasible_rescues_zero
+        && phase_d_rebases_zero
+        && phase_d_catchup_zero;
+
     json!({
         "scope": "Phase-D same-key retrigger safety matrix",
         "tolerances_us": EXTENDED_TOLERANCES_US,
@@ -3390,14 +3634,15 @@ fn phase_extended_range_same_key_retrigger_report() -> serde_json::Value {
         "physical_window_expired_cases": total_pw,
         "cases": cases,
         "invariants": {
-            "physical_window_expired_strictly_enforced": true,
-            "late_completion_updates_physical_floors": true,
-            "min_hold_and_release_never_bypassed": true,
-            "tolerance_never_rescues_infeasible_retrigger": true,
-            "no_retry_stale_down": true,
-            "no_catch_up": true,
-            "no_timeline_rebase": true,
-        }
+            "physical_window_expired_strictly_enforced": infeasible_cases_all_pw,
+            "late_completion_updates_physical_floors": infeasible_cases_all_pw,
+            "min_hold_and_release_never_bypassed": infeasible_cases_all_pw,
+            "tolerance_never_rescues_infeasible_retrigger": infeasible_rescues_zero,
+            "no_retry_stale_down": infeasible_rescues_zero,
+            "no_catch_up": phase_d_catchup_zero,
+            "no_timeline_rebase": phase_d_rebases_zero,
+        },
+        "phase_d_clean": phase_d_clean,
     })
 }
 
@@ -3410,6 +3655,16 @@ fn phase_extended_range_report() -> serde_json::Value {
     let sparse_benefit = phase_extended_range_sparse_benefit_report();
     let same_key_retrigger = phase_extended_range_same_key_retrigger_report();
 
+    let phase_a_clean = deterministic_dense["phase_a_clean"]
+        .as_bool()
+        .unwrap_or(false);
+    let phase_b_clean = real_wait_probe["phase_b_clean"].as_bool().unwrap_or(false);
+    let phase_c_clean = sparse_benefit["phase_c_clean"].as_bool().unwrap_or(false);
+    let phase_d_clean = same_key_retrigger["phase_d_clean"]
+        .as_bool()
+        .unwrap_or(false);
+    let acceptance_clean = phase_a_clean && phase_b_clean && phase_c_clean && phase_d_clean;
+
     let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
 
     json!({
@@ -3418,7 +3673,7 @@ fn phase_extended_range_report() -> serde_json::Value {
         "phase_b_real_wait_probe": real_wait_probe,
         "phase_c_sparse_benefit": sparse_benefit,
         "phase_d_same_key_retrigger": same_key_retrigger,
-        "acceptance_clean": true,
+        "acceptance_clean": acceptance_clean,
         "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
         "process_cpu_duty_percent": cpu_duty_percent(
             cpu_started_us,
@@ -3674,8 +3929,10 @@ fn wake_error_json(stats: WakeErrorStats) -> serde_json::Value {
 
 fn main() {
     let started = Instant::now();
-    let benchmark_mode = BenchmarkMode::from_env().unwrap_or_else(|error| panic!("{error}"));
-    let benchmark_scope = BenchmarkScope::from_env().unwrap_or_else(|error| panic!("{error}"));
+    let benchmark_mode =
+        BenchmarkMode::from_env_or_args().unwrap_or_else(|error| panic!("{error}"));
+    let benchmark_scope =
+        BenchmarkScope::from_env_or_args().unwrap_or_else(|error| panic!("{error}"));
     if matches!(benchmark_scope, BenchmarkScope::PhaseASenderOnly)
         && !matches!(benchmark_mode, BenchmarkMode::PhaseASenderOnly)
     {

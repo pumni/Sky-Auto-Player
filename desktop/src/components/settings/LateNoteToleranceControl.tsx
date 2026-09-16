@@ -77,8 +77,8 @@ export function LateNoteToleranceControl({
       </div>
       {requestedValue < 2_500 ? (
         <span className="settings-note">
-          Lower values keep notes closer to authored timing, but Windows wake jitter may cause more
-          late notes to be dropped.
+          Lower values can tighten late-note timing when they are above the active Timing Margin,
+          but Windows wake jitter may cause more late notes to be dropped.
         </span>
       ) : (
         <span className="settings-note">
