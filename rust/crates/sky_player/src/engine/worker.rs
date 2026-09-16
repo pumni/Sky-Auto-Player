@@ -294,6 +294,7 @@ pub(crate) struct WorkerRuntime {
     pub(crate) force_full_cleanup: bool,
     pub(crate) terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
+    pub(crate) manual_pause_suspension_pending: bool,
     /// True only after the first successful authored musical commit. A
     /// final foreground mismatch before that point is startup failure, not a
     /// pause/rebase event.
