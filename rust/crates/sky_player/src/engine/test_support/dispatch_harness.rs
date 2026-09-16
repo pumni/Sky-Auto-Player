@@ -44,6 +44,20 @@ pub struct PreparedBoundaryEvidence {
     pub compiled_packet_index: Option<u64>,
     pub packet: PhysicalPacket,
     pub physical_target_qpc: QpcTicks,
+    pub authored_ticks: TimelineTicks,
+    pub effective_deadline_ticks: TimelineTicks,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PhysicalFloorEvidence {
+    pub authored_target_qpc: QpcTicks,
+    pub musical_up_not_before_qpc: QpcTicks,
+    pub down_not_before_qpc: QpcTicks,
+    pub packet_not_before_qpc: QpcTicks,
+    pub latest_down_start_qpc: Option<QpcTicks>,
+    pub hold_floor_mask: u16,
+    pub release_floor_mask: u16,
+    pub down_feasible: Option<bool>,
 }
 
 #[allow(dead_code)]
@@ -939,6 +953,14 @@ impl ProductionDispatchTestHarness {
         self.effective_now_ticks = ticks;
     }
 
+    pub fn playback_epoch_qpc_for_test(&self) -> QpcTicks {
+        self.resources.playback.epoch
+    }
+
+    pub fn set_playback_epoch_qpc_for_test(&mut self, epoch: QpcTicks) {
+        self.resources.playback.epoch = epoch;
+    }
+
     /// Test-only clock setup: place the next authored boundary a fixed margin
     /// into the future before the plan is frozen.  This removes harness
     /// startup jitter without changing an already-frozen target.
@@ -1070,6 +1092,10 @@ impl ProductionDispatchTestHarness {
 
     pub fn final_sender_window_expirations_for_test(&self) -> u64 {
         self.local_metrics.final_sender_window_expirations
+    }
+
+    pub fn final_gate_control_rejections_for_test(&self) -> u64 {
+        self.local_metrics.final_gate_control_rejections
     }
 
     pub fn missed_unobserved_backlog_boundaries_for_test(&self) -> u64 {
@@ -1821,6 +1847,33 @@ impl ProductionDispatchTestHarness {
             .ok(),
             packet: physical.authored_view.packet_masks,
             physical_target_qpc: physical.physical_target_qpc,
+            authored_ticks: physical.authored_view.authored_batch_scheduled_ticks,
+            effective_deadline_ticks: physical.authored_view.batch_scheduled_ticks,
+        })
+    }
+
+    /// Read the production physical timing projection for a frozen plan
+    /// without mutating the guard. This is benchmark evidence only.
+    pub fn physical_floor_evidence_for_test(
+        &self,
+        plan: &NextDispatchPlan,
+    ) -> Option<PhysicalFloorEvidence> {
+        let physical = plan.physical()?;
+        let target = physical.physical_target_qpc;
+        let packet = physical.authored_view.packet_masks;
+        let guard = self.runtime.physical_timing_guard.as_ref()?;
+        let window = guard
+            .query(target, packet.up_mask, packet.down_mask)
+            .expect("physical timing window evidence");
+        Some(PhysicalFloorEvidence {
+            authored_target_qpc: window.authored_target_qpc,
+            musical_up_not_before_qpc: window.musical_up_not_before_qpc,
+            down_not_before_qpc: window.down_not_before_qpc,
+            packet_not_before_qpc: window.packet_not_before_qpc,
+            latest_down_start_qpc: window.latest_down_start_qpc,
+            hold_floor_mask: window.hold_floor_mask,
+            release_floor_mask: window.release_floor_mask,
+            down_feasible: (packet.down_mask != 0).then(|| window.is_down_feasible()),
         })
     }
 

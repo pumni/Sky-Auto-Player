@@ -19,8 +19,8 @@ use sky_dispatch_win32::input::{
 use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome, WakeErrorStats};
 use sky_player::engine::dispatch_primitives::{
     DispatchObservation, DispatchPath, DispatchStep, DownMissKind, NextDispatchPlan,
-    OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue, PrecisionHandoffEvidence,
-    PreparationCounts, ProductionDispatchTestHarness,
+    OBSERVATION_QUEUE_CAPACITY, PendingObservationQueue, PhysicalFloorEvidence,
+    PrecisionHandoffEvidence, PreparationCounts, ProductionDispatchTestHarness,
 };
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -506,8 +506,12 @@ struct BaselineBoundaryEvidence {
     pre_call_minus_target_us: Option<i64>,
     completion_minus_pre_call_us: Option<u64>,
     send_status: Option<&'static str>,
+    dispatch_step: &'static str,
+    observed_disposition: &'static str,
     delivery: &'static str,
     non_send_reason: Option<&'static str>,
+    expected_non_send_reason: Option<&'static str>,
+    sender_window_expired: bool,
 }
 
 #[derive(Default)]
@@ -529,6 +533,108 @@ fn baseline_status_name(status: SendTransactionStatus) -> &'static str {
         SendTransactionStatus::DownExpiredBeforeSend => "DownExpiredBeforeSend",
         SendTransactionStatus::ClockFailureBeforeSend => "ClockFailureBeforeSend",
         SendTransactionStatus::ClockFailureAfterSend => "ClockFailureAfterSend",
+    }
+}
+
+fn baseline_dispatch_step_name(step: &DispatchStep) -> &'static str {
+    match step {
+        DispatchStep::NoWork => "NoWork",
+        DispatchStep::Dispatched => "Dispatched",
+        DispatchStep::Continue => "Continue",
+        DispatchStep::Terminate(_) => "Terminate",
+        DispatchStep::TerminateStatic(_) => "TerminateStatic",
+    }
+}
+
+fn baseline_down_miss_name(kind: DownMissKind) -> &'static str {
+    match kind {
+        DownMissKind::UnobservedBacklog => "UnobservedBacklog",
+        DownMissKind::PhysicalWindowExpired => "PhysicalWindowExpired",
+        DownMissKind::DownExpiredBeforeSend => "DownExpiredBeforeSend",
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn baseline_observed_disposition(
+    step: &DispatchStep,
+    outcome: Option<SendTransactionOutcome>,
+    observation: Option<DispatchObservation>,
+    final_gate_control_rejections: u64,
+    sender_window_expired: bool,
+) -> (
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+    bool,
+) {
+    let from_status = |status: SendTransactionStatus| {
+        if matches!(status, SendTransactionStatus::Complete) {
+            (
+                "successful_send",
+                None,
+                Some(baseline_status_name(status)),
+                true,
+            )
+        } else {
+            (
+                "sender_status",
+                Some(baseline_status_name(status)),
+                Some(baseline_status_name(status)),
+                false,
+            )
+        }
+    };
+    if let Some(outcome) = outcome {
+        return from_status(outcome.status);
+    }
+    if let Some(observation) = observation {
+        match observation {
+            DispatchObservation::Down(value) => return from_status(value.trace.result_status),
+            DispatchObservation::Up(value) => return from_status(value.result_status),
+            DispatchObservation::DownMiss(value) => {
+                return (
+                    "down_miss",
+                    Some(baseline_down_miss_name(value.kind)),
+                    None,
+                    false,
+                );
+            }
+            DispatchObservation::Wait(_)
+            | DispatchObservation::StaleMetadata(_)
+            | DispatchObservation::BlockedUnfocused(_) => {}
+        }
+    }
+    if final_gate_control_rejections != 0 {
+        return ("control_disposition", Some("control_rejected"), None, false);
+    }
+    if sender_window_expired {
+        return (
+            "sender_cutoff_without_observation",
+            Some("sender_window_expiration_without_observation"),
+            None,
+            false,
+        );
+    }
+    match step {
+        DispatchStep::Continue => (
+            "dispatch_control",
+            Some("dispatch_continue_without_observation"),
+            None,
+            false,
+        ),
+        DispatchStep::NoWork => ("no_work", Some("no_work"), None, false),
+        DispatchStep::Dispatched => (
+            "dispatch_disposition",
+            Some("dispatched_without_send_evidence"),
+            None,
+            false,
+        ),
+        DispatchStep::Terminate(_) | DispatchStep::TerminateStatic(_) => (
+            "dispatch_disposition",
+            Some("dispatch_terminated"),
+            None,
+            false,
+        ),
     }
 }
 
@@ -645,7 +751,7 @@ fn baseline_record_boundary(
     now_qpc: Option<QpcTicks>,
     completion_delay_us: u64,
     inject_zero_progress_drop: bool,
-    non_send_reason: Option<&'static str>,
+    expected_non_send_reason: Option<&'static str>,
 ) {
     let prepared = harness
         .prepared_boundary_evidence_for_test(plan)
@@ -659,6 +765,7 @@ fn baseline_record_boundary(
         )
         .expect("baseline crossing arithmetic");
     let prior_sender_expirations = harness.final_sender_window_expirations_for_test();
+    let prior_control_rejections = harness.final_gate_control_rejections_for_test();
     let prior_timeline_rebases = harness.timeline_rebase_count_for_test();
     let prior_anomalies = harness.transport_anomaly_counts_for_test();
     let (step, outcome) = match now_qpc {
@@ -680,10 +787,18 @@ fn baseline_record_boundary(
     let observation_timing = observation.map(baseline_observation_timing);
     let sender_expired =
         harness.final_sender_window_expirations_for_test() > prior_sender_expirations;
-    let send_status = outcome
-        .map(|value| baseline_status_name(value.status))
-        .or(sender_expired.then_some("DownExpiredBeforeSend"));
-    let delivery = if outcome.is_some_and(|value| value.is_success()) {
+    let control_rejections = harness
+        .final_gate_control_rejections_for_test()
+        .saturating_sub(prior_control_rejections);
+    let (observed_disposition, observed_reason, observed_send_status, observed_success) =
+        baseline_observed_disposition(
+            &step,
+            outcome,
+            observation,
+            control_rejections,
+            sender_expired,
+        );
+    let delivery = if observed_success {
         evidence.successful_sendinput_transactions =
             evidence.successful_sendinput_transactions.saturating_add(1);
         "successful_send"
@@ -719,22 +834,6 @@ fn baseline_record_boundary(
             (pre_call, completion, residual, duration)
         })
         .unwrap_or((None, None, None, None));
-    let status_is_drop = outcome.is_some_and(|value| {
-        matches!(
-            value.status,
-            SendTransactionStatus::ZeroProgress
-                | SendTransactionStatus::PartialProgress
-                | SendTransactionStatus::IntegrityLost
-        )
-    });
-    let reason = if status_is_drop {
-        Some("injected_zero_progress_drop")
-    } else if sender_expired {
-        Some("normal_late_suppression")
-    } else {
-        non_send_reason
-    };
-    let _ = step;
     evidence.boundaries.push(BaselineBoundaryEvidence {
         scenario,
         source_action_index: prepared.source_action_index,
@@ -748,9 +847,13 @@ fn baseline_record_boundary(
         completion_qpc: outcome_completion.or(observed_completion),
         pre_call_minus_target_us: outcome_residual.or(observed_residual),
         completion_minus_pre_call_us: outcome_duration.or(observed_duration),
-        send_status,
+        send_status: observed_send_status,
+        dispatch_step: baseline_dispatch_step_name(&step),
+        observed_disposition,
         delivery,
-        non_send_reason: reason,
+        non_send_reason: observed_reason,
+        expected_non_send_reason,
+        sender_window_expired: sender_expired,
     });
     evidence.timeline_rebase_count = evidence.timeline_rebase_count.saturating_add(
         harness
@@ -770,6 +873,194 @@ fn baseline_record_boundary(
                     .saturating_add(prior_anomalies.2),
             ),
     );
+}
+
+fn baseline_floor_json(
+    prepared: sky_player::engine::dispatch_primitives::PreparedBoundaryEvidence,
+    floor: PhysicalFloorEvidence,
+) -> serde_json::Value {
+    json!({
+        "source_action_index": prepared.source_action_index,
+        "compiled_packet_index": prepared.compiled_packet_index,
+        "up_mask": prepared.packet.up_mask,
+        "down_mask": prepared.packet.down_mask,
+        "authored_ticks": prepared.authored_ticks.as_u64(),
+        "effective_deadline_ticks": prepared.effective_deadline_ticks.as_u64(),
+        "authored_target_qpc": floor.authored_target_qpc.as_u64(),
+        "physical_target_qpc": prepared.physical_target_qpc.as_u64(),
+        "musical_up_not_before_qpc": floor.musical_up_not_before_qpc.as_u64(),
+        "down_not_before_qpc": floor.down_not_before_qpc.as_u64(),
+        "packet_not_before_qpc": floor.packet_not_before_qpc.as_u64(),
+        "latest_down_start_qpc": floor.latest_down_start_qpc.map(QpcTicks::as_u64),
+        "hold_floor_mask": floor.hold_floor_mask,
+        "release_floor_mask": floor.release_floor_mask,
+        "down_feasible": floor.down_feasible,
+        "packet_not_before_after_authored_qpc": floor
+            .packet_not_before_qpc
+            .as_u64()
+            .saturating_sub(floor.authored_target_qpc.as_u64()),
+    })
+}
+
+fn baseline_completion_floor_variant(
+    evidence: &mut BaselineEvidence,
+    scenario: &'static str,
+    harness: &mut ProductionDispatchTestHarness,
+    completion_delay_us: u64,
+) -> serde_json::Value {
+    let packet_n = harness.plan_current_dispatch();
+    baseline_record_boundary(
+        evidence,
+        scenario,
+        harness,
+        &packet_n,
+        0,
+        None,
+        completion_delay_us,
+        false,
+        None,
+    );
+    let packet_n_evidence = evidence
+        .boundaries
+        .last()
+        .expect("completion-floor packet N evidence");
+    let packet_n1 = harness.plan_current_dispatch();
+    let prepared_n1 = harness
+        .prepared_boundary_evidence_for_test(&packet_n1)
+        .expect("completion-floor packet N+1 preparation");
+    let floor_n1 = harness
+        .physical_floor_evidence_for_test(&packet_n1)
+        .expect("completion-floor packet N+1 window");
+    json!({
+        "variant": scenario,
+        "completion_delay_us": completion_delay_us,
+        "packet_n": {
+            "source_action_index": packet_n_evidence.source_action_index,
+            "physical_target_qpc": packet_n_evidence.physical_target_qpc,
+            "completion_qpc": packet_n_evidence.completion_qpc,
+            "send_status": packet_n_evidence.send_status,
+            "delivery": packet_n_evidence.delivery,
+        },
+        "packet_n_plus_one": baseline_floor_json(prepared_n1, floor_n1),
+    })
+}
+
+fn baseline_completion_floor_report(evidence: &mut BaselineEvidence) -> serde_json::Value {
+    let mut control = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 30_000);
+    control.align_next_plan_to_future_for_test(100_000);
+    let shared_epoch = control.playback_epoch_qpc_for_test();
+    let mut delayed = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 30_000);
+    delayed.set_playback_epoch_qpc_for_test(shared_epoch);
+
+    let control_report = baseline_completion_floor_variant(
+        evidence,
+        "completion_floor_control",
+        &mut control,
+        BASELINE_COMPLETION_DELAY_US,
+    );
+    let delayed_report = baseline_completion_floor_variant(
+        evidence,
+        "completion_floor_delayed",
+        &mut delayed,
+        40_000,
+    );
+    let control_next = &control_report["packet_n_plus_one"];
+    let delayed_next = &delayed_report["packet_n_plus_one"];
+    let same_authored_schedule = control_next["authored_ticks"] == delayed_next["authored_ticks"]
+        && control_next["effective_deadline_ticks"] == delayed_next["effective_deadline_ticks"];
+    let same_physical_target =
+        control_next["physical_target_qpc"] == delayed_next["physical_target_qpc"];
+    let delayed_floor_moves = delayed_next["packet_not_before_qpc"].as_u64()
+        > delayed_next["authored_target_qpc"].as_u64()
+        && delayed_next["hold_floor_mask"] == json!(1);
+    let control_is_not_pressured =
+        control_next["packet_not_before_qpc"] == control_next["authored_target_qpc"];
+    json!({
+        "same_authored_prepared_schedule": same_authored_schedule,
+        "same_packet_n_plus_one_target": same_physical_target,
+        "control": control_report,
+        "delayed_completion": delayed_report,
+        "delayed_completion_moves_current_physical_floor": delayed_floor_moves,
+        "control_has_no_downstream_floor_pressure": control_is_not_pressured,
+        "acceptance_clean": same_authored_schedule
+            && same_physical_target
+            && delayed_floor_moves
+            && control_is_not_pressured,
+        "policy_changed": false,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn baseline_semantic_expectation(
+    boundaries: &[BaselineBoundaryEvidence],
+    scenario: &'static str,
+    expected_count: usize,
+    expected_sources: &[u32],
+    expected_packets: &[(u16, u16)],
+    expected_delivery: &[&'static str],
+    expected_statuses: &[Option<&'static str>],
+    expected_reasons: &[Option<&'static str>],
+    expected_steps: &[&'static str],
+) -> serde_json::Value {
+    let observed: Vec<&BaselineBoundaryEvidence> = boundaries
+        .iter()
+        .filter(|boundary| boundary.scenario == scenario)
+        .collect();
+    let observed_json: Vec<serde_json::Value> = observed
+        .iter()
+        .map(|boundary| {
+            json!({
+                "source_action_index": boundary.source_action_index,
+                "up_mask": boundary.up_mask,
+                "down_mask": boundary.down_mask,
+                "delivery": boundary.delivery,
+                "send_status": boundary.send_status,
+                "non_send_reason": boundary.non_send_reason,
+                "dispatch_step": boundary.dispatch_step,
+                "observed_disposition": boundary.observed_disposition,
+                "expected_non_send_reason": boundary.expected_non_send_reason,
+            })
+        })
+        .collect();
+    let observed_matches = observed.len() == expected_count
+        && observed
+            .iter()
+            .zip(expected_sources.iter())
+            .all(|(boundary, expected)| boundary.source_action_index == *expected)
+        && observed
+            .iter()
+            .zip(expected_packets.iter())
+            .all(|(boundary, expected)| (boundary.up_mask, boundary.down_mask) == *expected)
+        && observed
+            .iter()
+            .zip(expected_delivery.iter())
+            .all(|(boundary, expected)| boundary.delivery == *expected)
+        && observed
+            .iter()
+            .zip(expected_statuses.iter())
+            .all(|(boundary, expected)| boundary.send_status == *expected)
+        && observed
+            .iter()
+            .zip(expected_reasons.iter())
+            .all(|(boundary, expected)| boundary.non_send_reason == *expected)
+        && observed
+            .iter()
+            .zip(expected_steps.iter())
+            .all(|(boundary, expected)| boundary.dispatch_step == *expected);
+    json!({
+        "scenario": scenario,
+        "expected": {
+            "count": expected_count,
+            "source_action_indices": expected_sources,
+            "packets": expected_packets,
+            "delivery": expected_delivery,
+            "send_status": expected_statuses,
+            "non_send_reason": expected_reasons,
+            "dispatch_step": expected_steps,
+        },
+        "observed": observed_json,
+        "pass": observed_matches,
+    })
 }
 
 /// Paired producer-only A/B measurement. It deliberately avoids a production
@@ -4104,7 +4395,7 @@ fn baseline_report() -> serde_json::Value {
             None,
             BASELINE_COMPLETION_DELAY_US,
             false,
-            Some("normal_late_suppression"),
+            Some("DownExpiredBeforeSend"),
         );
     }
 
@@ -4131,7 +4422,7 @@ fn baseline_report() -> serde_json::Value {
             None,
             BASELINE_COMPLETION_DELAY_US,
             false,
-            Some("normal_late_suppression"),
+            Some("DownExpiredBeforeSend"),
         );
         let second = harness.plan_current_dispatch();
         let second_target = harness
@@ -4153,7 +4444,7 @@ fn baseline_report() -> serde_json::Value {
             Some(first_crossing),
             BASELINE_COMPLETION_DELAY_US,
             false,
-            Some("unobserved_backlog_after_late_first_boundary"),
+            Some("DownExpiredBeforeSend"),
         );
     }
 
@@ -4180,7 +4471,7 @@ fn baseline_report() -> serde_json::Value {
             None,
             BASELINE_COMPLETION_DELAY_US,
             false,
-            Some("stop_interrupt_race"),
+            Some("control_rejected"),
         );
     }
 
@@ -4196,9 +4487,11 @@ fn baseline_report() -> serde_json::Value {
             None,
             BASELINE_COMPLETION_DELAY_US,
             true,
-            Some("injected_zero_progress_drop"),
+            Some("ZeroProgress"),
         );
     }
+
+    let completion_floor = baseline_completion_floor_report(&mut evidence);
 
     let expected_case_names = [
         "single_note",
@@ -4210,12 +4503,146 @@ fn baseline_report() -> serde_json::Value {
         "late_first_boundary_pressures_following_boundary",
         "stop_interrupt_race_at_target",
         "intentionally_injected_zero_progress_drop",
+        "completion_floor_control",
+        "completion_floor_delayed",
     ];
     let prepared_boundary_count = evidence.boundaries.len();
-    let drop_record = evidence
-        .boundaries
+    let semantic_expectations = vec![
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "single_note",
+            1,
+            &[0],
+            &[(0, 1)],
+            &["successful_send"],
+            &[Some("Complete")],
+            &[None],
+            &["Dispatched"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "maximum_valid_atomic_chord",
+            1,
+            &[0],
+            &[(0, 0x7fff)],
+            &["successful_send"],
+            &[Some("Complete")],
+            &[None],
+            &["Dispatched"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "dense_different_key_boundaries",
+            2,
+            &[0, 1],
+            &[(0, 1), (0, 2)],
+            &["successful_send", "successful_send"],
+            &[Some("Complete"), Some("Complete")],
+            &[None, None],
+            &["Dispatched", "Dispatched"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "legal_same_key_sequence",
+            4,
+            &[0, 1, 2, 3],
+            &[(0, 1), (1, 0), (0, 1), (1, 0)],
+            &[
+                "successful_send",
+                "successful_send",
+                "successful_send",
+                "successful_send",
+            ],
+            &[
+                Some("Complete"),
+                Some("Complete"),
+                Some("Complete"),
+                Some("Complete"),
+            ],
+            &[None, None, None, None],
+            &["Dispatched", "Dispatched", "Dispatched", "Dispatched"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "late_wake_inside_normal_tolerance",
+            1,
+            &[0],
+            &[(0, 1)],
+            &["successful_send"],
+            &[Some("Complete")],
+            &[None],
+            &["Dispatched"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "late_wake_outside_normal_tolerance",
+            1,
+            &[0],
+            &[(0, 1)],
+            &["non_send"],
+            &[None],
+            &[Some("DownExpiredBeforeSend")],
+            &["Dispatched"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "late_first_boundary_pressures_following_boundary",
+            2,
+            &[0, 1],
+            &[(0, 1), (0, 2)],
+            &["non_send", "non_send"],
+            &[None, None],
+            &[Some("DownExpiredBeforeSend"), Some("DownExpiredBeforeSend")],
+            &["Dispatched", "Dispatched"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "stop_interrupt_race_at_target",
+            1,
+            &[0],
+            &[(0, 1)],
+            &["non_send"],
+            &[None],
+            &[Some("control_rejected")],
+            &["Continue"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "intentionally_injected_zero_progress_drop",
+            1,
+            &[0],
+            &[(0, 1)],
+            &["non_send"],
+            &[Some("ZeroProgress")],
+            &[Some("ZeroProgress")],
+            &["Terminate"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "completion_floor_control",
+            1,
+            &[0],
+            &[(0, 1)],
+            &["successful_send"],
+            &[Some("Complete")],
+            &[None],
+            &["Dispatched"],
+        ),
+        baseline_semantic_expectation(
+            &evidence.boundaries,
+            "completion_floor_delayed",
+            1,
+            &[0],
+            &[(0, 1)],
+            &["successful_send"],
+            &[Some("Complete")],
+            &[None],
+            &["Dispatched"],
+        ),
+    ];
+    let semantic_expectations_clean = semantic_expectations
         .iter()
-        .find(|boundary| boundary.scenario == "intentionally_injected_zero_progress_drop");
+        .all(|value| value["pass"].as_bool().unwrap_or(false));
     let deterministic_acceptance_clean = expected_case_names.iter().all(|name| {
         evidence
             .boundaries
@@ -4225,11 +4652,10 @@ fn baseline_report() -> serde_json::Value {
         == evidence
             .successful_sendinput_transactions
             .saturating_add(evidence.non_send_or_drop_boundaries)
-        && drop_record.is_some_and(|boundary| {
-            boundary.delivery == "non_send"
-                && boundary.send_status == Some("ZeroProgress")
-                && boundary.non_send_reason == Some("injected_zero_progress_drop")
-        });
+        && semantic_expectations_clean
+        && completion_floor["acceptance_clean"]
+            .as_bool()
+            .unwrap_or(false);
     assert!(
         deterministic_acceptance_clean,
         "baseline deterministic evidence contract failed"
@@ -4249,11 +4675,13 @@ fn baseline_report() -> serde_json::Value {
         "acceptance_clean": deterministic_acceptance_clean && real_wait_acceptance_clean,
         "deterministic_acceptance_clean": deterministic_acceptance_clean,
         "expected_cases": expected_case_names,
+        "semantic_expectations": semantic_expectations,
         "prepared_boundary_count": prepared_boundary_count,
         "successful_sendinput_transaction_count": evidence.successful_sendinput_transactions,
         "non_send_or_drop_boundary_count": evidence.non_send_or_drop_boundaries,
         "timeline_rebase_count": evidence.timeline_rebase_count,
         "transport_anomaly_count": evidence.transport_anomaly_count,
+        "completion_floor": completion_floor,
         "boundary_evidence": evidence.boundaries,
         "real_wait_probe": {
             "acceptance_clean": real_wait_acceptance_clean,
