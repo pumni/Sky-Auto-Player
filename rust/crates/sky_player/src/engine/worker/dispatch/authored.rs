@@ -597,8 +597,8 @@ fn record_down_send_outcome(
         Ok(sender_cutoff_qpc) => sender_cutoff_qpc,
         Err(error) => return DispatchStep::TerminateStatic(error),
     };
-    if packet.down_mask != 0 && sender_cutoff_qpc.is_none() {
-        return DispatchStep::TerminateStatic("Down packet is missing sender cutoff");
+    if timing.strict_timing && packet.down_mask != 0 && sender_cutoff_qpc.is_none() {
+        return DispatchStep::TerminateStatic("strict Down packet is missing sender cutoff");
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
@@ -643,6 +643,7 @@ fn record_down_send_outcome(
         result.status,
         sky_dispatch_win32::input::SendTransactionStatus::DownExpiredBeforeSend
     ) && view.packet_masks.down_mask != 0
+        && timing.strict_timing
     {
         let Some(observed_qpc) = result.evidence.started_ticks else {
             return DispatchStep::TerminateStatic(

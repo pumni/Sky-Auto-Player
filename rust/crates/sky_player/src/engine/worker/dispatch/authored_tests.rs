@@ -1,7 +1,6 @@
 use super::super::recovery::effective_down_sender_cutoff;
 use super::super::{PhysicalCommit, RecoveryDescriptor};
 use super::*;
-use crate::engine::worker::NORMAL_PLAYBACK_DOWN_START_TOLERANCE_US;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
 use sky_dispatch_core::model::PhysicalPacketKind;
 use sky_dispatch_win32::input::{PhysicalPacket, PreparedPhysicalPacket};
@@ -132,11 +131,9 @@ fn anchored_target_math_supports_explicit_offset() {
 }
 
 #[test]
-fn c1_normal_cutoff_is_non_additive_and_strict_cutoff_is_unchanged() {
+fn c2_normal_sender_cutoff_is_disabled_and_strict_cutoff_is_unchanged() {
     let target = QpcTicks::from_raw(10_000);
-    let tolerance_us = NORMAL_PLAYBACK_DOWN_START_TOLERANCE_US;
-    assert_eq!(tolerance_us, 2_500);
-    let tolerance = DurationTicks::from_raw(tolerance_us);
+    let tolerance = DurationTicks::from_raw(2_500);
     let mut timing = WorkerTimingState::create_test_timing();
     timing.strict_timing = false;
     timing.normal_down_start_tolerance_ticks = tolerance;
@@ -155,10 +152,9 @@ fn c1_normal_cutoff_is_non_additive_and_strict_cutoff_is_unchanged() {
             release_floor_mask: 0,
         };
         assert_eq!(
-            effective_down_sender_cutoff(window, &timing)
-                .expect("normal C1 cutoff")
-                .expect("Down cutoff"),
-            QpcTicks::from_raw(target.as_u64() + margin.max(tolerance_us))
+            effective_down_sender_cutoff(window, &timing).expect("normal cutoff"),
+            None,
+            "normal Down sender admission must not use a lateness cutoff"
         );
     }
 
@@ -184,7 +180,7 @@ fn c1_normal_cutoff_is_non_additive_and_strict_cutoff_is_unchanged() {
 }
 
 #[test]
-fn c1_1_normal_cutoff_is_non_additive_and_strict_ignores_tolerances_3_4_5_ms() {
+fn c2_normal_sender_cutoff_ignores_configured_tolerance_and_strict_ignores_it() {
     let target = QpcTicks::from_raw(20_000);
 
     for tolerance_us in [2_000, 2_500, 3_000, 4_000, 5_000, 7_500, 10_000] {
@@ -193,8 +189,7 @@ fn c1_1_normal_cutoff_is_non_additive_and_strict_ignores_tolerances_3_4_5_ms() {
         timing.strict_timing = false;
         timing.normal_down_start_tolerance_ticks = tolerance;
 
-        // Verify non-additive property under Normal timing:
-        // cutoff = target + max(margin, tolerance), NOT target + margin + tolerance.
+        // Normal timing keeps the configured compatibility field dormant.
         for margin in [0, 500, 1_000, 2_500, 3_000, 4_000, 6_000] {
             let latest = target
                 .checked_add_duration(DurationTicks::from_raw(margin))
@@ -208,23 +203,11 @@ fn c1_1_normal_cutoff_is_non_additive_and_strict_ignores_tolerances_3_4_5_ms() {
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
             };
-            let cutoff = effective_down_sender_cutoff(window, &timing)
-                .expect("normal cutoff calculation")
-                .expect("Down cutoff exists");
-
-            let expected_cutoff = QpcTicks::from_raw(target.as_u64() + margin.max(tolerance_us));
             assert_eq!(
-                cutoff, expected_cutoff,
-                "cutoff for tolerance {tolerance_us} margin {margin} must be non-additive max"
+                effective_down_sender_cutoff(window, &timing).expect("normal cutoff calculation"),
+                None,
+                "normal cutoff must stay disabled for tolerance {tolerance_us} margin {margin}"
             );
-
-            if margin > 0 {
-                let additive_cutoff = QpcTicks::from_raw(target.as_u64() + margin + tolerance_us);
-                assert_ne!(
-                    cutoff, additive_cutoff,
-                    "cutoff must NOT be additive (target + margin + tolerance)"
-                );
-            }
         }
 
         // Verify Strict timing completely ignores configured tolerance:

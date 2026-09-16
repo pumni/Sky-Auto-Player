@@ -4395,7 +4395,7 @@ fn baseline_report() -> serde_json::Value {
             None,
             BASELINE_COMPLETION_DELAY_US,
             false,
-            Some("DownExpiredBeforeSend"),
+            None,
         );
     }
 
@@ -4422,7 +4422,7 @@ fn baseline_report() -> serde_json::Value {
             None,
             BASELINE_COMPLETION_DELAY_US,
             false,
-            Some("DownExpiredBeforeSend"),
+            None,
         );
         let second = harness.plan_current_dispatch();
         let second_target = harness
@@ -4444,7 +4444,7 @@ fn baseline_report() -> serde_json::Value {
             Some(first_crossing),
             BASELINE_COMPLETION_DELAY_US,
             false,
-            Some("DownExpiredBeforeSend"),
+            None,
         );
     }
 
@@ -4579,9 +4579,9 @@ fn baseline_report() -> serde_json::Value {
             1,
             &[0],
             &[(0, 1)],
-            &["non_send"],
+            &["successful_send"],
+            &[Some("Complete")],
             &[None],
-            &[Some("DownExpiredBeforeSend")],
             &["Dispatched"],
         ),
         baseline_semantic_expectation(
@@ -4590,9 +4590,9 @@ fn baseline_report() -> serde_json::Value {
             2,
             &[0, 1],
             &[(0, 1), (0, 2)],
-            &["non_send", "non_send"],
+            &["successful_send", "successful_send"],
+            &[Some("Complete"), Some("Complete")],
             &[None, None],
-            &[Some("DownExpiredBeforeSend"), Some("DownExpiredBeforeSend")],
             &["Dispatched", "Dispatched"],
         ),
         baseline_semantic_expectation(
@@ -4671,7 +4671,7 @@ fn baseline_report() -> serde_json::Value {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     json!({
-        "scope": "Phase 0 deterministic dispatch qualification; production scheduling policy unchanged",
+        "scope": "Phase 2 deterministic dispatch qualification; normal Down sender cutoff disabled while physical timing policy remains unchanged",
         "acceptance_clean": deterministic_acceptance_clean && real_wait_acceptance_clean,
         "deterministic_acceptance_clean": deterministic_acceptance_clean,
         "expected_cases": expected_case_names,
@@ -5167,7 +5167,7 @@ fn main() {
         )
         .then_some(SYNTHETIC_TRANSPORT_COMPLETION_US),
         "evidence_scope": match (benchmark_scope, benchmark_mode) {
-            (BenchmarkScope::Baseline, BenchmarkMode::RealWait) => "baseline prepared-boundary evidence through the production test-support dispatch path, deterministic non-send/drop classification, and a host real HybridWaiter probe; no production scheduling policy or timing control is changed; not Raw Input or game-observed latency",
+            (BenchmarkScope::Baseline, BenchmarkMode::RealWait) => "normal late-Down baseline prepared-boundary evidence through the production test-support dispatch path, deterministic non-send/drop classification, and a host real HybridWaiter probe; physical timing floors and wait policy are unchanged; not Raw Input or game-observed latency",
             (BenchmarkScope::Baseline, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; test-support sender cutoff seam is exercised but production SendInput cutoff qualification is separate; not Raw Input or game-observed latency",
             (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",

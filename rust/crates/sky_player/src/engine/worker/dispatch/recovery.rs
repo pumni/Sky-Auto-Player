@@ -25,11 +25,11 @@ pub(super) fn effective_down_sender_cutoff(
     if timing.strict_timing {
         return Ok(Some(physical_latest));
     }
-    let continuity_cutoff = physical_timing_window
-        .authored_target_qpc
-        .checked_add_duration(timing.normal_down_start_tolerance_ticks)
-        .map_err(|_| "normal Down continuity cutoff arithmetic overflow")?;
-    Ok(Some(physical_latest.max(continuity_cutoff)))
+    // Normal playback treats lateness as observational evidence.  The sender
+    // still records its authoritative pre-call QPC, but it must not turn a
+    // late wake into a scheduler-level Down miss.  Keep the physical latest
+    // start cutoff isolated to strict/diagnostic timing.
+    Ok(None)
 }
 
 pub(super) fn record_late_rescued_down(

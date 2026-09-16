@@ -5056,7 +5056,7 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
 }
 
 #[test]
-fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
+fn strict_sender_deadline_miss_fails_closed() {
     // Keep the first physical boundary well clear of worker startup. This
     // test exercises the injected pre-call deadline miss on the second Down,
     // not an incidental startup scheduling race at an authored zero target.
@@ -5107,8 +5107,11 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
         },
     );
     options.profile = DispatchProfile::Production;
-    // This integration test verifies that the scripted sender deadline miss
-    // leaves a clean session. Keep the real worker/QPC path, but give CI host
+    // Keep the injected sender deadline miss on the explicit strict path;
+    // normal playback no longer converts wake lateness into Down recovery.
+    options.timing.strict_timing = true;
+    // This integration test verifies that the scripted strict sender deadline
+    // miss fails closed. Keep the real worker/QPC path, but give CI host
     // preemption enough test-only margin that the real sender cutoff cannot
     // consume the scripted packet index first. Exact cutoff behavior is
     // covered by deterministic dispatch tests; the product default is supplied
@@ -5120,23 +5123,19 @@ fn trusted_pre_call_deadline_miss_finishes_with_clean_session_health() {
     assert!(session.join(Duration::from_secs(8)).expect("worker join"));
 
     let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome, Some("error".to_string()), "{snapshot:?}");
+    assert_eq!(snapshot.status, "error", "{snapshot:?}");
     assert_eq!(
-        snapshot.outcome,
-        Some("finished".to_string()),
+        snapshot.terminal_error,
+        Some("down_final_sender_window_expired".to_string()),
         "{snapshot:?}"
     );
-    assert_eq!(snapshot.status, "finished", "{snapshot:?}");
-    assert_eq!(snapshot.terminal_error, None, "{snapshot:?}");
     assert_eq!(snapshot.authored_keys_rejected, 0, "{snapshot:?}");
     assert_eq!(
         snapshot.missed_physical_window_boundaries, 0,
-        "a sender-side latest-start miss is not a guard window miss: {snapshot:?}"
+        "{snapshot:?}"
     );
     assert_eq!(snapshot.final_sender_window_expirations, 1, "{snapshot:?}");
-    assert_eq!(
-        snapshot.generation_status_counts.get("dropped_expired"),
-        Some(&1)
-    );
     assert_eq!(snapshot.active_count, 0, "{snapshot:?}");
     assert_eq!(snapshot.possibly_active_count, 0, "{snapshot:?}");
     assert_eq!(snapshot.failed_release_count, 0, "{snapshot:?}");

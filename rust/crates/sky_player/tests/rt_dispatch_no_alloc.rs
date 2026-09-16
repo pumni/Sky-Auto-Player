@@ -802,9 +802,10 @@ fn production_mixed_missed_down_recovery_no_alloc() {
 }
 
 #[test]
-fn production_authorized_expired_before_send_recovery_no_alloc() {
+fn production_strict_expired_before_send_rejection_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
+    harness.set_strict_timing_for_test(true);
     let first = harness.plan_current_dispatch();
     assert!(matches!(
         harness.dispatch_at_plan_target_for_test(&first),
@@ -825,11 +826,17 @@ fn production_authorized_expired_before_send_recovery_no_alloc() {
         allocs, 0,
         "expired-before-send recovery allocated {allocs} time(s)"
     );
-    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
+    assert!(
+        matches!(
+            step,
+            DispatchStep::TerminateStatic("down_final_sender_window_expired")
+        ),
+        "step={step:?}"
+    );
 }
 
 #[test]
-fn production_late_rescued_down_dispatch_no_alloc() {
+fn production_normal_late_down_dispatch_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness =
         ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(5_000);
@@ -844,8 +851,8 @@ fn production_late_rescued_down_dispatch_no_alloc() {
     let target = harness
         .physical_target_qpc_for_test(&plan)
         .expect("physical target");
-    // Target pre-call time is strictly between physical_latest_down_start (target + margin)
-    // and normal_sender_cutoff (target + 3_500 us) to exercise an actual late rescue.
+    // Target pre-call time is beyond physical_latest_down_start. Normal sender
+    // admission must still dispatch without a lateness-only cutoff.
     let late_offset_us = timing_margin_us + 1_000;
     let late_now = target
         .checked_add_duration(
@@ -867,17 +874,20 @@ fn production_late_rescued_down_dispatch_no_alloc() {
     let step = harness.dispatch_at_qpc_for_test(&plan, late_now);
     let allocs = disable_counting();
 
-    assert_eq!(allocs, 0, "late rescue allocated {allocs} time(s)");
+    assert_eq!(
+        allocs, 0,
+        "normal late Down dispatch allocated {allocs} time(s)"
+    );
     assert!(
         matches!(step, DispatchStep::Dispatched),
-        "late rescue must dispatch cleanly: step={step:?}"
+        "normal late Down must dispatch cleanly: step={step:?}"
     );
     assert_eq!(
         packets.lock().unwrap().len(),
         1,
-        "late rescue must emit exactly 1 packet"
+        "normal late Down must emit exactly 1 packet"
     );
     let (rescued_boundaries, rescued_keys, _, _) = harness.late_rescued_down_metrics_for_test();
-    assert_eq!(rescued_boundaries, 1, "must record 1 late rescued boundary");
-    assert_eq!(rescued_keys, 1, "must record 1 late rescued key");
+    assert_eq!(rescued_boundaries, 0, "normal lateness is not a rescue");
+    assert_eq!(rescued_keys, 0, "normal lateness is not a rescue");
 }
