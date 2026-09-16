@@ -38,6 +38,28 @@ use sky_dispatch_win32::wait::HybridWaiter;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedBoundaryEvidence {
+    pub source_action_index: u32,
+    pub compiled_packet_index: Option<u64>,
+    pub packet: PhysicalPacket,
+    pub physical_target_qpc: QpcTicks,
+    pub authored_ticks: TimelineTicks,
+    pub effective_deadline_ticks: TimelineTicks,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PhysicalFloorEvidence {
+    pub authored_target_qpc: QpcTicks,
+    pub musical_up_not_before_qpc: QpcTicks,
+    pub down_not_before_qpc: QpcTicks,
+    pub packet_not_before_qpc: QpcTicks,
+    pub latest_down_start_qpc: Option<QpcTicks>,
+    pub hold_floor_mask: u16,
+    pub release_floor_mask: u16,
+    pub down_feasible: Option<bool>,
+}
+
 #[allow(dead_code)]
 pub struct ProductionDispatchTestHarness {
     pub(crate) config: WorkerConfig,
@@ -931,6 +953,14 @@ impl ProductionDispatchTestHarness {
         self.effective_now_ticks = ticks;
     }
 
+    pub fn playback_epoch_qpc_for_test(&self) -> QpcTicks {
+        self.resources.playback.epoch
+    }
+
+    pub fn set_playback_epoch_qpc_for_test(&mut self, epoch: QpcTicks) {
+        self.resources.playback.epoch = epoch;
+    }
+
     /// Test-only clock setup: place the next authored boundary a fixed margin
     /// into the future before the plan is frozen.  This removes harness
     /// startup jitter without changing an already-frozen target.
@@ -1064,6 +1094,10 @@ impl ProductionDispatchTestHarness {
         self.local_metrics.final_sender_window_expirations
     }
 
+    pub fn final_gate_control_rejections_for_test(&self) -> u64 {
+        self.local_metrics.final_gate_control_rejections
+    }
+
     pub fn missed_unobserved_backlog_boundaries_for_test(&self) -> u64 {
         self.local_metrics.missed_unobserved_backlog_boundaries
     }
@@ -1075,6 +1109,10 @@ impl ProductionDispatchTestHarness {
             self.local_metrics.sendinput_zero_progress_failures,
             self.local_metrics.chord_integrity_lost,
         )
+    }
+
+    pub fn timeline_rebase_count_for_test(&self) -> u64 {
+        self.local_metrics.timeline_rebase_count
     }
 
     pub fn fine_pre_call_bucket_counts_for_test(&self) -> [u64; 7] {
@@ -1793,6 +1831,52 @@ impl ProductionDispatchTestHarness {
         plan.physical_target_qpc()
     }
 
+    /// Return the identity and frozen target of the prepared physical
+    /// boundary. This is qualification evidence only; production dispatch
+    /// already carries the same values in the frozen plan and observation.
+    pub fn prepared_boundary_evidence_for_test(
+        &self,
+        plan: &NextDispatchPlan,
+    ) -> Option<PreparedBoundaryEvidence> {
+        let physical = plan.physical()?;
+        Some(PreparedBoundaryEvidence {
+            source_action_index: physical.authored_view.batch_source_action_index,
+            compiled_packet_index: u64::try_from(
+                physical.authored_view.prepared_batch.packet_index,
+            )
+            .ok(),
+            packet: physical.authored_view.packet_masks,
+            physical_target_qpc: physical.physical_target_qpc,
+            authored_ticks: physical.authored_view.authored_batch_scheduled_ticks,
+            effective_deadline_ticks: physical.authored_view.batch_scheduled_ticks,
+        })
+    }
+
+    /// Read the production physical timing projection for a frozen plan
+    /// without mutating the guard. This is benchmark evidence only.
+    pub fn physical_floor_evidence_for_test(
+        &self,
+        plan: &NextDispatchPlan,
+    ) -> Option<PhysicalFloorEvidence> {
+        let physical = plan.physical()?;
+        let target = physical.physical_target_qpc;
+        let packet = physical.authored_view.packet_masks;
+        let guard = self.runtime.physical_timing_guard.as_ref()?;
+        let window = guard
+            .query(target, packet.up_mask, packet.down_mask)
+            .expect("physical timing window evidence");
+        Some(PhysicalFloorEvidence {
+            authored_target_qpc: window.authored_target_qpc,
+            musical_up_not_before_qpc: window.musical_up_not_before_qpc,
+            down_not_before_qpc: window.down_not_before_qpc,
+            packet_not_before_qpc: window.packet_not_before_qpc,
+            latest_down_start_qpc: window.latest_down_start_qpc,
+            hold_floor_mask: window.hold_floor_mask,
+            release_floor_mask: window.release_floor_mask,
+            down_feasible: (packet.down_mask != 0).then(|| window.is_down_feasible()),
+        })
+    }
+
     pub fn qpc_now_for_test(&self) -> Result<QpcTicks, String> {
         self.resources
             .clock
@@ -1945,6 +2029,123 @@ impl ProductionDispatchTestHarness {
             Some(target),
             false,
         )
+    }
+
+    /// Invoke one frozen physical boundary at a deterministic target-relative
+    /// crossing. The returned sender outcome is qualification evidence for
+    /// this test-support seam; the worker still runs its normal admission,
+    /// sender, commit, and observer paths.
+    pub fn dispatch_at_baseline_boundary_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+        crossing_lateness_us: u64,
+        completion_delay_us: u64,
+        inject_zero_progress_drop: bool,
+    ) -> (DispatchStep, Option<SendTransactionOutcome>) {
+        let target = plan
+            .physical_target_qpc()
+            .expect("baseline boundary requires a physical plan target");
+        let crossing = target
+            .checked_add_duration(
+                self.resources
+                    .clock
+                    .duration_from_us(crossing_lateness_us)
+                    .expect("baseline crossing lateness conversion"),
+            )
+            .expect("baseline crossing arithmetic");
+        self.dispatch_at_baseline_boundary_at_qpc_for_test(
+            plan,
+            crossing,
+            crossing,
+            completion_delay_us,
+            inject_zero_progress_drop,
+        )
+    }
+
+    /// Variant of the baseline seam where the worker's current QPC and the
+    /// target-crossing QPC are supplied independently. This models a later
+    /// boundary that became overdue while a previous boundary was handled.
+    pub fn dispatch_at_baseline_boundary_at_qpc_for_test(
+        &mut self,
+        plan: &NextDispatchPlan,
+        now_qpc: QpcTicks,
+        crossing_qpc: QpcTicks,
+        completion_delay_us: u64,
+        inject_zero_progress_drop: bool,
+    ) -> (DispatchStep, Option<SendTransactionOutcome>) {
+        let target = plan
+            .physical_target_qpc()
+            .expect("baseline boundary requires a physical plan target");
+        let completion = crossing_qpc
+            .checked_add_duration(
+                self.resources
+                    .clock
+                    .duration_from_us(completion_delay_us)
+                    .expect("baseline completion delay conversion"),
+            )
+            .expect("baseline completion arithmetic");
+        let captured = Arc::new(Mutex::new(None));
+        let captured_by_emitter = Arc::clone(&captured);
+        self.resources.backend.set_packet_emitter(move |packet| {
+            let requested_mask = packet.up_mask | packet.down_mask;
+            let outcome = if inject_zero_progress_drop {
+                SendTransactionOutcome {
+                    status: SendTransactionStatus::ZeroProgress,
+                    evidence: SendEvidence {
+                        requested_mask,
+                        confirmed_mask: 0,
+                        skipped_mask: 0,
+                        first_inserted: 0,
+                        attempts: 1,
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
+                        first_win32_error: None,
+                        last_win32_error: None,
+                        started_ticks: Some(crossing_qpc),
+                        completed_ticks: Some(completion),
+                        timing_error: None,
+                    },
+                }
+            } else {
+                SendTransactionOutcome {
+                    status: SendTransactionStatus::Complete,
+                    evidence: SendEvidence {
+                        requested_mask,
+                        confirmed_mask: requested_mask,
+                        skipped_mask: 0,
+                        first_inserted: packet.event_count(),
+                        attempts: 1,
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
+                        first_win32_error: None,
+                        last_win32_error: None,
+                        started_ticks: Some(crossing_qpc),
+                        completed_ticks: Some(completion),
+                        timing_error: None,
+                    },
+                }
+            };
+            *captured_by_emitter
+                .lock()
+                .expect("baseline sender evidence lock") = Some(outcome);
+            outcome
+        });
+        self.runtime
+            .set_deadline_wait_evidence_for_test(Some(crossing_qpc), Some(target));
+        let step = self.dispatch_plan_at_with_sender_option(
+            plan,
+            TimelineTicks::ZERO,
+            now_qpc,
+            true,
+            Some(crossing_qpc),
+            Some(target),
+            true,
+        );
+        let outcome = captured
+            .lock()
+            .expect("baseline sender evidence lock")
+            .take();
+        (step, outcome)
     }
 
     /// Inject the exact waiter-entry race for a still-frozen physical plan:
