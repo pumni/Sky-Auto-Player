@@ -2110,7 +2110,7 @@ fn focus_admission_uses_the_expected_hwnd_without_reloading_target() {
 }
 
 #[test]
-fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
+fn early_focus_gate_is_atomic_only_and_final_admission_queries_zero_times() {
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     sky_dispatch_win32::focus::reset_foreground_query_count();
     let focus_active = AtomicBool::new(true);
@@ -2123,16 +2123,19 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
         hwnd: 123,
         generation: 1,
     };
-    let _ = final_down_target_admission(FinalTargetSignals {
-        expected,
-        require_focus: true,
-        focus_active: &focus_active,
-        target_hwnd: &target,
-        target_generation: &generation,
-        post_focus_race_hook: None,
-        post_focus_control_signals: None,
-    });
-    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected,
+            require_focus: true,
+            focus_active: &focus_active,
+            target_hwnd: &target,
+            target_generation: &generation,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::Allowed
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
 }
 
 #[test]
@@ -2185,12 +2188,13 @@ fn final_down_target_admission_checks_target_before_focus() {
 }
 
 #[test]
-fn first_final_foreground_loss_is_terminal_without_epoch_rebase() {
+fn final_admission_uses_published_focus_and_accepts_stale_foreground_observation() {
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::reset_foreground_query_count();
 
-    // The supervisor hint is stale-true, but the final foreground proof
-    // observes that the exact target is no longer foreground.
+    // The supervisor hint is stale-true, but the final boundary deliberately
+    // does not close the observer race with a synchronous foreground query.
     let focus_active = AtomicBool::new(true);
     let target_hwnd = AtomicIsize::new(123);
     let target_generation = AtomicU64::new(1);
@@ -2206,32 +2210,28 @@ fn first_final_foreground_loss_is_terminal_without_epoch_rebase() {
         post_focus_race_hook: None,
         post_focus_control_signals: None,
     });
-    assert_eq!(final_admission, DownAdmission::FocusLost);
+    assert_eq!(final_admission, DownAdmission::Allowed);
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
 
-    let qpc_clock = QpcClock::initialize().expect("QPC clock");
-    let epoch = qpc_clock.now().expect("epoch sample");
-    let mut clock_state =
-        sky_dispatch_core::clock::PlaybackClockState::new(epoch, DurationTicks::ZERO)
-            .expect("playback clock");
-    let original_epoch = clock_state.epoch;
-    let mut runtime = super::worker::WorkerRuntime::default();
-    let progress_clock = super::shared::SharedProgressClock::default();
-
-    let result = super::worker::handle_final_focus_loss(
-        qpc_clock,
-        &mut clock_state,
-        &mut runtime,
-        &progress_clock,
+    // Once the producer publishes the loss, the same atomic-only admission
+    // suppresses the boundary without consulting the foreground API.
+    focus_active.store(false, Ordering::Release);
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 1,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target_hwnd: &target_hwnd,
+            target_generation: &target_generation,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::FocusLost
     );
-
-    assert!(matches!(
-        result,
-        Err(super::worker::DispatchStep::TerminateStatic(
-            "focus_lost_during_preroll"
-        ))
-    ));
-    assert_eq!(clock_state.epoch, original_epoch);
-    assert!(!clock_state.is_paused());
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
 }
 
 #[test]
@@ -3364,6 +3364,9 @@ fn authored_down_target_change_after_crossing_never_reaches_transport() {
 fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     use super::test_support::ProductionDispatchTestHarness;
 
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::reset_foreground_query_count();
     let mut harness = ProductionDispatchTestHarness::new_deferred_release_with_unrelated_down();
     let calls = harness.configure_send_counter();
     harness.align_next_plan_to_future_for_test(500_000);
@@ -3401,6 +3404,7 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
             .paused
     );
     assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
     assert!(
         !std::iter::from_fn(|| harness.pop_observation()).any(|_| true),
         "final-gate focus loss must not enqueue a diagnostics observation"
