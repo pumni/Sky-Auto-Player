@@ -46,6 +46,7 @@ fn test_session_options(
             frame_us: 16_667,
             frame_base_hold_us: 0,
             timing_margin_us: 500,
+            normal_down_start_tolerance_us: 2_500,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,
@@ -1664,6 +1665,29 @@ fn invalid_instrument_profile_is_rejected_before_worker_start() {
         .err()
         .expect("invalid profile must fail at admission");
     assert!(error.contains("native instrument profile admission failed"));
+}
+
+#[test]
+fn native_dispatch_session_rejects_invalid_normal_down_start_tolerance() {
+    for invalid in [0, 1_000, 2_499, 2_501, 3_250, 5_001, 10_000] {
+        let mut options = test_session_options(
+            startup_boundary_schedule(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        );
+        options.timing.normal_down_start_tolerance_us = invalid;
+        let error = NativeDispatchSession::new(options)
+            .err()
+            .unwrap_or_else(|| panic!("tolerance {invalid} must be rejected by session admission"));
+        assert!(
+            error.contains("normal_down_start_tolerance_us"),
+            "error for {invalid} must mention normal_down_start_tolerance_us: {error}"
+        );
+    }
 }
 
 #[test]

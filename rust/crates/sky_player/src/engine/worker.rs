@@ -103,6 +103,7 @@ pub(crate) use timing::{
     lease_bounded_ticks, signed_delta, signed_ticks_to_us, signed_timeline_delta_ticks,
     supervisor_lease_expired, wait_failure_message, wake_lateness_ticks,
 };
+#[allow(unused_imports)]
 pub use wait::WaitObservation;
 pub(crate) use wait::{
     WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, WaitTiming,
@@ -118,7 +119,9 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub(crate) const NORMAL_PLAYBACK_DOWN_START_TOLERANCE_US: u64 = 2_500;
+#[allow(dead_code)]
+pub(crate) const NORMAL_PLAYBACK_DOWN_START_TOLERANCE_US: u64 =
+    super::config::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US;
 
 /// Test-only accounting for the immutable preparation boundary.
 ///
@@ -418,6 +421,7 @@ pub(super) struct WorkerErrorState {
 #[derive(Clone, Copy)]
 pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
+    #[allow(dead_code)]
     pub(super) timing_margin_ticks: DurationTicks,
     pub(super) normal_down_start_tolerance_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,

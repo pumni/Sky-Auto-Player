@@ -1844,6 +1844,61 @@ mod tests {
     }
 
     #[test]
+    fn c1_1_strict_timing_ignores_configured_tolerances_3_4_5_ms() {
+        for tolerance_us in [3_000, 4_000, 5_000] {
+            let mut rejected = ProductionDispatchTestHarness::new_down_only();
+            rejected
+                .configure_normal_down_start_tolerance_for_test(tolerance_us)
+                .expect("valid tolerance");
+            rejected.set_strict_timing_for_test(true);
+            rejected.timing.strict_down_completion_late_ticks = rejected
+                .resources
+                .clock
+                .duration_from_us(10_000)
+                .expect("strict completion test allowance");
+            let packets = rejected.configure_packet_capture();
+            let plan = rejected.plan_current_dispatch();
+            let target = plan.physical_target_qpc().expect("Down target");
+            assert_no_work(rejected.dispatch_at_qpc_for_test(
+                &plan,
+                subtract_duration(target, DurationTicks::from_raw(1)),
+            ));
+
+            let physical_cutoff = add_us(&rejected, target, 500);
+            let one_tick_beyond = physical_cutoff
+                .checked_add_duration(DurationTicks::from_raw(1))
+                .expect("one tick beyond strict cutoff");
+            assert!(matches!(
+                rejected.dispatch_at_qpc_for_test(&plan, one_tick_beyond),
+                DispatchStep::TerminateStatic("down_final_sender_window_expired")
+            ));
+            assert!(packets.lock().expect("packet capture").is_empty());
+            assert_eq!(rejected.local_metrics.final_sender_window_expirations, 1);
+            assert_eq!(rejected.late_rescued_down_metrics_for_test().0, 0);
+
+            // In contrast, under normal timing the note is rescued
+            let mut normal = ProductionDispatchTestHarness::new_down_only();
+            normal
+                .configure_normal_down_start_tolerance_for_test(tolerance_us)
+                .expect("valid tolerance");
+            let normal_packets = normal.configure_packet_capture();
+            let normal_plan = normal.plan_current_dispatch();
+            let normal_target = normal_plan.physical_target_qpc().expect("Down target");
+            assert_no_work(normal.dispatch_at_qpc_for_test(
+                &normal_plan,
+                subtract_duration(normal_target, DurationTicks::from_raw(1)),
+            ));
+            let rescued_now = add_us(&normal, normal_target, 1_000);
+            assert_dispatched(normal.dispatch_at_qpc_for_test(&normal_plan, rescued_now));
+            assert_eq!(
+                normal_packets.lock().expect("normal packet capture").len(),
+                1
+            );
+            assert_eq!(normal.late_rescued_down_metrics_for_test().0, 1);
+        }
+    }
+
+    #[test]
     fn c1_physical_infeasibility_precedes_continuity_rescue() {
         let mut harness = ProductionDispatchTestHarness::new_down_chord(2);
         harness
@@ -2049,9 +2104,11 @@ mod tests {
     #[test]
     fn c1_1_dense_boundary_matrix_preserves_authored_targets_and_safety() {
         const GAPS_US: [u64; 7] = [1_000, 1_500, 2_000, 2_500, 3_000, 4_000, 5_000];
-        const OFFSETS_US: [u64; 6] = [600, 1_000, 1_400, 1_600, 2_200, 2_500];
+        const OFFSETS_US: [u64; 11] = [
+            600, 1_000, 1_400, 1_600, 2_200, 2_500, 3_000, 3_500, 4_000, 5_000, 5_500,
+        ];
 
-        for tolerance_us in [1_500, 2_500] {
+        for tolerance_us in [1_500, 2_500, 3_000, 4_000, 5_000] {
             for gap_us in GAPS_US {
                 for offset_us in OFFSETS_US {
                     let mut harness =
@@ -2142,6 +2199,89 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn f1_1_sparse_comparison_proves_note_ons_rescued_up_to_5000us() {
+        let offsets_in_extended_range = [2_800, 3_000, 3_500, 4_000, 4_500, 5_000];
+
+        for &offset_us in &offsets_in_extended_range {
+            // Under baseline 2.5 ms: note is DROPPED because offset > 2.5 ms.
+            let mut baseline =
+                ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
+            baseline
+                .configure_normal_down_start_tolerance_for_test(2_500)
+                .expect("valid tolerance");
+            let packets_baseline = baseline.configure_packet_capture();
+            let plan_baseline = baseline.plan_current_dispatch();
+            let target_baseline = plan_baseline
+                .physical_target_qpc()
+                .expect("baseline target");
+            assert_no_work(baseline.dispatch_at_qpc_for_test(
+                &plan_baseline,
+                subtract_duration(target_baseline, DurationTicks::from_raw(1)),
+            ));
+            let now_baseline = add_us(&baseline, target_baseline, offset_us);
+            assert_dispatched(baseline.dispatch_at_qpc_for_test(&plan_baseline, now_baseline));
+            assert_eq!(
+                packets_baseline.lock().expect("packet capture").len(),
+                0,
+                "baseline 2.5 ms must drop note at offset {offset_us} us"
+            );
+            assert_eq!(baseline.local_metrics.final_sender_window_expirations, 1);
+            assert_eq!(baseline.late_rescued_down_metrics_for_test().0, 0);
+
+            // Under provisional max 5.0 ms: note is RESCUED because offset <= 5.0 ms.
+            let mut prov_max =
+                ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
+            prov_max
+                .configure_normal_down_start_tolerance_for_test(5_000)
+                .expect("valid tolerance");
+            let packets_prov = prov_max.configure_packet_capture();
+            let plan_prov = prov_max.plan_current_dispatch();
+            let target_prov = plan_prov.physical_target_qpc().expect("provisional target");
+            assert_no_work(prov_max.dispatch_at_qpc_for_test(
+                &plan_prov,
+                subtract_duration(target_prov, DurationTicks::from_raw(1)),
+            ));
+            let now_prov = add_us(&prov_max, target_prov, offset_us);
+            assert_dispatched(prov_max.dispatch_at_qpc_for_test(&plan_prov, now_prov));
+            assert_eq!(
+                packets_prov.lock().expect("packet capture").len(),
+                1,
+                "provisional max 5.0 ms must rescue note at offset {offset_us} us"
+            );
+            assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 0);
+            assert_eq!(
+                prov_max.late_rescued_down_metrics_for_test().0,
+                1,
+                "must record 1 late rescued boundary"
+            );
+        }
+
+        // Beyond 5.0 ms (e.g. 5,500 us): provisional max fails closed and drops the note.
+        let offset_beyond_max = 5_500;
+        let mut prov_max =
+            ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
+        prov_max
+            .configure_normal_down_start_tolerance_for_test(5_000)
+            .expect("valid tolerance");
+        let packets_prov = prov_max.configure_packet_capture();
+        let plan_prov = prov_max.plan_current_dispatch();
+        let target_prov = plan_prov.physical_target_qpc().expect("provisional target");
+        assert_no_work(prov_max.dispatch_at_qpc_for_test(
+            &plan_prov,
+            subtract_duration(target_prov, DurationTicks::from_raw(1)),
+        ));
+        let now_prov = add_us(&prov_max, target_prov, offset_beyond_max);
+        assert_dispatched(prov_max.dispatch_at_qpc_for_test(&plan_prov, now_prov));
+        assert_eq!(
+            packets_prov.lock().expect("packet capture").len(),
+            0,
+            "provisional max 5.0 ms must fail closed beyond 5.0 ms"
+        );
+        assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 1);
+        assert_eq!(prov_max.late_rescued_down_metrics_for_test().0, 0);
     }
 
     #[test]

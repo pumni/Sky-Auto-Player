@@ -228,4 +228,43 @@ mod tests {
         let second = clock.timeline_from_us(11).unwrap();
         assert!(second > first);
     }
+
+    #[test]
+    fn qpc_conversion_odd_frequency_pm_timer_3579545hz() {
+        // Classic ACPI PM-timer / NTSC frequency: 3,579,545 Hz (~0.279 us per tick).
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(3_579_545).unwrap());
+        let tolerances_us = [2_500, 3_000, 3_500, 4_000, 4_500, 5_000];
+
+        let mut prev_ticks = 0u64;
+        for &us in &tolerances_us {
+            let ticks = clock.duration_from_us(us).expect("convert to ticks");
+            assert!(
+                ticks.as_u64() > prev_ticks,
+                "ticks must be strictly monotonic: {ticks:?} > {prev_ticks}"
+            );
+            prev_ticks = ticks.as_u64();
+
+            // Duration in ticks must never underestimate authored duration (ceiling guarantee)
+            let tick_nanos_approx = (ticks.as_u64() as u128) * 1_000_000;
+            let target_nanos_approx = (us as u128) * 3_579_545;
+            assert!(
+                tick_nanos_approx >= target_nanos_approx,
+                "ticks must not underestimate duration: {tick_nanos_approx} >= {target_nanos_approx}"
+            );
+
+            // Ceiling division adds at most 1 tick of overshoot
+            let overshoot_nanos = tick_nanos_approx - target_nanos_approx;
+            assert!(
+                overshoot_nanos < 3_579_545,
+                "overshoot must be strictly less than 1 tick: {overshoot_nanos} < 3579545"
+            );
+
+            // Round-trip floor conversion returns the exact authored microsecond value
+            let round_trip_us = clock.duration_to_us(ticks).expect("convert to us");
+            assert_eq!(
+                round_trip_us, us,
+                "round-trip must preserve exact microsecond for {us} us"
+            );
+        }
+    }
 }

@@ -89,6 +89,7 @@ function initialSettings(): Settings {
     playback_defaults: {
       hold_frames: 1,
       timing_margin_us: 500,
+      normal_down_start_tolerance_us: 2_500,
       tempo_scale: 1,
       fps: 60,
       dry_run: false,
@@ -201,6 +202,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         hold_frames: config.hold_frames,
         frame_base_hold_us: frameBaseHoldUs,
         timing_margin_us: config.timing_margin_us,
+        normal_down_start_tolerance_us: settings.playback_defaults.normal_down_start_tolerance_us,
         min_hold_us: frameBaseHoldUs + config.timing_margin_us,
         min_release_gap_us: frameUs + config.timing_margin_us,
         timing_margin_recommendation: settings.timing_margin_recommendation,
@@ -417,6 +419,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           timing_margin_min_us: 0,
           timing_margin_max_us: 3_000,
           timing_margin_step_us: 100,
+          normal_down_start_tolerance_min_us: 2_500,
+          normal_down_start_tolerance_max_us: 5_000,
+          normal_down_start_tolerance_step_us: 500,
+          normal_down_start_tolerance_default_us: 2_500,
         },
         theme: settings.theme,
         telemetry_enabled: settings.telemetry_enabled,
@@ -587,6 +593,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 ...(playback.timingMarginUs === undefined
                   ? {}
                   : { timing_margin_us: playback.timingMarginUs }),
+                ...(playback.normalDownStartToleranceUs == null
+                  ? {}
+                  : { normal_down_start_tolerance_us: playback.normalDownStartToleranceUs }),
                 ...(playback.tempoScale === undefined ? {} : { tempo_scale: playback.tempoScale }),
                 ...(playback.fps === undefined ? {} : { fps: playback.fps }),
               },

@@ -42,7 +42,8 @@ The user-owned Timing Margin defaults to `500 µs`, ranges from `0` through
 It defines the physical latest Down start: `packet_not_before` must not exceed
 `physical_latest_down_start = authored target + this margin`. This is a
 physical-feasibility boundary, not a universal limit on the actual normal-mode
-sender pre-call. Normal playback also uses the fixed internal `2,500 µs` total
+sender pre-call. Normal playback also uses the user-configurable
+`normal_down_start_tolerance` (Advanced settings: `2,500–5,000 µs`, default `2,500 µs`)
 continuity bound from the authored target, without adding it to Timing Margin.
 Calibration never supplies part of the
 authored timing equation. Qualified calibration may produce an advisory

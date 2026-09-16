@@ -5,7 +5,11 @@ use super::shared::{
 };
 use super::worker::Worker;
 use super::*;
-use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_timing_constants};
+use crate::engine::config::{
+    MAX_NORMAL_DOWN_START_TOLERANCE_US, MIN_NORMAL_DOWN_START_TOLERANCE_US,
+    MIN_PRODUCTION_PREROLL_US, STEP_NORMAL_DOWN_START_TOLERANCE_US, TimingOptions,
+    validate_timing_constants,
+};
 use crate::engine::{EnginePollSnapshot, EnginePollStatus};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
@@ -97,6 +101,20 @@ pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<
         return Err(format!(
             "native timing contract mismatch: min_release_gap_us is {}, expected frame_us + timing_margin_us = {expected_min_release_gap_us}",
             timing.min_release_gap_us
+        ));
+    }
+
+    if timing.normal_down_start_tolerance_us < MIN_NORMAL_DOWN_START_TOLERANCE_US
+        || timing.normal_down_start_tolerance_us > MAX_NORMAL_DOWN_START_TOLERANCE_US
+        || !(timing.normal_down_start_tolerance_us - MIN_NORMAL_DOWN_START_TOLERANCE_US)
+            .is_multiple_of(STEP_NORMAL_DOWN_START_TOLERANCE_US)
+    {
+        return Err(format!(
+            "native timing contract mismatch: normal_down_start_tolerance_us is {}, expected [{}, {}] with step {}",
+            timing.normal_down_start_tolerance_us,
+            MIN_NORMAL_DOWN_START_TOLERANCE_US,
+            MAX_NORMAL_DOWN_START_TOLERANCE_US,
+            STEP_NORMAL_DOWN_START_TOLERANCE_US,
         ));
     }
     Ok(())
@@ -1189,5 +1207,52 @@ mod tests {
         publish_focus_hint(&focus_active, &interrupt, false);
         assert_eq!(interrupt.signal_generation(), 1);
         assert!(!interrupt.try_take());
+    }
+
+    #[test]
+    fn validate_native_timing_contract_rejects_out_of_range_or_unaligned_tolerance() {
+        use super::validate_native_timing_contract;
+        use crate::engine::config::TimingOptions;
+
+        let valid = TimingOptions {
+            game_fps: 60,
+            frame_us: 16_667,
+            frame_base_hold_us: 16_667,
+            timing_margin_us: 500,
+            min_hold_us: 17_167,
+            min_release_gap_us: 17_167,
+            normal_down_start_tolerance_us: 2_500,
+            strict_timing: false,
+            strict_down_completion_late_us: 2_000,
+            strict_up_completion_late_us: 2_000,
+            input_path_warn_us: 1_000,
+        };
+        assert!(validate_native_timing_contract(&valid).is_ok());
+
+        for tolerance in [2_500, 3_000, 3_500, 4_000, 4_500, 5_000] {
+            let mut opts = valid;
+            opts.normal_down_start_tolerance_us = tolerance;
+            assert!(
+                validate_native_timing_contract(&opts).is_ok(),
+                "tolerance {tolerance} must be accepted"
+            );
+        }
+
+        for invalid in [
+            0, 1_000, 2_000, 2_499, 2_501, 2_999, 3_250, 5_001, 6_000, 10_000,
+        ] {
+            let mut opts = valid;
+            opts.normal_down_start_tolerance_us = invalid;
+            let result = validate_native_timing_contract(&opts);
+            assert!(
+                result.is_err(),
+                "tolerance {invalid} must be rejected by native timing contract"
+            );
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("normal_down_start_tolerance_us")
+            );
+        }
     }
 }

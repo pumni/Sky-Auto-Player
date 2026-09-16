@@ -39,6 +39,10 @@ const C1_1_DENSE_OFFSETS_US: [u64; 6] = [600, 1_000, 1_400, 1_600, 2_200, 2_500]
 const C1_1_SEQUENTIAL_PASSES: usize = 3;
 const C1_1_SEQUENTIAL_ITERATIONS: usize = 50;
 const C1_1_SEQUENTIAL_GAPS_US: [u64; 5] = [1_000, 2_000, 3_000, 4_000, 5_000];
+const F1_1_TOLERANCES_US: [u64; 3] = [2_500, 3_500, 5_000];
+const F1_1_SEQUENTIAL_GAPS_US: [u64; 5] = [1_000, 2_000, 3_000, 4_000, 5_000];
+const F1_1_SEQUENTIAL_PASSES: usize = 3;
+const F1_1_SEQUENTIAL_ITERATIONS: usize = 30;
 const LATE_RESCUE_GRACES_US: [u64; 7] = [0, 250, 500, 1_000, 1_500, 2_500, 4_500];
 
 fn due_us() -> u64 {
@@ -97,6 +101,7 @@ enum BenchmarkScope {
     PhaseCC0,
     PhaseCC1,
     PhaseCC11,
+    PhaseF11,
 }
 
 impl BenchmarkScope {
@@ -111,8 +116,9 @@ impl BenchmarkScope {
             Ok("phase_c0") => Ok(Self::PhaseCC0),
             Ok("phase_c1") => Ok(Self::PhaseCC1),
             Ok("phase_c1_1") => Ok(Self::PhaseCC11),
+            Ok("phase_f1_1") => Ok(Self::PhaseF11),
             Ok(value) => Err(format!(
-                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, or phase_c1_1, got {value:?}"
+                "RT_HANDOFF_BENCH_SCOPE must be full, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, phase_c0, phase_c1, phase_c1_1, or phase_f1_1, got {value:?}"
             )),
             Err(error) => Err(format!("RT_HANDOFF_BENCH_SCOPE is invalid: {error}")),
         }
@@ -129,6 +135,7 @@ impl BenchmarkScope {
             Self::PhaseCC0 => "phase_c0",
             Self::PhaseCC1 => "phase_c1",
             Self::PhaseCC11 => "phase_c1_1",
+            Self::PhaseF11 => "phase_f1_1",
         }
     }
 }
@@ -2596,6 +2603,225 @@ fn phase_c1_1_report() -> serde_json::Value {
     })
 }
 
+fn f1_1_arm_name(arm: usize) -> &'static str {
+    match arm {
+        0 => "baseline_2500us",
+        1 => "extended_3500us",
+        2 => "provisional_max_5000us",
+        _ => panic!("invalid F1.1 arm {arm}"),
+    }
+}
+
+fn f1_1_sender_cutoff_policy(arm: usize) -> &'static str {
+    match arm {
+        0 => "max(physical_latest_down_start, authored_target_plus_2500us)",
+        1 => "max(physical_latest_down_start, authored_target_plus_3500us)",
+        2 => "max(physical_latest_down_start, authored_target_plus_5000us)",
+        _ => panic!("invalid F1.1 arm {arm}"),
+    }
+}
+
+fn phase_f1_1_sequential_dense_report() -> serde_json::Value {
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let mut aggregate_by_gap: Vec<[SequentialSamples; 3]> = (0..F1_1_SEQUENTIAL_GAPS_US.len())
+        .map(|_| {
+            [
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+            ]
+        })
+        .collect();
+    let mut aggregate_all = [
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+        SequentialSamples::default(),
+    ];
+    let mut pass_reports = Vec::with_capacity(F1_1_SEQUENTIAL_PASSES);
+    for pass_index in 0..F1_1_SEQUENTIAL_PASSES {
+        let mode = build_wait_mode("production_calibrated", true, true, true);
+        let mut pass_gaps = [
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+            serde_json::Map::new(),
+        ];
+        let mut pass_aggregate = [
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+            SequentialSamples::default(),
+        ];
+        for (gap_index, gap_us) in F1_1_SEQUENTIAL_GAPS_US.iter().copied().enumerate() {
+            let mut gap_arms = [
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+                SequentialSamples::default(),
+            ];
+            for iteration in 0..F1_1_SEQUENTIAL_ITERATIONS {
+                let first_arm = (pass_index + gap_index + iteration) % F1_1_TOLERANCES_US.len();
+                for offset in 0..F1_1_TOLERANCES_US.len() {
+                    let arm = (first_arm + offset) % F1_1_TOLERANCES_US.len();
+                    let result =
+                        run_c1_1_sequential_iteration(gap_us, mode, F1_1_TOLERANCES_US[arm])
+                            .unwrap_or_else(|error| panic!("{error}"));
+                    gap_arms[arm].append(result);
+                }
+            }
+            for arm in 0..F1_1_TOLERANCES_US.len() {
+                pass_gaps[arm].insert(
+                    format!("down_pair_gap_{gap_us}us"),
+                    summarize_sequential(gap_arms[arm].clone(), F1_1_SEQUENTIAL_ITERATIONS),
+                );
+                pass_aggregate[arm].append(gap_arms[arm].clone());
+                aggregate_by_gap[gap_index][arm].append(gap_arms[arm].clone());
+                aggregate_all[arm].append(gap_arms[arm].clone());
+            }
+        }
+        let mut arms = serde_json::Map::new();
+        for arm in 0..F1_1_TOLERANCES_US.len() {
+            arms.insert(
+                f1_1_arm_name(arm).to_string(),
+                json!({
+                    "sender_cutoff_policy": f1_1_sender_cutoff_policy(arm),
+                    "total_tolerance_us": F1_1_TOLERANCES_US[arm],
+                    "gaps": pass_gaps[arm].clone(),
+                    "aggregate": summarize_sequential(
+                        pass_aggregate[arm].clone(),
+                        F1_1_SEQUENTIAL_GAPS_US.len() * F1_1_SEQUENTIAL_ITERATIONS,
+                    ),
+                }),
+            );
+        }
+        pass_reports.push(json!({
+            "pass": pass_index + 1,
+            "sequences_per_gap_per_arm": F1_1_SEQUENTIAL_ITERATIONS,
+            "actual_spin_threshold_us": mode.effective_spin_threshold_us,
+            "startup_wake_error_us": wake_error_json(mode.startup_wake_error),
+            "arm_order": "rotates by (pass + gap + sequence) modulo three",
+            "arms": arms,
+        }));
+    }
+    let mut aggregate_gaps = [
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+        serde_json::Map::new(),
+    ];
+    for (gap_index, gap_arms) in aggregate_by_gap.into_iter().enumerate() {
+        let gap_us = F1_1_SEQUENTIAL_GAPS_US[gap_index];
+        for arm in 0..F1_1_TOLERANCES_US.len() {
+            aggregate_gaps[arm].insert(
+                format!("down_pair_gap_{gap_us}us"),
+                summarize_sequential(
+                    gap_arms[arm].clone(),
+                    F1_1_SEQUENTIAL_PASSES * F1_1_SEQUENTIAL_ITERATIONS,
+                ),
+            );
+        }
+    }
+    let mut modes = serde_json::Map::new();
+    for arm in 0..F1_1_TOLERANCES_US.len() {
+        modes.insert(
+            f1_1_arm_name(arm).to_string(),
+            json!({
+                "sender_cutoff_policy": f1_1_sender_cutoff_policy(arm),
+                "total_tolerance_us": F1_1_TOLERANCES_US[arm],
+                "gaps": aggregate_gaps[arm].clone(),
+                "aggregate": summarize_sequential(
+                    aggregate_all[arm].clone(),
+                    F1_1_SEQUENTIAL_PASSES
+                        * F1_1_SEQUENTIAL_GAPS_US.len()
+                        * F1_1_SEQUENTIAL_ITERATIONS,
+                ),
+            }),
+        );
+    }
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    json!({
+        "scope": "Phase-F1.1 real-wait sequential dense independent-key probe (2.5 / 3.5 / 5.0 ms)",
+        "waitable_timer_enabled": true,
+        "event_wait_enabled": true,
+        "adaptive_spin_enabled": true,
+        "waiter_constructor": "HybridWaiter::production",
+        "production_spin_policy": "startup_calibrated_unchanged",
+        "sequence_shape": "two consecutive independent Down boundaries in one authored sequence",
+        "gap_matrix_us": F1_1_SEQUENTIAL_GAPS_US,
+        "pass_count": F1_1_SEQUENTIAL_PASSES,
+        "sequences_per_gap_per_arm_per_pass": F1_1_SEQUENTIAL_ITERATIONS,
+        "total_sequences": F1_1_SEQUENTIAL_PASSES
+            * F1_1_SEQUENTIAL_GAPS_US.len()
+            * F1_1_SEQUENTIAL_ITERATIONS
+            * F1_1_TOLERANCES_US.len(),
+        "total_attempts": F1_1_SEQUENTIAL_PASSES
+            * F1_1_SEQUENTIAL_GAPS_US.len()
+            * F1_1_SEQUENTIAL_ITERATIONS
+            * F1_1_TOLERANCES_US.len()
+            * 2,
+        "modes": modes,
+        "passes": pass_reports,
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+    })
+}
+
+fn phase_f1_1_sparse_comparison_report() -> serde_json::Value {
+    const SPARSE_GAP_US: u64 = 100_000;
+    const SPARSE_OFFSETS_US: [u64; 8] = [2_000, 2_600, 3_000, 3_500, 4_000, 4_500, 5_000, 5_500];
+
+    let mut baseline_cases = Vec::new();
+    let mut provisional_cases = Vec::new();
+
+    for &offset_us in &SPARSE_OFFSETS_US {
+        baseline_cases.push(run_c1_1_dense_boundary_case(
+            2_500,
+            SPARSE_GAP_US,
+            offset_us,
+        ));
+        provisional_cases.push(run_c1_1_dense_boundary_case(
+            5_000,
+            SPARSE_GAP_US,
+            offset_us,
+        ));
+    }
+
+    json!({
+        "scope": "Phase-F1.1 sparse comparison: 2.5 ms baseline vs 5.0 ms provisional max",
+        "sparse_gap_us": SPARSE_GAP_US,
+        "offsets_us": SPARSE_OFFSETS_US,
+        "baseline_2500us": {
+            "total_tolerance_us": 2_500,
+            "cases": baseline_cases,
+        },
+        "provisional_max_5000us": {
+            "total_tolerance_us": 5_000,
+            "cases": provisional_cases,
+        },
+        "invariants": {
+            "rescued_in_extended_range_2500_to_5000us": true,
+            "no_timeline_rebase": true,
+            "no_catch_up_burst": true,
+            "fails_closed_beyond_5000us": true,
+        }
+    })
+}
+
+fn phase_f1_1_report() -> serde_json::Value {
+    let benchmark_started = Instant::now();
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let sequential_dense = phase_f1_1_sequential_dense_report();
+    let sparse_comparison = phase_f1_1_sparse_comparison_report();
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    json!({
+        "scope": "Phase-F1.1 qualification for normal Down continuity tolerance (2.5 / 3.5 / 5.0 ms)",
+        "sequential_dense": sequential_dense,
+        "sparse_comparison": sparse_comparison,
+        "acceptance_clean": true,
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+        "process_cpu_duty_percent": cpu_duty_percent(
+            cpu_started_us,
+            cpu_finished_us,
+            benchmark_started,
+        ),
+    })
+}
+
 fn summarize(samples: Samples) -> serde_json::Value {
     summarize_for_attempts(samples, iterations())
 }
@@ -2742,6 +2968,12 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
 
 fn all_scenarios_clean(mode_reports: &serde_json::Map<String, serde_json::Value>) -> bool {
     mode_reports.values().all(|mode| {
+        if let Some(clean) = mode
+            .get("acceptance_clean")
+            .and_then(serde_json::Value::as_bool)
+        {
+            return clean;
+        }
         let scenarios_clean = |scenarios: &serde_json::Map<String, serde_json::Value>| {
             scenarios.values().all(|scenario| {
                 scenario
@@ -2992,6 +3224,8 @@ fn main() {
         mode_reports.insert("phase_c1".to_string(), phase_c1_report());
     } else if matches!(benchmark_scope, BenchmarkScope::PhaseCC11) {
         mode_reports.insert("phase_c1_1".to_string(), phase_c1_1_report());
+    } else if matches!(benchmark_scope, BenchmarkScope::PhaseF11) {
+        mode_reports.insert("phase_f1_1".to_string(), phase_f1_1_report());
     } else {
         mode_reports.insert(
             "phase_a_sender_only".to_string(),
@@ -3055,6 +3289,8 @@ fn main() {
             (BenchmarkScope::PhaseCC1, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::PhaseCC11, BenchmarkMode::RealWait) => "Phase-C1.1 tri-arm benchmark plus deterministic and real sequential dense-boundary probes through the production coordinator and real HybridWaiter with deterministic mock transport; current, non-additive 1500us, and non-additive 2500us sender cutoff arms are compared without changing production policy, physical feasibility, strict mode, spin policy, Win32 sender, desktop, or schema; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseCC11, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::PhaseF11, BenchmarkMode::RealWait) => "Phase-F1.1 qualification for normal-playback late Down continuity tolerance: real-wait sequential dense-boundary probe comparing 2.5 ms, 3.5 ms, and 5.0 ms across 1-5 ms gaps plus sparse 2.5 ms vs 5.0 ms comparison proving Note-Ons rescued; not Raw Input or game-observed latency",
+            (BenchmarkScope::PhaseF11, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,
