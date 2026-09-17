@@ -381,8 +381,10 @@ pub fn virtual_key_for_scan_code(_hwnd: isize, _scan_code: u16) -> Result<i32, S
 /// Resolve the visible Sky window using the same title/process admission
 /// boundary as the legacy desktop target adapter.  This is deliberately kept
 /// in the Win32 crate so application code never has to own unsafe window API
-/// calls.  The returned HWND is only a target hint; the realtime worker still
-/// performs the final foreground admission before every physical down.
+/// calls. The returned HWND is a target hint. Precision-boundary Down
+/// admission uses the supervisor's published focus state and atomic target
+/// proof; exact foreground validation remains for startup and control-plane
+/// revalidation outside that envelope.
 #[cfg(windows)]
 pub fn find_sky_window(process_names: &[String], allow_title_fallback: bool) -> Option<isize> {
     use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};

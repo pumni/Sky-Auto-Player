@@ -8,7 +8,7 @@ use super::super::{
     handle_final_focus_loss, record_final_gate_rejection, record_sendinput_pre_call_lateness,
 };
 use super::authored::record_prepared_normal_send_outcome;
-use super::recovery::{DownMissReason, record_late_rescued_down, recover_missed_down_boundary};
+use super::recovery::{DownMissReason, recover_missed_down_boundary};
 use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::{SharedProgressClock, SystemPowerState};
 use crate::engine::worker::physical_timing_guard::PhysicalTimingWindow;
@@ -267,7 +267,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
         effective_now_ticks,
         physical_target_qpc,
         physical_timing_window,
-        physical_timing_window.latest_down_start_qpc,
         boundary_crossing_qpc,
         result,
         explicitly_cancelled_by_suspension,
@@ -290,11 +289,9 @@ pub(super) fn record_down_send_result(
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
     physical_timing_window: PhysicalTimingWindow,
-    physical_latest_down_start_qpc: Option<QpcTicks>,
     target_crossing_qpc: Option<QpcTicks>,
     trace_kind: u8,
     prepared_final_policy_qpc: Option<QpcTicks>,
-    sender_cutoff_qpc: Option<QpcTicks>,
     result: SendTransactionOutcome,
     explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
@@ -383,15 +380,6 @@ pub(super) fn record_down_send_result(
     {
         return step;
     }
-    record_late_rescued_down(
-        local_metrics,
-        physical_target_qpc,
-        physical_latest_down_start_qpc,
-        sender_cutoff_qpc,
-        result_started_ticks,
-        result_success,
-        packet.down_mask,
-    );
     let final_policy_qpc = prepared_final_policy_qpc
         .or(result_started_ticks)
         .unwrap_or(physical_target_qpc);

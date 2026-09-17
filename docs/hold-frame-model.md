@@ -12,16 +12,13 @@ with a final foreground-verification cost, so the two focus modes are not
 promised identical latency.
 
 For a physical boundary, native preparation materializes and validates
-one immutable packet before the interruptible wait. The worker's single
-hybrid wait and bounded QPC spin cross the later of the authored target and
-relevant physical floors. If a Down floor is outside the physical latest-start
-window, the worker waits only to the authored target, consumes the exact
-authorization, and classifies the Down chord as missed. A mixed packet's Up
-prefix then waits independently for its musical hold floor before recovery. It runs the final
-command/control, target, and focus gates, repeats the program-owned atomic
-checks, and evaluates the lease. The worker records `final_policy_qpc` for
-lease admission. The prepared sender then takes the true `pre_call_qpc`
-immediately before the effective sender-cutoff check and one `SendInput` call.
+one immutable packet before the interruptible wait. Normal playback uses one
+hybrid wait and bounded QPC spin to the authored target, then performs cheap
+control/target/focus checks and one prepared `SendInput` call. Strict/diagnostic
+dispatch may additionally apply physical floors and a physical latest-start
+bound. The worker records `final_policy_qpc` as evidence, not a musical
+deadline. The prepared sender then takes the true `pre_call_qpc` immediately
+before the syscall.
 Up entries precede Down entries;
 an overlapping Up/Down mask is rejected during preparation. A partial Up is
 reported with partial-progress evidence but is never silently retried by this
@@ -39,12 +36,9 @@ min_release_gap_us = frame_us + timing_margin_us
 
 The user-owned Timing Margin defaults to `500 µs`, ranges from `0` through
 `3,000 µs` in `100 µs` steps, and applies equally to Hold and Release Gap.
-It defines the physical latest Down start: `packet_not_before` must not exceed
-`physical_latest_down_start = authored target + this margin`. This is a
-physical-feasibility boundary, not a universal limit on the actual normal-mode
-sender pre-call. Normal playback also uses the user-configurable
-`normal_down_start_tolerance` (Advanced settings: `2,000–10,000 µs`, default `2,500 µs`)
-continuity bound from the authored target, without adding it to Timing Margin.
+It defines the strict/diagnostic physical latest Down start:
+`packet_not_before` must not exceed `physical_latest_down_start = authored
+target + this margin`. Normal playback has no separate late-note sender cutoff.
 Calibration never supplies part of the
 authored timing equation. Qualified calibration may produce an advisory
 recommendation from measured transport reserve plus a fixed `100 µs` guard.
@@ -68,31 +62,23 @@ next prepared session.
 
 The release gap is one base game frame plus the exact Timing Margin. The
 immutable schedule remains the source of authored targets. In addition, the
-worker-owned fixed-size `PhysicalTimingGuard` tracks per-key completion floors
-using sender QPC evidence:
+strict/diagnostic timing uses the worker-owned fixed-size
+`PhysicalTimingGuard` to track per-key completion floors using sender QPC
+evidence:
 
 ```text
 musical_up_not_before = last_successful_down_completion + frame_base_hold
 down_not_before = last_successful_up_completion + frame
 physical_latest_down_start = authored_down_target + timing_margin
-normal_sender_cutoff = max(
-    physical_latest_down_start,
-    authored_down_target + 2,500 µs,
-)
 strict_sender_cutoff = physical_latest_down_start
 ```
 
-The worker waits until the authored target and relevant physical floor are
-both reached. If a Down floor exceeds `physical_latest_down_start`, the worker
-classifies the whole Down chord as `PhysicalWindowExpired` at the authored
-target; continuity tolerance cannot rescue it. A true pre-call QPC check closes
-the remaining race immediately before `SendInput`. In normal playback, a
-physically feasible pre-call may be later than the physical boundary but must
-remain within the non-additive normal cutoff. Strict mode remains bounded by
-the physical boundary. Authored Up and mixed Up-prefix recovery respect the
-Down-completion hold floor. Emergency, focus-loss, and cleanup Ups bypass
-musical floors so safety release stays immediate. Completion evidence never
-proves that Sky sampled the transition.
+Strict mode remains bounded by the physical boundary. Normal prepared playback
+uses the authored target and does not suppress a clean late frame. Authored Up
+and mixed Up-prefix recovery respect the authored hold/release contract.
+Emergency, focus-loss, and cleanup Ups bypass musical floors so safety release
+stays immediate. Completion evidence never proves that Sky sampled the
+transition.
 
 Production hold forensics checks the fixed physical floors with trusted sender
 timestamps. For each successful paired key, it records
@@ -117,11 +103,9 @@ min_release_gap_us = frame_us + timing_margin_us
 Timing Margin is the only user-owned authored headroom and remains part of the
 hold/release materialization. Zero is a valid strict/no-headroom choice. In
 strict mode, equality at `physical_latest_down_start` is allowed and the first
-tick beyond it is a missed Down. In normal playback, the same equality rule
-uses `max(physical_latest_down_start, authored_target + 2,500 µs)` for the
-sender cutoff; this internal tolerance is not persisted, a validation input, or
-part of hold/release floors. A Down chord is never split or retried. Up-only
-safety releases remain exempt from musical floors.
+tick beyond it is a missed Down. Normal lateness is observational. A Down
+chord is never split or retried. Up-only safety releases remain exempt from
+musical floors.
 
 At 60 FPS with the default margin:
 
@@ -161,13 +145,9 @@ cases. It also requires the next same-key Down to meet the materialized
 boundaries are valid; same-timestamp same-key overlaps are rejected, while
 disjoint masks may still coalesce. Runtime may delay a physical packet until
 its floor is reached, but it never changes an authored target or retries a
-missed Down.
-Successful completion also updates the worker's physical floors, so a later
-Up or same-key Down cannot violate a hold or release interval after transport
-latency. A normal Down that starts after the physical boundary but within the
-bounded continuity cutoff is called a late rescue only after complete transport
-success and a successful physical-guard update. Miss classification uses
-mutually exclusive reasons:
+missed Down. Strict/diagnostic completion evidence may update its physical
+forensics guard; normal completion does not feed scheduling. Miss
+classification uses mutually exclusive reasons in strict/test-support paths:
 `unobserved_backlog`, `physical_window_expired`, or
 `final_sender_window_expired`. Their counters sum to `missed_down_boundaries`;
 a sender effective-cutoff rejection is counted at that boundary once. Hold- and
@@ -183,11 +163,12 @@ integrity remains valid.
 
 Production retains bounded worker-local scalars and a fixed anomaly ring:
 hold/release floor sample counts, minimum observed intervals, floor violations,
-same-call retriggers, anchor overwrites, unmatched Ups, and ring overwrites.
+same-key overlap corruption evidence, anchor overwrites, unmatched Ups, and
+ring overwrites.
 Structural anomalies and timing diagnostics have separate counters. Hold- and
 release-floor delay counts and maxima are published independently from the
-exclusive Down miss taxonomy. The fixed rescue scalars count only successful
-completion evidence and do not change schema 16 or claim game observation.
+exclusive Down miss taxonomy. Retired normal late-rescue scalars are not part
+of the current schema and no metric claims game observation.
 The production forensics block exposes an availability/version marker and
 never allocates, locks, samples QPC, or consults the diagnostic observer.
 These values are not game-onset or audio-onset measurements. The old estimator

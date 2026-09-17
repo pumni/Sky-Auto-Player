@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Bootstrap, SettingsPatch, ThemeId } from '../../bridge/DesktopBridge';
 import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
 import { TimingMarginControl } from './TimingMarginControl';
-import { LateNoteToleranceControl } from './LateNoteToleranceControl';
 import { AutoPlaySwitch } from './AutoPlaySwitch';
 
 interface SettingsPanelProps {
@@ -296,21 +295,6 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                   <p className="settings-note">
                     Native timing, input and security policy remain owned by the local Rust runtime.
                   </p>
-                  <div className="settings-subsection">
-                    <h3>Late note tolerance</h3>
-                    <LateNoteToleranceControl
-                      value={defaults.normal_down_start_tolerance_us}
-                      options={bootstrap.option_sets}
-                      onChange={(value) =>
-                        patchSettings({
-                          playbackDefaults: { normalDownStartToleranceUs: value },
-                        }).then(
-                          (authoritative) =>
-                            authoritative?.playback_defaults.normal_down_start_tolerance_us ?? null,
-                        )
-                      }
-                    />
-                  </div>
                   <div className="settings-subsection">
                     <h3>Advanced timing</h3>
                     <p className="settings-note">

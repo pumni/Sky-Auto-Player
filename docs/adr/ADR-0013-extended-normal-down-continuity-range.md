@@ -2,6 +2,11 @@
 
 Status: Accepted.
 
+> Historical record only. Superseded for the current normal-dispatch contract
+> by [ADR-0014](ADR-0014-deterministic-prepared-dispatch.md). The former
+> normal tolerance range and rescue qualification are retired; strict timing,
+> physical feasibility, and transport evidence remain historical references.
+
 Supersedes: The `2,500–5,000 µs` bounds of [ADR-0012](ADR-0012-user-configurable-normal-down-continuity.md),
 and documents the removal of the dedicated "Reset to 2.5 ms" button in #287.
 All invariants from ADR-0010, ADR-0011, and ADR-0012 (non-additive formula, strict-mode sender

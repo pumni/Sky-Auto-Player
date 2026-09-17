@@ -391,7 +391,6 @@ pub(crate) fn dispatch_due_from_plan(
         // comes from the nonblocking observation that precedes the waiter.
         runtime.observe_future_down_boundary(boundary_stamp);
     }
-    let physical_latest_down_start_qpc = window.latest_down_start_qpc;
     let down_admission = if let Some((_, admission)) = pending_up_recovery {
         admission
     } else if let Some(boundary) = boundary {
@@ -470,7 +469,6 @@ pub(crate) fn dispatch_due_from_plan(
             now_ticks,
             physical_timing_window: window,
             down_admission,
-            physical_latest_down_start_qpc,
             focus_loss_fault,
             supervisor_expired,
             boundary_crossing_qpc,
@@ -2181,9 +2179,6 @@ mod tests {
     fn c2_normal_mode_sends_late_authorized_down_at_2_10_and_50_ms() {
         for offset_us in [2_000, 10_000, 50_000] {
             let mut harness = ProductionDispatchTestHarness::new_down_only();
-            harness
-                .configure_normal_down_start_tolerance_for_test(2_500)
-                .expect("C1 tolerance");
             let packets = harness.configure_packet_capture();
             let plan = harness.plan_current_dispatch();
             let target = plan.physical_target_qpc().expect("Down target");
@@ -2217,20 +2212,12 @@ mod tests {
                 0,
                 "offset {offset_us}us must not rebase or catch up the timeline"
             );
-            assert_eq!(
-                harness.late_rescued_down_metrics_for_test().0,
-                0,
-                "normal lateness is not a rescued-cutoff classification"
-            );
         }
     }
 
     #[test]
     fn c1_strict_cutoff_remains_physical_latest_start() {
         let mut allowed = ProductionDispatchTestHarness::new_down_only();
-        allowed
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
         allowed.set_strict_timing_for_test(true);
         allowed.timing.strict_down_completion_late_ticks = allowed
             .resources
@@ -2247,12 +2234,8 @@ mod tests {
         assert_dispatched(allowed.dispatch_at_qpc_for_test(&plan, add_us(&allowed, target, 500)));
         assert_eq!(packets.lock().expect("packet capture").len(), 1);
         assert_eq!(allowed.local_metrics.final_sender_window_expirations, 0);
-        assert_eq!(allowed.late_rescued_down_metrics_for_test().0, 0);
 
         let mut rejected = ProductionDispatchTestHarness::new_down_only();
-        rejected
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
         rejected.set_strict_timing_for_test(true);
         rejected.timing.strict_down_completion_late_ticks = rejected
             .resources
@@ -2276,16 +2259,12 @@ mod tests {
         ));
         assert!(packets.lock().expect("packet capture").is_empty());
         assert_eq!(rejected.local_metrics.final_sender_window_expirations, 1);
-        assert_eq!(rejected.late_rescued_down_metrics_for_test().0, 0);
     }
 
     #[test]
-    fn c1_1_strict_timing_ignores_configured_tolerances_3_4_5_ms() {
-        for tolerance_us in [2_000, 2_500, 3_000, 4_000, 5_000, 7_500, 10_000] {
+    fn strict_timing_retains_physical_latest_start_rejection() {
+        {
             let mut rejected = ProductionDispatchTestHarness::new_down_only();
-            rejected
-                .configure_normal_down_start_tolerance_for_test(tolerance_us)
-                .expect("valid tolerance");
             rejected.set_strict_timing_for_test(true);
             rejected.timing.strict_down_completion_late_ticks = rejected
                 .resources
@@ -2310,13 +2289,9 @@ mod tests {
             ));
             assert!(packets.lock().expect("packet capture").is_empty());
             assert_eq!(rejected.local_metrics.final_sender_window_expirations, 1);
-            assert_eq!(rejected.late_rescued_down_metrics_for_test().0, 0);
 
             // In contrast, under normal timing the note is sent without a cutoff.
             let mut normal = ProductionDispatchTestHarness::new_down_only();
-            normal
-                .configure_normal_down_start_tolerance_for_test(tolerance_us)
-                .expect("valid tolerance");
             let normal_packets = normal.configure_packet_capture();
             let normal_plan = normal.plan_current_dispatch();
             let normal_target = normal_plan.physical_target_qpc().expect("Down target");
@@ -2324,22 +2299,18 @@ mod tests {
                 &normal_plan,
                 subtract_duration(normal_target, DurationTicks::from_raw(1)),
             ));
-            let rescued_now = add_us(&normal, normal_target, 1_000);
-            assert_dispatched(normal.dispatch_at_qpc_for_test(&normal_plan, rescued_now));
+            let late_now = add_us(&normal, normal_target, 1_000);
+            assert_dispatched(normal.dispatch_at_qpc_for_test(&normal_plan, late_now));
             assert_eq!(
                 normal_packets.lock().expect("normal packet capture").len(),
                 1
             );
-            assert_eq!(normal.late_rescued_down_metrics_for_test().0, 0);
         }
     }
 
     #[test]
     fn normal_completion_floor_does_not_make_down_infeasible() {
         let mut harness = ProductionDispatchTestHarness::new_down_chord(2);
-        harness
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
         let packets = harness.configure_packet_capture();
         let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("Down target");
@@ -2378,15 +2349,11 @@ mod tests {
         );
         assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
         assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
-        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
     }
 
     #[test]
     fn c2_mixed_late_start_sends_the_prepared_whole_packet() {
         let mut harness = ProductionDispatchTestHarness::new_mixed_events_with_gap(2, 100_000);
-        harness
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
         let packets = harness.configure_packet_capture();
         let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("mixed target");
@@ -2399,18 +2366,13 @@ mod tests {
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(1, 2)]
         );
-        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
-        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 0);
         assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
         assert_eq!(harness.chord_integrity_lost_count(), 0);
     }
 
     #[test]
-    fn c1_transport_failure_in_rescue_region_is_not_rescued() {
+    fn normal_late_transport_failure_is_not_success() {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
-        harness
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
         let clock = harness.resources.clock;
         harness.resources.backend.set_packet_emitter(move |packet| {
             let requested_mask = packet.up_mask | packet.down_mask;
@@ -2442,16 +2404,12 @@ mod tests {
             harness.dispatch_at_qpc_for_test(&plan, add_us(&harness, target, 1_000)),
             DispatchStep::Terminate(_)
         ));
-        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
         assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
     fn c1_complete_without_completion_qpc_is_not_recorded_as_rescue() {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
-        harness
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
         let clock = harness.resources.clock;
         harness.resources.backend.set_packet_emitter(move |packet| {
             let requested_mask = packet.up_mask | packet.down_mask;
@@ -2483,8 +2441,6 @@ mod tests {
             harness.dispatch_at_qpc_for_test(&plan, add_us(&harness, target, 1_000)),
             DispatchStep::TerminateStatic("successful Down missing completion QPC")
         ));
-        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
-        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 0);
         assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
         assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
         assert_eq!(
@@ -2496,9 +2452,6 @@ mod tests {
     #[test]
     fn c1_dense_future_boundary_keeps_authored_target_and_no_backlog() {
         let mut harness = ProductionDispatchTestHarness::new_dense_future_boundary_for_test();
-        harness
-            .configure_normal_down_start_tolerance_for_test(2_500)
-            .expect("C1 tolerance");
         let packets = harness.configure_packet_capture();
         let first = harness.plan_current_dispatch();
         let first_target = first.physical_target_qpc().expect("first target");
@@ -2536,8 +2489,6 @@ mod tests {
             0
         );
         assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
-        assert_eq!(harness.late_rescued_down_metrics_for_test().0, 0);
-        assert_eq!(harness.late_rescued_down_metrics_for_test().1, 0);
     }
 
     #[test]
@@ -2547,89 +2498,78 @@ mod tests {
             600, 1_000, 1_400, 1_600, 2_200, 2_500, 3_000, 3_500, 4_000, 5_000, 5_500,
         ];
 
-        for tolerance_us in [1_500, 2_500, 3_000, 4_000, 5_000] {
-            for gap_us in GAPS_US {
-                for offset_us in OFFSETS_US {
-                    let mut harness =
-                        ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(
-                            gap_us,
-                        );
-                    harness
-                        .configure_normal_down_start_tolerance_for_test(tolerance_us)
-                        .expect("C1.1 tolerance");
-                    let packets = harness.configure_packet_capture();
-                    let first = harness.plan_current_dispatch();
-                    let first_target = first.physical_target_qpc().expect("first target");
+        for gap_us in GAPS_US {
+            for offset_us in OFFSETS_US {
+                let mut harness =
+                    ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(
+                        gap_us,
+                    );
+                let packets = harness.configure_packet_capture();
+                let first = harness.plan_current_dispatch();
+                let first_target = first.physical_target_qpc().expect("first target");
+                assert_no_work(harness.dispatch_at_qpc_for_test(
+                    &first,
+                    subtract_duration(first_target, DurationTicks::from_raw(1)),
+                ));
+                let first_now = add_us(&harness, first_target, offset_us);
+                assert_dispatched(harness.dispatch_at_qpc_for_test(&first, first_now));
+
+                let first_allowed = true;
+                assert_eq!(
+                    packets.lock().expect("packet capture").len(),
+                    if first_allowed { 1 } else { 0 },
+                    "first packet classification for gap={gap_us} offset={offset_us}"
+                );
+
+                let second = harness.plan_current_dispatch();
+                let second_target = second.physical_target_qpc().expect("second target");
+                let authored_gap = harness
+                    .resources
+                    .clock
+                    .duration_to_us(
+                        second_target
+                            .checked_duration_since(first_target)
+                            .expect("second target follows first"),
+                    )
+                    .expect("authored gap conversion");
+                assert_eq!(
+                    authored_gap, gap_us,
+                    "second target must retain authored gap for offset={offset_us}"
+                );
+
+                let second_is_future = second_target > first_now;
+                if second_is_future {
                     assert_no_work(harness.dispatch_at_qpc_for_test(
-                        &first,
-                        subtract_duration(first_target, DurationTicks::from_raw(1)),
+                        &second,
+                        subtract_duration(second_target, DurationTicks::from_raw(1)),
                     ));
-                    let first_now = add_us(&harness, first_target, offset_us);
-                    assert_dispatched(harness.dispatch_at_qpc_for_test(&first, first_now));
-
-                    let first_allowed = true;
-                    let first_rescued = false;
+                    assert_dispatched(harness.dispatch_at_qpc_for_test(&second, second_target));
                     assert_eq!(
-                        packets.lock().expect("packet capture").len(),
-                        if first_allowed { 1 } else { 0 },
-                        "first packet classification for tolerance={tolerance_us} gap={gap_us} offset={offset_us}"
-                    );
-                    assert_eq!(
-                        harness.late_rescued_down_metrics_for_test().0,
-                        u64::from(first_rescued),
-                        "first rescue classification for tolerance={tolerance_us} gap={gap_us} offset={offset_us}"
-                    );
-
-                    let second = harness.plan_current_dispatch();
-                    let second_target = second.physical_target_qpc().expect("second target");
-                    let authored_gap = harness
-                        .resources
-                        .clock
-                        .duration_to_us(
-                            second_target
-                                .checked_duration_since(first_target)
-                                .expect("second target follows first"),
-                        )
-                        .expect("authored gap conversion");
-                    assert_eq!(
-                        authored_gap, gap_us,
-                        "second target must retain authored gap for tolerance={tolerance_us} offset={offset_us}"
-                    );
-
-                    let second_is_future = second_target > first_now;
-                    if second_is_future {
-                        assert_no_work(harness.dispatch_at_qpc_for_test(
-                            &second,
-                            subtract_duration(second_target, DurationTicks::from_raw(1)),
-                        ));
-                        assert_dispatched(harness.dispatch_at_qpc_for_test(&second, second_target));
-                        assert_eq!(
-                            harness.missed_unobserved_backlog_boundaries_for_test(),
-                            0,
-                            "future second boundary must not become false backlog"
-                        );
-                    } else {
-                        assert_dispatched(harness.dispatch_at_qpc_for_test(&second, first_now));
-                        assert_eq!(
-                            harness.missed_unobserved_backlog_boundaries_for_test(),
-                            1,
-                            "overdue second boundary must follow existing backlog contract"
-                        );
-                    }
-
-                    let expected_packets = (if first_allowed { 1 } else { 0 })
-                        + (if second_is_future { 1 } else { 0 });
-                    assert_eq!(
-                        packets.lock().expect("packet capture").len(),
-                        expected_packets,
-                        "no catch-up or packet split for tolerance={tolerance_us} gap={gap_us} offset={offset_us}"
-                    );
-                    assert_eq!(
-                        harness.missed_physical_window_boundaries_for_test(),
+                        harness.missed_unobserved_backlog_boundaries_for_test(),
                         0,
-                        "continuity must not bypass physical timing rules"
+                        "future second boundary must not become false backlog"
+                    );
+                } else {
+                    assert_dispatched(harness.dispatch_at_qpc_for_test(&second, first_now));
+                    assert_eq!(
+                        harness.missed_unobserved_backlog_boundaries_for_test(),
+                        1,
+                        "overdue second boundary must follow existing backlog contract"
                     );
                 }
+
+                let expected_packets =
+                    (if first_allowed { 1 } else { 0 }) + (if second_is_future { 1 } else { 0 });
+                assert_eq!(
+                    packets.lock().expect("packet capture").len(),
+                    expected_packets,
+                    "no catch-up or packet split for gap={gap_us} offset={offset_us}"
+                );
+                assert_eq!(
+                    harness.missed_physical_window_boundaries_for_test(),
+                    0,
+                    "continuity must not bypass physical timing rules"
+                );
             }
         }
     }
@@ -2737,16 +2677,13 @@ mod tests {
     }
 
     #[test]
-    fn c2_sparse_comparison_sends_authorized_late_note_ons_without_cutoff() {
+    fn sparse_comparison_sends_authorized_late_note_ons_without_cutoff() {
         let offsets_in_extended_range = [2_800, 3_000, 3_500, 4_000, 4_500, 5_000];
 
         for &offset_us in &offsets_in_extended_range {
-            // The compatibility tolerance does not gate normal sender admission.
+            // Normal sender admission has no lateness cutoff.
             let mut baseline =
                 ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
-            baseline
-                .configure_normal_down_start_tolerance_for_test(2_500)
-                .expect("valid tolerance");
             let packets_baseline = baseline.configure_packet_capture();
             let plan_baseline = baseline.plan_current_dispatch();
             let target_baseline = plan_baseline
@@ -2764,14 +2701,10 @@ mod tests {
                 "baseline 2.5 ms must send the authorized note at offset {offset_us} us"
             );
             assert_eq!(baseline.local_metrics.final_sender_window_expirations, 0);
-            assert_eq!(baseline.late_rescued_down_metrics_for_test().0, 0);
 
-            // A different compatibility tolerance has the same normal behavior.
+            // A separate prepared boundary has the same normal behavior.
             let mut prov_max =
                 ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
-            prov_max
-                .configure_normal_down_start_tolerance_for_test(5_000)
-                .expect("valid tolerance");
             let packets_prov = prov_max.configure_packet_capture();
             let plan_prov = prov_max.plan_current_dispatch();
             let target_prov = plan_prov.physical_target_qpc().expect("provisional target");
@@ -2787,20 +2720,12 @@ mod tests {
                 "provisional max 5.0 ms must send note at offset {offset_us} us"
             );
             assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 0);
-            assert_eq!(
-                prov_max.late_rescued_down_metrics_for_test().0,
-                0,
-                "normal lateness must not be a rescued-cutoff classification"
-            );
         }
 
-        // Even beyond the old provisional tolerance, an authorized normal Down is sent.
+        // A late authorized normal Down is sent regardless of lateness.
         let offset_beyond_max = 5_500;
         let mut prov_max =
             ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(100_000);
-        prov_max
-            .configure_normal_down_start_tolerance_for_test(5_000)
-            .expect("valid tolerance");
         let packets_prov = prov_max.configure_packet_capture();
         let plan_prov = prov_max.plan_current_dispatch();
         let target_prov = plan_prov.physical_target_qpc().expect("provisional target");
@@ -2813,10 +2738,9 @@ mod tests {
         assert_eq!(
             packets_prov.lock().expect("packet capture").len(),
             1,
-            "provisional max 5.0 ms must not gate normal lateness"
+            "normal lateness must not gate an authorized Down"
         );
         assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 0);
-        assert_eq!(prov_max.late_rescued_down_metrics_for_test().0, 0);
     }
 
     #[test]

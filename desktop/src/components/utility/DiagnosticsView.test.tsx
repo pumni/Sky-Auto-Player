@@ -28,7 +28,6 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     hold_frames: 1,
     frame_base_hold_us: 16_667,
     timing_margin_us: 800,
-    normal_down_start_tolerance_us: 2_500,
     min_hold_us: 17_467,
     min_release_gap_us: 17_467,
     timing_margin_recommendation: {

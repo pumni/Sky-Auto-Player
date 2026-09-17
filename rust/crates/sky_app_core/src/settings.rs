@@ -17,10 +17,6 @@ pub const DEFAULT_TIMING_MARGIN_US: u64 = 500;
 pub const MIN_TIMING_MARGIN_US: u64 = 0;
 pub const MAX_TIMING_MARGIN_US: u64 = 3_000;
 pub const TIMING_MARGIN_STEP_US: u64 = 100;
-pub const DEFAULT_NORMAL_DOWN_START_TOLERANCE_US: u64 = 2_500;
-pub const MIN_NORMAL_DOWN_START_TOLERANCE_US: u64 = 2_000;
-pub const MAX_NORMAL_DOWN_START_TOLERANCE_US: u64 = 10_000;
-pub const NORMAL_DOWN_START_TOLERANCE_STEP_US: u64 = 500;
 pub const TEMPO_SCALE_OPTIONS: [f64; 5] = [0.90, 0.95, 1.00, 1.05, 1.10];
 pub const DEFAULT_SONGS_DIR: &str = "songs";
 pub const DEFAULT_UPDATE_INTERVAL_S: i64 = 86_400;
@@ -123,8 +119,6 @@ pub struct PlaybackDefaults {
     pub hold_frames: f64,
     #[serde(default = "default_timing_margin_us")]
     pub timing_margin_us: u64,
-    #[serde(default = "default_normal_down_start_tolerance_us")]
-    pub normal_down_start_tolerance_us: u64,
     pub tempo_scale: f64,
     pub fps: u16,
 }
@@ -151,7 +145,6 @@ impl Default for PlaybackDefaults {
         Self {
             hold_frames: DEFAULT_HOLD_FRAMES,
             timing_margin_us: DEFAULT_TIMING_MARGIN_US,
-            normal_down_start_tolerance_us: DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
             tempo_scale: 1.0,
             fps: DEFAULT_GAME_FPS,
         }
@@ -205,7 +198,6 @@ impl Default for ApplicationSettings {
 pub struct PlaybackDefaultsPatch {
     pub hold_frames: Option<f64>,
     pub timing_margin_us: Option<u64>,
-    pub normal_down_start_tolerance_us: Option<u64>,
     pub tempo_scale: Option<f64>,
     pub fps: Option<u16>,
 }
@@ -323,10 +315,6 @@ pub fn normalize_settings(mut settings: ApplicationSettings) -> ApplicationSetti
         normalize_hold_frames(settings.playback_defaults.hold_frames);
     settings.playback_defaults.timing_margin_us =
         normalize_timing_margin(settings.playback_defaults.timing_margin_us);
-    settings.playback_defaults.normal_down_start_tolerance_us =
-        normalize_normal_down_start_tolerance(
-            settings.playback_defaults.normal_down_start_tolerance_us,
-        );
     settings.playback_defaults.tempo_scale =
         normalize_tempo(settings.playback_defaults.tempo_scale);
     settings.playback_defaults.fps = normalize_fps(settings.playback_defaults.fps);
@@ -356,10 +344,6 @@ pub fn apply_patch(
         }
         if let Some(value) = playback.timing_margin_us {
             next.playback_defaults.timing_margin_us = validate_timing_margin(value)?;
-        }
-        if let Some(value) = playback.normal_down_start_tolerance_us {
-            next.playback_defaults.normal_down_start_tolerance_us =
-                validate_normal_down_start_tolerance(value)?;
         }
         if let Some(value) = playback.tempo_scale {
             next.playback_defaults.tempo_scale = validate_tempo(value)?;
@@ -426,20 +410,6 @@ fn normalize_timing_margin(value: u64) -> u64 {
     }
 }
 
-fn default_normal_down_start_tolerance_us() -> u64 {
-    DEFAULT_NORMAL_DOWN_START_TOLERANCE_US
-}
-
-pub fn normalize_normal_down_start_tolerance(value: u64) -> u64 {
-    if (MIN_NORMAL_DOWN_START_TOLERANCE_US..=MAX_NORMAL_DOWN_START_TOLERANCE_US).contains(&value)
-        && value.is_multiple_of(NORMAL_DOWN_START_TOLERANCE_STEP_US)
-    {
-        value
-    } else {
-        DEFAULT_NORMAL_DOWN_START_TOLERANCE_US
-    }
-}
-
 fn normalize_tempo(value: f64) -> f64 {
     if value.is_finite() && value > 0.0 {
         value
@@ -503,19 +473,6 @@ fn validate_timing_margin(value: u64) -> Result<u64, SettingsError> {
         Err(SettingsError::InvalidField {
             field: "timing_margin_us".into(),
             message: "must be between 0 and 3000 us in 100 us steps".into(),
-        })
-    }
-}
-
-pub fn validate_normal_down_start_tolerance(value: u64) -> Result<u64, SettingsError> {
-    if (MIN_NORMAL_DOWN_START_TOLERANCE_US..=MAX_NORMAL_DOWN_START_TOLERANCE_US).contains(&value)
-        && value.is_multiple_of(NORMAL_DOWN_START_TOLERANCE_STEP_US)
-    {
-        Ok(value)
-    } else {
-        Err(SettingsError::InvalidField {
-            field: "normal_down_start_tolerance_us".into(),
-            message: "must be between 2000 and 10000 us in 500 us steps".into(),
         })
     }
 }
@@ -706,120 +663,6 @@ mod tests {
         assert!(
             matches!(error, SettingsError::InvalidField { field, .. } if field == "timing_margin_us")
         );
-        assert_eq!(*service.snapshot(), before);
-    }
-
-    #[test]
-    fn normal_down_start_tolerance_defaults_to_2500_and_normalizes_invalid_persisted() {
-        let settings = normalize_settings(ApplicationSettings::default());
-        assert_eq!(
-            settings.playback_defaults.normal_down_start_tolerance_us,
-            2_500
-        );
-        assert_eq!(DEFAULT_NORMAL_DOWN_START_TOLERANCE_US, 2_500);
-        assert_eq!(MIN_NORMAL_DOWN_START_TOLERANCE_US, 2_000);
-        assert_eq!(MAX_NORMAL_DOWN_START_TOLERANCE_US, 10_000);
-
-        for invalid in [
-            0, 1_000, 1_500, 1_999, 2_001, 2_499, 2_501, 3_250, 10_001, 10_500, 15_000,
-        ] {
-            let mut invalid_persisted = ApplicationSettings::default();
-            invalid_persisted
-                .playback_defaults
-                .normal_down_start_tolerance_us = invalid;
-            assert_eq!(
-                normalize_settings(invalid_persisted)
-                    .playback_defaults
-                    .normal_down_start_tolerance_us,
-                2_500,
-                "invalid value {invalid} should normalize to 2500"
-            );
-        }
-
-        for valid in [
-            2_000, 2_500, 3_000, 3_500, 4_000, 4_500, 5_000, 7_500, 10_000,
-        ] {
-            let mut valid_persisted = ApplicationSettings::default();
-            valid_persisted
-                .playback_defaults
-                .normal_down_start_tolerance_us = valid;
-            assert_eq!(
-                normalize_settings(valid_persisted)
-                    .playback_defaults
-                    .normal_down_start_tolerance_us,
-                valid,
-                "valid value {valid} should be preserved"
-            );
-        }
-    }
-
-    #[test]
-    fn normal_down_start_tolerance_patch_accepts_valid_steps_and_rejects_invalid_atomically() {
-        let defaults = ApplicationSettings::default();
-        for value in [
-            2_000, 2_500, 3_000, 3_500, 4_000, 4_500, 5_000, 7_500, 10_000,
-        ] {
-            let patched = apply_patch(
-                &defaults,
-                &SettingsPatch {
-                    playback_defaults: Some(PlaybackDefaultsPatch {
-                        normal_down_start_tolerance_us: Some(value),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            )
-            .expect("valid tolerance");
-            assert_eq!(
-                patched.playback_defaults.normal_down_start_tolerance_us,
-                value
-            );
-        }
-
-        for value in [
-            0, 500, 1_500, 1_999, 2_001, 2_499, 2_501, 3_200, 10_001, 10_500, 11_000,
-        ] {
-            let error = apply_patch(
-                &defaults,
-                &SettingsPatch {
-                    theme: Some("slate".into()),
-                    playback_defaults: Some(PlaybackDefaultsPatch {
-                        normal_down_start_tolerance_us: Some(value),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            )
-            .expect_err("invalid tolerance");
-            assert!(
-                matches!(
-                    error,
-                    SettingsError::InvalidField { field, .. } if field == "normal_down_start_tolerance_us"
-                ),
-                "value {value} must trigger InvalidField for normal_down_start_tolerance_us"
-            );
-            assert_eq!(
-                defaults.theme, "aurora",
-                "atomic validation must not mutate theme"
-            );
-        }
-
-        let mut service = SettingsService::load(MemoryStore::default()).expect("load settings");
-        let before = service.snapshot().clone();
-        let error = service
-            .patch(&SettingsPatch {
-                theme: Some("slate".into()),
-                playback_defaults: Some(PlaybackDefaultsPatch {
-                    normal_down_start_tolerance_us: Some(2_499),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .expect_err("invalid tolerance patch");
-        assert!(matches!(
-            error,
-            SettingsError::InvalidField { field, .. } if field == "normal_down_start_tolerance_us"
-        ));
         assert_eq!(*service.snapshot(), before);
     }
 }
