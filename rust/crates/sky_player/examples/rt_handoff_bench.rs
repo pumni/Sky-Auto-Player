@@ -246,6 +246,9 @@ struct Samples {
     observation_gaps: usize,
     planned_wait_gap_us: Vec<u64>,
     wait_wake_lateness_us: Vec<i64>,
+    target_minus_wait_entry_us: Vec<i64>,
+    alignment_to_wait_entry_us: Vec<i64>,
+    prepared_stream_build_us: Vec<u64>,
     hot_wait_count: usize,
     cold_wait_count: usize,
     missed_pre_call_lateness_us: Vec<i64>,
@@ -298,6 +301,9 @@ impl Samples {
             completion_error_us,
             planned_wait_gap_us,
             wait_wake_lateness_us,
+            target_minus_wait_entry_us,
+            alignment_to_wait_entry_us,
+            prepared_stream_build_us,
             missed_pre_call_lateness_us,
             missed_excess_beyond_latest_start_us,
             late_rescued_down_lateness_us,
@@ -1640,6 +1646,31 @@ fn record_wait_metrics(
     Ok(())
 }
 
+fn record_prepared_benchmark_evidence(
+    samples: &mut Samples,
+    harness: &ProductionDispatchTestHarness,
+) -> Result<(), String> {
+    let Some((alignment_qpc, target_qpc, wait_entry_qpc)) =
+        harness.prepared_benchmark_qpc_evidence_for_test()
+    else {
+        return Err("prepared benchmark timing evidence was not recorded".to_string());
+    };
+    let qpc_clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
+    samples
+        .target_minus_wait_entry_us
+        .push(signed_qpc_us(qpc_clock, target_qpc, wait_entry_qpc));
+    samples.alignment_to_wait_entry_us.push(signed_qpc_us(
+        qpc_clock,
+        wait_entry_qpc,
+        alignment_qpc,
+    ));
+    let build_duration_us = harness
+        .prepared_stream_build_duration_us_for_test()
+        .ok_or_else(|| "prepared stream build duration was not recorded".to_string())?;
+    samples.prepared_stream_build_us.push(build_duration_us);
+    Ok(())
+}
+
 fn record_c1_harness_metrics(
     samples: &mut Samples,
     harness: &mut ProductionDispatchTestHarness,
@@ -1932,9 +1963,10 @@ fn run_prepared_down_iteration(
     let iteration_started = Instant::now();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
     harness.enable_dispatch_ready_timing_for_benchmark();
-    harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
     harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
     harness.prepare_prepared_stream_for_test();
+    harness.reset_preparation_counts_for_test();
+    harness.align_prepared_current_to_benchmark_margin_for_test(gap_us)?;
     let step = harness.wait_and_dispatch_prepared_current_for_test()?;
     if !matches!(step, DispatchStep::Dispatched) {
         samples.record_step_failure(&step);
@@ -1950,6 +1982,7 @@ fn run_prepared_down_iteration(
         samples.overdue_dispatch_count += 1;
     }
     record_wait_evidence(samples, &harness)?;
+    record_prepared_benchmark_evidence(samples, &harness)?;
     record_wait_metrics(samples, &harness, BenchmarkMode::RealWait)?;
     drain_observations(&mut harness, samples);
     record_c1_harness_metrics(samples, &mut harness)?;
@@ -4808,6 +4841,9 @@ fn baseline_report() -> serde_json::Value {
             "overdue_dispatch_count": real_wait["overdue_dispatch_count"],
             "transport_anomaly_count": real_wait["transport_anomaly_count"],
             "host_waiter": "HybridWaiter::production",
+            "target_minus_wait_entry_us": real_wait["prepared_benchmark"]["target_minus_wait_entry_us"],
+            "alignment_to_wait_entry_us": real_wait["prepared_benchmark"]["alignment_to_wait_entry_us"],
+            "prepared_stream_build_us_startup_only": real_wait["prepared_benchmark"]["prepared_stream_build_us_startup_only"],
         },
         "healthy_precision_path": {
             "production_scheduling_semantics_changed": false,
@@ -4862,6 +4898,9 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
     let total_wall_time_us = samples.wall_time_us.iter().copied().sum::<u64>();
     let spin_duty = spin_duty_cycle_ppm(&samples.spin_time_us, &samples.wall_time_us);
     let counterfactual_rescue = counterfactual_rescue_summary(&samples);
+    let target_minus_wait_entry = signed_summary(samples.target_minus_wait_entry_us);
+    let alignment_to_wait_entry = signed_summary(samples.alignment_to_wait_entry_us);
+    let prepared_stream_build = unsigned_summary(samples.prepared_stream_build_us);
     json!({
         "acceptance_clean": acceptance_clean,
         "acceptance_failure_reasons": acceptance_failure_reasons,
@@ -4932,9 +4971,17 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "wait_evidence": {
             "planned_gap_us": unsigned_summary(samples.planned_wait_gap_us),
             "wake_lateness_us": signed_summary(samples.wait_wake_lateness_us),
+            "target_minus_wait_entry_us": target_minus_wait_entry.clone(),
+            "alignment_to_wait_entry_us": alignment_to_wait_entry.clone(),
             "hot_count": samples.hot_wait_count,
             "cold_count": samples.cold_wait_count,
             "cold_threshold_us": SEND_COLD_THRESHOLD_US,
+        },
+        "prepared_benchmark": {
+            "target_minus_wait_entry_us": target_minus_wait_entry,
+            "alignment_to_wait_entry_us": alignment_to_wait_entry,
+            "prepared_stream_build_us_startup_only": prepared_stream_build,
+            "note": "These fields are test-support benchmark setup evidence; stream construction is not part of the steady-state musical lateness interval.",
         },
         "missed_down": {
             "unobserved_backlog": samples.missed_down_unobserved_backlog,

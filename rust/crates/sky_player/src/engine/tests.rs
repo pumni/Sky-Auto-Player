@@ -813,6 +813,48 @@ fn normal_prepared_overdue_boundaries_send_once_without_scheduler_misses() {
 }
 
 #[test]
+fn prepared_benchmark_stream_build_precedes_alignment_and_wait_entry() {
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 10_000);
+    harness
+        .configure_production_wait_policy(1_000)
+        .expect("production wait policy");
+    harness.prepare_prepared_stream_for_test();
+    let built_qpc = harness
+        .prepared_stream_built_qpc_for_test()
+        .expect("prepared stream build timestamp");
+    let _build_duration_us = harness
+        .prepared_stream_build_duration_us_for_test()
+        .expect("prepared stream build duration");
+
+    harness
+        .align_prepared_current_to_benchmark_margin_for_test(10_000)
+        .expect("prepared benchmark alignment");
+    let alignment_qpc = harness
+        .prepared_alignment_qpc_for_test()
+        .expect("prepared alignment timestamp");
+    assert!(
+        built_qpc <= alignment_qpc,
+        "prepared stream construction must finish before target alignment"
+    );
+
+    assert!(matches!(
+        harness.wait_and_dispatch_prepared_current_for_test(),
+        Ok(super::worker::DispatchStep::Dispatched)
+    ));
+    let (_, target_qpc, wait_entry_qpc) = harness
+        .prepared_benchmark_qpc_evidence_for_test()
+        .expect("prepared wait-entry evidence");
+    assert!(
+        alignment_qpc <= wait_entry_qpc,
+        "target alignment must precede wait entry"
+    );
+    assert!(
+        target_qpc >= alignment_qpc,
+        "stream construction must not reduce the post-alignment target budget"
+    );
+}
+
+#[test]
 fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
     let mut harness =
         ProductionDispatchTestHarness::new_prepared_resumable_suspension_sequence_for_test();

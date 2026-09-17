@@ -89,6 +89,11 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) last_wait_observation: Option<WaitObservation>,
     effective_now_ticks: TimelineTicks,
     prepared_stream_for_test: Option<PreparedDispatchStream>,
+    prepared_stream_built_qpc: Option<QpcTicks>,
+    prepared_stream_build_duration_us: Option<u64>,
+    prepared_alignment_qpc: Option<QpcTicks>,
+    prepared_target_qpc: Option<QpcTicks>,
+    prepared_wait_entry_qpc: Option<QpcTicks>,
 }
 
 #[allow(dead_code)]
@@ -868,6 +873,11 @@ impl ProductionDispatchTestHarness {
             last_wait_observation: None,
             effective_now_ticks: TimelineTicks::ZERO,
             prepared_stream_for_test: None,
+            prepared_stream_built_qpc: None,
+            prepared_stream_build_duration_us: None,
+            prepared_alignment_qpc: None,
+            prepared_target_qpc: None,
+            prepared_wait_entry_qpc: None,
         }
     }
 
@@ -1078,6 +1088,46 @@ impl ProductionDispatchTestHarness {
             epoch
         };
         self.resources.playback.epoch = QpcTicks::from_raw(epoch);
+    }
+
+    /// Benchmark-only alignment for the already materialized normal stream.
+    /// The current immutable frame supplies the offset; no coordinator
+    /// planning or mutable schedule traversal is performed here.
+    pub fn align_prepared_current_to_benchmark_margin_for_test(
+        &mut self,
+        margin_us: u64,
+    ) -> Result<(), String> {
+        let frame_offset_ticks = self
+            .prepared_stream_for_test
+            .as_ref()
+            .and_then(PreparedDispatchStream::current)
+            .and_then(|entry| match entry {
+                PreparedDispatchEntry::Physical(frame) => Some(frame.offset_ticks.as_u64()),
+                PreparedDispatchEntry::Metadata { .. } => None,
+            })
+            .ok_or_else(|| "prepared benchmark alignment requires a physical frame".to_string())?;
+        let alignment_qpc = self
+            .resources
+            .clock
+            .now()
+            .map_err(|error| format!("prepared benchmark alignment QPC: {error:?}"))?;
+        let margin = self
+            .resources
+            .clock
+            .duration_from_us(margin_us)
+            .map_err(|error| format!("prepared benchmark margin conversion: {error:?}"))?;
+        let target_qpc = alignment_qpc
+            .as_u64()
+            .checked_add(margin.as_u64())
+            .ok_or_else(|| "prepared benchmark target overflow".to_string())?;
+        let epoch = target_qpc
+            .checked_sub(frame_offset_ticks)
+            .ok_or_else(|| "prepared benchmark epoch underflow".to_string())?;
+        self.resources.playback.epoch = QpcTicks::from_raw(epoch);
+        self.prepared_alignment_qpc = Some(alignment_qpc);
+        self.prepared_target_qpc = Some(QpcTicks::from_raw(target_qpc));
+        self.prepared_wait_entry_qpc = None;
+        Ok(())
     }
 
     pub fn set_deadline_wake_for_test(&mut self, ticks: QpcTicks) {
@@ -1554,7 +1604,54 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn prepare_prepared_stream_for_test(&mut self) {
-        self.prepared_stream_for_test = Some(self.build_prepared_stream_for_test());
+        let started_qpc = self
+            .resources
+            .clock
+            .now()
+            .expect("prepared stream build start QPC");
+        let stream = self.build_prepared_stream_for_test();
+        let finished_qpc = self
+            .resources
+            .clock
+            .now()
+            .expect("prepared stream build end QPC");
+        self.prepared_stream_built_qpc = Some(finished_qpc);
+        self.prepared_stream_build_duration_us = Some(
+            self.resources
+                .clock
+                .duration_to_us(
+                    finished_qpc
+                        .checked_duration_since(started_qpc)
+                        .expect("prepared stream build QPC ordering"),
+                )
+                .expect("prepared stream build duration conversion"),
+        );
+        self.prepared_alignment_qpc = None;
+        self.prepared_target_qpc = None;
+        self.prepared_wait_entry_qpc = None;
+        self.prepared_stream_for_test = Some(stream);
+    }
+
+    pub fn prepared_stream_built_qpc_for_test(&self) -> Option<QpcTicks> {
+        self.prepared_stream_built_qpc
+    }
+
+    pub fn prepared_stream_build_duration_us_for_test(&self) -> Option<u64> {
+        self.prepared_stream_build_duration_us
+    }
+
+    pub fn prepared_alignment_qpc_for_test(&self) -> Option<QpcTicks> {
+        self.prepared_alignment_qpc
+    }
+
+    pub fn prepared_benchmark_qpc_evidence_for_test(
+        &self,
+    ) -> Option<(QpcTicks, QpcTicks, QpcTicks)> {
+        Some((
+            self.prepared_alignment_qpc?,
+            self.prepared_target_qpc?,
+            self.prepared_wait_entry_qpc?,
+        ))
     }
 
     pub fn dispatch_prepared_current_at_lateness_without_stream_for_test(
@@ -1607,6 +1704,13 @@ impl ProductionDispatchTestHarness {
             frame.view.packet_masks,
             self.timing.timing_margin_ticks,
         )?;
+        let wait_entry_qpc = self
+            .resources
+            .clock
+            .now()
+            .map_err(|error| format!("prepared benchmark wait-entry QPC: {error:?}"))?;
+        self.prepared_target_qpc = Some(target_qpc);
+        self.prepared_wait_entry_qpc = Some(wait_entry_qpc);
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
             deadline: WaitDeadline {
                 physical_target_qpc: Some(target_qpc),

@@ -159,7 +159,7 @@ The previously accepted five-pair run remains recorded for comparison:
 | base-5 | 2 | 3 | 3 | 7 | 181 |
 | head-5 | 2 | 2 | 3 | 4 | 15 |
 
-### Counterbalanced five pairs for the current revision
+### Historical counterbalanced five pairs before benchmark-order correction
 
 The required counterbalanced order was:
 
@@ -201,10 +201,11 @@ that is separate from the host real-wait anomaly field.
 | cb-head-5 | 1 | 4 | 6 | 73 | 1887 |
 | cb-base-5 | 1 | 3 | 5 | 20 | 773 |
 
-The counterbalanced timing gate does **not** pass. Head p99 is better in the
-first three pair comparisons and worse in the last two; p99.9 is worse in
-three comparisons; and head max is higher in four of five comparisons. This
-must not be classified as host noise from this evidence alone.
+This is historical evidence from before the benchmark-order correction below.
+Its timing gate is superseded: head p99 is better in the first three pair
+comparisons and worse in the last two; p99.9 is worse in three comparisons;
+and head max is higher in four of five comparisons. It was not classified as
+host noise.
 
 ### Raw-report decomposition
 
@@ -242,12 +243,83 @@ p99/p99.9/max`, and `final_policy_to_pre_call p99/p99.9/max`, all in us.
 | cb-base-5 | 632/3019/19020 | 79/418/4672 | 9/33/591 |
 
 The head precision suffix remains structurally clean (`final_policy_to_pre_call`
-is zero in all head runs), while the disadvantage is in the wake and
-pre-wait/wait interaction. `wait.rs` itself is unchanged; the prepared normal
-dispatch loop is the relevant Phase-6 path around the existing waiter. No
-spin, MMCSS, affinity, timer, power, or scheduler policy was tuned. The
-timing result is therefore an unresolved Phase-6 investigation blocker, not a
-successful performance classification.
+is zero in all head runs). This historical result motivated the benchmark
+ownership correction; no spin, MMCSS, affinity, timer, power, or scheduler
+policy was tuned.
+
+### Corrected benchmark ownership qualification
+
+The old prepared real-wait setup armed `now + margin` before stream
+construction. The test-support path now configures the production waiter,
+materializes the prepared stream, resets setup counters, and only then aligns
+the current immutable frame to `now + margin`. The alignment helper derives
+the offset from the prepared frame and does not call the mutable coordinator
+planner. Stream-build duration is reported as startup/setup-only evidence.
+
+The ordering regression test is
+`prepared_benchmark_stream_build_precedes_alignment_and_wait_entry`; it
+asserts build completion <= target alignment <= wait entry and that the
+aligned target remains at or after the alignment sample.
+
+The exact corrected command for every run was:
+
+`rtk cmd /c "set RT_HANDOFF_BENCH_ITERATIONS=10000&& set RT_HANDOFF_BENCH_SCOPE=baseline&& cargo run --manifest-path rust/Cargo.toml -p sky_player --features test-support --example rt_handoff_bench -- <report.json>"`
+
+Head runs used the PR worktree at `bae99b551068c953e23100f1f687fd1922a0d9dd`.
+Base runs used a detached worktree at
+`9a32f0b8ce20d26e0fa31e48353ab6abd0822b3a`. The base worktree received only
+temporary test-support report instrumentation for wait-entry QPC; its
+production and benchmark scheduling behavior remained the base behavior.
+
+The required counterbalanced order was:
+
+`head-1 -> base-1 -> base-2 -> head-2 -> head-3 -> base-3 -> base-4 -> head-4 -> head-5 -> base-5`.
+
+All ten runs used Rust 1.98.1, 10,000 observations, were acceptance-clean and
+statistics-eligible, with host `non_dispatches=0`, `overdue=0`, and real-wait
+`transport_anomaly_count=0`. Every deterministic matrix retained
+`prepared=16`, `successful=14`, `non-send=2`, `DownExpired=0`, completion
+feedback `PhysicalWindowExpired=0`, `UnobservedBacklog=0`, and
+`timeline_rebase=0`. The deterministic matrix's one injected ZeroProgress
+anomaly remains intentional and separate from the host real-wait anomaly.
+
+The following values are p50/p95/p99/p99.9/max in microseconds unless noted.
+
+| run | pre_call-target | wake lateness p99/p99.9/max | wake -> final p99/p99.9/max | final -> pre p99/p99.9/max | target - wait-entry p50/p95/p99/p99.9/min | stream build startup-only p50/p95/p99/max |
+| --- | --- | --- | --- | --- | --- | --- |
+| head-1 | 16/205/387/740/4589 | 369/720/4567 | 37/89/298 | 0/0/0 | 9997/9998/9998/9998/9982 | 76/90/112/632 |
+| base-1 | 25/41/96/550/4866 | 48/462/4821 | 50/134/256 | 7/14/66 | 9971/9986/9987/9989/9397 | n/a |
+| base-2 | 25/38/68/221/1859 | 0/138/1816 | 49/111/245 | 7/14/107 | 9980/9986/9987/9988/9303 | n/a |
+| head-2 | 14/22/41/416/4530 | 2/296/4504 | 32/88/741 | 0/0/0 | 9998/9998/9998/9999/9902 | 45/86/107/426 |
+| head-3 | 15/23/66/341/4048 | 44/317/4026 | 33/65/280 | 0/0/0 | 9997/9998/9998/9999/9831 | 67/90/115/3311 |
+| base-3 | 24/37/64/358/6202 | 2/325/6150 | 46/125/302 | 6/14/38 | 9980/9986/9987/9989/9462 | n/a |
+| base-4 | 25/40/93/357/6490 | 41/316/6459 | 49/88/289 | 8/16/177 | 9972/9986/9986/9988/9551 | n/a |
+| head-4 | 14/22/39/611/3465 | 3/597/3445 | 31/56/278 | 0/0/0 | 9998/9998/9998/9999/9972 | 48/86/111/829 |
+| head-5 | 14/22/38/260/3396 | 1/241/3362 | 32/48/167 | 0/0/0 | 9998/9998/9998/9999/9968 | 49/87/110/491 |
+| base-5 | 25/37/66/406/3441 | 1/351/3392 | 47/81/1954 | 7/13/154 | 9978/9986/9987/9988/9256 | n/a |
+
+For completeness, corrected `completion_qpc - pre_call_qpc` percentiles were:
+
+| run | p50 | p95 | p99 | p99.9 | max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| head-1 | 1 | 3 | 3 | 7 | 21 |
+| base-1 | 1 | 3 | 4 | 6 | 55 |
+| base-2 | 2 | 3 | 4 | 7 | 118 |
+| head-2 | 1 | 2 | 4 | 9 | 16 |
+| head-3 | 1 | 2 | 4 | 8 | 69 |
+| base-3 | 1 | 2 | 4 | 6 | 780 |
+| base-4 | 1 | 3 | 4 | 11 | 222 |
+| head-4 | 1 | 2 | 3 | 8 | 200 |
+| head-5 | 1 | 2 | 3 | 8 | 15 |
+| base-5 | 1 | 3 | 4 | 9 | 230 |
+
+The corrected wait-entry evidence shows the head receives the intended
+approximately 10 ms future budget before entering the waiter. Prepared stream
+construction is outside that interval. Head p99/p99.9 are not systematically
+worse across the counterbalanced pairs, and maxima cross/interleave: head is
+lower in four of five pairwise maxima and higher only in the second pair.
+The corrected timing gate therefore passes without any scheduler-policy
+tuning. `final_policy_to_pre_call` remains zero for every head run.
 
 ## Verification
 
@@ -270,8 +342,9 @@ successful performance classification.
   warnings);
 - `cargo xtask check rust`: PASS (fmt, clippy `-D warnings`, all-features
   workspace tests);
-- final GitHub required CI result for this revision: not run yet; timing gate
-  is unresolved and requires coordinator direction before claiming acceptance.
+- corrected counterbalanced five-pair host qualification: PASS; all ten runs
+  were 10,000-observation, delivery-clean, and statistics-eligible;
+- final GitHub required CI result for this benchmark-only revision: pending.
 
 No focus, completion-floor, late-send, HybridWaiter, watchdog, MMCSS, spin,
 affinity, timer, or persisted schema policy was changed. Strict/diagnostic
