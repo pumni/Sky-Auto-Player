@@ -1589,6 +1589,7 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "application/vnd.github+json",
         "X-GitHub-Api-Version",
         "2026-03-10",
+        "uploads.github.com",
         "ContentLength",
         "fileLength",
         "StatusCode",
@@ -1597,12 +1598,16 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "SendAsync",
         "ReadAsStringAsync",
         "application/octet-stream",
+        "$client.Timeout = [TimeSpan]::FromMinutes(10)",
     ] {
         if !upload_helper.contains(marker) {
             return Err(
                 format!("raw release asset upload helper is missing marker: {marker}").into(),
             );
         }
+    }
+    if upload_helper.contains("InfiniteTimeSpan") {
+        return Err("raw release asset upload helper must use a finite timeout".into());
     }
     if upload_helper.contains("gh ") || upload_helper.contains("ArgumentList") {
         return Err("raw release asset upload helper must not invoke GitHub CLI".into());
