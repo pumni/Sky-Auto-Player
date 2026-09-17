@@ -16,7 +16,7 @@ mod health;
 pub(crate) mod health;
 mod orchestration;
 mod physical_timing_guard;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 pub(crate) use physical_timing_guard::PhysicalTimingWindow;
 mod planning;
 mod prepared;
