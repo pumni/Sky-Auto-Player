@@ -373,7 +373,7 @@ fn send_once(
 ) -> Result<PlatformSendResult, (Option<QpcTicks>, crate::clock::QpcError, bool)> {
     let prepared = PreparedPhysicalPacket::try_new(packet)
         .expect("send_once receives a validated physical packet");
-    match send_once_prepared(&prepared, clock, supplied_started_ticks, None) {
+    match send_once_prepared(&prepared, clock, supplied_started_ticks) {
         Ok(result) => Ok(result),
         Err(PreparedSendFailure::Clock(start, error, called)) => Err((start, error, called)),
         Err(PreparedSendFailure::DeadlineMissed { .. }) => {
@@ -522,21 +522,20 @@ fn send_once_prepared(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
     supplied_started_ticks: Option<QpcTicks>,
-    latest_down_start_qpc: Option<QpcTicks>,
 ) -> Result<PlatformSendResult, PreparedSendFailure> {
-    send_once_prepared_view(
+    send_once_prepared_view::<false>(
         prepared.as_view(),
         clock,
         supplied_started_ticks,
-        latest_down_start_qpc,
+        QpcTicks::ZERO,
     )
 }
 
-fn send_once_prepared_view(
+fn send_once_prepared_view<const CHECK_DOWN_CUTOFF: bool>(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     supplied_started_ticks: Option<QpcTicks>,
-    latest_down_start_qpc: Option<QpcTicks>,
+    latest_down_start_qpc: QpcTicks,
 ) -> Result<PlatformSendResult, PreparedSendFailure> {
     #[cfg(windows)]
     {
@@ -558,11 +557,13 @@ fn send_once_prepared_view(
                 Err(error) => return Err(PreparedSendFailure::Clock(None, error, false)),
             },
         };
-        if down_latest_start_expired(
-            prepared.packet().down_mask,
-            started_ticks,
-            latest_down_start_qpc,
-        ) {
+        if CHECK_DOWN_CUTOFF
+            && down_latest_start_expired(
+                prepared.packet().down_mask,
+                started_ticks,
+                Some(latest_down_start_qpc),
+            )
+        {
             return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
         }
         let inserted =
@@ -597,11 +598,13 @@ fn send_once_prepared_view(
                 Err(error) => return Err(PreparedSendFailure::Clock(None, error, false)),
             },
         };
-        if down_latest_start_expired(
-            prepared.packet().down_mask,
-            started_ticks,
-            latest_down_start_qpc,
-        ) {
+        if CHECK_DOWN_CUTOFF
+            && down_latest_start_expired(
+                prepared.packet().down_mask,
+                started_ticks,
+                Some(latest_down_start_qpc),
+            )
+        {
             return Err(PreparedSendFailure::DeadlineMissed { started_ticks });
         }
         let completed_ticks = match clock.now() {
@@ -646,13 +649,13 @@ fn run_send_attempt(
     }
 }
 
-fn run_prepared_send_attempt(
+fn run_prepared_send_attempt<const CHECK_DOWN_CUTOFF: bool>(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     supplied_started_ticks: Option<QpcTicks>,
-    latest_down_start_qpc: Option<QpcTicks>,
+    latest_down_start_qpc: QpcTicks,
 ) -> PacketSendAttempt {
-    match send_once_prepared_view(
+    match send_once_prepared_view::<CHECK_DOWN_CUTOFF>(
         prepared,
         clock,
         supplied_started_ticks,
@@ -851,23 +854,27 @@ fn send_physical_packet_once_impl(
 /// and ABI size have been resolved and immediately before `SendInput`. Test
 /// support may provide a controlled timestamp without changing production
 /// behavior.
-fn send_prepared_physical_packet_once_impl(
+fn send_prepared_physical_packet_once_impl<const CHECK_DOWN_CUTOFF: bool>(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     started_ticks: Option<QpcTicks>,
-    latest_down_start_qpc: Option<QpcTicks>,
+    latest_down_start_qpc: QpcTicks,
 ) -> SendTransactionOutcome {
     let packet = prepared.packet();
-    let first =
-        match run_prepared_send_attempt(prepared, clock, started_ticks, latest_down_start_qpc) {
-            PacketSendAttempt::Outcome(res) => Ok(res),
-            PacketSendAttempt::DeadlineMissed(started_ticks) => {
-                Err(PreparedSendFailure::DeadlineMissed { started_ticks })
-            }
-            PacketSendAttempt::ClockFailure(start, error, called) => {
-                Err(PreparedSendFailure::Clock(start, error, called))
-            }
-        };
+    let first = match run_prepared_send_attempt::<CHECK_DOWN_CUTOFF>(
+        prepared,
+        clock,
+        started_ticks,
+        latest_down_start_qpc,
+    ) {
+        PacketSendAttempt::Outcome(res) => Ok(res),
+        PacketSendAttempt::DeadlineMissed(started_ticks) => {
+            Err(PreparedSendFailure::DeadlineMissed { started_ticks })
+        }
+        PacketSendAttempt::ClockFailure(start, error, called) => {
+            Err(PreparedSendFailure::Clock(start, error, called))
+        }
+    };
     prepared_send_outcome(packet, first)
 }
 
@@ -1053,6 +1060,28 @@ pub fn send_physical_packet_once_with_clock(
     send_physical_packet_once_impl(packet, |packet| run_send_attempt(packet, clock, None))
 }
 
+fn send_prepared_physical_packet_once_with_optional_cutoff(
+    prepared: PreparedPacketView<'_>,
+    clock: QpcClock,
+    started_ticks: Option<QpcTicks>,
+    latest_down_start_qpc: Option<QpcTicks>,
+) -> SendTransactionOutcome {
+    match latest_down_start_qpc {
+        Some(latest_down_start_qpc) => send_prepared_physical_packet_once_impl::<true>(
+            prepared,
+            clock,
+            started_ticks,
+            latest_down_start_qpc,
+        ),
+        None => send_prepared_physical_packet_once_impl::<false>(
+            prepared,
+            clock,
+            started_ticks,
+            QpcTicks::ZERO,
+        ),
+    }
+}
+
 /// One packet transaction using a payload built before the final admission
 /// boundary and a caller-owned authoritative start timestamp.
 pub fn send_prepared_physical_packet_once_with_start(
@@ -1060,7 +1089,12 @@ pub fn send_prepared_physical_packet_once_with_start(
     clock: QpcClock,
     started_ticks: QpcTicks,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(prepared.as_view(), clock, Some(started_ticks), None)
+    send_prepared_physical_packet_once_impl::<false>(
+        prepared.as_view(),
+        clock,
+        Some(started_ticks),
+        QpcTicks::ZERO,
+    )
 }
 
 /// One trusted borrowed prepared-packet attempt using a caller-supplied start
@@ -1070,7 +1104,12 @@ pub fn send_prepared_physical_packet_view_once_with_start(
     clock: QpcClock,
     started_ticks: QpcTicks,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(prepared, clock, Some(started_ticks), None)
+    send_prepared_physical_packet_once_impl::<false>(
+        prepared,
+        clock,
+        Some(started_ticks),
+        QpcTicks::ZERO,
+    )
 }
 
 /// One trusted prepared packet attempt using a caller-supplied start boundary
@@ -1083,7 +1122,7 @@ pub fn send_prepared_physical_packet_once_with_start_and_cutoff(
     started_ticks: QpcTicks,
     latest_down_start_qpc: Option<QpcTicks>,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(
+    send_prepared_physical_packet_once_with_optional_cutoff(
         prepared.as_view(),
         clock,
         Some(started_ticks),
@@ -1099,7 +1138,7 @@ pub fn send_prepared_physical_packet_view_once_with_start_and_cutoff(
     started_ticks: QpcTicks,
     latest_down_start_qpc: Option<QpcTicks>,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(
+    send_prepared_physical_packet_once_with_optional_cutoff(
         prepared,
         clock,
         Some(started_ticks),
@@ -1113,7 +1152,12 @@ pub fn send_prepared_physical_packet_once(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(prepared.as_view(), clock, None, None)
+    send_prepared_physical_packet_once_impl::<false>(
+        prepared.as_view(),
+        clock,
+        None,
+        QpcTicks::ZERO,
+    )
 }
 
 /// One trusted borrowed prepared-packet attempt with no Down latest-start check.
@@ -1121,7 +1165,7 @@ pub fn send_prepared_physical_packet_view_once(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(prepared, clock, None, None)
+    send_prepared_physical_packet_once_impl::<false>(prepared, clock, None, QpcTicks::ZERO)
 }
 
 /// One trusted prepared packet attempt whose authoritative pre-call QPC is
@@ -1132,7 +1176,12 @@ pub fn send_prepared_physical_packet_once_with_cutoff(
     clock: QpcClock,
     latest_down_start_qpc: Option<QpcTicks>,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(prepared.as_view(), clock, None, latest_down_start_qpc)
+    send_prepared_physical_packet_once_with_optional_cutoff(
+        prepared.as_view(),
+        clock,
+        None,
+        latest_down_start_qpc,
+    )
 }
 
 /// One trusted borrowed prepared-packet attempt with an optional Down latest-start boundary.
@@ -1141,7 +1190,12 @@ pub fn send_prepared_physical_packet_view_once_with_cutoff(
     clock: QpcClock,
     latest_down_start_qpc: Option<QpcTicks>,
 ) -> SendTransactionOutcome {
-    send_prepared_physical_packet_once_impl(prepared, clock, None, latest_down_start_qpc)
+    send_prepared_physical_packet_once_with_optional_cutoff(
+        prepared,
+        clock,
+        None,
+        latest_down_start_qpc,
+    )
 }
 
 /// One trusted prepared packet attempt whose target-crossing QPC sample is
@@ -1314,7 +1368,7 @@ mod tests {
     fn prepared_cutoff_is_checked_before_the_sendinput_call() {
         let source = include_str!("packet.rs");
         let trusted = source
-            .split("fn send_once_prepared(")
+            .split("fn send_once_prepared_view<const CHECK_DOWN_CUTOFF: bool>(")
             .nth(1)
             .expect("trusted prepared-send primitive");
         let body = trusted
@@ -1329,24 +1383,17 @@ mod tests {
     }
 
     #[test]
-    fn immediate_sender_samples_true_pre_call_after_payload_resolution() {
+    fn immediate_sender_samples_true_pre_call_without_normal_cutoff() {
         let source = include_str!("packet.rs");
         let body = source
-            .split("fn send_once_prepared_view(")
+            .split("fn send_once_prepared(")
             .nth(1)
             .expect("immediate prepared sender")
-            .split("/// One low-level")
+            .split("fn send_once_prepared_view")
             .next()
             .expect("immediate prepared sender body");
-        let payload = body.find("let inputs = prepared.inputs.as_ptr").unwrap();
-        let reset = body.find("SetLastError(0)").unwrap();
-        let pre_call = body.find("let started_ticks").unwrap();
-        let cutoff = body.find("down_latest_start_expired").unwrap();
-        let syscall = body.find("SendInput(").unwrap();
-        assert!(payload < reset);
-        assert!(reset < pre_call);
-        assert!(pre_call < cutoff);
-        assert!(cutoff < syscall);
+        assert!(body.contains("send_once_prepared_view::<false>"));
+        assert!(!body.contains("down_latest_start_expired"));
     }
 
     #[test]
@@ -1379,7 +1426,7 @@ mod tests {
             .split("/// One trusted borrowed prepared-packet attempt")
             .next()
             .expect("caller-owned start sender body");
-        assert!(body.contains("send_prepared_physical_packet_once_impl"));
+        assert!(body.contains("send_prepared_physical_packet_once_with_optional_cutoff"));
         assert!(!body.contains("at_target"));
         assert!(!body.contains("physical_target_qpc"));
     }

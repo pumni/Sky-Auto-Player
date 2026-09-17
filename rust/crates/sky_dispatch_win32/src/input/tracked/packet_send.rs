@@ -40,7 +40,7 @@ pub(crate) fn deadline_missed_before_send_outcome(
 }
 
 #[cfg(any(test, feature = "test-support"))]
-fn clock_failure_before_send_outcome(
+pub(super) fn clock_failure_before_send_outcome(
     packet: PhysicalPacket,
     error: crate::clock::QpcError,
 ) -> SendTransactionOutcome {
@@ -512,7 +512,7 @@ impl TrackedKeyState {
         &mut self,
         prepared: &PreparedPhysicalPacket,
     ) -> SendTransactionOutcome {
-        self.send_prepared_physical_packet_with_cutoff(prepared, None)
+        self.send_prepared_physical_packet_view_without_cutoff(prepared.as_view())
     }
 
     /// Send a trusted prepared packet and enforce an optional Down-only
