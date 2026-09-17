@@ -121,9 +121,8 @@ fn send_prepared_normal_precision_frame(
 
     // The prepared payload and Win32 call metadata are fully resolved by the
     // sender before its authoritative pre-call QPC boundary.
-    let result = backend.send_prepared_physical_packet_at_final_boundary(
+    let result = backend.send_prepared_physical_packet_at_final_boundary_without_cutoff(
         &frame.view.prepared_packet,
-        None,
         #[cfg(any(test, feature = "test-support"))]
         test_now_ticks,
         #[cfg(not(any(test, feature = "test-support")))]
@@ -567,8 +566,11 @@ mod tests {
                 "prepared precision suffix contains forbidden reference {forbidden}"
             );
         }
-        assert!(helper.contains("backend.send_prepared_physical_packet_at_final_boundary"));
-        assert!(helper.contains("None"), "normal sender must pass no cutoff");
+        assert!(
+            helper
+                .contains("backend.send_prepared_physical_packet_at_final_boundary_without_cutoff")
+        );
+        assert!(!helper.contains("backend.send_prepared_physical_packet_at_final_boundary("));
 
         let tracked = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -583,6 +585,13 @@ mod tests {
             .expect("tracked final sender body");
         assert!(final_sender.contains("send_prepared_physical_packet_with_cutoff"));
         assert!(!final_sender.contains("RuntimeDispatchCoordinator"));
+
+        let normal_sender = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../sky_dispatch_win32/src/input/tracked/packet_send_without_cutoff.rs"
+        ));
+        assert!(normal_sender.contains("self.send_prepared_physical_packet(prepared)"));
+        assert!(!normal_sender.contains("with_cutoff"));
 
         let packet = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
