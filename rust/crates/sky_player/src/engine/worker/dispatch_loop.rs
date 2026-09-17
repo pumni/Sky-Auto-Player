@@ -41,34 +41,6 @@ fn normal_prepared_target_qpc(
 }
 
 #[inline]
-pub(crate) fn normal_prepared_timing_window(
-    physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
-    masks: sky_dispatch_win32::input::PhysicalPacket,
-    timing_margin_ticks: DurationTicks,
-) -> Result<super::physical_timing_guard::PhysicalTimingWindow, String> {
-    let latest_down_start_qpc = if masks.down_mask == 0 {
-        None
-    } else {
-        Some(
-            physical_target_qpc
-                .checked_add_duration(timing_margin_ticks)
-                .map_err(|error| {
-                    format!("prepared Down latest-start arithmetic failure: {error}")
-                })?,
-        )
-    };
-    Ok(super::physical_timing_guard::PhysicalTimingWindow {
-        authored_target_qpc: physical_target_qpc,
-        musical_up_not_before_qpc: physical_target_qpc,
-        down_not_before_qpc: physical_target_qpc,
-        packet_not_before_qpc: physical_target_qpc,
-        latest_down_start_qpc,
-        hold_floor_mask: 0,
-        release_floor_mask: 0,
-    })
-}
-
-#[inline]
 fn physical_boundary_stamp(
     plan: &super::planning::NextDispatchPlan,
     physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
@@ -1264,32 +1236,6 @@ pub(super) fn dispatch(
                 } else {
                     None
                 };
-                let timing_window = if has_physical {
-                    let frame = match prepared_stream.as_ref().and_then(|stream| stream.current()) {
-                        Some(PreparedDispatchEntry::Physical(frame)) => frame,
-                        _ => {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error = Some(
-                                "prepared physical cursor changed before timing window".to_string(),
-                            );
-                            break;
-                        }
-                    };
-                    match normal_prepared_timing_window(
-                        target_qpc,
-                        frame.view.packet_masks,
-                        timing.timing_margin_ticks,
-                    ) {
-                        Ok(window) => Some(window),
-                        Err(error) => {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error = Some(error);
-                            break;
-                        }
-                    }
-                } else {
-                    None
-                };
                 core.runtime.future_physical_wait_target_qpc = has_physical.then_some(target_qpc);
 
                 let dispatch_result = if target_qpc <= now_ticks {
@@ -1436,7 +1382,6 @@ pub(super) fn dispatch(
                         core.observer.pending.as_ref(),
                         preflight_target,
                         target_qpc,
-                        timing_window.expect("prepared physical timing window"),
                         effective_now_ticks,
                         dispatch_qpc,
                         focus_loss_fault,
@@ -1865,14 +1810,15 @@ fn prepared_stream_requires_terminal(
 #[cfg(test)]
 mod tests {
     use super::{
-        normal_prepared_timing_window, physical_target_qpc_for_work, physical_wait_target_for_plan,
+        physical_target_qpc_for_work, physical_wait_target_for_plan,
         prepared_stream_requires_terminal, publish_live_metrics_after_dispatch,
     };
     use crate::engine::shared::{SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING};
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
     use crate::engine::worker::{
-        DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime, dispatch::DispatchStep,
+        DownBoundaryState, PhysicalBoundaryStamp, PhysicalTimingWindow, WorkerRuntime,
+        dispatch::{DispatchObservation, DispatchStep},
     };
     use sky_dispatch_core::clock::PauseReason;
     use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
@@ -2094,23 +2040,83 @@ mod tests {
     }
 
     #[test]
-    fn normal_prepared_timing_window_is_authored_only() {
+    fn authored_only_normal_diagnostic_view_has_no_latest_start() {
         let target = QpcTicks::from_raw(1_000);
-        let margin = DurationTicks::from_raw(50);
-        let window =
-            normal_prepared_timing_window(target, PhysicalPacket::new(0b001, 0b010), margin)
-                .expect("normal prepared timing window");
+        let window = PhysicalTimingWindow::authored_only(target);
 
         assert_eq!(window.authored_target_qpc, target);
         assert_eq!(window.musical_up_not_before_qpc, target);
         assert_eq!(window.down_not_before_qpc, target);
         assert_eq!(window.packet_not_before_qpc, target);
-        assert_eq!(
-            window.latest_down_start_qpc,
-            Some(QpcTicks::from_raw(1_050))
-        );
+        assert_eq!(window.latest_down_start_qpc, None);
         assert_eq!(window.hold_floor_mask, 0);
         assert_eq!(window.release_floor_mask, 0);
+    }
+
+    #[test]
+    fn prepared_normal_observer_uses_authored_only_timing_evidence() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        harness.enable_dispatch_ready_timing_for_benchmark();
+        harness.configure_packet_capture();
+        harness.prepare_prepared_stream_for_test();
+
+        assert_dispatched(
+            harness
+                .wait_and_dispatch_prepared_current_for_test()
+                .expect("prepared normal dispatch"),
+        );
+
+        let observation = harness.pop_observation().expect("normal Down observation");
+        let DispatchObservation::Down(observation) = observation else {
+            panic!("expected normal Down observation");
+        };
+        assert_eq!(
+            observation.physical_timing_window.authored_target_qpc,
+            observation.physical_target_qpc
+        );
+        assert_eq!(
+            observation.physical_timing_window.musical_up_not_before_qpc,
+            observation.physical_target_qpc
+        );
+        assert_eq!(
+            observation.physical_timing_window.down_not_before_qpc,
+            observation.physical_target_qpc
+        );
+        assert_eq!(
+            observation.physical_timing_window.packet_not_before_qpc,
+            observation.physical_target_qpc
+        );
+        assert_eq!(
+            observation.physical_timing_window.latest_down_start_qpc,
+            None
+        );
+        assert_eq!(observation.physical_timing_window.hold_floor_mask, 0);
+        assert_eq!(observation.physical_timing_window.release_floor_mask, 0);
+    }
+
+    #[test]
+    fn prepared_normal_branch_does_not_build_timing_window_before_wait() {
+        let source = include_str!("dispatch_loop.rs");
+        let removed_helper = ["normal_prepared", "_timing_window"].concat();
+        assert!(!source.contains(&removed_helper));
+        let prepared_branch = source
+            .split("let (offset_ticks, has_physical) = {")
+            .nth(1)
+            .expect("prepared normal branch")
+            .split("let dispatch_result = if target_qpc <= now_ticks")
+            .next()
+            .expect("prepared wait handoff");
+        for forbidden in [
+            "PhysicalTimingWindow",
+            "latest_down_start_qpc",
+            "timing_margin_ticks",
+            "physical_timing_guard",
+        ] {
+            assert!(
+                !prepared_branch.contains(forbidden),
+                "prepared normal pre-wait branch contains {forbidden}"
+            );
+        }
     }
 
     #[test]

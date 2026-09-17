@@ -161,7 +161,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
     observer: Option<&PendingObservationQueue>,
     preflight_target: Option<TargetStamp>,
     physical_target_qpc: QpcTicks,
-    physical_timing_window: PhysicalTimingWindow,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     focus_loss_fault: bool,
@@ -277,7 +276,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
         &mut resources.playback,
         effective_now_ticks,
         physical_target_qpc,
-        physical_timing_window,
         boundary_crossing_qpc,
         result,
         explicitly_cancelled_by_suspension,
@@ -299,7 +297,7 @@ pub(super) fn record_down_send_result(
     clock_state: &mut super::super::PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
-    physical_timing_window: PhysicalTimingWindow,
+    physical_timing_window: Option<PhysicalTimingWindow>,
     target_crossing_qpc: Option<QpcTicks>,
     trace_kind: u8,
     prepared_final_policy_qpc: Option<QpcTicks>,
@@ -348,6 +346,11 @@ pub(super) fn record_down_send_result(
                 "DownExpiredBeforeSend missing authoritative start boundary",
             );
         };
+        let Some(physical_timing_window) = physical_timing_window else {
+            return DispatchStep::TerminateStatic(
+                "strict Down recovery is missing physical timing evidence",
+            );
+        };
         return recover_missed_down_boundary(
             view,
             config,
@@ -394,6 +397,8 @@ pub(super) fn record_down_send_result(
     let final_policy_qpc = prepared_final_policy_qpc
         .or(result_started_ticks)
         .unwrap_or(physical_target_qpc);
+    let physical_timing_window = physical_timing_window
+        .unwrap_or_else(|| PhysicalTimingWindow::authored_only(physical_target_qpc));
     super::authored::finalize_down_send_outcome(
         view,
         config,
@@ -502,6 +507,15 @@ mod tests {
             precision_call < post_send,
             "normal precision suffix must precede post-send work"
         );
+        let normal_body = source
+            .split("pub(crate) fn dispatch_prepared_normal_frame")
+            .nth(1)
+            .expect("normal dispatch body")
+            .split("pub(super) fn record_down_send_result")
+            .next()
+            .expect("normal dispatch body before shared outcome accounting");
+        assert!(!normal_body.contains("PhysicalTimingWindow"));
+        assert!(!normal_body.contains("physical_timing_window"));
         for forbidden in [
             "plan_next_dispatch_projected",
             "prepare_current_authored_packet",

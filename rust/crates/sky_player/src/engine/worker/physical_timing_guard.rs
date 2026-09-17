@@ -26,6 +26,18 @@ pub(crate) struct PhysicalTimingWindow {
 }
 
 impl PhysicalTimingWindow {
+    pub(crate) const fn authored_only(authored_target_qpc: QpcTicks) -> Self {
+        Self {
+            authored_target_qpc,
+            musical_up_not_before_qpc: authored_target_qpc,
+            down_not_before_qpc: authored_target_qpc,
+            packet_not_before_qpc: authored_target_qpc,
+            latest_down_start_qpc: None,
+            hold_floor_mask: 0,
+            release_floor_mask: 0,
+        }
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn is_down_feasible(&self) -> bool {
         self.latest_down_start_qpc
@@ -200,21 +212,12 @@ impl PhysicalTimingGuard {
         if up_mask == 0 && down_mask == 0 {
             return Err(PhysicalTimingGuardError::InvalidPacketMasks);
         }
-        let latest_down_start_qpc = if down_mask == 0 {
-            None
-        } else {
-            Some(
-                authored_target_qpc
-                    .checked_add_duration(self.timing_margin_ticks)
-                    .map_err(|_| PhysicalTimingGuardError::ArithmeticOverflow)?,
-            )
-        };
         Ok(PhysicalTimingWindow {
             authored_target_qpc,
             musical_up_not_before_qpc: authored_target_qpc,
             down_not_before_qpc: authored_target_qpc,
             packet_not_before_qpc: authored_target_qpc,
-            latest_down_start_qpc,
+            latest_down_start_qpc: None,
             hold_floor_mask: 0,
             release_floor_mask: 0,
         })
@@ -416,7 +419,7 @@ mod tests {
         assert_eq!(window.musical_up_not_before_qpc, qpc(110));
         assert_eq!(window.down_not_before_qpc, qpc(110));
         assert_eq!(window.packet_not_before_qpc, qpc(110));
-        assert_eq!(window.latest_down_start_qpc, Some(qpc(115)));
+        assert_eq!(window.latest_down_start_qpc, None);
         assert_eq!(window.hold_floor_mask, 0);
         assert_eq!(window.release_floor_mask, 0);
     }

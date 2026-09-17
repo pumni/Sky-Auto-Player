@@ -15,7 +15,7 @@ use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
 };
 use crate::engine::worker::{
-    DispatchHealthOptions, DispatchPath, NextDispatchPlan, PhysicalTimingWindow, PreparationCounts,
+    DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts,
     PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundary, WaitBoundaryInput,
     WaitDeadline, WaitMutable, WaitObservation, WaitResult, WaitSignals, WorkerHealthState,
     WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
@@ -1662,11 +1662,6 @@ impl ProductionDispatchTestHarness {
             }
             Some(target)
         };
-        let timing_window = super::super::worker::normal_prepared_timing_window(
-            target_qpc,
-            frame.view.packet_masks,
-            self.timing.timing_margin_ticks,
-        )?;
         let wait_entry_qpc = self
             .resources
             .clock
@@ -1753,7 +1748,6 @@ impl ProductionDispatchTestHarness {
             Some(&self.observer),
             preflight_target,
             target_qpc,
-            timing_window,
             effective_now_ticks,
             dispatch_qpc,
             false,
@@ -1809,23 +1803,6 @@ impl ProductionDispatchTestHarness {
                 .checked_sub(epoch.as_u64())
                 .expect("prepared effective now"),
         );
-        let window = PhysicalTimingWindow {
-            authored_target_qpc: physical_target_qpc,
-            musical_up_not_before_qpc: physical_target_qpc,
-            down_not_before_qpc: physical_target_qpc,
-            packet_not_before_qpc: physical_target_qpc,
-            latest_down_start_qpc: if frame.view.packet_masks.down_mask == 0 {
-                None
-            } else {
-                Some(
-                    physical_target_qpc
-                        .checked_add_duration(self.timing.timing_margin_ticks)
-                        .expect("prepared latest-start target"),
-                )
-            },
-            hold_floor_mask: 0,
-            release_floor_mask: 0,
-        };
         let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
             hwnd: self.target_hwnd.load(Ordering::Acquire),
             generation: self.target_generation.load(Ordering::Acquire),
@@ -1851,7 +1828,6 @@ impl ProductionDispatchTestHarness {
             Some(&self.observer),
             preflight_target,
             physical_target_qpc,
-            window,
             effective_now_ticks,
             wall_now,
             false,

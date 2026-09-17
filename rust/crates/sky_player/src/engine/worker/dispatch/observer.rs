@@ -102,7 +102,9 @@ pub(crate) fn publisher_down_send_outcome(
     if matches!(
         result_status,
         sky_dispatch_win32::input::SendTransactionStatus::Complete
-    ) {
+    ) && (physical_timing_window.hold_floor_mask != 0
+        || physical_timing_window.release_floor_mask != 0)
+    {
         record_physical_floor_delays(local_metrics, physical_timing_window);
     }
     if let Some(observer) = observer {
