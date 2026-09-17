@@ -49,6 +49,53 @@ impl RuntimeDispatchCoordinator {
         Ok(())
     }
 
+    /// Reconcile one generation whose physical ownership was released by a
+    /// resumable suspension before its immutable authored Up was dispatched.
+    ///
+    /// This is deliberately separate from [`transition_generation`]: a
+    /// cancellation is not generally releasable, and arbitrary
+    /// `Cancelled -> Released` transitions must remain impossible.
+    pub(super) fn reconcile_resumable_cancelled_generation(
+        &mut self,
+        generation_id: GenerationId,
+    ) -> Result<(), CoordinatorError> {
+        let Some(actual) = self.generation_states.get(generation_id as usize).copied() else {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::UnknownGeneration {
+                    generation_id,
+                    generation_count: self.generation_count,
+                },
+            ));
+        };
+        if actual != GenerationStatus::Cancelled {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::UnexpectedTransition {
+                    generation_id,
+                    expected: GenerationStatus::Cancelled,
+                    actual,
+                    next: GenerationStatus::Released,
+                },
+            ));
+        }
+        if self.counters.cancelled == 0 {
+            return Err(CoordinatorError::Invariant(
+                CoordinatorInvariantError::Accounting(
+                    "cancelled generation counter underflow during suspension reconciliation"
+                        .into(),
+                ),
+            ));
+        }
+        let released = self.counters.released.checked_add(1).ok_or_else(|| {
+            CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                "released generation counter overflow during suspension reconciliation".into(),
+            ))
+        })?;
+        self.counters.cancelled -= 1;
+        self.counters.released = released;
+        self.generation_states[generation_id as usize] = GenerationStatus::Released;
+        Ok(())
+    }
+
     pub(super) fn terminalize(
         &mut self,
         generation_id: GenerationId,

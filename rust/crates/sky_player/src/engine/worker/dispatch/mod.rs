@@ -18,6 +18,7 @@ pub(crate) mod observation;
 pub(crate) mod observer;
 mod observer_trace;
 mod observer_wake;
+mod prepared;
 mod recovery;
 pub(crate) mod timing;
 
@@ -197,6 +198,7 @@ pub(crate) use observation::DispatchObservation;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use observer::drain_one_observer;
 pub(crate) use observer::{ObserverRuntime, PendingObservationQueue, dispatch_stale_packet};
+pub(crate) use prepared::dispatch_prepared_normal_frame;
 
 use super::super::{ActionKind, QpcTicks, TimelineTicks};
 use super::DispatchPath;

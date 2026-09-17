@@ -380,6 +380,7 @@ fn resolve_send_boundaries(
     coordinator: &mut RuntimeDispatchCoordinator,
     result_started_ticks: Option<QpcTicks>,
     result_completed_ticks: Option<QpcTicks>,
+    explicitly_cancelled_by_suspension: &[sky_dispatch_core::model::GenerationId],
 ) -> Result<
     (
         TimelineTicks,
@@ -437,10 +438,11 @@ fn resolve_send_boundaries(
     };
     let commit_result = match &view.commit {
         PhysicalCommit::Authored(commit) => coordinator
-            .commit_prepared_authored_frame_success_frozen(
+            .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
                 commit,
                 pre_call_effective_ticks,
                 completed_effective_ticks,
+                explicitly_cancelled_by_suspension,
             ),
         PhysicalCommit::PendingRelease {
             release_mask,
@@ -466,11 +468,13 @@ fn resolve_send_boundaries(
             coordinator
                 .commit_pending_release_success(*release_mask, pre_call_effective_ticks)
                 .and_then(|_| {
-                    coordinator.commit_prepared_authored_frame_success_frozen(
-                        authored,
-                        pre_call_effective_ticks,
-                        completed_effective_ticks,
-                    )
+                    coordinator
+                        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+                            authored,
+                            pre_call_effective_ticks,
+                            completed_effective_ticks,
+                            explicitly_cancelled_by_suspension,
+                        )
                 })
         }
     };
@@ -516,6 +520,7 @@ pub(crate) fn interpret_down_send_timing(
     result_retry_reason: PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
+    explicitly_cancelled_by_suspension: &[sky_dispatch_core::model::GenerationId],
 ) -> Result<DownSendTiming, DispatchStep> {
     if let Some(completed_qpc) = result_completed_ticks
         && completed_qpc
@@ -538,6 +543,7 @@ pub(crate) fn interpret_down_send_timing(
         coordinator,
         result_started_ticks,
         result_completed_ticks,
+        explicitly_cancelled_by_suspension,
     )?;
     // Expose the raw QPC sender-completion boundary for the deferred observer.
     // Guaranteed `Some` here: a missing boundary already terminated inside

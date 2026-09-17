@@ -875,3 +875,22 @@ fn production_normal_late_down_dispatch_no_alloc() {
     assert_eq!(rescued_boundaries, 0, "normal lateness is not a rescue");
     assert_eq!(rescued_keys, 0, "normal lateness is not a rescue");
 }
+
+#[test]
+fn production_prepared_normal_frame_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_send_counter();
+    harness.prepare_prepared_stream_for_test();
+
+    enable_counting();
+    let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(10_000);
+    let allocs = disable_counting();
+
+    assert_eq!(
+        allocs, 0,
+        "prepared normal precision frame allocated {allocs} time(s)"
+    );
+    assert!(matches!(step, DispatchStep::Dispatched));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}

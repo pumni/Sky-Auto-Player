@@ -793,6 +793,497 @@ fn production_profile_has_no_observer_samples_or_trace_records() {
 }
 
 #[test]
+fn normal_prepared_overdue_boundaries_send_once_without_scheduler_misses() {
+    for lateness_us in [2_000, 10_000, 50_000, 100_000] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let calls = harness.configure_send_counter();
+        let mut stream = harness.build_prepared_stream_for_test();
+
+        let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, lateness_us);
+        assert!(
+            matches!(step, super::worker::DispatchStep::Dispatched),
+            "lateness {lateness_us}us step: {step:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "lateness {lateness_us}us");
+        assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
+        assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
+        assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+        assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    }
+}
+
+#[test]
+fn prepared_benchmark_stream_build_precedes_alignment_and_wait_entry() {
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 10_000);
+    harness
+        .configure_production_wait_policy(1_000)
+        .expect("production wait policy");
+    harness.prepare_prepared_stream_for_test();
+    let built_qpc = harness
+        .prepared_stream_built_qpc_for_test()
+        .expect("prepared stream build timestamp");
+    let _build_duration_us = harness
+        .prepared_stream_build_duration_us_for_test()
+        .expect("prepared stream build duration");
+
+    harness
+        .align_prepared_current_to_benchmark_margin_for_test(10_000)
+        .expect("prepared benchmark alignment");
+    let alignment_qpc = harness
+        .prepared_alignment_qpc_for_test()
+        .expect("prepared alignment timestamp");
+    assert!(
+        built_qpc <= alignment_qpc,
+        "prepared stream construction must finish before target alignment"
+    );
+
+    assert!(matches!(
+        harness.wait_and_dispatch_prepared_current_for_test(),
+        Ok(super::worker::DispatchStep::Dispatched)
+    ));
+    let (_, target_qpc, wait_entry_qpc) = harness
+        .prepared_benchmark_qpc_evidence_for_test()
+        .expect("prepared wait-entry evidence");
+    assert!(
+        alignment_qpc <= wait_entry_qpc,
+        "target alignment must precede wait entry"
+    );
+    assert!(
+        target_qpc >= alignment_qpc,
+        "stream construction must not reduce the post-alignment target budget"
+    );
+}
+
+#[test]
+fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
+    let mut harness =
+        ProductionDispatchTestHarness::new_prepared_resumable_suspension_sequence_for_test();
+    let packets = harness.configure_packet_capture();
+    harness.prepare_prepared_stream_for_test();
+    let frame_offsets_before = harness.prepared_frame_offsets_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(packets.lock().expect("prepared packet capture").len(), 1);
+
+    let cancelled = harness
+        .suspend_live_input_for_test()
+        .expect("shared resumable suspension");
+    assert_eq!(cancelled, vec![0]);
+    assert_eq!(
+        harness.prepared_suspension_cancellation_count_for_test(),
+        1,
+        "the prepared stream must retain the shared suspension reconciliation"
+    );
+    assert_eq!(harness.backend_active_mask(), 0);
+    assert_eq!(harness.backend_possibly_active_mask(), 0);
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(packets.lock().expect("prepared packet capture").len(), 3);
+    assert_eq!(
+        *packets.lock().expect("prepared packet capture"),
+        vec![
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b001),
+            sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0),
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b010),
+        ]
+    );
+    assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    assert_eq!(harness.backend_active_mask(), 0b010);
+    assert_eq!(harness.backend_possibly_active_mask(), 0);
+    assert_eq!(
+        harness.prepared_frame_offsets_for_test(),
+        frame_offsets_before,
+        "resumable suspension must not rewrite prepared frame offsets"
+    );
+}
+
+#[test]
+fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "native-prepared-suspension-down-k".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "native-prepared-suspension-up-k".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 2_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "native-prepared-suspension-sentinel-j".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("prepared suspension schedule");
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let full_release_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_calls));
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    let session = NativeDispatchSession::new(options).expect("native session admission");
+    start_with_test_wall_clock_slack(&session);
+
+    let first_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot();
+        if send_calls.load(Ordering::Acquire) >= 1 {
+            break;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "prepared Down terminated before pause: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < first_deadline,
+            "prepared Down did not commit: {snapshot:?}"
+        );
+        session.heartbeat().expect("heartbeat before pause");
+        std::thread::yield_now();
+    }
+
+    let pause_generation = session.pause_with_timing_token().expect("pause request");
+    let _pause_timing = wait_for_pause_ack(&session, pause_generation);
+    let paused_snapshot = wait_for_clean_suspension(&session, &full_release_calls);
+    assert!(paused_snapshot.is_paused);
+    assert_eq!(paused_snapshot.active_count, 0);
+    assert_eq!(paused_snapshot.possibly_active_count, 0);
+
+    session.resume().expect("resume request");
+    let resume_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot();
+        if !snapshot.is_paused {
+            break;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "prepared resume terminated before the frozen Up: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < resume_deadline,
+            "prepared resume did not commit"
+        );
+        session.heartbeat().expect("heartbeat after resume request");
+        std::thread::yield_now();
+    }
+
+    let sentinel_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let snapshot = session.snapshot();
+        if send_calls.load(Ordering::Acquire) >= 4 {
+            assert!(snapshot.is_running);
+            assert_eq!(snapshot.terminal_error, None);
+            break;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "prepared frozen Up or sentinel Down terminated the worker: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < sentinel_deadline,
+            "sentinel Down did not send"
+        );
+        session.heartbeat().expect("heartbeat before sentinel");
+        std::thread::yield_now();
+    }
+
+    session.quit().expect("explicit quit after sentinel");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let final_snapshot = session.snapshot();
+    assert_eq!(final_snapshot.terminal_error, None);
+    assert_eq!(final_snapshot.active_count, 0);
+    assert_eq!(final_snapshot.possibly_active_count, 0);
+    assert_eq!(final_snapshot.timeline_rebase_count, 0);
+    assert!(send_calls.load(Ordering::Acquire) >= 3);
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    let sentinel = telemetry["records"]
+        .as_array()
+        .expect("telemetry records")
+        .iter()
+        .find(|record| record["event_index"].as_u64() == Some(2))
+        .expect("sentinel Down telemetry");
+    assert_eq!(sentinel["send_attempts"].as_u64(), Some(1));
+    assert_eq!(sentinel["sent_count"].as_u64(), Some(1));
+}
+
+#[test]
+fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "natural-resume-down-k".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 800_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "natural-resume-up-k".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 1_600_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "natural-resume-down-j".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 2_400_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "natural-resume-up-j".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("natural prepared suspension schedule");
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let full_release_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_calls));
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    let session = NativeDispatchSession::new(options).expect("native session admission");
+    start_with_test_wall_clock_slack(&session);
+
+    let first_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot();
+        if send_calls.load(Ordering::Acquire) >= 1 {
+            break;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "initial Down terminated: {snapshot:?}"
+        );
+        assert!(Instant::now() < first_deadline, "initial Down did not send");
+        session
+            .heartbeat()
+            .expect("heartbeat before natural-resume pause");
+        std::thread::yield_now();
+    }
+
+    let pause_generation = session.pause_with_timing_token().expect("pause request");
+    let _pause_timing = wait_for_pause_ack(&session, pause_generation);
+    let paused_snapshot = wait_for_clean_suspension(&session, &full_release_calls);
+    assert!(paused_snapshot.is_paused);
+    assert_eq!(paused_snapshot.active_count, 0);
+    assert_eq!(paused_snapshot.possibly_active_count, 0);
+
+    session.resume().expect("resume request");
+    let resume_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot();
+        if !snapshot.is_paused {
+            break;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "resume finished unexpectedly: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < resume_deadline,
+            "resume acknowledgment timed out: {snapshot:?}"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat after natural-resume request");
+        std::thread::yield_now();
+    }
+
+    let finish_deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let snapshot = session.snapshot();
+        if snapshot.is_finished {
+            break;
+        }
+        assert!(
+            snapshot.terminal_error.is_none(),
+            "natural resume terminated with an error: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < finish_deadline,
+            "prepared stream did not naturally finish: {snapshot:?}"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat during natural finish");
+        std::thread::yield_now();
+    }
+
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "finished");
+    assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(snapshot.generation_status_counts["released"], 2);
+    assert_eq!(snapshot.generation_status_counts["cancelled"], 0);
+    assert_eq!(snapshot.generation_status_counts["scheduled"], 0);
+    assert_eq!(snapshot.generation_status_counts["active"], 0);
+    assert_eq!(snapshot.generation_status_counts["dropped_expired"], 0);
+    assert_eq!(snapshot.generation_status_counts["dropped_backend"], 0);
+    assert_eq!(snapshot.generation_status_counts["dropped_conflict"], 0);
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    assert_eq!(snapshot.failed_release_count, 0);
+    assert_eq!(snapshot.timeline_rebase_count, 0);
+    let release = snapshot
+        .release_outcome
+        .as_ref()
+        .expect("natural completion publishes release outcome");
+    assert!(release.released_successfully);
+    assert_eq!(release.stuck_mask, 0);
+    assert!(!release.verification_inconclusive);
+    assert!(full_release_calls.load(Ordering::Acquire) >= 1);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records array");
+    for event_index in 0..4 {
+        let record = records
+            .iter()
+            .find(|record| record["event_index"].as_u64() == Some(event_index))
+            .unwrap_or_else(|| panic!("missing natural physical event {event_index}"));
+        assert_eq!(record["send_attempts"].as_u64(), Some(1));
+        assert_eq!(record["sent_count"].as_u64(), Some(1));
+    }
+}
+
+#[test]
+fn normal_prepared_final_control_race_suppresses_send_without_cursor_advance() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_send_counter();
+    let mut stream = harness.build_prepared_stream_for_test();
+    harness.set_final_gate_race_hook(
+        |_focus_active,
+         _target_hwnd,
+         _target_generation,
+         quit_requested,
+         _skip_requested,
+         _panic_requested,
+         _desired_pause| {
+            quit_requested.store(true, Ordering::Release);
+        },
+    );
+
+    let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.resources.coordinator.cursor, 0);
+}
+
+#[test]
+fn normal_prepared_precision_suffix_suppresses_all_final_control_races() {
+    for control in 0..8 {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let calls = harness.configure_send_counter();
+        match control {
+            0 => harness.panic_requested.store(true, Ordering::Release),
+            1 => harness.supervisor_expired.store(true, Ordering::Release),
+            2 => harness.quit_requested.store(true, Ordering::Release),
+            3 => harness.skip_requested.store(true, Ordering::Release),
+            4 => harness.desired_pause.store(true, Ordering::Release),
+            5 => {
+                harness.config.focus.require_focus = true;
+                harness.set_final_gate_race_hook(
+                    |focus_active,
+                     _target_hwnd,
+                     _target_generation,
+                     _quit,
+                     _skip,
+                     _panic,
+                     _pause| {
+                        focus_active.store(false, Ordering::Release);
+                    },
+                );
+            }
+            6 => {
+                assert!(harness.notify_system_power_for_test(true));
+            }
+            7 => harness.set_final_gate_race_hook(
+                |_focus_active, _target_hwnd, target_generation, _quit, _skip, _panic, _pause| {
+                    target_generation.store(1, Ordering::Release);
+                },
+            ),
+            _ => unreachable!(),
+        }
+
+        let mut stream = harness.build_prepared_stream_for_test();
+        let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+
+        assert!(!matches!(step, super::worker::DispatchStep::Dispatched));
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "control race {control}");
+        assert!(
+            stream.current().is_some(),
+            "control race {control} advanced cursor"
+        );
+    }
+}
+
+#[test]
+fn normal_prepared_zero_progress_is_fail_closed_without_cursor_advance() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_prepared_zero_progress_sender_for_test();
+    let mut stream = harness.build_prepared_stream_for_test();
+
+    let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+
+    assert!(matches!(step, super::worker::DispatchStep::Terminate(_)));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.backend_active_mask(), 0);
+    assert_eq!(harness.backend_possibly_active_mask(), 0);
+}
+
+#[test]
 fn midstream_stale_packet_is_metadata_not_physical_work() {
     use sky_dispatch_core::compile::compile_runtime_intents;
 
@@ -5601,6 +6092,7 @@ fn worker_scheduling_guards_lifetime_is_preserved_until_resources_drop() {
         waiter,
         backend,
         coordinator,
+        prepared_stream: None,
         playback,
         telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
         scheduling: guards,

@@ -3367,6 +3367,7 @@ const CANONICAL_DISPATCH_FILES: &[&str] = &[
     "hold_forensics.rs",
     "observer_wake.rs",
     "observer_trace.rs",
+    "prepared.rs",
 ];
 const ALLOWED_UNSAFE_MODULES: &[&str] = &[
     "rust/crates/sky_dispatch_win32/src/calibration.rs",

@@ -737,6 +737,21 @@ impl RuntimeDispatchCoordinator {
         up_intents: &[PreparedUpIntent],
         started: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
+        self.commit_prepared_up_intents_frozen_with_resumable_cancellation(
+            prepared,
+            up_intents,
+            started,
+            &[],
+        )
+    }
+
+    fn commit_prepared_up_intents_frozen_with_resumable_cancellation(
+        &mut self,
+        prepared: PreparedAuthoredFrame,
+        up_intents: &[PreparedUpIntent],
+        started: TimelineTicks,
+        explicitly_cancelled_by_suspension: &[GenerationId],
+    ) -> Result<(), CoordinatorError> {
         if prepared.first_batch_index != self.cursor {
             return Err(CoordinatorError::PreparedBatchMismatch {
                 prepared: prepared.first_batch_index,
@@ -752,6 +767,16 @@ impl RuntimeDispatchCoordinator {
             }
             if prepared.immediate_up_mask & bit != 0 {
                 let Some(active) = self.active_for_slot(slot).cloned() else {
+                    if explicitly_cancelled_by_suspension.contains(&generation_id)
+                        && self.frozen_up_matches_cancelled_generation(prepared, up)
+                    {
+                        // A resumable suspension has already released this
+                        // physical key. The frozen Up remains in the
+                        // immutable stream, so consume its accounting using
+                        // the narrow cancellation reconciliation contract.
+                        self.reconcile_resumable_cancelled_generation(generation_id)?;
+                        continue;
+                    }
                     return Err(CoordinatorError::Invariant(
                         CoordinatorInvariantError::Accounting(
                             "authored immediate Up has no active generation".into(),
@@ -795,9 +820,37 @@ impl RuntimeDispatchCoordinator {
                     source_action_index: up.source_action_index,
                 });
                 self.pending_release_mask |= bit;
+            } else {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "frozen authored Up is absent from its prepared release masks".into(),
+                    ),
+                ));
             }
         }
         Ok(())
+    }
+
+    fn frozen_up_matches_cancelled_generation(
+        &self,
+        prepared: PreparedAuthoredFrame,
+        up: &PreparedUpIntent,
+    ) -> bool {
+        let Ok(generation_index) = usize::try_from(up.intent.generation_id()) else {
+            return false;
+        };
+        let Some(location) = self.up_intent_locations.get(generation_index) else {
+            return false;
+        };
+        let Some((packet_index, intent_index)) = *location else {
+            return false;
+        };
+        let Some(compact) = self.schedule.intents.get(intent_index) else {
+            return false;
+        };
+        packet_index == prepared.packet_index
+            && compact.generation_id() == NO_GENERATION_ID
+            && compact.key_slot() == up.intent.key_slot()
     }
 
     /// Apply a frozen authored commit after a successful physical send.
@@ -807,6 +860,38 @@ impl RuntimeDispatchCoordinator {
         commit: &PreparedAuthoredCommit,
         started: TimelineTicks,
         _completed: TimelineTicks,
+    ) -> Result<(), CoordinatorError> {
+        self.commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
+            commit,
+            started,
+            &[],
+        )
+    }
+
+    /// Apply a frozen authored commit after a successful normal prepared send
+    /// when one or more earlier generations were explicitly cancelled by a
+    /// resumable suspension.  Only generation IDs supplied by the suspension
+    /// path and still marked `Cancelled` may bypass the usual immediate-Up
+    /// active-owner check; genuine ownership mismatches remain errors.
+    pub fn commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        started: TimelineTicks,
+        _completed: TimelineTicks,
+        explicitly_cancelled_by_suspension: &[GenerationId],
+    ) -> Result<(), CoordinatorError> {
+        self.commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
+            commit,
+            started,
+            explicitly_cancelled_by_suspension,
+        )
+    }
+
+    fn commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        started: TimelineTicks,
+        explicitly_cancelled_by_suspension: &[GenerationId],
     ) -> Result<(), CoordinatorError> {
         let prepared = commit.frame;
         if prepared.first_batch_index != self.cursor {
@@ -819,7 +904,12 @@ impl RuntimeDispatchCoordinator {
             .authored_ticks
             .checked_add_duration(self.min_hold_ticks)?;
 
-        self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
+        self.commit_prepared_up_intents_frozen_with_resumable_cancellation(
+            prepared,
+            &commit.up_intents,
+            started,
+            explicitly_cancelled_by_suspension,
+        )?;
 
         for down in &commit.down_intents {
             let generation_id = down.intent.generation_id();

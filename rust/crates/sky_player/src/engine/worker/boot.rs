@@ -8,9 +8,10 @@ use super::super::{
 };
 use super::admission::focus_matches_hwnd;
 use super::{
-    DispatchHealthOptions, HealthWindow, StartupResources, Worker, WorkerHealthState,
-    WorkerResources, WorkerTimingState, describe_release_outcome, ensure_preflight_for_target,
-    initialize_startup, load_target_stamp, release_state_verified, wait_failure_message,
+    DispatchHealthOptions, HealthWindow, PreparedDispatchStream, StartupResources, Worker,
+    WorkerHealthState, WorkerResources, WorkerTimingState, describe_release_outcome,
+    ensure_preflight_for_target, initialize_startup, load_target_stamp, release_state_verified,
+    wait_failure_message,
 };
 use crate::engine::config::{
     CALIBRATION_MAX_STARTUP_BUDGET_US, CALIBRATION_SAMPLES, STARTUP_READINESS_RESERVE_US,
@@ -419,7 +420,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
+    let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
         schedule,
         effective_min_hold_us,
         min_hold_ticks,
@@ -437,6 +438,28 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 format!("coordinator construction failed: {error}"),
             );
         }
+    };
+    let prepared_stream = if !config.profile.strict_timing() && !config.timing.strict_timing {
+        match PreparedDispatchStream::build(
+            coordinator,
+            qpc_clock,
+            &core.runtime.preparation_probe,
+            backend.instrument_key_profile(),
+        ) {
+            Ok((stream, restored_coordinator)) => {
+                coordinator = restored_coordinator;
+                Some(stream)
+            }
+            Err(error) => {
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("normal prepared stream admission failed: {error}"),
+                );
+            }
+        }
+    } else {
+        None
     };
     core.metrics.total_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(
         match coordinator.effective_total_ticks() {
@@ -667,6 +690,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         waiter,
         backend,
         coordinator,
+        prepared_stream,
         playback: startup_anchor_ticks,
         telemetry,
         scheduling,
