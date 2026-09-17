@@ -185,6 +185,12 @@ The diagnostic release doctor (`release-doctor`) evaluates external truth, local
   4. **`REMOTE_STATE_UNKNOWN`**: Publication was attempted but external state could not be verified (e.g. network partition or GitHub API unavailability). Fails closed without assuming success or failure.
   5. **`null`**: No failure or incident observed (e.g. release completed successfully or workflow is currently running in progress).
 
+### Publication reconciliation and diagnostic invariants
+
+1. **Exact `release_id` reconciliation only**: Following an irreversible GitHub publication PATCH attempt, the pipeline queries external truth strictly via `GET repos/$repository/releases/$($state.release_id)`. Tag equality is a verification invariant, not a transaction identifier; the pipeline never falls back to adopting a release via tag lookup. If the exact `release_id` cannot be retrieved, the pipeline records `failure_class = "REMOTE_STATE_UNKNOWN"` and fails closed.
+2. **Strict workflow run repository identity**: Diagnostic workflow run resolution (`release-doctor`) enforces exact repository matching (`repository.full_name == pumni/Sky-Auto-Player`). Workflow runs with missing, empty, or mismatched repository identities are refused and never implicitly trusted.
+3. **Fail-closed canonical UTC RFC3339 timestamps**: Timestamps across machine-readable JSON outputs are strictly canonical UTC formatted with trailing `Z` under invariant culture. Any invalid or unparseable timestamp returns `null` and triggers operator review rather than falling back to unvalidated raw strings.
+
 ### Recovery lifecycle and governance rules
 
 #### Fresh dispatch

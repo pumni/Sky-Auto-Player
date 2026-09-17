@@ -216,7 +216,7 @@ function Format-CanonicalRfc3339Timestamp([object]$timestamp) {
             )
             return $parsedDt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
         } catch {
-            return $str
+            return $null
         }
     }
 }
@@ -1437,9 +1437,6 @@ function Invoke-PublishDraft {
     $getRemoteError = $null
     try {
         $remoteRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)") -AllowNotFound
-        if ($null -eq $remoteRelease) {
-            $remoteRelease = Get-ReleaseForTag $repository $Tag
-        }
     } catch {
         $getRemoteError = $_
     }

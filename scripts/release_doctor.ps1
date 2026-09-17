@@ -55,7 +55,7 @@ function Format-CanonicalRfc3339Timestamp([object]$timestamp) {
             )
             return $parsedDt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
         } catch {
-            return $str
+            return $null
         }
     }
 }
@@ -83,7 +83,7 @@ function Test-ReleaseWorkflowRunCriteria([object]$run, [string]$expectedSha, [st
         if ($headSha.ToLowerInvariant() -ne $expectedSha.ToLowerInvariant()) { return $false }
     }
 
-    # 4. repository == pumni/Sky-Auto-Player
+    # 4. repository == pumni/Sky-Auto-Player (missing repository is rejected, not implicitly trusted)
     $repoName = ""
     if ($null -ne $run.PSObject.Properties['repository']) {
         if ($run.repository -is [string]) {
@@ -92,9 +92,8 @@ function Test-ReleaseWorkflowRunCriteria([object]$run, [string]$expectedSha, [st
             $repoName = [string]$run.repository.full_name
         }
     }
-    if (-not [string]::IsNullOrWhiteSpace($repoName) -and -not [string]::IsNullOrWhiteSpace($expectedRepo)) {
-        if ($repoName.ToLowerInvariant() -ne $expectedRepo.ToLowerInvariant()) { return $false }
-    }
+    if ([string]::IsNullOrWhiteSpace($repoName)) { return $false }
+    if ($repoName.ToLowerInvariant() -ne $expectedRepo.ToLowerInvariant()) { return $false }
 
     return $true
 }
@@ -135,10 +134,11 @@ function Assert-ReleaseWorkflowRunCriteria([object]$run, [string]$expectedSha, [
             $repoName = [string]$run.repository.full_name
         }
     }
-    if (-not [string]::IsNullOrWhiteSpace($repoName) -and -not [string]::IsNullOrWhiteSpace($expectedRepo)) {
-        if ($repoName.ToLowerInvariant() -ne $expectedRepo.ToLowerInvariant()) {
-            throw "Workflow run '$runId' is refused: repository '$repoName' does not match required '$expectedRepo'"
-        }
+    if ([string]::IsNullOrWhiteSpace($repoName)) {
+        throw "Workflow run '$runId' is refused: repository identity is missing or empty"
+    }
+    if ($repoName.ToLowerInvariant() -ne $expectedRepo.ToLowerInvariant()) {
+        throw "Workflow run '$runId' is refused: repository '$repoName' does not match required '$expectedRepo'"
     }
 }
 
@@ -258,9 +258,10 @@ if ($null -ne $channelMetadataResponse) {
 # 4. Assess external truth
 $releaseExists = ($null -ne $externalRelease)
 $isDraft = ($releaseExists -and $null -ne $externalRelease.PSObject.Properties['draft'] -and [bool]$externalRelease.draft)
-$rawPublishedAt = if ($releaseExists -and $null -ne $externalRelease.PSObject.Properties['published_at']) { [string]$externalRelease.published_at } else { "" }
+$rawPublishedAt = if ($releaseExists -and $null -ne $externalRelease.PSObject.Properties['published_at'] -and -not [string]::IsNullOrWhiteSpace([string]$externalRelease.published_at)) { [string]$externalRelease.published_at } else { "" }
 $publishedAt = Format-CanonicalRfc3339Timestamp $rawPublishedAt
-$isPublished = ($releaseExists -and -not $isDraft -and -not [string]::IsNullOrWhiteSpace($publishedAt))
+$isMalformedPublishedAt = ($releaseExists -and -not $isDraft -and -not [string]::IsNullOrWhiteSpace($rawPublishedAt) -and [string]::IsNullOrWhiteSpace($publishedAt))
+$isPublished = ($releaseExists -and -not $isDraft -and (-not [string]::IsNullOrWhiteSpace($publishedAt) -or $isMalformedPublishedAt))
 $isImmutable = ($releaseExists -and $null -ne $externalRelease.PSObject.Properties['immutable'] -and [bool]$externalRelease.immutable)
 $targetCommitish = if ($releaseExists -and $null -ne $externalRelease.PSObject.Properties['target_commitish']) { [string]$externalRelease.target_commitish } else { "" }
 
@@ -393,7 +394,7 @@ if ($isPublished) {
     $rawMetadataMatches = ($publicMetadataVersion -eq $Version)
     $latestMatches = ($Channel -ne "stable" -or $isLatest)
 
-    if ($metadataMatches -and $rawMetadataMatches -and $latestMatches -and $hasExactPublicAssets -and $isImmutable) {
+    if ($metadataMatches -and $rawMetadataMatches -and $latestMatches -and $hasExactPublicAssets -and $isImmutable -and -not $isMalformedPublishedAt) {
         $externalPhase = "COMPLETE"
         $classification = $null
         $operatorReviewRequired = $false
@@ -401,6 +402,12 @@ if ($isPublished) {
         $recoveryGuidance = "Release transaction completed successfully. No recovery action needed."
     } else {
         $externalPhase = "PUBLISHED_PENDING_METADATA"
+
+        if ($isMalformedPublishedAt) {
+            $findings += "External release published_at is invalid/non-canonical: '$rawPublishedAt'"
+            $operatorReviewRequired = $true
+            $classification = "POST_PUBLICATION_INCIDENT"
+        }
 
         if ($workflowOutcome -eq "failure") {
             $classification = "POST_PUBLICATION_INCIDENT"
@@ -437,12 +444,12 @@ POST-PUBLICATION RECOVERY CONTRACT:
 3. METADATA RECOVERY:
    - Do NOT manually promote release-metadata without an explicitly reviewed and authorized post-publication recovery design compliant with the release authority contract.
 "@
-        } elseif ($workflowOutcome -eq "in_progress") {
+        } elseif ($workflowOutcome -eq "in_progress" -and -not $isMalformedPublishedAt) {
             $classification = $null
             $operatorReviewRequired = $false
             $assessment = "Release $Tag is published on GitHub, and workflow run $(if ($null -ne $workflowRunId) { "($workflowRunId)" } else { '' }) is currently in progress."
             $recoveryGuidance = "Release workflow is currently in flight. Await workflow completion. Do not interrupt, cancel, or rerun."
-        } elseif ($workflowOutcome -eq "unknown") {
+        } elseif ($workflowOutcome -eq "unknown" -and -not $isMalformedPublishedAt) {
             $classification = $null
             $operatorReviewRequired = $true
             if (-not $metadataMatches) {
@@ -472,10 +479,15 @@ OPERATOR REVIEW REQUIRED:
 "@
             }
         } else {
-            # Workflow completed with success or cancelled/timed_out, but channel metadata is still old
+            # Workflow completed with success or cancelled/timed_out, or isMalformedPublishedAt, but channel metadata is still old
             $classification = "POST_PUBLICATION_INCIDENT"
             $operatorReviewRequired = $true
-            $findings += "Workflow completed with conclusion '$workflowRunConclusion' but channel metadata remains version '$metadataVersion'"
+            if (-not [string]::IsNullOrWhiteSpace($workflowRunConclusion)) {
+                $findings += "Workflow completed with conclusion '$workflowRunConclusion' but channel metadata remains version '$metadataVersion'"
+            }
+            if (-not $metadataMatches) {
+                $findings += "Channel metadata on release-metadata is version '$metadataVersion' (expected '$Version')"
+            }
             $assessment = "Release $Tag has been immutably published on GitHub, but post-publication promotion did not complete ($($findings -join '; '))."
             $recoveryGuidance = @"
 POST-PUBLICATION RECOVERY CONTRACT:

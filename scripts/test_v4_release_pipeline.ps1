@@ -1247,15 +1247,18 @@ function Test-SafeReleaseAssetNameContract {
 # Post-Publication Incident & Canonical Schema Regression Tests
 # -------------------------------------------------------------------------
 
-function Extract-PipelineFunction([string]$FunctionName) {
-    $startIdx = $pipeline.IndexOf("function $FunctionName")
-    if ($startIdx -lt 0) { throw "Could not locate $FunctionName in pipeline" }
-    $openBrace = $pipeline.IndexOf('{', $startIdx)
+$doctorScriptPath = Join-Path $PSScriptRoot "release_doctor.ps1"
+$doctorScriptContent = Get-Content -LiteralPath $doctorScriptPath -Raw
+
+function Extract-ScriptFunction([string]$Content, [string]$FunctionName) {
+    $startIdx = $Content.IndexOf("function $FunctionName")
+    if ($startIdx -lt 0) { throw "Could not locate $FunctionName in script content" }
+    $openBrace = $Content.IndexOf('{', $startIdx)
     $depth = 0
     $endIdx = -1
-    for ($i = $openBrace; $i -lt $pipeline.Length; $i++) {
-        if ($pipeline[$i] -eq '{') { $depth++ }
-        elseif ($pipeline[$i] -eq '}') {
+    for ($i = $openBrace; $i -lt $Content.Length; $i++) {
+        if ($Content[$i] -eq '{') { $depth++ }
+        elseif ($Content[$i] -eq '}') {
             $depth--
             if ($depth -eq 0) {
                 $endIdx = $i
@@ -1264,7 +1267,11 @@ function Extract-PipelineFunction([string]$FunctionName) {
         }
     }
     if ($endIdx -lt 0) { throw "Could not find matching brace for $FunctionName" }
-    return $pipeline.Substring($startIdx, $endIdx - $startIdx + 1)
+    return $Content.Substring($startIdx, $endIdx - $startIdx + 1)
+}
+
+function Extract-PipelineFunction([string]$FunctionName) {
+    return Extract-ScriptFunction $pipeline $FunctionName
 }
 
 . ([scriptblock]::Create((Extract-PipelineFunction "Assert-V4ReleaseStateSchema")))
@@ -1272,6 +1279,8 @@ function Extract-PipelineFunction([string]$FunctionName) {
 . ([scriptblock]::Create((Extract-PipelineFunction "Convert-V4ReleaseStateV1ToV2")))
 . ([scriptblock]::Create((Extract-PipelineFunction "Assert-ExistingUnpublishedDraftMatchesRequest")))
 . ([scriptblock]::Create((Extract-PipelineFunction "Format-CanonicalRfc3339Timestamp")))
+. ([scriptblock]::Create((Extract-ScriptFunction $doctorScriptContent "Test-ReleaseWorkflowRunCriteria")))
+. ([scriptblock]::Create((Extract-ScriptFunction $doctorScriptContent "Assert-ReleaseWorkflowRunCriteria")))
 
 # -------------------------------------------------------------------------
 # Test 1: schema-v1 missing field reproduces StrictMode failure
@@ -1307,7 +1316,7 @@ function Test-SchemaV1MissingFieldReproducesStrictModeFailure {
     if (-not $reproduced) {
         Fail "root-cause reproduction failed: assigning published_at on schema 1 PSCustomObject did not throw"
     }
-    Write-Host "V4 test (1/11): schema-v1 missing field reproduces StrictMode failure: PASS"
+    Write-Host "V4 test (1/19): schema-v1 missing field reproduces StrictMode failure: PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -1357,7 +1366,7 @@ function Test-SchemaV2CanonicalConstructorSurvivesStrictMode {
     $deserialized.phase = "COMPLETE"
 
     Assert-V4ReleaseStateSchema $deserialized
-    Write-Host "V4 test (2/11): schema-v2 canonical constructor survives StrictMode: PASS"
+    Write-Host "V4 test (2/19): schema-v2 canonical constructor survives StrictMode: PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -1439,7 +1448,7 @@ function Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed {
     }
     if (-not $threw) { Fail "Assert-V4ReleaseStateSchema accepted published=true with empty published_at" }
 
-    Write-Host "V4 test (3/11): malformed/missing critical schema-v2 field fails closed: PASS"
+    Write-Host "V4 test (3/19): malformed/missing critical schema-v2 field fails closed: PASS"
 }
 
 # Helper for testing publish reconciliation state transitions
@@ -1562,7 +1571,7 @@ function Test-PatchSucceedsGetConfirmsPublication {
             Fail "state was not reconciled to PUBLISHED_PENDING_METADATA"
         }
 
-        Write-Host "V4 test (4/11): PATCH succeeds + GET confirms publication => PUBLISHED_PENDING_METADATA: PASS"
+        Write-Host "V4 test (4/19): PATCH succeeds + GET confirms publication => PUBLISHED_PENDING_METADATA: PASS"
     } finally {
         if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -1614,7 +1623,7 @@ function Test-PatchReportsFailureGetConfirmsPublication {
             Fail "reconciliation failed when PATCH failed but GET confirmed publication"
         }
 
-        Write-Host "V4 test (5/11): PATCH command reports failure + GET confirms publication => PUBLISHED_PENDING_METADATA: PASS"
+        Write-Host "V4 test (5/19): PATCH command reports failure + GET confirms publication => PUBLISHED_PENDING_METADATA: PASS"
     } finally {
         if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -1674,7 +1683,7 @@ function Test-PatchFailsGetConfirmsStillDraft {
             Fail "persisted state does not reflect RECOVERABLE_PRE_PUBLICATION_FAILURE"
         }
 
-        Write-Host "V4 test (6/11): PATCH fails + GET confirms still draft => recoverable pre-publication failure: PASS"
+        Write-Host "V4 test (6/19): PATCH fails + GET confirms still draft => recoverable pre-publication failure: PASS"
     } finally {
         if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -1725,7 +1734,7 @@ function Test-PatchAmbiguousGetUnavailable {
             Fail "persisted state does not reflect REMOTE_STATE_UNKNOWN"
         }
 
-        Write-Host "V4 test (7/11): PATCH result ambiguous + GET unavailable => REMOTE_STATE_UNKNOWN: PASS"
+        Write-Host "V4 test (7/19): PATCH result ambiguous + GET unavailable => REMOTE_STATE_UNKNOWN: PASS"
     } finally {
         if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -1761,7 +1770,7 @@ function Test-FreshTransactionRefusesAdoptionOfExistingPublishedRelease {
         Fail "fresh transaction did not fail closed with 'fresh transaction refuses adoption'"
     }
 
-    Write-Host "V4 test (8/11): fresh transaction encounters existing published same tag => refuses adoption: PASS"
+    Write-Host "V4 test (8/19): fresh transaction encounters existing published same tag => refuses adoption: PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -1808,7 +1817,7 @@ function Test-ExactLocalReleaseIdEncountersAlreadyPublishedRemoteReconciles {
             Fail "exact local transaction failed to reconcile already-published remote release"
         }
 
-        Write-Host "V4 test (9/11): exact local release_id encounters already-published remote => reconciliation allowed: PASS"
+        Write-Host "V4 test (9/19): exact local release_id encounters already-published remote => reconciliation allowed: PASS"
     } finally {
         if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -1840,6 +1849,7 @@ function Test-PublishedReleaseMetadataOldProductionWorkflowRunningOrUnknown {
         path = ".github/workflows/release-v4.yml"
         event = "workflow_dispatch"
         head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "in_progress"
         conclusion = $null
     }
@@ -1886,7 +1896,7 @@ function Test-PublishedReleaseMetadataOldProductionWorkflowRunningOrUnknown {
         Fail "ambiguous phase/lifecycle_state must not be emitted at root report"
     }
 
-    Write-Host "V4 test (10/16): published release + metadata old + production workflow still running/unknown => PUBLISHED_PENDING_METADATA: PASS"
+    Write-Host "V4 test (10/19): published release + metadata old + production workflow still running/unknown => PUBLISHED_PENDING_METADATA: PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -1914,6 +1924,7 @@ function Test-PublishedReleaseMetadataOldWorkflowCompletedFailure {
         path = ".github/workflows/release-v4.yml"
         event = "workflow_dispatch"
         head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "completed"
         conclusion = "failure"
     }
@@ -1943,7 +1954,7 @@ function Test-PublishedReleaseMetadataOldWorkflowCompletedFailure {
         Fail "diagnostic recovery guidance missing mandatory immutability/no-rerun prohibitions"
     }
 
-    Write-Host "V4 test (11/16): published release + metadata old + exact workflow completed failure => POST_PUBLICATION_INCIDENT: PASS"
+    Write-Host "V4 test (11/19): published release + metadata old + exact workflow completed failure => POST_PUBLICATION_INCIDENT: PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -1969,6 +1980,7 @@ function Test-CanonicalRfc3339TimestampsCultureInvariance {
         path = ".github/workflows/release-v4.yml"
         event = "workflow_dispatch"
         head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "completed"
         conclusion = "failure"
     }
@@ -2011,7 +2023,7 @@ function Test-CanonicalRfc3339TimestampsCultureInvariance {
         [System.Threading.Thread]::CurrentThread.CurrentUICulture = $originalUICulture
     }
 
-    Write-Host "V4 test (12/16): canonical RFC3339 timestamps culture invariance (en-US, vi-VN, fr-FR): PASS"
+    Write-Host "V4 test (12/19): canonical RFC3339 timestamps culture invariance (en-US, vi-VN, fr-FR): PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -2036,6 +2048,7 @@ function Test-UnrelatedWorkflowRunIdRefused {
         path = ".github/workflows/ci.yml"
         event = "push"
         head_sha = "1111111111111111111111111111111111111111"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "completed"
         conclusion = "failure"
     }
@@ -2062,7 +2075,7 @@ function Test-UnrelatedWorkflowRunIdRefused {
         Fail "unrelated workflow run ID was not refused"
     }
 
-    Write-Host "V4 test (13/16): unrelated run ID => refused (fails closed): PASS"
+    Write-Host "V4 test (13/19): unrelated run ID => refused (fails closed): PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -2089,6 +2102,7 @@ function Test-SameSourceNonProductionRunIgnored {
         path = ".github/workflows/ci.yml"
         event = "push"
         head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "completed"
         conclusion = "success"
     }
@@ -2097,6 +2111,7 @@ function Test-SameSourceNonProductionRunIgnored {
         path = ".github/workflows/release-v4.yml"
         event = "workflow_dispatch"
         head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "completed"
         conclusion = "failure"
     }
@@ -2117,7 +2132,7 @@ function Test-SameSourceNonProductionRunIgnored {
         Fail "CI push run was not ignored during auto-resolution: got id=$($report.workflow_run_id), outcome=$($report.workflow_outcome), class=$($report.classification)"
     }
 
-    Write-Host "V4 test (14/16): same source with CI/non-production run => ignored by filter: PASS"
+    Write-Host "V4 test (14/19): same source with CI/non-production run => ignored by filter: PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -2144,6 +2159,7 @@ function Test-TwoProductionWorkflowDispatchRunsAmbiguousFailsClosed {
         path = ".github/workflows/release-v4.yml"
         event = "workflow_dispatch"
         head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "completed"
         conclusion = "cancelled"
     }
@@ -2152,6 +2168,7 @@ function Test-TwoProductionWorkflowDispatchRunsAmbiguousFailsClosed {
         path = ".github/workflows/release-v4.yml"
         event = "workflow_dispatch"
         head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "completed"
         conclusion = "failure"
     }
@@ -2176,7 +2193,7 @@ function Test-TwoProductionWorkflowDispatchRunsAmbiguousFailsClosed {
         Fail "guidance does not instruct operator to provide explicit --run-id"
     }
 
-    Write-Host "V4 test (15/16): two production workflow_dispatch runs for same SHA => ambiguous/fail closed: PASS"
+    Write-Host "V4 test (15/19): two production workflow_dispatch runs for same SHA => ambiguous/fail closed: PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -2203,6 +2220,7 @@ function Test-ExplicitValidRunIdDeterministicClassification {
         path = ".github/workflows/release-v4.yml"
         event = "workflow_dispatch"
         head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
         status = "completed"
         conclusion = "cancelled"
     }
@@ -2225,10 +2243,236 @@ function Test-ExplicitValidRunIdDeterministicClassification {
         Fail "explicit RunId did not produce deterministic classification: got id=$($report.workflow_run_id), outcome=$($report.workflow_outcome), class=$($report.classification)"
     }
 
-    Write-Host "V4 test (16/16): explicit valid run ID => deterministic classification: PASS"
+    Write-Host "V4 test (16/19): explicit valid run ID => deterministic classification: PASS"
 }
 
-# Run all 16 regression tests
+# -------------------------------------------------------------------------
+# Test 17: exact release_id missing + same tag points to another published release => REMOTE_STATE_UNKNOWN => other release is NOT adopted
+# -------------------------------------------------------------------------
+function Test-ExactReleaseIdMissingTagPointsToAnotherReleaseNotAdopted {
+    $testDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-test17-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        $stateFile = Join-Path $testDir "release-state.json"
+
+        # Local state expects release_id 12345
+        $initialState = New-V4CanonicalReleaseState `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -Version "4.1.0" `
+            -Channel "stable" `
+            -Tag "v4.1.0" `
+            -ReleaseId 12345 `
+            -Phase "QUALIFIED"
+        $initialState.qualified_after_download = $true
+        $initialState.attested = $true
+        [IO.File]::WriteAllText($stateFile, ($initialState | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+
+        # Another release with id 99999 exists on remote with the same tag
+        $otherReleaseWithSameTag = [pscustomobject]@{
+            id = 99999
+            tag_name = "v4.1.0"
+            target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+            draft = $false
+            published_at = "2026-09-17T17:35:58Z"
+            immutable = $true
+        }
+
+        $threw = $false
+        try {
+            Invoke-TestPublishReconciliation `
+                -StatePath $stateFile `
+                -Tag "v4.1.0" `
+                -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+                -PatchAction { throw [System.IO.IOException]::new("Connection error during PATCH") } `
+                -GetAction {
+                    # Authoritative query GET repos/$repo/releases/12345 returns $null (not found)
+                    return $null
+                }
+        } catch {
+            if ($_.Exception.Message -match "REMOTE_STATE_UNKNOWN") {
+                $threw = $true
+            } else {
+                throw
+            }
+        }
+        if (-not $threw) { Fail "expected REMOTE_STATE_UNKNOWN exception when exact release_id is missing" }
+
+        # Verify persisted failure class and that other release was NOT adopted
+        $persisted = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+        if ($persisted.failure_class -ne "REMOTE_STATE_UNKNOWN" -or
+            $persisted.phase -ne "QUALIFIED" -or
+            $persisted.published -or
+            $persisted.release_id -ne 12345) {
+            Fail "persisted state corrupted or adopted other release: release_id=$($persisted.release_id), phase=$($persisted.phase), published=$($persisted.published), failure_class=$($persisted.failure_class)"
+        }
+
+        Write-Host "V4 test (17/19): exact release_id missing + same tag points to another published release => REMOTE_STATE_UNKNOWN => other release is NOT adopted: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 18: workflow run repository identity validation (missing => refused, wrong => refused, exact => accepted)
+# -------------------------------------------------------------------------
+function Test-WorkflowRunRepositoryIdentityValidation {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+    $targetSha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+    $expectedRepo = "pumni/Sky-Auto-Player"
+
+    function Get-BaseRun {
+        return [pscustomobject]@{
+            id = 35255186714
+            path = ".github/workflows/release-v4.yml"
+            event = "workflow_dispatch"
+            head_sha = $targetSha
+            status = "completed"
+            conclusion = "failure"
+        }
+    }
+
+    # Case A: Missing repository identity => refused
+    $runMissingRepo = Get-BaseRun
+    if (Test-ReleaseWorkflowRunCriteria $runMissingRepo $targetSha $expectedRepo) {
+        Fail "Test-ReleaseWorkflowRunCriteria accepted run with missing repository identity"
+    }
+    $refusedMissing = $false
+    try {
+        Assert-ReleaseWorkflowRunCriteria $runMissingRepo $targetSha $expectedRepo "35255186714"
+    } catch {
+        if ($_.Exception.Message -match "repository identity is missing or empty") {
+            $refusedMissing = $true
+        } else {
+            throw
+        }
+    }
+    if (-not $refusedMissing) {
+        Fail "Assert-ReleaseWorkflowRunCriteria did not fail closed on missing repository identity"
+    }
+
+    # Case B: Wrong repository identity => refused
+    $runWrongRepo = Get-BaseRun
+    $runWrongRepo | Add-Member -MemberType NoteProperty -Name "repository" -Value ([pscustomobject]@{ full_name = "evil/Sky-Auto-Player" })
+    if (Test-ReleaseWorkflowRunCriteria $runWrongRepo $targetSha $expectedRepo) {
+        Fail "Test-ReleaseWorkflowRunCriteria accepted run with wrong repository identity"
+    }
+    $refusedWrong = $false
+    try {
+        Assert-ReleaseWorkflowRunCriteria $runWrongRepo $targetSha $expectedRepo "35255186714"
+    } catch {
+        if ($_.Exception.Message -match "does not match required '$expectedRepo'") {
+            $refusedWrong = $true
+        } else {
+            throw
+        }
+    }
+    if (-not $refusedWrong) {
+        Fail "Assert-ReleaseWorkflowRunCriteria did not refuse wrong repository identity"
+    }
+
+    # Case C: Exact repository identity => accepted
+    $runExactRepo = Get-BaseRun
+    $runExactRepo | Add-Member -MemberType NoteProperty -Name "repository" -Value ([pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" })
+    if (-not (Test-ReleaseWorkflowRunCriteria $runExactRepo $targetSha $expectedRepo)) {
+        Fail "Test-ReleaseWorkflowRunCriteria rejected run with exact required repository identity"
+    }
+    try {
+        Assert-ReleaseWorkflowRunCriteria $runExactRepo $targetSha $expectedRepo "35255186714"
+    } catch {
+        Fail "Assert-ReleaseWorkflowRunCriteria threw unexpectedly for valid exact repository: $_"
+    }
+
+    Write-Host "V4 test (18/19): workflow run repository identity validation (missing => refused, wrong => refused, exact => accepted): PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 19: timestamp formatting fail-closed (valid => canonical UTC, non-default culture => byte-identical UTC, invalid => returns null)
+# -------------------------------------------------------------------------
+function Test-TimestampFormattingFailClosedAndCultureInvariance {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+
+    # 1. Direct unit verification of Format-CanonicalRfc3339Timestamp:
+    $validOffset = "2026-09-17T10:35:58-07:00"
+    $formatted = Format-CanonicalRfc3339Timestamp $validOffset
+    if ($formatted -ne "2026-09-17T17:35:58Z") {
+        Fail "Format-CanonicalRfc3339Timestamp produced '$formatted', expected '2026-09-17T17:35:58Z'"
+    }
+
+    $originalCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    $originalUICulture = [System.Threading.Thread]::CurrentThread.CurrentUICulture
+    try {
+        foreach ($cultureCode in @("vi-VN", "fr-FR", "ar-SA", "de-DE")) {
+            $cultureInfo = [System.Globalization.CultureInfo]::GetCultureInfo($cultureCode)
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = $cultureInfo
+            [System.Threading.Thread]::CurrentThread.CurrentUICulture = $cultureInfo
+            $formattedCulture = Format-CanonicalRfc3339Timestamp $validOffset
+            if ($formattedCulture -ne "2026-09-17T17:35:58Z") {
+                Fail "Format-CanonicalRfc3339Timestamp in culture $cultureCode produced '$formattedCulture', expected '2026-09-17T17:35:58Z'"
+            }
+        }
+    } finally {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = $originalCulture
+        [System.Threading.Thread]::CurrentThread.CurrentUICulture = $originalUICulture
+    }
+
+    # Invalid timestamp must return $null, NOT the raw input string
+    $invalidInput = "not-a-timestamp-2026"
+    $invalidResult = Format-CanonicalRfc3339Timestamp $invalidInput
+    if ($null -ne $invalidResult) {
+        Fail "Format-CanonicalRfc3339Timestamp on invalid input did not return null; got '$invalidResult'"
+    }
+    $emptyResult = Format-CanonicalRfc3339Timestamp ""
+    if ($null -ne $emptyResult) {
+        Fail "Format-CanonicalRfc3339Timestamp on empty string did not return null"
+    }
+
+    # 2. Doctor integration verification with malformed external release published_at:
+    $publishedWithMalformedTime = [pscustomobject]@{
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "malformed-timestamp-value"
+        immutable = $true
+        assets = @(
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe" },
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe.sig" }
+        )
+    }
+    $mockLatest = [pscustomobject]@{ tag_name = "v4.1.0" }
+    $mockMetadata = [pscustomobject]@{ version = "4.0.1" }
+
+    $report = & $doctorScript `
+        -Tag "v4.1.0" `
+        -Channel "stable" `
+        -Offline `
+        -OfflineExternalRelease $publishedWithMalformedTime `
+        -OfflineLatestRelease $mockLatest `
+        -OfflineMetadata $mockMetadata `
+        -Format Json | ConvertFrom-Json
+
+    if ($report.external_truth.published_at -ne $null) {
+        Fail "doctor did not null out malformed published_at; got '$($report.external_truth.published_at)'"
+    }
+    if ($report.external_phase -ne "PUBLISHED_PENDING_METADATA" -or
+        $report.classification -ne "POST_PUBLICATION_INCIDENT" -or
+        $report.operator_review_required -ne $true) {
+        Fail "doctor did not fail closed on malformed published_at: ext_phase=$($report.external_phase), class=$($report.classification), review=$($report.operator_review_required)"
+    }
+    $findingMatched = $false
+    foreach ($f in $report.findings) {
+        if ($f -match "External release published_at is invalid/non-canonical: 'malformed-timestamp-value'") {
+            $findingMatched = $true
+            break
+        }
+    }
+    if (-not $findingMatched) {
+        Fail "doctor findings did not include malformed published_at warning: $($report.findings -join '; ')"
+    }
+
+    Write-Host "V4 test (19/19): timestamp formatting fail-closed (valid => canonical UTC, non-default culture => byte-identical UTC, invalid => returns null): PASS"
+}
+
+# Run all 19 regression tests
 Test-SchemaV1MissingFieldReproducesStrictModeFailure
 Test-SchemaV2CanonicalConstructorSurvivesStrictMode
 Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed
@@ -2245,5 +2489,8 @@ Test-UnrelatedWorkflowRunIdRefused
 Test-SameSourceNonProductionRunIgnored
 Test-TwoProductionWorkflowDispatchRunsAmbiguousFailsClosed
 Test-ExplicitValidRunIdDeterministicClassification
+Test-ExactReleaseIdMissingTagPointsToAnotherReleaseNotAdopted
+Test-WorkflowRunRepositoryIdentityValidation
+Test-TimestampFormattingFailClosedAndCultureInvariance
 
-Write-Host "V4 release pipeline contract/self-test: PASS (all 16 release state reconciliation regressions verified)"
+Write-Host "V4 release pipeline contract/self-test: PASS (all 19 release state reconciliation regressions verified)"
