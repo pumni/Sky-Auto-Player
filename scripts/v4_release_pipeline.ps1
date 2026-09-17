@@ -185,6 +185,42 @@ function Convert-PublishedAtToMetadataTimestamp([object]$Release) {
     }
 }
 
+function Get-CanonicalUtcTimestamp {
+    return (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Format-CanonicalRfc3339Timestamp([object]$timestamp) {
+    if ($null -eq $timestamp -or [string]::IsNullOrWhiteSpace([string]$timestamp)) {
+        return $null
+    }
+    if ($timestamp -is [DateTimeOffset]) {
+        return $timestamp.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($timestamp -is [DateTime]) {
+        return $timestamp.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    $str = [string]$timestamp
+    try {
+        $parsed = [DateTimeOffset]::Parse(
+            $str,
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::AssumeUniversal
+        )
+        return $parsed.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+    } catch {
+        try {
+            $parsedDt = [DateTime]::Parse(
+                $str,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::AssumeUniversal
+            )
+            return $parsedDt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+        } catch {
+            return $str
+        }
+    }
+}
+
 function Invoke-GhBinaryOutput {
     param(
         [Parameter(Mandatory = $true)] [string[]]$Arguments,
@@ -682,13 +718,189 @@ function Invoke-BuildCandidate {
     Write-Host "V4 candidate build: PASS (one orchestrator invocation; exact candidate manifest recorded)"
 }
 
+function Assert-V4ReleaseStateSchema([object]$State) {
+    if ($null -eq $State) { Fail "release state object is null" }
+
+    $requiredProperties = @(
+        "schema_version",
+        "phase",
+        "source_sha",
+        "version",
+        "channel",
+        "tag",
+        "release_id",
+        "draft",
+        "published",
+        "immutable",
+        "published_at",
+        "attested",
+        "qualified_after_download",
+        "qualification_assets",
+        "public_assets",
+        "metadata_promoted",
+        "promoted_at",
+        "final_verified",
+        "final_verified_at",
+        "reconciled_from_remote",
+        "last_reconciled_at",
+        "failure_class",
+        "error_message"
+    )
+
+    foreach ($prop in $requiredProperties) {
+        if ($null -eq $State.PSObject.Properties[$prop]) {
+            Fail "release state schema validation failed: missing required property '$prop'"
+        }
+    }
+
+    if ([int]$State.schema_version -ne 2) {
+        Fail "unsupported release state schema_version '$($State.schema_version)' (expected 2)"
+    }
+
+    $validPhases = @("READY", "QUALIFIED", "PUBLISHED_PENDING_METADATA", "COMPLETE")
+    if ([string]$State.phase -notin $validPhases) {
+        Fail "invalid release state phase '$($State.phase)'; valid phases are $($validPhases -join ', ')"
+    }
+
+    if ([bool]$State.published) {
+        if ([string]::IsNullOrWhiteSpace([string]$State.published_at)) {
+            Fail "release state is marked published but published_at timestamp is empty"
+        }
+        if ([bool]$State.draft) {
+            Fail "release state cannot be both draft and published"
+        }
+        if ([string]$State.phase -notin @("PUBLISHED_PENDING_METADATA", "COMPLETE")) {
+            Fail "published release state must have phase PUBLISHED_PENDING_METADATA or COMPLETE"
+        }
+    }
+
+    if ([bool]$State.metadata_promoted -and [string]::IsNullOrWhiteSpace([string]$State.promoted_at)) {
+        Fail "release state is marked metadata_promoted but promoted_at timestamp is empty"
+    }
+
+    if ([bool]$State.final_verified -and [string]::IsNullOrWhiteSpace([string]$State.final_verified_at)) {
+        Fail "release state is marked final_verified but final_verified_at timestamp is empty"
+    }
+}
+
+function New-V4CanonicalReleaseState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceSha,
+        [Parameter(Mandatory = $true)]
+        [string]$Version,
+        [Parameter(Mandatory = $true)]
+        [string]$Channel,
+        [Parameter(Mandatory = $true)]
+        [string]$Tag,
+        [Parameter(Mandatory = $true)]
+        [int64]$ReleaseId,
+        [object[]]$QualificationAssets = @(),
+        [object[]]$PublicAssets = @(),
+        [string]$Phase = "READY"
+    )
+
+    $validPhases = @("READY", "QUALIFIED", "PUBLISHED_PENDING_METADATA", "COMPLETE")
+    if ($Phase -notin $validPhases) {
+        Fail "cannot construct canonical release state with invalid phase '$Phase'"
+    }
+
+    $state = [ordered]@{
+        schema_version = 2
+        phase = [string]$Phase
+        source_sha = $SourceSha.ToLowerInvariant()
+        version = [string]$Version
+        channel = [string]$Channel
+        tag = [string]$Tag
+        release_id = [int64]$ReleaseId
+        draft = $true
+        published = $false
+        immutable = $false
+        published_at = ""
+        attested = $false
+        qualified_after_download = $false
+        qualification_assets = @($QualificationAssets)
+        public_assets = @($PublicAssets)
+        metadata_promoted = $false
+        promoted_at = ""
+        final_verified = $false
+        final_verified_at = ""
+        reconciled_from_remote = $false
+        last_reconciled_at = ""
+        failure_class = ""
+        error_message = ""
+    }
+
+    $obj = [pscustomobject]$state
+    Assert-V4ReleaseStateSchema $obj
+    return $obj
+}
+
+function Convert-V4ReleaseStateV1ToV2([object]$RawState) {
+    if ($null -eq $RawState) { Fail "release state object is null" }
+
+    if ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
+        if ($null -eq $RawState.PSObject.Properties['published_at'] -or [string]::IsNullOrWhiteSpace([string]$RawState.published_at)) {
+            Fail "cannot migrate v1 state: marked published but published_at timestamp is missing"
+        }
+    }
+
+    $schemaVersion = if ($null -ne $RawState.PSObject.Properties['schema_version']) { [int]$RawState.schema_version } else { 1 }
+    if ($schemaVersion -ne 1) {
+        Fail "Convert-V4ReleaseStateV1ToV2 only converts schema_version 1 (got $schemaVersion)"
+    }
+
+    $phase = if ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
+        if ($null -ne $RawState.PSObject.Properties['final_verified'] -and [bool]$RawState.final_verified) {
+            "COMPLETE"
+        } else {
+            "PUBLISHED_PENDING_METADATA"
+        }
+    } elseif ($null -ne $RawState.PSObject.Properties['attested'] -and [bool]$RawState.attested) {
+        "QUALIFIED"
+    } else {
+        "READY"
+    }
+
+    $canonical = [ordered]@{
+        schema_version = 2
+        phase = [string]$phase
+        source_sha = if ($null -ne $RawState.PSObject.Properties['source_sha']) { [string]$RawState.source_sha } else { "" }
+        version = if ($null -ne $RawState.PSObject.Properties['version']) { [string]$RawState.version } else { "" }
+        channel = if ($null -ne $RawState.PSObject.Properties['channel']) { [string]$RawState.channel } else { "" }
+        tag = if ($null -ne $RawState.PSObject.Properties['tag']) { [string]$RawState.tag } else { "" }
+        release_id = if ($null -ne $RawState.PSObject.Properties['release_id']) { [int64]$RawState.release_id } else { [int64]0 }
+        draft = if ($null -ne $RawState.PSObject.Properties['draft']) { [bool]$RawState.draft } else { $true }
+        published = if ($null -ne $RawState.PSObject.Properties['published']) { [bool]$RawState.published } else { $false }
+        immutable = if ($null -ne $RawState.PSObject.Properties['immutable']) { [bool]$RawState.immutable } else { $false }
+        published_at = if ($null -ne $RawState.PSObject.Properties['published_at']) { [string]$RawState.published_at } else { "" }
+        attested = if ($null -ne $RawState.PSObject.Properties['attested']) { [bool]$RawState.attested } else { $false }
+        qualified_after_download = if ($null -ne $RawState.PSObject.Properties['qualified_after_download']) { [bool]$RawState.qualified_after_download } else { $false }
+        qualification_assets = if ($null -ne $RawState.PSObject.Properties['qualification_assets'] -and $null -ne $RawState.qualification_assets) { @($RawState.qualification_assets) } else { @() }
+        public_assets = if ($null -ne $RawState.PSObject.Properties['public_assets'] -and $null -ne $RawState.public_assets) { @($RawState.public_assets) } else { @() }
+        metadata_promoted = if ($null -ne $RawState.PSObject.Properties['metadata_promoted']) { [bool]$RawState.metadata_promoted } else { $false }
+        promoted_at = if ($null -ne $RawState.PSObject.Properties['promoted_at']) { [string]$RawState.promoted_at } else { "" }
+        final_verified = if ($null -ne $RawState.PSObject.Properties['final_verified']) { [bool]$RawState.final_verified } else { $false }
+        final_verified_at = if ($null -ne $RawState.PSObject.Properties['final_verified_at']) { [string]$RawState.final_verified_at } else { "" }
+        reconciled_from_remote = if ($null -ne $RawState.PSObject.Properties['reconciled_from_remote']) { [bool]$RawState.reconciled_from_remote } else { $false }
+        last_reconciled_at = if ($null -ne $RawState.PSObject.Properties['last_reconciled_at']) { [string]$RawState.last_reconciled_at } else { "" }
+        failure_class = if ($null -ne $RawState.PSObject.Properties['failure_class']) { [string]$RawState.failure_class } else { "" }
+        error_message = if ($null -ne $RawState.PSObject.Properties['error_message']) { [string]$RawState.error_message } else { "" }
+    }
+
+    $obj = [pscustomobject]$canonical
+    Assert-V4ReleaseStateSchema $obj
+    return $obj
+}
+
 function Get-State {
-    $state = Read-JsonFile (Get-StatePath)
-    if ([string]$state.source_sha -ne $SourceSha.ToLowerInvariant() -or
-        [string]$state.version -ne $Version -or [string]$state.channel -ne $Channel) {
+    $raw = Read-JsonFile (Get-StatePath)
+    if ([string]$raw.source_sha -ne $SourceSha.ToLowerInvariant() -or
+        [string]$raw.version -ne $Version -or [string]$raw.channel -ne $Channel) {
         Fail "state file release identity does not match this invocation"
     }
-    return $state
+    Assert-V4ReleaseStateSchema $raw
+    return $raw
 }
 
 function Get-ReleaseCollection([string]$Repository) {
@@ -711,7 +923,7 @@ function Assert-ExistingUnpublishedDraftMatchesRequest([object]$Release) {
     }
     if (-not [bool]$Release.draft -or
         -not [string]::IsNullOrWhiteSpace([string]$Release.published_at)) {
-        Fail "repository already contains published release/tag $Tag; published releases and tags are immutable"
+        Fail "repository already contains published release/tag $Tag; published releases and tags are immutable; fresh transaction refuses adoption"
     }
     $source = $SourceSha.ToLowerInvariant()
     $targetCommitish = [string]$Release.target_commitish
@@ -747,7 +959,7 @@ function Assert-NoExistingReleaseTag {
     $ref = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/ref/tags/$Tag") -AllowNotFound
     if ($null -ne $ref) {
         if ($null -eq $release) {
-            Fail "repository already contains tag $Tag without an unpublished draft; published tags are immutable"
+            Fail "repository already contains tag $Tag without an unpublished draft; published tags are immutable; fresh transaction refuses adoption"
         }
         Invoke-GitHubApi -Arguments @(
             "api", "--method", "DELETE", "repos/$repository/git/refs/tags/$Tag"
@@ -805,21 +1017,15 @@ function Invoke-CreateDraft {
             Fail "repository upload did not return the exact uploaded asset: $releaseName"
         }
     }
-    $state = [ordered]@{
-        schema_version = 1
-        source_sha = $SourceSha.ToLowerInvariant()
-        version = $Version
-        channel = $Channel
-        tag = $Tag
-        release_id = [int64]$release.id
-        draft = $true
-        published = $false
-        immutable = $false
-        attested = $false
-        qualified_after_download = $false
-        qualification_assets = @($manifest.qualification_assets)
-        public_assets = $publicRecords
-    }
+    $state = New-V4CanonicalReleaseState `
+        -SourceSha $SourceSha `
+        -Version $Version `
+        -Channel $Channel `
+        -Tag $Tag `
+        -ReleaseId [int64]$release.id `
+        -QualificationAssets @($manifest.qualification_assets) `
+        -PublicAssets $publicRecords `
+        -Phase "READY"
     Write-JsonFile (Get-StatePath) $state
     Write-Host "V4 repository draft: PASS (tag=$Tag; exact qualified asset set uploaded)"
 }
@@ -1130,34 +1336,164 @@ function Invoke-QualifyDownloaded {
 
 function Invoke-PublishDraft {
     $state = Get-State
-    if (-not $state.draft -or $state.published) { Fail "publish requires the same unpublished draft" }
-    if (-not $state.qualified_after_download -or -not $state.attested) { Fail "publish requires downloaded qualification and exact-byte attestations" }
     $repository = Get-CanonicalRepository
-    $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)")
-    if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "draft is missing or has changed before publication" }
+
+    # Local transaction authority validation:
+    # Only adopt a remotely published release if local transaction contains exact
+    # release_id, source SHA, tag, version, and qualified assets.
+    if ([int64]$state.release_id -le 0) { Fail "publish requires an existing release id in local transaction state" }
+    if ([string]$state.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "local transaction source SHA does not match" }
+    if ([string]$state.tag -ne $Tag) { Fail "local transaction tag does not match" }
+    if ([string]$state.version -ne $Version) { Fail "local transaction version does not match" }
+    if (-not $state.qualified_after_download -or -not $state.attested) {
+        Fail "publish requires downloaded qualification and exact-byte attestations"
+    }
+
     $candidateManifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
     $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
+
+    foreach ($expected in $publicRecords) {
+        $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
+        $downloadedPath = Join-Path (Get-EffectiveStateRoot) "downloaded/$expectedReleaseName"
+        if (-not (Test-Path -LiteralPath $downloadedPath -PathType Leaf)) {
+            Fail "qualified downloaded asset is missing before publication: $expectedReleaseName"
+        }
+        $downloadedHash = (Get-FileHash -LiteralPath $downloadedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($downloadedHash -ne [string]$expected.sha256) {
+            Fail "qualified downloaded digest changed before publication: $expectedReleaseName"
+        }
+    }
+
+    # Preflight: Check remote GitHub release state BEFORE deciding to patch.
+    # GitHub/external state is the source of truth after every irreversible mutation.
+    $preflightRelease = $null
+    try {
+        $preflightRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)") -AllowNotFound
+    } catch {
+        $preflightRelease = $null
+    }
+
+    $isAlreadyPublishedRemotely = ($null -ne $preflightRelease -and -not [bool]$preflightRelease.draft -and -not [string]::IsNullOrWhiteSpace([string]$preflightRelease.published_at))
+
+    if ($isAlreadyPublishedRemotely) {
+        # Remote mutation has ALREADY occurred! Reconcile from external truth.
+        if ([string]$preflightRelease.tag_name -ne $Tag) {
+            Fail "existing published remote release tag mismatch: expected $Tag, got $($preflightRelease.tag_name)"
+        }
+        $targetCommitish = [string]$preflightRelease.target_commitish
+        if ($targetCommitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
+            Fail "existing published remote release source SHA mismatch: expected $SourceSha, got $targetCommitish"
+        }
+        $published = $preflightRelease
+        Assert-ImmutableRelease $published
+        Assert-ExactPublicReleaseAssetSet $published
+        Assert-ExactAssetSet $published $publicRecords
+
+        $state.phase = "PUBLISHED_PENDING_METADATA"
+        $state.draft = $false
+        $state.published = $true
+        $state.immutable = [bool]$published.immutable
+        $state.published_at = [string]$published.published_at
+        $state.reconciled_from_remote = $true
+        $state.last_reconciled_at = Get-CanonicalUtcTimestamp
+        $state.failure_class = ""
+        $state.error_message = ""
+        Write-JsonFile (Get-StatePath) $state
+        Write-Host "V4 immutable publication: PASS (reconciled from already-published external release; tag=$Tag; published_at=$($state.published_at))"
+        return
+    }
+
+    # If not already published remotely, enforce preconditions for publishing unpublished draft:
+    if (-not $state.draft -or $state.published) { Fail "publish requires an unpublished draft" }
+
+    $release = $preflightRelease
+    if ($null -eq $release) {
+        $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)")
+    }
+    if ($null -eq $release -or -not $release.draft -or [string]$release.tag_name -ne $Tag) {
+        Fail "draft is missing or has changed before publication"
+    }
     Assert-ExactPublicReleaseAssetSet $release
     Assert-ExactAssetSet $release $publicRecords
     foreach ($expected in $publicRecords) {
         $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
         $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedReleaseName })
         if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne [int64]$expected.size) { Fail "draft asset changed before publication: $expectedReleaseName" }
-        $downloadedPath = Join-Path (Get-EffectiveStateRoot) "downloaded/$expectedReleaseName"
-        $downloadedHash = (Get-FileHash -LiteralPath $downloadedPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($downloadedHash -ne [string]$expected.sha256) { Fail "qualified downloaded digest changed before publication: $expectedReleaseName" }
     }
     $patchPath = Join-Path (Get-EffectiveStateRoot) "publish-release.json"
     Write-JsonFile $patchPath ([ordered]@{ draft = $false; make_latest = Get-V4ReleaseMakeLatestValue $Channel })
-    $published = Invoke-GitHubApi -Arguments @("api", "--method", "PATCH", "repos/$repository/releases/$($state.release_id)", "--input", $patchPath)
-    if ($published.draft -or [string]::IsNullOrWhiteSpace([string]$published.published_at)) { Fail "repository did not publish the already-qualified draft" }
-    Assert-ImmutableRelease $published
-    $state.draft = $false
-    $state.published = $true
-    $state.immutable = $true
-    $state.published_at = [string]$published.published_at
+
+    $published = $null
+    $patchError = $null
+    try {
+        $published = Invoke-GitHubApi -Arguments @("api", "--method", "PATCH", "repos/$repository/releases/$($state.release_id)", "--input", $patchPath)
+    } catch {
+        $patchError = $_
+    }
+
+    # Step 3: ALWAYS GET exact release_id.
+    # No assumption that a failed local command means a remote mutation did not occur.
+    $remoteRelease = $null
+    $getRemoteError = $null
+    try {
+        $remoteRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)") -AllowNotFound
+        if ($null -eq $remoteRelease) {
+            $remoteRelease = Get-ReleaseForTag $repository $Tag
+        }
+    } catch {
+        $getRemoteError = $_
+    }
+
+    # Branch 1: If exact release is published + immutable: reconcile to PUBLISHED_PENDING_METADATA.
+    if ($null -ne $remoteRelease -and -not [bool]$remoteRelease.draft -and -not [string]::IsNullOrWhiteSpace([string]$remoteRelease.published_at)) {
+        if ([string]$remoteRelease.tag_name -ne $Tag) {
+            Fail "published remote release tag mismatch: expected $Tag, got $($remoteRelease.tag_name)"
+        }
+        $targetCommitish = [string]$remoteRelease.target_commitish
+        if ($targetCommitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
+            Fail "published remote release source SHA mismatch: expected $SourceSha, got $targetCommitish"
+        }
+        Assert-ImmutableRelease $remoteRelease
+        Assert-ExactPublicReleaseAssetSet $remoteRelease
+        Assert-ExactAssetSet $remoteRelease $publicRecords
+
+        $state.phase = "PUBLISHED_PENDING_METADATA"
+        $state.draft = $false
+        $state.published = $true
+        $state.immutable = [bool]$remoteRelease.immutable
+        $state.published_at = [string]$remoteRelease.published_at
+        $state.reconciled_from_remote = $true
+        $state.last_reconciled_at = Get-CanonicalUtcTimestamp
+        $state.failure_class = ""
+        $state.error_message = ""
+        Write-JsonFile (Get-StatePath) $state
+        Write-Host "V4 immutable publication: PASS (reconciled from verified remote release; tag=$Tag; published_at=$($state.published_at))"
+        return
+    }
+
+    # Branch 2: If exact release remains draft: RECOVERABLE_PRE_PUBLICATION_FAILURE (fail closed).
+    if ($null -ne $remoteRelease -and [bool]$remoteRelease.draft) {
+        $errMsg = if ($null -ne $patchError) { $patchError.Exception.Message } else { "release remains draft after publication attempt" }
+        $state.failure_class = "RECOVERABLE_PRE_PUBLICATION_FAILURE"
+        $state.error_message = $errMsg
+        $state.last_reconciled_at = Get-CanonicalUtcTimestamp
+        Write-JsonFile (Get-StatePath) $state
+        Fail "RECOVERABLE_PRE_PUBLICATION_FAILURE: publication did not complete; remote release $($state.release_id) remains draft ($errMsg)"
+    }
+
+    # Branch 3: If remote truth cannot be obtained (GET fails/unavailable): REMOTE_STATE_UNKNOWN (fail closed).
+    $unknownMsg = if ($null -ne $getRemoteError) {
+        $getRemoteError.Exception.Message
+    } elseif ($null -ne $patchError) {
+        $patchError.Exception.Message
+    } else {
+        "unable to retrieve release $($state.release_id) after publication attempt"
+    }
+    $state.failure_class = "REMOTE_STATE_UNKNOWN"
+    $state.error_message = $unknownMsg
+    $state.last_reconciled_at = Get-CanonicalUtcTimestamp
     Write-JsonFile (Get-StatePath) $state
-    Write-Host "V4 immutable publication: PASS (assets were not replaced or rebuilt)"
+    Fail "REMOTE_STATE_UNKNOWN: unable to verify remote publication state for release $($state.release_id) ($unknownMsg)"
 }
 
 function Invoke-RecordAttestations {
@@ -1171,6 +1507,7 @@ function Invoke-RecordAttestations {
     # immediately before this state. This state records that externally
     # verified fact without fabricating local provenance.
     $state.attested = $true
+    $state.phase = "QUALIFIED"
     Write-JsonFile (Get-StatePath) $state
     Write-Host "V4 exact-byte attestations: PASS (OIDC/source binding verified by workflow)"
 }
@@ -1242,7 +1579,10 @@ function Invoke-PromoteMetadata {
     $payloadPath = Join-Path $root "metadata-commit.json"
     Write-JsonFile $payloadPath $payload
     Invoke-GitHubApi -Arguments @("api", "--method", "PUT", "repos/$repository/contents/channels/$Channel/latest.json", "--input", $payloadPath) | Out-Null
-    Write-Host "V4 metadata promotion: PASS (channel=$Channel; publication already immutable)"
+    $state.metadata_promoted = $true
+    $state.promoted_at = Get-CanonicalUtcTimestamp
+    Write-JsonFile (Get-StatePath) $state
+    Write-Host "V4 metadata promotion: PASS (channel=$Channel; publication already immutable; phase=$($state.phase))"
 }
 
 function Invoke-FinalVerify {
@@ -1308,7 +1648,11 @@ function Invoke-FinalVerify {
         "-ExpectedSourceSha", $SourceSha,
         "-StateRoot", (Get-EffectiveStateRoot)
     ) "GitHub Latest channel policy verification failed"
-    Write-Host "V4 final public verification: PASS (published immutable assets and metadata are exact)"
+    $state.phase = "COMPLETE"
+    $state.final_verified = $true
+    $state.final_verified_at = Get-CanonicalUtcTimestamp
+    Write-JsonFile (Get-StatePath) $state
+    Write-Host "V4 final public verification: PASS (phase=COMPLETE; published immutable assets and metadata are exact)"
 }
 
 function Invoke-SelfTest {

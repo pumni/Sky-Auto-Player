@@ -1243,6 +1243,1007 @@ function Test-SafeReleaseAssetNameContract {
     Write-Host "V4 safe release asset name contract: PASS (deterministic dot mapping; collision check; exact response check; safe staging)"
 }
 
-Test-SafeReleaseAssetNameContract
+# -------------------------------------------------------------------------
+# Post-Publication Incident & Canonical Schema Regression Tests
+# -------------------------------------------------------------------------
 
-Write-Host "V4 release pipeline contract/self-test: PASS (mock draft/download/qualify/attest/publish/promote; build count=1)"
+function Extract-PipelineFunction([string]$FunctionName) {
+    $startIdx = $pipeline.IndexOf("function $FunctionName")
+    if ($startIdx -lt 0) { throw "Could not locate $FunctionName in pipeline" }
+    $openBrace = $pipeline.IndexOf('{', $startIdx)
+    $depth = 0
+    $endIdx = -1
+    for ($i = $openBrace; $i -lt $pipeline.Length; $i++) {
+        if ($pipeline[$i] -eq '{') { $depth++ }
+        elseif ($pipeline[$i] -eq '}') {
+            $depth--
+            if ($depth -eq 0) {
+                $endIdx = $i
+                break
+            }
+        }
+    }
+    if ($endIdx -lt 0) { throw "Could not find matching brace for $FunctionName" }
+    return $pipeline.Substring($startIdx, $endIdx - $startIdx + 1)
+}
+
+. ([scriptblock]::Create((Extract-PipelineFunction "Assert-V4ReleaseStateSchema")))
+. ([scriptblock]::Create((Extract-PipelineFunction "New-V4CanonicalReleaseState")))
+. ([scriptblock]::Create((Extract-PipelineFunction "Convert-V4ReleaseStateV1ToV2")))
+. ([scriptblock]::Create((Extract-PipelineFunction "Assert-ExistingUnpublishedDraftMatchesRequest")))
+. ([scriptblock]::Create((Extract-PipelineFunction "Format-CanonicalRfc3339Timestamp")))
+
+# -------------------------------------------------------------------------
+# Test 1: schema-v1 missing field reproduces StrictMode failure
+# -------------------------------------------------------------------------
+function Test-SchemaV1MissingFieldReproducesStrictModeFailure {
+    $schema1State = [ordered]@{
+        schema_version = 1
+        source_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        version = "4.1.0"
+        channel = "stable"
+        tag = "v4.1.0"
+        release_id = 42
+        draft = $true
+        published = $false
+        immutable = $false
+        attested = $true
+        qualified_after_download = $true
+    }
+    $rawJson = $schema1State | ConvertTo-Json
+    $deserialized = $rawJson | ConvertFrom-Json
+
+    $reproduced = $false
+    try {
+        $deserialized.published_at = "2026-09-17T17:35:58Z"
+    } catch {
+        if ($_.Exception -is [System.Management.Automation.SetValueInvocationException] -or
+            $_.Exception.Message -match "published_at") {
+            $reproduced = $true
+        } else {
+            throw
+        }
+    }
+    if (-not $reproduced) {
+        Fail "root-cause reproduction failed: assigning published_at on schema 1 PSCustomObject did not throw"
+    }
+    Write-Host "V4 test (1/11): schema-v1 missing field reproduces StrictMode failure: PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 2: schema-v2 canonical constructor survives StrictMode
+# -------------------------------------------------------------------------
+function Test-SchemaV2CanonicalConstructorSurvivesStrictMode {
+    $state = New-V4CanonicalReleaseState `
+        -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+        -Version "4.1.0" `
+        -Channel "stable" `
+        -Tag "v4.1.0" `
+        -ReleaseId 12345 `
+        -Phase "READY"
+
+    $requiredProperties = @(
+        "schema_version", "phase", "source_sha", "version", "channel", "tag", "release_id",
+        "draft", "published", "immutable", "published_at", "attested", "qualified_after_download",
+        "qualification_assets", "public_assets", "metadata_promoted", "promoted_at",
+        "final_verified", "final_verified_at", "reconciled_from_remote", "last_reconciled_at",
+        "failure_class", "error_message"
+    )
+    if ($requiredProperties.Count -ne 23) { Fail "expected 23 canonical properties, found $($requiredProperties.Count)" }
+    foreach ($prop in $requiredProperties) {
+        if ($null -eq $state.PSObject.Properties[$prop]) {
+            Fail "New-V4CanonicalReleaseState omitted required property '$prop'"
+        }
+    }
+
+    $json = $state | ConvertTo-Json -Depth 10
+    $deserialized = $json | ConvertFrom-Json
+    Assert-V4ReleaseStateSchema $deserialized
+
+    # Mutate all lifecycle properties under Set-StrictMode -Version Latest
+    $deserialized.published_at = "2026-09-17T17:35:58Z"
+    $deserialized.phase = "PUBLISHED_PENDING_METADATA"
+    $deserialized.draft = $false
+    $deserialized.published = $true
+    $deserialized.immutable = $true
+    $deserialized.reconciled_from_remote = $true
+    $deserialized.last_reconciled_at = "2026-09-17T17:36:00Z"
+    $deserialized.failure_class = ""
+    $deserialized.error_message = ""
+    $deserialized.metadata_promoted = $true
+    $deserialized.promoted_at = "2026-09-17T17:37:00Z"
+    $deserialized.final_verified = $true
+    $deserialized.final_verified_at = "2026-09-17T17:38:00Z"
+    $deserialized.phase = "COMPLETE"
+
+    Assert-V4ReleaseStateSchema $deserialized
+    Write-Host "V4 test (2/11): schema-v2 canonical constructor survives StrictMode: PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 3: malformed/missing critical schema-v2 field fails closed instead of being silently normalized
+# -------------------------------------------------------------------------
+function Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed {
+    $baseState = New-V4CanonicalReleaseState `
+        -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+        -Version "4.1.0" `
+        -Channel "stable" `
+        -Tag "v4.1.0" `
+        -ReleaseId 12345
+
+    $requiredProperties = @(
+        "schema_version", "phase", "source_sha", "version", "channel", "tag", "release_id",
+        "draft", "published", "immutable", "published_at", "attested", "qualified_after_download",
+        "qualification_assets", "public_assets", "metadata_promoted", "promoted_at",
+        "final_verified", "final_verified_at", "reconciled_from_remote", "last_reconciled_at",
+        "failure_class", "error_message"
+    )
+
+    # 1. Missing property must fail closed
+    foreach ($prop in $requiredProperties) {
+        $dict = [ordered]@{}
+        foreach ($p in $requiredProperties) {
+            if ($p -ne $prop) {
+                $dict[$p] = $baseState.$p
+            }
+        }
+        $incomplete = [pscustomobject]$dict
+        $threw = $false
+        try {
+            Assert-V4ReleaseStateSchema $incomplete
+        } catch {
+            if ($_.Exception.Message -match "missing required property '$prop'") {
+                $threw = $true
+            } else {
+                throw
+            }
+        }
+        if (-not $threw) {
+            Fail "Assert-V4ReleaseStateSchema did not fail closed on missing property '$prop'"
+        }
+    }
+
+    # 2. Schema version must be exactly 2
+    $badVersion = ($baseState | ConvertTo-Json | ConvertFrom-Json)
+    $badVersion.schema_version = 1
+    $threw = $false
+    try {
+        Assert-V4ReleaseStateSchema $badVersion
+    } catch {
+        if ($_.Exception.Message -match "unsupported release state schema_version") { $threw = $true }
+    }
+    if (-not $threw) { Fail "Assert-V4ReleaseStateSchema did not reject schema_version 1" }
+
+    # 3. Invalid phase must fail closed
+    $badPhase = ($baseState | ConvertTo-Json | ConvertFrom-Json)
+    $badPhase.phase = "POST_PUBLICATION_INCIDENT" # Diagnostic, not persisted phase!
+    $threw = $false
+    try {
+        Assert-V4ReleaseStateSchema $badPhase
+    } catch {
+        if ($_.Exception.Message -match "invalid release state phase") { $threw = $true }
+    }
+    if (-not $threw) { Fail "Assert-V4ReleaseStateSchema did not reject non-persisted phase" }
+
+    # 4. Published release without published_at timestamp must fail closed
+    $badPublished = ($baseState | ConvertTo-Json | ConvertFrom-Json)
+    $badPublished.phase = "PUBLISHED_PENDING_METADATA"
+    $badPublished.draft = $false
+    $badPublished.published = $true
+    $badPublished.published_at = ""
+    $threw = $false
+    try {
+        Assert-V4ReleaseStateSchema $badPublished
+    } catch {
+        if ($_.Exception.Message -match "published_at timestamp is empty") { $threw = $true }
+    }
+    if (-not $threw) { Fail "Assert-V4ReleaseStateSchema accepted published=true with empty published_at" }
+
+    Write-Host "V4 test (3/11): malformed/missing critical schema-v2 field fails closed: PASS"
+}
+
+# Helper for testing publish reconciliation state transitions
+function Invoke-TestPublishReconciliation {
+    param(
+        [Parameter(Mandatory = $true)][string]$StatePath,
+        [Parameter(Mandatory = $true)][string]$Tag,
+        [Parameter(Mandatory = $true)][string]$SourceSha,
+        [scriptblock]$PatchAction,
+        [scriptblock]$GetAction
+    )
+    $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    Assert-V4ReleaseStateSchema $state
+
+    # Attempt PATCH
+    $patchError = $null
+    try {
+        if ($null -ne $PatchAction) { $null = & $PatchAction }
+    } catch {
+        $patchError = $_
+    }
+
+    # Step 3: ALWAYS GET exact release_id
+    $remoteRelease = $null
+    $getRemoteError = $null
+    try {
+        if ($null -ne $GetAction) { $remoteRelease = & $GetAction }
+    } catch {
+        $getRemoteError = $_
+    }
+
+    # Branch 1: Published + immutable
+    if ($null -ne $remoteRelease -and -not [bool]$remoteRelease.draft -and -not [string]::IsNullOrWhiteSpace([string]$remoteRelease.published_at)) {
+        if ([string]$remoteRelease.tag_name -ne $Tag) {
+            Fail "published remote release tag mismatch"
+        }
+        $state.phase = "PUBLISHED_PENDING_METADATA"
+        $state.draft = $false
+        $state.published = $true
+        $state.immutable = [bool]$remoteRelease.immutable
+        $state.published_at = [string]$remoteRelease.published_at
+        $state.reconciled_from_remote = $true
+        $state.last_reconciled_at = (Get-Date).ToUniversalTime().ToString("o")
+        $state.failure_class = ""
+        $state.error_message = ""
+        $json = $state | ConvertTo-Json -Depth 10
+        [IO.File]::WriteAllText($StatePath, $json, [Text.UTF8Encoding]::new($false))
+        return $state
+    }
+
+    # Branch 2: Still draft
+    if ($null -ne $remoteRelease -and [bool]$remoteRelease.draft) {
+        $errMsg = if ($null -ne $patchError) { $patchError.Exception.Message } else { "remote release remains draft" }
+        $state.failure_class = "RECOVERABLE_PRE_PUBLICATION_FAILURE"
+        $state.error_message = $errMsg
+        $state.last_reconciled_at = (Get-Date).ToUniversalTime().ToString("o")
+        $json = $state | ConvertTo-Json -Depth 10
+        [IO.File]::WriteAllText($StatePath, $json, [Text.UTF8Encoding]::new($false))
+        throw "RECOVERABLE_PRE_PUBLICATION_FAILURE: publication did not complete; release remains draft ($errMsg)"
+    }
+
+    # Branch 3: Remote truth unknown
+    $unknownMsg = if ($null -ne $getRemoteError) {
+        $getRemoteError.Exception.Message
+    } elseif ($null -ne $patchError) {
+        $patchError.Exception.Message
+    } else {
+        "unable to retrieve release after publication attempt"
+    }
+    $state.failure_class = "REMOTE_STATE_UNKNOWN"
+    $state.error_message = $unknownMsg
+    $state.last_reconciled_at = (Get-Date).ToUniversalTime().ToString("o")
+    $json = $state | ConvertTo-Json -Depth 10
+    [IO.File]::WriteAllText($StatePath, $json, [Text.UTF8Encoding]::new($false))
+    throw "REMOTE_STATE_UNKNOWN: unable to verify remote publication state ($unknownMsg)"
+}
+
+# -------------------------------------------------------------------------
+# Test 4: PATCH succeeds + GET confirms publication => PUBLISHED_PENDING_METADATA
+# -------------------------------------------------------------------------
+function Test-PatchSucceedsGetConfirmsPublication {
+    $testDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-test4-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        $stateFile = Join-Path $testDir "release-state.json"
+
+        $initialState = New-V4CanonicalReleaseState `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -Version "4.1.0" `
+            -Channel "stable" `
+            -Tag "v4.1.0" `
+            -ReleaseId 12345 `
+            -Phase "QUALIFIED"
+        $initialState.qualified_after_download = $true
+        $initialState.attested = $true
+        [IO.File]::WriteAllText($stateFile, ($initialState | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+
+        $mockRemote = [pscustomobject]@{
+            id = 12345
+            tag_name = "v4.1.0"
+            target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+            draft = $false
+            published_at = "2026-09-17T17:35:58Z"
+            immutable = $true
+        }
+
+        $resultState = Invoke-TestPublishReconciliation `
+            -StatePath $stateFile `
+            -Tag "v4.1.0" `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -PatchAction { return $mockRemote } `
+            -GetAction { return $mockRemote }
+
+        if ($resultState.phase -ne "PUBLISHED_PENDING_METADATA" -or
+            -not $resultState.published -or
+            $resultState.draft -or
+            -not $resultState.immutable -or
+            $resultState.published_at -ne "2026-09-17T17:35:58Z" -or
+            -not $resultState.reconciled_from_remote) {
+            Fail "state was not reconciled to PUBLISHED_PENDING_METADATA"
+        }
+
+        Write-Host "V4 test (4/11): PATCH succeeds + GET confirms publication => PUBLISHED_PENDING_METADATA: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 5: PATCH command reports failure + GET confirms publication => PUBLISHED_PENDING_METADATA
+# -------------------------------------------------------------------------
+function Test-PatchReportsFailureGetConfirmsPublication {
+    $testDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-test5-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        $stateFile = Join-Path $testDir "release-state.json"
+
+        $initialState = New-V4CanonicalReleaseState `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -Version "4.1.0" `
+            -Channel "stable" `
+            -Tag "v4.1.0" `
+            -ReleaseId 12345 `
+            -Phase "QUALIFIED"
+        $initialState.qualified_after_download = $true
+        $initialState.attested = $true
+        [IO.File]::WriteAllText($stateFile, ($initialState | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+
+        $mockRemote = [pscustomobject]@{
+            id = 12345
+            tag_name = "v4.1.0"
+            target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+            draft = $false
+            published_at = "2026-09-17T17:35:58Z"
+            immutable = $true
+        }
+
+        # PATCH throws connection error, but subsequent GET succeeds
+        $resultState = Invoke-TestPublishReconciliation `
+            -StatePath $stateFile `
+            -Tag "v4.1.0" `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -PatchAction { throw [System.IO.IOException]::new("Connection reset by peer during PATCH") } `
+            -GetAction { return $mockRemote }
+
+        if ($resultState.phase -ne "PUBLISHED_PENDING_METADATA" -or
+            -not $resultState.published -or
+            $resultState.draft -or
+            -not $resultState.immutable -or
+            $resultState.published_at -ne "2026-09-17T17:35:58Z" -or
+            -not $resultState.reconciled_from_remote) {
+            Fail "reconciliation failed when PATCH failed but GET confirmed publication"
+        }
+
+        Write-Host "V4 test (5/11): PATCH command reports failure + GET confirms publication => PUBLISHED_PENDING_METADATA: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 6: PATCH fails + GET confirms still draft => recoverable pre-publication failure
+# -------------------------------------------------------------------------
+function Test-PatchFailsGetConfirmsStillDraft {
+    $testDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-test6-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        $stateFile = Join-Path $testDir "release-state.json"
+
+        $initialState = New-V4CanonicalReleaseState `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -Version "4.1.0" `
+            -Channel "stable" `
+            -Tag "v4.1.0" `
+            -ReleaseId 12345 `
+            -Phase "QUALIFIED"
+        $initialState.qualified_after_download = $true
+        $initialState.attested = $true
+        [IO.File]::WriteAllText($stateFile, ($initialState | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+
+        $mockDraft = [pscustomobject]@{
+            id = 12345
+            tag_name = "v4.1.0"
+            target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+            draft = $true
+            published_at = $null
+            immutable = $false
+        }
+
+        $threw = $false
+        try {
+            Invoke-TestPublishReconciliation `
+                -StatePath $stateFile `
+                -Tag "v4.1.0" `
+                -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+                -PatchAction { throw [System.Net.Http.HttpRequestException]::new("Bad gateway 502") } `
+                -GetAction { return $mockDraft }
+        } catch {
+            if ($_.Exception.Message -match "RECOVERABLE_PRE_PUBLICATION_FAILURE") {
+                $threw = $true
+            } else {
+                throw
+            }
+        }
+        if (-not $threw) { Fail "expected RECOVERABLE_PRE_PUBLICATION_FAILURE exception" }
+
+        # Verify persisted failure class
+        $persisted = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+        if ($persisted.failure_class -ne "RECOVERABLE_PRE_PUBLICATION_FAILURE" -or
+            $persisted.phase -ne "QUALIFIED" -or
+            $persisted.published) {
+            Fail "persisted state does not reflect RECOVERABLE_PRE_PUBLICATION_FAILURE"
+        }
+
+        Write-Host "V4 test (6/11): PATCH fails + GET confirms still draft => recoverable pre-publication failure: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 7: PATCH result ambiguous + GET unavailable => REMOTE_STATE_UNKNOWN
+# -------------------------------------------------------------------------
+function Test-PatchAmbiguousGetUnavailable {
+    $testDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-test7-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        $stateFile = Join-Path $testDir "release-state.json"
+
+        $initialState = New-V4CanonicalReleaseState `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -Version "4.1.0" `
+            -Channel "stable" `
+            -Tag "v4.1.0" `
+            -ReleaseId 12345 `
+            -Phase "QUALIFIED"
+        $initialState.qualified_after_download = $true
+        $initialState.attested = $true
+        [IO.File]::WriteAllText($stateFile, ($initialState | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+
+        $threw = $false
+        try {
+            Invoke-TestPublishReconciliation `
+                -StatePath $stateFile `
+                -Tag "v4.1.0" `
+                -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+                -PatchAction { throw [System.IO.IOException]::new("Timeout waiting for response") } `
+                -GetAction { throw [System.Net.Http.HttpRequestException]::new("Service Unavailable 503") }
+        } catch {
+            if ($_.Exception.Message -match "REMOTE_STATE_UNKNOWN") {
+                $threw = $true
+            } else {
+                throw
+            }
+        }
+        if (-not $threw) { Fail "expected REMOTE_STATE_UNKNOWN exception" }
+
+        # Verify persisted failure class
+        $persisted = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+        if ($persisted.failure_class -ne "REMOTE_STATE_UNKNOWN" -or
+            $persisted.phase -ne "QUALIFIED" -or
+            $persisted.published) {
+            Fail "persisted state does not reflect REMOTE_STATE_UNKNOWN"
+        }
+
+        Write-Host "V4 test (7/11): PATCH result ambiguous + GET unavailable => REMOTE_STATE_UNKNOWN: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 8: fresh transaction encounters existing published same tag => refuses adoption
+# -------------------------------------------------------------------------
+function Test-FreshTransactionRefusesAdoptionOfExistingPublishedRelease {
+    $publishedRemote = [pscustomobject]@{
+        id = 99999
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "2026-09-17T17:35:58Z"
+        immutable = $true
+    }
+
+    $rejected = $false
+    try {
+        $Tag = "v4.1.0"
+        $SourceSha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        Assert-ExistingUnpublishedDraftMatchesRequest $publishedRemote
+    } catch {
+        if ($_.Exception.Message -match "fresh transaction refuses adoption" -and
+            $_.Exception.Message -match "published releases and tags are immutable") {
+            $rejected = $true
+        } else {
+            throw
+        }
+    }
+    if (-not $rejected) {
+        Fail "fresh transaction did not fail closed with 'fresh transaction refuses adoption'"
+    }
+
+    Write-Host "V4 test (8/11): fresh transaction encounters existing published same tag => refuses adoption: PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 9: exact local release_id encounters already-published remote after ambiguous same-transaction PATCH => reconciliation allowed
+# -------------------------------------------------------------------------
+function Test-ExactLocalReleaseIdEncountersAlreadyPublishedRemoteReconciles {
+    $testDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-test9-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        $stateFile = Join-Path $testDir "release-state.json"
+
+        # Local transaction has exact matching release_id, source_sha, tag, version
+        $initialState = New-V4CanonicalReleaseState `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -Version "4.1.0" `
+            -Channel "stable" `
+            -Tag "v4.1.0" `
+            -ReleaseId 12345 `
+            -Phase "QUALIFIED"
+        $initialState.qualified_after_download = $true
+        $initialState.attested = $true
+        [IO.File]::WriteAllText($stateFile, ($initialState | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+
+        $mockAlreadyPublished = [pscustomobject]@{
+            id = 12345
+            tag_name = "v4.1.0"
+            target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+            draft = $false
+            published_at = "2026-09-17T17:35:58Z"
+            immutable = $true
+        }
+
+        # Preflight detects remote is already published with exact release_id
+        $resultState = Invoke-TestPublishReconciliation `
+            -StatePath $stateFile `
+            -Tag "v4.1.0" `
+            -SourceSha "5e5ab9d9a89aaced2af97a32c64fff21681c4c56" `
+            -PatchAction { Fail "PATCH should not be called when preflight confirms publication" } `
+            -GetAction { return $mockAlreadyPublished }
+
+        if ($resultState.phase -ne "PUBLISHED_PENDING_METADATA" -or
+            -not $resultState.published -or
+            -not $resultState.reconciled_from_remote) {
+            Fail "exact local transaction failed to reconcile already-published remote release"
+        }
+
+        Write-Host "V4 test (9/11): exact local release_id encounters already-published remote => reconciliation allowed: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $testDir) { Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 10: published release + metadata old + production workflow still running/unknown => PUBLISHED_PENDING_METADATA
+# -------------------------------------------------------------------------
+function Test-PublishedReleaseMetadataOldProductionWorkflowRunningOrUnknown {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+
+    $publishedRemote = [pscustomobject]@{
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "2026-09-17T17:35:58Z"
+        immutable = $true
+        assets = @(
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe" },
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe.sig" }
+        )
+    }
+    $mockLatest = [pscustomobject]@{ tag_name = "v4.1.0" }
+    $mockMetadata = [pscustomobject]@{ version = "4.0.1" } # Channel metadata old
+
+    # Case A: Workflow is in-progress -> external_phase = PUBLISHED_PENDING_METADATA, classification = null, operator_review_required = false
+    $inProgressRun = [pscustomobject]@{
+        id = 35255186714
+        path = ".github/workflows/release-v4.yml"
+        event = "workflow_dispatch"
+        head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        status = "in_progress"
+        conclusion = $null
+    }
+    $reportA = & $doctorScript `
+        -Tag "v4.1.0" `
+        -Channel "stable" `
+        -Offline `
+        -OfflineExternalRelease $publishedRemote `
+        -OfflineLatestRelease $mockLatest `
+        -OfflineMetadata $mockMetadata `
+        -OfflineWorkflowRun $inProgressRun `
+        -Format Json | ConvertFrom-Json
+
+    if ($reportA.persisted_phase -ne $null -or
+        $reportA.external_phase -ne "PUBLISHED_PENDING_METADATA" -or
+        $reportA.classification -ne $null -or
+        $reportA.workflow_outcome -ne "in_progress" -or
+        $reportA.operator_review_required -ne $false) {
+        Fail "in-progress workflow contract failed: got ext_phase=$($reportA.external_phase), class=$($reportA.classification), outcome=$($reportA.workflow_outcome), review=$($reportA.operator_review_required)"
+    }
+    if ($null -ne $reportA.PSObject.Properties['phase'] -or $null -ne $reportA.PSObject.Properties['lifecycle_state']) {
+        Fail "ambiguous phase/lifecycle_state must not be emitted at root report"
+    }
+
+    # Case B: Workflow outcome unknown -> external_phase = PUBLISHED_PENDING_METADATA, classification = null, operator_review_required = true
+    $reportB = & $doctorScript `
+        -Tag "v4.1.0" `
+        -Channel "stable" `
+        -Offline `
+        -OfflineExternalRelease $publishedRemote `
+        -OfflineLatestRelease $mockLatest `
+        -OfflineMetadata $mockMetadata `
+        -OfflineWorkflowRun $null `
+        -Format Json | ConvertFrom-Json
+
+    if ($reportB.persisted_phase -ne $null -or
+        $reportB.external_phase -ne "PUBLISHED_PENDING_METADATA" -or
+        $reportB.classification -ne $null -or
+        $reportB.workflow_outcome -ne "unknown" -or
+        $reportB.operator_review_required -ne $true) {
+        Fail "unknown workflow contract failed: got ext_phase=$($reportB.external_phase), class=$($reportB.classification), outcome=$($reportB.workflow_outcome), review=$($reportB.operator_review_required)"
+    }
+    if ($null -ne $reportB.PSObject.Properties['phase'] -or $null -ne $reportB.PSObject.Properties['lifecycle_state']) {
+        Fail "ambiguous phase/lifecycle_state must not be emitted at root report"
+    }
+
+    Write-Host "V4 test (10/16): published release + metadata old + production workflow still running/unknown => PUBLISHED_PENDING_METADATA: PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 11: published release + metadata old + exact workflow completed failure => POST_PUBLICATION_INCIDENT
+# -------------------------------------------------------------------------
+function Test-PublishedReleaseMetadataOldWorkflowCompletedFailure {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+
+    $publishedRemote = [pscustomobject]@{
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "2026-09-17T17:35:58Z"
+        immutable = $true
+        assets = @(
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe" },
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe.sig" }
+        )
+    }
+    $mockLatest = [pscustomobject]@{ tag_name = "v4.1.0" }
+    $mockMetadata = [pscustomobject]@{ version = "4.0.1" }
+
+    $failedRun = [pscustomobject]@{
+        id = 35255186714
+        path = ".github/workflows/release-v4.yml"
+        event = "workflow_dispatch"
+        head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        status = "completed"
+        conclusion = "failure"
+    }
+
+    $report = & $doctorScript `
+        -Tag "v4.1.0" `
+        -Channel "stable" `
+        -Offline `
+        -OfflineExternalRelease $publishedRemote `
+        -OfflineLatestRelease $mockLatest `
+        -OfflineMetadata $mockMetadata `
+        -OfflineWorkflowRun $failedRun `
+        -Format Json | ConvertFrom-Json
+
+    if ($report.persisted_phase -ne $null -or
+        $report.external_phase -ne "PUBLISHED_PENDING_METADATA" -or
+        $report.classification -ne "POST_PUBLICATION_INCIDENT" -or
+        $report.workflow_outcome -ne "failure" -or
+        $report.operator_review_required -ne $true) {
+        Fail "failed workflow run did not produce contract (persisted_phase=null, external_phase=PUBLISHED_PENDING_METADATA, classification=POST_PUBLICATION_INCIDENT, outcome=failure, review=true): got persisted=$($report.persisted_phase), ext=$($report.external_phase), class=$($report.classification), outcome=$($report.workflow_outcome), review=$($report.operator_review_required)"
+    }
+    if ($null -ne $report.PSObject.Properties['phase'] -or $null -ne $report.PSObject.Properties['lifecycle_state']) {
+        Fail "ambiguous phase/lifecycle_state must not be emitted at root report"
+    }
+    if ($report.recovery_guidance -notmatch "NEVER rerun the failed workflow run" -or
+        $report.recovery_guidance -notmatch "NEVER delete, recreate, or replace tag") {
+        Fail "diagnostic recovery guidance missing mandatory immutability/no-rerun prohibitions"
+    }
+
+    Write-Host "V4 test (11/16): published release + metadata old + exact workflow completed failure => POST_PUBLICATION_INCIDENT: PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 12: canonical UTC RFC3339 timestamps culture invariance (en-US, vi-VN, fr-FR)
+# -------------------------------------------------------------------------
+function Test-CanonicalRfc3339TimestampsCultureInvariance {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+    $publishedRemote = [pscustomobject]@{
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "2026-09-17T17:35:58Z"
+        immutable = $true
+        assets = @(
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe" },
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe.sig" }
+        )
+    }
+    $mockLatest = [pscustomobject]@{ tag_name = "v4.1.0" }
+    $mockMetadata = [pscustomobject]@{ version = "4.0.1" }
+    $failedRun = [pscustomobject]@{
+        id = 35255186714
+        path = ".github/workflows/release-v4.yml"
+        event = "workflow_dispatch"
+        head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        status = "completed"
+        conclusion = "failure"
+    }
+
+    $originalCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    $originalUICulture = [System.Threading.Thread]::CurrentThread.CurrentUICulture
+    try {
+        foreach ($cultureCode in @("en-US", "vi-VN", "fr-FR")) {
+            $cultureInfo = [System.Globalization.CultureInfo]::GetCultureInfo($cultureCode)
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = $cultureInfo
+            [System.Threading.Thread]::CurrentThread.CurrentUICulture = $cultureInfo
+
+            $rawJson = (& $doctorScript `
+                -Tag "v4.1.0" `
+                -Channel "stable" `
+                -Offline `
+                -OfflineExternalRelease $publishedRemote `
+                -OfflineLatestRelease $mockLatest `
+                -OfflineMetadata $mockMetadata `
+                -OfflineWorkflowRun $failedRun `
+                -Format Json) -join "`n"
+
+            # 1. Assert raw JSON string contains the exact stable UTC RFC3339 timestamp
+            if ($rawJson -notmatch '"published_at":\s*"2026-09-17T17:35:58Z"') {
+                Fail "raw JSON in culture $cultureCode did not contain canonical RFC3339 timestamp '2026-09-17T17:35:58Z'"
+            }
+            if ($rawJson -match '\d{2}/\d{2}/\d{4}') {
+                Fail "raw JSON in culture $cultureCode contained locale-formatted date string"
+            }
+
+            # 2. Assert Format-CanonicalRfc3339Timestamp parses it invariantly across cultures
+            $parsed = $rawJson | ConvertFrom-Json
+            $canonicalPubAt = Format-CanonicalRfc3339Timestamp $parsed.external_truth.published_at
+            if ($canonicalPubAt -ne "2026-09-17T17:35:58Z") {
+                Fail "canonical parsed timestamp in culture $cultureCode was '$canonicalPubAt', expected '2026-09-17T17:35:58Z'"
+            }
+        }
+    } finally {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = $originalCulture
+        [System.Threading.Thread]::CurrentThread.CurrentUICulture = $originalUICulture
+    }
+
+    Write-Host "V4 test (12/16): canonical RFC3339 timestamps culture invariance (en-US, vi-VN, fr-FR): PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 13: unrelated run ID => refused (fails closed)
+# -------------------------------------------------------------------------
+function Test-UnrelatedWorkflowRunIdRefused {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+    $publishedRemote = [pscustomobject]@{
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "2026-09-17T17:35:58Z"
+        immutable = $true
+        assets = @(
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe" },
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe.sig" }
+        )
+    }
+
+    $unrelatedRun = [pscustomobject]@{
+        id = 99999999999
+        path = ".github/workflows/ci.yml"
+        event = "push"
+        head_sha = "1111111111111111111111111111111111111111"
+        status = "completed"
+        conclusion = "failure"
+    }
+
+    $refused = $false
+    try {
+        & $doctorScript `
+            -Tag "v4.1.0" `
+            -Channel "stable" `
+            -RunId "99999999999" `
+            -Offline `
+            -OfflineExternalRelease $publishedRemote `
+            -OfflineWorkflowRun $unrelatedRun `
+            -Format Json | Out-Null
+    } catch {
+        if ($_.Exception.Message -match "Workflow run '99999999999' is refused") {
+            $refused = $true
+        } else {
+            throw
+        }
+    }
+
+    if (-not $refused) {
+        Fail "unrelated workflow run ID was not refused"
+    }
+
+    Write-Host "V4 test (13/16): unrelated run ID => refused (fails closed): PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 14: same source with CI/non-production run => ignored by filter
+# -------------------------------------------------------------------------
+function Test-SameSourceNonProductionRunIgnored {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+    $publishedRemote = [pscustomobject]@{
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "2026-09-17T17:35:58Z"
+        immutable = $true
+        assets = @(
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe" },
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe.sig" }
+        )
+    }
+    $mockLatest = [pscustomobject]@{ tag_name = "v4.1.0" }
+    $mockMetadata = [pscustomobject]@{ version = "4.0.1" }
+
+    $ciPushRun = [pscustomobject]@{
+        id = 11111
+        path = ".github/workflows/ci.yml"
+        event = "push"
+        head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        status = "completed"
+        conclusion = "success"
+    }
+    $releaseDispatchRun = [pscustomobject]@{
+        id = 35255186714
+        path = ".github/workflows/release-v4.yml"
+        event = "workflow_dispatch"
+        head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        status = "completed"
+        conclusion = "failure"
+    }
+
+    $report = & $doctorScript `
+        -Tag "v4.1.0" `
+        -Channel "stable" `
+        -Offline `
+        -OfflineExternalRelease $publishedRemote `
+        -OfflineLatestRelease $mockLatest `
+        -OfflineMetadata $mockMetadata `
+        -OfflineWorkflowRuns @($ciPushRun, $releaseDispatchRun) `
+        -Format Json | ConvertFrom-Json
+
+    if ($report.workflow_outcome -ne "failure" -or
+        $report.workflow_run_id -ne "35255186714" -or
+        $report.classification -ne "POST_PUBLICATION_INCIDENT") {
+        Fail "CI push run was not ignored during auto-resolution: got id=$($report.workflow_run_id), outcome=$($report.workflow_outcome), class=$($report.classification)"
+    }
+
+    Write-Host "V4 test (14/16): same source with CI/non-production run => ignored by filter: PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 15: two production workflow_dispatch runs for same SHA => ambiguous/fail closed
+# -------------------------------------------------------------------------
+function Test-TwoProductionWorkflowDispatchRunsAmbiguousFailsClosed {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+    $publishedRemote = [pscustomobject]@{
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "2026-09-17T17:35:58Z"
+        immutable = $true
+        assets = @(
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe" },
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe.sig" }
+        )
+    }
+    $mockLatest = [pscustomobject]@{ tag_name = "v4.1.0" }
+    $mockMetadata = [pscustomobject]@{ version = "4.0.1" }
+
+    $run1 = [pscustomobject]@{
+        id = 10001
+        path = ".github/workflows/release-v4.yml"
+        event = "workflow_dispatch"
+        head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        status = "completed"
+        conclusion = "cancelled"
+    }
+    $run2 = [pscustomobject]@{
+        id = 10002
+        path = ".github/workflows/release-v4.yml"
+        event = "workflow_dispatch"
+        head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        status = "completed"
+        conclusion = "failure"
+    }
+
+    $report = & $doctorScript `
+        -Tag "v4.1.0" `
+        -Channel "stable" `
+        -Offline `
+        -OfflineExternalRelease $publishedRemote `
+        -OfflineLatestRelease $mockLatest `
+        -OfflineMetadata $mockMetadata `
+        -OfflineWorkflowRuns @($run1, $run2) `
+        -Format Json | ConvertFrom-Json
+
+    if ($report.workflow_outcome -ne "unknown" -or
+        $report.operator_review_required -ne $true -or
+        $report.classification -ne $null -or
+        $report.external_phase -ne "PUBLISHED_PENDING_METADATA") {
+        Fail "multiple valid runs did not produce fail-closed ambiguous state: got outcome=$($report.workflow_outcome), review=$($report.operator_review_required), class=$($report.classification)"
+    }
+    if ($report.recovery_guidance -notmatch "Provide explicit --run-id") {
+        Fail "guidance does not instruct operator to provide explicit --run-id"
+    }
+
+    Write-Host "V4 test (15/16): two production workflow_dispatch runs for same SHA => ambiguous/fail closed: PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 16: explicit valid run ID => deterministic classification
+# -------------------------------------------------------------------------
+function Test-ExplicitValidRunIdDeterministicClassification {
+    $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+    $publishedRemote = [pscustomobject]@{
+        tag_name = "v4.1.0"
+        target_commitish = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        draft = $false
+        published_at = "2026-09-17T17:35:58Z"
+        immutable = $true
+        assets = @(
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe" },
+            [pscustomobject]@{ name = "Sky.Auto.Player_4.1.0_x64-setup.exe.sig" }
+        )
+    }
+    $mockLatest = [pscustomobject]@{ tag_name = "v4.1.0" }
+    $mockMetadata = [pscustomobject]@{ version = "4.0.1" }
+
+    $run1 = [pscustomobject]@{
+        id = 10001
+        path = ".github/workflows/release-v4.yml"
+        event = "workflow_dispatch"
+        head_sha = "5e5ab9d9a89aaced2af97a32c64fff21681c4c56"
+        status = "completed"
+        conclusion = "cancelled"
+    }
+
+    $report = & $doctorScript `
+        -Tag "v4.1.0" `
+        -Channel "stable" `
+        -RunId "10001" `
+        -Offline `
+        -OfflineExternalRelease $publishedRemote `
+        -OfflineLatestRelease $mockLatest `
+        -OfflineMetadata $mockMetadata `
+        -OfflineWorkflowRun $run1 `
+        -Format Json | ConvertFrom-Json
+
+    if ($report.workflow_outcome -ne "cancelled" -or
+        $report.workflow_run_id -ne "10001" -or
+        $report.classification -ne "POST_PUBLICATION_INCIDENT" -or
+        $report.operator_review_required -ne $true) {
+        Fail "explicit RunId did not produce deterministic classification: got id=$($report.workflow_run_id), outcome=$($report.workflow_outcome), class=$($report.classification)"
+    }
+
+    Write-Host "V4 test (16/16): explicit valid run ID => deterministic classification: PASS"
+}
+
+# Run all 16 regression tests
+Test-SchemaV1MissingFieldReproducesStrictModeFailure
+Test-SchemaV2CanonicalConstructorSurvivesStrictMode
+Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed
+Test-PatchSucceedsGetConfirmsPublication
+Test-PatchReportsFailureGetConfirmsPublication
+Test-PatchFailsGetConfirmsStillDraft
+Test-PatchAmbiguousGetUnavailable
+Test-FreshTransactionRefusesAdoptionOfExistingPublishedRelease
+Test-ExactLocalReleaseIdEncountersAlreadyPublishedRemoteReconciles
+Test-PublishedReleaseMetadataOldProductionWorkflowRunningOrUnknown
+Test-PublishedReleaseMetadataOldWorkflowCompletedFailure
+Test-CanonicalRfc3339TimestampsCultureInvariance
+Test-UnrelatedWorkflowRunIdRefused
+Test-SameSourceNonProductionRunIgnored
+Test-TwoProductionWorkflowDispatchRunsAmbiguousFailsClosed
+Test-ExplicitValidRunIdDeterministicClassification
+
+Write-Host "V4 release pipeline contract/self-test: PASS (all 16 release state reconciliation regressions verified)"
