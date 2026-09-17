@@ -4,8 +4,11 @@ Closes #300
 
 Base: `9a32f0b8ce20d26e0fa31e48353ab6abd0822b3a`
 
-Implementation revision head used for the evidence runs:
+Benchmark implementation revision used for the evidence runs:
 `4be4a65fe60288bed55645a88f0c845eef0dd0b9`
+
+Current PR head (documentation-only commit after those runs):
+`187a3dae726b7c139e23eb55c52a387d67c62d87`
 
 ## Prepared-stream suspension reconciliation
 
