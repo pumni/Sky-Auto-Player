@@ -91,10 +91,6 @@ pub struct WorkerMetricsLocal {
     pub final_gate_focus_losses: u64,
     pub final_gate_lease_expirations: u64,
     pub final_sender_window_expirations: u64,
-    pub(crate) late_rescued_down_boundaries: u64,
-    pub(crate) late_rescued_down_keys: u64,
-    pub(crate) max_late_rescued_down_lateness_ticks: u64,
-    pub(crate) max_late_rescued_down_excess_ticks: u64,
     /// Missed Down boundaries where a prior-Up release floor itself exceeded
     /// the latest feasible Down start.
     pub release_floor_infeasible_boundaries: u64,
@@ -126,7 +122,9 @@ pub struct WorkerMetricsLocal {
     pub production_release_floor_violation_count: u64,
     pub production_hold_floor_ticks: u64,
     pub production_release_floor_ticks: u64,
-    pub production_same_call_same_key_retrigger_count: u64,
+    /// Corruption/forensics evidence for a packet that violated the
+    /// disjoint Up/Down mask contract before realtime execution.
+    pub production_same_key_overlap_forensics_count: u64,
     pub production_anchor_overwrite_count: u64,
     pub production_unmatched_up_count: u64,
     pub production_anomaly_ring_overwrite_count: u64,

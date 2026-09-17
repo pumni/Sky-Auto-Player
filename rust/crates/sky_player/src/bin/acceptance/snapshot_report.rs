@@ -79,7 +79,7 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "production_release_floor_violation_count": snapshot.production_release_floor_violation_count,
         "production_hold_floor_ticks": snapshot.production_hold_floor_ticks,
         "production_release_floor_ticks": snapshot.production_release_floor_ticks,
-        "production_same_call_same_key_retrigger_count": snapshot.production_same_call_same_key_retrigger_count,
+        "production_same_key_overlap_forensics_count": snapshot.production_same_key_overlap_forensics_count,
         "production_anchor_overwrite_count": snapshot.production_anchor_overwrite_count,
         "production_unmatched_up_count": snapshot.production_unmatched_up_count,
         "production_anomaly_ring_overwrite_count": snapshot.production_anomaly_ring_overwrite_count,

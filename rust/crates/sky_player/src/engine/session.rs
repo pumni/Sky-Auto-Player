@@ -5,11 +5,7 @@ use super::shared::{
 };
 use super::worker::Worker;
 use super::*;
-use crate::engine::config::{
-    MAX_NORMAL_DOWN_START_TOLERANCE_US, MIN_NORMAL_DOWN_START_TOLERANCE_US,
-    MIN_PRODUCTION_PREROLL_US, STEP_NORMAL_DOWN_START_TOLERANCE_US, TimingOptions,
-    validate_timing_constants,
-};
+use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_timing_constants};
 use crate::engine::{EnginePollSnapshot, EnginePollStatus};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
@@ -173,19 +169,6 @@ pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<
         ));
     }
 
-    if timing.normal_down_start_tolerance_us < MIN_NORMAL_DOWN_START_TOLERANCE_US
-        || timing.normal_down_start_tolerance_us > MAX_NORMAL_DOWN_START_TOLERANCE_US
-        || !(timing.normal_down_start_tolerance_us - MIN_NORMAL_DOWN_START_TOLERANCE_US)
-            .is_multiple_of(STEP_NORMAL_DOWN_START_TOLERANCE_US)
-    {
-        return Err(format!(
-            "native timing contract mismatch: normal_down_start_tolerance_us is {}, expected [{}, {}] with step {}",
-            timing.normal_down_start_tolerance_us,
-            MIN_NORMAL_DOWN_START_TOLERANCE_US,
-            MAX_NORMAL_DOWN_START_TOLERANCE_US,
-            STEP_NORMAL_DOWN_START_TOLERANCE_US,
-        ));
-    }
     Ok(())
 }
 
@@ -270,8 +253,8 @@ impl NativeDispatchSession {
                 skip_requested: AtomicBool::new(false),
                 panic_requested: AtomicBool::new(false),
                 supervisor_expired: AtomicBool::new(false),
-                // Supervisor hint only: the worker still performs the
-                // authoritative foreground-HWND check before every Down.
+                // Supervisor-published focus state is the precision-path hint;
+                // final admission revalidates only the target/focus atomics.
                 focus_active: AtomicBool::new(true),
                 #[cfg(any(test, feature = "test-support"))]
                 command_timing: CommandTimingState::default(),
@@ -934,8 +917,8 @@ impl NativeDispatchSession {
                 .production_min_down_start_after_up_completion_ticks,
             production_release_floor_violation_count: local
                 .production_release_floor_violation_count,
-            production_same_call_same_key_retrigger_count: local
-                .production_same_call_same_key_retrigger_count,
+            production_same_key_overlap_forensics_count: local
+                .production_same_key_overlap_forensics_count,
             production_anchor_overwrite_count: local.production_anchor_overwrite_count,
             production_unmatched_up_count: local.production_unmatched_up_count,
             production_anomaly_ring_overwrite_count: local.production_anomaly_ring_overwrite_count,
@@ -1071,8 +1054,8 @@ impl NativeDispatchSession {
                 .production_release_floor_violation_count,
             production_hold_floor_ticks: local.production_hold_floor_ticks,
             production_release_floor_ticks: local.production_release_floor_ticks,
-            production_same_call_same_key_retrigger_count: local
-                .production_same_call_same_key_retrigger_count,
+            production_same_key_overlap_forensics_count: local
+                .production_same_key_overlap_forensics_count,
             production_anchor_overwrite_count: local.production_anchor_overwrite_count,
             production_unmatched_up_count: local.production_unmatched_up_count,
             production_anomaly_ring_overwrite_count: local.production_anomaly_ring_overwrite_count,
@@ -1378,55 +1361,5 @@ mod tests {
             heartbeat_store < watchdog_spawn,
             "watchdog must not observe the construction-time heartbeat"
         );
-    }
-
-    #[test]
-    fn validate_native_timing_contract_rejects_out_of_range_or_unaligned_tolerance() {
-        use super::validate_native_timing_contract;
-        use crate::engine::config::TimingOptions;
-
-        let valid = TimingOptions {
-            game_fps: 60,
-            frame_us: 16_667,
-            frame_base_hold_us: 16_667,
-            timing_margin_us: 500,
-            min_hold_us: 17_167,
-            min_release_gap_us: 17_167,
-            normal_down_start_tolerance_us: 2_500,
-            strict_timing: false,
-            strict_down_completion_late_us: 2_000,
-            strict_up_completion_late_us: 2_000,
-            input_path_warn_us: 1_000,
-        };
-        assert!(validate_native_timing_contract(&valid).is_ok());
-
-        for tolerance in [
-            2_000, 2_500, 3_000, 3_500, 4_000, 4_500, 5_000, 5_500, 6_000, 6_500, 7_000, 7_500,
-            8_000, 8_500, 9_000, 9_500, 10_000,
-        ] {
-            let mut opts = valid;
-            opts.normal_down_start_tolerance_us = tolerance;
-            assert!(
-                validate_native_timing_contract(&opts).is_ok(),
-                "tolerance {tolerance} must be accepted"
-            );
-        }
-
-        for invalid in [
-            0, 1_000, 1_500, 1_999, 2_001, 2_499, 2_501, 2_999, 3_250, 10_001, 10_500, 12_000,
-        ] {
-            let mut opts = valid;
-            opts.normal_down_start_tolerance_us = invalid;
-            let result = validate_native_timing_contract(&opts);
-            assert!(
-                result.is_err(),
-                "tolerance {invalid} must be rejected by native timing contract"
-            );
-            assert!(
-                result
-                    .unwrap_err()
-                    .contains("normal_down_start_tolerance_us")
-            );
-        }
     }
 }

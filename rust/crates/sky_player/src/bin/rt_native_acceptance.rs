@@ -397,7 +397,6 @@ fn production_options(
             frame_us: ACCEPTANCE_FRAME_US,
             frame_base_hold_us: ACCEPTANCE_FRAME_US,
             timing_margin_us,
-            normal_down_start_tolerance_us: 2_500,
             strict_timing: false,
             strict_down_completion_late_us: 2_000,
             strict_up_completion_late_us: 2_000,

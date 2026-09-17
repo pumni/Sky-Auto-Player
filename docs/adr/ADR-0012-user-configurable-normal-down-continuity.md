@@ -2,6 +2,11 @@
 
 Status: Accepted.
 
+> Historical record only. Superseded for the current normal-dispatch contract
+> by [ADR-0014](ADR-0014-deterministic-prepared-dispatch.md). The former
+> configurable normal tolerance is retired. The legacy persisted key is only
+> accepted and discarded during migration.
+
 Supersedes: only the fixed internal/non-configurable nature of normal-playback
 down-start tolerance in [ADR-0011](ADR-0011-normal-playback-down-continuity.md).
 ADR-0010 and ADR-0011 non-additive formula, strict-mode sender cutoff,

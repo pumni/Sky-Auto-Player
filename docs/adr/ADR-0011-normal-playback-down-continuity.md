@@ -2,6 +2,11 @@
 
 Status: Accepted.
 
+> Historical record only. Superseded for the current normal-dispatch contract
+> by [ADR-0014](ADR-0014-deterministic-prepared-dispatch.md). The former
+> normal continuity cutoff and rescue counters are retired; strict physical
+> feasibility and transport safety evidence remain useful.
+
 Supersedes: only the normal-playback sender-cutoff decision in
 [ADR-0010](ADR-0010-physical-timing-feasibility.md). ADR-0010 remains the
 historical record of the physical-feasibility redesign; its strict-mode,

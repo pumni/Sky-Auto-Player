@@ -147,7 +147,6 @@ pub struct DiagnosticsSnapshotDto {
     pub hold_frames: f64,
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,
-    pub normal_down_start_tolerance_us: u64,
     pub min_hold_us: u64,
     pub min_release_gap_us: u64,
     pub timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,

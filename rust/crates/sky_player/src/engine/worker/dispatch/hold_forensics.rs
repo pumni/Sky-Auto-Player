@@ -46,7 +46,9 @@ pub(crate) struct ProductionHoldForensics {
     release_floor_samples: u64,
     min_down_start_after_up_completion_ticks: u64,
     release_floor_violation_count: u64,
-    same_call_same_key_retrigger_count: u64,
+    /// Corruption/forensics evidence only: production packet preparation is
+    /// required to reject overlapping directions before realtime execution.
+    same_key_overlap_forensics_count: u64,
     anchor_overwrite_count: u64,
     unmatched_up_count: u64,
     structural_anomaly_count: u64,
@@ -178,8 +180,8 @@ impl ProductionHoldForensics {
             if self.anchors[slot].valid {
                 let anchor = self.anchors[slot];
                 if same_call_down_mask & bit != 0 {
-                    self.same_call_same_key_retrigger_count =
-                        self.same_call_same_key_retrigger_count.saturating_add(1);
+                    self.same_key_overlap_forensics_count =
+                        self.same_key_overlap_forensics_count.saturating_add(1);
                     self.record_anomaly(
                         6,
                         slot,
@@ -366,8 +368,7 @@ impl ProductionHoldForensics {
         metrics.production_release_floor_violation_count = self.release_floor_violation_count;
         metrics.production_hold_floor_ticks = self.frame_base_hold_ticks;
         metrics.production_release_floor_ticks = self.frame_ticks;
-        metrics.production_same_call_same_key_retrigger_count =
-            self.same_call_same_key_retrigger_count;
+        metrics.production_same_key_overlap_forensics_count = self.same_key_overlap_forensics_count;
         metrics.production_anchor_overwrite_count = self.anchor_overwrite_count;
         metrics.production_unmatched_up_count = self.unmatched_up_count;
         metrics.production_anomaly_ring_overwrite_count = self.anomaly_ring_overwrites;

@@ -146,8 +146,8 @@ impl ProductionDispatchTestHarness {
     }
 
     /// Build two independent Down boundaries five milliseconds apart.  The
-    /// first boundary is used for a controlled late-rescue send; the second
-    /// proves that its authored target remains unchanged.
+    /// first boundary is used for a controlled late send; the second proves
+    /// that its authored target remains unchanged.
     pub fn new_dense_future_boundary_for_test() -> Self {
         Self::new_dense_future_boundary_with_gap_for_test(5_000)
     }
@@ -915,18 +915,6 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
-    pub fn configure_normal_down_start_tolerance_for_test(
-        &mut self,
-        tolerance_us: u64,
-    ) -> Result<(), String> {
-        self.timing.normal_down_start_tolerance_ticks = self
-            .resources
-            .clock
-            .duration_from_us(tolerance_us)
-            .map_err(|error| format!("test Down continuity tolerance conversion: {error:?}"))?;
-        Ok(())
-    }
-
     pub fn is_physically_feasible_for_test(
         &self,
         target: QpcTicks,
@@ -1152,31 +1140,6 @@ impl ProductionDispatchTestHarness {
     /// Query coordinator chord integrity lost count.
     pub fn chord_integrity_lost_count(&self) -> u64 {
         self.runtime.chord_integrity_lost_count()
-    }
-
-    pub fn late_rescued_down_metrics_for_test(&self) -> (u64, u64, u64, u64) {
-        (
-            self.local_metrics.late_rescued_down_boundaries,
-            self.local_metrics.late_rescued_down_keys,
-            self.local_metrics.max_late_rescued_down_lateness_ticks,
-            self.local_metrics.max_late_rescued_down_excess_ticks,
-        )
-    }
-
-    pub fn late_rescued_down_metrics_us_for_test(&self) -> Result<(u64, u64, u64, u64), String> {
-        let (boundaries, keys, lateness_ticks, excess_ticks) =
-            self.late_rescued_down_metrics_for_test();
-        let lateness_us = self
-            .resources
-            .clock
-            .duration_to_us(DurationTicks::from_raw(lateness_ticks))
-            .map_err(|error| format!("late-rescue lateness conversion: {error:?}"))?;
-        let excess_us = self
-            .resources
-            .clock
-            .duration_to_us(DurationTicks::from_raw(excess_ticks))
-            .map_err(|error| format!("late-rescue excess conversion: {error:?}"))?;
-        Ok((boundaries, keys, lateness_us, excess_us))
     }
 
     pub fn final_sender_window_expirations_for_test(&self) -> u64 {
@@ -2701,11 +2664,6 @@ impl ProductionDispatchTestHarness {
     pub fn dispatch_authored_with_plan(&mut self, plan: &NextDispatchPlan) -> DispatchStep {
         let physical_target_qpc = plan.physical_target_qpc().expect("physical target QPC");
         let physical = plan.physical().expect("physical dispatch plan");
-        let physical_latest_down_start_qpc = self.runtime.latest_down_start_for_test(
-            physical_target_qpc,
-            physical.authored_view.packet_masks.up_mask,
-            physical.authored_view.packet_masks.down_mask,
-        );
         let physical_timing_window = self
             .runtime
             .physical_timing_window_for_test(
@@ -2723,7 +2681,6 @@ impl ProductionDispatchTestHarness {
             effective_now_ticks: self.effective_now_ticks,
             now_ticks,
             physical_timing_window,
-            physical_latest_down_start_qpc,
             down_admission: DownBoundaryAdmission::Authorized,
             focus_loss_fault: false,
             supervisor_expired: &self.supervisor_expired,

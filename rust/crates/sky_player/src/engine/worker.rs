@@ -124,10 +124,6 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[allow(dead_code)]
-pub(crate) const NORMAL_PLAYBACK_DOWN_START_TOLERANCE_US: u64 =
-    super::config::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US;
-
 /// Test-only accounting for the immutable preparation boundary.
 ///
 /// In production this is a zero-sized no-op, so the proof instrumentation
@@ -327,20 +323,6 @@ impl WorkerRuntime {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn latest_down_start_for_test(
-        &self,
-        authored_target_qpc: QpcTicks,
-        up_mask: u16,
-        down_mask: u16,
-    ) -> Option<QpcTicks> {
-        self.physical_timing_guard
-            .as_ref()?
-            .query(authored_target_qpc, up_mask, down_mask)
-            .ok()?
-            .latest_down_start_qpc
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn physical_timing_window_for_test(
         &self,
         authored_target_qpc: QpcTicks,
@@ -431,10 +413,6 @@ pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
     #[allow(dead_code)]
     pub(super) timing_margin_ticks: DurationTicks,
-    /// Persisted normal-playback compatibility value. Normal sender
-    /// admission intentionally keeps this dormant; strict mode uses the
-    /// physical latest-start boundary instead.
-    pub(super) normal_down_start_tolerance_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
@@ -465,7 +443,6 @@ impl WorkerTimingState {
         Self {
             strict_timing: false,
             timing_margin_ticks: DurationTicks::ZERO,
-            normal_down_start_tolerance_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,

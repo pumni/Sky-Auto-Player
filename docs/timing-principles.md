@@ -16,15 +16,14 @@ microsecond conversions.
 | --- | --- |
 | `scheduled` | Immutable authored playback timestamp. |
 | `physical_target` | Absolute QPC target derived from the playback epoch and `scheduled`. |
-| `final_policy_qpc` | Worker-owned QPC sample taken after final control/target/focus checks and used directly for lease evaluation; those predicates are not evaluated at the timestamp itself. |
+| `final_policy_qpc` | Worker-owned QPC evidence sampled after final control/target/focus checks; it is not a musical deadline. |
 | `pre_call_qpc` | True sender-owned QPC sample taken after payload resolution and immediately before `SendInput`; the latest-start comparison follows it. |
 | `sendinput_completion_qpc` | QPC sample returned after the prepared SendInput call. |
 | `pre_call_to_completion` | The interval from `pre_call_qpc` to `sendinput_completion_qpc`; compatibility field `send_duration_us` retains this value. |
 | `timing_margin` | User-owned persisted value, from `0` through `3,000 µs` in `100 µs` steps; frozen into each prepared session. |
 | `min_hold` | Fixed materialized floor equal to the selected frame-based hold plus the exact user Timing Margin. |
 | `physical_latest_down_start` | `authored_target + Timing Margin`; the physical/musical feasibility boundary for a Down-bearing packet. |
-| `normal_down_start_tolerance` | User-configurable persisted value in Advanced settings (`2,000` through `10,000 µs` in `500 µs` steps, default `2,500 µs`), frozen into each prepared session. Total bound from authored target in normal playback only; not added to Timing Margin, not used in strict mode. |
-| `sender_cutoff` | Strict mode uses `physical_latest_down_start`; normal playback uses `max(physical_latest_down_start, authored_target + normal_down_start_tolerance)`. |
+| `sender_cutoff` | Strict/diagnostic mode may use `physical_latest_down_start`; normal playback has no late-note cutoff. |
 | `musical_up_not_before` | Per-key floor from the last successful Down completion plus `frame_base_hold_ticks`. |
 | `down_not_before` | Per-key floor from the last successful Up completion plus `frame_ticks`. |
 | `min_release_gap` | One frame period plus the same exact user Timing Margin between a same-key Up and the next same-key Down. |
@@ -68,48 +67,34 @@ dispatch. If the interval is invalid, native admission fails before any musical 
 sent; the worker never reschedules the Up target.
 
 The release gap is authored statically and uses the same user-owned margin as
-the hold floor. A fixed-size worker-owned `PhysicalTimingGuard` also tracks
-completion-relative physical floors for each instrument key. After a
-successful Down, its musical Up cannot start before that Down's completion
-plus the base hold. After a successful Up, the next same-key Down cannot start
-before that Up's completion plus one frame. These floors are combined with
-the immutable authored targets; they never move a target or rebase the
-timeline.
+the hold floor. A fixed-size worker-owned `PhysicalTimingGuard` remains
+available for strict/diagnostic physical forensics. Normal prepared playback
+uses authored targets only; completion-relative floors do not move a normal
+target or rebase the timeline.
 
-Every Down-bearing packet needs an exact future authorization for its frozen
-boundary. Physical feasibility is evaluated against the Timing Margin boundary;
-normal playback has a separate bounded sender-continuity cutoff:
+Strict/diagnostic Down-bearing packets evaluate physical feasibility against the
+Timing Margin boundary. Normal prepared packets use the immutable authored
+target and have no late-note sender cutoff:
 
 ```text
 physical_latest_down_start_qpc = authored_target_qpc + timing_margin_ticks
 packet_not_before_qpc = max(authored_target_qpc, relevant physical floors)
 packet_not_before_qpc <= physical_latest_down_start_qpc
-normal_sender_cutoff_qpc = max(
-    physical_latest_down_start_qpc,
-    authored_target_qpc + normal_down_start_tolerance_ticks,
-)
 strict_sender_cutoff_qpc = physical_latest_down_start_qpc
-normal pre_call_qpc <= normal_sender_cutoff_qpc
+normal pre_call_qpc = authoritative sender evidence; no lateness cutoff
 strict pre_call_qpc <= strict_sender_cutoff_qpc
 ```
 
-If the physical floor is later than `physical_latest_down_start_qpc`, the worker
-consumes the authorization and classifies the complete Down chord as
-`PhysicalWindowExpired`; continuity tolerance cannot rescue it. Any required
-musical Up prefix then waits independently for its hold floor and is sent once;
-later authored times remain unchanged. The sender repeats the mode-specific
-cutoff check immediately before `SendInput`; equality is permitted and the first
-QPC tick beyond the effective cutoff sends no Down. Emergency and cleanup Ups
-bypass musical floors. Partial, uncertain, or post-send clock failures
+If the physical floor is later than `physical_latest_down_start_qpc`, strict or
+diagnostic dispatch classifies the complete Down chord as
+`PhysicalWindowExpired`. Normal prepared playback does not turn scheduler
+lateness into a drop. Emergency and cleanup Ups bypass musical floors. Partial, uncertain, or post-send clock failures
 invalidate guard evidence and fail closed through cleanup.
 
 Timing Margin remains the only user-owned authored headroom: it extends the
-authored hold and release targets and defines `physical_latest_down_start`.
-The user-configurable `normal_down_start_tolerance` (Settings → Advanced) is
-a normal-playback continuity bound measured from the authored target (default
-`2,500 µs`, range `2,000–10,000 µs` in `500 µs` steps). It is not added to Timing
-Margin, does not extend physical feasibility, is not a dispatch lead, and is
-not adapted dynamically during playback.
+authored hold and release targets and defines `physical_latest_down_start` for
+strict/diagnostic qualification. Normal playback exposes no late-note timing
+policy.
 
 Before a native session starts, the boundary validator rejects every authored
 same-key Down→Up interval below `min_hold_us`, including intervals
@@ -231,40 +216,28 @@ the future. The identity stamp survives waiter-entry latency and a same-plan
 control replan, and is consumed before the boundary is admitted. A changed
 plan, pause, focus/epoch reset, or completed boundary clears it.
 
-An overdue Down without that exact stamp is `unobserved_backlog`. A stamped
-Down whose per-key physical floors cannot fit inside
-`physical_latest_down_start` is `physical_window_expired`. A sender pre-call
-sample beyond the effective mode-specific sender cutoff is
-`final_sender_window_expired`. Normal playback may therefore complete a
-physically feasible Down after `physical_latest_down_start` but no later than
-its bounded continuity cutoff; that successful packet is a late rescue, not a
-miss. Rescue accounting is recorded only after successful transport completion
-and a successful physical-guard update. `physical_window_expired` and
-`unobserved_backlog` are never rescued. All missed Down targets remain
-immutable and are never retried, rebased, or emitted as a catch-up burst.
+In normal prepared playback, an overdue but authorized Down is sent once;
+scheduler lateness does not create `unobserved_backlog`,
+`physical_window_expired`, or `final_sender_window_expired`. Strict/test-support
+dynamic dispatch may retain those classifications. All missed Down targets
+remain immutable and are never retried, rebased, or emitted as a catch-up
+burst.
 
 ## 4. Authoritative send ordering
 
 The final physical path is ordered and fail-closed:
 
 1. Prepare and validate the immutable packet before the target wait.
-2. One interruptible lease-bounded hybrid waiter crosses the authored target
-   and relevant physical floors. When a Down floor is already beyond
-   `physical_latest_down_start`, the worker waits to the authored target and
-   classifies the Down as missed there; required Up-prefix recovery has its own
-   later hold-floor wait. The waiter returns its QPC sample; it does not change
-   the target.
-3. Recheck command/control, the stamped target, and foreground focus (Down
-   only) after target crossing. A rejection records a bounded final-gate
-   diagnostic and performs no packet syscall.
-4. Recheck the program-owned control, target stamp, and focus atomics after
-   the foreground query. This is a cheap revalidation and does not issue a
-   second foreground query.
-5. Take `final_policy_qpc` after those checks and use it for the final lease
-   admission.
+2. One interruptible high-resolution hybrid waiter crosses the immutable
+   authored target. Strict/diagnostic mode may include its physical floors.
+3. Recheck command/control, the stamped target, and the published focus state
+   (Down only) after target crossing. A rejection performs no packet syscall.
+4. Recheck the program-owned control, target stamp, and focus atomics. This is
+   a cheap revalidation and does not issue a foreground query.
+5. Take `final_policy_qpc` as evidence after those checks.
 6. Enter the trusted prepared sender. It resets Win32 last-error state, takes
-   the true `pre_call_qpc` after payload resolution, checks the Down against the
-   effective mode-specific sender cutoff, and immediately performs one
+   the true `pre_call_qpc` after payload resolution, applies only the strict
+   physical check when enabled, and immediately performs one
    packetized `SendInput` call. It does not wait, spin, or redo
    control/focus/target admission.
 7. Read/validate the transport's `sendinput_completion_qpc` boundary and masks.
@@ -276,24 +249,24 @@ mixed integrity loss is never blindly retried. A skipped key that the
 coordinator still owns is state disagreement and requires full cleanup and
 termination. Any zero/partial transport result is terminal for the playback
 worker; cleanup is a separate fail-closed release-all operation. The typed
-`DownExpiredBeforeSend` result records a final sender-cutoff race as
-`final_sender_window_expired`, keeps `SendInput` uncalled, and enters the
-bounded missed-frame recovery path.
+`DownExpiredBeforeSend` remains a strict/test-support classification; normal
+scheduler lateness does not enter that recovery path.
 
-Up-only traffic uses command and lease admission but not the Down focus gate.
-Down traffic compares the stamped HWND with the current foreground window at
-the final gate. Focus hints and early loop gates are wake hints, not physical
-authorization.
+Up-only traffic uses command admission but not the Down focus gate. Down
+traffic compares the stamped HWND with the published target/focus atomics at
+the final gate. Exact foreground validation remains in startup, restoration,
+and resume lifecycle paths. Focus hints and early loop gates are wake hints,
+not physical authorization.
 
 ## 5. Wait, wake, and spin
 
 The production wait path uses one high-resolution waitable timer and event
-interruption directly to the absolute physical target. There is no per-note
-`T - 2,000 µs` admission wake and no second precision wait. The waiter sleeps
-until the remaining target interval reaches the frozen startup-calibrated
-threshold, then performs the bounded QPC spin to the target. Interrupts,
-lease-only wakes, focus changes, and command transitions invalidate the frozen
-plan and replan; they never dispatch a stale plan.
+interruption directly to the absolute authored target. There is no per-note
+early admission wake and no second precision wait. The waiter sleeps until the
+remaining target interval reaches the frozen startup-calibrated threshold, then
+performs the bounded QPC spin to the target. Interrupts, focus changes, and
+command transitions invalidate the frozen plan; the supervisor watchdog is a
+control-plane interrupt, not a musical deadline.
 
 Production startup calibration uses six wake samples when at least 20 ms remains
 before the startup readiness deadline. It derives
@@ -379,7 +352,7 @@ The authoritative sender-side metrics are:
   counts, maximum delay, QPC boundaries, and contributing masks; and
 - diagnostic-only observer queue/drop and telemetry counters;
 - fixed-size production hold/release floor samples, minima, violations,
-  ownership anomalies, and same-call retrigger counts.
+  ownership anomalies, and same-key overlap corruption evidence.
 
 The producer-side maximum SendInput pre-call lateness is retained in raw QPC
 ticks. The `2 ms`, `5 ms`, and `10 ms` bucket cutoffs are converted once during
@@ -388,13 +361,12 @@ when a metrics snapshot is published. Native telemetry schema 16 carries the
 floor and latest-start trace boundaries without a QPC frequency conversion on
 every physical send.
 
-Fixed internal scalar telemetry distinguishes successful normal sends,
-successful `late_rescued_down_boundaries`/`late_rescued_down_keys`, and residual
-`final_sender_window_expired` rejects. Rescue counters require complete
-transport evidence, a valid completion QPC, and a successful physical-guard
-update; they are not claims about game observation. `physical_window_expired`
-and `unobserved_backlog` remain exclusive miss reasons, and the public/native
-telemetry schema remains version 16.
+Fixed internal scalar telemetry retains transport status, strict/test-support
+miss evidence, and bounded physical forensics. The retired normal late-rescue
+counters are not claims about game observation and are no longer published.
+`physical_window_expired` and `unobserved_backlog` remain available for strict
+or diagnostic qualification, and the public/native telemetry schema remains
+backward-compatible apart from the retired dead-policy fields.
 
 `actual_us`, completion lateness, and observed hold are sender-side proxies.
 They must not be described as game-observed timing. The compatibility report

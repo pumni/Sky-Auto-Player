@@ -824,9 +824,6 @@ fn production_normal_late_down_dispatch_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness =
         ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(5_000);
-    harness
-        .configure_normal_down_start_tolerance_for_test(3_500)
-        .expect("valid tolerance");
     let timing_margin_us = harness
         .timing_margin_us_for_benchmark()
         .expect("timing margin");
@@ -871,9 +868,6 @@ fn production_normal_late_down_dispatch_no_alloc() {
         1,
         "normal late Down must emit exactly 1 packet"
     );
-    let (rescued_boundaries, rescued_keys, _, _) = harness.late_rescued_down_metrics_for_test();
-    assert_eq!(rescued_boundaries, 0, "normal lateness is not a rescue");
-    assert_eq!(rescued_keys, 0, "normal lateness is not a rescue");
 }
 
 #[test]

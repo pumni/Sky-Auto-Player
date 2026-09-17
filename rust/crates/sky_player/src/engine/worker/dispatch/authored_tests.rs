@@ -155,10 +155,8 @@ fn anchored_target_math_supports_explicit_offset() {
 #[test]
 fn c2_normal_sender_cutoff_is_disabled_and_strict_cutoff_is_unchanged() {
     let target = QpcTicks::from_raw(10_000);
-    let tolerance = DurationTicks::from_raw(2_500);
     let mut timing = WorkerTimingState::create_test_timing();
     timing.strict_timing = false;
-    timing.normal_down_start_tolerance_ticks = tolerance;
 
     for margin in [0, 500, 1_000, 2_000, 3_000] {
         let latest = target
@@ -199,63 +197,4 @@ fn c2_normal_sender_cutoff_is_disabled_and_strict_cutoff_is_unchanged() {
             .expect("strict Down cutoff"),
         latest
     );
-}
-
-#[test]
-fn c2_normal_sender_cutoff_ignores_configured_tolerance_and_strict_ignores_it() {
-    let target = QpcTicks::from_raw(20_000);
-
-    for tolerance_us in [2_000, 2_500, 3_000, 4_000, 5_000, 7_500, 10_000] {
-        let tolerance = DurationTicks::from_raw(tolerance_us);
-        let mut timing = WorkerTimingState::create_test_timing();
-        timing.strict_timing = false;
-        timing.normal_down_start_tolerance_ticks = tolerance;
-
-        // Normal timing keeps the configured compatibility field dormant.
-        for margin in [0, 500, 1_000, 2_500, 3_000, 4_000, 6_000] {
-            let latest = target
-                .checked_add_duration(DurationTicks::from_raw(margin))
-                .expect("physical latest start");
-            let window = PhysicalTimingWindow {
-                authored_target_qpc: target,
-                musical_up_not_before_qpc: target,
-                down_not_before_qpc: target,
-                packet_not_before_qpc: target,
-                latest_down_start_qpc: Some(latest),
-                hold_floor_mask: 0,
-                release_floor_mask: 0,
-            };
-            assert_eq!(
-                effective_down_sender_cutoff(window, &timing).expect("normal cutoff calculation"),
-                None,
-                "normal cutoff must stay disabled for tolerance {tolerance_us} margin {margin}"
-            );
-        }
-
-        // Verify Strict timing completely ignores configured tolerance:
-        // cutoff is strictly equal to latest (target + margin), regardless of tolerance.
-        timing.strict_timing = true;
-        for margin in [250, 500, 1_000, 2_500] {
-            let latest = target
-                .checked_add_duration(DurationTicks::from_raw(margin))
-                .expect("strict physical latest start");
-            let window = PhysicalTimingWindow {
-                authored_target_qpc: target,
-                musical_up_not_before_qpc: target,
-                down_not_before_qpc: target,
-                packet_not_before_qpc: target,
-                latest_down_start_qpc: Some(latest),
-                hold_floor_mask: 0,
-                release_floor_mask: 0,
-            };
-            let strict_cutoff = effective_down_sender_cutoff(window, &timing)
-                .expect("strict cutoff calculation")
-                .expect("strict Down cutoff exists");
-
-            assert_eq!(
-                strict_cutoff, latest,
-                "strict cutoff with tolerance {tolerance_us} and margin {margin} must strictly equal physical latest"
-            );
-        }
-    }
 }

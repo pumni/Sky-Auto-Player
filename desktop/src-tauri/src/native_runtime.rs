@@ -1823,14 +1823,6 @@ impl NativeDesktopRuntime {
                 timing_margin_min_us: sky_app_core::settings::MIN_TIMING_MARGIN_US,
                 timing_margin_max_us: sky_app_core::settings::MAX_TIMING_MARGIN_US,
                 timing_margin_step_us: sky_app_core::settings::TIMING_MARGIN_STEP_US,
-                normal_down_start_tolerance_min_us:
-                    sky_app_core::settings::MIN_NORMAL_DOWN_START_TOLERANCE_US,
-                normal_down_start_tolerance_max_us:
-                    sky_app_core::settings::MAX_NORMAL_DOWN_START_TOLERANCE_US,
-                normal_down_start_tolerance_step_us:
-                    sky_app_core::settings::NORMAL_DOWN_START_TOLERANCE_STEP_US,
-                normal_down_start_tolerance_default_us:
-                    sky_app_core::settings::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
             },
             theme: settings_dto.theme.clone(),
             telemetry_enabled: settings_dto.telemetry_enabled,
@@ -1908,7 +1900,6 @@ impl NativeDesktopRuntime {
             playback_defaults: patch.playback_defaults.map(|value| PlaybackDefaultsPatch {
                 hold_frames: value.hold_frames,
                 timing_margin_us: value.timing_margin_us,
-                normal_down_start_tolerance_us: value.normal_down_start_tolerance_us,
                 tempo_scale: value.tempo_scale,
                 fps: value.fps,
             }),
@@ -3255,9 +3246,6 @@ impl NativeDesktopRuntime {
             risk,
             timing_policy: policy,
             timing_margin_recommendation,
-            normal_down_start_tolerance_us: settings
-                .playback_defaults
-                .normal_down_start_tolerance_us,
             settings_fingerprint: settings_fingerprint(&settings)?,
         })
     }
@@ -3603,7 +3591,6 @@ struct NativePlaybackVariant {
     fingerprint: String,
     timing_policy: MaterializedTimingPolicy,
     timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
-    normal_down_start_tolerance_us: u64,
 }
 
 struct NativePreparedInput {
@@ -3615,7 +3602,6 @@ struct NativePreparedInput {
     risk: RiskReport,
     timing_policy: MaterializedTimingPolicy,
     timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
-    normal_down_start_tolerance_us: u64,
     settings_fingerprint: String,
 }
 
@@ -3628,7 +3614,6 @@ struct NativeActivePlayback {
     config: PlaybackConfigDto,
     timing_policy: MaterializedTimingPolicy,
     timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
-    normal_down_start_tolerance_us: u64,
     plan_fingerprint: String,
     physical: bool,
     activity_lease: Mutex<Option<PhysicalActivityLease>>,
@@ -3899,10 +3884,9 @@ fn settings_fingerprint(settings: &ApplicationSettings) -> Result<String, String
     // this cross-runtime identity cannot depend on Rust struct field order.
     let theme = serde_json::to_string(&settings.theme).map_err(json_error)?;
     let payload = format!(
-        "{{\"fps\": {}, \"hold\": {}, \"normal_down_start_tolerance_us\": {}, \"telemetry\": {}, \"tempo\": {}, \"theme\": {}, \"timing_margin_us\": {}}}",
+        "{{\"fps\": {}, \"hold\": {}, \"telemetry\": {}, \"tempo\": {}, \"theme\": {}, \"timing_margin_us\": {}}}",
         settings.playback_defaults.fps,
         settings.playback_defaults.hold_frames,
-        settings.playback_defaults.normal_down_start_tolerance_us,
         settings.telemetry_enabled,
         settings.playback_defaults.tempo_scale,
         theme,
@@ -4143,7 +4127,6 @@ impl NativePlaybackService {
             risk,
             timing_policy,
             timing_margin_recommendation,
-            normal_down_start_tolerance_us,
             settings_fingerprint,
         } = input;
         let detail = song_detail(&song_id, &song, &schedule, &risk);
@@ -4174,7 +4157,6 @@ impl NativePlaybackService {
             fingerprint: fingerprint.clone(),
             timing_policy: timing_policy.clone(),
             timing_margin_recommendation: timing_margin_recommendation.clone(),
-            normal_down_start_tolerance_us,
         };
         let mut decisions = Vec::new();
         let mut variants = HashMap::from([(PlaybackDecision::Proceed, base_variant)]);
@@ -4221,7 +4203,6 @@ impl NativePlaybackService {
                         fingerprint: recommended_fingerprint.clone(),
                         timing_policy: recommended_policy,
                         timing_margin_recommendation: timing_margin_recommendation.clone(),
-                        normal_down_start_tolerance_us,
                     },
                 );
                 variant_dtos.push(PlaybackPlanVariantDto {
@@ -4249,7 +4230,6 @@ impl NativePlaybackService {
                         fingerprint: dry_run_fingerprint.clone(),
                         timing_policy: timing_policy.clone(),
                         timing_margin_recommendation: timing_margin_recommendation.clone(),
-                        normal_down_start_tolerance_us,
                     },
                 );
                 variant_dtos.push(PlaybackPlanVariantDto {
@@ -4376,7 +4356,6 @@ impl NativePlaybackService {
                 &variant.schedule,
                 &variant.config,
                 &variant.timing_policy,
-                variant.normal_down_start_tolerance_us,
                 settings,
             )
             .and_then(|(player, target)| {
@@ -4411,7 +4390,6 @@ impl NativePlaybackService {
                     config: variant.config.clone(),
                     timing_policy: variant.timing_policy.clone(),
                     timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
-                    normal_down_start_tolerance_us: variant.normal_down_start_tolerance_us,
                     plan_fingerprint: variant.fingerprint.clone(),
                     physical: true,
                     activity_lease: Mutex::new(activity_lease),
@@ -4480,7 +4458,6 @@ impl NativePlaybackService {
             config: variant.config.clone(),
             timing_policy: variant.timing_policy.clone(),
             timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
-            normal_down_start_tolerance_us: variant.normal_down_start_tolerance_us,
             plan_fingerprint: variant.fingerprint.clone(),
             physical: player.is_some(),
             activity_lease: Mutex::new(activity_lease),
@@ -4691,7 +4668,6 @@ impl NativePlaybackService {
         schedule: &ScheduleMetadata,
         config: &PlaybackConfigDto,
         policy: &MaterializedTimingPolicy,
-        normal_down_start_tolerance_us: u64,
         settings: &ApplicationSettings,
     ) -> Result<(Arc<NativeDispatchSession>, isize), String> {
         #[cfg(test)]
@@ -4728,7 +4704,6 @@ impl NativePlaybackService {
                     frame_us: policy.frame_us,
                     frame_base_hold_us: policy.frame_base_hold_us,
                     timing_margin_us: policy.timing_margin_us,
-                    normal_down_start_tolerance_us,
                     strict_timing: false,
                     strict_down_completion_late_us: 2_000,
                     strict_up_completion_late_us: 2_000,
@@ -5416,7 +5391,6 @@ fn publish_diagnostics_snapshot_inner(
             hold_frames: active.timing_policy.hold_frames,
             frame_base_hold_us: active.timing_policy.frame_base_hold_us,
             timing_margin_us: active.timing_policy.timing_margin_us,
-            normal_down_start_tolerance_us: active.normal_down_start_tolerance_us,
             min_hold_us: active.timing_policy.min_hold_us,
             min_release_gap_us: active.timing_policy.min_release_gap_us,
             timing_margin_recommendation: active.timing_margin_recommendation.clone(),
@@ -6199,7 +6173,6 @@ fn playback_defaults(settings: &ApplicationSettings) -> PlaybackDefaultsDto {
     PlaybackDefaultsDto {
         hold_frames: settings.playback_defaults.hold_frames,
         timing_margin_us: settings.playback_defaults.timing_margin_us,
-        normal_down_start_tolerance_us: settings.playback_defaults.normal_down_start_tolerance_us,
         tempo_scale: settings.playback_defaults.tempo_scale,
         fps: settings.playback_defaults.fps,
         dry_run: false,
@@ -6303,7 +6276,6 @@ struct NativeCatalogViewportRequest {
 struct NativePlaybackPatch {
     hold_frames: Option<f64>,
     timing_margin_us: Option<u64>,
-    normal_down_start_tolerance_us: Option<u64>,
     tempo_scale: Option<f64>,
     fps: Option<u16>,
 }
@@ -6350,7 +6322,6 @@ impl NativeSettingsPatch {
                 .map(|value| crate::commands::PlaybackPatch {
                     hold_frames: value.hold_frames,
                     timing_margin_us: value.timing_margin_us,
-                    normal_down_start_tolerance_us: value.normal_down_start_tolerance_us,
                     tempo_scale: value.tempo_scale,
                     fps: value.fps,
                 }),
@@ -6719,8 +6690,6 @@ mod tests {
                 qualified: false,
                 source: "default_fallback".into(),
             },
-            normal_down_start_tolerance_us:
-                sky_app_core::settings::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
             plan_fingerprint: "d".repeat(64),
             physical,
             activity_lease: Mutex::new(None),
@@ -6788,9 +6757,6 @@ mod tests {
                     qualified: false,
                     source: "default_fallback".into(),
                 },
-                normal_down_start_tolerance_us: settings
-                    .playback_defaults
-                    .normal_down_start_tolerance_us,
                 settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
             })
             .expect("physical fixture plan");
@@ -9692,21 +9658,13 @@ mod tests {
             settings_fingerprint(&settings).expect("settings fingerprint");
         assert_eq!(
             default_settings_fingerprint,
-            "b937f777ecf04df624fbe47d2e15596fcea4f513159383bb2e281413b66db293"
+            "c74d3a67e251808529cfa8b1b53626f81f0e6d233086a1b056e3a2eb746df7dd"
         );
         let mut auto_play_changed = settings.clone();
         auto_play_changed.playback_behavior.auto_play = false;
         assert_eq!(
             default_settings_fingerprint,
             settings_fingerprint(&auto_play_changed).expect("Auto Play is not timing identity")
-        );
-        let mut tolerance_changed = settings.clone();
-        tolerance_changed
-            .playback_defaults
-            .normal_down_start_tolerance_us = 3_000;
-        assert_ne!(
-            default_settings_fingerprint,
-            settings_fingerprint(&tolerance_changed).expect("changed tolerance fingerprint")
         );
         let mut changed_settings = settings.clone();
         changed_settings.playback_defaults.timing_margin_us = 900;
@@ -9941,7 +9899,6 @@ mod tests {
                 playback_defaults: Some(crate::commands::PlaybackPatch {
                     hold_frames: None,
                     timing_margin_us: None,
-                    normal_down_start_tolerance_us: None,
                     tempo_scale: Some(0.95),
                     fps: None,
                 }),
@@ -10184,41 +10141,5 @@ mod tests {
         ui.join().expect("UI publication seam");
         stop.store(true, Ordering::Release);
         heartbeat.join().expect("heartbeat seam");
-    }
-
-    #[test]
-    fn normal_down_start_tolerance_constants_match_contract() {
-        assert_eq!(
-            sky_app_core::settings::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
-            sky_player::engine::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US
-        );
-        assert_eq!(
-            sky_app_core::settings::DEFAULT_NORMAL_DOWN_START_TOLERANCE_US,
-            2_500
-        );
-        assert_eq!(
-            sky_app_core::settings::MIN_NORMAL_DOWN_START_TOLERANCE_US,
-            sky_player::engine::MIN_NORMAL_DOWN_START_TOLERANCE_US
-        );
-        assert_eq!(
-            sky_app_core::settings::MIN_NORMAL_DOWN_START_TOLERANCE_US,
-            2_000
-        );
-        assert_eq!(
-            sky_app_core::settings::MAX_NORMAL_DOWN_START_TOLERANCE_US,
-            sky_player::engine::MAX_NORMAL_DOWN_START_TOLERANCE_US
-        );
-        assert_eq!(
-            sky_app_core::settings::MAX_NORMAL_DOWN_START_TOLERANCE_US,
-            10_000
-        );
-        assert_eq!(
-            sky_app_core::settings::NORMAL_DOWN_START_TOLERANCE_STEP_US,
-            sky_player::engine::STEP_NORMAL_DOWN_START_TOLERANCE_US
-        );
-        assert_eq!(
-            sky_app_core::settings::NORMAL_DOWN_START_TOLERANCE_STEP_US,
-            500
-        );
     }
 }
