@@ -16,7 +16,7 @@ mod health;
 pub(crate) mod health;
 mod orchestration;
 mod physical_timing_guard;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 pub(crate) use physical_timing_guard::PhysicalTimingWindow;
 mod planning;
 mod prepared;
@@ -58,8 +58,6 @@ pub(super) use dispatch::{
 pub(crate) use dispatch_loop::apply_system_suspend_transition;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::dispatch_due_from_plan;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatch_loop::normal_prepared_timing_window;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::preflight_prepared_plan;
 #[cfg(any(test, feature = "test-support"))]
