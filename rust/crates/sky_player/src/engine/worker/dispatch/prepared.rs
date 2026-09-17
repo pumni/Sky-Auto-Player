@@ -35,7 +35,6 @@ enum PreparedNormalPrecisionResult {
 /// atomic gates and the one prepared sender transaction; all coordinator,
 /// planner, recovery, telemetry, and cursor work remains in its caller after
 /// the sender returns.
-#[cfg_attr(not(any(test, feature = "test-support")), inline(never))]
 #[allow(clippy::too_many_arguments)]
 fn send_prepared_normal_precision_frame(
     frame: &PreparedDispatchFrame,
@@ -57,24 +56,24 @@ fn send_prepared_normal_precision_frame(
     #[cfg(any(test, feature = "test-support"))] test_now_ticks: Option<QpcTicks>,
 ) -> Result<PreparedNormalPrecisionResult, &'static str> {
     let has_down_events = frame.view.packet_masks.down_mask != 0;
-    let control_signals = FinalControlSignals {
-        quit_requested,
-        skip_requested,
-        panic_requested,
-        desired_pause,
-        supervisor_expired,
-        system_power: Some(system_power),
-    };
-    if !matches!(
-        final_control_precheck(control_signals),
-        FinalControlAdmission::Allowed
-    ) {
-        return Ok(PreparedNormalPrecisionResult::Rejected(
-            PreparedNormalAdmission::EarlyControl,
-        ));
-    }
-
     if has_down_events {
+        let control_signals = FinalControlSignals {
+            quit_requested,
+            skip_requested,
+            panic_requested,
+            desired_pause,
+            supervisor_expired,
+            system_power: Some(system_power),
+        };
+        if !matches!(
+            final_control_precheck(control_signals),
+            FinalControlAdmission::Allowed
+        ) {
+            return Ok(PreparedNormalPrecisionResult::Rejected(
+                PreparedNormalAdmission::EarlyControl,
+            ));
+        }
+
         let Some(expected) = preflight_target else {
             return Err("prepared Down reached final admission without target proof");
         };
@@ -103,6 +102,14 @@ fn send_prepared_normal_precision_frame(
         }
     }
 
+    let control_signals = FinalControlSignals {
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        supervisor_expired,
+        system_power: Some(system_power),
+    };
     if !matches!(
         final_control_precheck(control_signals),
         FinalControlAdmission::Allowed
@@ -166,6 +173,10 @@ pub(crate) fn dispatch_prepared_normal_frame(
     let _ = now_ticks;
     let view = &frame.view;
     let has_down_events = view.packet_masks.down_mask != 0;
+    // Keep this cheap outer read for the distinct preroll/focus-pause path.
+    // The precision helper still performs the authoritative final atomic
+    // admission; removing this read would merge the preroll fault path with
+    // the post-start revalidation path and the test-only focus fault seam.
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
         if !runtime.musical_physical_commit_started {
             return DispatchStep::TerminateStatic("focus_lost_during_preroll");
@@ -467,12 +478,18 @@ mod tests {
         let final_control = helper
             .find("final_control_precheck")
             .expect("final control gate");
+        assert_eq!(
+            helper.matches("final_control_precheck").count(),
+            2,
+            "Down keeps early+late control gates; UpOnly has only the shared late gate"
+        );
         let sender = helper
             .find("let result = backend.send_prepared_physical_packet_at_final_boundary")
             .expect("normal sender handoff");
         assert!(final_control < sender, "final atomics must precede sender");
         assert!(helper.contains("final_down_target_admission"));
         assert!(helper.contains("test_now_ticks"));
+        assert!(!helper.contains("inline(never)"));
         assert!(!helper.contains("record_prepared_normal_send_outcome"));
 
         let precision_call = outer

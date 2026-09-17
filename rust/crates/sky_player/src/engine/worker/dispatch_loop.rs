@@ -1485,6 +1485,18 @@ pub(super) fn dispatch(
                 }
             }
 
+            if prepared_stream_requires_terminal(
+                prepared_stream.as_ref(),
+                resources.coordinator.is_finished(),
+            ) {
+                core.runtime.force_full_cleanup = true;
+                core.runtime.terminal_error = Some(
+                    "prepared stream exhausted before coordinator finished; dynamic planner fallback is forbidden"
+                        .to_string(),
+                );
+                break;
+            }
+
             // Stale metadata is globally non-physical. Commit at most one
             // compiled packet per outer iteration, regardless of startup
             // phase, so every control/focus/pause/lease gate is re-admitted.
@@ -1843,11 +1855,18 @@ pub(super) fn dispatch(
     }))
 }
 
+fn prepared_stream_requires_terminal(
+    prepared_stream: Option<&PreparedDispatchStream>,
+    coordinator_finished: bool,
+) -> bool {
+    prepared_stream.is_some_and(PreparedDispatchStream::is_exhausted) && !coordinator_finished
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         normal_prepared_timing_window, physical_target_qpc_for_work, physical_wait_target_for_plan,
-        publish_live_metrics_after_dispatch,
+        prepared_stream_requires_terminal, publish_live_metrics_after_dispatch,
     };
     use crate::engine::shared::{SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING};
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
@@ -1922,6 +1941,34 @@ mod tests {
         let snapshot = shared.snapshot.load();
         assert_eq!(snapshot.pre_call_lt_250us, 1);
         assert_eq!(snapshot.max_sendinput_pre_call_lateness_us, 25);
+    }
+
+    #[test]
+    fn exhausted_prepared_stream_cannot_fall_back_to_dynamic_planner() {
+        let harness = ProductionDispatchTestHarness::new_down_only();
+        let mut stream = harness.build_prepared_stream_for_test();
+        while !stream.is_exhausted() {
+            stream.advance().expect("prepared stream advance");
+        }
+
+        assert!(prepared_stream_requires_terminal(Some(&stream), false));
+        assert!(!prepared_stream_requires_terminal(Some(&stream), true));
+        assert!(!prepared_stream_requires_terminal(None, false));
+    }
+
+    #[test]
+    fn prepared_stream_terminal_guard_precedes_dynamic_planner_source() {
+        let source = include_str!("dispatch_loop.rs");
+        let guard = source
+            .find("prepared stream exhausted before coordinator finished")
+            .expect("prepared stream terminal guard");
+        let planner = source
+            .find("let mut dispatch_plan = super::planning::NextDispatchPlan::default()")
+            .expect("dynamic planner fallback");
+        assert!(
+            guard < planner,
+            "prepared path must fail before planner fallback"
+        );
     }
 
     #[test]

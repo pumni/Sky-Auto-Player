@@ -25,7 +25,7 @@ $targets = @(
     @{ Name = 'physical_plan_from_view'; Fragment = 'physical_plan_from_view:'; Policy = 'report' },
     @{ Name = 'dispatch_due_from_plan'; Fragment = 'dispatch_due_from_plan:'; Policy = 'clean' },
     @{ Name = 'recover_missed_down_boundary'; Fragment = 'recover_missed_down_boundary:'; Policy = 'clean' },
-    @{ Name = 'dispatch_loop caller'; Fragment = 'dispatch_loop8dispatch0B9_:'; Policy = 'report' }
+    @{ Name = 'normal shipping caller'; Fragment = 'dispatch_loop8dispatch0B9_:'; Policy = 'report' }
 )
 
 function Find-FunctionBody([string]$fragment) {
@@ -104,6 +104,41 @@ foreach ($target in $targets) {
             $divisionInstructionCount -gt 0
         )) {
         $failed = $true
+    }
+}
+
+# Gate A deliberately does not require a retained Rust helper symbol. ThinLTO
+# may inline the normal precision suffix into the dispatch-loop caller. Audit
+# the optimized caller for the actual prepared sender handoff and report any
+# retained helper call only as compiler output, not as a source-level contract.
+$callerRange = Find-FunctionBody 'dispatch_loop8dispatch0B9_:'
+if ($null -ne $callerRange) {
+    $callerBody = $lines[$callerRange[0]..$callerRange[1]]
+    $helperCalls = @(
+        $callerBody | Where-Object {
+            $_ -match 'callq.*send_prepared_normal_precision_frame'
+        }
+    )
+    $preparedSenderCalls = @(
+        $callerBody | Where-Object {
+            $_ -match 'callq.*send_prepared_physical_packet_at_final_boundary'
+        }
+    )
+    $panicRmwInstructions = @(
+        $callerBody | Where-Object { $_ -match '\b(?:xchg|cmpxchg)\w*\b' }
+    )
+    $powerConsumeRmwInstructions = @(
+        $callerBody | Where-Object { $_ -match '\bcmpxchg\w*\b' }
+    )
+    Write-Output (
+        'normal precision caller: retained_helper_call_refs={0} prepared_sender_calls={1} atomic_rmw_instructions={2} power_consume_rmw_candidates={3}' -f
+        $helperCalls.Count, $preparedSenderCalls.Count, $panicRmwInstructions.Count,
+        $powerConsumeRmwInstructions.Count
+    )
+    if ($helperCalls.Count -gt 0) {
+        Write-Output 'normal precision caller: compiler retained an out-of-line helper call; inspect this caller region as the shipping suffix'
+    } else {
+        Write-Output 'normal precision caller: no retained send_prepared_normal_precision_frame call (inlined or eliminated)'
     }
 }
 
