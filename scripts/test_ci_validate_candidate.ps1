@@ -26,7 +26,12 @@ try {
     $bundle = Join-Path $tempRoot "bundle"
     $candidate = Join-Path $tempRoot "candidate"
     New-Item -ItemType Directory -Path $bundle -Force | Out-Null
-    $installerName = "Sky Auto Player_4.0.1_x64-setup.exe"
+    $cargoPath = Join-Path $repoRoot "desktop/src-tauri/Cargo.toml"
+    $cargo = Get-Content -LiteralPath $cargoPath -Raw
+    $versionMatch = [regex]::Match($cargo, '(?m)^version\s*=\s*"([^"]+)"')
+    if (-not $versionMatch.Success) { Fail "canonical package version is missing from $cargoPath" }
+    $candidateVersion = $versionMatch.Groups[1].Value
+    $installerName = "Sky Auto Player_${candidateVersion}_x64-setup.exe"
     [IO.File]::WriteAllBytes((Join-Path $bundle $installerName), [byte[]](0..31))
     [IO.File]::WriteAllText((Join-Path $bundle "$installerName.sig"), "official test updater signature`n")
     $publicKey = Join-Path $tempRoot "test-public-key.pub"
@@ -43,7 +48,7 @@ try {
     )
     if ($validate.ExitCode -ne 0) { Fail "Validate mode failed: $($validate.Output)" }
     $metadata = Get-Content -LiteralPath (Join-Path $candidate "candidate.json") -Raw | ConvertFrom-Json
-    if ([string]$metadata.version -ne "4.0.1" -or [string]$metadata.source_sha -ne $sourceSha) {
+    if ([string]$metadata.version -ne $candidateVersion -or [string]$metadata.source_sha -ne $sourceSha) {
         Fail "created candidate metadata did not bind version and source SHA"
     }
     if (@(Get-ChildItem -LiteralPath $candidate -File).Count -ne 4) {
