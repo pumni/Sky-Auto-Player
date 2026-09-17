@@ -1945,7 +1945,7 @@ mod tests {
 
     #[test]
     fn exhausted_prepared_stream_cannot_fall_back_to_dynamic_planner() {
-        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let harness = ProductionDispatchTestHarness::new_down_only();
         let mut stream = harness.build_prepared_stream_for_test();
         while !stream.is_exhausted() {
             stream.advance().expect("prepared stream advance");
