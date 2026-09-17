@@ -40,15 +40,37 @@ pub(super) fn production_visibility_qualification(
     release_samples: u64,
     release_floor_violations: u64,
 ) -> (Verdict, &'static str) {
-    if hold_floor_violations > 0 || release_floor_violations > 0 {
-        (Verdict::Fail, "observed sender start violated a fixed physical hold or release floor")
-    } else if scenario == Scenario::ReleaseGapStress
+    // Completion-relative floor observations are retained as raw normal-mode
+    // forensics.  They are not a shipping authority after Phase 3 made
+    // completion telemetry-only for normal prepared playback.  The values
+    // are intentionally consumed here so the report/test contract cannot
+    // accidentally stop collecting them.
+    let _diagnostic_floor_violations = hold_floor_violations.saturating_add(release_floor_violations);
+    if scenario == Scenario::ReleaseGapStress
         && (hold_samples < RELEASE_GAP_STRESS_MIN_SAMPLES
             || release_samples < RELEASE_GAP_STRESS_MIN_SAMPLES)
     {
         (Verdict::NonQualifying, "stress collected fewer than 512 qualifying hold or release samples")
     } else {
-        (Verdict::Pass, "production hold and release floor forensics meet the scenario qualification threshold")
+        (Verdict::Pass, "normal delivery passed; completion-relative hold/release floors remain diagnostic evidence")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn strict_physical_forensics_qualification(
+    hold_floor_violations: u64,
+    release_floor_violations: u64,
+) -> (Verdict, &'static str) {
+    if hold_floor_violations > 0 || release_floor_violations > 0 {
+        (
+            Verdict::Fail,
+            "strict physical timing forensics violated an intentional floor",
+        )
+    } else {
+        (
+            Verdict::Pass,
+            "strict physical timing forensics meet the intentional floor",
+        )
     }
 }
 

@@ -84,16 +84,21 @@ The physical command is an explicit, feature-gated qualification run:
 `cargo run --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance -- run --allow-real-input --run-id <run-id> --sink-ready .benchmarks/sink.json --sink-events .benchmarks/sink-events.json --target-hwnd <sink-hwnd> --scenario <scenario> --evidence .benchmarks/rt-native-acceptance.jsonl`
 
 The supported physical scenario names are `canonical-single`, `canonical-chord`,
-`canonical-max-chord`, `hold`, `rapid-retrigger`, `mixed-up-down`, `focus-loss`,
-`target-hwnd-change`, `pause-resume`, `stop-cleanup`, `skip-cleanup`,
+`canonical-max-chord`, `hold`, `long-single-sequence`, `dense-alternating`,
+`chord-sweep`, `near-minimum-retrigger`, `rapid-retrigger`, `mixed-up-down`,
+`focus-loss`, `target-hwnd-change`, `pause-resume`, `suspend-resume`,
+`stop-cleanup`, `skip-cleanup`, `supervisor-lease-expiry`,
 `cleanup-full-release`, `w4-noncanonical`, `timing-margin-sweep`, and
 `release-gap-stress`. Each invocation appends one JSONL report with the
 scenario name and its `PASS`, `NON_QUALIFYING`, `FAIL`, or `INCONCLUSIVE`
-verdict. A release gap below the fixed one-frame sender floor is `FAIL`; the
-stress scenario is `NON_QUALIFYING` when it collects fewer than 512 release-gap
-samples. It authors 513 same-key Down/Up cycles at the configured Hold and
-Release Gap and keeps the supervisor heartbeat alive while the approximately
-18-second workload runs at the default margin. The target-change scenario changes the session target to the invalid
+verdict. Normal completion-relative hold/release floor observations remain
+raw physical-forensics evidence and do not by themselves fail a normal
+prepared delivery verdict. Strict/diagnostic timing retains its intentional
+physical latest-start/floor rejection. The stress scenario is
+`NON_QUALIFYING` when it collects fewer than 512 release-gap samples. It
+authors 513 same-key Down/Up cycles at the configured Hold and Release Gap
+and keeps the supervisor heartbeat alive while the approximately 18-second
+workload runs at the default margin. The target-change scenario changes the session target to the invalid
 sentinel `0` before the first authored Down and requires the production
 control-plane path to fail closed with no gameplay KeyDown delivery. The
 fail-closed path may emit the bounded full-cleanup KeyUp safety pass; those
@@ -303,8 +308,11 @@ focus invalid
 
 This keeps an unfocused physical probe `Inconclusive` rather than treating it
 as evidence that all instrument keys are up. No Down can be admitted while the
-focus pause is active, and the fresh foreground HWND check remains the final
-physical Down authority.
+focus pause is active. The precision-boundary Down authority is the published
+focus state plus its final atomic revalidation; the bounded foreground
+observer race is intentional. Exact foreground HWND validation remains part
+of focus restoration and other control-plane revalidation outside the
+target-crossing-to-SendInput envelope.
 
 After focus is observed again, the worker waits for the configured restore
 grace and validates the current foreground/target identity. A manual pause

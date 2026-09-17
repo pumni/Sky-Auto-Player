@@ -1,10 +1,11 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('timing-margin-sweep', 'release-gap-stress')]
+    [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'pause-resume', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'w4-noncanonical', 'timing-margin-sweep')]
     [string]$Scenario,
     [Parameter(Mandatory)]
     [ValidateScript({ $_ -ge 0 -and $_ -le 3000 -and $_ % 100 -eq 0 })]
-    [int]$TimingMarginUs
+    [int]$TimingMarginUs,
+    [switch]$CpuContention
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,8 +22,13 @@ $reportPath = Join-Path $runDir 'rt-native-acceptance.jsonl'
 $runConfigPath = Join-Path $runDir 'run-config.json'
 $invocationPath = Join-Path $runDir 'invocation.json'
 $windowPath = Join-Path $runDir 'sink-event-window.json'
+$probeReadyPath = Join-Path $runDir 'focus-probe-ready.json'
+$probeEventsPath = Join-Path $runDir 'focus-probe-events.jsonl'
+$focusRestoreRequestPath = Join-Path $runDir 'focus-restore.request'
 $harness = Join-Path $root 'rust\target\release\rt-native-acceptance.exe'
 $sinkProcess = $null
+$probeProcess = $null
+$contentionProcesses = @()
 $nativeExit = $null
 $report = $null
 $windowIntegrity = $false
@@ -92,10 +98,23 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'could not verify source-tree cleanliness' }
     $sourceTreeClean = [string]::IsNullOrWhiteSpace($trackedChanges)
     $sessionId = (Get-Process -Id $PID).SessionId
-    $sinkArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'ReceiveOnly', '-RunId', $runId, '-ReadyFile', $readyPath, '-EventLog', $eventsPath)
+    $sinkArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'ReceiveOnly', '-RunId', $runId, '-ReadyFile', $readyPath, '-EventLog', $eventsPath, '-ActivateRequestFile', $focusRestoreRequestPath)
     $sinkProcess = Start-Process -FilePath $pwshPath -ArgumentList $sinkArgv -PassThru -WindowStyle Normal -RedirectStandardOutput (Join-Path $runDir 'sink.stdout.log') -RedirectStandardError (Join-Path $runDir 'sink.stderr.log')
     $sink = Wait-ReadyRecord $readyPath $sinkProcess
     Assert-SinkIdentity $sink $sessionId
+
+    if ($Scenario -eq 'focus-loss') {
+        $probeArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'InertFocusProbe', '-RunId', $runId, '-ReadyFile', $probeReadyPath, '-EventLog', $probeEventsPath)
+        $probeProcess = Start-Process -FilePath $pwshPath -ArgumentList $probeArgv -PassThru -WindowStyle Normal -RedirectStandardOutput (Join-Path $runDir 'focus-probe.stdout.log') -RedirectStandardError (Join-Path $runDir 'focus-probe.stderr.log')
+        $probe = Wait-ReadyRecord $probeReadyPath $probeProcess
+    }
+
+    if ($CpuContention) {
+        $loadCommand = 'while ($true) { [void]([Math]::Sqrt(12345.6789)) }'
+        for ($index = 0; $index -lt 2; $index++) {
+            $contentionProcesses += Start-Process -FilePath $pwshPath -ArgumentList @('-NoProfile', '-Command', $loadCommand) -PassThru -WindowStyle Hidden
+        }
+    }
 
     $harnessHash = Get-Sha256 $harness
     $runnerHash = Get-Sha256 $PSCommandPath
@@ -104,6 +123,9 @@ try {
         source_revision = $head
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
+        cpu_contention = [bool]$CpuContention
+        cpu_contention_processes = $contentionProcesses.Count
+        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers' } else { $null }
         timing_margin_us = $TimingMarginUs
         expected_hold_us = 16667 + $TimingMarginUs
         expected_release_gap_us = 16667 + $TimingMarginUs
@@ -127,6 +149,9 @@ try {
         '--scenario', $Scenario, '--evidence', $reportPath,
         '--timing-margin-us', [string]$TimingMarginUs
     )
+    if ($Scenario -eq 'focus-loss') {
+        $harnessArgs += @('--focus-probe-ready', $probeReadyPath, '--focus-probe-events', $probeEventsPath, '--focus-probe-hwnd', ([long]$probe.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture), '--focus-restore-request', $focusRestoreRequestPath)
+    }
     $captured = @(& $harness @harnessArgs 2>&1)
     $nativeExit = $LASTEXITCODE
     $endedUtc = [DateTimeOffset]::UtcNow.ToString('O')
@@ -179,6 +204,9 @@ try {
         source_revision = $head
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
+        cpu_contention = [bool]$CpuContention
+        cpu_contention_processes = $contentionProcesses.Count
+        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers' } else { $null }
         timing_margin_us = $TimingMarginUs
         started_utc = $startedUtc
         ended_utc = $endedUtc
@@ -218,6 +246,20 @@ try {
     Write-Output ('EVIDENCE ' + $runDir)
     $resultCode = 2
 } finally {
+    foreach ($process in $contentionProcesses) {
+        if ($process -and -not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if ($probeProcess) {
+        $liveProbe = Get-Process -Id $probeProcess.Id -ErrorAction SilentlyContinue
+        if ($liveProbe) {
+            [void]$liveProbe.CloseMainWindow()
+            if (-not $liveProbe.WaitForExit(3000)) {
+                Stop-Process -Id $probeProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
     if ($sinkProcess) {
         $live = Get-Process -Id $sinkProcess.Id -ErrorAction SilentlyContinue
         if ($live) {

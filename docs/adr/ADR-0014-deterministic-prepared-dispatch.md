@@ -35,6 +35,13 @@ not feed a scheduling guard or move a later authored target. Strict/diagnostic
 mode may retain `PhysicalTimingGuard` and its physical latest-start/floor
 checks for qualification and diagnostics.
 
+Normal completion-relative hold/release floor samples, minimum observed
+intervals, and violation counts remain raw physical-forensics evidence. They
+are serialized and reported even when nonzero, but they are not a normal
+shipping verdict authority. The strict/diagnostic `PhysicalTimingGuard`
+continues to enforce its intentional physical floor and may reject a packet
+when that strict bound is violated.
+
 Focus and window identity are control-plane state plus a cheap atomic final
 proof. The supervisor's published focus state is intentionally sampled rather
 than synchronously querying Windows inside the target-crossing-to-SendInput

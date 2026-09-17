@@ -13,7 +13,9 @@ use super::{
     production_options, reconcile_events, scenario_plan,
     validate_event_stream, validate_ready_record, w4_profile_spec, wait_for_sink_events_with,
 };
-use super::release_gap_stress::RELEASE_GAP_STRESS_MIN_SAMPLES;
+use super::release_gap_stress::{
+    strict_physical_forensics_qualification, RELEASE_GAP_STRESS_MIN_SAMPLES,
+};
 
 fn base_arguments(scenario: &str) -> Vec<String> {
     [
@@ -180,13 +182,19 @@ fn canonical_and_w4_expectations_are_physical() {
     for name in [
         "canonical-max-chord",
         "hold",
+        "long-single-sequence",
+        "dense-alternating",
+        "chord-sweep",
+        "near-minimum-retrigger",
         "rapid-retrigger",
         "release-gap-stress",
         "mixed-up-down",
         "target-hwnd-change",
         "pause-resume",
+        "suspend-resume",
         "stop-cleanup",
         "skip-cleanup",
+        "supervisor-lease-expiry",
         "timing-margin-sweep",
     ] {
         assert!(
@@ -549,6 +557,8 @@ fn authorization_and_timing_contracts_remain_bounded() {
             "e",
             "--focus-probe-hwnd",
             "0x43",
+            "--focus-restore-request",
+            "restore.request",
         ]
         .into_iter()
         .map(str::to_owned),
@@ -562,6 +572,7 @@ fn authorization_and_timing_contracts_remain_bounded() {
     assert_eq!(acceptance_min_hold_us(0), 16_667);
     assert_eq!(acceptance_min_release_gap_us(0), 16_667);
     assert!(focus_evidence_clean(true, 1, 0, true, true));
+    assert!(focus_evidence_clean(true, 0, 0, true, true));
 }
 #[test]
 fn timing_margin_override_accepts_only_bounded_hundred_microsecond_values() {
@@ -627,14 +638,69 @@ fn release_gap_stress_authors_hundreds_of_exact_hold_and_gap_pairs() {
 }
 
 #[test]
-fn either_production_visibility_floor_violation_fails_qualification() {
+fn normal_floor_forensics_are_preserved_without_becoming_shipping_authority() {
     assert_eq!(
         production_visibility_qualification(Scenario::TimingMarginSweep, 4, 0, 1, 1).0,
-        Verdict::Fail
+        Verdict::Pass
     );
     assert_eq!(
         production_visibility_qualification(Scenario::TimingMarginSweep, 4, 1, 1, 0).0,
+        Verdict::Pass
+    );
+}
+
+#[test]
+fn strict_physical_forensics_still_reject_floor_violations() {
+    assert_eq!(
+        strict_physical_forensics_qualification(1, 0).0,
         Verdict::Fail
+    );
+    assert_eq!(
+        strict_physical_forensics_qualification(0, 1).0,
+        Verdict::Fail
+    );
+    assert_eq!(
+        strict_physical_forensics_qualification(0, 0).0,
+        Verdict::Pass
+    );
+}
+
+#[test]
+fn unrelated_shipping_invariants_remain_fail_closed() {
+    let clean = NativeCleanupEvidence {
+        terminal_error: false,
+        partial_events: 0,
+        zero_progress_events: 0,
+        active_count: 0,
+        possibly_active_count: 0,
+        failed_release_count: 0,
+        release_failed: false,
+        stuck_mask: 0,
+        verification_inconclusive: false,
+        transport_anomaly: false,
+    };
+    assert_eq!(
+        preterminal_verdict(Verdict::Fail, clean.is_anomalous()),
+        Verdict::Fail,
+        "a missing sink/order verdict cannot be converted by normal floor semantics"
+    );
+    for mut anomaly in [clean; 5] {
+        anomaly.transport_anomaly = true;
+        assert_eq!(
+            preterminal_verdict(Verdict::Pass, anomaly.is_anomalous()),
+            Verdict::Fail,
+            "transport anomaly must remain fail-closed"
+        );
+    }
+    assert!(
+        reconcile_events(
+            &[event(1, "key_press", 0x16), event(2, "key_release", 0x16)],
+            &[physical(0x15)],
+            &[physical(0x15)],
+            false,
+        )
+        .is_err(),
+        "wrong or missing sink events must remain a failure"
     );
 }
 

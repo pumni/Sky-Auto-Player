@@ -8,6 +8,7 @@ param(
     [string]$ReadyFile,
     [ValidateNotNullOrEmpty()]
     [string]$EventLog,
+    [string]$ActivateRequestFile,
     [double]$DurationSeconds = 0
 )
 
@@ -267,6 +268,18 @@ if ($DurationSeconds -gt 0) {
     $timer.Interval = [Math]::Max(1, [int]($DurationSeconds * 1000))
     $timer.Add_Tick({ $timer.Stop(); $form.Close() })
     $timer.Start()
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ActivateRequestFile)) {
+    $activationTimer = New-Object System.Windows.Forms.Timer
+    $activationTimer.Interval = 20
+    $activationTimer.Add_Tick({
+        if (Test-Path -LiteralPath $ActivateRequestFile) {
+            Remove-Item -LiteralPath $ActivateRequestFile -Force -ErrorAction SilentlyContinue
+            [void][NativeAcceptanceSinkFocus]::SetForegroundWindow($form.Handle)
+        }
+    })
+    $activationTimer.Start()
 }
 
 [System.Windows.Forms.Application]::Run($form)

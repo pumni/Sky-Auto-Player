@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, MAX_KEYS};
 use sky_dispatch_win32::focus::{
-    WindowIdentity, focus_window_and_verify, inspect_window_identity,
+    WindowIdentity, focus_window_and_verify, foreground_window_matches, inspect_window_identity,
 };
 #[cfg(test)]
 use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
@@ -63,13 +63,13 @@ const ACCEPTANCE_TIMING_MARGIN_STEP_US: u64 = 100;
 const ACCEPTANCE_INPUT_PATH_WARN_US: u64 = 300;
 const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scenario { CanonicalSingle, CanonicalChord, CanonicalMaxChord, Hold, RapidRetrigger, ReleaseGapStress, MixedUpDown, CleanupFullRelease, FocusLoss, TargetHwndChange, PauseResume, StopCleanup, SkipCleanup, W4Noncanonical, TimingMarginSweep }
+enum Scenario { CanonicalSingle, CanonicalChord, CanonicalMaxChord, Hold, LongSingleSequence, DenseAlternating, ChordSweep, NearMinimumRetrigger, RapidRetrigger, ReleaseGapStress, MixedUpDown, CleanupFullRelease, FocusLoss, TargetHwndChange, PauseResume, SuspendResume, StopCleanup, SkipCleanup, SupervisorLeaseExpiry, W4Noncanonical, TimingMarginSweep }
 impl Scenario {
     fn parse(value: &str) -> Result<Self, String> {
-        match value { "canonical-single" => Ok(Self::CanonicalSingle), "canonical-chord" => Ok(Self::CanonicalChord), "canonical-max-chord" => Ok(Self::CanonicalMaxChord), "hold" => Ok(Self::Hold), "rapid-retrigger" => Ok(Self::RapidRetrigger), "release-gap-stress" => Ok(Self::ReleaseGapStress), "mixed-up-down" => Ok(Self::MixedUpDown), "cleanup-full-release" => Ok(Self::CleanupFullRelease), "focus-loss" => Ok(Self::FocusLoss), "target-hwnd-change" => Ok(Self::TargetHwndChange), "pause-resume" => Ok(Self::PauseResume), "stop-cleanup" => Ok(Self::StopCleanup), "skip-cleanup" => Ok(Self::SkipCleanup), "w4-noncanonical" => Ok(Self::W4Noncanonical), "timing-margin-sweep" => Ok(Self::TimingMarginSweep), _ => Err(format!("unsupported scenario: {value}")) }
+        match value { "canonical-single" => Ok(Self::CanonicalSingle), "canonical-chord" => Ok(Self::CanonicalChord), "canonical-max-chord" => Ok(Self::CanonicalMaxChord), "hold" => Ok(Self::Hold), "long-single-sequence" => Ok(Self::LongSingleSequence), "dense-alternating" => Ok(Self::DenseAlternating), "chord-sweep" => Ok(Self::ChordSweep), "near-minimum-retrigger" => Ok(Self::NearMinimumRetrigger), "rapid-retrigger" => Ok(Self::RapidRetrigger), "release-gap-stress" => Ok(Self::ReleaseGapStress), "mixed-up-down" => Ok(Self::MixedUpDown), "cleanup-full-release" => Ok(Self::CleanupFullRelease), "focus-loss" => Ok(Self::FocusLoss), "target-hwnd-change" => Ok(Self::TargetHwndChange), "pause-resume" => Ok(Self::PauseResume), "suspend-resume" => Ok(Self::SuspendResume), "stop-cleanup" => Ok(Self::StopCleanup), "skip-cleanup" => Ok(Self::SkipCleanup), "supervisor-lease-expiry" => Ok(Self::SupervisorLeaseExpiry), "w4-noncanonical" => Ok(Self::W4Noncanonical), "timing-margin-sweep" => Ok(Self::TimingMarginSweep), _ => Err(format!("unsupported scenario: {value}")) }
     }
     const fn label(self) -> &'static str {
-        match self { Self::CanonicalSingle => "canonical-single", Self::CanonicalChord => "canonical-chord", Self::CanonicalMaxChord => "canonical-max-chord", Self::Hold => "hold", Self::RapidRetrigger => "rapid-retrigger", Self::ReleaseGapStress => "release-gap-stress", Self::MixedUpDown => "mixed-up-down", Self::CleanupFullRelease => "cleanup-full-release", Self::FocusLoss => "focus-loss", Self::TargetHwndChange => "target-hwnd-change", Self::PauseResume => "pause-resume", Self::StopCleanup => "stop-cleanup", Self::SkipCleanup => "skip-cleanup", Self::W4Noncanonical => "w4-noncanonical", Self::TimingMarginSweep => "timing-margin-sweep" }
+        match self { Self::CanonicalSingle => "canonical-single", Self::CanonicalChord => "canonical-chord", Self::CanonicalMaxChord => "canonical-max-chord", Self::Hold => "hold", Self::LongSingleSequence => "long-single-sequence", Self::DenseAlternating => "dense-alternating", Self::ChordSweep => "chord-sweep", Self::NearMinimumRetrigger => "near-minimum-retrigger", Self::RapidRetrigger => "rapid-retrigger", Self::ReleaseGapStress => "release-gap-stress", Self::MixedUpDown => "mixed-up-down", Self::CleanupFullRelease => "cleanup-full-release", Self::FocusLoss => "focus-loss", Self::TargetHwndChange => "target-hwnd-change", Self::PauseResume => "pause-resume", Self::SuspendResume => "suspend-resume", Self::StopCleanup => "stop-cleanup", Self::SkipCleanup => "skip-cleanup", Self::SupervisorLeaseExpiry => "supervisor-lease-expiry", Self::W4Noncanonical => "w4-noncanonical", Self::TimingMarginSweep => "timing-margin-sweep" }
     }
     const fn needs_focus_probe(self) -> bool {
         matches!(self, Self::FocusLoss)
@@ -78,7 +78,7 @@ impl Scenario {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunArgs {
     run_id: String, sink_ready: PathBuf, sink_events: PathBuf, target_hwnd: isize, scenario: Scenario,
-    evidence: PathBuf, timing_margin_us: u64, focus_probe_ready: Option<PathBuf>, focus_probe_events: Option<PathBuf>, focus_probe_hwnd: Option<isize>,
+    evidence: PathBuf, timing_margin_us: u64, focus_probe_ready: Option<PathBuf>, focus_probe_events: Option<PathBuf>, focus_probe_hwnd: Option<isize>, focus_restore_request: Option<PathBuf>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedCommand {
@@ -110,7 +110,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--timing-margin-us <0..3000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--timing-margin-us <0..3000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
 }
 fn validate_run_id(value: &str) -> Result<String, String> {
     if value.is_empty()
@@ -182,6 +182,7 @@ where
     let mut focus_probe_ready = None;
     let mut focus_probe_events = None;
     let mut focus_probe_hwnd = None;
+    let mut focus_restore_request = None;
     let mut arguments = arguments.peekable();
     while let Some(flag) = arguments.next() {
         macro_rules! next_value {
@@ -216,6 +217,7 @@ where
             "--focus-probe-ready" => { unique!(focus_probe_ready, "--focus-probe-ready"); let value = next_value!("--focus-probe-ready"); focus_probe_ready = Some(bounded_path(&value, "--focus-probe-ready")?); }
             "--focus-probe-events" => { unique!(focus_probe_events, "--focus-probe-events"); let value = next_value!("--focus-probe-events"); focus_probe_events = Some(bounded_path(&value, "--focus-probe-events")?); }
             "--focus-probe-hwnd" => { unique!(focus_probe_hwnd, "--focus-probe-hwnd"); focus_probe_hwnd = Some(parse_hwnd(&next_value!("--focus-probe-hwnd"))?); }
+            "--focus-restore-request" => { unique!(focus_restore_request, "--focus-restore-request"); let value = next_value!("--focus-restore-request"); focus_restore_request = Some(bounded_path(&value, "--focus-restore-request")?); }
             "--help" | "-h" => return Ok(ParsedCommand::Help),
             _ => return Err(format!("unknown argument {flag:?}")),
         }
@@ -235,6 +237,7 @@ where
         focus_probe_ready,
         focus_probe_events,
         focus_probe_hwnd,
+        focus_restore_request,
     };
     let probe_count = [
         run.focus_probe_ready.is_some(),
@@ -249,6 +252,9 @@ where
             "focus-loss requires --focus-probe-ready, --focus-probe-events, and --focus-probe-hwnd"
                 .to_string(),
         );
+    }
+    if run.scenario.needs_focus_probe() != run.focus_restore_request.is_some() {
+        return Err("focus-loss requires --focus-restore-request and other scenarios may not use it".to_string());
     }
     if !run.scenario.needs_focus_probe() && probe_count != 0 {
         return Err("focus-probe arguments are valid only for focus-loss".to_string());
@@ -353,14 +359,87 @@ fn scenario_plan(scenario: Scenario, timing_margin_us: u64) -> Result<ScenarioPl
             Scenario::CanonicalChord => (vec![action(0, ActionKind::Down, 50_000, &[0, 1]), action(1, ActionKind::Up, 90_000, &[0, 1])], None, vec![0, 1], vec![0, 1], false),
             Scenario::CanonicalMaxChord => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 90_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
             Scenario::Hold => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 500_000, &[0])], None, vec![0], vec![0], false),
+            Scenario::LongSingleSequence => {
+                let hold_us = acceptance_min_hold_us(timing_margin_us);
+                let gap_us = acceptance_min_release_gap_us(timing_margin_us);
+                let mut actions = Vec::with_capacity(48);
+                let mut down_slots = Vec::with_capacity(24);
+                let mut up_slots = Vec::with_capacity(24);
+                let mut timestamp_us = 50_000_u64;
+                for index in 0..24_u32 {
+                    actions.push(action(index * 2, ActionKind::Down, timestamp_us, &[0]));
+                    actions.push(action(index * 2 + 1, ActionKind::Up, timestamp_us + hold_us, &[0]));
+                    down_slots.push(0);
+                    up_slots.push(0);
+                    timestamp_us += hold_us + gap_us;
+                }
+                (actions, None, down_slots, up_slots, false)
+            }
+            Scenario::DenseAlternating => {
+                let hold_us = acceptance_min_hold_us(timing_margin_us);
+                let gap_us = acceptance_min_release_gap_us(timing_margin_us);
+                let mut actions = Vec::with_capacity(32);
+                let mut down_slots = Vec::with_capacity(16);
+                let mut up_slots = Vec::with_capacity(16);
+                let mut timestamp_us = 50_000_u64;
+                for index in 0..16_u32 {
+                    let slot = (index as usize) % 2;
+                    actions.push(action(index * 2, ActionKind::Down, timestamp_us, &[slot]));
+                    actions.push(action(index * 2 + 1, ActionKind::Up, timestamp_us + hold_us, &[slot]));
+                    down_slots.push(slot);
+                    up_slots.push(slot);
+                    timestamp_us += hold_us + gap_us;
+                }
+                (actions, None, down_slots, up_slots, false)
+            }
+            Scenario::ChordSweep => {
+                let hold_us = acceptance_min_hold_us(timing_margin_us);
+                // Keep the chord-size sweep physically observable on the
+                // receive-only Windows sink.  Dense minimum-geometry timing
+                // is covered independently by DenseAlternating.
+                let gap_us = 100_000;
+                let mut actions = Vec::with_capacity((MAX_KEYS - 1) * 2);
+                let mut down_slots = Vec::new();
+                let mut up_slots = Vec::new();
+                let mut timestamp_us = 50_000_u64;
+                let mut action_index = 0_u32;
+                for chord_size in 2..=MAX_KEYS {
+                    let slots = (0..chord_size).collect::<Vec<_>>();
+                    actions.push(action(action_index, ActionKind::Down, timestamp_us, &slots));
+                    actions.push(action(action_index + 1, ActionKind::Up, timestamp_us + hold_us, &slots));
+                    down_slots.extend(slots.iter().copied());
+                    up_slots.extend(slots);
+                    timestamp_us += hold_us + gap_us;
+                    action_index += 2;
+                }
+                (actions, None, down_slots, up_slots, false)
+            }
+            Scenario::NearMinimumRetrigger => {
+                let hold_us = acceptance_min_hold_us(timing_margin_us);
+                let gap_us = acceptance_min_release_gap_us(timing_margin_us);
+                let mut actions = Vec::with_capacity(8);
+                let mut down_slots = Vec::with_capacity(4);
+                let mut up_slots = Vec::with_capacity(4);
+                let mut timestamp_us = 50_000_u64;
+                for index in 0..4_u32 {
+                    actions.push(action(index * 2, ActionKind::Down, timestamp_us, &[0]));
+                    actions.push(action(index * 2 + 1, ActionKind::Up, timestamp_us + hold_us, &[0]));
+                    down_slots.push(0);
+                    up_slots.push(0);
+                    timestamp_us += hold_us + gap_us;
+                }
+                (actions, None, down_slots, up_slots, false)
+            }
             Scenario::RapidRetrigger => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 80_000, &[0]), action(2, ActionKind::Down, 110_000, &[0]), action(3, ActionKind::Up, 140_000, &[0]), action(4, ActionKind::Down, 170_000, &[0]), action(5, ActionKind::Up, 200_000, &[0])], None, vec![0, 0, 0], vec![0, 0, 0], false),
             Scenario::ReleaseGapStress => return release_gap_scenario_plan(timing_margin_us),
             Scenario::MixedUpDown => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 100_000, &[0]), action(2, ActionKind::Down, 100_000, &[1]), action(3, ActionKind::Up, 150_000, &[1])], None, vec![0, 1], vec![0, 1], false),
             Scenario::CleanupFullRelease => (vec![action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()), action(1, ActionKind::Up, 10_000_000, &(0..MAX_KEYS).collect::<Vec<_>>())], None, (0..MAX_KEYS).collect(), (0..MAX_KEYS).collect(), false),
-            Scenario::FocusLoss => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0]), action(2, ActionKind::Down, 1_000_000, &[1]), action(3, ActionKind::Up, 1_100_000, &[1])], None, vec![0], vec![0], false),
+            Scenario::FocusLoss => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0]), action(2, ActionKind::Down, 3_000_000, &[1]), action(3, ActionKind::Up, 3_100_000, &[1])], None, vec![0, 1], vec![0].into_iter().chain(0..MAX_KEYS).chain([1]).collect(), true),
             Scenario::TargetHwndChange => (vec![action(0, ActionKind::Down, 500_000, &[0]), action(1, ActionKind::Up, 600_000, &[0])], None, vec![], (0..MAX_KEYS).collect(), true),
             Scenario::StopCleanup | Scenario::SkipCleanup => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 10_000_000, &[0])], None, vec![0], vec![0], false),
             Scenario::PauseResume => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 120_000, &[0]), action(2, ActionKind::Down, 500_000, &[1]), action(3, ActionKind::Up, 570_000, &[1])], None, vec![0, 1], vec![0, 1].into_iter().chain(0..MAX_KEYS).collect(), true),
+            Scenario::SuspendResume => (vec![action(0, ActionKind::Down, 50_000, &[0]), action(1, ActionKind::Up, 500_000, &[0]), action(2, ActionKind::Down, 1_000_000, &[1]), action(3, ActionKind::Up, 1_100_000, &[1])], None, vec![0, 1], (0..MAX_KEYS).chain([0, 1]).collect(), true),
+            Scenario::SupervisorLeaseExpiry => (vec![action(0, ActionKind::Down, 5_000_000, &[0]), action(1, ActionKind::Up, 5_100_000, &[0])], None, vec![], (0..MAX_KEYS).collect(), true),
             Scenario::TimingMarginSweep => {
                 let down = 50_000;
                 let up = down + acceptance_min_hold_us(timing_margin_us);
@@ -609,10 +688,29 @@ fn cleanup_evidence_clean(full_mask_required: bool, attempted_mask: u16, attempt
 impl NativeCleanupEvidence { fn is_anomalous(self) -> bool { self.terminal_error || self.partial_events != 0 || self.zero_progress_events != 0 || self.active_count != 0 || self.possibly_active_count != 0 || self.failed_release_count != 0 || self.release_failed || self.stuck_mask != 0 || self.verification_inconclusive || self.transport_anomaly } }
 fn preterminal_verdict(observer: Verdict, cleanup_anomaly: bool) -> Verdict { if cleanup_anomaly { Verdict::Fail } else { observer } }
 fn focus_evidence_clean(paused: bool, final_gate_focus_losses: u64, target_changes: u64, sink_events_clean: bool, probe_events_empty: bool) -> bool {
-    paused && final_gate_focus_losses >= 1 && target_changes == 0 && sink_events_clean && probe_events_empty
+    // A focus transition may be consumed by the supervisor pause before a
+    // later Down reaches the final gate.  In that valid case there is no
+    // final-gate rejection counter, but the observed pause remains the
+    // authoritative fail-closed evidence.
+    let focus_transition_observed = paused || final_gate_focus_losses >= 1;
+    focus_transition_observed && target_changes == 0 && sink_events_clean && probe_events_empty
 }
 fn target_change_preflight_error(snapshot: &EngineSnapshot) -> bool { snapshot.outcome.as_deref() == Some("error") && snapshot.terminal_error.as_deref().is_some_and(|error| error.contains("instrument key preflight failed")) }
 fn target_change_cleanup_exception(snapshot: &EngineSnapshot) -> bool { target_change_preflight_error(snapshot) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.release_outcome.as_ref().is_some_and(|outcome| outcome.verification_inconclusive && !outcome.transport_anomaly) }
+fn supervisor_expiry_cleanup_exception(snapshot: &EngineSnapshot) -> bool {
+    snapshot.terminal_error.as_deref() == Some("supervisor_lease_expired")
+        && snapshot.active_count == 0
+        && snapshot.possibly_active_count == 0
+        && snapshot.sendinput_partial_events == 0
+        && snapshot.sendinput_zero_progress_failures == 0
+        && snapshot.timeline_rebase_count == 0
+}
+#[cfg(windows)]
+fn publish_foreground_focus_hint(session: &NativeDispatchSession, target_hwnd: isize) -> bool {
+    let focused = foreground_window_matches(target_hwnd);
+    session.set_focus_hint(focused);
+    focused
+}
 fn write_report(args: &RunArgs, verdict: Verdict, reason: &str, details: Value) -> i32 {
     let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "timing_margin_us": args.timing_margin_us, "min_hold_us": acceptance_min_hold_us(args.timing_margin_us), "min_release_gap_us": acceptance_min_release_gap_us(args.timing_margin_us), "reason": reason, "details": details});
     let serialized = serde_json::to_string(&report).unwrap_or_else(|_| format!(r#"{{"status":"{}","reason":"report serialization failed"}}"#, verdict.label()));
@@ -649,6 +747,16 @@ fn wait_for_focus_pause(session: &NativeDispatchSession) -> bool {
     loop {
         let state = session.poll_state();
         if state.is_paused { return true; }
+        if state.is_finished || Instant::now() >= deadline { return false; }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+#[cfg(windows)]
+fn wait_for_resume(session: &NativeDispatchSession) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let state = session.poll_state();
+        if !state.is_paused { return true; }
         if state.is_finished || Instant::now() >= deadline { return false; }
         thread::sleep(Duration::from_millis(5));
     }
@@ -704,7 +812,7 @@ fn run_windows(args: RunArgs) -> i32 {
     if let Err(error) = session.arm(0) {
         inconclusive!(&error, json!({}));
     }
-    if args.scenario == Scenario::ReleaseGapStress
+    if matches!(args.scenario, Scenario::ReleaseGapStress | Scenario::FocusLoss | Scenario::SuspendResume)
         && let Err(error) = release_gap_stress::start_heartbeat(Arc::clone(&session))
     {
         inconclusive!(&error, json!({}));
@@ -717,12 +825,18 @@ fn run_windows(args: RunArgs) -> i32 {
             let _ = session.join(Duration::from_secs(5));
             inconclusive!("production session did not reach startup_ready before focus challenge", json!({}));
         }
-        if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &expected_up)) { return code; }
+        let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]);
+        if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; }
         let probe_hwnd = targets.probe.as_ref().expect("focus scenario probe").hwnd as isize;
         if !focus_window_and_verify(probe_hwnd, Duration::from_millis(250)) {
             let _ = session.quit();
             let _ = session.join(Duration::from_secs(5));
             inconclusive!("focus probe could not become the exact foreground HWND", json!({}));
+        }
+        if publish_foreground_focus_hint(&session, sink_hwnd) {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("focus probe transition did not produce a foreground loss for the target HWND", snapshot_json(&session.snapshot()));
         }
         let probe = targets.probe.as_ref().expect("focus scenario probe");
         let fresh_probe = match validate_target_ready(args.focus_probe_ready.as_deref().expect("focus probe ready path"), &args.run_id, probe_hwnd, PROBE_ROLE) {
@@ -733,12 +847,47 @@ fn run_windows(args: RunArgs) -> i32 {
         if let Err(error) = validate_log_binding(args.focus_probe_events.as_deref().expect("focus probe event path"), &fresh_probe, PROBE_ROLE) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }
         final_probe = Some(fresh_probe);
         let observed = wait_for_focus_pause(&session);
-        let _ = session.quit();
+        if !observed {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("focus loss did not commit before the bounded proof deadline", snapshot_json(&session.snapshot()));
+        }
+        if let Err(error) = fs::write(args.focus_restore_request.as_deref().expect("focus restore request path"), b"restore") {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!(&format!("failed to request sink focus restoration: {error}"), snapshot_json(&session.snapshot()));
+        }
+        if !focus_window_and_verify(sink_hwnd, Duration::from_millis(250)) {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("sink could not be restored as the exact foreground HWND", snapshot_json(&session.snapshot()));
+        }
+        if !publish_foreground_focus_hint(&session, sink_hwnd) {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("foreground restoration did not publish a focused target hint", snapshot_json(&session.snapshot()));
+        }
+        if !wait_for_resume(&session) {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("focus restoration did not resume before the bounded proof deadline", snapshot_json(&session.snapshot()));
+        }
         observed
     } else if args.scenario == Scenario::CleanupFullRelease {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before cleanup proof", json!({})); }
         if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &[])) { return code; }
         let _ = session.quit();
+        false
+    } else if args.scenario == Scenario::SuspendResume {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before suspend/resume proof", json!({})); }
+        let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]);
+        if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; }
+        first_physical_commit_observed = true;
+        if !session.notify_system_power(true) { inconclusive!("system suspend transition was not accepted", snapshot_json(&session.snapshot())); }
+        pause_observed = wait_for_focus_pause(&session);
+        if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("system suspend did not commit before the bounded proof deadline", snapshot_json(&session.snapshot())); }
+        if !session.notify_system_power(false) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("system resume transition was not accepted", snapshot_json(&session.snapshot())); }
+        resume_requested = wait_for_resume(&session);
         false
     } else if args.scenario == Scenario::PauseResume {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
@@ -754,12 +903,13 @@ fn run_windows(args: RunArgs) -> i32 {
     let joined = session.join(Duration::from_secs(if args.scenario == Scenario::ReleaseGapStress { 60 } else { 10 })).unwrap_or(false);
     let snapshot = session.snapshot();
     if !joined { inconclusive!("production session did not join within the bounded timeout", snapshot_json(&snapshot)); }
+    let sink_drain_mode = DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: plan.allow_unpaired_cleanup_ups };
     let (sink_events, sink_drain_failure) = match drain_event_window(
         &args.sink_events,
         sink_cursor,
         &fresh_sink,
         RECEIVE_ONLY_ROLE,
-        DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: plan.allow_unpaired_cleanup_ups },
+        sink_drain_mode,
         &expected_down,
         &expected_up,
     ) {
@@ -799,9 +949,11 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
         object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
         object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
+        let power = session.system_power_snapshot();
+        object.insert("system_power".to_string(), json!({"suspended": power.suspended, "down_blocked": power.down_blocked, "suspend_notifications": power.suspend_notifications, "resume_notifications": power.resume_notifications, "duplicate_notifications": power.duplicate_notifications}));
     }
     let Some(outcome) = snapshot.release_outcome.as_ref() else { inconclusive!("missing cleanup/release evidence", details); };
-    if !cleanup_evidence_clean(args.scenario == Scenario::CleanupFullRelease, outcome.attempted_mask, outcome.attempts, outcome.released_successfully, outcome.stuck_mask, outcome.verification_inconclusive, outcome.transport_anomaly) && !target_change_cleanup_exception(&snapshot) {
+    if !cleanup_evidence_clean(args.scenario == Scenario::CleanupFullRelease, outcome.attempted_mask, outcome.attempts, outcome.released_successfully, outcome.stuck_mask, outcome.verification_inconclusive, outcome.transport_anomaly) && !target_change_cleanup_exception(&snapshot) && !supervisor_expiry_cleanup_exception(&snapshot) {
         return write_report(
             &args,
             Verdict::Fail,
@@ -811,7 +963,8 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     let expected_target_preflight_failure = args.scenario == Scenario::TargetHwndChange && target_change_preflight_error(&snapshot);
     let target_cleanup_exception = target_change_cleanup_exception(&snapshot);
-    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception) || snapshot.sendinput_partial_events != 0 || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure)
+    let expected_supervisor_expiry = args.scenario == Scenario::SupervisorLeaseExpiry && supervisor_expiry_cleanup_exception(&snapshot);
+    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || snapshot.sendinput_partial_events != 0 || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry)
     {
         return write_report(
             &args,
@@ -830,10 +983,27 @@ fn run_windows(args: RunArgs) -> i32 {
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
+    if args.scenario == Scenario::SuspendResume {
+        let power = session.system_power_snapshot();
+        if !first_physical_commit_observed || !pause_observed || !resume_requested || power.suspend_notifications == 0 || power.resume_notifications == 0 || power.suspended || snapshot.timeline_rebase_count != 0 {
+            return write_report(&args, Verdict::Fail, "suspend/resume control evidence is incomplete", details);
+        }
+    }
+    if args.scenario == Scenario::SupervisorLeaseExpiry {
+        if !expected_supervisor_expiry
+            || snapshot.wait_interrupted_count == 0
+            || snapshot.timeline_rebase_count != 0
+            || sink_events.iter().any(|event| event.kind == "key_press")
+            || sink_events.len() != MAX_KEYS
+        {
+            return write_report(&args, Verdict::Fail, "supervisor lease expiry did not fail closed before the musical target", details);
+        }
+        return write_report(&args, Verdict::Pass, "watchdog interrupted the long musical wait before any physical send", details);
+    }
     if args.scenario == Scenario::RapidRetrigger { let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let expected = [("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
     if args.scenario == Scenario::MixedUpDown { let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0]; let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", second)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
     if args.scenario.needs_focus_probe() {
-        let sink_events_clean = reconcile_events(&sink_events, &expected_down, &expected_up, false).is_ok();
+        let sink_events_clean = reconcile_events(&sink_events, &expected_down, &expected_up, plan.allow_unpaired_cleanup_ups).is_ok();
         if !focus_evidence_clean(focus_gate_observed, snapshot.final_gate_focus_losses, snapshot.final_gate_target_changes, sink_events_clean, probe_events.is_empty()) {
             return write_report(
                 &args,
