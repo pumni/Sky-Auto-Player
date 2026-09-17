@@ -83,51 +83,77 @@ The optimized shipping caller has zero retained `send_prepared_normal_precision_
 
 ## Counterbalanced real-wait A/B
 
+This is the fresh final-head confirmation. Production code is unchanged from `75f2eb3f84b77966b504a472144ca299d02eb456`; this is an evidence-only revision.
+
 Benchmark command for every run:
 
 ```text
 rtk cmd /c "set RT_HANDOFF_BENCH_ITERATIONS=10000&& set RT_HANDOFF_BENCH_SCOPE=baseline&& cargo run --profile dist --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --example rt_handoff_bench -- <report.json>"
 ```
 
-Order: `head-1 -> base-1 -> head-2 -> base-2 -> head-3 -> base-3 -> head-4 -> base-4 -> head-5 -> base-5`.
+Toolchain and host were unchanged: Rust 1.98.1 MSVC, same laptop, same power/setup, `--profile dist`, corrected production-calibrated real-wait benchmark. Exact chronological order and pair directions:
 
-All runs had 10,000 observations, `statistics_eligible=true`, `acceptance_clean=true`, real-wait non-dispatch 0, overdue 0, and real-wait transport anomaly 0.
+```text
+H1 -> B1 -> B2 -> H2 -> H3 -> B3 -> B4 -> H4 -> H5 -> B5
+H -> B, B -> H, H -> B, B -> H, H -> B
+```
+
+All ten runs had 10,000 observations, `statistics_eligible=true`, `acceptance_clean=true`, real-wait non-dispatch 0, overdue 0, and real-wait transport anomaly 0. Worker CPU time was not available in this benchmark report.
 
 ### `pre_call_qpc - target_qpc` (microseconds)
 
-| run | p50 | p95 | p99 | p99.9 | max |
-|---|---:|---:|---:|---:|---:|
-| head-1 | 2 | 5 | 897 | 4849 | 18335 |
-| base-1 | 2 | 10 | 1460 | 4028 | 14437 |
-| head-2 | 2 | 148 | 995 | 3290 | 5079 |
-| base-2 | 3 | 52 | 616 | 3210 | 6057 |
-| head-3 | 2 | 5 | 838 | 3159 | 9087 |
-| base-3 | 35 | 369 | 735 | 3290 | 27502 |
-| head-4 | 3 | 6 | 1079 | 2671 | 7377 |
-| base-4 | 2 | 7 | 1295 | 4322 | 6430 |
-| head-5 | 2 | 6 | 184 | 457 | 11164 |
-| base-5 | 2 | 4 | 5 | 752 | 8223 |
+| run | base/head | p50 | p95 | p99 | p99.9 | max |
+|---|---|---:|---:|---:|---:|---:|
+| H1 | head | 2 | 20 | 220 | 2736 | 14276 |
+| B1 | base | 3 | 133 | 375 | 1674 | 8201 |
+| B2 | base | 2 | 4 | 28 | 1222 | 11487 |
+| H2 | head | 2 | 20 | 191 | 2824 | 17249 |
+| H3 | head | 3 | 5 | 128 | 1664 | 19704 |
+| B3 | base | 4 | 9 | 208 | 6870 | 30260 |
+| B4 | base | 4 | 119 | 313 | 2870 | 49280 |
+| H4 | head | 38 | 396 | 604 | 1258 | 3123 |
+| H5 | head | 4 | 5 | 128 | 385 | 4648 |
+| B5 | base | 4 | 6 | 42 | 1285 | 14157 |
 
 ### `completion_qpc - pre_call_qpc` (microseconds)
 
-| run | p50 | p95 | p99 | p99.9 | max |
-|---|---:|---:|---:|---:|---:|
-| head-1 | 0 | 1 | 2 | 20 | 378 |
-| base-1 | 0 | 1 | 2 | 13 | 192 |
-| head-2 | 0 | 1 | 2 | 8 | 29 |
-| base-2 | 0 | 1 | 2 | 9 | 239 |
-| head-3 | 0 | 1 | 3 | 26 | 205 |
-| base-3 | 0 | 1 | 2 | 18 | 320 |
-| head-4 | 0 | 1 | 2 | 16 | 1152 |
-| base-4 | 0 | 1 | 3 | 24 | 1979 |
-| head-5 | 0 | 1 | 1 | 2 | 12 |
-| base-5 | 0 | 1 | 1 | 2 | 151 |
+| run | base/head | p50 | p95 | p99 | p99.9 | max |
+|---|---|---:|---:|---:|---:|---:|
+| H1 | head | 0 | 1 | 2 | 10 | 253 |
+| B1 | base | 0 | 1 | 2 | 18 | 133 |
+| B2 | base | 0 | 1 | 2 | 3 | 5 |
+| H2 | head | 0 | 1 | 1 | 2 | 13 |
+| H3 | head | 0 | 1 | 1 | 2 | 43 |
+| B3 | base | 1 | 1 | 2 | 6 | 277 |
+| B4 | base | 1 | 1 | 1 | 4 | 109 |
+| H4 | head | 1 | 1 | 1 | 81 | 134 |
+| H5 | head | 1 | 1 | 2 | 3 | 91 |
+| B5 | base | 1 | 1 | 1 | 2 | 274 |
 
-Each report also retains target-to-wake, wake-to-final-policy, final-policy-to-pre-call, completion-to-ready (the available completion-to-next-ready proxy), non-dispatch, overdue, and transport-anomaly fields. The samples are noisy and do not support a scheduler-tuning or universal improvement claim. There is no attributable delivery regression or systematic new tail regression in this Gate-A comparison.
+### Raw decomposition for every run
 
-Raw reports:
+Values are microseconds. `wake` is target-to-wake lateness; `wake-final` is wake-to-final-policy; `final-pre` is final-policy-to-pre-call; `ready` is the available completion-to-next-ready/wait-entry proxy; `slack` is `target_minus_wait_entry`.
 
-`.benchmarks/gate-a-head-1.json`, `.benchmarks/gate-a-base-1.json`, `.benchmarks/gate-a-head-2.json`, `.benchmarks/gate-a-base-2.json`, `.benchmarks/gate-a-head-3.json`, `.benchmarks/gate-a-base-3.json`, `.benchmarks/gate-a-head-4.json`, `.benchmarks/gate-a-base-4.json`, `.benchmarks/gate-a-head-5.json`, `.benchmarks/gate-a-base-5.json`.
+| run | wake p99 / p99.9 / max | wake-final p99 / p99.9 / max | final-pre p99 / p99.9 / max | ready p99 / p99.9 / max | slack p50 / p95 / p99 / p99.9 / min | non-dispatch / overdue / transport |
+|---|---|---|---|---|---|---:|
+| H1 | 216 / 2730 / 14273 | 6 / 34 / 822 | 0 / 0 / 0 | 8 / 26 / 284 | 9999 / 9999 / 9999 / 9999 / 9975 | 0 / 0 / 0 |
+| B1 | 366 / 1630 / 7651 | 9 / 90 / 7982 | 0 / 0 / 0 | 10 / 49 / 424 | 9999 / 9999 / 9999 / 9999 / 9711 | 0 / 0 / 0 |
+| B2 | 15 / 1213 / 11483 | 6 / 28 / 282 | 0 / 0 / 0 | 8 / 22 / 453 | 9999 / 9999 / 9999 / 9999 / 9984 | 0 / 0 / 0 |
+| H2 | 188 / 2822 / 17245 | 4 / 12 / 98 | 0 / 0 / 0 | 5 / 10 / 72 | 9999 / 9999 / 9999 / 9999 / 9970 | 0 / 0 / 0 |
+| H3 | 124 / 1661 / 19700 | 5 / 12 / 118 | 0 / 0 / 0 | 6 / 21 / 454 | 9999 / 9999 / 9999 / 9999 / 9986 | 0 / 0 / 0 |
+| B3 | 203 / 6865 / 30254 | 5 / 26 / 168 | 0 / 0 / 0 | 6 / 24 / 238 | 9999 / 9999 / 9999 / 9999 / 9836 | 0 / 0 / 0 |
+| B4 | 308 / 2866 / 49276 | 5 / 59 / 326 | 0 / 0 / 0 | 6 / 77 / 507 | 9999 / 9999 / 9999 / 9999 / 9882 | 0 / 0 / 0 |
+| H4 | 593 / 1254 / 3120 | 5 / 136 / 212 | 0 / 0 / 0 | 6 / 124 / 165 | 9999 / 9999 / 9999 / 9999 / 9935 | 0 / 0 / 0 |
+| H5 | 124 / 381 / 4628 | 5 / 19 / 176 | 0 / 0 / 0 | 6 / 30 / 329 | 9999 / 9999 / 9999 / 9999 / 9949 | 0 / 0 / 0 |
+| B5 | 36 / 1282 / 14152 | 6 / 14 / 65 | 0 / 0 / 0 | 5 / 14 / 164 | 9999 / 9999 / 9999 / 9999 / 9667 | 0 / 0 / 0 |
+
+The paired comparison is directionally mixed: head p99 is lower in 2/5 pairs and higher in 3/5; head p99.9 is lower in 3/5 and higher in 2/5; head max is lower in 3/5 and higher in 2/5. This is not a systematic head disadvantage in either direction. The observed series is host-noise sensitive, with no delivery regression, no systematic new central/tail regression attributable to Gate A, and no scheduler tuning justified. `final-policy-to-pre-call` remains zero in every run.
+
+Raw reports, in chronological order:
+
+`.benchmarks/gate-a-final-H1.json`, `.benchmarks/gate-a-final-B1.json`, `.benchmarks/gate-a-final-B2.json`, `.benchmarks/gate-a-final-H2.json`, `.benchmarks/gate-a-final-H3.json`, `.benchmarks/gate-a-final-B3.json`, `.benchmarks/gate-a-final-B4.json`, `.benchmarks/gate-a-final-H4.json`, `.benchmarks/gate-a-final-H5.json`, `.benchmarks/gate-a-final-B5.json`.
+
+The earlier all-`H -> B` series (`gate-a-head-1` through `gate-a-base-5`) is historical/non-qualifying evidence and is not mixed into this final-head confirmation or its comparison.
 
 ## Focused workload A/B
 
