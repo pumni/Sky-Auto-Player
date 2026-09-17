@@ -56,6 +56,7 @@ function Invoke-V4ReleaseAssetUpload {
 
     $assetUrl = Get-V4ReleaseAssetUploadUrl -UploadUrl $UploadUrl -AssetName $AssetName
     $client = [System.Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromMinutes(10)
     $request = $null
     $fileStream = $null
     $content = $null

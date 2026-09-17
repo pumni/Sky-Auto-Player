@@ -326,13 +326,24 @@ foreach ($script in @(
 foreach ($marker in @(
     'System.Net.Http.HttpClient', 'System.Net.Http.StreamContent', 'System.IO.FileStream',
     'Headers.Authorization', 'UserAgent', 'application/vnd.github+json',
-    'X-GitHub-Api-Version', '2026-03-10', 'ContentLength', 'fileLength',
+    'X-GitHub-Api-Version', '2026-03-10', 'uploads.github.com', 'ContentLength', 'fileLength',
     'StatusCode', 'System.Net.HttpStatusCode', 'Created',
-    'SendAsync', 'ReadAsStringAsync', 'application/octet-stream'
+    'SendAsync', 'ReadAsStringAsync', 'application/octet-stream',
+    '$client.Timeout = [TimeSpan]::FromMinutes(10)'
 )) {
     if (-not $uploadHelper.Contains($marker)) {
         Fail "raw release asset upload helper is missing marker: $marker"
     }
+}
+if ($uploadHelper.Contains('InfiniteTimeSpan')) {
+    Fail "raw release asset upload helper must use a finite timeout"
+}
+$timeoutMatch = [regex]::Match(
+    $uploadHelper,
+    '\$client\.Timeout\s*=\s*\[TimeSpan\]::FromMinutes\((\d+)\)'
+)
+if (-not $timeoutMatch.Success -or ([int]$timeoutMatch.Groups[1].Value * 60) -le 100) {
+    Fail "raw release asset upload timeout must be explicit and longer than 100 seconds"
 }
 if ($uploadHelper.Contains('gh ') -or $uploadHelper.Contains('ArgumentList')) {
     Fail "raw release asset upload helper must not invoke GitHub CLI"
