@@ -64,6 +64,14 @@ fn terminal_reason_for_hard_stop(
     })
 }
 
+#[inline]
+fn consume_panic_request_if_pending(panic_requested: &AtomicBool, command_exit: bool) -> bool {
+    if command_exit || !panic_requested.load(Ordering::Acquire) {
+        return false;
+    }
+    panic_requested.swap(false, Ordering::AcqRel)
+}
+
 pub(super) fn process_command_control(context: CommandControlInput<'_>) -> CommandControl {
     let CommandControlInput {
         clock,
@@ -96,7 +104,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
     let supervisor_expired_before = supervisor_expired.load(Ordering::Acquire);
     let command_exit =
         quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire);
-    let panic_hard_stop_consumed = !command_exit && panic_requested.swap(false, Ordering::AcqRel);
+    let panic_hard_stop_consumed = consume_panic_request_if_pending(panic_requested, command_exit);
     let panic_requested = supervisor_expired_before || panic_hard_stop_consumed;
     if panic_requested {
         let panic_release =
@@ -180,5 +188,34 @@ mod tests {
             terminal_reason_for_hard_stop(false, true, false),
             Some("panic_release_requested")
         );
+    }
+
+    #[test]
+    fn panic_fast_path_does_not_rmw_when_flag_is_clear() {
+        let panic_requested = AtomicBool::new(false);
+
+        assert!(!super::consume_panic_request_if_pending(
+            &panic_requested,
+            false
+        ));
+        panic_requested.store(true, Ordering::Release);
+        assert!(super::consume_panic_request_if_pending(
+            &panic_requested,
+            false
+        ));
+        assert!(!panic_requested.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn panic_fast_path_source_loads_before_conditional_consume() {
+        let source = include_str!("control.rs");
+        let helper = source
+            .split("fn consume_panic_request_if_pending")
+            .nth(1)
+            .expect("panic fast path helper")
+            .split("pub(super) fn process_command_control")
+            .next()
+            .expect("panic fast path helper body");
+        assert!(helper.find("load(Ordering::Acquire)").unwrap() < helper.find("swap(").unwrap());
     }
 }

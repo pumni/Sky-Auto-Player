@@ -2749,6 +2749,32 @@ fn final_control_admission_rejects_each_command_state_in_priority_order() {
 }
 
 #[test]
+fn panic_arriving_after_outer_sample_is_caught_by_final_control_gate() {
+    let quit_requested = AtomicBool::new(false);
+    let skip_requested = AtomicBool::new(false);
+    let panic_requested = AtomicBool::new(false);
+    let desired_pause = AtomicBool::new(false);
+    let supervisor_expired = AtomicBool::new(false);
+    let signals = || FinalControlSignals {
+        quit_requested: &quit_requested,
+        skip_requested: &skip_requested,
+        panic_requested: &panic_requested,
+        desired_pause: &desired_pause,
+        supervisor_expired: &supervisor_expired,
+        system_power: None,
+    };
+
+    assert!(!panic_requested.load(Ordering::Acquire));
+    // The worker's read-mostly outer sample saw false. The interrupt/final
+    // gate remains the authority for a signal arriving immediately after it.
+    panic_requested.store(true, Ordering::Release);
+    assert_eq!(
+        final_control_precheck(signals()),
+        FinalControlAdmission::PanicRequested
+    );
+}
+
+#[test]
 fn system_suspend_after_wait_wake_blocks_final_down_admission_until_revalidated_resume() {
     use super::shared::SystemPowerState;
     use sky_dispatch_win32::event::OwnedEvent;
@@ -2882,6 +2908,43 @@ fn authored_up_only_does_not_send_after_final_control_rejection() {
             "{command} must reject UpOnly before transport: {step:?}"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0, "{command} sent physically");
+    }
+}
+
+#[test]
+fn prepared_up_only_has_one_final_gate_for_every_hard_stop() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    for control in 0..7 {
+        let mut harness = ProductionDispatchTestHarness::new_uponly_release_with_gap(100_000);
+        let calls = harness.configure_send_counter();
+        harness.advance_playback_time_us(100_000);
+        match control {
+            0 => harness.quit_requested.store(true, Ordering::Release),
+            1 => harness.skip_requested.store(true, Ordering::Release),
+            2 => harness.desired_pause.store(true, Ordering::Release),
+            3 => harness.panic_requested.store(true, Ordering::Release),
+            4 => harness.supervisor_expired.store(true, Ordering::Release),
+            5 => assert!(harness.notify_system_power_for_test(true)),
+            6 => harness.set_final_gate_race_hook(
+                |_focus_active, _target_hwnd, _target_generation, quit, _skip, _panic, _pause| {
+                    quit.store(true, Ordering::Release);
+                },
+            ),
+            _ => unreachable!(),
+        }
+
+        let mut stream = harness.build_prepared_stream_for_test();
+        let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+        assert!(
+            !matches!(step, super::worker::DispatchStep::Dispatched),
+            "UpOnly hard-stop {control} sent: {step:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "UpOnly hard-stop {control}"
+        );
     }
 }
 

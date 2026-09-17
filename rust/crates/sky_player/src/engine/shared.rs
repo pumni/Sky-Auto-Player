@@ -267,6 +267,10 @@ impl SystemPowerState {
     }
 
     pub(super) fn take_pending(&self) -> u8 {
+        let state = self.state.load(Ordering::Acquire);
+        if state & SYSTEM_POWER_PENDING_MASK == 0 {
+            return 0;
+        }
         self.state
             .fetch_and(!SYSTEM_POWER_PENDING_MASK, Ordering::AcqRel)
             & SYSTEM_POWER_PENDING_MASK
@@ -521,6 +525,30 @@ mod tests {
         assert!(power.notify(true, &interrupt));
         assert!(!power.complete_resume());
         assert!(power.down_blocked());
+    }
+
+    #[test]
+    fn pending_power_fast_path_returns_without_consume_when_clear() {
+        let power = SystemPowerState::default();
+
+        assert_eq!(power.take_pending(), 0);
+        assert_eq!(power.take_pending(), 0);
+    }
+
+    #[test]
+    fn pending_power_source_loads_before_conditional_consume() {
+        let source = include_str!("shared.rs");
+        let method = source
+            .split("pub(super) fn take_pending")
+            .nth(1)
+            .expect("pending power method")
+            .split("pub(super) fn down_blocked")
+            .next()
+            .expect("pending power method body");
+        assert!(
+            method.find("load(Ordering::Acquire)").unwrap() < method.find("fetch_and(").unwrap()
+        );
+        assert!(method.contains("return 0"));
     }
 
     #[test]
