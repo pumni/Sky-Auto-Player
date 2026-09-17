@@ -5,7 +5,7 @@ Closes #300
 Base: `9a32f0b8ce20d26e0fa31e48353ab6abd0822b3a`
 
 Implementation revision head used for the evidence runs:
-`3078d60f9ad79f9bd5825fe1342df4413722e1ce`
+`4be4a65fe60288bed55645a88f0c845eef0dd0b9`
 
 ## Prepared-stream suspension reconciliation
 
@@ -123,7 +123,7 @@ was the reviewed implementation revision. Runs used the same laptop, power
 and setup, `RT_HANDOFF_BENCH_SCOPE=baseline`,
 `RT_HANDOFF_BENCH_ITERATIONS=10000`, and the same command:
 
-`rtk cargo run -p sky_player --features test-support --example rt_handoff_bench -- <report.json>`
+`rtk cmd /c "set RT_HANDOFF_BENCH_ITERATIONS=10000&& set RT_HANDOFF_BENCH_SCOPE=baseline&& cargo run --manifest-path rust/Cargo.toml -p sky_player --features test-support --example rt_handoff_bench -- <report.json>"`
 
 ### Previously recorded five pairs
 
@@ -334,10 +334,10 @@ tuning. `final_policy_to_pre_call` remains zero for every head run.
   wrong-slot/unlisted negative cases, offset immutability, overdue delivery,
   legal same-key, completion no-feedback, transport-fault, and all prepared
   control-race tests: passed;
-- diff-scope proof: the revision changes coordinator post-send accounting and
-  test-support/test coverage only; `wait.rs`, target/wait derivation,
-  `dispatch_prepared_normal_frame`, and the precision sender helper are
-  unchanged, so the prior optimized assembly audit remains applicable;
+- diff-scope proof: this revision changes only benchmark/test-support ordering,
+  QPC evidence, the benchmark ordering regression test, and this evidence
+  document; no production dispatch/wait/precision implementation changed;
+  the prior optimized assembly audit remains applicable;
 - `cargo xtask check static`: PASS (29 pre-existing/allowlisted architecture
   warnings);
 - `cargo xtask check rust`: PASS (fmt, clippy `-D warnings`, all-features
