@@ -45,6 +45,7 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "physical_target_to_wake_max_us": snapshot.physical_target_to_wake_max_us,
         "wake_to_final_policy_max_us": snapshot.wake_to_final_policy_max_us,
         "final_policy_to_pre_call_max_us": snapshot.final_policy_to_pre_call_max_us,
+        "wake_to_send_max_us": snapshot.wake_to_send_max_us,
         "sendinput_duration_max_us": snapshot.sendinput_duration_max_us,
         "pre_call_lt_250us": snapshot.pre_call_lt_250us,
         "pre_call_250_500us": snapshot.pre_call_250_500us,
