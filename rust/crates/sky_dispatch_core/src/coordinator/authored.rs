@@ -768,23 +768,13 @@ impl RuntimeDispatchCoordinator {
             if prepared.immediate_up_mask & bit != 0 {
                 let Some(active) = self.active_for_slot(slot).cloned() else {
                     if explicitly_cancelled_by_suspension.contains(&generation_id)
-                        && self
-                            .generation_states
-                            .get(usize::try_from(generation_id).map_err(|_| {
-                                CoordinatorError::Invariant(
-                                    CoordinatorInvariantError::UnknownGeneration {
-                                        generation_id,
-                                        generation_count: self.generation_count,
-                                    },
-                                )
-                            })?)
-                            .is_some_and(|state| *state == GenerationStatus::Cancelled)
+                        && self.frozen_up_matches_cancelled_generation(prepared, up)
                     {
                         // A resumable suspension has already released this
-                        // physical key and terminalized its old generation.
-                        // The frozen Up remains in the immutable stream, so
-                        // consume its accounting without requiring a
-                        // Cancelled -> Released transition.
+                        // physical key. The frozen Up remains in the
+                        // immutable stream, so consume its accounting using
+                        // the narrow cancellation reconciliation contract.
+                        self.reconcile_resumable_cancelled_generation(generation_id)?;
                         continue;
                     }
                     return Err(CoordinatorError::Invariant(
@@ -830,9 +820,37 @@ impl RuntimeDispatchCoordinator {
                     source_action_index: up.source_action_index,
                 });
                 self.pending_release_mask |= bit;
+            } else {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "frozen authored Up is absent from its prepared release masks".into(),
+                    ),
+                ));
             }
         }
         Ok(())
+    }
+
+    fn frozen_up_matches_cancelled_generation(
+        &self,
+        prepared: PreparedAuthoredFrame,
+        up: &PreparedUpIntent,
+    ) -> bool {
+        let Ok(generation_index) = usize::try_from(up.intent.generation_id()) else {
+            return false;
+        };
+        let Some(location) = self.up_intent_locations.get(generation_index) else {
+            return false;
+        };
+        let Some((packet_index, intent_index)) = *location else {
+            return false;
+        };
+        let Some(compact) = self.schedule.intents.get(intent_index) else {
+            return false;
+        };
+        packet_index == prepared.packet_index
+            && compact.generation_id() == NO_GENERATION_ID
+            && compact.key_slot() == up.intent.key_slot()
     }
 
     /// Apply a frozen authored commit after a successful physical send.

@@ -1540,6 +1540,19 @@ impl ProductionDispatchTestHarness {
         })
     }
 
+    pub fn prepared_frame_offsets_for_test(&self) -> Vec<u64> {
+        self.prepared_stream_for_test
+            .as_ref()
+            .expect("prepared stream test setup")
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                PreparedDispatchEntry::Physical(frame) => Some(frame.offset_ticks.as_u64()),
+                PreparedDispatchEntry::Metadata { .. } => None,
+            })
+            .collect()
+    }
+
     pub fn prepare_prepared_stream_for_test(&mut self) {
         self.prepared_stream_for_test = Some(self.build_prepared_stream_for_test());
     }

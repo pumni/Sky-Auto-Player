@@ -818,6 +818,7 @@ fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
         ProductionDispatchTestHarness::new_prepared_resumable_suspension_sequence_for_test();
     let packets = harness.configure_packet_capture();
     harness.prepare_prepared_stream_for_test();
+    let frame_offsets_before = harness.prepared_frame_offsets_for_test();
 
     assert!(matches!(
         harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
@@ -857,6 +858,11 @@ fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
     assert_eq!(harness.backend_active_mask(), 0b010);
     assert_eq!(harness.backend_possibly_active_mask(), 0);
+    assert_eq!(
+        harness.prepared_frame_offsets_for_test(),
+        frame_offsets_before,
+        "resumable suspension must not rewrite prepared frame offsets"
+    );
 }
 
 #[test]
@@ -989,6 +995,163 @@ fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
         .expect("sentinel Down telemetry");
     assert_eq!(sentinel["send_attempts"].as_u64(), Some(1));
     assert_eq!(sentinel["sent_count"].as_u64(), Some(1));
+}
+
+#[test]
+fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "natural-resume-down-k".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 800_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "natural-resume-up-k".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 1_600_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "natural-resume-down-j".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 2_400_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "natural-resume-up-j".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("natural prepared suspension schedule");
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let full_release_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_calls));
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    let session = NativeDispatchSession::new(options).expect("native session admission");
+    start_with_test_wall_clock_slack(&session);
+
+    let first_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot();
+        if send_calls.load(Ordering::Acquire) >= 1 {
+            break;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "initial Down terminated: {snapshot:?}"
+        );
+        assert!(Instant::now() < first_deadline, "initial Down did not send");
+        session
+            .heartbeat()
+            .expect("heartbeat before natural-resume pause");
+        std::thread::yield_now();
+    }
+
+    let pause_generation = session.pause_with_timing_token().expect("pause request");
+    let _pause_timing = wait_for_pause_ack(&session, pause_generation);
+    let paused_snapshot = wait_for_clean_suspension(&session, &full_release_calls);
+    assert!(paused_snapshot.is_paused);
+    assert_eq!(paused_snapshot.active_count, 0);
+    assert_eq!(paused_snapshot.possibly_active_count, 0);
+
+    session.resume().expect("resume request");
+    let resume_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot();
+        if !snapshot.is_paused {
+            break;
+        }
+        assert!(
+            !snapshot.is_finished,
+            "resume finished unexpectedly: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < resume_deadline,
+            "resume acknowledgment timed out: {snapshot:?}"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat after natural-resume request");
+        std::thread::yield_now();
+    }
+
+    let finish_deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let snapshot = session.snapshot();
+        if snapshot.is_finished {
+            break;
+        }
+        assert!(
+            snapshot.terminal_error.is_none(),
+            "natural resume terminated with an error: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < finish_deadline,
+            "prepared stream did not naturally finish: {snapshot:?}"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat during natural finish");
+        std::thread::yield_now();
+    }
+
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "finished");
+    assert_eq!(snapshot.terminal_error, None);
+    assert_eq!(snapshot.generation_status_counts["released"], 2);
+    assert_eq!(snapshot.generation_status_counts["cancelled"], 0);
+    assert_eq!(snapshot.generation_status_counts["scheduled"], 0);
+    assert_eq!(snapshot.generation_status_counts["active"], 0);
+    assert_eq!(snapshot.generation_status_counts["dropped_expired"], 0);
+    assert_eq!(snapshot.generation_status_counts["dropped_backend"], 0);
+    assert_eq!(snapshot.generation_status_counts["dropped_conflict"], 0);
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    assert_eq!(snapshot.failed_release_count, 0);
+    assert_eq!(snapshot.timeline_rebase_count, 0);
+    let release = snapshot
+        .release_outcome
+        .as_ref()
+        .expect("natural completion publishes release outcome");
+    assert!(release.released_successfully);
+    assert_eq!(release.stuck_mask, 0);
+    assert!(!release.verification_inconclusive);
+    assert!(full_release_calls.load(Ordering::Acquire) >= 1);
+
+    let telemetry: serde_json::Value =
+        serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+            .expect("valid telemetry JSON");
+    let records = telemetry["records"].as_array().expect("records array");
+    for event_index in 0..4 {
+        let record = records
+            .iter()
+            .find(|record| record["event_index"].as_u64() == Some(event_index))
+            .unwrap_or_else(|| panic!("missing natural physical event {event_index}"));
+        assert_eq!(record["send_attempts"].as_u64(), Some(1));
+        assert_eq!(record["sent_count"].as_u64(), Some(1));
+    }
 }
 
 #[test]

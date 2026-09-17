@@ -1228,6 +1228,22 @@ fn frozen_up_after_resumable_suspension_consumes_only_explicit_cancelled_owner()
         )
         .expect("frozen Up is reconciled only for explicit suspension cancellation");
     assert_eq!(coordinator.active_mask, 0);
+    let counts = coordinator.generation_status_counts();
+    assert_eq!(counts.get("released"), Some(&1));
+    assert_eq!(counts.get("cancelled"), Some(&0));
+    assert!(coordinator.is_finished());
+    let duplicate_error = coordinator
+        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+            &up_commit,
+            TimelineTicks::from_raw(20_000),
+            TimelineTicks::from_raw(20_000),
+            &cancelled,
+        )
+        .expect_err("a reconciled frozen Up must not bypass its cursor on replay");
+    assert!(matches!(
+        duplicate_error,
+        CoordinatorError::PreparedBatchMismatch { .. }
+    ));
 
     let schedule = compile_runtime_intents(
         &[
@@ -1272,6 +1288,20 @@ fn frozen_up_after_resumable_suspension_consumes_only_explicit_cancelled_owner()
     let cancelled = mismatch
         .cancel_live_generations()
         .expect("cancel mismatch generation");
+    let mut wrong_slot = up_commit.clone();
+    wrong_slot.up_intents[0].intent = crate::model::CompactIntent::new(0, 1);
+    let wrong_slot_error = mismatch
+        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+            &wrong_slot,
+            TimelineTicks::from_raw(20_000),
+            TimelineTicks::from_raw(20_000),
+            &cancelled,
+        )
+        .expect_err("a cancelled generation with a mismatched frozen slot must fail");
+    assert!(matches!(
+        wrong_slot_error,
+        CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
+    ));
     let error = mismatch
         .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
             &up_commit,

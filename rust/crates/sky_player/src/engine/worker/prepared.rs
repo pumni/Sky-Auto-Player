@@ -221,7 +221,7 @@ impl PreparedDispatchStream {
             .count()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn entries(&self) -> &[PreparedDispatchEntry] {
         &self.entries
     }
