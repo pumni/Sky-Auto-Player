@@ -90,20 +90,6 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
             checkRequestPending: false,
           },
         });
-        try {
-          const preferences = await bridge.getUpdatePreferences();
-          const currentSettings = get().settings;
-          if (currentSettings) {
-            set({
-              settings: {
-                ...currentSettings,
-                update_preferences: preferences,
-              },
-            });
-          }
-        } catch {
-          // Native query failure; keep existing preferences
-        }
       } catch (error) {
         set({
           update: {

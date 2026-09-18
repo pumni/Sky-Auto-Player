@@ -35,28 +35,12 @@ export function formatUpdateError(
     case 'state_persistence_failed':
       return 'Failed to save update state.';
     case 'check_failed':
-      if (detail) {
-        const stripped = stripTechnicalPrefixes(detail);
-        if (stripped.length > 0) return stripped;
-      }
       return 'Could not check for updates. Check your network connection and try again.';
     case 'download_failed':
-      if (detail) {
-        const stripped = stripTechnicalPrefixes(detail);
-        if (stripped.length > 0) return stripped;
-      }
       return 'Failed to download the update. Please try again later.';
     case 'install_failed':
-      if (detail) {
-        const stripped = stripTechnicalPrefixes(detail);
-        if (stripped.length > 0) return stripped;
-      }
       return 'Failed to install the update. Please try again later.';
     case 'unknown':
-      if (detail) {
-        const stripped = stripTechnicalPrefixes(detail);
-        if (stripped.length > 0) return stripped;
-      }
       return 'An unexpected error occurred while updating.';
   }
 

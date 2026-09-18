@@ -2799,23 +2799,11 @@ describe('desktop update UX and native authority', () => {
         error: 'network_timeout: failed to fetch release metadata',
       },
     });
+    const prefsSpy = vi.spyOn(bridge, 'getUpdatePreferences');
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
 
-    // Reset store state to test that manual check refreshes native error timestamp
-    act(() => {
-      store.setState({
-        settings: {
-          ...store.getState().settings!,
-          update_preferences: {
-            ...store.getState().settings!.update_preferences,
-            last_error_ts: 0,
-            last_check_ts: 0,
-          },
-        },
-      });
-    });
-    expect(store.getState().settings?.update_preferences.last_error_ts).toBe(0);
+    prefsSpy.mockClear();
 
     await act(async () => store.getState().checkForUpdate('manual'));
 
@@ -2826,9 +2814,13 @@ describe('desktop update UX and native authority', () => {
     expect(update.errorDetail).toBe('network_timeout: failed to fetch release metadata');
     expect(update.retryAction).toBe('check');
 
-    const prefs = store.getState().settings?.update_preferences;
-    expect(prefs?.last_error_ts).toBeGreaterThan(0);
-    expect(prefs?.last_check_ts).toBe(0);
+    // Frontend does not query getUpdatePreferences() post-check
+    expect(prefsSpy).not.toHaveBeenCalled();
+
+    // Native authority updated its preferences timestamp
+    const nativePrefs = await bridge.getUpdatePreferences();
+    expect(nativePrefs.last_error_ts).toBeGreaterThan(0);
+    expect(nativePrefs.last_check_ts).toBe(0);
   });
 
   it('thrown bridge/IPC failure records transportError without inventing timestamps or corrupting native state', async () => {
@@ -2906,7 +2898,7 @@ describe('desktop update UX and native authority', () => {
     expect(update.checkRequestPending).toBe(false);
   });
 
-  it('translates physical playback rejection during install handoff to transportError', async () => {
+  it('translates physical playback rejection during install handoff to authoritative error state without transportError', async () => {
     const bridge = createMockBridge({
       beginUpdateHandoffError:
         'playback_active: update installation cannot run during physical playback',
@@ -2927,13 +2919,14 @@ describe('desktop update UX and native authority', () => {
     await act(async () => store.getState().beginUpdateHandoff());
 
     const update = store.getState().update;
-    expect(update.transportError).toBe(
-      'playback_active: update installation cannot run during physical playback',
-    );
+    expect(update.state).toBe('error');
+    expect(update.errorCode).toBe('playback_active');
+    expect(update.retryAction).toBe('install');
+    expect(update.transportError).toBeNull();
     expect(update.installRequestPending).toBe(false);
   });
 
-  it('translates calibration rejection during install handoff to transportError', async () => {
+  it('translates calibration rejection during install handoff to authoritative error state without transportError', async () => {
     const bridge = createMockBridge({
       beginUpdateHandoffError:
         'calibration_active: update installation cannot run during calibration',
@@ -2954,9 +2947,10 @@ describe('desktop update UX and native authority', () => {
     await act(async () => store.getState().beginUpdateHandoff());
 
     const update = store.getState().update;
-    expect(update.transportError).toBe(
-      'calibration_active: update installation cannot run during calibration',
-    );
+    expect(update.state).toBe('error');
+    expect(update.errorCode).toBe('calibration_active');
+    expect(update.retryAction).toBe('install');
+    expect(update.transportError).toBeNull();
     expect(update.installRequestPending).toBe(false);
   });
 
@@ -2967,7 +2961,7 @@ describe('desktop update UX and native authority', () => {
 
     act(() => {
       store.getState().applyEvent({
-        v: 2,
+        v: 1,
         name: 'update.changed',
         payload: {
           revision: 2,
@@ -2989,7 +2983,7 @@ describe('desktop update UX and native authority', () => {
     expect(store.getState().update.lastNativeRevision).toBe(2);
     expect(store.getState().update.availableVersion).toBe('4.2.0');
 
-    // Stale event with v: 1 should be discarded
+    // Stale event with revision: 1 should be discarded even with v: 1
     act(() => {
       store.getState().applyEvent({
         v: 1,
@@ -3016,6 +3010,74 @@ describe('desktop update UX and native authority', () => {
     expect(store.getState().update.releaseNotes).toBe('New release notes v2');
   });
 
+  it('accepts monotonic revision progression with constant protocol version v=1', () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+
+    act(() => {
+      store.getState().applyEvent({
+        v: 1,
+        name: 'update.changed',
+        payload: {
+          revision: 1,
+          state: 'checking',
+          current_version: '4.0.0',
+          available_version: null,
+          channel: 'stable',
+          release_notes: null,
+          published_at: null,
+          error_code: null,
+          error_detail: null,
+          retry_action: 'none',
+          operation_id: null,
+          progress: null,
+        },
+      });
+    });
+    expect(store.getState().update.lastNativeRevision).toBe(1);
+    expect(store.getState().update.state).toBe('checking');
+
+    act(() => {
+      store.getState().applyEvent({
+        v: 1,
+        name: 'update.changed',
+        payload: {
+          revision: 2,
+          state: 'available',
+          current_version: '4.0.0',
+          available_version: '4.1.0',
+          channel: 'stable',
+          release_notes: 'Update notes',
+          published_at: null,
+          error_code: null,
+          error_detail: null,
+          retry_action: 'none',
+          operation_id: null,
+          progress: null,
+        },
+      });
+    });
+    expect(store.getState().update.lastNativeRevision).toBe(2);
+    expect(store.getState().update.state).toBe('available');
+    expect(store.getState().update.availableVersion).toBe('4.1.0');
+  });
+
+  it('does not emit update.changed when background check is disabled by auto_check=false', async () => {
+    const bridge = createMockBridge();
+    await bridge.patchUpdatePreferences({ autoCheck: false });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const initialRevision = store.getState().update.lastNativeRevision;
+    const initialAvailableVersion = store.getState().update.availableVersion;
+
+    await act(async () => store.getState().checkForUpdate('background'));
+
+    expect(store.getState().update.lastNativeRevision).toBe(initialRevision);
+    expect(store.getState().update.availableVersion).toBe(initialAvailableVersion);
+    expect(store.getState().update.transportError).toBeNull();
+  });
+
   it('update.changed atomically updates native fields while preserving local dialog state', async () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
@@ -3034,7 +3096,7 @@ describe('desktop update UX and native authority', () => {
 
     act(() => {
       store.getState().applyEvent({
-        v: 5,
+        v: 1,
         name: 'update.changed',
         payload: {
           revision: 5,

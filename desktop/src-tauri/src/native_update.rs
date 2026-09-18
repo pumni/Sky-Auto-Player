@@ -8,7 +8,7 @@
 //! root makes the official updater fail closed.
 
 use crate::app_state::{ActivityCoordinator, ActivityReservationError};
-use crate::commands::UpdateHandoffDto;
+use crate::commands::UpdateInstallAckDto;
 use crate::ui_events::{
     UiEvent, UpdateChannel, UpdateCheckAckDto, UpdateCheckDisposition, UpdateCheckOrigin,
     UpdateCheckRequest, UpdateErrorCode, UpdateProgressDto, UpdateRetryAction,
@@ -60,22 +60,24 @@ pub(crate) struct NativeUpdateCandidate {
     pub published_at: Option<String>,
 }
 
-struct NativeUpdateState {
-    revision: u64,
-    candidate: Option<NativeUpdateCandidate>,
-    updates: Vec<Update>,
-    operation_id: Option<String>,
-    state: UpdateState,
-    error_code: Option<UpdateErrorCode>,
-    error_detail: Option<String>,
-    retry_action: UpdateRetryAction,
-    progress: Option<UpdateProgressDto>,
+pub(crate) struct NativeUpdateState {
+    pub(crate) revision: u64,
+    pub(crate) channel: UpdateChannel,
+    pub(crate) candidate: Option<NativeUpdateCandidate>,
+    pub(crate) updates: Vec<Update>,
+    pub(crate) operation_id: Option<String>,
+    pub(crate) state: UpdateState,
+    pub(crate) error_code: Option<UpdateErrorCode>,
+    pub(crate) error_detail: Option<String>,
+    pub(crate) retry_action: UpdateRetryAction,
+    pub(crate) progress: Option<UpdateProgressDto>,
 }
 
 impl Default for NativeUpdateState {
     fn default() -> Self {
         Self {
             revision: 0,
+            channel: UpdateChannel::Stable,
             candidate: None,
             updates: Vec::new(),
             operation_id: None,
@@ -88,9 +90,79 @@ impl Default for NativeUpdateState {
     }
 }
 
+impl NativeUpdateState {
+    pub(crate) fn apply_transition(
+        &mut self,
+        transition: StateTransition,
+    ) -> (u64, UpdateSnapshotPayload) {
+        self.revision += 1;
+        self.state = transition.state;
+        self.channel = transition.channel;
+        self.candidate = transition.candidate.clone();
+        self.updates = transition.updates;
+        self.operation_id = transition.operation_id.clone();
+        self.progress = transition.progress.clone();
+        self.error_code = transition.error_code;
+        self.error_detail = transition.error_detail.clone();
+        self.retry_action = transition.retry_action;
+
+        let (available_version, release_notes, published_at) = match &transition.candidate {
+            Some(c) => (
+                Some(c.version.clone()),
+                c.release_notes.clone(),
+                c.published_at.clone(),
+            ),
+            None => (None, None, None),
+        };
+
+        let snapshot = UpdateSnapshotPayload {
+            revision: self.revision,
+            state: transition.state,
+            current_version: env!("CARGO_PKG_VERSION").to_owned(),
+            available_version,
+            channel: transition.channel,
+            release_notes,
+            published_at,
+            error_code: transition.error_code,
+            error_detail: transition.error_detail,
+            retry_action: transition.retry_action,
+            operation_id: transition.operation_id,
+            progress: transition.progress,
+        };
+
+        (self.revision, snapshot)
+    }
+
+    pub(crate) fn snapshot(&self) -> UpdateSnapshotPayload {
+        let (available_version, release_notes, published_at) = match &self.candidate {
+            Some(c) => (
+                Some(c.version.clone()),
+                c.release_notes.clone(),
+                c.published_at.clone(),
+            ),
+            None => (None, None, None),
+        };
+
+        UpdateSnapshotPayload {
+            revision: self.revision,
+            state: self.state,
+            current_version: env!("CARGO_PKG_VERSION").to_owned(),
+            available_version,
+            channel: self.channel,
+            release_notes,
+            published_at,
+            error_code: self.error_code,
+            error_detail: self.error_detail.clone(),
+            retry_action: self.retry_action,
+            operation_id: self.operation_id.clone(),
+            progress: self.progress.clone(),
+        }
+    }
+}
+
 type SafetyHook = Arc<dyn Fn() + Send + Sync + 'static>;
 
-struct StateTransition {
+pub(crate) struct StateTransition {
     state: UpdateState,
     channel: UpdateChannel,
     candidate: Option<NativeUpdateCandidate>,
@@ -170,34 +242,7 @@ impl<R: Runtime> UpdateService<R> {
 
     pub(crate) fn current_snapshot(&self) -> UpdateSnapshotPayload {
         let state_guard = self.state.lock().expect("native update state lock");
-        let (available_version, release_notes, published_at) = match &state_guard.candidate {
-            Some(c) => (
-                Some(c.version.clone()),
-                c.release_notes.clone(),
-                c.published_at.clone(),
-            ),
-            None => (None, None, None),
-        };
-        let channel = state_guard
-            .candidate
-            .as_ref()
-            .map(|c| c.channel)
-            .unwrap_or(UpdateChannel::Stable);
-
-        UpdateSnapshotPayload {
-            revision: state_guard.revision,
-            state: state_guard.state,
-            current_version: env!("CARGO_PKG_VERSION").to_owned(),
-            available_version,
-            channel,
-            release_notes,
-            published_at,
-            error_code: state_guard.error_code,
-            error_detail: state_guard.error_detail.clone(),
-            retry_action: state_guard.retry_action,
-            operation_id: state_guard.operation_id.clone(),
-            progress: state_guard.progress.clone(),
-        }
+        state_guard.snapshot()
     }
 
     fn transition_and_publish(
@@ -205,49 +250,16 @@ impl<R: Runtime> UpdateService<R> {
         transition: StateTransition,
         publish: &impl Fn(UiEvent) -> Result<(), String>,
     ) -> Result<UpdateSnapshotPayload, String> {
-        let (revision, snapshot) = {
+        let (_, snapshot) = {
             let mut state_guard = self
                 .state
                 .lock()
                 .map_err(|_| "native update state lock poisoned".to_string())?;
-            state_guard.revision += 1;
-            state_guard.state = transition.state;
-            state_guard.candidate = transition.candidate.clone();
-            state_guard.updates = transition.updates;
-            state_guard.operation_id = transition.operation_id.clone();
-            state_guard.progress = transition.progress.clone();
-            state_guard.error_code = transition.error_code;
-            state_guard.error_detail = transition.error_detail.clone();
-            state_guard.retry_action = transition.retry_action;
-
-            let (available_version, release_notes, published_at) = match &transition.candidate {
-                Some(c) => (
-                    Some(c.version.clone()),
-                    c.release_notes.clone(),
-                    c.published_at.clone(),
-                ),
-                None => (None, None, None),
-            };
-
-            let snapshot = UpdateSnapshotPayload {
-                revision: state_guard.revision,
-                state: transition.state,
-                current_version: env!("CARGO_PKG_VERSION").to_owned(),
-                available_version,
-                channel: transition.channel,
-                release_notes,
-                published_at,
-                error_code: transition.error_code,
-                error_detail: transition.error_detail,
-                retry_action: transition.retry_action,
-                operation_id: transition.operation_id,
-                progress: transition.progress,
-            };
-            (state_guard.revision, snapshot)
+            state_guard.apply_transition(transition)
         };
 
         publish(UiEvent::UpdateChanged {
-            v: revision,
+            v: crate::DESKTOP_PROTOCOL_VERSION,
             payload: snapshot.clone(),
         })?;
 
@@ -264,17 +276,9 @@ impl<R: Runtime> UpdateService<R> {
         let now = unix_timestamp();
         let preferences = &settings.snapshot().update;
 
-        if request.origin == UpdateCheckOrigin::Background {
-            if !preferences.auto_check {
-                return Ok(UpdateCheckAckDto {
-                    disposition: UpdateCheckDisposition::Disabled,
-                });
-            }
-            if !sky_app_core::update::should_auto_check(preferences, now) {
-                return Ok(UpdateCheckAckDto {
-                    disposition: UpdateCheckDisposition::Throttled,
-                });
-            }
+        let disposition = check_disposition(request.origin, preferences, now);
+        if disposition != UpdateCheckDisposition::Performed {
+            return Ok(UpdateCheckAckDto { disposition });
         }
 
         self.transition_and_publish(
@@ -297,18 +301,20 @@ impl<R: Runtime> UpdateService<R> {
             {
                 if let Err(error) = settings.record_update_success(timestamp) {
                     let detail = format!("update timestamp persistence failed: {error}");
-                    let _ = self.transition_and_publish(
+                    self.transition_and_publish(
                         StateTransition {
                             state: UpdateState::Error,
                             channel,
                             error_code: Some(UpdateErrorCode::StatePersistenceFailed),
-                            error_detail: Some(detail.clone()),
+                            error_detail: Some(detail),
                             retry_action: UpdateRetryAction::Check,
                             ..Default::default()
                         },
                         &publish,
-                    );
-                    return Err(detail);
+                    )?;
+                    return Ok(UpdateCheckAckDto {
+                        disposition: UpdateCheckDisposition::Performed,
+                    });
                 }
                 let candidate =
                     candidate_from_update(updates.first().expect("update exists"), channel);
@@ -329,18 +335,20 @@ impl<R: Runtime> UpdateService<R> {
             Ok(_) => {
                 if let Err(error) = settings.record_update_success(timestamp) {
                     let detail = format!("update timestamp persistence failed: {error}");
-                    let _ = self.transition_and_publish(
+                    self.transition_and_publish(
                         StateTransition {
                             state: UpdateState::Error,
                             channel,
                             error_code: Some(UpdateErrorCode::StatePersistenceFailed),
-                            error_detail: Some(detail.clone()),
+                            error_detail: Some(detail),
                             retry_action: UpdateRetryAction::Check,
                             ..Default::default()
                         },
                         &publish,
-                    );
-                    return Err(detail);
+                    )?;
+                    return Ok(UpdateCheckAckDto {
+                        disposition: UpdateCheckDisposition::Performed,
+                    });
                 }
                 self.transition_and_publish(
                     StateTransition {
@@ -357,18 +365,20 @@ impl<R: Runtime> UpdateService<R> {
             Err(error) => {
                 if let Err(persist_error) = settings.record_update_error(timestamp) {
                     let detail = format!("update timestamp persistence failed: {persist_error}");
-                    let _ = self.transition_and_publish(
+                    self.transition_and_publish(
                         StateTransition {
                             state: UpdateState::Error,
                             channel,
                             error_code: Some(UpdateErrorCode::StatePersistenceFailed),
-                            error_detail: Some(detail.clone()),
+                            error_detail: Some(detail),
                             retry_action: UpdateRetryAction::Check,
                             ..Default::default()
                         },
                         &publish,
-                    );
-                    return Err(detail);
+                    )?;
+                    return Ok(UpdateCheckAckDto {
+                        disposition: UpdateCheckDisposition::Performed,
+                    });
                 }
                 let error_code = classify_check_error(&error);
                 let message = bounded(error);
@@ -395,7 +405,7 @@ impl<R: Runtime> UpdateService<R> {
         settings: &ApplicationSettings,
         requested_target: &str,
         publish: impl Fn(UiEvent) -> Result<(), String>,
-    ) -> Result<UpdateHandoffDto, String> {
+    ) -> Result<UpdateInstallAckDto, String> {
         let (candidate, updates) = {
             let state = self
                 .state
@@ -418,7 +428,7 @@ impl<R: Runtime> UpdateService<R> {
                         },
                         &publish,
                     )?;
-                    return Err("update_unavailable: check for an update first".to_string());
+                    return Ok(UpdateInstallAckDto { accepted: false });
                 }
             };
             let updates = state.updates.clone();
@@ -437,7 +447,7 @@ impl<R: Runtime> UpdateService<R> {
                     },
                     &publish,
                 )?;
-                return Err("update_unavailable: update metadata is unavailable".to_string());
+                return Ok(UpdateInstallAckDto { accepted: false });
             }
             (candidate, updates)
         };
@@ -457,7 +467,7 @@ impl<R: Runtime> UpdateService<R> {
                 },
                 &publish,
             )?;
-            return Err("stale_update: update metadata is stale".into());
+            return Ok(UpdateInstallAckDto { accepted: false });
         }
 
         let reservation = match self.activity.reserve_update() {
@@ -486,13 +496,13 @@ impl<R: Runtime> UpdateService<R> {
                         candidate: Some(candidate.clone()),
                         updates,
                         error_code: Some(code),
-                        error_detail: Some(message.clone()),
+                        error_detail: Some(message),
                         retry_action: action,
                         ..Default::default()
                     },
                     &publish,
                 )?;
-                return Err(message);
+                return Ok(UpdateInstallAckDto { accepted: false });
             }
         };
 
@@ -563,13 +573,13 @@ impl<R: Runtime> UpdateService<R> {
                         updates,
                         operation_id: Some(operation_id),
                         error_code: Some(UpdateErrorCode::DownloadFailed),
-                        error_detail: Some(detail.clone()),
+                        error_detail: Some(detail),
                         retry_action: UpdateRetryAction::Install,
                         ..Default::default()
                     },
                     &publish,
                 )?;
-                return Err(detail);
+                return Ok(UpdateInstallAckDto { accepted: false });
             }
             Err(error) => {
                 let detail = format!("update download failed: {error}");
@@ -581,13 +591,13 @@ impl<R: Runtime> UpdateService<R> {
                         updates,
                         operation_id: Some(operation_id),
                         error_code: Some(UpdateErrorCode::DownloadFailed),
-                        error_detail: Some(detail.clone()),
+                        error_detail: Some(detail),
                         retry_action: UpdateRetryAction::Install,
                         ..Default::default()
                     },
                     &publish,
                 )?;
-                return Err(detail);
+                return Ok(UpdateInstallAckDto { accepted: false });
             }
         };
 
@@ -608,12 +618,6 @@ impl<R: Runtime> UpdateService<R> {
             },
             &publish,
         )?;
-
-        let dto = UpdateHandoffDto {
-            handoff_id: operation_id.clone(),
-            target_version: candidate.version.clone(),
-            state: UpdateState::Installing,
-        };
 
         self.transition_and_publish(
             StateTransition {
@@ -645,19 +649,19 @@ impl<R: Runtime> UpdateService<R> {
                     updates,
                     operation_id: Some(operation_id),
                     error_code: Some(UpdateErrorCode::InstallFailed),
-                    error_detail: Some(detail.clone()),
+                    error_detail: Some(detail),
                     retry_action: UpdateRetryAction::Install,
                     ..Default::default()
                 },
                 &publish,
             )?;
-            return Err(detail);
+            return Ok(UpdateInstallAckDto { accepted: false });
         }
 
         #[cfg(not(windows))]
         self.app.request_restart();
         drop(reservation);
-        Ok(dto)
+        Ok(UpdateInstallAckDto { accepted: true })
     }
 
     fn check_official(&self, channel: UpdateChannel) -> Result<Vec<Update>, String> {
@@ -989,6 +993,22 @@ fn opaque_id() -> Result<String, String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+pub(crate) fn check_disposition(
+    origin: UpdateCheckOrigin,
+    preferences: &sky_app_core::settings::UpdatePreferences,
+    now: i64,
+) -> UpdateCheckDisposition {
+    if origin == UpdateCheckOrigin::Background {
+        if !preferences.auto_check {
+            return UpdateCheckDisposition::Disabled;
+        }
+        if !sky_app_core::update::should_auto_check(preferences, now) {
+            return UpdateCheckDisposition::Throttled;
+        }
+    }
+    UpdateCheckDisposition::Performed
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(not(feature = "tauri-update-fixture"))]
@@ -1248,5 +1268,197 @@ mod tests {
         assert_eq!(state.retry_action, UpdateRetryAction::None);
         assert!(state.candidate.is_none());
         assert!(state.progress.is_none());
+    }
+
+    #[test]
+    fn check_disposition_matrix_enforces_background_throttling_and_manual_bypass() {
+        use crate::ui_events::{UpdateCheckDisposition, UpdateCheckOrigin};
+        use sky_app_core::settings::UpdatePreferences;
+
+        let mut prefs = UpdatePreferences::default();
+        let now = 1_700_000_000;
+
+        // Fresh default: background check is performed
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
+            UpdateCheckDisposition::Performed
+        );
+
+        // Auto check disabled: background check is disabled
+        prefs.auto_check = false;
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
+            UpdateCheckDisposition::Disabled
+        );
+        // Manual check ignores auto_check = false
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Manual, &prefs, now),
+            UpdateCheckDisposition::Performed
+        );
+
+        // Re-enable auto_check, recent success check (< 24h)
+        prefs.auto_check = true;
+        prefs.last_check_ts = now - 1000;
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
+            UpdateCheckDisposition::Throttled
+        );
+        // Manual check bypasses throttling
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Manual, &prefs, now),
+            UpdateCheckDisposition::Performed
+        );
+
+        // >= 24h (86_400s) elapsed: background check is performed
+        prefs.last_check_ts = now - 86_400;
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
+            UpdateCheckDisposition::Performed
+        );
+
+        // Recent failure (< 300s)
+        prefs.last_check_ts = 0;
+        prefs.last_error_ts = now - 100;
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
+            UpdateCheckDisposition::Throttled
+        );
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Manual, &prefs, now),
+            UpdateCheckDisposition::Performed
+        );
+
+        // >= 300s elapsed after error: background check is performed
+        prefs.last_error_ts = now - 300;
+        assert_eq!(
+            super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
+            UpdateCheckDisposition::Performed
+        );
+    }
+
+    #[test]
+    fn native_update_state_transitions_maintain_monotonic_revisions_and_invariants() {
+        use super::{NativeUpdateCandidate, NativeUpdateState, StateTransition};
+        use crate::ui_events::{UpdateChannel, UpdateErrorCode, UpdateRetryAction, UpdateState};
+
+        let mut state = NativeUpdateState::default();
+        assert_eq!(state.revision, 0);
+        assert_eq!(state.snapshot().revision, 0);
+
+        // 1. Idle -> Checking
+        let (rev1, snap1) = state.apply_transition(StateTransition {
+            state: UpdateState::Checking,
+            channel: UpdateChannel::Stable,
+            ..Default::default()
+        });
+        assert_eq!(rev1, 1);
+        assert_eq!(snap1.revision, 1);
+        assert_eq!(snap1.state, UpdateState::Checking);
+        assert_eq!(state.snapshot(), snap1);
+
+        // 2. Checking -> Available
+        let candidate = NativeUpdateCandidate {
+            version: "4.1.0".to_string(),
+            channel: UpdateChannel::Stable,
+            release_notes: Some("Notes".to_string()),
+            published_at: Some("2026-09-01T00:00:00Z".to_string()),
+        };
+        let (rev2, snap2) = state.apply_transition(StateTransition {
+            state: UpdateState::Available,
+            channel: UpdateChannel::Stable,
+            candidate: Some(candidate.clone()),
+            ..Default::default()
+        });
+        assert_eq!(rev2, 2);
+        assert_eq!(snap2.revision, 2);
+        assert_eq!(snap2.state, UpdateState::Available);
+        assert_eq!(snap2.available_version.as_deref(), Some("4.1.0"));
+        assert_eq!(snap2.release_notes.as_deref(), Some("Notes"));
+        assert_eq!(state.snapshot(), snap2);
+
+        // 3. Available -> Current (candidate cleared)
+        let (rev3, snap3) = state.apply_transition(StateTransition {
+            state: UpdateState::Current,
+            channel: UpdateChannel::Stable,
+            ..Default::default()
+        });
+        assert_eq!(rev3, 3);
+        assert_eq!(snap3.revision, 3);
+        assert_eq!(snap3.state, UpdateState::Current);
+        assert!(snap3.available_version.is_none());
+        assert_eq!(state.snapshot(), snap3);
+
+        // 4. Checking error -> error fields set, candidate None, retry Check
+        let (rev4, snap4) = state.apply_transition(StateTransition {
+            state: UpdateState::Error,
+            channel: UpdateChannel::Stable,
+            error_code: Some(UpdateErrorCode::CheckFailed),
+            error_detail: Some("network error".to_string()),
+            retry_action: UpdateRetryAction::Check,
+            ..Default::default()
+        });
+        assert_eq!(rev4, 4);
+        assert_eq!(snap4.revision, 4);
+        assert_eq!(snap4.state, UpdateState::Error);
+        assert_eq!(snap4.error_code, Some(UpdateErrorCode::CheckFailed));
+        assert_eq!(snap4.retry_action, UpdateRetryAction::Check);
+        assert!(snap4.available_version.is_none());
+        assert_eq!(state.snapshot(), snap4);
+
+        // 5. Available -> Install error (e.g. download failure): candidate preserved, retry Install
+        let _ = state.apply_transition(StateTransition {
+            state: UpdateState::Available,
+            channel: UpdateChannel::Stable,
+            candidate: Some(candidate.clone()),
+            ..Default::default()
+        });
+        let (rev6, snap6) = state.apply_transition(StateTransition {
+            state: UpdateState::Error,
+            channel: UpdateChannel::Stable,
+            candidate: Some(candidate.clone()),
+            error_code: Some(UpdateErrorCode::DownloadFailed),
+            error_detail: Some("download failed".to_string()),
+            retry_action: UpdateRetryAction::Install,
+            ..Default::default()
+        });
+        assert_eq!(rev6, 6);
+        assert_eq!(snap6.revision, 6);
+        assert_eq!(snap6.state, UpdateState::Error);
+        assert_eq!(snap6.error_code, Some(UpdateErrorCode::DownloadFailed));
+        assert_eq!(snap6.retry_action, UpdateRetryAction::Install);
+        assert_eq!(snap6.available_version.as_deref(), Some("4.1.0"));
+        assert_eq!(state.snapshot(), snap6);
+
+        // 6. Stale update error: candidate cleared, retry Check
+        let (rev7, snap7) = state.apply_transition(StateTransition {
+            state: UpdateState::Error,
+            channel: UpdateChannel::Stable,
+            error_code: Some(UpdateErrorCode::StaleUpdate),
+            error_detail: Some("stale update".to_string()),
+            retry_action: UpdateRetryAction::Check,
+            ..Default::default()
+        });
+        assert_eq!(rev7, 7);
+        assert_eq!(snap7.revision, 7);
+        assert_eq!(snap7.state, UpdateState::Error);
+        assert_eq!(snap7.retry_action, UpdateRetryAction::Check);
+        assert!(snap7.available_version.is_none());
+        assert_eq!(state.snapshot(), snap7);
+
+        // 7. Reset to Idle: candidate, error, progress cleared
+        let (rev8, snap8) = state.apply_transition(StateTransition {
+            state: UpdateState::Idle,
+            channel: UpdateChannel::Stable,
+            ..Default::default()
+        });
+        assert_eq!(rev8, 8);
+        assert_eq!(snap8.revision, 8);
+        assert_eq!(snap8.state, UpdateState::Idle);
+        assert!(snap8.available_version.is_none());
+        assert!(snap8.error_code.is_none());
+        assert!(snap8.error_detail.is_none());
+        assert!(snap8.progress.is_none());
+        assert_eq!(snap8.retry_action, UpdateRetryAction::None);
+        assert_eq!(state.snapshot(), snap8);
     }
 }

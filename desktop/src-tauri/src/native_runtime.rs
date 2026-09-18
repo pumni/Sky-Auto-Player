@@ -19,7 +19,7 @@ use crate::commands::{
     PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto, PlaybackSessionState,
     PlaybackStartRequest, PlaybackStatusDto, PlaybackTerminalStatusDto, PreparedPlaybackDto,
     RiskDecisionDto, RiskSummaryDto, SettingsDto, SettingsPatch, SongDetailDto, UpdateCheckAckDto,
-    UpdateHandoffDto, UpdatePreferencesDto, UpdatePreferencesPatch,
+    UpdateInstallAckDto, UpdatePreferencesDto, UpdatePreferencesPatch,
 };
 use crate::power_lifecycle::{
     PowerLifecycleDiagnostics, PowerLifecycleSnapshot, SuspendResumeRegistration,
@@ -1539,14 +1539,16 @@ impl NativeDesktopRuntime {
             .map_err(|error| format!("native settings startup failed: {error}"))?;
         crate::startup_telemetry::record("settings.load.end");
         if settings.snapshot().update.channel == sky_app_core::settings::UpdateChannel::Beta {
-            let _ = settings.patch(&sky_app_core::settings::SettingsPatch {
-                update: Some(CoreUpdatePreferencesPatch {
-                    auto_check: None,
-                    channel: Some(sky_app_core::settings::UpdateChannel::Stable),
-                    skip_version: None,
-                }),
-                ..Default::default()
-            });
+            settings
+                .patch(&sky_app_core::settings::SettingsPatch {
+                    update: Some(CoreUpdatePreferencesPatch {
+                        auto_check: None,
+                        channel: Some(sky_app_core::settings::UpdateChannel::Stable),
+                        skip_version: None,
+                    }),
+                    ..Default::default()
+                })
+                .map_err(|e| format!("native settings beta repair failed: {e}"))?;
         }
         let manifest_store = JsonLibraryManifestStore::new(paths.library_manifest_path());
         crate::startup_telemetry::record("manifest.load.start");
@@ -1910,7 +1912,10 @@ impl NativeDesktopRuntime {
                 "channel_unavailable: beta update channel is not supported in production".into(),
             );
         }
-        let update_preferences_changed = patch.update_preferences.is_some();
+        let candidate_invalidation_needed = patch
+            .update_preferences
+            .as_ref()
+            .is_some_and(|u| u.channel.is_some() || u.skip_version.is_some());
         let auto_play_only = patch.auto_play.is_some()
             && patch.theme.is_none()
             && patch.telemetry_enabled.is_none()
@@ -1953,7 +1958,7 @@ impl NativeDesktopRuntime {
             self.playback.invalidate_settings();
             self.invalidate_analysis_cache();
         }
-        if update_preferences_changed && let Some(update_service) = &self.update_service {
+        if candidate_invalidation_needed && let Some(update_service) = &self.update_service {
             let channel = match snapshot.update.channel {
                 sky_app_core::settings::UpdateChannel::Stable => {
                     crate::ui_events::UpdateChannel::Stable
@@ -1962,7 +1967,7 @@ impl NativeDesktopRuntime {
                     crate::ui_events::UpdateChannel::Beta
                 }
             };
-            let _ = update_service.reset_and_publish_idle(channel, |event| self.publish(event));
+            update_service.reset_and_publish_idle(channel, |event| self.publish(event))?;
         }
         Ok(settings_dto(&snapshot, self.timing_margin_recommendation()))
     }
@@ -1994,7 +1999,7 @@ impl NativeDesktopRuntime {
             .map(|service| service.current_snapshot())
     }
 
-    fn begin_update_handoff(&self, target_version: String) -> Result<UpdateHandoffDto, String> {
+    fn begin_update_handoff(&self, target_version: String) -> Result<UpdateInstallAckDto, String> {
         if target_version.is_empty() || target_version.len() > 64 || target_version.contains('\0') {
             return Err("invalid_params: target_version is invalid".into());
         }
@@ -2016,6 +2021,7 @@ impl NativeDesktopRuntime {
                 "channel_unavailable: beta update channel is not supported in production".into(),
             );
         }
+        let candidate_invalidation_needed = patch.channel.is_some() || patch.skip_version.is_some();
         let mut settings = self
             .settings
             .lock()
@@ -2037,7 +2043,7 @@ impl NativeDesktopRuntime {
                 ..Default::default()
             })
             .map_err(settings_error)?;
-        if let Some(update_service) = &self.update_service {
+        if candidate_invalidation_needed && let Some(update_service) = &self.update_service {
             let channel = match snapshot.update.channel {
                 sky_app_core::settings::UpdateChannel::Stable => {
                     crate::ui_events::UpdateChannel::Stable
@@ -2046,7 +2052,7 @@ impl NativeDesktopRuntime {
                     crate::ui_events::UpdateChannel::Beta
                 }
             };
-            let _ = update_service.reset_and_publish_idle(channel, |event| self.publish(event));
+            update_service.reset_and_publish_idle(channel, |event| self.publish(event))?;
         }
         Ok(update_preferences_dto(snapshot))
     }
@@ -10196,5 +10202,104 @@ mod tests {
         ui.join().expect("UI publication seam");
         stop.store(true, Ordering::Release);
         heartbeat.join().expect("heartbeat seam");
+    }
+
+    #[test]
+    fn persisted_beta_repair_fails_closed_and_persists_stable() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-beta-repair-test-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(
+            root.join("config.json"),
+            r#"{"schema_version":8,"update":{"channel":"beta"}}"#,
+        )
+        .expect("write config with beta channel");
+
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone())
+            .expect("runtime bootstrap must succeed and repair beta channel to stable");
+
+        assert_eq!(
+            runtime
+                .settings_snapshot()
+                .expect("snapshot")
+                .update
+                .channel,
+            sky_app_core::settings::UpdateChannel::Stable
+        );
+
+        let persisted: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("config.json")).expect("read persisted config"),
+        )
+        .expect("parse persisted config");
+        assert_eq!(persisted["update"]["channel"], "stable");
+
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn beta_patch_rejected() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-beta-patch-test-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), r#"{"schema_version":8}"#).expect("write config");
+
+        let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+
+        let err1 = runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: Some(crate::ui_events::UpdateChannel::Beta),
+                    skip_version: None,
+                }),
+            })
+            .unwrap_err();
+        assert!(err1.contains("channel_unavailable"));
+
+        let err2 = runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: Some(crate::ui_events::UpdateChannel::Beta),
+                skip_version: None,
+            })
+            .unwrap_err();
+        assert!(err2.contains("channel_unavailable"));
+
+        let err3 = runtime
+            .dispatch(
+                "settings.patch",
+                serde_json::json!({
+                    "updatePreferences": {
+                        "channel": "beta"
+                    }
+                }),
+            )
+            .unwrap_err();
+        assert!(err3.contains("channel_unavailable"));
+
+        let err4 = runtime
+            .dispatch(
+                "update.preferences.patch",
+                serde_json::json!({
+                    "channel": "beta"
+                }),
+            )
+            .unwrap_err();
+        assert!(err4.contains("channel_unavailable"));
+
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
     }
 }

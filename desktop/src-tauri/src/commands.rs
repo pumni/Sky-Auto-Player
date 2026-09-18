@@ -1,8 +1,8 @@
 use crate::app_state::AppState;
 use crate::ui_events::{
-    CalibrationMode, CalibrationState, CatalogReadiness, UiEvent, UpdateChannel, UpdateState,
+    CalibrationMode, CalibrationState, CatalogReadiness, UiEvent, UpdateChannel,
 };
-pub use crate::ui_events::{UpdateCheckAckDto, UpdateCheckRequest};
+pub use crate::ui_events::{UpdateCheckAckDto, UpdateCheckRequest, UpdateInstallAckDto};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -277,15 +277,6 @@ pub struct UpdatePreferencesDto {
     pub check_interval_s: i64,
     pub last_check_ts: i64,
     pub last_error_ts: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct UpdateHandoffDto {
-    pub handoff_id: String,
-    pub target_version: String,
-    pub state: UpdateState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -863,7 +854,7 @@ pub async fn patch_update_preferences(
 pub async fn begin_update_handoff(
     state: State<'_, AppState>,
     params: UpdateBeginHandoffRequest,
-) -> Result<UpdateHandoffDto, String> {
+) -> Result<UpdateInstallAckDto, String> {
     blocking_request(state, "update.begin_handoff", params).await
 }
 

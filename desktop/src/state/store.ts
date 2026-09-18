@@ -207,7 +207,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (bootstrap.catalog_state === 'ready' || get().library.generation > 0) {
             await librarySlice.reconcileCatalog();
           }
-          if (settings.update_preferences.auto_check) void get().checkForUpdate('background');
+          void get().checkForUpdate('background');
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           set({ bootstrapState: 'fatal', fatal: message });
@@ -373,7 +373,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           }
         } else if (event.name === 'update.changed') {
           const current = get().update;
-          if (event.v <= current.lastNativeRevision) return;
+          if (event.payload.revision <= current.lastNativeRevision) return;
           set({
             update: {
               ...current,
@@ -381,7 +381,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
               checkRequestPending: current.checkRequestPending,
               installRequestPending: current.installRequestPending,
               transportError: null,
-              lastNativeRevision: event.v,
+              lastNativeRevision: event.payload.revision,
 
               state: event.payload.state,
               currentVersion: event.payload.current_version,

@@ -54,7 +54,7 @@ import type {
   UpdateCheckOrigin,
   UpdateCheckRequest,
   UpdateErrorCode,
-  UpdateHandoffDto,
+  UpdateInstallAckDto,
   UpdateProgressDto,
   UpdateRetryAction,
   UpdateSnapshotPayload,
@@ -85,7 +85,8 @@ export type {
 };
 export type UpdateProgress = UpdateProgressDto;
 export type UpdateSnapshot = UpdateSnapshotPayload;
-export type UpdateHandoff = UpdateHandoffDto;
+export type UpdateInstallAck = UpdateInstallAckDto;
+export type UpdateHandoff = UpdateInstallAckDto;
 export type UpdatePatch = Partial<{
   autoCheck: boolean;
   channel: GeneratedUpdateChannel;
@@ -203,7 +204,7 @@ export interface DesktopBridge {
   checkForUpdate(request: UpdateCheckRequest): Promise<UpdateCheckAck>;
   getUpdatePreferences(): Promise<UpdatePreferences>;
   patchUpdatePreferences(patch: UpdatePatch): Promise<UpdatePreferences>;
-  beginUpdateHandoff(targetVersion: string): Promise<UpdateHandoff>;
+  beginUpdateHandoff(targetVersion: string): Promise<UpdateInstallAck>;
   preparePlayback(request: PlaybackPrepare): Promise<PreparedPlayback>;
   startPlayback(request: PlaybackStart): Promise<PlaybackSession>;
   getPlaybackStatus(): Promise<PlaybackStatus>;

@@ -158,7 +158,7 @@ describe('UpdateDialog', () => {
 
     render(<UpdateDialog useStore={useStore} />);
 
-    expect(screen.getByRole('heading', { name: 'Update check failed' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Update failed' })).toBeInTheDocument();
     const retryBtn = screen.getByRole('button', { name: 'Try again' });
     expect(retryBtn).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
@@ -234,5 +234,37 @@ describe('UpdateDialog', () => {
     render(<UpdateDialog useStore={useStore} />);
 
     expect(screen.getByRole('button', { name: 'Close update' })).toBeDisabled();
+  });
+
+  it('does not close dialog if skipping version fails to persist', async () => {
+    const bridge = createMockBridge();
+    bridge.patchSettings = async () => {
+      throw new Error('disk full');
+    };
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          currentVersion: '4.0.1',
+          channel: 'stable',
+          dialogOpen: true,
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+    const skipBtn = screen.getByRole('button', { name: 'Skip this version' });
+
+    await act(async () => {
+      fireEvent.click(skipBtn);
+    });
+
+    // Dialog stays open because skipVersion failed to persist
+    expect(useStore.getState().update.dialogOpen).toBe(true);
   });
 });

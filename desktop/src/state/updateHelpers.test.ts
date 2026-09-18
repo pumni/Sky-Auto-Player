@@ -69,35 +69,37 @@ describe('updateHelpers formatUpdateError', () => {
     expect(formatUpdateError('state_persistence_failed')).toBe('Failed to save update state.');
   });
 
-  it('translates check_failed with and without detail', () => {
+  it('translates check_failed with and without detail to stable copy', () => {
     expect(formatUpdateError('check_failed')).toBe(
       'Could not check for updates. Check your network connection and try again.',
     );
     expect(formatUpdateError('check_failed', 'error: fetch_timeout: request timed out')).toBe(
-      'request timed out',
+      'Could not check for updates. Check your network connection and try again.',
     );
   });
 
-  it('translates download_failed with and without detail', () => {
+  it('translates download_failed with and without detail to stable copy', () => {
     expect(formatUpdateError('download_failed')).toBe(
       'Failed to download the update. Please try again later.',
     );
-    expect(formatUpdateError('download_failed', 'error: io_error: disk full')).toBe('disk full');
+    expect(formatUpdateError('download_failed', 'error: io_error: disk full')).toBe(
+      'Failed to download the update. Please try again later.',
+    );
   });
 
-  it('translates install_failed with and without detail', () => {
+  it('translates install_failed with and without detail to stable copy', () => {
     expect(formatUpdateError('install_failed')).toBe(
       'Failed to install the update. Please try again later.',
     );
     expect(formatUpdateError('install_failed', 'error: execution_error: elevated abort')).toBe(
-      'elevated abort',
+      'Failed to install the update. Please try again later.',
     );
   });
 
-  it('translates unknown with and without detail', () => {
+  it('translates unknown with and without detail to stable copy', () => {
     expect(formatUpdateError('unknown')).toBe('An unexpected error occurred while updating.');
     expect(formatUpdateError('unknown', 'error: custom_error: something broke')).toBe(
-      'something broke',
+      'An unexpected error occurred while updating.',
     );
   });
 

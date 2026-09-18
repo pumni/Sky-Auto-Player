@@ -76,7 +76,13 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
               </>
             ) : isError ? (
               <>
-                <h3>Update check failed</h3>
+                <h3>
+                  {update.retryAction === 'install' ||
+                  update.errorCode === 'download_failed' ||
+                  update.errorCode === 'install_failed'
+                    ? 'Update failed'
+                    : 'Update check failed'}
+                </h3>
                 <p className="inline-error">{errorText}</p>
                 <div className="update-actions">
                   {(update.retryAction === 'check' || Boolean(update.transportError)) && (
@@ -142,12 +148,18 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                     type="button"
                     disabled={busy}
                     onClick={async () => {
-                      if (update.availableVersion) {
-                        await patchSettings({
-                          updatePreferences: { skipVersion: update.availableVersion },
+                      const targetVersion = update.availableVersion;
+                      if (targetVersion) {
+                        const result = await patchSettings({
+                          updatePreferences: { skipVersion: targetVersion },
                         });
+                        if (
+                          result !== null &&
+                          result.update_preferences.skip_version === targetVersion
+                        ) {
+                          close(false);
+                        }
                       }
-                      close(false);
                     }}
                   >
                     Skip this version

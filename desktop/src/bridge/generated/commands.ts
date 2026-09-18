@@ -28,7 +28,7 @@ import type {
   SongDetail,
   UpdateCheck,
   UpdateCheckRequest,
-  UpdateHandoff,
+  UpdateInstallAck,
   UpdatePatch,
   UpdatePreferences,
   ViewportRequest,
@@ -85,7 +85,7 @@ export interface CommandResponseMap {
   check_for_update: UpdateCheck;
   get_update_preferences: UpdatePreferences;
   patch_update_preferences: UpdatePreferences;
-  begin_update_handoff: UpdateHandoff;
+  begin_update_handoff: UpdateInstallAck;
   prepare_playback: PreparedPlayback;
   start_playback: PlaybackSession;
   get_playback_status: PlaybackStatus;

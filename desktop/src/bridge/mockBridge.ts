@@ -24,9 +24,11 @@ import type {
   UpdateCheck,
   UpdateCheckDisposition,
   UpdateCheckRequest,
-  UpdateHandoff,
+  UpdateErrorCode,
+  UpdateInstallAck,
   UpdatePatch,
   UpdatePreferences,
+  UpdateRetryAction,
   UpdateSnapshotPayload,
 } from './DesktopBridge';
 
@@ -146,6 +148,9 @@ export interface MockBridgeOptions {
   updateSnapshot?: Partial<UpdateSnapshotPayload>;
   updateCheckDisposition?: UpdateCheckDisposition;
   beginUpdateHandoffError?: string;
+  beginUpdateHandoffTransportError?: string;
+  beginUpdateHandoffErrorCode?: UpdateErrorCode;
+  beginUpdateHandoffRetryAction?: UpdateRetryAction;
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
@@ -215,19 +220,29 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     progress: null,
     ...(options.updateSnapshot ?? {}),
   };
-  const emitUpdateChanged = (snapshot: Partial<UpdateSnapshotPayload>) => {
+  const emitUpdateSnapshot = (snapshot: Omit<UpdateSnapshotPayload, 'revision'>) => {
     updateRevision += 1;
     currentUpdateSnapshot = {
-      ...currentUpdateSnapshot,
-      ...snapshot,
+      state: snapshot.state,
+      current_version: snapshot.current_version,
+      available_version: snapshot.available_version,
+      channel: snapshot.channel,
+      release_notes: snapshot.release_notes,
+      published_at: snapshot.published_at,
+      error_code: snapshot.error_code,
+      error_detail: snapshot.error_detail,
+      retry_action: snapshot.retry_action,
+      operation_id: snapshot.operation_id,
+      progress: snapshot.progress,
       revision: updateRevision,
     };
     emit({
-      v: updateRevision,
+      v: 1,
       name: 'update.changed',
       payload: currentUpdateSnapshot,
     });
   };
+  const emitUpdateChanged = emitUpdateSnapshot;
   const emitDiagnostics = () => {
     if (!diagnosticsEnabled) return;
     diagnosticsSeq += 1;
@@ -677,6 +692,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       ) {
         emitUpdateChanged({
           state: 'idle',
+          current_version: currentUpdateSnapshot.current_version,
           channel: settings.update_preferences.channel,
           available_version: null,
           release_notes: null,
@@ -731,6 +747,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
             error_code: 'check_failed',
             error_detail: legacyResult.error ?? 'Mock update check failed.',
             retry_action: 'check',
+            operation_id: null,
+            progress: null,
           });
         } else {
           settings = {
@@ -751,6 +769,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
             error_code: null,
             error_detail: null,
             retry_action: 'none',
+            operation_id: null,
+            progress: null,
           });
         }
         return { disposition: 'performed' };
@@ -775,7 +795,19 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
             },
           };
         }
-        emitUpdateChanged(options.updateSnapshot);
+        emitUpdateChanged({
+          state: options.updateSnapshot.state ?? 'idle',
+          current_version: options.updateSnapshot.current_version ?? '4.0.0-alpha.1-mock',
+          available_version: options.updateSnapshot.available_version ?? null,
+          channel: options.updateSnapshot.channel ?? settings.update_preferences.channel,
+          release_notes: options.updateSnapshot.release_notes ?? null,
+          published_at: options.updateSnapshot.published_at ?? null,
+          error_code: options.updateSnapshot.error_code ?? null,
+          error_detail: options.updateSnapshot.error_detail ?? null,
+          retry_action: options.updateSnapshot.retry_action ?? 'none',
+          operation_id: options.updateSnapshot.operation_id ?? null,
+          progress: options.updateSnapshot.progress ?? null,
+        });
         return { disposition: 'performed' };
       }
 
@@ -821,6 +853,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       if (patch.channel !== undefined || patch.skipVersion !== undefined) {
         emitUpdateChanged({
           state: 'idle',
+          current_version: currentUpdateSnapshot.current_version,
           channel: settings.update_preferences.channel,
           available_version: null,
           release_notes: null,
@@ -834,27 +867,93 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       }
       return settings.update_preferences;
     },
-    async beginUpdateHandoff(targetVersion: string): Promise<UpdateHandoff> {
+    async beginUpdateHandoff(targetVersion: string): Promise<UpdateInstallAck> {
+      if (options.beginUpdateHandoffTransportError) {
+        throw new Error(options.beginUpdateHandoffTransportError);
+      }
       if (options.beginUpdateHandoffError) {
-        throw new Error(options.beginUpdateHandoffError);
+        const isPlayback = options.beginUpdateHandoffError.includes('playback_active');
+        const isCalibration = options.beginUpdateHandoffError.includes('calibration_active');
+        const isClosing = options.beginUpdateHandoffError.includes('closing');
+        const errorCode =
+          options.beginUpdateHandoffErrorCode ??
+          (isPlayback
+            ? 'playback_active'
+            : isCalibration
+              ? 'calibration_active'
+              : isClosing
+                ? 'closing'
+                : 'install_failed');
+        const retryAction =
+          options.beginUpdateHandoffRetryAction ?? (isClosing ? 'none' : 'install');
+        emitUpdateSnapshot({
+          state: 'error',
+          current_version: currentUpdateSnapshot.current_version,
+          available_version: targetVersion,
+          channel: settings.update_preferences.channel,
+          release_notes: currentUpdateSnapshot.release_notes,
+          published_at: currentUpdateSnapshot.published_at,
+          error_code: errorCode,
+          error_detail: options.beginUpdateHandoffError,
+          retry_action: retryAction,
+          operation_id: null,
+          progress: null,
+        });
+        return { accepted: false };
       }
       const handoffId = `h${Date.now().toString(16).padStart(31, '0')}`.slice(-32);
-      const handoff: UpdateHandoff = {
-        handoff_id: handoffId,
-        target_version: targetVersion,
-        state: 'installing',
-      };
-      emitUpdateChanged({
-        state: 'installing',
+      emitUpdateSnapshot({
+        state: 'downloading',
+        current_version: currentUpdateSnapshot.current_version,
         available_version: targetVersion,
+        channel: settings.update_preferences.channel,
+        release_notes: currentUpdateSnapshot.release_notes,
+        published_at: currentUpdateSnapshot.published_at,
+        error_code: null,
+        error_detail: null,
+        retry_action: 'none',
         operation_id: handoffId,
         progress: {
-          completed: 1,
-          total: 1,
+          completed: 0,
+          total: 100,
+          message: 'Downloading update',
+        },
+      });
+      emitUpdateSnapshot({
+        state: 'ready',
+        current_version: currentUpdateSnapshot.current_version,
+        available_version: targetVersion,
+        channel: settings.update_preferences.channel,
+        release_notes: currentUpdateSnapshot.release_notes,
+        published_at: currentUpdateSnapshot.published_at,
+        error_code: null,
+        error_detail: null,
+        retry_action: 'none',
+        operation_id: handoffId,
+        progress: {
+          completed: 100,
+          total: 100,
+          message: 'Update is ready to install',
+        },
+      });
+      emitUpdateSnapshot({
+        state: 'installing',
+        current_version: currentUpdateSnapshot.current_version,
+        available_version: targetVersion,
+        channel: settings.update_preferences.channel,
+        release_notes: currentUpdateSnapshot.release_notes,
+        published_at: currentUpdateSnapshot.published_at,
+        error_code: null,
+        error_detail: null,
+        retry_action: 'none',
+        operation_id: handoffId,
+        progress: {
+          completed: 100,
+          total: 100,
           message: 'Installing update and restarting',
         },
       });
-      return handoff;
+      return { accepted: true };
     },
     async preparePlayback(request) {
       const found = allRows().find((item) => item.song_id === request.songId);

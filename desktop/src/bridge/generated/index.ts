@@ -74,7 +74,7 @@ export type { UpdateCheckDisposition } from './UpdateCheckDisposition';
 export type { UpdateCheckOrigin } from './UpdateCheckOrigin';
 export type { UpdateCheckRequest } from './UpdateCheckRequest';
 export type { UpdateErrorCode } from './UpdateErrorCode';
-export type { UpdateHandoffDto } from './UpdateHandoffDto';
+export type { UpdateInstallAckDto } from './UpdateInstallAckDto';
 export type { UpdatePreferencesPatch } from './UpdatePreferencesPatch';
 export type { UpdateProgressDto } from './UpdateProgressDto';
 export type { UpdateRetryAction } from './UpdateRetryAction';

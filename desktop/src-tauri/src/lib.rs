@@ -258,7 +258,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                                     },
                                 )?;
                             }
-                            let _: commands::UpdateHandoffDto =
+                            let _: commands::UpdateInstallAckDto =
                                 serde_json::from_value(native.dispatch(
                                     "update.begin_handoff",
                                     serde_json::json!({"targetVersion": target}),
@@ -590,6 +590,17 @@ pub fn selftest_packaged_shell() -> i32 {
             }
             Err(error) if error.starts_with("update_service_unavailable") => {}
             Err(error) => return Err(format!("unexpected update.check failure: {error}")),
+        }
+        match runtime.dispatch(
+            "update.begin_handoff",
+            serde_json::json!({"targetVersion": "9.9.9"}),
+        ) {
+            Ok(value) => {
+                let _update_install: commands::UpdateInstallAckDto = serde_json::from_value(value)
+                    .map_err(|error| format!("update.begin_handoff response: {error}"))?;
+            }
+            Err(error) if error.starts_with("update_service_unavailable") => {}
+            Err(error) => return Err(format!("unexpected update.begin_handoff failure: {error}")),
         }
         let _diagnostics: commands::DiagnosticsEnabledDto =
             serde_json::from_value(runtime.dispatch(
@@ -1006,5 +1017,64 @@ mod ipc_tests {
             "settings patch must stale native prepared ID"
         );
         let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 70));
+    }
+
+    #[test]
+    fn native_settings_patch_auto_check_only_does_not_require_update_service() {
+        let (paths, _cleanup) = test_install_root();
+        let app = tauri::test::mock_builder()
+            .manage(AppState::with_test_paths(paths))
+            .invoke_handler(tauri::generate_handler![
+                super::commands::patch_settings,
+                super::commands::patch_update_preferences,
+                super::commands::get_update_preferences,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        // Patch auto_check only via patch_settings
+        let res = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_settings",
+                json!({"params":{"updatePreferences":{"autoCheck":false}}}),
+                80,
+            ),
+        )
+        .expect("patch settings auto_check");
+        let res: serde_json::Value = res.deserialize().expect("deserialize");
+        assert_eq!(res["update_preferences"]["auto_check"], false);
+
+        // Patch auto_check only via patch_update_preferences
+        let res2 = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_update_preferences",
+                json!({"params":{"autoCheck":true}}),
+                82,
+            ),
+        )
+        .expect("patch update_preferences auto_check");
+        let res2: serde_json::Value = res2.deserialize().expect("deserialize");
+        assert_eq!(res2["auto_check"], true);
+
+        // Patch skip_version via patch_settings
+        let res3 = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_settings",
+                json!({"params":{"updatePreferences":{"skipVersion":"4.1.0"}}}),
+                84,
+            ),
+        )
+        .expect("patch settings skip_version");
+        let res3: serde_json::Value = res3.deserialize().expect("deserialize");
+        assert_eq!(res3["update_preferences"]["skip_version"], "4.1.0");
+
+        let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 86));
     }
 }

@@ -112,6 +112,13 @@ pub struct UpdateCheckAckDto {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateInstallAckDto {
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateRetryAction {
     None,
