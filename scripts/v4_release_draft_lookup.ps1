@@ -17,7 +17,11 @@ function Select-V4ReleaseByTag {
         return $DirectRelease
     }
 
-    $matches = @($ReleaseCollection | Where-Object { [string]$_.tag_name -eq $Tag })
+    $matches = @($ReleaseCollection | Where-Object {
+        $null -ne $_ -and
+        $null -ne $_.PSObject.Properties['tag_name'] -and
+        [string]$_.tag_name -eq $Tag
+    })
     if ($matches.Count -gt 1) {
         throw "V4 release lookup failed closed: duplicate releases use the requested tag"
     }

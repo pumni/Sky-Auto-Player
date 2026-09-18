@@ -91,34 +91,20 @@ jobs:
             -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
             -StateRoot $env:V4_RELEASE_STATE_ROOT
 
-      - name: Validate exact v4 release request
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State ValidateRequest `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
-
-      - name: Verify canonical repository release policy
+      - name: Preflight release request and repository readiness
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State ValidateRepository `
+            -State Preflight `
             -Version $env:V4_RELEASE_VERSION `
             -Channel $env:V4_RELEASE_CHANNEL `
             -Tag $env:V4_RELEASE_TAG `
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
-
-      - name: Verify dedicated runner tools
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,bun,gh.exe
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
+            -RunId $env:GITHUB_RUN_ID
 
       - name: Build and qualify the single production candidate
         run: |
@@ -130,73 +116,34 @@ jobs:
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
+            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
+            -RunId $env:GITHUB_RUN_ID
 
-      - name: Create exact candidate draft in canonical repository
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State CreateDraft `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
-
-      - name: Re-download exact draft assets from canonical repository
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State DownloadDraft `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
-
-      - name: Qualify downloaded exact candidate bytes and packaged update
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State QualifyDownloaded `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
-
-      - name: Preserve bounded post-draft qualification evidence
+      - name: Preserve bounded qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: v4-post-draft-qualification-${{ github.run_id }}
+          name: v4-qualification-evidence-${{ github.run_id }}
           if-no-files-found: error
           retention-days: 14
           path: |
             ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-manifest.json
             ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\*.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\downloaded-manifest.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\downloaded-authenticode-verification.json
             ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\fixture-http-evidence.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\post-draft-qualification.json
             ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\defender-evidence.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\release-state.json
+            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\preflight-evidence.json
 
-      - name: Attest exact downloaded Tauri candidate and signature
+      - name: Attest exact candidate and signature
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\downloaded\*.exe
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\downloaded\*.sig
+            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\*.exe
+            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\*.sig
 
-      - name: Attest SPDX SBOM for exact downloaded candidate
+      - name: Attest SPDX SBOM for exact candidate
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\downloaded\*.exe
+          subject-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\*.exe
           sbom-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\SBOM.spdx.json
 
       - name: Verify exact-source OIDC attestations
@@ -204,10 +151,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $gh = (Get-Command gh.exe -CommandType Application -ErrorAction Stop).Source
-          $downloaded = Join-Path $env:V4_RELEASE_STATE_ROOT "downloaded"
-          $installer = @(Get-ChildItem -LiteralPath $downloaded -Filter "*.exe" -File)
-          $signature = @(Get-ChildItem -LiteralPath $downloaded -Filter "*.sig" -File)
-          if ($installer.Count -ne 1 -or $signature.Count -ne 1) { throw "Downloaded attestation subject set is not exact" }
+          $assetsDir = Join-Path $env:V4_RELEASE_STATE_ROOT "candidate-assets"
+          $installer = @(Get-ChildItem -LiteralPath $assetsDir -Filter "*.exe" -File)
+          $signature = @(Get-ChildItem -LiteralPath $assetsDir -Filter "*.sig" -File)
+          if ($installer.Count -ne 1 -or $signature.Count -ne 1) { throw "Attestation subject set is not exact" }
           $signerWorkflow = "$env:GITHUB_REPOSITORY/.github/workflows/release-v4.yml"
           & $gh attestation verify $installer[0].FullName -R $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
           if ($LASTEXITCODE -ne 0) { throw "Installer exact-source attestation verification failed" }
@@ -216,48 +163,40 @@ jobs:
           & $gh attestation verify $installer[0].FullName -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3 --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
           if ($LASTEXITCODE -ne 0) { throw "SBOM exact-source attestation verification failed" }
 
-      - name: Record verified exact-byte attestations
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State RecordAttestations `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
-
       - name: Snapshot GitHub Latest before publication
         env:
           GH_TOKEN: ${{ github.token }}
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1 -Mode Capture -StateRoot $env:V4_RELEASE_STATE_ROOT
 
-      - name: Publish the already-qualified draft immutably
+      - name: Publish the qualified candidate immutably
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
-            -State PublishDraft `
+            -State PublishRelease `
             -Version $env:V4_RELEASE_VERSION `
             -Channel $env:V4_RELEASE_CHANNEL `
             -Tag $env:V4_RELEASE_TAG `
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
+            -StateRoot $env:V4_RELEASE_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
+            -RunId $env:GITHUB_RUN_ID
 
       - name: Verify GitHub Latest channel policy before metadata promotion
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1 `
-          -Mode Verify `
-          -Channel $env:V4_RELEASE_CHANNEL `
-          -ExpectedTag $env:V4_RELEASE_TAG `
-          -ExpectedSourceSha $env:V4_RELEASE_SOURCE_SHA `
-          -StateRoot $env:V4_RELEASE_STATE_ROOT
+        run: |
+          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1 `
+            -Mode Verify `
+            -Channel $env:V4_RELEASE_CHANNEL `
+            -ExpectedTag $env:V4_RELEASE_TAG `
+            -ExpectedSourceSha $env:V4_RELEASE_SOURCE_SHA `
+            -StateRoot $env:V4_RELEASE_STATE_ROOT
 
       - name: Mint release-metadata GitHub App token
         id: metadata-app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v1.11.0
         with:
           app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
           private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
@@ -276,8 +215,7 @@ jobs:
             -Tag $env:V4_RELEASE_TAG `
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
+            -StateRoot $env:V4_RELEASE_STATE_ROOT
 
       - name: Re-fetch and verify final public release and metadata
         env:

@@ -724,8 +724,8 @@ fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     }
 
     for normal_step in [
-        "Create exact candidate draft in canonical repository",
-        "Publish the already-qualified draft immutably",
+        "Preflight release request and repository readiness",
+        "Publish the qualified candidate immutably",
         "Re-fetch and verify final public release and metadata",
     ] {
         let block = steps
@@ -1007,9 +1007,8 @@ fn v4_release_pipeline_contract_source(
         "actions/attest@",
         "actions/upload-artifact@",
         "--source-digest $env:GITHUB_SHA",
-        "Qualify downloaded exact candidate bytes and packaged update",
-        "RecordAttestations",
-        "PublishDraft",
+        "Build and qualify the single production candidate",
+        "Publish the qualified candidate immutably",
         "Snapshot GitHub Latest before publication",
         "Verify GitHub Latest channel policy before metadata promotion",
         "scripts/ci_v4_release_latest_guard.ps1",
@@ -1028,14 +1027,9 @@ fn v4_release_pipeline_contract_source(
         );
     }
     let workflow_states = [
-        "-State ValidateRequest",
-        "-State ValidateRepository",
+        "-State Preflight",
         "-State BuildCandidate",
-        "-State CreateDraft",
-        "-State DownloadDraft",
-        "-State QualifyDownloaded",
-        "-State RecordAttestations",
-        "-State PublishDraft",
+        "-State PublishRelease",
         "-State PromoteMetadata",
         "-State FinalVerify",
     ];
@@ -1084,7 +1078,7 @@ fn v4_release_pipeline_contract_source(
         .find("- name: Snapshot GitHub Latest before publication")
         .ok_or("v4 release workflow is missing the pre-publication Latest snapshot")?;
     let publish_step = workflow
-        .find("- name: Publish the already-qualified draft immutably")
+        .find("- name: Publish the qualified candidate immutably")
         .ok_or("v4 release workflow is missing the publication step")?;
     let latest_policy_step = workflow
         .find("- name: Verify GitHub Latest channel policy before metadata promotion")
@@ -1097,7 +1091,7 @@ fn v4_release_pipeline_contract_source(
         || latest_policy_step >= metadata_token_step
     {
         return Err(
-            "GitHub Latest capture and policy guard must surround PublishDraft before the metadata App token"
+            "GitHub Latest capture and policy guard must surround PublishRelease before the metadata App token"
                 .into(),
         );
     }
@@ -1138,14 +1132,9 @@ fn v4_release_pipeline_contract_source(
         return Err("production orchestrator must have exactly one pipeline call site".into());
     }
     for marker in [
-        "ValidateRequest",
-        "ValidateRepository",
+        "Preflight",
         "BuildCandidate",
-        "CreateDraft",
-        "DownloadDraft",
-        "QualifyDownloaded",
-        "RecordAttestations",
-        "PublishDraft",
+        "PublishRelease",
         "PromoteMetadata",
         "FinalVerify",
         "unsigned-zero-budget",
@@ -1236,43 +1225,49 @@ fn v4_release_pipeline_contract_source(
                 .into(),
         );
     }
-    let create_draft_position = pipeline
-        .find("function Invoke-CreateDraft")
-        .ok_or("v4 release coordinator is missing the draft boundary")?;
-    let publish_position = pipeline
-        .find("function Invoke-PublishDraft")
-        .ok_or("v4 release coordinator is missing the publication state")?;
+    for marker in [
+        "PublishRelease",
+        "Preflight",
+        "Format-V4TransactionMarker",
+        "Get-V4TransactionMarker",
+        "Test-V4TransactionMarkerMatch",
+        "Invoke-DraftSelfCleanup",
+        "candidate-manifest.json",
+    ] {
+        if !pipeline.contains(marker) {
+            return Err(
+                format!("v4 release coordinator is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    let publish_release_position = pipeline
+        .find("function Invoke-PublishRelease")
+        .ok_or("v4 release coordinator is missing the publication transaction boundary")?;
     let promote_position = pipeline
         .find("function Invoke-PromoteMetadata")
         .ok_or("v4 release coordinator is missing the metadata promotion state")?;
-    if !pipeline[create_draft_position..publish_position]
-        .contains("make_latest = Get-V4ReleaseDraftMakeLatestValue")
-        || pipeline[create_draft_position..publish_position]
-            .contains("make_latest = Get-V4ReleaseMakeLatestValue $Channel")
-        || !pipeline[publish_position..promote_position]
-            .contains("make_latest = Get-V4ReleaseMakeLatestValue $Channel")
-        || pipeline[publish_position..promote_position]
-            .contains("make_latest = Get-V4ReleaseDraftMakeLatestValue")
-    {
-        return Err(
-            "CreateDraft must use draft-safe make_latest=false and PublishDraft must use the channel-aware helper"
-                .into(),
-        );
+    if publish_release_position >= promote_position {
+        return Err("PublishRelease must precede PromoteMetadata".into());
     }
-    let immutable_guard_position = pipeline
+    let publish_block = &pipeline[publish_release_position..promote_position];
+    let draft_latest_pos = publish_block
+        .find("make_latest = Get-V4ReleaseDraftMakeLatestValue")
+        .ok_or("PublishRelease must create draft with make_latest=false helper")?;
+    let publish_latest_pos = publish_block
+        .find("make_latest = (Get-V4ReleaseMakeLatestValue $Channel)")
+        .or_else(|| publish_block.find("make_latest = Get-V4ReleaseMakeLatestValue $Channel"))
+        .ok_or("PublishRelease must publish with channel-aware make_latest helper")?;
+    let immutable_pos = publish_block
         .find("Assert-ImmutableRelease $published")
-        .ok_or("v4 release coordinator is missing the published immutable-release guard")?;
-    if immutable_guard_position < publish_position || immutable_guard_position > promote_position {
+        .ok_or("PublishRelease must assert immutable release before metadata promotion")?;
+    if draft_latest_pos >= publish_latest_pos || publish_latest_pos >= immutable_pos {
         return Err(
-            "published immutable-release verification must remain after publication and before metadata promotion"
+            "PublishRelease draft creation, publication patch, and immutable check must be strictly ordered"
                 .into(),
         );
     }
-    let draft_boundary = pipeline
-        .find("function Invoke-CreateDraft")
-        .ok_or("v4 release coordinator is missing the draft boundary")?;
-    if pipeline[draft_boundary..].contains("orchestrate_v4_production_release.ps1") {
-        return Err("v4 release coordinator may not rebuild after draft creation".into());
+    if pipeline[publish_release_position..].contains("orchestrate_v4_production_release.ps1") {
+        return Err("v4 release coordinator may not rebuild after publication start".into());
     }
     if !regression.contains("MockReleaseApi")
         || !regression.contains("candidate rebuilt")
@@ -4645,14 +4640,15 @@ jobs:
     refs/heads/main
     environment: v4-production-release
     steps:
-      - name: Create exact candidate draft in canonical repository
+      - name: Preflight release request and repository readiness
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Build and qualify the single production candidate
       - name: Snapshot GitHub Latest before publication
         env:
           GH_TOKEN: ${{ github.token }}
         run: scripts/ci_v4_release_latest_guard.ps1 -Mode Capture -StateRoot $env:V4_RELEASE_STATE_ROOT
-      - name: Publish the already-qualified draft immutably
+      - name: Publish the qualified candidate immutably
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Verify GitHub Latest channel policy before metadata promotion
@@ -4681,15 +4677,9 @@ jobs:
     -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
     persist-credentials: false
     GH_TOKEN: ${{ github.token }}
-    -State ValidateRequest
-    -State ValidateRepository
+    -State Preflight
     -State BuildCandidate
-    -State CreateDraft
-    -State DownloadDraft
-    -State QualifyDownloaded
-    Qualify downloaded exact candidate bytes and packaged update
-    -State RecordAttestations
-    -State PublishDraft
+    -State PublishRelease
     -State PromoteMetadata
     -State FinalVerify
     actions/attest@v4
@@ -4698,7 +4688,7 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1
+Preflight BuildCandidate PublishRelease PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1 Format-V4TransactionMarker Get-V4TransactionMarker Test-V4TransactionMarkerMatch Invoke-DraftSelfCleanup candidate-manifest.json
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
@@ -4706,6 +4696,11 @@ function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
 function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; freshUserSongs = @(; Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { GH_TOKEN }
+function Invoke-PublishRelease {
+  make_latest = Get-V4ReleaseDraftMakeLatestValue
+  make_latest = (Get-V4ReleaseMakeLatestValue $Channel)
+  Assert-ImmutableRelease $published
+}
 function Invoke-PublishDraft { draft = $false; Get-V4ReleaseMakeLatestValue; make_latest = Get-V4ReleaseMakeLatestValue $Channel; draft false; stable publish true; beta publish false; Assert-ImmutableRelease $published; repository release is not marked immutable }
 function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication; branch = "release-metadata"; GITHUB_REPOSITORY; Invoke-GitHubApi }
 function Invoke-FinalVerify { FinalVerify }
@@ -4718,13 +4713,13 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         assert!(v4_release_pipeline_contract_source(workflow, pipeline, regression).is_ok());
 
         let reordered = workflow.replace(
-            "-State CreateDraft\n    -State DownloadDraft",
-            "-State DownloadDraft\n    -State CreateDraft",
+            "-State Preflight\n    -State BuildCandidate",
+            "-State BuildCandidate\n    -State Preflight",
         );
         assert!(v4_release_pipeline_contract_source(&reordered, pipeline, regression).is_err());
         let duplicated_build = pipeline.replace(
-            "function Invoke-CreateDraft",
-            "orchestrate_v4_production_release.ps1\nfunction Invoke-CreateDraft",
+            "function Invoke-PublishRelease",
+            "orchestrate_v4_production_release.ps1\nfunction Invoke-PublishRelease",
         );
         assert!(
             v4_release_pipeline_contract_source(workflow, &duplicated_build, regression).is_err()
@@ -4758,10 +4753,10 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
     #[test]
     fn metadata_app_token_is_scoped_to_promotion_and_keeps_private_key_in_action_input() {
         let workflow = r#"
-      - name: Create exact candidate draft in canonical repository
+      - name: Preflight release request and repository readiness
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Publish the already-qualified draft immutably
+      - name: Publish the qualified candidate immutably
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Mint release-metadata GitHub App token

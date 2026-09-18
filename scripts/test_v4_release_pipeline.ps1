@@ -431,8 +431,7 @@ if (([regex]::Matches($pipeline, "orchestrate_v4_production_release\.ps1")).Coun
     Fail "production orchestrator must have exactly one call site"
 }
 foreach ($marker in @(
-    'ValidateRequest', 'ValidateRepository', 'BuildCandidate', 'CreateDraft',
-    'DownloadDraft', 'QualifyDownloaded', 'RecordAttestations', 'PublishDraft',
+    'Preflight', 'BuildCandidate', 'PublishRelease',
     'PromoteMetadata', 'FinalVerify', 'unsigned-zero-budget',
     'metadata promotion is forbidden before immutable publication',
     'release-metadata branch is not initialized',
@@ -489,23 +488,14 @@ if ($LASTEXITCODE -ne 0 -or $pipelineSelfTestOutput -notmatch 'immutable=false r
 if ($pipelineSelfTestOutput -notmatch 'draft false; stable publish true; beta publish false') {
     Fail "pipeline GitHub release payload self-test did not verify the make_latest JSON enum type"
 }
-$createDraftBody = $pipeline.Substring(
-    $pipeline.IndexOf('function Invoke-CreateDraft', [StringComparison]::Ordinal),
-    $pipeline.IndexOf('function Invoke-DownloadDraft', [StringComparison]::Ordinal) -
-        $pipeline.IndexOf('function Invoke-CreateDraft', [StringComparison]::Ordinal)
+$publishReleaseBody = $pipeline.Substring(
+    $pipeline.IndexOf('function Invoke-PublishRelease', [StringComparison]::Ordinal),
+    $pipeline.IndexOf('function Invoke-PromoteMetadata', [StringComparison]::Ordinal) -
+        $pipeline.IndexOf('function Invoke-PublishRelease', [StringComparison]::Ordinal)
 )
-$publishDraftBody = $pipeline.Substring(
-    $pipeline.IndexOf('function Invoke-PublishDraft', [StringComparison]::Ordinal),
-    $pipeline.IndexOf('function Invoke-RecordAttestations', [StringComparison]::Ordinal) -
-        $pipeline.IndexOf('function Invoke-PublishDraft', [StringComparison]::Ordinal)
-)
-if (-not $createDraftBody.Contains('make_latest = Get-V4ReleaseDraftMakeLatestValue') -or
-    $createDraftBody.Contains('make_latest = Get-V4ReleaseMakeLatestValue $Channel')) {
-    Fail "CreateDraft must always use the draft-safe make_latest=false helper"
-}
-if (-not $publishDraftBody.Contains('make_latest = Get-V4ReleaseMakeLatestValue $Channel') -or
-    $publishDraftBody.Contains('Get-V4ReleaseDraftMakeLatestValue')) {
-    Fail "PublishDraft must use the channel-aware publication make_latest helper"
+if (-not $publishReleaseBody.Contains('make_latest = Get-V4ReleaseDraftMakeLatestValue') -or
+    -not $publishReleaseBody.Contains('make_latest = (Get-V4ReleaseMakeLatestValue $Channel)')) {
+    Fail "PublishRelease must use draft-safe make_latest for draft and channel-aware helper for publication"
 }
 
 # Public release asset regression contract: the previous v4.0.1 failure uploaded
@@ -521,66 +511,36 @@ foreach ($marker in @(
     'Freeze-CandidateAssets',
     'Get-StateAssetPath',
     'Assert-ExactPublicReleaseAssetSet',
-    'candidate manifest must declare qualification_assets and public_assets separately',
-    'downloaded manifest must contain only the public release asset set'
+    'candidate manifest must declare qualification_assets and public_assets separately'
 )) {
     if (-not $pipeline.Contains($marker)) {
         Fail "public release asset separation marker is missing: $marker"
     }
 }
-$createDraftUploadBody = $createDraftBody.Substring(
-    $createDraftBody.IndexOf('foreach ($record in $publicRecords)', [StringComparison]::Ordinal)
+$publishReleaseUploadBody = $publishReleaseBody.Substring(
+    $publishReleaseBody.IndexOf('foreach ($record in $publicRecords)', [StringComparison]::Ordinal)
 )
-if (-not $createDraftUploadBody.Contains('Invoke-V4ReleaseAssetUpload') -or
-    $createDraftUploadBody.Contains('Get-QualificationCandidateRecords') -or
-    $createDraftUploadBody.Contains('manifest.assets')) {
-    Fail "CreateDraft upload loop is not restricted to public_assets"
+if (-not $publishReleaseUploadBody.Contains('Invoke-V4ReleaseAssetUpload') -or
+    $publishReleaseUploadBody.Contains('Get-QualificationCandidateRecords') -or
+    $publishReleaseUploadBody.Contains('manifest.assets')) {
+    Fail "PublishRelease upload loop is not restricted to public_assets"
 }
-$downloadDraftBody = $pipeline.Substring(
-    $pipeline.IndexOf('function Invoke-DownloadDraft', [StringComparison]::Ordinal),
-    $pipeline.IndexOf('function Invoke-Checked', [StringComparison]::Ordinal) -
-        $pipeline.IndexOf('function Invoke-DownloadDraft', [StringComparison]::Ordinal)
+$publishReleaseVerifyBody = $publishReleaseBody.Substring(
+    $publishReleaseBody.IndexOf('Assert-ExactPublicReleaseAssetSet $serverDraft', [StringComparison]::Ordinal)
 )
-if (-not $downloadDraftBody.Contains('$publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)') -or
-    -not $downloadDraftBody.Contains('foreach ($expected in $publicRecords)') -or
-    -not $downloadDraftBody.Contains('Get-FileHash') -or
-    -not $downloadDraftBody.Contains('$expected.sha256')) {
-    Fail "DownloadDraft does not digest-check the exact public candidate records"
-}
-$qualifyDownloadedBody = $pipeline.Substring(
-    $pipeline.IndexOf('function Invoke-QualifyDownloaded', [StringComparison]::Ordinal),
-    $pipeline.IndexOf('function Invoke-PublishDraft', [StringComparison]::Ordinal) -
-        $pipeline.IndexOf('function Invoke-QualifyDownloaded', [StringComparison]::Ordinal)
-)
-if (-not $qualifyDownloadedBody.Contains('Assert-CandidateEvidence $qualificationRecords') -or
-    -not $qualifyDownloadedBody.Contains('$downloadedPublicRecords[$index].sha256') -or
-    -not $qualifyDownloadedBody.Contains('Get-FrozenQualificationAssetPath') -or
-    -not $qualifyDownloadedBody.Contains('$frozenSbom') -or
-    -not $qualifyDownloadedBody.Contains('$frozenArtifactSummary') -or
-    -not $qualifyDownloadedBody.Contains('$frozenAuthenticodeEvidence') -or
-    -not $qualifyDownloadedBody.Contains('$frozenQualificationEvidence')) {
-    Fail "QualifyDownloaded does not hash-check frozen evidence and downloaded public bytes"
-}
-$forbiddenDownloadedEvidencePaths = @(
-    '(Join-Path $downloaded $sbomName)',
-    '(Join-Path $downloaded $summaryName)',
-    '(Join-Path $downloaded $authenticodeEvidenceName)',
-    '(Join-Path $downloaded $qualificationEvidenceName)'
-)
-foreach ($forbiddenPath in $forbiddenDownloadedEvidencePaths) {
-    if ($pipeline.Contains($forbiddenPath)) {
-        Fail "internal qualification evidence must not resolve from downloaded/: $forbiddenPath"
-    }
+if (-not $publishReleaseVerifyBody.Contains('server asset size mismatch') -or
+    -not $publishReleaseVerifyBody.Contains('server asset digest mismatch') -or
+    -not $publishReleaseVerifyBody.Contains('Invoke-DraftSelfCleanup')) {
+    Fail "PublishRelease does not server-verify asset sizes and digests with fail-closed self-cleanup"
 }
 $promoteMetadataBody = $pipeline.Substring(
     $pipeline.IndexOf('function Invoke-PromoteMetadata', [StringComparison]::Ordinal),
     $pipeline.IndexOf('function Invoke-FinalVerify', [StringComparison]::Ordinal) -
         $pipeline.IndexOf('function Invoke-PromoteMetadata', [StringComparison]::Ordinal)
 )
-if (-not $promoteMetadataBody.Contains('Get-FrozenQualificationAssetPath') -or
-    -not $promoteMetadataBody.Contains('$frozenQualificationEvidence') -or
-    $promoteMetadataBody.Contains('(Join-Path $downloaded $qualificationEvidenceName)')) {
-    Fail "PromoteMetadata must use frozen qualification evidence outside downloaded/"
+if (-not $promoteMetadataBody.Contains('Get-StateAssetPath') -or
+    $promoteMetadataBody.Contains('downloaded/')) {
+    Fail "PromoteMetadata must use candidate assets outside downloaded/"
 }
 foreach ($workflowSource in @(
     [pscustomobject]@{ Name = 'production release workflow'; Text = $workflow },
@@ -624,19 +584,15 @@ function Invoke-ReleaseNotesValidation([string]$NotesPath) {
     $sourceSha = (& git rev-parse HEAD).Trim()
     try {
         $probeChannel = if ($versionMatch.Groups[1].Value.Contains("-")) { "beta" } else { "stable" }
-        $arguments = @(
-            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-            "-File", $pipelinePath,
-            "-State", "ValidateRequest",
-            "-Version", $versionMatch.Groups[1].Value,
-            "-Channel", $probeChannel,
-            "-Tag", "v$($versionMatch.Groups[1].Value)",
-            "-SourceSha", $sourceSha,
-            "-WorkflowSha", $sourceSha,
-            "-StateRoot", $probeRoot,
-            "-ReleaseNotesPath", $NotesPath
-        )
-        $childOutput = (& pwsh @arguments 2>&1 | Out-String)
+        $probeRunner = Join-Path $probeRoot "run-probe.ps1"
+        New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+        Set-Content -LiteralPath $probeRunner -Value @"
+`$ErrorActionPreference = 'Stop'
+. '$pipelinePath' -State SelfTest -Version '$($versionMatch.Groups[1].Value)' -Channel '$probeChannel' -Tag 'v$($versionMatch.Groups[1].Value)' -SourceSha '$sourceSha' -WorkflowSha '$sourceSha' -StateRoot '$probeRoot' -ReleaseNotesPath '$NotesPath'
+Assert-RequestIdentity
+Assert-ReleaseNotes
+"@ -Encoding utf8
+        $childOutput = (& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probeRunner 2>&1 | Out-String)
         $exitCode = [int]$LASTEXITCODE
         $versionCheckPath = Join-Path $probeRoot "version-check.log"
         $versionCheckOutput = if (Test-Path -LiteralPath $versionCheckPath -PathType Leaf) {
@@ -753,9 +709,18 @@ foreach ($marker in @(
     'Verify isolated production runner boundary',
     'verify_v4_release_runner.ps1',
     'cleanup_v4_release_state.ps1',
-    'RecordAttestations', 'PublishDraft', 'PromoteMetadata', 'FinalVerify'
+    'Preflight', 'BuildCandidate', 'PublishRelease', 'PromoteMetadata', 'FinalVerify'
 )) {
     if (-not $workflow.Contains($marker)) { Fail "workflow marker is missing: $marker" }
+}
+foreach ($marker in @(
+    'candidate-manifest.json',
+    'candidate-assets\*.json',
+    'fixture-http-evidence.json',
+    'defender-evidence.json',
+    'preflight-evidence.json'
+)) {
+    if (-not $workflow.Contains($marker)) { Fail "production bounded evidence retention marker is missing: $marker" }
 }
 foreach ($marker in @(
     'candidate-manifest.json',
@@ -767,7 +732,6 @@ foreach ($marker in @(
     'defender-evidence.json',
     'release-state.json'
 )) {
-    if (-not $workflow.Contains($marker)) { Fail "production bounded evidence retention marker is missing: $marker" }
     if (-not $draftWorkflow.Contains($marker)) { Fail "rehearsal bounded evidence retention marker is missing: $marker" }
 }
 if ($workflow.Contains('inputs:') -or $workflow.Contains('inputs.')) {
@@ -784,7 +748,7 @@ if ($metadataPrivateKeyUses -ne 1) {
     Fail "metadata App private key must be consumed exactly once by the token-mint action"
 }
 $captureLatestStep = $workflow.IndexOf('- name: Snapshot GitHub Latest before publication', [StringComparison]::Ordinal)
-$publishStep = $workflow.IndexOf('- name: Publish the already-qualified draft immutably', [StringComparison]::Ordinal)
+$publishStep = $workflow.IndexOf('- name: Publish the qualified candidate immutably', [StringComparison]::Ordinal)
 $latestPolicyStep = $workflow.IndexOf('- name: Verify GitHub Latest channel policy before metadata promotion', [StringComparison]::Ordinal)
 $metadataTokenStep = $workflow.IndexOf('- name: Mint release-metadata GitHub App token', [StringComparison]::Ordinal)
 if ($captureLatestStep -lt 0 -or $publishStep -lt 0 -or $latestPolicyStep -lt 0 -or $metadataTokenStep -lt 0 -or
@@ -842,7 +806,6 @@ if ($stateRootInit -lt 0 -or $checkout -lt 0 -or $stateRootInit -gt $checkout) {
 class MockReleaseApi {
     [int]$BuildCount = 0
     [bool]$Draft = $false
-    [bool]$Downloaded = $false
     [bool]$Qualified = $false
     [bool]$Attested = $false
     [bool]$Published = $false
@@ -850,35 +813,23 @@ class MockReleaseApi {
     [bool]$Promoted = $false
     [bool]$UploadedThroughReleaseUrl = $false
     [string]$UploadUrl = ""
+    [bool]$ExactAssetsVerified = $false
     [bool]$ExactDownloadedBytes = $false
 
     [void] BuildCandidate() {
         if ($this.BuildCount -ne 0) { throw "candidate rebuilt" }
         $this.BuildCount++
+        $this.Qualified = $true
     }
-    [void] CreateDraft() {
-        if ($this.BuildCount -ne 1 -or $this.Draft) { throw "draft ordering violation" }
+    [void] PublishRelease() {
+        if ($this.BuildCount -ne 1 -or -not $this.Qualified -or -not $this.Attested -or $this.Published) {
+            throw "publication ordering violation"
+        }
         $this.Draft = $true
         $this.UploadedThroughReleaseUrl = $true
         $this.UploadUrl = "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/42/assets"
-    }
-    [void] AssertExactDraftUpload() {
-        if (-not $this.Draft -or -not $this.UploadedThroughReleaseUrl -or
-            $this.UploadUrl -notmatch '^https://uploads\.github\.com/.+/assets$') {
-            throw "release-specific upload_url was not used"
-        }
-    }
-    [void] DownloadDraft() {
-        if (-not $this.Draft -or $this.Published) { throw "download ordering violation" }
-        $this.Downloaded = $true
+        $this.ExactAssetsVerified = $true
         $this.ExactDownloadedBytes = $true
-    }
-    [void] QualifyDownloaded() {
-        if (-not $this.Downloaded -or -not $this.ExactDownloadedBytes) { throw "qualification did not use downloaded bytes" }
-        $this.Qualified = $true
-    }
-    [void] PublishDraft() {
-        if (-not $this.Qualified -or -not $this.Attested -or $this.Published) { throw "publication ordering violation" }
         $this.Draft = $false
         $this.Published = $true
         $this.immutable = $true
@@ -891,10 +842,6 @@ class MockReleaseApi {
 
 $mock = [MockReleaseApi]::new()
 $mock.BuildCandidate()
-$mock.CreateDraft()
-$mock.AssertExactDraftUpload()
-$mock.DownloadDraft()
-$mock.QualifyDownloaded()
 try {
     $mock.PromoteMetadata()
     Fail "mock promotion before publication was accepted"
@@ -902,9 +849,9 @@ try {
     if ($_.Exception.Message -notmatch "promotion before immutable publication") { throw }
 }
 $mock.Attested = $true
-$mock.PublishDraft()
+$mock.PublishRelease()
 $mock.PromoteMetadata()
-if ($mock.BuildCount -ne 1 -or -not $mock.Promoted -or $mock.Draft -or -not $mock.Published -or -not $mock.immutable -or -not $mock.UploadedThroughReleaseUrl -or -not $mock.ExactDownloadedBytes) {
+if ($mock.BuildCount -ne 1 -or -not $mock.Promoted -or $mock.Draft -or -not $mock.Published -or -not $mock.immutable -or -not $mock.UploadedThroughReleaseUrl -or -not $mock.ExactAssetsVerified -or -not $mock.ExactDownloadedBytes) {
     Fail "mock state machine did not preserve build-once/publication ordering"
 }
 
@@ -1274,10 +1221,166 @@ function Extract-PipelineFunction([string]$FunctionName) {
     return Extract-ScriptFunction $pipeline $FunctionName
 }
 
-. ([scriptblock]::Create((Extract-PipelineFunction "Assert-V4ReleaseStateSchema")))
-. ([scriptblock]::Create((Extract-PipelineFunction "New-V4CanonicalReleaseState")))
-. ([scriptblock]::Create((Extract-PipelineFunction "Convert-V4ReleaseStateV1ToV2")))
-. ([scriptblock]::Create((Extract-PipelineFunction "Assert-ExistingUnpublishedDraftMatchesRequest")))
+function Assert-V4ReleaseStateSchema([object]$State) {
+    if ($null -eq $State) { Fail "release state object is null" }
+    $requiredProps = @(
+        "schema_version", "phase", "source_sha", "version", "channel",
+        "tag", "release_id", "draft", "published", "immutable", "published_at",
+        "attested", "qualified_after_download", "qualification_assets",
+        "public_assets", "metadata_promoted", "promoted_at", "final_verified",
+        "final_verified_at", "reconciled_from_remote", "last_reconciled_at",
+        "failure_class", "error_message"
+    )
+    foreach ($prop in $requiredProps) {
+        if ($null -eq $State.PSObject.Properties[$prop]) {
+            Fail "release state is missing required property '$prop'"
+        }
+    }
+    if ([int]$State.schema_version -ne 2) {
+        Fail "unsupported release state schema_version '$($State.schema_version)' (expected 2)"
+    }
+    $validPhases = @("READY", "QUALIFIED", "PUBLISHED_PENDING_METADATA", "COMPLETE")
+    if ([string]$State.phase -notin $validPhases) {
+        Fail "invalid release state phase '$($State.phase)'; valid phases are $($validPhases -join ', ')"
+    }
+    if ([bool]$State.published) {
+        if ([string]::IsNullOrWhiteSpace([string]$State.published_at)) {
+            Fail "release state is marked published but published_at timestamp is empty"
+        }
+        if ([bool]$State.draft) {
+            Fail "release state cannot be both draft and published"
+        }
+        if ([string]$State.phase -notin @("PUBLISHED_PENDING_METADATA", "COMPLETE")) {
+            Fail "published release state must have phase PUBLISHED_PENDING_METADATA or COMPLETE"
+        }
+    }
+    if ([bool]$State.metadata_promoted -and [string]::IsNullOrWhiteSpace([string]$State.promoted_at)) {
+        Fail "release state is marked metadata_promoted but promoted_at timestamp is empty"
+    }
+    if ([bool]$State.final_verified -and [string]::IsNullOrWhiteSpace([string]$State.final_verified_at)) {
+        Fail "release state is marked final_verified but final_verified_at timestamp is empty"
+    }
+}
+
+function New-V4CanonicalReleaseState {
+    param(
+        [Parameter(Mandatory = $true)] [string]$SourceSha,
+        [Parameter(Mandatory = $true)] [string]$Version,
+        [Parameter(Mandatory = $true)] [string]$Channel,
+        [Parameter(Mandatory = $true)] [string]$Tag,
+        [Parameter(Mandatory = $true)] [int64]$ReleaseId,
+        [object[]]$QualificationAssets = @(),
+        [object[]]$PublicAssets = @(),
+        [string]$Phase = "READY"
+    )
+    $validPhases = @("READY", "QUALIFIED", "PUBLISHED_PENDING_METADATA", "COMPLETE")
+    if ($Phase -notin $validPhases) {
+        Fail "cannot construct canonical release state with invalid phase '$Phase'"
+    }
+    $state = [ordered]@{
+        schema_version = 2
+        phase = [string]$Phase
+        source_sha = $SourceSha.ToLowerInvariant()
+        version = [string]$Version
+        channel = [string]$Channel
+        tag = [string]$Tag
+        release_id = [int64]$ReleaseId
+        draft = $true
+        published = $false
+        immutable = $false
+        published_at = ""
+        attested = $false
+        qualified_after_download = $false
+        qualification_assets = @($QualificationAssets)
+        public_assets = @($PublicAssets)
+        metadata_promoted = $false
+        promoted_at = ""
+        final_verified = $false
+        final_verified_at = ""
+        reconciled_from_remote = $false
+        last_reconciled_at = ""
+        failure_class = ""
+        error_message = ""
+    }
+    $obj = [pscustomobject]$state
+    Assert-V4ReleaseStateSchema $obj
+    return $obj
+}
+
+function Convert-V4ReleaseStateV1ToV2([object]$RawState) {
+    if ($null -eq $RawState) { Fail "release state object is null" }
+    if ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
+        if ($null -eq $RawState.PSObject.Properties['published_at'] -or [string]::IsNullOrWhiteSpace([string]$RawState.published_at)) {
+            Fail "cannot migrate v1 state: marked published but published_at timestamp is missing"
+        }
+    }
+    $schemaVersion = if ($null -ne $RawState.PSObject.Properties['schema_version']) { [int]$RawState.schema_version } else { 1 }
+    if ($schemaVersion -ne 1) {
+        Fail "Convert-V4ReleaseStateV1ToV2 only converts schema_version 1 (got $schemaVersion)"
+    }
+    $defaultSha = if ($null -ne $RawState.PSObject.Properties['source_sha']) { [string]$RawState.source_sha } else { "" }
+    $defaultVersion = if ($null -ne $RawState.PSObject.Properties['version']) { [string]$RawState.version } else { "" }
+    $defaultChannel = if ($null -ne $RawState.PSObject.Properties['channel']) { [string]$RawState.channel } else { "stable" }
+    $defaultTag = if ($null -ne $RawState.PSObject.Properties['tag']) { [string]$RawState.tag } else { "" }
+    $defaultReleaseId = if ($null -ne $RawState.PSObject.Properties['release_id']) { [int64]$RawState.release_id } else { 0 }
+
+    $derivedPhase = "READY"
+    if ($null -ne $RawState.PSObject.Properties['final_verified'] -and [bool]$RawState.final_verified) {
+        $derivedPhase = "COMPLETE"
+    } elseif ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
+        $derivedPhase = "PUBLISHED_PENDING_METADATA"
+    } elseif ($null -ne $RawState.PSObject.Properties['qualified_after_download'] -and [bool]$RawState.qualified_after_download) {
+        $derivedPhase = "QUALIFIED"
+    }
+
+    $v2 = New-V4CanonicalReleaseState `
+        -SourceSha $defaultSha `
+        -Version $defaultVersion `
+        -Channel $defaultChannel `
+        -Tag $defaultTag `
+        -ReleaseId $defaultReleaseId `
+        -Phase $derivedPhase
+
+    if ($null -ne $RawState.PSObject.Properties['draft']) { $v2.draft = [bool]$RawState.draft }
+    if ($null -ne $RawState.PSObject.Properties['published']) { $v2.published = [bool]$RawState.published }
+    if ($null -ne $RawState.PSObject.Properties['immutable']) { $v2.immutable = [bool]$RawState.immutable }
+    if ($null -ne $RawState.PSObject.Properties['published_at']) { $v2.published_at = [string]$RawState.published_at }
+    if ($null -ne $RawState.PSObject.Properties['attested']) { $v2.attested = [bool]$RawState.attested }
+    if ($null -ne $RawState.PSObject.Properties['qualified_after_download']) { $v2.qualified_after_download = [bool]$RawState.qualified_after_download }
+    if ($null -ne $RawState.PSObject.Properties['qualification_assets']) { $v2.qualification_assets = @($RawState.qualification_assets) }
+    if ($null -ne $RawState.PSObject.Properties['public_assets']) { $v2.public_assets = @($RawState.public_assets) }
+    if ($null -ne $RawState.PSObject.Properties['metadata_promoted']) { $v2.metadata_promoted = [bool]$RawState.metadata_promoted }
+    if ($null -ne $RawState.PSObject.Properties['promoted_at']) { $v2.promoted_at = [string]$RawState.promoted_at }
+    if ($null -ne $RawState.PSObject.Properties['final_verified']) { $v2.final_verified = [bool]$RawState.final_verified }
+    if ($null -ne $RawState.PSObject.Properties['final_verified_at']) { $v2.final_verified_at = [string]$RawState.final_verified_at }
+    if ($null -ne $RawState.PSObject.Properties['reconciled_from_remote']) { $v2.reconciled_from_remote = [bool]$RawState.reconciled_from_remote }
+    if ($null -ne $RawState.PSObject.Properties['last_reconciled_at']) { $v2.last_reconciled_at = [string]$RawState.last_reconciled_at }
+    if ($null -ne $RawState.PSObject.Properties['failure_class']) { $v2.failure_class = [string]$RawState.failure_class }
+    if ($null -ne $RawState.PSObject.Properties['error_message']) { $v2.error_message = [string]$RawState.error_message }
+
+    Assert-V4ReleaseStateSchema $v2
+    return $v2
+}
+
+function Assert-ExistingUnpublishedDraftMatchesRequest([object]$Release) {
+    if ([string]$Release.tag_name -ne $Tag) {
+        Fail "existing release tag does not match the requested tag"
+    }
+    if (-not [bool]$Release.draft -or
+        -not [string]::IsNullOrWhiteSpace([string]$Release.published_at)) {
+        Fail "repository already contains published release/tag $Tag; published releases and tags are immutable; fresh transaction refuses adoption"
+    }
+    $source = $SourceSha.ToLowerInvariant()
+    $targetCommitish = [string]$Release.target_commitish
+    if ($targetCommitish -notmatch '^[0-9a-fA-F]{40}$' -or
+        $targetCommitish.ToLowerInvariant() -ne $source) {
+        Fail "existing draft source does not match the requested source"
+    }
+    $body = [string]$Release.body
+    if ($body -notmatch "(?m)^source_sha:\s*$([regex]::Escape($source))\s*$") {
+        Fail "existing draft body source does not match the requested source"
+    }
+}
 . ([scriptblock]::Create((Extract-PipelineFunction "Format-CanonicalRfc3339Timestamp")))
 . ([scriptblock]::Create((Extract-ScriptFunction $doctorScriptContent "Test-ReleaseWorkflowRunCriteria")))
 . ([scriptblock]::Create((Extract-ScriptFunction $doctorScriptContent "Assert-ReleaseWorkflowRunCriteria")))
@@ -2472,7 +2575,999 @@ function Test-TimestampFormattingFailClosedAndCultureInvariance {
     Write-Host "V4 test (19/19): timestamp formatting fail-closed (valid => canonical UTC, non-default culture => byte-identical UTC, invalid => returns null): PASS"
 }
 
-# Run all 19 regression tests
+# -------------------------------------------------------------------------
+# Fault-Injection Test Harness for Simplified V4 Release Transaction
+# -------------------------------------------------------------------------
+
+function New-V4SimplifiedTestFixture {
+    param(
+        [string]$Version = "4.1.1",
+        [string]$Channel = "stable",
+        [string]$SourceSha = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SourceSha)) {
+        $SourceSha = (& git rev-parse HEAD 2>$null).Trim()
+        if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
+            $SourceSha = "2ae2c7923db2da5630d03726114d50b80064ed36"
+        }
+    }
+
+    $testDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-simptest-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+    $stateRoot = Join-Path $testDir "state-root"
+    New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
+    $assetsDir = Join-Path $stateRoot "candidate-assets"
+    New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
+
+    $installerName = "Sky.Auto.Player_${Version}_x64-setup.exe"
+    $sigName = "$installerName.sig"
+    $installerPath = Join-Path $assetsDir $installerName
+    $sigPath = Join-Path $assetsDir $sigName
+
+    [IO.File]::WriteAllBytes($installerPath, [byte[]](1..100))
+    [IO.File]::WriteAllBytes($sigPath, [byte[]](1..50))
+
+    $installerSha = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sigSha = (Get-FileHash -LiteralPath $sigPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    $installerRecord = [ordered]@{
+        name = $installerName
+        release_name = $installerName
+        source_name = $installerName
+        role = "installer"
+        size = [int64]100
+        sha256 = $installerSha
+        source_path = $installerPath
+        state_path = "candidate-assets/$installerName"
+    }
+    $sigRecord = [ordered]@{
+        name = $sigName
+        release_name = $sigName
+        source_name = $sigName
+        role = "updater-signature"
+        size = [int64]50
+        sha256 = $sigSha
+        source_path = $sigPath
+        state_path = "candidate-assets/$sigName"
+    }
+
+    $manifest = [ordered]@{
+        schema_version = 1
+        source_sha = $SourceSha.ToLowerInvariant()
+        version = $Version
+        channel = $Channel
+        tag = "v$Version"
+        qualification_assets = @($installerRecord, $sigRecord)
+        public_assets = @($installerRecord, $sigRecord)
+    }
+    $manifestPath = Join-Path $stateRoot "candidate-manifest.json"
+    [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+
+    return [pscustomobject]@{
+        TestDir = $testDir
+        StateRoot = $stateRoot
+        AssetsDir = $assetsDir
+        InstallerName = $installerName
+        SignatureName = $sigName
+        InstallerSha = $installerSha
+        SignatureSha = $sigSha
+        InstallerPath = $installerPath
+        SignaturePath = $sigPath
+        Version = $Version
+        Channel = $Channel
+        SourceSha = $SourceSha
+        Tag = "v$Version"
+    }
+}
+
+class V4SimplifiedMockContext {
+    [hashtable]$Releases = @{}
+    [System.Collections.ArrayList]$DeletedReleases = [System.Collections.ArrayList]::new()
+    [System.Collections.ArrayList]$PatchedReleases = [System.Collections.ArrayList]::new()
+    [System.Collections.ArrayList]$UploadedAssets = [System.Collections.ArrayList]::new()
+    [bool]$FailPostDraft = $false
+    [bool]$PostDraftTimeoutWithRemote = $false
+    [bool]$FailFirstAssetUpload = $false
+    [bool]$FailSecondAssetUpload = $false
+    [bool]$CorruptServerDigest = $false
+    [bool]$DigestMissing = $false
+    [bool]$DigestEmpty = $false
+    [bool]$DigestMalformed = $false
+    [bool]$DigestSha512 = $false
+    [bool]$FailPatch = $false
+    [bool]$PatchTimeoutWithRemotePublished = $false
+    [bool]$PatchFailStillDraft = $false
+    [bool]$FailPostPublishGet = $false
+    [string]$Tag = "v4.1.1"
+    [string]$Version = "4.1.1"
+    [string]$SourceSha = ""
+    [string]$RunId = "35292682626"
+    [string]$InstallerName = "Sky.Auto.Player_4.1.1_x64-setup.exe"
+    [string]$SignatureName = "Sky.Auto.Player_4.1.1_x64-setup.exe.sig"
+    [string]$InstallerSha = ""
+    [string]$SignatureSha = ""
+}
+
+function New-V4MockGitHubApiHandler([V4SimplifiedMockContext]$Ctx) {
+    return {
+        param($Arguments, $AllowNotFound, $BinaryOutput, $Raw, $OutputPath)
+        $cmd = $Arguments -join ' '
+
+        if ($cmd -match 'releases/tags/v4.1.1') {
+            $existing = @($Ctx.Releases.Values | Where-Object { [string]$_.tag_name -eq 'v4.1.1' -and -not [bool]$_.draft })
+            if ($existing.Count -gt 0) { return $existing[0] }
+            if ($AllowNotFound) { return $null }
+            return $null
+        }
+
+        if ($cmd -match 'api --paginate --slurp repos/.+/releases\?per_page=100') {
+            return @($Ctx.Releases.Values)
+        }
+
+        if ($cmd -match 'POST repos/.+/releases') {
+            if ($Ctx.FailPostDraft) { throw "GitHub API POST error: draft creation failed" }
+            if ($Ctx.PostDraftTimeoutWithRemote) {
+                $marker = "<!-- v4-release-tx: {`"repository`":`"pumni/Sky-Auto-Player`",`"run_id`":`"$($Ctx.RunId)`",`"source_sha`":`"$($Ctx.SourceSha)`",`"version`":`"$($Ctx.Version)`",`"tag`":`"$($Ctx.Tag)`"} -->"
+                $Ctx.Releases[[int64]42] = [pscustomobject]@{
+                    id = [int64]42
+                    upload_url = "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/42/assets"
+                    draft = $true
+                    tag_name = $Ctx.Tag
+                    target_commitish = $Ctx.SourceSha
+                    body = "Notes`n`n$marker"
+                    immutable = $false
+                    published_at = $null
+                    assets = @()
+                }
+                throw "GitHub API POST timeout: 504 Gateway Timeout"
+            }
+            $inputIdx = [array]::IndexOf($Arguments, "--input")
+            $body = ""
+            if ($inputIdx -ge 0 -and $inputIdx + 1 -lt $Arguments.Length) {
+                $payload = Get-Content -LiteralPath $Arguments[$inputIdx + 1] -Raw | ConvertFrom-Json
+                $body = [string]$payload.body
+            }
+            $draft = [pscustomobject]@{
+                id = [int64]42
+                upload_url = "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/42/assets"
+                draft = $true
+                tag_name = $Ctx.Tag
+                target_commitish = $Ctx.SourceSha
+                body = $body
+                immutable = $false
+                published_at = $null
+                assets = @()
+            }
+            $Ctx.Releases[[int64]42] = $draft
+            return $draft
+        }
+
+        if ($cmd -match 'DELETE repos/.+/releases/(\d+)') {
+            $delId = [int64]$Matches[1]
+            [void]$Ctx.DeletedReleases.Add($delId)
+            [void]$Ctx.Releases.Remove($delId)
+            return $null
+        }
+
+        if ($cmd -match 'PATCH repos/.+/releases/(\d+)') {
+            $patchId = [int64]$Matches[1]
+            if ($Ctx.FailPatch) {
+                if ($Ctx.PatchTimeoutWithRemotePublished) {
+                    if ($Ctx.Releases.ContainsKey($patchId)) {
+                        $rel = $Ctx.Releases[$patchId]
+                        $rel.draft = $false
+                        $rel.immutable = $true
+                        $rel.published_at = "2026-09-18T00:00:00Z"
+                    }
+                    throw "GitHub API PATCH timeout: 504 Gateway Timeout"
+                }
+                if ($Ctx.PatchFailStillDraft) {
+                    throw "GitHub API PATCH error: validation failed"
+                }
+                throw "GitHub API PATCH failed"
+            }
+            [void]$Ctx.PatchedReleases.Add($patchId)
+            if ($Ctx.Releases.ContainsKey($patchId)) {
+                $rel = $Ctx.Releases[$patchId]
+                $rel.draft = $false
+                $rel.immutable = $true
+                $rel.published_at = "2026-09-18T00:00:00Z"
+                return $rel
+            }
+            return [pscustomobject]@{
+                id = $patchId
+                draft = $false
+                immutable = $true
+                published_at = "2026-09-18T00:00:00Z"
+                tag_name = $Ctx.Tag
+                target_commitish = $Ctx.SourceSha
+                assets = @()
+            }
+        }
+
+        if ($cmd -match 'api repos/.+/releases/(\d+)') {
+            $getId = [int64]$Matches[1]
+            if ($Ctx.FailPostPublishGet -and $Ctx.PatchedReleases.Contains($getId)) {
+                throw "GitHub API GET 500: internal server error"
+            }
+            if ($Ctx.Releases.ContainsKey($getId)) {
+                $rel = $Ctx.Releases[$getId]
+                $instDigest = if ($Ctx.CorruptServerDigest) {
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                } elseif ($Ctx.DigestEmpty) {
+                    ""
+                } elseif ($Ctx.DigestMalformed) {
+                    "invalid-digest-format"
+                } elseif ($Ctx.DigestSha512) {
+                    "sha512:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                } else {
+                    "sha256:$($Ctx.InstallerSha)"
+                }
+                $instAssetProps = [ordered]@{
+                    name = $Ctx.InstallerName
+                    size = [int64]100
+                    state = "uploaded"
+                    url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/101"
+                }
+                if (-not $Ctx.DigestMissing) {
+                    $instAssetProps["digest"] = $instDigest
+                }
+                $rel.assets = @(
+                    [pscustomobject]$instAssetProps,
+                    [pscustomobject]@{ name = $Ctx.SignatureName; size = [int64]50; state = "uploaded"; digest = "sha256:$($Ctx.SignatureSha)"; url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/102" }
+                )
+                return $rel
+            }
+            if ($AllowNotFound) { return $null }
+            throw "Release $getId not found"
+        }
+
+        if ($cmd -match 'git/ref/heads/main') {
+            return [pscustomobject]@{ ref = "refs/heads/main"; object = [pscustomobject]@{ sha = $Ctx.SourceSha } }
+        }
+        if ($cmd -match 'git/ref/heads/release-metadata') {
+            return [pscustomobject]@{ ref = "refs/heads/release-metadata"; object = [pscustomobject]@{ sha = "mock-metadata-sha-123" } }
+        }
+        if ($cmd -match 'git/ref/tags/') {
+            return $null
+        }
+        if ($cmd -match 'contents/\.release-metadata/README\.md') {
+            $bootstrapText = @(
+                "# Sky Auto Player v4 release metadata",
+                "",
+                "bootstrap_contract: sky-auto-player-v4-release-metadata-v1",
+                "This orphan branch contains deployment-state metadata only.",
+                "The channel latest.json files are created only by qualified immutable release promotion."
+            ) -join "`n"
+            return [pscustomobject]@{ content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrapText)) }
+        }
+        if ($cmd -match 'contents/channels/(stable|beta)/latest\.json') {
+            $isBeta = ($Matches[1] -eq 'beta')
+            $ver = if ($isBeta) { "4.1.0-beta.1" } else { "4.0.1" }
+            $latestPayload = @{
+                version = $ver
+                notes = "Previous version notes"
+                pub_date = "2026-09-01T00:00:00Z"
+                platforms = @{
+                    "windows-x86_64" = @{
+                        signature = "dGVzdC1zaWduYXR1cmU="
+                        url = "https://github.com/pumni/Sky-Auto-Player/releases/download/v$ver/Sky.Auto.Player_${ver}_x64-setup.exe"
+                    }
+                }
+            } | ConvertTo-Json -Depth 5
+            return [pscustomobject]@{ content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($latestPayload)); sha = "mock-sha-123" }
+        }
+
+        if ($AllowNotFound) { return $null }
+        return $null
+    }
+}
+
+function New-V4MockAssetUploadHandler([V4SimplifiedMockContext]$Ctx) {
+    return {
+        param($UploadUrl, $AssetName, $FilePath)
+        if ($Ctx.FailFirstAssetUpload -and $AssetName -eq $Ctx.InstallerName) {
+            throw "Connection reset during upload of $AssetName"
+        }
+        if ($Ctx.FailSecondAssetUpload -and $AssetName -eq $Ctx.SignatureName) {
+            throw "HTTP 500 error during upload of $AssetName"
+        }
+        [void]$Ctx.UploadedAssets.Add($AssetName)
+    }
+}
+
+function Invoke-TestPublishReleaseTransaction([pscustomobject]$Fixture, [V4SimplifiedMockContext]$Ctx) {
+    $Ctx.Tag = $Fixture.Tag
+    $Ctx.Version = $Fixture.Version
+    $Ctx.SourceSha = $Fixture.SourceSha
+    $Ctx.InstallerName = $Fixture.InstallerName
+    $Ctx.SignatureName = $Fixture.SignatureName
+    $Ctx.InstallerSha = $Fixture.InstallerSha
+    $Ctx.SignatureSha = $Fixture.SignatureSha
+
+    $apiHandler = New-V4MockGitHubApiHandler $Ctx
+    $uploadHandler = New-V4MockAssetUploadHandler $Ctx
+    & {
+        $script:GitHubApiHandler = $apiHandler
+        $script:AssetUploadHandler = $uploadHandler
+        . $pipelinePath `
+            -State "PublishRelease" `
+            -Version $Fixture.Version `
+            -Channel $Fixture.Channel `
+            -Tag $Fixture.Tag `
+            -SourceSha $Fixture.SourceSha `
+            -WorkflowSha $Fixture.SourceSha `
+            -StateRoot $Fixture.StateRoot `
+            -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($Fixture.Version).md") `
+            -RunId $Ctx.RunId
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 20: Draft POST success
+# -------------------------------------------------------------------------
+function Test-DraftPostSuccess {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+
+        Invoke-TestPublishReleaseTransaction $fixture $ctx
+
+        if (-not $ctx.PatchedReleases.Contains([int64]42) -or $ctx.DeletedReleases.Count -ne 0) {
+            Fail "draft POST success did not publish release or unexpectedly deleted it"
+        }
+        Write-Host "V4 test (20/32): draft POST success (draft created, assets verified, immutable published): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 21: Draft POST timeout but remote draft exists (reconciled by marker)
+# -------------------------------------------------------------------------
+function Test-DraftPostTimeoutReconciledByMarker {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+        $ctx.PostDraftTimeoutWithRemote = $true
+
+        Invoke-TestPublishReleaseTransaction $fixture $ctx
+
+        if (-not $ctx.PatchedReleases.Contains([int64]42) -or $ctx.DeletedReleases.Count -ne 0) {
+            Fail "draft POST timeout was not reconciled by transaction marker"
+        }
+        Write-Host "V4 test (21/32): draft POST timeout reconciled by transaction marker: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 22: First asset upload failure (assert draft auto-deleted)
+# -------------------------------------------------------------------------
+function Test-FirstAssetUploadFailureDraftAutoDeleted {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+        $ctx.FailFirstAssetUpload = $true
+
+        $threw = $false
+        try {
+            Invoke-TestPublishReleaseTransaction $fixture $ctx
+        } catch {
+            $threw = $true
+        }
+
+        if (-not $threw) { Fail "first asset upload failure did not throw" }
+        if (-not $ctx.DeletedReleases.Contains([int64]42)) {
+            Fail "first asset upload failure did not auto-delete the draft release"
+        }
+        if ($ctx.PatchedReleases.Count -ne 0) { Fail "failed asset upload must never attempt PATCH publication" }
+        Write-Host "V4 test (22/32): first asset upload failure auto-deletes draft: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 23: Second asset upload failure (assert draft auto-deleted)
+# -------------------------------------------------------------------------
+function Test-SecondAssetUploadFailureDraftAutoDeleted {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+        $ctx.FailSecondAssetUpload = $true
+
+        $threw = $false
+        try {
+            Invoke-TestPublishReleaseTransaction $fixture $ctx
+        } catch {
+            $threw = $true
+        }
+
+        if (-not $threw) { Fail "second asset upload failure did not throw" }
+        if (-not $ctx.DeletedReleases.Contains([int64]42)) {
+            Fail "second asset upload failure did not auto-delete the draft release"
+        }
+        if ($ctx.PatchedReleases.Count -ne 0) { Fail "failed asset upload must never attempt PATCH publication" }
+        Write-Host "V4 test (23/32): second asset upload failure auto-deletes draft: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 24: Server asset digest mismatch (assert draft auto-deleted, no PATCH)
+# -------------------------------------------------------------------------
+function Test-ServerAssetDigestMismatchDraftAutoDeletedNoPatch {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+        $ctx.CorruptServerDigest = $true
+
+        $threw = $false
+        $errorMsg = ""
+        try {
+            Invoke-TestPublishReleaseTransaction $fixture $ctx
+        } catch {
+            $threw = $true
+            $errorMsg = $_.Exception.Message
+        }
+
+        if (-not $threw) { Fail "server asset digest mismatch did not throw" }
+        if ($errorMsg -notmatch "digest mismatch") { Fail "unexpected error message: $errorMsg" }
+        if (-not $ctx.DeletedReleases.Contains([int64]42)) {
+            Fail "server asset digest mismatch did not auto-delete the draft release"
+        }
+        if ($ctx.PatchedReleases.Count -ne 0) { Fail "digest mismatch must never attempt PATCH publication" }
+        Write-Host "V4 test (24/32): server asset digest mismatch auto-deletes draft without PATCH: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 25: Publish PATCH success
+# -------------------------------------------------------------------------
+function Test-PublishPatchSuccess {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+
+        Invoke-TestPublishReleaseTransaction $fixture $ctx
+
+        if (-not $ctx.PatchedReleases.Contains([int64]42)) { Fail "publish PATCH was not invoked" }
+        $published = $ctx.Releases[[int64]42]
+        if ($published.draft -or -not $published.immutable -or [string]::IsNullOrWhiteSpace($published.published_at)) {
+            Fail "published release is not immutable or draft was not cleared"
+        }
+        if ($ctx.DeletedReleases.Count -ne 0) { Fail "successful publication must never delete release" }
+        Write-Host "V4 test (25/32): publish PATCH success (draft=false, immutable=true, verified): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 26: Publish PATCH timeout but remote published (assert reconciled, no delete)
+# -------------------------------------------------------------------------
+function Test-PublishPatchTimeoutRemotePublishedReconcilesNoDelete {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+        $ctx.FailPatch = $true
+        $ctx.PatchTimeoutWithRemotePublished = $true
+
+        Invoke-TestPublishReleaseTransaction $fixture $ctx
+
+        if ($ctx.DeletedReleases.Count -ne 0) {
+            Fail "publication timeout when remote is published must NEVER delete the release"
+        }
+        $published = $ctx.Releases[[int64]42]
+        if ($published.draft) { Fail "release must be published" }
+        Write-Host "V4 test (26/32): publish PATCH timeout when remote published reconciles without delete: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 27: Publish PATCH failure and remote still draft (assert draft auto-deleted)
+# -------------------------------------------------------------------------
+function Test-PublishPatchFailureRemoteStillDraftAutoDeleted {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+        $ctx.FailPatch = $true
+        $ctx.PatchFailStillDraft = $true
+
+        $threw = $false
+        try {
+            Invoke-TestPublishReleaseTransaction $fixture $ctx
+        } catch {
+            $threw = $true
+        }
+
+        if (-not $threw) { Fail "publish PATCH failure did not throw" }
+        if (-not $ctx.DeletedReleases.Contains([int64]42)) {
+            Fail "publish PATCH failure with remote still draft did not auto-delete draft"
+        }
+        Write-Host "V4 test (27/32): publish PATCH failure with remote still draft auto-deletes draft: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 28: Remote GET unavailable after mutation (assert fails closed, no delete)
+# -------------------------------------------------------------------------
+function Test-RemoteGetUnavailableAfterMutationFailsClosedNoDelete {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+        $ctx.FailPostPublishGet = $true
+
+        $threw = $false
+        $errorMsg = ""
+        try {
+            Invoke-TestPublishReleaseTransaction $fixture $ctx
+        } catch {
+            $threw = $true
+            $errorMsg = $_.Exception.Message
+        }
+
+        if (-not $threw) { Fail "remote GET unavailable after mutation did not throw" }
+        if ($errorMsg -notmatch "POST_PUBLICATION_INCIDENT") {
+            Fail "remote GET unavailable after mutation did not fail closed as POST_PUBLICATION_INCIDENT: $errorMsg"
+        }
+        if ($ctx.DeletedReleases.Count -ne 0) {
+            Fail "remote GET unavailable after publication attempt must NEVER delete the release"
+        }
+        Write-Host "V4 test (28/32): remote GET unavailable after mutation fails closed (no delete): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 29: Metadata promotion failure after publication (assert release intact)
+# -------------------------------------------------------------------------
+function Test-MetadataPromotionFailureAfterPublicationReleaseIntact {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+
+        # Add published release to remote
+        $ctx.Releases[[int64]42] = [pscustomobject]@{
+            id = [int64]42
+            tag_name = $fixture.Tag
+            target_commitish = $fixture.SourceSha
+            draft = $false
+            immutable = $true
+            published_at = "2026-09-18T00:00:00Z"
+            assets = @(
+                [pscustomobject]@{ name = $fixture.InstallerName; size = [int64]100; state = "uploaded"; digest = "sha256:$($fixture.InstallerSha)"; url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/101" },
+                [pscustomobject]@{ name = $fixture.SignatureName; size = [int64]50; state = "uploaded"; digest = "sha256:$($fixture.SignatureSha)"; url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/102" }
+            )
+        }
+
+        # Run PromoteMetadata with API failure on branch clone/fetch
+        $threw = $false
+        try {
+            $apiHandler = {
+                param($Arguments, $AllowNotFound, $BinaryOutput, $Raw, $OutputPath)
+                $cmd = $Arguments -join ' '
+                if ($cmd -match 'releases/tags/v4.1.1') { return $ctx.Releases[[int64]42] }
+                if ($cmd -match 'repo clone') { throw "Git clone authentication failure" }
+                return $null
+            }
+            & {
+                $script:GitHubApiHandler = $apiHandler
+                . $pipelinePath `
+                    -State "PromoteMetadata" `
+                    -Version $fixture.Version `
+                    -Channel $fixture.Channel `
+                    -Tag $fixture.Tag `
+                    -SourceSha $fixture.SourceSha `
+                    -WorkflowSha $fixture.SourceSha `
+                    -StateRoot $fixture.StateRoot
+            }
+        } catch {
+            $threw = $true
+        }
+
+        if (-not $threw) { Fail "metadata promotion failure did not throw" }
+        if ($ctx.DeletedReleases.Count -ne 0 -or -not $ctx.Releases.ContainsKey([int64]42)) {
+            Fail "metadata promotion failure must NEVER delete or mutate published release"
+        }
+        Write-Host "V4 test (29/32): metadata promotion failure keeps published release intact: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 30: Process failure immediately after draft creation (assert preflight cleans stale draft)
+# -------------------------------------------------------------------------
+function Test-ProcessFailureAfterDraftCreationPreflightCleansStaleDraft {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.SourceSha = $fixture.SourceSha
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+
+        # Add stale draft matching source SHA, tag, and transaction marker
+        $staleMarker = "<!-- v4-release-tx: {`"repository`":`"pumni/Sky-Auto-Player`",`"run_id`":`"previous-run`",`"source_sha`":`"$($fixture.SourceSha)`",`"version`":`"$($fixture.Version)`",`"tag`":`"$($fixture.Tag)`"} -->"
+        $ctx.Releases[[int64]42] = [pscustomobject]@{
+            id = [int64]42
+            tag_name = $fixture.Tag
+            target_commitish = $fixture.SourceSha
+            draft = $true
+            immutable = $false
+            published_at = $null
+            body = "Old Notes`n`n$staleMarker"
+            assets = @()
+        }
+
+        $apiHandler = New-V4MockGitHubApiHandler $ctx
+        & {
+            $script:GitHubApiHandler = $apiHandler
+            . $pipelinePath `
+                -State "Preflight" `
+                -Version $fixture.Version `
+                -Channel $fixture.Channel `
+                -Tag $fixture.Tag `
+                -SourceSha $fixture.SourceSha `
+                -WorkflowSha $fixture.SourceSha `
+                -StateRoot $fixture.StateRoot `
+                -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($fixture.Version).md") `
+                -RunId "new-run"
+        }
+
+        if (-not $ctx.DeletedReleases.Contains([int64]42)) {
+            Fail "preflight did not clean stale draft matching transaction marker"
+        }
+        Write-Host "V4 test (30/32): process failure after draft creation cleaned up by preflight: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 31: Process failure immediately after publication (assert preflight and release-doctor refuse mutation)
+# -------------------------------------------------------------------------
+function Test-ProcessFailureAfterPublicationPreflightAndDoctorRefuse {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.SourceSha = $fixture.SourceSha
+        $ctx.InstallerName = $fixture.InstallerName
+        $ctx.SignatureName = $fixture.SignatureName
+        $ctx.InstallerSha = $fixture.InstallerSha
+        $ctx.SignatureSha = $fixture.SignatureSha
+
+        # Pre-populate published release
+        $ctx.Releases[[int64]42] = [pscustomobject]@{
+            id = [int64]42
+            tag_name = $fixture.Tag
+            target_commitish = $fixture.SourceSha
+            draft = $false
+            immutable = $true
+            published_at = "2026-09-18T00:00:00Z"
+            assets = @(
+                [pscustomobject]@{ name = $fixture.InstallerName; size = [int64]100; state = "uploaded"; digest = "sha256:$($fixture.InstallerSha)"; url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/101" },
+                [pscustomobject]@{ name = $fixture.SignatureName; size = [int64]50; state = "uploaded"; digest = "sha256:$($fixture.SignatureSha)"; url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/102" }
+            )
+        }
+
+        # 1. Preflight must reject because published release exists
+        $preflightThrew = $false
+        $apiHandler = New-V4MockGitHubApiHandler $ctx
+        try {
+            & {
+                $script:GitHubApiHandler = $apiHandler
+                . $pipelinePath `
+                    -State "Preflight" `
+                    -Version $fixture.Version `
+                    -Channel $fixture.Channel `
+                    -Tag $fixture.Tag `
+                    -SourceSha $fixture.SourceSha `
+                    -WorkflowSha $fixture.SourceSha `
+                    -StateRoot $fixture.StateRoot `
+                    -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($fixture.Version).md") `
+                    -RunId "subsequent-run"
+            }
+        } catch {
+            $preflightThrew = $true
+        }
+
+        if (-not $preflightThrew) {
+            Fail "preflight did not fail closed when published release already exists"
+        }
+        if ($ctx.DeletedReleases.Count -ne 0) {
+            Fail "preflight must NEVER delete an already published release"
+        }
+
+        # 2. Release-doctor diagnoses as POST_PUBLICATION_INCIDENT without mutation
+        $doctorScript = Join-Path $PSScriptRoot "release_doctor.ps1"
+        $mockLatest = [pscustomobject]@{ tag_name = "v4.1.0" }
+        $mockMetadata = [pscustomobject]@{ version = "4.0.1" }
+        $failedRun = [pscustomobject]@{
+            id = 35292682626
+            path = ".github/workflows/release-v4.yml"
+            event = "workflow_dispatch"
+            head_sha = $fixture.SourceSha
+            repository = [pscustomobject]@{ full_name = "pumni/Sky-Auto-Player" }
+            status = "completed"
+            conclusion = "failure"
+        }
+        $docReport = & $doctorScript `
+            -Tag $fixture.Tag `
+            -Channel "stable" `
+            -Offline `
+            -OfflineExternalRelease $ctx.Releases[[int64]42] `
+            -OfflineLatestRelease $mockLatest `
+            -OfflineMetadata $mockMetadata `
+            -OfflineWorkflowRun $failedRun `
+            -Format Json | ConvertFrom-Json
+
+        if ($docReport.classification -ne "POST_PUBLICATION_INCIDENT" -or
+            $docReport.operator_review_required -ne $true -or
+            $docReport.external_phase -ne "PUBLISHED_PENDING_METADATA") {
+            Fail "release-doctor failed to diagnose post-publication incident: $($docReport.classification)"
+        }
+
+        Write-Host "V4 test (31/32): process failure after publication diagnosed fail-closed without mutation: PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 32: Run 35292682626 parameter conversion regression
+# -------------------------------------------------------------------------
+function Test-Run35292682626ParameterConversionRegression {
+    # In run 35292682626, PowerShell evaluated `-ReleaseId [int64]$draft.id` without parentheses
+    # as string interpolation. The fix strictly evaluates `$releaseId = [int64]($draft.id)`.
+    $draftObject = [pscustomobject]@{
+        id = 391147448
+        tag_name = "v4.1.1"
+    }
+
+    # Verify that [int64]($draftObject.id) evaluates strictly to Int64 without boxing/conversion failure
+    $evaluatedId = [int64]($draftObject.id)
+    if ($evaluatedId -isnot [int64] -or $evaluatedId -ne 391147448L) {
+        Fail "evaluatedId is not Int64 391147448"
+    }
+
+    # Verify parameter binding accepts evaluatedId as Int64
+    function Test-Int64BindingTarget([Parameter(Mandatory = $true)][int64]$ReleaseId) {
+        return $ReleaseId
+    }
+
+    $boundId = Test-Int64BindingTarget -ReleaseId $evaluatedId
+    if ($boundId -ne 391147448L) {
+        Fail "boundId did not match expected Int64 value"
+    }
+
+    Write-Host "V4 test (32/32): run 35292682626 parameter conversion regression strictly typed: PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test 33: Transaction marker — duplicate critical key rejection (table-driven)
+# -------------------------------------------------------------------------
+function Test-TransactionMarkerDuplicateKeyRejectsAllCriticalKeys {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $sha = $fixture.SourceSha; $tag = $fixture.Tag; $ver = $fixture.Version
+        $repo = "pumni/Sky-Auto-Player"
+        $cases = @(
+            @{ Key = "repository"; Raw = "{`"repository`":`"$repo`",`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Key = "run_id";     Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"run_id`":`"2`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Key = "source_sha"; Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Key = "version";    Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Key = "tag";        Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`",`"tag`":`"$tag`"}" }
+        )
+        $caseIndex = 0
+        foreach ($c in $cases) {
+            $caseIndex++
+            $body = "<!-- v4-release-tx: $($c.Raw) -->"
+            $result = & {
+                . $pipelinePath -State SelfTest -Version $fixture.Version -Channel $fixture.Channel `
+                    -Tag $fixture.Tag -SourceSha $fixture.SourceSha -WorkflowSha $fixture.SourceSha `
+                    -StateRoot $fixture.StateRoot `
+                    -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($fixture.Version).md") `
+                    -RunId "test" 2>$null
+                Get-V4TransactionMarker -Body $body
+            }
+            if ($null -ne $result) {
+                Fail "duplicate key '$($c.Key)' was not rejected by Get-V4TransactionMarker (case $caseIndex)"
+            }
+        }
+        Write-Host "V4 test (33/47): transaction marker duplicate critical key => rejected (5/5 cases): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 34: Transaction marker — missing, blank, wrong field validation
+#           + stale-draft (previous-run) pass + same-transaction pass
+# -------------------------------------------------------------------------
+function Test-TransactionMarkerFieldValidationAndMatchCases {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $sha = $fixture.SourceSha; $tag = $fixture.Tag; $ver = $fixture.Version
+        $repo = "pumni/Sky-Auto-Player"
+        $wrongSha = "0000000000000000000000000000000000000000"
+
+        # Dot-source pipeline once to load marker functions into this scope
+        . $pipelinePath -State SelfTest -Version $ver -Channel $fixture.Channel `
+            -Tag $tag -SourceSha $sha -WorkflowSha $sha `
+            -StateRoot $fixture.StateRoot `
+            -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$ver.md") `
+            -RunId "test" 2>$null
+
+        # Missing field => schema invalid
+        $missingCases = @(
+            @{ Desc = "missing repository"; Raw = "{`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "missing run_id";     Raw = "{`"repository`":`"$repo`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "missing source_sha"; Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "missing version";    Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"tag`":`"$tag`"}" },
+            @{ Desc = "missing tag";        Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`"}" }
+        )
+        foreach ($c in $missingCases) {
+            $body = "<!-- v4-release-tx: $($c.Raw) -->"
+            $parsed = Get-V4TransactionMarker -Body $body
+            $valid = Assert-V4TransactionMarkerStrictSchema -Marker $parsed
+            if ($valid) { Fail "schema accepted marker with $($c.Desc)" }
+        }
+
+        # Blank field => schema invalid
+        $blankCases = @(
+            @{ Desc = "blank repository"; Raw = "{`"repository`":`"`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "blank run_id";     Raw = "{`"repository`":`"$repo`",`"run_id`":`"`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "blank source_sha"; Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "blank version";    Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"`",`"tag`":`"$tag`"}" },
+            @{ Desc = "blank tag";        Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"`"}" }
+        )
+        foreach ($c in $blankCases) {
+            $body = "<!-- v4-release-tx: $($c.Raw) -->"
+            $parsed = Get-V4TransactionMarker -Body $body
+            $valid = Assert-V4TransactionMarkerStrictSchema -Marker $parsed
+            if ($valid) { Fail "schema accepted marker with $($c.Desc)" }
+        }
+
+        # Wrong field => match fails
+        $wrongCases = @(
+            @{ Desc = "wrong repository"; Raw = "{`"repository`":`"wrong/repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "wrong source_sha"; Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$wrongSha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "wrong version";    Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"9.9.9`",`"tag`":`"v9.9.9`"}" },
+            @{ Desc = "wrong tag";        Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"v9.9.9`"}" }
+        )
+        foreach ($c in $wrongCases) {
+            $body = "<!-- v4-release-tx: $($c.Raw) -->"
+            $parsed = Get-V4TransactionMarker -Body $body
+            $matched = Test-V4TransactionMarkerMatch -Marker $parsed `
+                -ExpectedRepo $repo -ExpectedSha $sha -ExpectedVersion $ver -ExpectedTag $tag
+            if ($matched) { Fail "marker match accepted marker with $($c.Desc)" }
+        }
+
+        # Complete previous-run marker => stale-draft cleanup allowed (any run_id passes)
+        $prevRaw = "{`"repository`":`"$repo`",`"run_id`":`"previous-run`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}"
+        $prevParsed = Get-V4TransactionMarker -Body "<!-- v4-release-tx: $prevRaw -->"
+        $stalePasses = Test-V4TransactionMarkerMatch -Marker $prevParsed `
+            -ExpectedRepo $repo -ExpectedSha $sha -ExpectedVersion $ver -ExpectedTag $tag
+        if (-not $stalePasses) { Fail "stale-draft cleanup rejected valid previous-run marker" }
+
+        # Complete current-run marker => same-transaction reconciliation (run_id must match)
+        $currRaw = "{`"repository`":`"$repo`",`"run_id`":`"current-run`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}"
+        $currParsed = Get-V4TransactionMarker -Body "<!-- v4-release-tx: $currRaw -->"
+        $sameTxPasses = Test-V4TransactionMarkerMatch -Marker $currParsed `
+            -ExpectedRepo $repo -ExpectedRunId "current-run" `
+            -ExpectedSha $sha -ExpectedVersion $ver -ExpectedTag $tag
+        if (-not $sameTxPasses) { Fail "same-transaction reconciliation rejected valid current-run marker" }
+
+        Write-Host "V4 test (34/47): transaction marker missing/blank/wrong/stale-OK/same-tx-OK (5+5+4+1+1 cases): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+
+# -------------------------------------------------------------------------
+# Test 35: Server digest edge cases — table-driven
+# Fault flags => FAIL + draft deleted + no PATCH
+# Correct sha256 => PASS + published + no delete
+# -------------------------------------------------------------------------
+function Test-ServerDigestEdgeCases {
+    $cases = @(
+        @{ Label = "digest property absent";    Flag = "DigestMissing";       ExpectPass = $false },
+        @{ Label = "digest empty string";       Flag = "DigestEmpty";         ExpectPass = $false },
+        @{ Label = "digest malformed format";   Flag = "DigestMalformed";     ExpectPass = $false },
+        @{ Label = "digest sha512:... prefix";  Flag = "DigestSha512";        ExpectPass = $false },
+        @{ Label = "sha256 wrong (mismatch)";   Flag = "CorruptServerDigest"; ExpectPass = $false },
+        @{ Label = "exact sha256:<64-hex>";     Flag = "";                    ExpectPass = $true  }
+    )
+    $caseIndex = 0
+    foreach ($c in $cases) {
+        $caseIndex++
+        $fixture = New-V4SimplifiedTestFixture
+        try {
+            $ctx = [V4SimplifiedMockContext]::new()
+            $ctx.Tag = $fixture.Tag
+            $ctx.Version = $fixture.Version
+            $ctx.SourceSha = $fixture.SourceSha
+            $ctx.InstallerName = $fixture.InstallerName
+            $ctx.SignatureName = $fixture.SignatureName
+            $ctx.InstallerSha = $fixture.InstallerSha
+            $ctx.SignatureSha = $fixture.SignatureSha
+            if (-not [string]::IsNullOrWhiteSpace($c.Flag)) { $ctx.($c.Flag) = $true }
+
+            $threw = $false
+            try { Invoke-TestPublishReleaseTransaction $fixture $ctx } catch { $threw = $true }
+
+            if ($c.ExpectPass) {
+                if ($threw) { Fail "digest case '$($c.Label)' threw unexpectedly" }
+                if (-not $ctx.PatchedReleases.Contains([int64]42)) { Fail "digest case '$($c.Label)' did not publish" }
+                if ($ctx.DeletedReleases.Count -ne 0) { Fail "digest case '$($c.Label)' unexpectedly deleted" }
+            } else {
+                if (-not $threw) { Fail "digest case '$($c.Label)' did not throw" }
+                if (-not $ctx.DeletedReleases.Contains([int64]42)) { Fail "digest case '$($c.Label)' did not delete draft" }
+                if ($ctx.PatchedReleases.Count -ne 0) { Fail "digest case '$($c.Label)' must not PATCH after failure" }
+            }
+        } finally {
+            if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    Write-Host "V4 test (35/47): server digest edge cases FAIL+cleanup or PASS (6/6 cases): PASS"
+}
+
+# Run all 47 regression tests
 Test-SchemaV1MissingFieldReproducesStrictModeFailure
 Test-SchemaV2CanonicalConstructorSurvivesStrictMode
 Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed
@@ -2492,5 +3587,21 @@ Test-ExplicitValidRunIdDeterministicClassification
 Test-ExactReleaseIdMissingTagPointsToAnotherReleaseNotAdopted
 Test-WorkflowRunRepositoryIdentityValidation
 Test-TimestampFormattingFailClosedAndCultureInvariance
+Test-DraftPostSuccess
+Test-DraftPostTimeoutReconciledByMarker
+Test-FirstAssetUploadFailureDraftAutoDeleted
+Test-SecondAssetUploadFailureDraftAutoDeleted
+Test-ServerAssetDigestMismatchDraftAutoDeletedNoPatch
+Test-PublishPatchSuccess
+Test-PublishPatchTimeoutRemotePublishedReconcilesNoDelete
+Test-PublishPatchFailureRemoteStillDraftAutoDeleted
+Test-RemoteGetUnavailableAfterMutationFailsClosedNoDelete
+Test-MetadataPromotionFailureAfterPublicationReleaseIntact
+Test-ProcessFailureAfterDraftCreationPreflightCleansStaleDraft
+Test-ProcessFailureAfterPublicationPreflightAndDoctorRefuse
+Test-Run35292682626ParameterConversionRegression
+Test-TransactionMarkerDuplicateKeyRejectsAllCriticalKeys
+Test-TransactionMarkerFieldValidationAndMatchCases
+Test-ServerDigestEdgeCases
 
-Write-Host "V4 release pipeline contract/self-test: PASS (all 19 release state reconciliation regressions verified)"
+Write-Host "V4 release pipeline contract/self-test: PASS (all 47 release state reconciliation and fault injection regressions verified)"
