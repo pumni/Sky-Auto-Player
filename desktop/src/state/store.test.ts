@@ -2814,21 +2814,137 @@ describe('desktop update UX and throttle policy', () => {
     expect(update.availableVersion).toBeNull();
   });
 
-  it('manual check presents Error terminal result with formatted message in dialog', async () => {
+  it('native updater error resolves Error DTO, surfaces error, and updates native error timestamp', async () => {
     const bridge = createMockBridge({
-      updateCheckError: 'Failed to fetch: network connection closed',
+      updateCheckResult: {
+        state: 'error',
+        current_version: '4.1.0',
+        available_version: null,
+        channel: 'stable',
+        release_notes: null,
+        published_at: null,
+        error: 'network_timeout: failed to fetch release metadata',
+      },
     });
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
 
+    // Background check on initialize recorded native error timestamp
+    expect(store.getState().settings?.update_preferences.last_error_ts).toBeGreaterThan(0);
+    expect(store.getState().settings?.update_preferences.last_check_ts).toBe(0);
+
+    // Reset store state to test that manual check also refreshes native error timestamp
+    act(() => {
+      store.setState({
+        settings: {
+          ...store.getState().settings!,
+          update_preferences: {
+            ...store.getState().settings!.update_preferences,
+            last_error_ts: 0,
+            last_check_ts: 0,
+          },
+        },
+      });
+    });
+    expect(store.getState().settings?.update_preferences.last_error_ts).toBe(0);
+
     await act(async () => store.getState().checkForUpdate('manual'));
 
     const update = store.getState().update;
-    expect(update.dialogOpen).toBe(true);
     expect(update.state).toBe('error');
+    expect(update.dialogOpen).toBe(true);
     expect(update.error).toBe(
       'Could not check for updates. Check your network connection and try again.',
     );
+
+    // Proves frontend timestamps match native persisted error semantics from getUpdatePreferences()
+    const prefs = store.getState().settings?.update_preferences;
+    expect(prefs?.last_error_ts).toBeGreaterThan(0);
+    expect(prefs?.last_check_ts).toBe(0);
+  });
+
+  it('thrown bridge/IPC failure presents Error state without inventing timestamps', async () => {
+    const bridge = createMockBridge({
+      updateCheckError: 'ipc_connection_failed: backend process terminated',
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const initialPrefs = { ...store.getState().settings?.update_preferences };
+
+    await act(async () => store.getState().checkForUpdate('manual'));
+
+    const update = store.getState().update;
+    expect(update.state).toBe('error');
+    expect(update.dialogOpen).toBe(true);
+
+    // Timestamps are not invented on IPC exception
+    const currentPrefs = store.getState().settings?.update_preferences;
+    expect(currentPrefs?.last_check_ts).toBe(initialPrefs.last_check_ts);
+  });
+
+  it('fresh install with recent error obeys 300s backoff and does not check in background', async () => {
+    const bridge = createMockBridge();
+    const checkSpy = vi.spyOn(bridge, 'checkForUpdate');
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const recentError = Math.floor(Date.now() / 1000) - 60; // 1 minute ago
+    act(() => {
+      store.setState({
+        settings: {
+          ...store.getState().settings!,
+          update_preferences: {
+            ...store.getState().settings!.update_preferences,
+            auto_check: true,
+            last_check_ts: 0,
+            last_error_ts: recentError,
+          },
+        },
+      });
+    });
+
+    checkSpy.mockClear();
+    await act(async () => store.getState().checkForUpdate('background'));
+
+    expect(checkSpy).not.toHaveBeenCalled();
+  });
+
+  it('fresh install with error older than 300s retries background check', async () => {
+    const bridge = createMockBridge({
+      updateCheckResult: {
+        state: 'current',
+        current_version: '4.1.0',
+        available_version: null,
+        channel: 'stable',
+        release_notes: null,
+        published_at: null,
+        error: null,
+      },
+    });
+    const checkSpy = vi.spyOn(bridge, 'checkForUpdate');
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const oldError = Math.floor(Date.now() / 1000) - 350; // > 300s ago
+    act(() => {
+      store.setState({
+        settings: {
+          ...store.getState().settings!,
+          update_preferences: {
+            ...store.getState().settings!.update_preferences,
+            auto_check: true,
+            last_check_ts: 0,
+            last_error_ts: oldError,
+          },
+        },
+      });
+    });
+
+    checkSpy.mockClear();
+    await act(async () => store.getState().checkForUpdate('background'));
+
+    expect(checkSpy).toHaveBeenCalledOnce();
   });
 
   it('background check throttles within interval and does not call bridge', async () => {

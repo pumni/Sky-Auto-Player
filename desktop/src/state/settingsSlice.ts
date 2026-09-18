@@ -107,18 +107,19 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
             dialogOpen: isManual ? true : get().update.dialogOpen,
           },
         });
-        const currentSettings = get().settings;
-        if (currentSettings) {
-          set({
-            settings: {
-              ...currentSettings,
-              update_preferences: {
-                ...currentSettings.update_preferences,
-                last_check_ts: Math.floor(Date.now() / 1000),
-                last_error_ts: 0,
+        try {
+          const preferences = await bridge.getUpdatePreferences();
+          const currentSettings = get().settings;
+          if (currentSettings) {
+            set({
+              settings: {
+                ...currentSettings,
+                update_preferences: preferences,
               },
-            },
-          });
+            });
+          }
+        } catch {
+          // Native query failure; keep existing preferences
         }
       } catch (error) {
         set({
@@ -129,18 +130,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
             dialogOpen: isManual ? true : get().update.dialogOpen,
           },
         });
-        const currentSettings = get().settings;
-        if (currentSettings) {
-          set({
-            settings: {
-              ...currentSettings,
-              update_preferences: {
-                ...currentSettings.update_preferences,
-                last_error_ts: Math.floor(Date.now() / 1000),
-              },
-            },
-          });
-        }
+        // Thrown bridge/IPC failure; do not invent timestamps
       }
     },
 

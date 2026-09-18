@@ -640,14 +640,25 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         published_at: '2026-08-30T00:00:00Z',
         error: null,
       };
-      settings = {
-        ...settings,
-        update_preferences: {
-          ...settings.update_preferences,
-          last_check_ts: Math.floor(Date.now() / 1000),
-          last_error_ts: 0,
-        },
-      };
+      const timestamp = Math.floor(Date.now() / 1000);
+      if (result.state === 'error') {
+        settings = {
+          ...settings,
+          update_preferences: {
+            ...settings.update_preferences,
+            last_error_ts: timestamp,
+          },
+        };
+      } else {
+        settings = {
+          ...settings,
+          update_preferences: {
+            ...settings.update_preferences,
+            last_check_ts: timestamp,
+            last_error_ts: 0,
+          },
+        };
+      }
       if (result.state === 'available' && result.available_version) {
         emit({
           v: 1,

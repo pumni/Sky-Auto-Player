@@ -19,17 +19,15 @@ export function shouldAutoCheck(
   const lastCheckTs = preferences.last_check_ts ?? 0;
   const lastErrorTs = preferences.last_error_ts ?? 0;
 
-  const successElapsed = Math.max(0, nowSec - lastCheckTs);
-  if (nowSec < lastCheckTs || successElapsed >= checkIntervalS) {
+  if (lastErrorTs > lastCheckTs) {
+    const errorElapsed = Math.max(0, nowSec - lastErrorTs);
+    return nowSec < lastErrorTs || errorElapsed >= RETRY_INTERVAL_S;
+  }
+  if (lastCheckTs === 0) {
     return true;
   }
-  if (lastErrorTs !== 0) {
-    const errorElapsed = Math.max(0, nowSec - lastErrorTs);
-    if (nowSec < lastErrorTs || errorElapsed >= RETRY_INTERVAL_S) {
-      return true;
-    }
-  }
-  return false;
+  const successElapsed = Math.max(0, nowSec - lastCheckTs);
+  return nowSec < lastCheckTs || successElapsed >= checkIntervalS;
 }
 
 export function formatUpdateError(error: unknown): string {

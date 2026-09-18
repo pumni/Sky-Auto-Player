@@ -60,7 +60,39 @@ describe('updateHelpers shouldAutoCheck', () => {
     ).toBe(true);
   });
 
-  it('throttles check if within 300s backoff after an error', () => {
+  it('throttles fresh-install check if within 300s backoff after a first failure', () => {
+    const lastError = 1_700_000_000;
+    const nowSec = lastError + 120; // 2 minutes later
+    expect(
+      shouldAutoCheck(
+        {
+          auto_check: true,
+          last_check_ts: 0,
+          last_error_ts: lastError,
+          check_interval_s: 86400,
+        },
+        nowSec,
+      ),
+    ).toBe(false);
+  });
+
+  it('allows fresh-install retry after 300s backoff elapses following a first failure', () => {
+    const lastError = 1_700_000_000;
+    const nowSec = lastError + 300; // 5 minutes later
+    expect(
+      shouldAutoCheck(
+        {
+          auto_check: true,
+          last_check_ts: 0,
+          last_error_ts: lastError,
+          check_interval_s: 86400,
+        },
+        nowSec,
+      ),
+    ).toBe(true);
+  });
+
+  it('throttles check if within 300s backoff after a newer error following a success', () => {
     const lastCheck = 1_700_000_000;
     const lastError = 1_700_050_000;
     const nowSec = lastError + 120; // 2 minutes later
@@ -77,7 +109,7 @@ describe('updateHelpers shouldAutoCheck', () => {
     ).toBe(false);
   });
 
-  it('retries after 300s backoff elapses following an error', () => {
+  it('retries after 300s backoff elapses following a newer error', () => {
     const lastCheck = 1_700_000_000;
     const lastError = 1_700_050_000;
     const nowSec = lastError + 300; // 5 minutes later
