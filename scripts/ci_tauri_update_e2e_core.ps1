@@ -21,6 +21,8 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $desktopRoot = Join-Path $repoRoot 'desktop'
+. (Join-Path $PSScriptRoot 'v4_nsis_smoke_boundary.ps1')
+$smokeScope = $null
 $runnerTemp = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
   [IO.Path]::GetTempPath()
 } else {
@@ -673,7 +675,8 @@ try {
   Write-Host "Fixture HTTP manifest contract: PASS (status=200; content-type=application/json; content-length=$($manifestHttp.content_length); body-sha256=$($manifestHttp.body_sha256))"
   Write-Host "Fixture HTTP candidate contract: PASS (status=200; content-type=application/octet-stream; content-length=$($candidateContract.http.content_length); body-sha256=$($candidateContract.http.body_sha256))"
 
-  $installerRun = Start-Process -FilePath $previousInstallerCopy -ArgumentList @('/S', "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
+  $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -ManageInstallRootCleanup:$false
+  $installerRun = Start-Process -FilePath $previousInstallerCopy -ArgumentList @('/S', '/NS', "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
   if ($installerRun.ExitCode -ne 0) { throw "Bridge-v4 installer exited with $($installerRun.ExitCode)" }
   $locationKey = 'HKCU:\Software\pumni\Sky Auto Player'
   New-Item -Path $locationKey -Force -Value $installRoot | Out-Null
@@ -865,7 +868,10 @@ try {
   if ($null -ne $catalogSourceRestoreError) {
     throw "Updater fixture source-tree restoration failed: $catalogSourceRestoreError"
   }
+  if ($null -ne $smokeScope) {
+    Exit-V4NsisSmokeScope -Scope $smokeScope
+  }
   if (-not $KeepFixtureOnFailure -and (Test-Path -LiteralPath $fixtureRoot)) {
-    Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-V4DirectoryWithRetry -Path $fixtureRoot
   }
 }

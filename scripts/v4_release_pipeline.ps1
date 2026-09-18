@@ -51,6 +51,7 @@ $sbomName = "SBOM.spdx.json"
 . (Join-Path $PSScriptRoot "v4_release_asset_upload.ps1")
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
 . (Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1")
+. (Join-Path $PSScriptRoot "v4_nsis_smoke_boundary.ps1")
 
 if (-not (Test-Path Variable:script:GitHubApiHandler)) {
     $script:GitHubApiHandler = $null
@@ -949,9 +950,10 @@ function Invoke-BuildCandidate {
     $installRoot = Join-Path $root ("install-" + [guid]::NewGuid().ToString("N"))
     $app = Join-Path $installRoot "sky_desktop_shell.exe"
     $uninstaller = Join-Path $installRoot "uninstall.exe"
+    $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -ManageInstallRootCleanup:$false
     try {
         New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-        $install = Start-Process -FilePath (Join-Path $bundle $releaseInstaller) -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
+        $install = Start-Process -FilePath (Join-Path $bundle $releaseInstaller) -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
         if ($install.ExitCode -ne 0) { Fail "candidate current-user installer failed" }
         $installedBuiltinRoot = Join-Path $installRoot "builtin-songs"
         Invoke-Checked "cargo" @(
@@ -994,7 +996,7 @@ function Invoke-BuildCandidate {
         } finally {
             if ($null -eq $previousAppDataRoot) { Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $previousAppDataRoot, "Process") }
             if ($null -eq $previousFreshSelfTest) { Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", $previousFreshSelfTest, "Process") }
-            if (Test-Path -LiteralPath $freshAppData) { Remove-Item -LiteralPath $freshAppData -Recurse -Force -ErrorAction SilentlyContinue }
+            if (Test-Path -LiteralPath $freshAppData) { Remove-V4DirectoryWithRetry -Path $freshAppData }
         }
 
         # active-playback-install-rejected
@@ -1014,7 +1016,8 @@ function Invoke-BuildCandidate {
         $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
         if ($uninstall.ExitCode -ne 0) { Fail "candidate uninstall failed" }
     } finally {
-        if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue }
+        Exit-V4NsisSmokeScope -Scope $smokeScope
+        if (Test-Path -LiteralPath $installRoot) { Remove-V4DirectoryWithRetry -Path $installRoot }
     }
 
     $candidateManifest = [ordered]@{

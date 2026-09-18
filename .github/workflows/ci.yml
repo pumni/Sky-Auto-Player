@@ -1139,12 +1139,15 @@ jobs:
           $summary = Get-Content rust/target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
           $installer = Join-Path $env:SKY_TAURI_BUNDLE $summary.installer
           $installRoot = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-smoke-" + [guid]::NewGuid().ToString("N"))
+          $freshAppData = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-fresh-appdata-" + [guid]::NewGuid().ToString("N"))
           $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
           $uninstaller = Join-Path $installRoot "uninstall.exe"
+          . scripts/v4_nsis_smoke_boundary.ps1
+          $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -AppDataRoot $freshAppData
           $appProcess = $null
-          $installerRun = Start-Process -FilePath $installer -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
-          if ($installerRun.ExitCode -ne 0) { throw "Tauri NSIS installer exited with $($installerRun.ExitCode)" }
           try {
+            $installerRun = Start-Process -FilePath $installer -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
+            if ($installerRun.ExitCode -ne 0) { throw "Tauri NSIS installer exited with $($installerRun.ExitCode)" }
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed Tauri executable is missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Tauri uninstaller is missing: $uninstaller" }
             cargo xtask builtin-catalog verify-installed --root (Join-Path $installRoot "builtin-songs")
@@ -1157,8 +1160,6 @@ jobs:
               -Artifact $installedPe.FullName `
               -Evidence rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
             if ($LASTEXITCODE -ne 0) { throw "Installed Authenticode verification failed with exit code $LASTEXITCODE" }
-            $freshAppData = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-fresh-appdata-" + [guid]::NewGuid().ToString("N"))
-            $env:SKY_APP_DATA_ROOT = $freshAppData
             $env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST = "1"
             try {
               $catalogSelftest = Start-Process -FilePath $appPath -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
@@ -1167,21 +1168,23 @@ jobs:
               if ($userSongs.Count -ne 0) { throw "Built-in catalog self-test populated the user songs directory" }
               "Packaged built-in catalog fresh-install self-test: PASS (user songs remain empty; user composition exercised)" | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
             } finally {
-              Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
               Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST -ErrorAction SilentlyContinue
-              if (Test-Path -LiteralPath $freshAppData) { Remove-Item -LiteralPath $freshAppData -Recurse -Force -ErrorAction SilentlyContinue }
             }
             $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
+            $smokeScope.TrackedProcesses.Add($appProcess) | Out-Null
             Start-Sleep -Seconds 5
             if ($appProcess.HasExited) { throw "Packaged Tauri application exited during launch smoke (exit $($appProcess.ExitCode))" }
             Stop-Process -Id $appProcess.Id -Force
+            $smokeScope.TrackedProcesses.Remove($appProcess) | Out-Null
             $appProcess = $null
             $uninstallerRun = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
             if ($uninstallerRun.ExitCode -ne 0) { throw "Tauri uninstaller exited with $($uninstallerRun.ExitCode)" }
             "Tauri NSIS install/launch/uninstall: PASS (installer=$($installerRun.ExitCode), uninstaller=$($uninstallerRun.ExitCode))" | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
           } finally {
             if ($null -ne $appProcess -and -not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue }
-            if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
+            Exit-V4NsisSmokeScope -Scope $smokeScope
+            if (Test-Path -LiteralPath $freshAppData) { Remove-V4DirectoryWithRetry -Path $freshAppData }
+            if (Test-Path -LiteralPath $installRoot) { Remove-V4DirectoryWithRetry -Path $installRoot }
           }
 
       - name: Emit exact Tauri qualification evidence

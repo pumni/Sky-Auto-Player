@@ -261,3 +261,27 @@ The read-only `release-doctor` queries external truth, local state, and workflow
 cargo xtask release-doctor --tag <tag> [--run-id <id>] [--workflow-sha <sha>] [--format <text|json>]
 pwsh scripts/release_doctor.ps1 -Tag <tag> [-RunId <id>] [-WorkflowSha <sha>] [-Format <Text|Json>]
 ```
+
+## Release and update domain authority ownership map
+
+To maintain single authoritative ownership and prevent duplicated domain rules across languages,
+the v4 architecture defines exact ownership boundaries:
+
+```text
+GitHub Actions = transaction orchestration
+cargo xtask    = deterministic release/update domain validation
+PowerShell     = Windows adapters and bounded glue
+Tauri Rust     = runtime updater authority
+React          = presentation
+```
+
+### Responsibility breakdown
+
+| Layer | Component / Tooling | Canonical Ownership | Non-Goals / Excluded Roles |
+|---|---|---|---|
+| **GitHub Actions** | `.github/workflows/release-v4.yml`, `ci.yml` | Workflow lifecycle & environment gates; job sequencing (`Preflight` &rarr; `BuildCandidate` &rarr; `Attest` &rarr; `PublishRelease` &rarr; `PromoteMetadata` &rarr; `FinalVerify`); OIDC attestation issuance. | Does not define SemVer rules, asset naming patterns, or metadata schemas. |
+| **`cargo xtask` (Rust)** | `rust/xtask/src/` (`release_metadata.rs`, `tauri_bundle.rs`, `sbom.rs`, `version.rs`, `updater_trust.rs`) | Single canonical source of truth for deterministic release domain rules: SemVer validation and channel classification (`Stable`/`Beta`); canonical asset naming and digest verification; metadata schema generation, validation, and monotonic roll-forward checking; updater trust material inventory; SPDX SBOM generation/verification; installed catalog validation. | Does not interact with Windows Credential Manager or native OS desktop sessions directly. |
+| **PowerShell** | `scripts/` (`v4_nsis_smoke_boundary.ps1`, `v4_updater_credential_broker.ps1`, `sign_v4_authenticode.ps1`, `promote_v4_metadata.ps1`) | Thin Windows and toolchain adapters: Windows Credential Manager integration; Authenticode signing tool invocation; NSIS installer/uninstaller execution and hermetic smoke boundary isolation (registry snapshot/restore, throwaway AppData routing, fail-closed directory cleanup); GitHub CLI (`gh`) and raw HTTP transport calls. | Must not independently re-implement SemVer, asset naming, or metadata schema validation rules that are owned by `cargo xtask`. |
+| **Tauri Rust** | `desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
+| **React / TypeScript** | `desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
+

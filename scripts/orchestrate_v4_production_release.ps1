@@ -22,6 +22,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot "v4_nsis_smoke_boundary.ps1")
 
 # 1. Validate mandatory parameters explicitly (fail closed without interactive stdin blocking)
 if ([string]::IsNullOrWhiteSpace($ExpectedSourceSha)) {
@@ -439,10 +440,9 @@ try {
         $installRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-smoke-" + [guid]::NewGuid().ToString("N"))
         $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
         $uninstaller = Join-Path $installRoot "uninstall.exe"
-        $appProcess = $null
+        $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
         try {
-            $instRun = Start-Process -FilePath $installerPath -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
-            if ($instRun.ExitCode -ne 0) { throw "Installer exited with code $($instRun.ExitCode)" }
+            Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot | Out-Null
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed executable missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Uninstaller missing: $uninstaller" }
 
@@ -459,18 +459,18 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "Installed PE Authenticode verification failed" }
 
             $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
+            $smokeScope.TrackedProcesses.Add($appProcess) | Out-Null
             Start-Sleep -Seconds 3
             if ($appProcess.HasExited) { throw "Application exited unexpectedly during smoke test" }
             Stop-Process -Id $appProcess.Id -Force
+            $smokeScope.TrackedProcesses.Remove($appProcess) | Out-Null
             $appProcess = $null
 
-            $uninstRun = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
-            if ($uninstRun.ExitCode -ne 0) { throw "Uninstaller exited with code $($uninstRun.ExitCode)" }
+            Invoke-V4NsisUninstaller -UninstallerPath $uninstaller | Out-Null
             $smokeRanAndPassed = $true
             Write-Host "  Install/Launch/Uninstall smoke: PASS"
         } finally {
-            if ($null -ne $appProcess -and -not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue }
-            if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue }
+            Exit-V4NsisSmokeScope -Scope $smokeScope
         }
     } else {
         Write-Host "  Install/Launch/Uninstall smoke: SKIPPED (internal test fixture only)"
