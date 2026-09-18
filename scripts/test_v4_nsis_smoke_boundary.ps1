@@ -176,14 +176,12 @@ $lockFile = Join-Path $testDir "locked.tmp"
 $stream = [IO.File]::Open($lockFile, [IO.FileMode]::Create, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 
 $cleanupFailed = $false
+$cleanupError = ""
 try {
     Remove-V4DirectoryWithRetry -Path $testDir -MaxAttempts 3 -DelayMilliseconds 50
 } catch {
-    if ($_.Exception.Message -match "residue remains") {
-        $cleanupFailed = $true
-    } else {
-        throw $_
-    }
+    $cleanupFailed = $true
+    $cleanupError = $_.Exception.Message
 } finally {
     $stream.Close()
     $stream.Dispose()
@@ -191,6 +189,10 @@ try {
 }
 
 Assert-True $cleanupFailed "Remove-V4DirectoryWithRetry fails closed when directory is locked"
+Assert-True ($cleanupError -match "path=") "Directory cleanup failure reports path"
+Assert-True ($cleanupError -match "last_error=") "Directory cleanup failure reports last_error"
+Assert-True ($cleanupError -match "residue=") "Directory cleanup failure reports residue"
+Assert-True ($cleanupError -like "*locked.tmp*") "Directory cleanup residue lists locked file"
 Write-Host "    PASS"
 
 # Test 7: Injected failure in one cleanup stage does not skip subsequent cleanup stages
@@ -307,6 +309,79 @@ try {
 Assert-True $residueCaught "Assert-V4NsisRegistryEquivalence must detect unexpected leftover properties"
 
 Remove-Item -LiteralPath $testCustomParent9 -Recurse -Force
+Write-Host "    PASS"
+
+# Test 10: Tracked processes terminated by Exit-V4NsisSmokeScope
+Write-Host "  Test 10: Tracked child processes terminated by Exit-V4NsisSmokeScope..."
+$psPath = (Get-Command powershell.exe).Source
+$childProc = Start-Process -FilePath $psPath -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 30" -WindowStyle Hidden -PassThru
+$scope10 = Enter-V4NsisSmokeScope
+$scope10.TrackedProcesses.Add($childProc)
+try {
+    Assert-True (-not $childProc.HasExited) "Tracked process is running before Exit-V4NsisSmokeScope"
+} finally {
+    Exit-V4NsisSmokeScope -Scope $scope10
+}
+Assert-True $childProc.HasExited "Tracked process must be terminated after Exit-V4NsisSmokeScope"
+Write-Host "    PASS"
+
+# Load updater fixture process helpers from ci_tauri_update_e2e_core.ps1
+$coreScriptPath = Join-Path $PSScriptRoot "ci_tauri_update_e2e_core.ps1"
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($coreScriptPath, [ref]$null, [ref]$null)
+$targetFunctions = @('Test-ProcessPathUnderRoots', 'Stop-UpdaterFixtureProcesses')
+$functions = $ast.FindAll({
+    $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    ($args[0].Name -in $targetFunctions)
+}, $true)
+foreach ($fn in $functions) {
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+
+# Test 11: Pure path matching helper (Test-ProcessPathUnderRoots)
+Write-Host "  Test 11: Pure path matching helper (Test-ProcessPathUnderRoots)..."
+$testRoot = "C:\test\fixture\root"
+$resolvedRoots = @($testRoot)
+
+# executable under root => owned
+Assert-True (Test-ProcessPathUnderRoots -Path "C:\test\fixture\root\app.exe" -ResolvedRoots $resolvedRoots) "Executable directly under root is owned"
+Assert-True (Test-ProcessPathUnderRoots -Path "C:\test\fixture\root\sub\app.exe" -ResolvedRoots $resolvedRoots) "Executable in subfolder of root is owned"
+
+# sibling prefix collision => not owned
+Assert-True (-not (Test-ProcessPathUnderRoots -Path "C:\test\fixture\root-sibling\app.exe" -ResolvedRoots $resolvedRoots)) "Sibling prefix collision is not owned"
+
+# executable outside root => not owned
+Assert-True (-not (Test-ProcessPathUnderRoots -Path "C:\Windows\System32\cmd.exe" -ResolvedRoots $resolvedRoots)) "Executable outside root is not owned"
+Assert-True (-not (Test-ProcessPathUnderRoots -Path "" -ResolvedRoots $resolvedRoots)) "Empty executable path is not owned"
+Write-Host "    PASS"
+
+# Test 12: Live fixture-root process sweep (Stop-UpdaterFixtureProcesses)
+Write-Host "  Test 12: Live fixture-root process sweep (Stop-UpdaterFixtureProcesses)..."
+$sweepTempRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-sweep-test-" + [guid]::NewGuid().ToString("N"))
+$insideRoot = Join-Path $sweepTempRoot "inside"
+$outsideRoot = Join-Path $sweepTempRoot "outside"
+New-Item -ItemType Directory -Path $insideRoot, $outsideRoot -Force | Out-Null
+
+$insideExe = Join-Path $insideRoot "inside_worker.exe"
+$outsideExe = Join-Path $outsideRoot "outside_worker.exe"
+Copy-Item -LiteralPath $psPath -Destination $insideExe
+Copy-Item -LiteralPath $psPath -Destination $outsideExe
+
+$insideProc = Start-Process -FilePath $insideExe -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 30" -WindowStyle Hidden -PassThru
+$outsideProc = Start-Process -FilePath $outsideExe -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 30" -WindowStyle Hidden -PassThru
+
+try {
+    Assert-True (-not $insideProc.HasExited) "Inside process is running"
+    Assert-True (-not $outsideProc.HasExited) "Outside process is running"
+
+    Stop-UpdaterFixtureProcesses -Roots @($insideRoot)
+
+    Assert-True $insideProc.HasExited "Inside process was stopped by sweep"
+    Assert-True (-not $outsideProc.HasExited) "Outside process was not targeted by sweep"
+} finally {
+    if (-not $insideProc.HasExited) { Stop-Process -Id $insideProc.Id -Force -ErrorAction SilentlyContinue }
+    if (-not $outsideProc.HasExited) { Stop-Process -Id $outsideProc.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $sweepTempRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 Write-Host "    PASS"
 
 Write-Host "All NSIS smoke boundary tests PASS."
