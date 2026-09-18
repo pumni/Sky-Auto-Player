@@ -27,7 +27,8 @@ import type {
   SettingsPatch,
   SongDetail,
   UpdateCheck,
-  UpdateHandoff,
+  UpdateCheckRequest,
+  UpdateInstallAck,
   UpdatePatch,
   UpdatePreferences,
   ViewportRequest,
@@ -46,7 +47,7 @@ export interface CommandRequestMap {
   set_song_liked: SetSongLikedRequest;
   get_settings: undefined;
   patch_settings: SettingsPatch;
-  check_for_update: undefined;
+  check_for_update: UpdateCheckRequest;
   get_update_preferences: undefined;
   patch_update_preferences: UpdatePatch;
   begin_update_handoff: { targetVersion: string };
@@ -84,7 +85,7 @@ export interface CommandResponseMap {
   check_for_update: UpdateCheck;
   get_update_preferences: UpdatePreferences;
   patch_update_preferences: UpdatePreferences;
-  begin_update_handoff: UpdateHandoff;
+  begin_update_handoff: UpdateInstallAck;
   prepare_playback: PreparedPlayback;
   start_playback: PlaybackSession;
   get_playback_status: PlaybackStatus;

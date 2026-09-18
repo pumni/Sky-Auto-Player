@@ -6,7 +6,6 @@ import { createLibrarySlice } from './librarySlice';
 import { createSettingsSlice } from './settingsSlice';
 import { createDiagnosticsSlice } from './diagnosticsSlice';
 import { createPlaybackSlice } from './playbackSlice';
-import { formatUpdateError } from './updateHelpers';
 import { MAX_DIAGNOSTIC_EVENTS, MAX_DIAGNOSTIC_SAMPLES } from './types';
 import type { CalibrationUiState, DesktopStore, DiagnosticsEventLine } from './types';
 import type { LibrarySlice } from './librarySlice';
@@ -141,16 +140,24 @@ export function createDesktopStore(bridge: DesktopBridge) {
         error: null,
       },
       update: {
-        state: 'idle',
         dialogOpen: false,
+        checkRequestPending: false,
+        installRequestPending: false,
+        transportError: null,
+        transportErrorAction: null,
+        lastNativeRevision: 0,
+
+        state: 'idle',
         currentVersion: null,
         availableVersion: null,
         channel: 'stable',
         releaseNotes: null,
         publishedAt: null,
-        error: null,
+        errorCode: null,
+        errorDetail: null,
+        retryAction: 'none',
         handoffId: null,
-        progress: { completed: 0, total: null, message: '' },
+        progress: null,
       },
       playback: {
         shuffleEnabled: false,
@@ -201,7 +208,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (bootstrap.catalog_state === 'ready' || get().library.generation > 0) {
             await librarySlice.reconcileCatalog();
           }
-          if (settings.update_preferences.auto_check) void get().checkForUpdate('background');
+          void get().checkForUpdate('background');
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           set({ bootstrapState: 'fatal', fatal: message });
@@ -232,11 +239,9 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
 
         diagnosticsEventSeq += 1;
-        const shouldRecordEvent = ![
-          'playback.snapshot',
-          'calibration.progress',
-          'update.progress',
-        ].includes(event.name);
+        const shouldRecordEvent = !['playback.snapshot', 'calibration.progress'].includes(
+          event.name,
+        );
         if (shouldRecordEvent) {
           const detail = boundedText(eventDetail(event));
           const diagnostics = get().diagnostics;
@@ -367,43 +372,36 @@ export function createDesktopStore(bridge: DesktopBridge) {
               set({ settings, settingsState: 'ready' });
             });
           }
-        } else if (event.name === 'update.available') {
+        } else if (event.name === 'update.changed') {
+          const current = get().update;
+          if (event.payload.revision <= current.lastNativeRevision) return;
           set({
             update: {
-              ...get().update,
-              state: 'available',
+              // frontend-local only
+              dialogOpen: current.dialogOpen,
+              checkRequestPending: current.checkRequestPending,
+              installRequestPending: current.installRequestPending,
+              transportError: null,
+              transportErrorAction: null,
+              lastNativeRevision: event.payload.revision,
+
+              state: event.payload.state,
               currentVersion: event.payload.current_version,
               availableVersion: event.payload.available_version,
               channel: event.payload.channel,
               releaseNotes: event.payload.release_notes,
               publishedAt: event.payload.published_at,
-              error: null,
-              dialogOpen: get().update.dialogOpen,
-            },
-          });
-        } else if (event.name === 'update.result') {
-          set({
-            update: {
-              ...get().update,
-              state: event.payload.state,
-              currentVersion: event.payload.current_version,
-              availableVersion: event.payload.available_version,
-              channel: event.payload.channel,
-              error: event.payload.error ? formatUpdateError(event.payload.error) : null,
-            },
-          });
-        } else if (event.name === 'update.progress') {
-          set({
-            update: {
-              ...get().update,
-              state: event.payload.state,
-              availableVersion: event.payload.available_version,
-              progress: {
-                completed: event.payload.completed,
-                total: event.payload.total,
-                message: event.payload.message,
-              },
-              error: null,
+              errorCode: event.payload.error_code,
+              errorDetail: event.payload.error_detail,
+              retryAction: event.payload.retry_action,
+              handoffId: event.payload.operation_id,
+              progress: event.payload.progress
+                ? {
+                    completed: event.payload.progress.completed,
+                    total: event.payload.progress.total,
+                    message: event.payload.progress.message,
+                  }
+                : null,
             },
           });
         }

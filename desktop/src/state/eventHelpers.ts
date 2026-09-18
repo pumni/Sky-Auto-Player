@@ -33,12 +33,8 @@ export function eventDetail(event: UiEvent): string {
       return `${event.payload.phase}: ${event.payload.completed}/${event.payload.total}`;
     case 'calibration.finished':
       return `${event.payload.outcome}: ${event.payload.status}`;
-    case 'update.available':
-      return `Update ${event.payload.available_version} is available`;
-    case 'update.result':
-      return `Update check: ${event.payload.state}`;
-    case 'update.progress':
-      return `${event.payload.message}: ${event.payload.completed} bytes`;
+    case 'update.changed':
+      return `Update ${event.payload.state}${event.payload.available_version ? ` (${event.payload.available_version})` : ''}`;
     case 'playback.state_changed':
       return `${event.payload.song_id} → ${event.payload.state}`;
     case 'playback.snapshot':

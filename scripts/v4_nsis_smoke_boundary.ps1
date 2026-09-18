@@ -269,11 +269,15 @@ function Remove-V4DirectoryWithRetry {
         return
     }
 
+    $lastError = $null
+
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
             Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            $lastError = $null
         } catch {
             # Bounded retry on lock contention
+            $lastError = $_.Exception.Message
         }
 
         if (-not (Test-Path -LiteralPath $Path)) {
@@ -283,7 +287,11 @@ function Remove-V4DirectoryWithRetry {
     }
 
     if (Test-Path -LiteralPath $Path) {
-        throw "Failed to clean up test directory after $MaxAttempts attempts: residue remains at '$Path'"
+        $residue = @(
+            Get-ChildItem -LiteralPath $Path -Force -Recurse -ErrorAction SilentlyContinue |
+                Select-Object -First 20 -ExpandProperty FullName
+        )
+        throw "Failed to clean up test directory after $MaxAttempts attempts: path='$Path'; last_error='$lastError'; residue='$($residue -join '; ')'"
     }
 }
 
@@ -303,7 +311,7 @@ function Stop-V4TrackedProcesses {
             try {
                 if (-not $proc.HasExited) {
                     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-                    $proc.WaitForExit(5000)
+                    [void]$proc.WaitForExit(5000)
                 }
             } catch {
                 # Process may have exited concurrently

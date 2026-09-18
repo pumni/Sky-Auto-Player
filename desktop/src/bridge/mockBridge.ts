@@ -22,9 +22,14 @@ import type {
   ViewportRequest,
   ViewportResult,
   UpdateCheck,
-  UpdateHandoff,
+  UpdateCheckDisposition,
+  UpdateCheckRequest,
+  UpdateErrorCode,
+  UpdateInstallAck,
   UpdatePatch,
   UpdatePreferences,
+  UpdateRetryAction,
+  UpdateSnapshotPayload,
 } from './DesktopBridge';
 
 const MOCK_NATIVE: Bootstrap['native_build'] = {
@@ -122,9 +127,33 @@ export interface MockBridgeOptions {
   emitSnapshots?: boolean;
   dropPlaybackStartConfirmation?: boolean;
   playbackDurationsMs?: number[];
-  updateCheckResult?: UpdateCheck;
-  updateCheckError?: string;
-  beginUpdateHandoffError?: string;
+  updateCheckResult?: {
+    state:
+      | 'idle'
+      | 'checking'
+      | 'current'
+      | 'available'
+      | 'downloading'
+      | 'ready'
+      | 'installing'
+      | 'error';
+    current_version?: string;
+    available_version?: string | null;
+    channel?: 'stable' | 'beta';
+    release_notes?: string | null;
+    published_at?: string | null;
+    error?: string | null;
+  };
+  updateCheckTransportError?: string;
+  updateSnapshot?: Partial<UpdateSnapshotPayload>;
+  updateCheckDisposition?: UpdateCheckDisposition;
+  beginUpdateProductError?: {
+    code: UpdateErrorCode;
+    detail: string;
+    retryAction: UpdateRetryAction;
+    preserveCandidate: boolean;
+  };
+  beginUpdateTransportError?: string;
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
@@ -178,6 +207,45 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
+  let updateRevision = options.updateSnapshot?.revision ?? 0;
+  let currentUpdateSnapshot: UpdateSnapshotPayload = {
+    revision: updateRevision,
+    state: 'idle',
+    current_version: '4.0.0-alpha.1-mock',
+    available_version: null,
+    channel: settings.update_preferences.channel,
+    release_notes: null,
+    published_at: null,
+    error_code: null,
+    error_detail: null,
+    retry_action: 'none',
+    operation_id: null,
+    progress: null,
+    ...(options.updateSnapshot ?? {}),
+  };
+  const emitUpdateSnapshot = (snapshot: Omit<UpdateSnapshotPayload, 'revision'>) => {
+    updateRevision += 1;
+    currentUpdateSnapshot = {
+      state: snapshot.state,
+      current_version: snapshot.current_version,
+      available_version: snapshot.available_version,
+      channel: snapshot.channel,
+      release_notes: snapshot.release_notes,
+      published_at: snapshot.published_at,
+      error_code: snapshot.error_code,
+      error_detail: snapshot.error_detail,
+      retry_action: snapshot.retry_action,
+      operation_id: snapshot.operation_id,
+      progress: snapshot.progress,
+      revision: updateRevision,
+    };
+    emit({
+      v: 1,
+      name: 'update.changed',
+      payload: currentUpdateSnapshot,
+    });
+  };
+  const emitUpdateChanged = emitUpdateSnapshot;
   const emitDiagnostics = () => {
     if (!diagnosticsEnabled) return;
     diagnosticsSeq += 1;
@@ -579,6 +647,11 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings;
     },
     async patchSettings(patch: SettingsPatch) {
+      if (patch.updatePreferences?.channel === 'beta') {
+        throw new Error('channel_unavailable: beta channel is not available in v4.0.0');
+      }
+      const beforeChannel = settings.update_preferences.channel;
+      const beforeSkipVersion = settings.update_preferences.skip_version;
       const playback = patch.playbackDefaults;
       settings = {
         ...settings,
@@ -618,77 +691,157 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
               },
             }),
       };
+      const candidateIdentityChanged =
+        beforeChannel !== settings.update_preferences.channel ||
+        beforeSkipVersion !== settings.update_preferences.skip_version;
+      if (candidateIdentityChanged) {
+        emitUpdateChanged({
+          state: 'idle',
+          current_version: currentUpdateSnapshot.current_version,
+          channel: settings.update_preferences.channel,
+          available_version: null,
+          release_notes: null,
+          published_at: null,
+          error_code: null,
+          error_detail: null,
+          retry_action: 'none',
+          operation_id: null,
+          progress: null,
+        });
+      }
       return settings;
     },
-    async checkForUpdate(): Promise<UpdateCheck> {
-      if (options.updateCheckError) {
-        settings = {
-          ...settings,
-          update_preferences: {
-            ...settings.update_preferences,
-            last_error_ts: Math.floor(Date.now() / 1000),
-          },
-        };
-        throw new Error(options.updateCheckError);
+    async checkForUpdate(request: UpdateCheckRequest): Promise<UpdateCheck> {
+      const transportError = options.updateCheckTransportError;
+      if (transportError) {
+        throw new Error(transportError);
       }
-      const result: UpdateCheck = options.updateCheckResult ?? {
+      if (request.origin === 'background') {
+        if (!settings.update_preferences.auto_check) {
+          return { disposition: 'disabled' };
+        }
+      }
+      if (options.updateCheckDisposition) {
+        return { disposition: options.updateCheckDisposition };
+      }
+      const timestamp = Math.floor(Date.now() / 1000);
+
+      const legacyResult = options.updateCheckResult;
+      if (legacyResult) {
+        if (legacyResult.state === 'error') {
+          settings = {
+            ...settings,
+            update_preferences: {
+              ...settings.update_preferences,
+              last_error_ts: timestamp,
+            },
+          };
+          emitUpdateChanged({
+            state: 'error',
+            current_version: legacyResult.current_version ?? '4.0.0-alpha.1-mock',
+            available_version: legacyResult.available_version ?? null,
+            channel: legacyResult.channel ?? settings.update_preferences.channel,
+            release_notes: legacyResult.release_notes ?? null,
+            published_at: legacyResult.published_at ?? null,
+            error_code: 'check_failed',
+            error_detail: legacyResult.error ?? 'Mock update check failed.',
+            retry_action: 'check',
+            operation_id: null,
+            progress: null,
+          });
+        } else {
+          settings = {
+            ...settings,
+            update_preferences: {
+              ...settings.update_preferences,
+              last_check_ts: timestamp,
+              last_error_ts: 0,
+            },
+          };
+          emitUpdateChanged({
+            state: legacyResult.state,
+            current_version: legacyResult.current_version ?? '4.0.0-alpha.1-mock',
+            available_version: legacyResult.available_version ?? null,
+            channel: legacyResult.channel ?? settings.update_preferences.channel,
+            release_notes: legacyResult.release_notes ?? null,
+            published_at: legacyResult.published_at ?? null,
+            error_code: null,
+            error_detail: null,
+            retry_action: 'none',
+            operation_id: null,
+            progress: null,
+          });
+        }
+        return { disposition: 'performed' };
+      }
+
+      if (options.updateSnapshot) {
+        if (options.updateSnapshot.state === 'error') {
+          settings = {
+            ...settings,
+            update_preferences: {
+              ...settings.update_preferences,
+              last_error_ts: timestamp,
+            },
+          };
+        } else {
+          settings = {
+            ...settings,
+            update_preferences: {
+              ...settings.update_preferences,
+              last_check_ts: timestamp,
+              last_error_ts: 0,
+            },
+          };
+        }
+        emitUpdateChanged({
+          state: options.updateSnapshot.state ?? 'idle',
+          current_version: options.updateSnapshot.current_version ?? '4.0.0-alpha.1-mock',
+          available_version: options.updateSnapshot.available_version ?? null,
+          channel: options.updateSnapshot.channel ?? settings.update_preferences.channel,
+          release_notes: options.updateSnapshot.release_notes ?? null,
+          published_at: options.updateSnapshot.published_at ?? null,
+          error_code: options.updateSnapshot.error_code ?? null,
+          error_detail: options.updateSnapshot.error_detail ?? null,
+          retry_action: options.updateSnapshot.retry_action ?? 'none',
+          operation_id: options.updateSnapshot.operation_id ?? null,
+          progress: options.updateSnapshot.progress ?? null,
+        });
+        return { disposition: 'performed' };
+      }
+
+      settings = {
+        ...settings,
+        update_preferences: {
+          ...settings.update_preferences,
+          last_check_ts: timestamp,
+          last_error_ts: 0,
+        },
+      };
+      emitUpdateChanged({
         state: 'available',
         current_version: '4.0.0-alpha.1-mock',
         available_version: '4.0.0-alpha.2-mock',
         channel: settings.update_preferences.channel,
         release_notes: 'A deterministic update fixture for the desktop UI.',
         published_at: '2026-08-30T00:00:00Z',
-        error: null,
-      };
-      const timestamp = Math.floor(Date.now() / 1000);
-      if (result.state === 'error') {
-        settings = {
-          ...settings,
-          update_preferences: {
-            ...settings.update_preferences,
-            last_error_ts: timestamp,
-          },
-        };
-      } else {
-        settings = {
-          ...settings,
-          update_preferences: {
-            ...settings.update_preferences,
-            last_check_ts: timestamp,
-            last_error_ts: 0,
-          },
-        };
-      }
-      if (result.state === 'available' && result.available_version) {
-        emit({
-          v: 1,
-          name: 'update.available',
-          payload: {
-            current_version: result.current_version,
-            available_version: result.available_version,
-            channel: result.channel,
-            release_notes: result.release_notes,
-            published_at: result.published_at,
-          },
-        });
-      }
-      emit({
-        v: 1,
-        name: 'update.result',
-        payload: {
-          state: result.state,
-          current_version: result.current_version,
-          available_version: result.available_version,
-          channel: result.channel,
-          error: result.error,
-        },
+        error_code: null,
+        error_detail: null,
+        retry_action: 'none',
+        operation_id: null,
+        progress: null,
       });
-      return result;
+      return { disposition: 'performed' };
     },
     async getUpdatePreferences(): Promise<UpdatePreferences> {
       return settings.update_preferences;
     },
     async patchUpdatePreferences(patch: UpdatePatch): Promise<UpdatePreferences> {
+      if (patch.channel === 'beta') {
+        throw new Error('channel_unavailable: beta channel is not available in v4.0.0');
+      }
+      const beforeChannel = settings.update_preferences.channel;
+      const beforeSkipVersion = settings.update_preferences.skip_version;
       settings = {
         ...settings,
         update_preferences: {
@@ -698,30 +851,101 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           ...(patch.skipVersion === undefined ? {} : { skip_version: patch.skipVersion }),
         },
       };
+      const candidateIdentityChanged =
+        beforeChannel !== settings.update_preferences.channel ||
+        beforeSkipVersion !== settings.update_preferences.skip_version;
+      if (candidateIdentityChanged) {
+        emitUpdateChanged({
+          state: 'idle',
+          current_version: currentUpdateSnapshot.current_version,
+          channel: settings.update_preferences.channel,
+          available_version: null,
+          release_notes: null,
+          published_at: null,
+          error_code: null,
+          error_detail: null,
+          retry_action: 'none',
+          operation_id: null,
+          progress: null,
+        });
+      }
       return settings.update_preferences;
     },
-    async beginUpdateHandoff(targetVersion: string): Promise<UpdateHandoff> {
-      if (options.beginUpdateHandoffError) {
-        throw new Error(options.beginUpdateHandoffError);
+    async beginUpdateHandoff(targetVersion: string): Promise<UpdateInstallAck> {
+      const transportError = options.beginUpdateTransportError;
+      if (transportError) {
+        throw new Error(transportError);
       }
-      const handoff: UpdateHandoff = {
-        handoff_id: `h${Date.now().toString(16).padStart(31, '0')}`.slice(-32),
-        target_version: targetVersion,
+      if (options.beginUpdateProductError) {
+        const preserve = options.beginUpdateProductError.preserveCandidate;
+        emitUpdateSnapshot({
+          state: 'error',
+          current_version: currentUpdateSnapshot.current_version,
+          available_version: preserve ? targetVersion : null,
+          channel: settings.update_preferences.channel,
+          release_notes: preserve ? currentUpdateSnapshot.release_notes : null,
+          published_at: preserve ? currentUpdateSnapshot.published_at : null,
+          error_code: options.beginUpdateProductError.code,
+          error_detail: options.beginUpdateProductError.detail,
+          retry_action: options.beginUpdateProductError.retryAction,
+          operation_id: null,
+          progress: null,
+        });
+        return { accepted: false };
+      }
+      const handoffId = `h${Date.now().toString(16).padStart(31, '0')}`.slice(-32);
+      emitUpdateSnapshot({
+        state: 'downloading',
+        current_version: currentUpdateSnapshot.current_version,
+        available_version: targetVersion,
+        channel: settings.update_preferences.channel,
+        release_notes: currentUpdateSnapshot.release_notes,
+        published_at: currentUpdateSnapshot.published_at,
+        error_code: null,
+        error_detail: null,
+        retry_action: 'none',
+        operation_id: handoffId,
+        progress: {
+          completed: 0,
+          total: 100,
+          message: 'Downloading update',
+        },
+      });
+      emitUpdateSnapshot({
+        state: 'ready',
+        current_version: currentUpdateSnapshot.current_version,
+        available_version: targetVersion,
+        channel: settings.update_preferences.channel,
+        release_notes: currentUpdateSnapshot.release_notes,
+        published_at: currentUpdateSnapshot.published_at,
+        error_code: null,
+        error_detail: null,
+        retry_action: 'none',
+        operation_id: handoffId,
+        progress: {
+          completed: 100,
+          total: 100,
+          message: 'Update is ready to install',
+        },
+      });
+      emitUpdateSnapshot({
         state: 'installing',
-      };
-      emit({
-        v: 1,
-        name: 'update.progress',
-        payload: {
-          operation_id: handoff.handoff_id,
-          state: 'installing',
-          available_version: targetVersion,
-          completed: 1,
-          total: 1,
+        current_version: currentUpdateSnapshot.current_version,
+        available_version: targetVersion,
+        channel: settings.update_preferences.channel,
+        release_notes: currentUpdateSnapshot.release_notes,
+        published_at: currentUpdateSnapshot.published_at,
+        error_code: null,
+        error_detail: null,
+        retry_action: 'none',
+        operation_id: handoffId,
+        progress: {
+          completed: 100,
+          total: 100,
           message: 'Installing update and restarting',
         },
       });
-      return handoff;
+      return { accepted: true };
     },
     async preparePlayback(request) {
       const found = allRows().find((item) => item.song_id === request.songId);

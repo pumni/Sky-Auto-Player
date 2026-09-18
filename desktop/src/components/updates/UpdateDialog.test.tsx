@@ -114,7 +114,9 @@ describe('UpdateDialog', () => {
         update: {
           ...useStore.getState().update,
           state: 'error',
-          error: 'Could not check for updates. Check your network connection and try again.',
+          errorCode: 'check_failed',
+          errorDetail: 'Could not check for updates. Check your network connection and try again.',
+          retryAction: 'check',
           dialogOpen: true,
         },
       });
@@ -133,4 +135,208 @@ describe('UpdateDialog', () => {
     fireEvent.click(retryBtn);
     expect(checkSpy).toHaveBeenCalledWith('manual');
   });
+
+  it('renders Try again button when retryAction is install', async () => {
+    const bridge = createMockBridge();
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+
+    const handoffSpy = vi.spyOn(useStore.getState(), 'beginUpdateHandoff');
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'error',
+          errorCode: 'install_failed',
+          errorDetail: 'Install process terminated abnormally.',
+          retryAction: 'install',
+          dialogOpen: true,
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+
+    expect(screen.getByRole('heading', { name: 'Update failed' })).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: 'Try again' });
+    expect(retryBtn).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+
+    fireEvent.click(retryBtn);
+    expect(handoffSpy).toHaveBeenCalledOnce();
+  });
+
+  it('renders only Close button when retryAction is none', async () => {
+    const bridge = createMockBridge();
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'error',
+          errorCode: 'channel_unavailable',
+          retryAction: 'none',
+          dialogOpen: true,
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+
+    expect(screen.getByRole('heading', { name: 'Update check failed' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('surfaces check transportError with Check again button and Update check failed heading', async () => {
+    const bridge = createMockBridge();
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+    const checkSpy = vi.spyOn(useStore.getState(), 'checkForUpdate');
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          transportError: 'IPC transport disconnected',
+          transportErrorAction: 'check',
+          dialogOpen: true,
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+
+    expect(screen.getByRole('heading', { name: 'Update check failed' })).toBeInTheDocument();
+    expect(screen.getByText('IPC transport disconnected')).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: 'Check again' });
+    expect(retryBtn).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+
+    fireEvent.click(retryBtn);
+    expect(checkSpy).toHaveBeenCalledWith('manual');
+  });
+
+  it('surfaces install transportError with Try again button and Update failed heading', async () => {
+    const bridge = createMockBridge();
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+    const handoffSpy = vi.spyOn(useStore.getState(), 'beginUpdateHandoff');
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          transportError: 'IPC connection failed during install handoff',
+          transportErrorAction: 'install',
+          dialogOpen: true,
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+
+    expect(screen.getByRole('heading', { name: 'Update failed' })).toBeInTheDocument();
+    expect(screen.getByText('IPC connection failed during install handoff')).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: 'Try again' });
+    expect(retryBtn).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+
+    fireEvent.click(retryBtn);
+    expect(handoffSpy).toHaveBeenCalledOnce();
+  });
+
+  it('disables buttons when busy installing or checking', async () => {
+    const bridge = createMockBridge();
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'downloading',
+          availableVersion: '4.2.0',
+          dialogOpen: true,
+          installRequestPending: true,
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+
+    expect(screen.getByRole('button', { name: 'Close update' })).toBeDisabled();
+  });
+
+  it('does not close dialog if skipping version fails to persist', async () => {
+    const bridge = createMockBridge();
+    bridge.patchSettings = async () => {
+      throw new Error('disk full');
+    };
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          currentVersion: '4.0.1',
+          channel: 'stable',
+          dialogOpen: true,
+        },
+      });
+    });
+
+    const patchSpy = vi.spyOn(useStore.getState(), 'patchSettings');
+
+    render(<UpdateDialog useStore={useStore} />);
+    const skipBtn = screen.getByRole('button', { name: 'Skip this version' });
+
+    await act(async () => {
+      fireEvent.click(skipBtn);
+    });
+
+    expect(patchSpy).toHaveBeenCalledWith({
+      updatePreferences: { skipVersion: '4.2.0' },
+    });
+    const patchResult = await patchSpy.mock.results[0]?.value;
+    expect(patchResult).toBeNull();
+    // Dialog stays open because skipVersion failed to persist
+    expect(useStore.getState().update.dialogOpen).toBe(true);
+  });
+
+  it.each([
+    { errorCode: 'stale_update', expectedHeading: 'Update failed', retryAction: 'check' },
+    { errorCode: 'update_unavailable', expectedHeading: 'Update failed', retryAction: 'check' },
+    { errorCode: 'closing', expectedHeading: 'Update failed', retryAction: 'none' },
+    { errorCode: 'check_failed', expectedHeading: 'Update check failed', retryAction: 'check' },
+  ] as const)(
+    'classifies $errorCode heading as "$expectedHeading"',
+    async ({ errorCode, expectedHeading, retryAction }) => {
+      const bridge = createMockBridge();
+      const useStore = createDesktopStore(bridge);
+      await act(async () => useStore.getState().initialize());
+
+      act(() => {
+        useStore.setState({
+          update: {
+            ...useStore.getState().update,
+            state: 'error',
+            errorCode,
+            retryAction,
+            dialogOpen: true,
+          },
+        });
+      });
+
+      render(<UpdateDialog useStore={useStore} />);
+      expect(screen.getByRole('heading', { name: expectedHeading })).toBeInTheDocument();
+    },
+  );
 });

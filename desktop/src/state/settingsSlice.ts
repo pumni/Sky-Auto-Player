@@ -1,8 +1,6 @@
 import type { DesktopBridge } from '../bridge/DesktopBridge';
 import type { DesktopStore } from './types';
 
-import { formatUpdateError, shouldAutoCheck } from './updateHelpers';
-
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
 export interface SettingsSliceContext {
@@ -61,7 +59,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           set({ settingsState: 'fatal', fatal: message });
-          return get().settings;
+          return null;
         }
       });
       // Keep the queue alive after an individual mutation fails. Later user
@@ -75,59 +73,39 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
 
     async checkForUpdate(origin: 'manual' | 'background' = 'manual') {
       const isManual = origin === 'manual';
-      if (!isManual) {
-        const preferences = get().settings?.update_preferences;
-        if (!preferences || !shouldAutoCheck(preferences)) {
-          return;
-        }
-      }
-
+      const requestRevision = get().update.lastNativeRevision;
       set({
         update: {
           ...get().update,
-          state: 'checking',
-          error: null,
+          checkRequestPending: true,
+          transportError: null,
+          transportErrorAction: null,
           dialogOpen: isManual ? true : get().update.dialogOpen,
         },
       });
 
       try {
-        const result = await bridge.checkForUpdate();
-        const formattedError = result.error ? formatUpdateError(result.error) : null;
+        await bridge.checkForUpdate({ origin });
         set({
           update: {
             ...get().update,
-            state: result.state,
-            currentVersion: result.current_version,
-            availableVersion: result.available_version,
-            channel: result.channel,
-            releaseNotes: result.release_notes,
-            publishedAt: result.published_at,
-            error: formattedError,
-            dialogOpen: isManual ? true : get().update.dialogOpen,
+            checkRequestPending: false,
           },
         });
-        try {
-          const preferences = await bridge.getUpdatePreferences();
-          const currentSettings = get().settings;
-          if (currentSettings) {
-            set({
-              settings: {
-                ...currentSettings,
-                update_preferences: preferences,
-              },
-            });
-          }
-        } catch {
-          // Native query failure; keep existing preferences
-        }
       } catch (error) {
+        const current = get().update;
+        const hasNewerSnapshot = current.lastNativeRevision > requestRevision;
         set({
           update: {
-            ...get().update,
-            state: 'error',
-            error: formatUpdateError(error),
-            dialogOpen: isManual ? true : get().update.dialogOpen,
+            ...current,
+            checkRequestPending: false,
+            transportError: hasNewerSnapshot
+              ? null
+              : error instanceof Error
+                ? error.message
+                : String(error),
+            transportErrorAction: hasNewerSnapshot ? null : 'check',
+            dialogOpen: isManual ? true : current.dialogOpen,
           },
         });
         // Thrown bridge/IPC failure; do not invent timestamps
@@ -139,25 +117,41 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
     },
 
     async beginUpdateHandoff() {
+      if (get().update.installRequestPending) {
+        return;
+      }
       const targetVersion = get().update.availableVersion;
       if (!targetVersion) return;
-      set({ update: { ...get().update, state: 'downloading', error: null } });
+      const requestRevision = get().update.lastNativeRevision;
+      set({
+        update: {
+          ...get().update,
+          installRequestPending: true,
+          transportError: null,
+          transportErrorAction: null,
+        },
+      });
       try {
-        const handoff = await bridge.beginUpdateHandoff(targetVersion);
+        await bridge.beginUpdateHandoff(targetVersion);
         set({
           update: {
             ...get().update,
-            state: handoff.state,
-            handoffId: handoff.handoff_id,
-            error: null,
+            installRequestPending: false,
           },
         });
       } catch (error) {
+        const current = get().update;
+        const hasNewerSnapshot = current.lastNativeRevision > requestRevision;
         set({
           update: {
-            ...get().update,
-            state: 'error',
-            error: formatUpdateError(error),
+            ...current,
+            installRequestPending: false,
+            transportError: hasNewerSnapshot
+              ? null
+              : error instanceof Error
+                ? error.message
+                : String(error),
+            transportErrorAction: hasNewerSnapshot ? null : 'install',
           },
         });
       }

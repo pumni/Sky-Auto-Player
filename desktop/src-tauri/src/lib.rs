@@ -124,6 +124,41 @@ pub fn run_update_smoke() {
     exit_on_failure(run_inner(false, true));
 }
 
+fn packaged_update_install_ack_result(
+    ack: commands::UpdateInstallAckDto,
+    snapshot: Option<&ui_events::UpdateSnapshotPayload>,
+) -> Result<bool, String> {
+    if ack.accepted {
+        // Accepted means the official updater transaction owns the process
+        // lifecycle now. The current process is expected to exit/restart.
+        return Ok(false);
+    }
+
+    let snapshot = snapshot.ok_or_else(|| {
+        "packaged update install was rejected without an authoritative native snapshot".to_string()
+    })?;
+
+    if snapshot.state != ui_events::UpdateState::Error {
+        return Err(format!(
+            "packaged update install was rejected without Error state: {:?}",
+            snapshot.state
+        ));
+    }
+
+    let code = snapshot.error_code.ok_or_else(|| {
+        "packaged update install was rejected without a typed native error code".to_string()
+    })?;
+
+    let detail = snapshot
+        .error_detail
+        .as_deref()
+        .unwrap_or("no diagnostic detail");
+
+    Err(format!(
+        "packaged update install rejected ({code:?}): {detail}"
+    ))
+}
+
 /// Prove the packaged update admission boundary remains fail-closed while
 /// physical playback owns the activity gate. This is a hidden qualification
 /// seam only; it does not add an updater protocol or install path.
@@ -243,11 +278,12 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                 tauri::async_runtime::spawn_blocking(move || {
                     let result = (|| -> Result<bool, String> {
                         let native = update_state.ensure_native_blocking()?;
-                        let check: commands::UpdateCheckDto = serde_json::from_value(
-                            native.dispatch("update.check", serde_json::json!({}))?,
+                        let _check: commands::UpdateCheckAckDto = serde_json::from_value(
+                            native.dispatch("update.check", serde_json::json!({"origin": "manual"}))?,
                         )
                         .map_err(|error| format!("packaged update check response: {error}"))?;
-                        if let Some(target) = check.available_version {
+                        let snapshot = native.update_snapshot()?;
+                        if let Some(target) = snapshot.available_version {
                             if let Some(expected_path) = expected_version_file.as_ref() {
                                 std::fs::write(expected_path, format!("{target}\n")).map_err(
                                     |error| {
@@ -257,7 +293,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                                     },
                                 )?;
                             }
-                            let _: commands::UpdateHandoffDto =
+                            let install_ack: commands::UpdateInstallAckDto =
                                 serde_json::from_value(native.dispatch(
                                     "update.begin_handoff",
                                     serde_json::json!({"targetVersion": target}),
@@ -265,8 +301,17 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                                 .map_err(|error| {
                                     format!("packaged update install response: {error}")
                                 })?;
-                            Ok(false)
-                        } else if check.state == ui_events::UpdateState::Current {
+
+                            if install_ack.accepted {
+                                packaged_update_install_ack_result(install_ack, None)
+                            } else {
+                                let rejected_snapshot = native.update_snapshot()?;
+                                packaged_update_install_ack_result(
+                                    install_ack,
+                                    Some(&rejected_snapshot),
+                                )
+                            }
+                        } else if snapshot.state == ui_events::UpdateState::Current {
                             if let Some(marker) = marker.as_ref() {
                                 let _ = std::fs::write(
                                     marker,
@@ -276,8 +321,8 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                             native.shutdown();
                             Ok(true)
                         } else {
-                            Err(check
-                                .error
+                            Err(snapshot
+                                .error_detail
                                 .unwrap_or_else(|| "packaged update check was inconclusive".into()))
                         }
                     })();
@@ -582,13 +627,24 @@ pub fn selftest_packaged_shell() -> i32 {
                 serde_json::json!({"autoCheck": settings.update_preferences.auto_check}),
             )?)
             .map_err(|error| format!("update.preferences.patch response: {error}"))?;
-        match runtime.dispatch("update.check", serde_json::json!({})) {
+        match runtime.dispatch("update.check", serde_json::json!({"origin": "background"})) {
             Ok(value) => {
-                let _update_check: commands::UpdateCheckDto = serde_json::from_value(value)
+                let _update_check: commands::UpdateCheckAckDto = serde_json::from_value(value)
                     .map_err(|error| format!("update.check response: {error}"))?;
             }
             Err(error) if error.starts_with("update_service_unavailable") => {}
             Err(error) => return Err(format!("unexpected update.check failure: {error}")),
+        }
+        match runtime.dispatch(
+            "update.begin_handoff",
+            serde_json::json!({"targetVersion": "9.9.9"}),
+        ) {
+            Ok(value) => {
+                let _update_install: commands::UpdateInstallAckDto = serde_json::from_value(value)
+                    .map_err(|error| format!("update.begin_handoff response: {error}"))?;
+            }
+            Err(error) if error.starts_with("update_service_unavailable") => {}
+            Err(error) => return Err(format!("unexpected update.begin_handoff failure: {error}")),
         }
         let _diagnostics: commands::DiagnosticsEnabledDto =
             serde_json::from_value(runtime.dispatch(
@@ -1005,5 +1061,347 @@ mod ipc_tests {
             "settings patch must stale native prepared ID"
         );
         let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 70));
+    }
+
+    #[test]
+    fn native_settings_patch_auto_check_only_does_not_require_update_service() {
+        let (paths, _cleanup) = test_install_root();
+        let app = tauri::test::mock_builder()
+            .manage(AppState::with_test_paths(paths))
+            .invoke_handler(tauri::generate_handler![
+                super::commands::patch_settings,
+                super::commands::patch_update_preferences,
+                super::commands::get_update_preferences,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        // Patch auto_check only via patch_settings
+        let res = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_settings",
+                json!({"params":{"updatePreferences":{"autoCheck":false}}}),
+                80,
+            ),
+        )
+        .expect("patch settings auto_check");
+        let res: serde_json::Value = res.deserialize().expect("deserialize");
+        assert_eq!(res["update_preferences"]["auto_check"], false);
+
+        // Patch auto_check only via patch_update_preferences
+        let res2 = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_update_preferences",
+                json!({"params":{"autoCheck":true}}),
+                82,
+            ),
+        )
+        .expect("patch update_preferences auto_check");
+        let res2: serde_json::Value = res2.deserialize().expect("deserialize");
+        assert_eq!(res2["auto_check"], true);
+
+        // Patch skip_version via patch_settings
+        let res3 = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "patch_settings",
+                json!({"params":{"updatePreferences":{"skipVersion":"4.1.0"}}}),
+                84,
+            ),
+        )
+        .expect("patch settings skip_version");
+        let res3: serde_json::Value = res3.deserialize().expect("deserialize");
+        assert_eq!(res3["update_preferences"]["skip_version"], "4.1.0");
+
+        let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 86));
+    }
+
+    #[test]
+    fn candidate_invalidation_matrix_for_settings_and_update_preferences_patches() {
+        use crate::native_update::NativeUpdateCandidate;
+        use crate::ui_events::{UpdateChannel, UpdateState};
+
+        let (paths, _cleanup) = test_install_root();
+        let state = AppState::with_test_paths(paths);
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .invoke_handler(tauri::generate_handler![
+                super::commands::patch_settings,
+                super::commands::patch_update_preferences,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+
+        state
+            .configure_update_service(app.handle().clone())
+            .expect("configure update service");
+        let update_service = state
+            .update_service()
+            .expect("lock")
+            .expect("update service");
+        let runtime = state.ensure_native_blocking().expect("runtime");
+
+        let set_available = |version: &str| {
+            let mut s = update_service.state.lock().unwrap();
+            s.channel = UpdateChannel::Stable;
+            s.candidate = Some(NativeUpdateCandidate {
+                version: version.to_string(),
+                channel: UpdateChannel::Stable,
+                release_notes: Some("Release notes".to_string()),
+                published_at: None,
+            });
+            s.state = UpdateState::Available;
+        };
+
+        // --- 1. Generic patch_settings path ---
+
+        // 1a. Available + auto_check-only mutation => candidate/snapshot remains Available
+        set_available("4.2.0");
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: Some(false),
+                    channel: None,
+                    skip_version: None,
+                }),
+            })
+            .expect("patch auto_check false");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1b. Available + Stable->Stable no-op => candidate remains Available
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: Some(UpdateChannel::Stable),
+                    skip_version: None,
+                }),
+            })
+            .expect("patch stable->stable");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1c. Available + skip X->X no-op => candidate remains Available
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.1.0".to_string()),
+                }),
+            })
+            .expect("set skip_version");
+        set_available("4.2.0");
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.1.0".to_string()),
+                }),
+            })
+            .expect("patch skip 4.1.0->4.1.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1d. Available + actual skip change => Idle and candidate cleared
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.2.0".to_string()),
+                }),
+            })
+            .expect("patch skip 4.1.0->4.2.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Idle);
+        assert!(snap.available_version.is_none());
+
+        // --- 2. Dedicated patch_update_preferences path ---
+
+        // 2a. Available + auto_check-only mutation => candidate/snapshot remains Available
+        set_available("4.3.0");
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: Some(true),
+                channel: None,
+                skip_version: None,
+            })
+            .expect("patch auto_check true");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2b. Available + Stable->Stable no-op => candidate remains Available
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: Some(UpdateChannel::Stable),
+                skip_version: None,
+            })
+            .expect("patch stable->stable");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2c. Available + skip X->X no-op => candidate remains Available
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: None,
+                skip_version: Some("4.2.0".to_string()),
+            })
+            .expect("patch skip 4.2.0->4.2.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2d. Available + actual skip change => Idle and candidate cleared
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: None,
+                skip_version: Some("4.3.0".to_string()),
+            })
+            .expect("patch skip 4.2.0->4.3.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Idle);
+        assert!(snap.available_version.is_none());
+    }
+}
+
+#[cfg(test)]
+mod update_smoke_tests {
+    use super::*;
+    use crate::commands::UpdateInstallAckDto;
+    use crate::ui_events::{
+        UpdateChannel, UpdateErrorCode, UpdateRetryAction, UpdateSnapshotPayload, UpdateState,
+    };
+
+    fn test_snapshot(
+        state: UpdateState,
+        error_code: Option<UpdateErrorCode>,
+        error_detail: Option<&str>,
+        retry_action: UpdateRetryAction,
+    ) -> UpdateSnapshotPayload {
+        UpdateSnapshotPayload {
+            revision: 1,
+            state,
+            current_version: "4.0.0-alpha.1".to_string(),
+            available_version: Some("4.0.0-alpha.2".to_string()),
+            channel: UpdateChannel::Stable,
+            release_notes: None,
+            published_at: None,
+            error_code,
+            error_detail: error_detail.map(|s| s.to_string()),
+            retry_action,
+            operation_id: None,
+            progress: None,
+        }
+    }
+
+    #[test]
+    fn accepted_install_waits_for_updater_lifecycle() {
+        let ack = UpdateInstallAckDto { accepted: true };
+        let result = packaged_update_install_ack_result(ack, None);
+        assert_eq!(result, Ok(false));
+    }
+
+    #[test]
+    fn rejected_install_becomes_packaged_selftest_failure() {
+        let ack = UpdateInstallAckDto { accepted: false };
+        let snapshot = test_snapshot(
+            UpdateState::Error,
+            Some(UpdateErrorCode::DownloadFailed),
+            Some("update download failed: signature verification failed"),
+            UpdateRetryAction::Install,
+        );
+        let result = packaged_update_install_ack_result(ack, Some(&snapshot));
+        let err = result.expect_err("rejected install must return Err");
+        assert!(
+            err.contains("DownloadFailed"),
+            "error message should contain 'DownloadFailed': {err}"
+        );
+        assert!(
+            err.contains("signature verification failed"),
+            "error message should contain 'signature verification failed': {err}"
+        );
+    }
+
+    #[test]
+    fn rejected_install_requires_error_state() {
+        let ack = UpdateInstallAckDto { accepted: false };
+        let snapshot = test_snapshot(UpdateState::Available, None, None, UpdateRetryAction::None);
+        let result = packaged_update_install_ack_result(ack, Some(&snapshot));
+        let err = result.expect_err("rejected install without Error state must return Err");
+        assert!(
+            err.contains("rejected without Error state"),
+            "error message should contain 'rejected without Error state': {err}"
+        );
+    }
+
+    #[test]
+    fn rejected_install_requires_typed_error() {
+        let ack = UpdateInstallAckDto { accepted: false };
+        let snapshot = test_snapshot(
+            UpdateState::Error,
+            None,
+            Some("untyped error"),
+            UpdateRetryAction::Check,
+        );
+        let result = packaged_update_install_ack_result(ack, Some(&snapshot));
+        let err = result.expect_err("rejected install without typed error code must return Err");
+        assert!(
+            err.contains("without a typed native error code"),
+            "error message should contain 'without a typed native error code': {err}"
+        );
+    }
+
+    #[test]
+    fn rejected_install_without_snapshot_fails_closed() {
+        let ack = UpdateInstallAckDto { accepted: false };
+        let result = packaged_update_install_ack_result(ack, None);
+        let err = result.expect_err("rejected install without snapshot must return Err");
+        assert!(
+            err.contains("without an authoritative native snapshot"),
+            "error message should contain 'without an authoritative native snapshot': {err}"
+        );
     }
 }

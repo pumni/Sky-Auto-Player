@@ -348,6 +348,66 @@ function Write-FixtureUpdaterConfig {
   } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
+function Test-ProcessPathUnderRoots {
+  param(
+    [AllowNull()]
+    [AllowEmptyString()]
+    [string]$Path,
+    [Parameter(Mandatory = $true)]
+    [string[]]$ResolvedRoots
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+  try {
+    $full = [IO.Path]::GetFullPath($Path)
+  } catch {
+    return $false
+  }
+  foreach ($root in $ResolvedRoots) {
+    $prefix = $root + [IO.Path]::DirectorySeparatorChar
+    if ($full.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
+        $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Stop-UpdaterFixtureProcesses {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string[]]$Roots
+  )
+
+  $resolvedRoots = @(
+    $Roots |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') }
+  )
+
+  $errors = [System.Collections.Generic.List[string]]::new()
+
+  $processes = @(
+    Get-CimInstance Win32_Process -ErrorAction Stop |
+      Where-Object {
+        Test-ProcessPathUnderRoots -Path ([string]$_.ExecutablePath) -ResolvedRoots $resolvedRoots
+      }
+  )
+
+  foreach ($process in $processes) {
+    try {
+      Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop
+      Wait-Process -Id ([int]$process.ProcessId) -Timeout 10 -ErrorAction SilentlyContinue
+    } catch {
+      $errors.Add("PID $($process.ProcessId) '$($process.ExecutablePath)': $($_.Exception.Message)")
+    }
+  }
+
+  if ($errors.Count -gt 0) {
+    throw ("Failed to stop updater fixture process(es): " + ($errors -join ' | '))
+  }
+}
+
 function Clear-FixtureResourceStaging {
   param([Parameter(Mandatory = $true)] [string]$TargetRoot)
   $stagingRoot = Join-Path $TargetRoot 'dist/builtin-songs'
@@ -722,6 +782,7 @@ try {
     '--selftest-update-expected-version-file', $expectedVersionPath,
     '--selftest-update-safety-marker', $safetyPath
   ) + $fixtureRuntimeArguments) -WindowStyle Hidden -PassThru
+  $smokeScope.TrackedProcesses.Add($appProcess)
   Wait-Process -Id $appProcess.Id -Timeout 180
   Wait-ForPath -Path $markerPath
   $completion = ([IO.File]::ReadAllText($markerPath)).Trim()
@@ -804,11 +865,15 @@ try {
     '--selftest-update-marker', $cutoverMarkerPath,
     '--selftest-update-fixture-new-only'
   ) + $fixtureRuntimeArguments) -WindowStyle Hidden -PassThru
+  $smokeScope.TrackedProcesses.Add($cutoverProcess)
   Wait-Process -Id $cutoverProcess.Id -Timeout 180
   Wait-ForPath -Path $cutoverMarkerPath
   $cutoverResult = ([IO.File]::ReadAllText($cutoverMarkerPath)).Trim()
   if (-not $cutoverResult.StartsWith('update-failed:')) {
     throw "Cutover client accepted an old-root artifact: $cutoverResult"
+  }
+  if ($cutoverResult.Length -gt 4096) {
+    throw 'Cutover rejection marker is unexpectedly unbounded'
   }
   $negativeRequests = @(
     Get-Content -LiteralPath $requestLogPath -ErrorAction Stop |
@@ -907,6 +972,12 @@ try {
     } catch {
       $finalizerErrors.Add("Exit-V4NsisSmokeScope failed: $($_.Exception.Message)")
     }
+  }
+
+  try {
+    Stop-UpdaterFixtureProcesses -Roots @($installRoot, $preservedBridgeRoot)
+  } catch {
+    $finalizerErrors.Add("Failed to stop updater fixture processes: $($_.Exception.Message)")
   }
 
   # Step 6: Fixture root cleanup
