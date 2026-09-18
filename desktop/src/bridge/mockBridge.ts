@@ -145,16 +145,15 @@ export interface MockBridgeOptions {
     error?: string | null;
   };
   updateCheckTransportError?: string;
-  updateCheckError?: string;
   updateSnapshot?: Partial<UpdateSnapshotPayload>;
   updateCheckDisposition?: UpdateCheckDisposition;
   beginUpdateProductError?: {
     code: UpdateErrorCode;
     detail: string;
     retryAction: UpdateRetryAction;
+    preserveCandidate: boolean;
   };
   beginUpdateTransportError?: string;
-  beginUpdateHandoffTransportError?: string;
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
@@ -651,6 +650,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       if (patch.updatePreferences?.channel === 'beta') {
         throw new Error('channel_unavailable: beta channel is not available in v4.0.0');
       }
+      const beforeChannel = settings.update_preferences.channel;
+      const beforeSkipVersion = settings.update_preferences.skip_version;
       const playback = patch.playbackDefaults;
       settings = {
         ...settings,
@@ -690,10 +691,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
               },
             }),
       };
-      if (
-        patch.updatePreferences?.channel !== undefined ||
-        patch.updatePreferences?.skipVersion !== undefined
-      ) {
+      const candidateIdentityChanged =
+        beforeChannel !== settings.update_preferences.channel ||
+        beforeSkipVersion !== settings.update_preferences.skip_version;
+      if (candidateIdentityChanged) {
         emitUpdateChanged({
           state: 'idle',
           current_version: currentUpdateSnapshot.current_version,
@@ -711,7 +712,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings;
     },
     async checkForUpdate(request: UpdateCheckRequest): Promise<UpdateCheck> {
-      const transportError = options.updateCheckTransportError ?? options.updateCheckError;
+      const transportError = options.updateCheckTransportError;
       if (transportError) {
         throw new Error(transportError);
       }
@@ -839,6 +840,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       if (patch.channel === 'beta') {
         throw new Error('channel_unavailable: beta channel is not available in v4.0.0');
       }
+      const beforeChannel = settings.update_preferences.channel;
+      const beforeSkipVersion = settings.update_preferences.skip_version;
       settings = {
         ...settings,
         update_preferences: {
@@ -848,7 +851,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           ...(patch.skipVersion === undefined ? {} : { skip_version: patch.skipVersion }),
         },
       };
-      if (patch.channel !== undefined || patch.skipVersion !== undefined) {
+      const candidateIdentityChanged =
+        beforeChannel !== settings.update_preferences.channel ||
+        beforeSkipVersion !== settings.update_preferences.skip_version;
+      if (candidateIdentityChanged) {
         emitUpdateChanged({
           state: 'idle',
           current_version: currentUpdateSnapshot.current_version,
@@ -866,19 +872,19 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings.update_preferences;
     },
     async beginUpdateHandoff(targetVersion: string): Promise<UpdateInstallAck> {
-      const transportError =
-        options.beginUpdateTransportError ?? options.beginUpdateHandoffTransportError;
+      const transportError = options.beginUpdateTransportError;
       if (transportError) {
         throw new Error(transportError);
       }
       if (options.beginUpdateProductError) {
+        const preserve = options.beginUpdateProductError.preserveCandidate;
         emitUpdateSnapshot({
           state: 'error',
           current_version: currentUpdateSnapshot.current_version,
-          available_version: targetVersion,
+          available_version: preserve ? targetVersion : null,
           channel: settings.update_preferences.channel,
-          release_notes: currentUpdateSnapshot.release_notes,
-          published_at: currentUpdateSnapshot.published_at,
+          release_notes: preserve ? currentUpdateSnapshot.release_notes : null,
+          published_at: preserve ? currentUpdateSnapshot.published_at : null,
           error_code: options.beginUpdateProductError.code,
           error_detail: options.beginUpdateProductError.detail,
           retry_action: options.beginUpdateProductError.retryAction,

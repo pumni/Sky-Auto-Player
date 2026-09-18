@@ -2825,7 +2825,7 @@ describe('desktop update UX and native authority', () => {
 
   it('thrown bridge/IPC failure records transportError without inventing timestamps or corrupting native state', async () => {
     const bridge = createMockBridge({
-      updateCheckError: 'ipc_connection_failed: backend process terminated',
+      updateCheckTransportError: 'ipc_connection_failed: backend process terminated',
     });
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
@@ -2837,6 +2837,7 @@ describe('desktop update UX and native authority', () => {
     const update = store.getState().update;
     expect(update.checkRequestPending).toBe(false);
     expect(update.transportError).toBe('ipc_connection_failed: backend process terminated');
+    expect(update.transportErrorAction).toBe('check');
     expect(update.dialogOpen).toBe(true);
 
     // Timestamps are not invented on IPC exception
@@ -2886,7 +2887,7 @@ describe('desktop update UX and native authority', () => {
 
   it('background check with transient IPC error records transportError and does not open dialog', async () => {
     const bridge = createMockBridge({
-      updateCheckError: 'fetch_failed: server returned 503',
+      updateCheckTransportError: 'fetch_failed: server returned 503',
     });
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
@@ -2898,7 +2899,35 @@ describe('desktop update UX and native authority', () => {
     const update = store.getState().update;
     expect(update.dialogOpen).toBe(false);
     expect(update.transportError).toBe('fetch_failed: server returned 503');
+    expect(update.transportErrorAction).toBe('check');
     expect(update.checkRequestPending).toBe(false);
+  });
+
+  it('thrown bridge/IPC failure during install handoff records transportError with transportErrorAction install', async () => {
+    const bridge = createMockBridge({
+      beginUpdateTransportError: 'ipc_connection_failed: install handoff timed out',
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    act(() => {
+      store.setState({
+        update: {
+          ...store.getState().update,
+          state: 'available',
+          availableVersion: '4.2.0',
+        },
+      });
+    });
+
+    await act(async () => store.getState().beginUpdateHandoff());
+
+    const update = store.getState().update;
+    expect(update.installRequestPending).toBe(false);
+    expect(update.transportError).toBe('ipc_connection_failed: install handoff timed out');
+    expect(update.transportErrorAction).toBe('install');
+    expect(update.state).toBe('available');
+    expect(update.availableVersion).toBe('4.2.0');
   });
 
   it('translates physical playback rejection during install handoff to authoritative error state without transportError', async () => {
@@ -2907,6 +2936,7 @@ describe('desktop update UX and native authority', () => {
         code: 'playback_active',
         detail: 'playback_active: update installation cannot run during physical playback',
         retryAction: 'install',
+        preserveCandidate: true,
       },
     });
     const store = createDesktopStore(bridge);
@@ -2929,6 +2959,7 @@ describe('desktop update UX and native authority', () => {
     expect(update.errorCode).toBe('playback_active');
     expect(update.retryAction).toBe('install');
     expect(update.transportError).toBeNull();
+    expect(update.transportErrorAction).toBeNull();
     expect(update.installRequestPending).toBe(false);
   });
 
@@ -2938,6 +2969,7 @@ describe('desktop update UX and native authority', () => {
         code: 'calibration_active',
         detail: 'calibration_active: update installation cannot run during calibration',
         retryAction: 'install',
+        preserveCandidate: true,
       },
     });
     const store = createDesktopStore(bridge);
@@ -2960,6 +2992,7 @@ describe('desktop update UX and native authority', () => {
     expect(update.errorCode).toBe('calibration_active');
     expect(update.retryAction).toBe('install');
     expect(update.transportError).toBeNull();
+    expect(update.transportErrorAction).toBeNull();
     expect(update.installRequestPending).toBe(false);
   });
 
@@ -3175,6 +3208,7 @@ describe('desktop update UX and native authority', () => {
     expect(update.availableVersion).toBe('4.2.0');
     expect(update.releaseNotes).toBe('Version 4.2.0 release notes');
     expect(update.transportError).toBeNull();
+    expect(update.transportErrorAction).toBeNull();
     expect(update.checkRequestPending).toBe(false);
   });
 
@@ -3230,57 +3264,193 @@ describe('desktop update UX and native authority', () => {
     expect(update.handoffId).toBe('op-download-123');
     expect(update.progress?.completed).toBe(50);
     expect(update.transportError).toBeNull();
+    expect(update.transportErrorAction).toBeNull();
     expect(update.installRequestPending).toBe(false);
   });
 
-  it('treats download_failed, install_failed, stale_update, and update_unavailable as native state with transportError null', () => {
-    const bridge = createMockBridge();
-    const store = createDesktopStore(bridge);
-
+  it('exercises product install errors via beginUpdateHandoff preserving or clearing candidate metadata according to error type', async () => {
     const testCases: Array<{
-      code: 'download_failed' | 'install_failed' | 'stale_update' | 'update_unavailable';
-      retry: 'check' | 'install' | 'none';
+      code: import('../bridge/DesktopBridge').UpdateErrorCode;
       detail: string;
+      retryAction: import('../bridge/DesktopBridge').UpdateRetryAction;
+      preserveCandidate: boolean;
     }> = [
-      { code: 'download_failed', retry: 'install', detail: 'Checksum mismatch during download' },
+      {
+        code: 'download_failed',
+        detail: 'Checksum mismatch during download',
+        retryAction: 'install',
+        preserveCandidate: true,
+      },
       {
         code: 'install_failed',
-        retry: 'install',
         detail: 'Installer execution exited with code 1',
+        retryAction: 'install',
+        preserveCandidate: true,
       },
-      { code: 'stale_update', retry: 'check', detail: 'Update candidate is no longer valid' },
-      { code: 'update_unavailable', retry: 'check', detail: 'Release assets removed from mirror' },
+      {
+        code: 'stale_update',
+        detail: 'Update candidate is no longer valid',
+        retryAction: 'check',
+        preserveCandidate: false,
+      },
+      {
+        code: 'update_unavailable',
+        detail: 'Release assets removed from mirror',
+        retryAction: 'check',
+        preserveCandidate: false,
+      },
     ];
 
-    testCases.forEach((tc, idx) => {
-      act(() => {
-        store.getState().applyEvent({
-          v: 1,
-          name: 'update.changed',
-          payload: {
-            revision: idx + 1,
-            state: 'error',
-            current_version: '4.0.0',
-            available_version: '4.2.0',
-            channel: 'stable',
-            release_notes: null,
-            published_at: null,
-            error_code: tc.code,
-            error_detail: tc.detail,
-            retry_action: tc.retry,
-            operation_id: null,
-            progress: null,
-          },
-        });
+    for (const tc of testCases) {
+      const bridge = createMockBridge({
+        updateSnapshot: {
+          state: 'available',
+          current_version: '4.0.0',
+          available_version: '4.2.0',
+          channel: 'stable',
+          release_notes: 'Release notes v4.2.0',
+          published_at: '2026-09-01T00:00:00Z',
+        },
+        beginUpdateProductError: {
+          code: tc.code,
+          detail: tc.detail,
+          retryAction: tc.retryAction,
+          preserveCandidate: tc.preserveCandidate,
+        },
       });
+      const store = createDesktopStore(bridge);
+      await act(async () => store.getState().initialize());
+
+      expect(store.getState().update.state).toBe('available');
+      expect(store.getState().update.availableVersion).toBe('4.2.0');
+
+      await act(async () => store.getState().beginUpdateHandoff());
 
       const update = store.getState().update;
       expect(update.state).toBe('error');
       expect(update.errorCode).toBe(tc.code);
       expect(update.errorDetail).toBe(tc.detail);
-      expect(update.retryAction).toBe(tc.retry);
+      expect(update.retryAction).toBe(tc.retryAction);
       expect(update.transportError).toBeNull();
+      expect(update.transportErrorAction).toBeNull();
+      expect(update.installRequestPending).toBe(false);
+
+      if (tc.preserveCandidate) {
+        expect(update.availableVersion).toBe('4.2.0');
+        expect(update.releaseNotes).toBe('Release notes v4.2.0');
+        expect(update.publishedAt).toBe('2026-09-01T00:00:00Z');
+      } else {
+        expect(update.availableVersion).toBeNull();
+        expect(update.releaseNotes).toBeNull();
+        expect(update.publishedAt).toBeNull();
+      }
+    }
+  });
+
+  it('mock candidate invalidation matrix for generic patchSettings', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const setAvailable = async () => {
+      await act(async () => {
+        await store.getState().checkForUpdate('manual');
+      });
+      expect(store.getState().update.state).toBe('available');
+      expect(store.getState().update.availableVersion).toBe('4.0.0-alpha.2-mock');
+    };
+
+    // 1. auto_check change => remains Available
+    await setAvailable();
+    await act(async () => {
+      await store.getState().patchSettings({
+        updatePreferences: { autoCheck: false },
+      });
     });
+    expect(store.getState().update.state).toBe('available');
+    expect(store.getState().update.availableVersion).toBe('4.0.0-alpha.2-mock');
+
+    // 2. Stable -> Stable no-op => remains Available
+    await act(async () => {
+      await store.getState().patchSettings({
+        updatePreferences: { channel: 'stable' },
+      });
+    });
+    expect(store.getState().update.state).toBe('available');
+    expect(store.getState().update.availableVersion).toBe('4.0.0-alpha.2-mock');
+
+    // 3. skip X -> X no-op => remains Available
+    await act(async () => {
+      await store.getState().patchSettings({
+        updatePreferences: { skipVersion: '4.1.0' },
+      });
+    });
+    expect(store.getState().update.state).toBe('idle');
+    await setAvailable();
+    await act(async () => {
+      await store.getState().patchSettings({
+        updatePreferences: { skipVersion: '4.1.0' },
+      });
+    });
+    expect(store.getState().update.state).toBe('available');
+    expect(store.getState().update.availableVersion).toBe('4.0.0-alpha.2-mock');
+
+    // 4. actual skip change => Idle and candidate cleared
+    await act(async () => {
+      await store.getState().patchSettings({
+        updatePreferences: { skipVersion: '4.2.0' },
+      });
+    });
+    expect(store.getState().update.state).toBe('idle');
+    expect(store.getState().update.availableVersion).toBeNull();
+  });
+
+  it('mock candidate invalidation matrix for dedicated patchUpdatePreferences', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const setAvailable = async () => {
+      await act(async () => {
+        await store.getState().checkForUpdate('manual');
+      });
+      expect(store.getState().update.state).toBe('available');
+      expect(store.getState().update.availableVersion).toBe('4.0.0-alpha.2-mock');
+    };
+
+    // 1. auto_check change => remains Available
+    await setAvailable();
+    await act(async () => {
+      await bridge.patchUpdatePreferences({ autoCheck: false });
+    });
+    expect(store.getState().update.state).toBe('available');
+    expect(store.getState().update.availableVersion).toBe('4.0.0-alpha.2-mock');
+
+    // 2. Stable -> Stable no-op => remains Available
+    await act(async () => {
+      await bridge.patchUpdatePreferences({ channel: 'stable' });
+    });
+    expect(store.getState().update.state).toBe('available');
+    expect(store.getState().update.availableVersion).toBe('4.0.0-alpha.2-mock');
+
+    // 3. skip X -> X no-op => remains Available
+    await act(async () => {
+      await bridge.patchUpdatePreferences({ skipVersion: '4.1.0' });
+    });
+    expect(store.getState().update.state).toBe('idle');
+    await setAvailable();
+    await act(async () => {
+      await bridge.patchUpdatePreferences({ skipVersion: '4.1.0' });
+    });
+    expect(store.getState().update.state).toBe('available');
+    expect(store.getState().update.availableVersion).toBe('4.0.0-alpha.2-mock');
+
+    // 4. actual skip change => Idle and candidate cleared
+    await act(async () => {
+      await bridge.patchUpdatePreferences({ skipVersion: '4.2.0' });
+    });
+    expect(store.getState().update.state).toBe('idle');
+    expect(store.getState().update.availableVersion).toBeNull();
   });
 
   it('delegates background check to bridge on startup respecting auto_check=false', async () => {

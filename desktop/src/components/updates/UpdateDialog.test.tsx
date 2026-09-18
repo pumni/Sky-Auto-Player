@@ -192,16 +192,18 @@ describe('UpdateDialog', () => {
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
   });
 
-  it('surfaces transportError with Check again button', async () => {
+  it('surfaces check transportError with Check again button and Update check failed heading', async () => {
     const bridge = createMockBridge();
     const useStore = createDesktopStore(bridge);
     await act(async () => useStore.getState().initialize());
+    const checkSpy = vi.spyOn(useStore.getState(), 'checkForUpdate');
 
     act(() => {
       useStore.setState({
         update: {
           ...useStore.getState().update,
           transportError: 'IPC transport disconnected',
+          transportErrorAction: 'check',
           dialogOpen: true,
         },
       });
@@ -211,7 +213,41 @@ describe('UpdateDialog', () => {
 
     expect(screen.getByRole('heading', { name: 'Update check failed' })).toBeInTheDocument();
     expect(screen.getByText('IPC transport disconnected')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: 'Check again' });
+    expect(retryBtn).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+
+    fireEvent.click(retryBtn);
+    expect(checkSpy).toHaveBeenCalledWith('manual');
+  });
+
+  it('surfaces install transportError with Try again button and Update failed heading', async () => {
+    const bridge = createMockBridge();
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+    const handoffSpy = vi.spyOn(useStore.getState(), 'beginUpdateHandoff');
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          transportError: 'IPC connection failed during install handoff',
+          transportErrorAction: 'install',
+          dialogOpen: true,
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+
+    expect(screen.getByRole('heading', { name: 'Update failed' })).toBeInTheDocument();
+    expect(screen.getByText('IPC connection failed during install handoff')).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: 'Try again' });
+    expect(retryBtn).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+
+    fireEvent.click(retryBtn);
+    expect(handoffSpy).toHaveBeenCalledOnce();
   });
 
   it('disables buttons when busy installing or checking', async () => {

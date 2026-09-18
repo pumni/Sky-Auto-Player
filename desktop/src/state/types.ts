@@ -148,6 +148,7 @@ export interface DesktopStore {
     checkRequestPending: boolean;
     installRequestPending: boolean;
     transportError: string | null;
+    transportErrorAction: 'check' | 'install' | null;
     lastNativeRevision: number;
 
     state: UpdateState;

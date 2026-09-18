@@ -79,6 +79,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           ...get().update,
           checkRequestPending: true,
           transportError: null,
+          transportErrorAction: null,
           dialogOpen: isManual ? true : get().update.dialogOpen,
         },
       });
@@ -103,6 +104,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
               : error instanceof Error
                 ? error.message
                 : String(error),
+            transportErrorAction: hasNewerSnapshot ? null : 'check',
             dialogOpen: isManual ? true : current.dialogOpen,
           },
         });
@@ -126,6 +128,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           ...get().update,
           installRequestPending: true,
           transportError: null,
+          transportErrorAction: null,
         },
       });
       try {
@@ -148,6 +151,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
               : error instanceof Error
                 ? error.message
                 : String(error),
+            transportErrorAction: hasNewerSnapshot ? null : 'install',
           },
         });
       }

@@ -144,6 +144,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         checkRequestPending: false,
         installRequestPending: false,
         transportError: null,
+        transportErrorAction: null,
         lastNativeRevision: 0,
 
         state: 'idle',
@@ -381,6 +382,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
               checkRequestPending: current.checkRequestPending,
               installRequestPending: current.installRequestPending,
               transportError: null,
+              transportErrorAction: null,
               lastNativeRevision: event.payload.revision,
 
               state: event.payload.state,

@@ -7,7 +7,11 @@ import { formatUpdateError } from '../../state/updateHelpers';
 function getErrorHeading(
   errorCode: UpdateErrorCode | null,
   retryAction: UpdateRetryAction,
+  hasTransportError = false,
 ): string {
+  if (hasTransportError) {
+    return retryAction === 'install' ? 'Update failed' : 'Update check failed';
+  }
   if (
     errorCode === 'check_failed' ||
     errorCode === 'state_persistence_failed' ||
@@ -51,6 +55,10 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
   const isError = update.state === 'error' || Boolean(update.transportError);
   const isAvailable = !isError && update.state === 'available' && Boolean(update.availableVersion);
   const isCurrent = !isError && update.state === 'current';
+
+  const effectiveRetryAction = update.transportError
+    ? (update.transportErrorAction ?? 'check')
+    : update.retryAction;
 
   const errorText = update.transportError
     ? formatUpdateError(null, update.transportError)
@@ -105,10 +113,16 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
               </>
             ) : isError ? (
               <>
-                <h3>{getErrorHeading(update.errorCode, update.retryAction)}</h3>
+                <h3>
+                  {getErrorHeading(
+                    update.errorCode,
+                    effectiveRetryAction,
+                    Boolean(update.transportError),
+                  )}
+                </h3>
                 <p className="inline-error">{errorText}</p>
                 <div className="update-actions">
-                  {(update.retryAction === 'check' || Boolean(update.transportError)) && (
+                  {effectiveRetryAction === 'check' && (
                     <button
                       className="button button-primary"
                       type="button"
@@ -118,7 +132,7 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                       Check again
                     </button>
                   )}
-                  {update.retryAction === 'install' && !update.transportError && (
+                  {effectiveRetryAction === 'install' && (
                     <button
                       className="button button-primary"
                       type="button"

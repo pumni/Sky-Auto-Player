@@ -272,7 +272,7 @@ impl<R: Runtime> UpdateService<R> {
         error: impl std::fmt::Display,
         publish: &impl Fn(UiEvent) -> Result<(), String>,
     ) -> Result<UpdateCheckAckDto, String> {
-        let detail = format!("update timestamp persistence failed: {error}");
+        let detail = bounded(format!("update timestamp persistence failed: {error}"));
         self.transition_and_publish(
             StateTransition {
                 state: UpdateState::Error,
@@ -1460,27 +1460,26 @@ mod tests {
         let service = UpdateService::new(app.handle().clone(), activity);
 
         let event_count = AtomicUsize::new(0);
+        let oversized_error = "disk write error (simulated): ".to_string() + &"x".repeat(8192);
         let ack = service
-            .handle_check_persistence_failure(
-                UpdateChannel::Stable,
-                "disk write error (simulated)",
-                &|event| {
-                    event_count.fetch_add(1, Ordering::SeqCst);
-                    if let UiEvent::UpdateChanged { v, payload } = event {
-                        assert_eq!(v, 1);
-                        assert_eq!(payload.state, UpdateState::Error);
-                        assert_eq!(
-                            payload.error_code,
-                            Some(UpdateErrorCode::StatePersistenceFailed)
-                        );
-                        assert_eq!(payload.retry_action, UpdateRetryAction::Check);
-                        assert!(payload.error_detail.unwrap().contains("disk write error"));
-                    } else {
-                        panic!("unexpected event: {event:?}");
-                    }
-                    Ok(())
-                },
-            )
+            .handle_check_persistence_failure(UpdateChannel::Stable, &oversized_error, &|event| {
+                event_count.fetch_add(1, Ordering::SeqCst);
+                if let UiEvent::UpdateChanged { v, payload } = event {
+                    assert_eq!(v, 1);
+                    assert_eq!(payload.state, UpdateState::Error);
+                    assert_eq!(
+                        payload.error_code,
+                        Some(UpdateErrorCode::StatePersistenceFailed)
+                    );
+                    assert_eq!(payload.retry_action, UpdateRetryAction::Check);
+                    let detail = payload.error_detail.unwrap();
+                    assert!(detail.contains("disk write error"));
+                    assert!(detail.len() <= 4096);
+                } else {
+                    panic!("unexpected event: {event:?}");
+                }
+                Ok(())
+            })
             .expect("handled persistence failure");
 
         assert_eq!(ack.disposition, UpdateCheckDisposition::Performed);
@@ -1493,5 +1492,6 @@ mod tests {
             Some(UpdateErrorCode::StatePersistenceFailed)
         );
         assert_eq!(snapshot.retry_action, UpdateRetryAction::Check);
+        assert!(snapshot.error_detail.as_ref().unwrap().len() <= 4096);
     }
 }
