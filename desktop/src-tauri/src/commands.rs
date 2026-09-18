@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::ui_events::{
     CalibrationMode, CalibrationState, CatalogReadiness, UiEvent, UpdateChannel, UpdateState,
 };
+pub use crate::ui_events::{UpdateCheckAckDto, UpdateCheckRequest};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -276,19 +277,6 @@ pub struct UpdatePreferencesDto {
     pub check_interval_s: i64,
     pub last_check_ts: i64,
     pub last_error_ts: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct UpdateCheckDto {
-    pub state: UpdateState,
-    pub current_version: String,
-    pub available_version: Option<String>,
-    pub channel: UpdateChannel,
-    pub release_notes: Option<String>,
-    pub published_at: Option<String>,
-    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -849,8 +837,11 @@ pub async fn patch_settings(
 }
 
 #[tauri::command]
-pub async fn check_for_update(state: State<'_, AppState>) -> Result<UpdateCheckDto, String> {
-    blocking_request(state, "update.check", serde_json::json!({})).await
+pub async fn check_for_update(
+    state: State<'_, AppState>,
+    params: UpdateCheckRequest,
+) -> Result<UpdateCheckAckDto, String> {
+    blocking_request(state, "update.check", params).await
 }
 
 #[tauri::command]

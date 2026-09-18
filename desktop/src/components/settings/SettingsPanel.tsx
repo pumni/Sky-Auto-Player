@@ -280,9 +280,12 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                   <button
                     className="button"
                     type="button"
+                    disabled={update.checkRequestPending || update.state === 'checking'}
                     onClick={() => void checkForUpdate('manual')}
                   >
-                    {update.state === 'checking' ? 'Checking…' : 'Check for updates'}
+                    {update.checkRequestPending || update.state === 'checking'
+                      ? 'Checking…'
+                      : 'Check for updates'}
                   </button>
                 </section>
               )}

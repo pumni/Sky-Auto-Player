@@ -1,8 +1,6 @@
 import type { DesktopBridge } from '../bridge/DesktopBridge';
 import type { DesktopStore } from './types';
 
-import { formatUpdateError, shouldAutoCheck } from './updateHelpers';
-
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
 export interface SettingsSliceContext {
@@ -75,36 +73,21 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
 
     async checkForUpdate(origin: 'manual' | 'background' = 'manual') {
       const isManual = origin === 'manual';
-      if (!isManual) {
-        const preferences = get().settings?.update_preferences;
-        if (!preferences || !shouldAutoCheck(preferences)) {
-          return;
-        }
-      }
-
       set({
         update: {
           ...get().update,
-          state: 'checking',
-          error: null,
+          checkRequestPending: true,
+          transportError: null,
           dialogOpen: isManual ? true : get().update.dialogOpen,
         },
       });
 
       try {
-        const result = await bridge.checkForUpdate();
-        const formattedError = result.error ? formatUpdateError(result.error) : null;
+        await bridge.checkForUpdate({ origin });
         set({
           update: {
             ...get().update,
-            state: result.state,
-            currentVersion: result.current_version,
-            availableVersion: result.available_version,
-            channel: result.channel,
-            releaseNotes: result.release_notes,
-            publishedAt: result.published_at,
-            error: formattedError,
-            dialogOpen: isManual ? true : get().update.dialogOpen,
+            checkRequestPending: false,
           },
         });
         try {
@@ -125,8 +108,8 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
         set({
           update: {
             ...get().update,
-            state: 'error',
-            error: formatUpdateError(error),
+            checkRequestPending: false,
+            transportError: error instanceof Error ? error.message : String(error),
             dialogOpen: isManual ? true : get().update.dialogOpen,
           },
         });
@@ -139,25 +122,32 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
     },
 
     async beginUpdateHandoff() {
+      if (get().update.installRequestPending) {
+        return;
+      }
       const targetVersion = get().update.availableVersion;
       if (!targetVersion) return;
-      set({ update: { ...get().update, state: 'downloading', error: null } });
+      set({
+        update: {
+          ...get().update,
+          installRequestPending: true,
+          transportError: null,
+        },
+      });
       try {
-        const handoff = await bridge.beginUpdateHandoff(targetVersion);
+        await bridge.beginUpdateHandoff(targetVersion);
         set({
           update: {
             ...get().update,
-            state: handoff.state,
-            handoffId: handoff.handoff_id,
-            error: null,
+            installRequestPending: false,
           },
         });
       } catch (error) {
         set({
           update: {
             ...get().update,
-            state: 'error',
-            error: formatUpdateError(error),
+            installRequestPending: false,
+            transportError: error instanceof Error ? error.message : String(error),
           },
         });
       }

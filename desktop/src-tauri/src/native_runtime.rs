@@ -18,7 +18,7 @@ use crate::commands::{
     PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackDefaultsDto, PlaybackPendingControl,
     PlaybackPlanVariantDto, PlaybackPrepareRequest, PlaybackSessionDto, PlaybackSessionState,
     PlaybackStartRequest, PlaybackStatusDto, PlaybackTerminalStatusDto, PreparedPlaybackDto,
-    RiskDecisionDto, RiskSummaryDto, SettingsDto, SettingsPatch, SongDetailDto, UpdateCheckDto,
+    RiskDecisionDto, RiskSummaryDto, SettingsDto, SettingsPatch, SongDetailDto, UpdateCheckAckDto,
     UpdateHandoffDto, UpdatePreferencesDto, UpdatePreferencesPatch,
 };
 use crate::power_lifecycle::{
@@ -31,7 +31,8 @@ use crate::ui_events::{
     CalibrationState, CatalogChangedPayload, CatalogLoadFailedPayload, CatalogReadiness,
     CoreReadyPayload, DiagnosticsBackendStatus, NativeBuildPayload, PlaybackEventState,
     PlaybackFailedPayload, PlaybackFinishedPayload, PlaybackFocusState, PlaybackHealthState,
-    PlaybackSnapshotPayload, PlaybackStateChangedPayload, UiEvent,
+    PlaybackSnapshotPayload, PlaybackStateChangedPayload, UiEvent, UpdateCheckRequest,
+    UpdateSnapshotPayload,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -1534,9 +1535,19 @@ impl NativeDesktopRuntime {
         let settings_path = paths.settings_path();
         let settings_store = JsonSettingsStore::new(settings_path);
         crate::startup_telemetry::record("settings.load.start");
-        let settings = SettingsService::load(settings_store)
+        let mut settings = SettingsService::load(settings_store)
             .map_err(|error| format!("native settings startup failed: {error}"))?;
         crate::startup_telemetry::record("settings.load.end");
+        if settings.snapshot().update.channel == sky_app_core::settings::UpdateChannel::Beta {
+            let _ = settings.patch(&sky_app_core::settings::SettingsPatch {
+                update: Some(CoreUpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: Some(sky_app_core::settings::UpdateChannel::Stable),
+                    skip_version: None,
+                }),
+                ..Default::default()
+            });
+        }
         let manifest_store = JsonLibraryManifestStore::new(paths.library_manifest_path());
         crate::startup_telemetry::record("manifest.load.start");
         let library_manifest = LibraryManifestService::load(manifest_store)
@@ -1745,10 +1756,16 @@ impl NativeDesktopRuntime {
                 encode_result(self.patch_update_preferences(request.into_public()))
             }
             "update.check" => {
-                if !params.as_object().is_some_and(|object| object.is_empty()) {
-                    return Err("invalid_params: update.check takes no parameters".into());
-                }
-                encode_result(self.check_update())
+                let request: UpdateCheckRequest = if params.is_null()
+                    || params.as_object().is_some_and(|object| object.is_empty())
+                {
+                    UpdateCheckRequest {
+                        origin: crate::ui_events::UpdateCheckOrigin::Background,
+                    }
+                } else {
+                    serde_json::from_value(params).map_err(json_error)?
+                };
+                encode_result(self.check_update(request))
             }
             "update.begin_handoff" => {
                 let request: crate::commands::UpdateBeginHandoffRequest =
@@ -1886,6 +1903,13 @@ impl NativeDesktopRuntime {
     }
 
     fn patch_settings(&self, patch: SettingsPatch) -> Result<SettingsDto, String> {
+        if patch.update_preferences.as_ref().and_then(|u| u.channel)
+            == Some(crate::ui_events::UpdateChannel::Beta)
+        {
+            return Err(
+                "channel_unavailable: beta update channel is not supported in production".into(),
+            );
+        }
         let update_preferences_changed = patch.update_preferences.is_some();
         let auto_play_only = patch.auto_play.is_some()
             && patch.theme.is_none()
@@ -1930,7 +1954,15 @@ impl NativeDesktopRuntime {
             self.invalidate_analysis_cache();
         }
         if update_preferences_changed && let Some(update_service) = &self.update_service {
-            update_service.reset();
+            let channel = match snapshot.update.channel {
+                sky_app_core::settings::UpdateChannel::Stable => {
+                    crate::ui_events::UpdateChannel::Stable
+                }
+                sky_app_core::settings::UpdateChannel::Beta => {
+                    crate::ui_events::UpdateChannel::Beta
+                }
+            };
+            let _ = update_service.reset_and_publish_idle(channel, |event| self.publish(event));
         }
         Ok(settings_dto(&snapshot, self.timing_margin_recommendation()))
     }
@@ -1940,7 +1972,7 @@ impl NativeDesktopRuntime {
         Ok(update_preferences_dto(&settings))
     }
 
-    fn check_update(&self) -> Result<UpdateCheckDto, String> {
+    fn check_update(&self, request: UpdateCheckRequest) -> Result<UpdateCheckAckDto, String> {
         let mut settings = self
             .settings
             .lock()
@@ -1950,7 +1982,16 @@ impl NativeDesktopRuntime {
             .ok_or_else(|| {
                 "update_service_unavailable: Rust-owned UpdateService is not configured".to_string()
             })?
-            .check(&mut settings, |event| self.publish(event))
+            .check(&request, &mut settings, |event| self.publish(event))
+    }
+
+    pub(crate) fn update_snapshot(&self) -> Result<UpdateSnapshotPayload, String> {
+        self.update_service
+            .as_ref()
+            .ok_or_else(|| {
+                "update_service_unavailable: Rust-owned UpdateService is not configured".to_string()
+            })
+            .map(|service| service.current_snapshot())
     }
 
     fn begin_update_handoff(&self, target_version: String) -> Result<UpdateHandoffDto, String> {
@@ -1970,6 +2011,11 @@ impl NativeDesktopRuntime {
         &self,
         patch: UpdatePreferencesPatch,
     ) -> Result<UpdatePreferencesDto, String> {
+        if patch.channel == Some(crate::ui_events::UpdateChannel::Beta) {
+            return Err(
+                "channel_unavailable: beta update channel is not supported in production".into(),
+            );
+        }
         let mut settings = self
             .settings
             .lock()
@@ -1992,7 +2038,15 @@ impl NativeDesktopRuntime {
             })
             .map_err(settings_error)?;
         if let Some(update_service) = &self.update_service {
-            update_service.reset();
+            let channel = match snapshot.update.channel {
+                sky_app_core::settings::UpdateChannel::Stable => {
+                    crate::ui_events::UpdateChannel::Stable
+                }
+                sky_app_core::settings::UpdateChannel::Beta => {
+                    crate::ui_events::UpdateChannel::Beta
+                }
+            };
+            let _ = update_service.reset_and_publish_idle(channel, |event| self.publish(event));
         }
         Ok(update_preferences_dto(snapshot))
     }
@@ -6496,9 +6550,7 @@ fn validate_ui_event(event: &UiEvent) -> Result<(), String> {
         UiEvent::CalibrationFinished { payload, .. } => {
             UiEvent::validate_calibration_finished(payload)
         }
-        UiEvent::UpdateAvailable { payload, .. } => UiEvent::validate_update_available(payload),
-        UiEvent::UpdateResult { payload, .. } => UiEvent::validate_update_result(payload),
-        UiEvent::UpdateProgress { payload, .. } => UiEvent::validate_update_progress(payload),
+        UiEvent::UpdateChanged { payload, .. } => UiEvent::validate_update_changed(payload),
     }
 }
 

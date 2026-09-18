@@ -18,7 +18,9 @@ import type {
   SongRow,
   UiEvent,
   UpdateChannelId,
-  UpdateCheck,
+  UpdateErrorCode,
+  UpdateRetryAction,
+  UpdateState,
 } from '../bridge/DesktopBridge';
 
 export type LoadState = 'idle' | 'loading' | 'ready' | 'fatal';
@@ -142,16 +144,23 @@ export interface DesktopStore {
     error: string | null;
   };
   update: {
-    state: UpdateCheck['state'];
     dialogOpen: boolean;
+    checkRequestPending: boolean;
+    installRequestPending: boolean;
+    transportError: string | null;
+    lastNativeRevision: number;
+
+    state: UpdateState;
     currentVersion: string | null;
     availableVersion: string | null;
     channel: UpdateChannelId;
     releaseNotes: string | null;
     publishedAt: string | null;
-    error: string | null;
+    errorCode: UpdateErrorCode | null;
+    errorDetail: string | null;
+    retryAction: UpdateRetryAction;
     handoffId: string | null;
-    progress: { completed: number; total: number | null; message: string };
+    progress: { completed: number; total: number | null; message: string } | null;
   };
   playback: {
     shuffleEnabled: boolean;

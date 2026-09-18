@@ -20,6 +20,7 @@ import type {
   UiEvent,
   Unsubscribe,
   ViewportRequest,
+  UpdateCheckRequest,
   UpdatePatch,
 } from './DesktopBridge';
 
@@ -63,7 +64,7 @@ export function createTauriBridge(): DesktopBridge {
       call(COMMANDS.libraryImportLocalFolderToPlaylist, { playlistId }),
     getSettings: () => call(COMMANDS.getSettings),
     patchSettings: (patch: SettingsPatch) => call(COMMANDS.patchSettings, patch),
-    checkForUpdate: () => call(COMMANDS.checkForUpdate),
+    checkForUpdate: (request: UpdateCheckRequest) => call(COMMANDS.checkForUpdate, request),
     getUpdatePreferences: () => call(COMMANDS.getUpdatePreferences),
     patchUpdatePreferences: (patch: UpdatePatch) => call(COMMANDS.patchUpdatePreferences, patch),
     beginUpdateHandoff: (targetVersion: string) =>

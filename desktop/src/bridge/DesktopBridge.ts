@@ -49,11 +49,15 @@ import type {
   UpdatePreferencesDto,
   UpdateChannel as GeneratedUpdateChannel,
   UpdateState as GeneratedUpdateState,
-  UpdateCheckDto,
+  UpdateCheckAckDto,
+  UpdateCheckDisposition,
+  UpdateCheckOrigin,
+  UpdateCheckRequest,
+  UpdateErrorCode,
   UpdateHandoffDto,
-  UpdateAvailablePayload,
-  UpdateResultPayload,
-  UpdateProgressPayload,
+  UpdateProgressDto,
+  UpdateRetryAction,
+  UpdateSnapshotPayload,
 } from './generated';
 
 export type ThemeId = 'aurora' | 'minimalist' | 'slate' | 'cyberpunk' | 'classic';
@@ -66,8 +70,21 @@ export type UpdatePreferences = Omit<UpdatePreferencesDto, 'channel'> & {
   channel: GeneratedUpdateChannel;
 };
 export type UpdateChannelId = GeneratedUpdateChannel;
+export type UpdateState = GeneratedUpdateState;
 export type UpdateStateId = GeneratedUpdateState;
-export type UpdateCheck = UpdateCheckDto;
+export type UpdateCheck = UpdateCheckAckDto;
+export type UpdateCheckAck = UpdateCheckAckDto;
+export type {
+  UpdateCheckDisposition,
+  UpdateCheckOrigin,
+  UpdateCheckRequest,
+  UpdateErrorCode,
+  UpdateProgressDto,
+  UpdateRetryAction,
+  UpdateSnapshotPayload,
+};
+export type UpdateProgress = UpdateProgressDto;
+export type UpdateSnapshot = UpdateSnapshotPayload;
 export type UpdateHandoff = UpdateHandoffDto;
 export type UpdatePatch = Partial<{
   autoCheck: boolean;
@@ -140,9 +157,6 @@ export type SongRow = Omit<CatalogRowDto, 'risk_level' | 'metadata_state'> & {
 };
 
 export type UiEvent = GeneratedUiEvent;
-export type UpdateAvailable = UpdateAvailablePayload;
-export type UpdateResult = UpdateResultPayload;
-export type UpdateProgress = UpdateProgressPayload;
 export type PlaybackConfig = PlaybackConfigDto;
 export type PlaybackCommandAck = PlaybackCommandAckDto;
 export type PlaybackPrepare = PlaybackPrepareRequest;
@@ -186,7 +200,7 @@ export interface DesktopBridge {
   importLocalFolderToPlaylist(playlistId: string): Promise<LibraryPlaylistImportResult>;
   getSettings(): Promise<Settings>;
   patchSettings(patch: SettingsPatch): Promise<Settings>;
-  checkForUpdate(): Promise<UpdateCheck>;
+  checkForUpdate(request: UpdateCheckRequest): Promise<UpdateCheckAck>;
   getUpdatePreferences(): Promise<UpdatePreferences>;
   patchUpdatePreferences(patch: UpdatePatch): Promise<UpdatePreferences>;
   beginUpdateHandoff(targetVersion: string): Promise<UpdateHandoff>;

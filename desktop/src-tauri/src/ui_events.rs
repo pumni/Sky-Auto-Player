@@ -79,38 +79,90 @@ pub enum UpdateState {
     Error,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct UpdateAvailablePayload {
-    pub current_version: String,
-    pub available_version: String,
-    pub channel: UpdateChannel,
-    pub release_notes: Option<String>,
-    pub published_at: Option<String>,
+#[serde(rename_all = "snake_case")]
+pub enum UpdateCheckOrigin {
+    Manual,
+    Background,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(deny_unknown_fields)]
-pub struct UpdateResultPayload {
+pub struct UpdateCheckRequest {
+    pub origin: UpdateCheckOrigin,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateCheckDisposition {
+    Performed,
+    Disabled,
+    Throttled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateCheckAckDto {
+    pub disposition: UpdateCheckDisposition,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateRetryAction {
+    None,
+    Check,
+    Install,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateErrorCode {
+    CheckFailed,
+    UpdateServiceUnavailable,
+    ChannelUnavailable,
+    PlaybackActive,
+    CalibrationActive,
+    UpdateBusy,
+    Closing,
+    StaleUpdate,
+    UpdateUnavailable,
+    DownloadFailed,
+    InstallFailed,
+    StatePersistenceFailed,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateProgressDto {
+    pub completed: u64,
+    pub total: Option<u64>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateSnapshotPayload {
+    pub revision: u64,
     pub state: UpdateState,
     pub current_version: String,
     pub available_version: Option<String>,
     pub channel: UpdateChannel,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
-#[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct UpdateProgressPayload {
-    pub operation_id: String,
-    pub state: UpdateState,
-    pub available_version: String,
-    pub completed: u64,
-    pub total: Option<u64>,
-    pub message: String,
+    pub release_notes: Option<String>,
+    pub published_at: Option<String>,
+    pub error_code: Option<UpdateErrorCode>,
+    pub error_detail: Option<String>,
+    pub retry_action: UpdateRetryAction,
+    pub operation_id: Option<String>,
+    pub progress: Option<UpdateProgressDto>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
@@ -403,20 +455,10 @@ pub enum UiEvent {
         v: u64,
         payload: CalibrationFinishedPayload,
     },
-    #[serde(rename = "update.available")]
-    UpdateAvailable {
+    #[serde(rename = "update.changed")]
+    UpdateChanged {
         v: u64,
-        payload: UpdateAvailablePayload,
-    },
-    #[serde(rename = "update.result")]
-    UpdateResult {
-        v: u64,
-        payload: UpdateResultPayload,
-    },
-    #[serde(rename = "update.progress")]
-    UpdateProgress {
-        v: u64,
-        payload: UpdateProgressPayload,
+        payload: UpdateSnapshotPayload,
     },
 }
 
@@ -569,43 +611,37 @@ impl UiEvent {
         Ok(())
     }
 
-    pub(crate) fn validate_update_available(
-        payload: &UpdateAvailablePayload,
-    ) -> Result<(), String> {
+    pub(crate) fn validate_update_changed(payload: &UpdateSnapshotPayload) -> Result<(), String> {
+        if payload.revision == 0 {
+            return Err("event update revision must be positive".into());
+        }
         validate_text("current_version", &payload.current_version)?;
-        validate_text("available_version", &payload.available_version)?;
+        if let Some(version) = &payload.available_version {
+            validate_text("available_version", version)?;
+        }
         if let Some(notes) = &payload.release_notes {
             validate_text("release_notes", notes)?;
         }
         if let Some(published_at) = &payload.published_at {
             validate_text("published_at", published_at)?;
         }
-        Ok(())
-    }
-
-    pub(crate) fn validate_update_result(payload: &UpdateResultPayload) -> Result<(), String> {
-        validate_text("current_version", &payload.current_version)?;
-        if let Some(version) = &payload.available_version {
-            validate_text("available_version", version)?;
+        if let Some(error_detail) = &payload.error_detail {
+            validate_text("error_detail", error_detail)?;
         }
-        if let Some(error) = &payload.error {
-            validate_text("error", error)?;
+        if let Some(operation_id) = &payload.operation_id {
+            validate_session_id(operation_id)
+                .map_err(|_| "update operation_id is not an opaque ID".to_string())?;
         }
-        Ok(())
-    }
-
-    pub(crate) fn validate_update_progress(payload: &UpdateProgressPayload) -> Result<(), String> {
-        validate_session_id(&payload.operation_id)
-            .map_err(|_| "update operation_id is not an opaque ID".to_string())?;
-        validate_text("available_version", &payload.available_version)?;
-        validate_text("message", &payload.message)?;
-        if payload.completed > 2 * 1024 * 1024 * 1024 {
-            return Err("update progress exceeds the bounded artifact size".into());
-        }
-        if payload.total.is_some_and(|total| {
-            total == 0 || total > 2 * 1024 * 1024 * 1024 || payload.completed > total
-        }) {
-            return Err("update progress is outside bounds".into());
+        if let Some(progress) = &payload.progress {
+            validate_text("message", &progress.message)?;
+            if progress.completed > 2 * 1024 * 1024 * 1024 {
+                return Err("update progress exceeds the bounded artifact size".into());
+            }
+            if progress.total.is_some_and(|total| {
+                total == 0 || total > 2 * 1024 * 1024 * 1024 || progress.completed > total
+            }) {
+                return Err("update progress is outside bounds".into());
+            }
         }
         Ok(())
     }

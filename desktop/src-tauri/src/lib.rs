@@ -243,11 +243,12 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                 tauri::async_runtime::spawn_blocking(move || {
                     let result = (|| -> Result<bool, String> {
                         let native = update_state.ensure_native_blocking()?;
-                        let check: commands::UpdateCheckDto = serde_json::from_value(
-                            native.dispatch("update.check", serde_json::json!({}))?,
+                        let _check: commands::UpdateCheckAckDto = serde_json::from_value(
+                            native.dispatch("update.check", serde_json::json!({"origin": "manual"}))?,
                         )
                         .map_err(|error| format!("packaged update check response: {error}"))?;
-                        if let Some(target) = check.available_version {
+                        let snapshot = native.update_snapshot()?;
+                        if let Some(target) = snapshot.available_version {
                             if let Some(expected_path) = expected_version_file.as_ref() {
                                 std::fs::write(expected_path, format!("{target}\n")).map_err(
                                     |error| {
@@ -266,7 +267,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                                     format!("packaged update install response: {error}")
                                 })?;
                             Ok(false)
-                        } else if check.state == ui_events::UpdateState::Current {
+                        } else if snapshot.state == ui_events::UpdateState::Current {
                             if let Some(marker) = marker.as_ref() {
                                 let _ = std::fs::write(
                                     marker,
@@ -276,8 +277,8 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                             native.shutdown();
                             Ok(true)
                         } else {
-                            Err(check
-                                .error
+                            Err(snapshot
+                                .error_detail
                                 .unwrap_or_else(|| "packaged update check was inconclusive".into()))
                         }
                     })();
@@ -582,9 +583,9 @@ pub fn selftest_packaged_shell() -> i32 {
                 serde_json::json!({"autoCheck": settings.update_preferences.auto_check}),
             )?)
             .map_err(|error| format!("update.preferences.patch response: {error}"))?;
-        match runtime.dispatch("update.check", serde_json::json!({})) {
+        match runtime.dispatch("update.check", serde_json::json!({"origin": "background"})) {
             Ok(value) => {
-                let _update_check: commands::UpdateCheckDto = serde_json::from_value(value)
+                let _update_check: commands::UpdateCheckAckDto = serde_json::from_value(value)
                     .map_err(|error| format!("update.check response: {error}"))?;
             }
             Err(error) if error.starts_with("update_service_unavailable") => {}

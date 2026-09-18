@@ -7,11 +7,12 @@
 //! updater trust root is compiled into this boundary; a missing or invalid
 //! root makes the official updater fail closed.
 
-use crate::app_state::{ActivityCoordinator, ActivityReservationError, UpdateInstallLease};
-use crate::commands::{UpdateCheckDto, UpdateHandoffDto};
+use crate::app_state::{ActivityCoordinator, ActivityReservationError};
+use crate::commands::UpdateHandoffDto;
 use crate::ui_events::{
-    UiEvent, UpdateAvailablePayload, UpdateChannel, UpdateProgressPayload, UpdateResultPayload,
-    UpdateState,
+    UiEvent, UpdateChannel, UpdateCheckAckDto, UpdateCheckDisposition, UpdateCheckOrigin,
+    UpdateCheckRequest, UpdateErrorCode, UpdateProgressDto, UpdateRetryAction,
+    UpdateSnapshotPayload, UpdateState,
 };
 use sky_app_core::settings::{ApplicationSettings, SettingsService, UpdateChannel as CoreChannel};
 use sky_native_adapters::JsonSettingsStore;
@@ -30,6 +31,7 @@ const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 #[cfg(not(feature = "tauri-update-fixture"))]
 const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json";
 #[cfg(not(feature = "tauri-update-fixture"))]
+#[allow(dead_code)]
 const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json";
 #[cfg(not(feature = "tauri-update-fixture"))]
 const OFFICIAL_METADATA_HOST: &str = "raw.githubusercontent.com";
@@ -59,24 +61,62 @@ pub(crate) struct NativeUpdateCandidate {
 }
 
 struct NativeUpdateState {
+    revision: u64,
     candidate: Option<NativeUpdateCandidate>,
     updates: Vec<Update>,
     operation_id: Option<String>,
     state: UpdateState,
+    error_code: Option<UpdateErrorCode>,
+    error_detail: Option<String>,
+    retry_action: UpdateRetryAction,
+    progress: Option<UpdateProgressDto>,
 }
 
 impl Default for NativeUpdateState {
     fn default() -> Self {
         Self {
+            revision: 0,
             candidate: None,
             updates: Vec::new(),
             operation_id: None,
             state: UpdateState::Idle,
+            error_code: None,
+            error_detail: None,
+            retry_action: UpdateRetryAction::None,
+            progress: None,
         }
     }
 }
 
 type SafetyHook = Arc<dyn Fn() + Send + Sync + 'static>;
+
+struct StateTransition {
+    state: UpdateState,
+    channel: UpdateChannel,
+    candidate: Option<NativeUpdateCandidate>,
+    updates: Vec<Update>,
+    operation_id: Option<String>,
+    progress: Option<UpdateProgressDto>,
+    error_code: Option<UpdateErrorCode>,
+    error_detail: Option<String>,
+    retry_action: UpdateRetryAction,
+}
+
+impl Default for StateTransition {
+    fn default() -> Self {
+        Self {
+            state: UpdateState::Idle,
+            channel: UpdateChannel::Stable,
+            candidate: None,
+            updates: Vec::new(),
+            operation_id: None,
+            progress: None,
+            error_code: None,
+            error_detail: None,
+            retry_action: UpdateRetryAction::None,
+        }
+    }
+}
 
 /// The only updater object owned by the desktop application. No caller
 /// supplied endpoint, public key, artifact path, or version comparator enters
@@ -104,19 +144,148 @@ impl<R: Runtime> UpdateService<R> {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn reset(&self) {
         if let Ok(mut state) = self.state.lock() {
+            let revision = state.revision;
             *state = NativeUpdateState::default();
+            state.revision = revision;
         }
+    }
+
+    pub(crate) fn reset_and_publish_idle(
+        &self,
+        channel: UpdateChannel,
+        publish: impl Fn(UiEvent) -> Result<(), String>,
+    ) -> Result<UpdateSnapshotPayload, String> {
+        self.transition_and_publish(
+            StateTransition {
+                state: UpdateState::Idle,
+                channel,
+                ..Default::default()
+            },
+            &publish,
+        )
+    }
+
+    pub(crate) fn current_snapshot(&self) -> UpdateSnapshotPayload {
+        let state_guard = self.state.lock().expect("native update state lock");
+        let (available_version, release_notes, published_at) = match &state_guard.candidate {
+            Some(c) => (
+                Some(c.version.clone()),
+                c.release_notes.clone(),
+                c.published_at.clone(),
+            ),
+            None => (None, None, None),
+        };
+        let channel = state_guard
+            .candidate
+            .as_ref()
+            .map(|c| c.channel)
+            .unwrap_or(UpdateChannel::Stable);
+
+        UpdateSnapshotPayload {
+            revision: state_guard.revision,
+            state: state_guard.state,
+            current_version: env!("CARGO_PKG_VERSION").to_owned(),
+            available_version,
+            channel,
+            release_notes,
+            published_at,
+            error_code: state_guard.error_code,
+            error_detail: state_guard.error_detail.clone(),
+            retry_action: state_guard.retry_action,
+            operation_id: state_guard.operation_id.clone(),
+            progress: state_guard.progress.clone(),
+        }
+    }
+
+    fn transition_and_publish(
+        &self,
+        transition: StateTransition,
+        publish: &impl Fn(UiEvent) -> Result<(), String>,
+    ) -> Result<UpdateSnapshotPayload, String> {
+        let (revision, snapshot) = {
+            let mut state_guard = self
+                .state
+                .lock()
+                .map_err(|_| "native update state lock poisoned".to_string())?;
+            state_guard.revision += 1;
+            state_guard.state = transition.state;
+            state_guard.candidate = transition.candidate.clone();
+            state_guard.updates = transition.updates;
+            state_guard.operation_id = transition.operation_id.clone();
+            state_guard.progress = transition.progress.clone();
+            state_guard.error_code = transition.error_code;
+            state_guard.error_detail = transition.error_detail.clone();
+            state_guard.retry_action = transition.retry_action;
+
+            let (available_version, release_notes, published_at) = match &transition.candidate {
+                Some(c) => (
+                    Some(c.version.clone()),
+                    c.release_notes.clone(),
+                    c.published_at.clone(),
+                ),
+                None => (None, None, None),
+            };
+
+            let snapshot = UpdateSnapshotPayload {
+                revision: state_guard.revision,
+                state: transition.state,
+                current_version: env!("CARGO_PKG_VERSION").to_owned(),
+                available_version,
+                channel: transition.channel,
+                release_notes,
+                published_at,
+                error_code: transition.error_code,
+                error_detail: transition.error_detail,
+                retry_action: transition.retry_action,
+                operation_id: transition.operation_id,
+                progress: transition.progress,
+            };
+            (state_guard.revision, snapshot)
+        };
+
+        publish(UiEvent::UpdateChanged {
+            v: revision,
+            payload: snapshot.clone(),
+        })?;
+
+        Ok(snapshot)
     }
 
     pub(crate) fn check(
         &self,
+        request: &UpdateCheckRequest,
         settings: &mut SettingsService<JsonSettingsStore>,
         publish: impl Fn(UiEvent) -> Result<(), String>,
-    ) -> Result<UpdateCheckDto, String> {
+    ) -> Result<UpdateCheckAckDto, String> {
         let channel = public_channel(&settings.snapshot().update.channel);
-        let current_version = env!("CARGO_PKG_VERSION").to_owned();
+        let now = unix_timestamp();
+        let preferences = &settings.snapshot().update;
+
+        if request.origin == UpdateCheckOrigin::Background {
+            if !preferences.auto_check {
+                return Ok(UpdateCheckAckDto {
+                    disposition: UpdateCheckDisposition::Disabled,
+                });
+            }
+            if !sky_app_core::update::should_auto_check(preferences, now) {
+                return Ok(UpdateCheckAckDto {
+                    disposition: UpdateCheckDisposition::Throttled,
+                });
+            }
+        }
+
+        self.transition_and_publish(
+            StateTransition {
+                state: UpdateState::Checking,
+                channel,
+                ..Default::default()
+            },
+            &publish,
+        )?;
+
         let result = self.check_official(channel);
         let timestamp = unix_timestamp();
 
@@ -126,75 +295,97 @@ impl<R: Runtime> UpdateService<R> {
                     settings.snapshot().update.skip_version != update.version
                 }) =>
             {
-                settings
-                    .record_update_success(timestamp)
-                    .map_err(|error| format!("update timestamp persistence failed: {error}"))?;
+                if let Err(error) = settings.record_update_success(timestamp) {
+                    let detail = format!("update timestamp persistence failed: {error}");
+                    let _ = self.transition_and_publish(
+                        StateTransition {
+                            state: UpdateState::Error,
+                            channel,
+                            error_code: Some(UpdateErrorCode::StatePersistenceFailed),
+                            error_detail: Some(detail.clone()),
+                            retry_action: UpdateRetryAction::Check,
+                            ..Default::default()
+                        },
+                        &publish,
+                    );
+                    return Err(detail);
+                }
                 let candidate =
                     candidate_from_update(updates.first().expect("update exists"), channel);
-                let dto = UpdateCheckDto {
-                    state: UpdateState::Available,
-                    current_version: current_version.clone(),
-                    available_version: Some(candidate.version.clone()),
-                    channel,
-                    release_notes: candidate.release_notes.clone(),
-                    published_at: candidate.published_at.clone(),
-                    error: None,
-                };
-                {
-                    let mut state = self
-                        .state
-                        .lock()
-                        .map_err(|_| "native update state lock poisoned".to_string())?;
-                    state.candidate = Some(candidate.clone());
-                    state.updates = updates;
-                    state.operation_id = None;
-                    state.state = UpdateState::Available;
-                }
-                publish(UiEvent::UpdateAvailable {
-                    v: crate::DESKTOP_PROTOCOL_VERSION,
-                    payload: UpdateAvailablePayload {
-                        current_version: current_version.clone(),
-                        available_version: candidate.version,
+                self.transition_and_publish(
+                    StateTransition {
+                        state: UpdateState::Available,
                         channel,
-                        release_notes: candidate.release_notes,
-                        published_at: candidate.published_at,
+                        candidate: Some(candidate),
+                        updates,
+                        ..Default::default()
                     },
-                })?;
-                publish_result(&publish, &dto)?;
-                Ok(dto)
+                    &publish,
+                )?;
+                Ok(UpdateCheckAckDto {
+                    disposition: UpdateCheckDisposition::Performed,
+                })
             }
             Ok(_) => {
-                settings
-                    .record_update_success(timestamp)
-                    .map_err(|error| format!("update timestamp persistence failed: {error}"))?;
-                let dto = UpdateCheckDto {
-                    state: UpdateState::Current,
-                    current_version,
-                    available_version: None,
-                    channel,
-                    release_notes: None,
-                    published_at: None,
-                    error: None,
-                };
-                self.reset();
-                publish_result(&publish, &dto)?;
-                Ok(dto)
+                if let Err(error) = settings.record_update_success(timestamp) {
+                    let detail = format!("update timestamp persistence failed: {error}");
+                    let _ = self.transition_and_publish(
+                        StateTransition {
+                            state: UpdateState::Error,
+                            channel,
+                            error_code: Some(UpdateErrorCode::StatePersistenceFailed),
+                            error_detail: Some(detail.clone()),
+                            retry_action: UpdateRetryAction::Check,
+                            ..Default::default()
+                        },
+                        &publish,
+                    );
+                    return Err(detail);
+                }
+                self.transition_and_publish(
+                    StateTransition {
+                        state: UpdateState::Current,
+                        channel,
+                        ..Default::default()
+                    },
+                    &publish,
+                )?;
+                Ok(UpdateCheckAckDto {
+                    disposition: UpdateCheckDisposition::Performed,
+                })
             }
             Err(error) => {
-                let _ = settings.record_update_error(timestamp);
+                if let Err(persist_error) = settings.record_update_error(timestamp) {
+                    let detail = format!("update timestamp persistence failed: {persist_error}");
+                    let _ = self.transition_and_publish(
+                        StateTransition {
+                            state: UpdateState::Error,
+                            channel,
+                            error_code: Some(UpdateErrorCode::StatePersistenceFailed),
+                            error_detail: Some(detail.clone()),
+                            retry_action: UpdateRetryAction::Check,
+                            ..Default::default()
+                        },
+                        &publish,
+                    );
+                    return Err(detail);
+                }
+                let error_code = classify_check_error(&error);
                 let message = bounded(error);
-                let dto = UpdateCheckDto {
-                    state: UpdateState::Error,
-                    current_version,
-                    available_version: None,
-                    channel,
-                    release_notes: None,
-                    published_at: None,
-                    error: Some(message),
-                };
-                self.reset();
-                publish_result(&publish, &dto)?;
-                Ok(dto)
+                self.transition_and_publish(
+                    StateTransition {
+                        state: UpdateState::Error,
+                        channel,
+                        error_code: Some(error_code),
+                        error_detail: Some(message),
+                        retry_action: UpdateRetryAction::Check,
+                        ..Default::default()
+                    },
+                    &publish,
+                )?;
+                Ok(UpdateCheckAckDto {
+                    disposition: UpdateCheckDisposition::Performed,
+                })
             }
         }
     }
@@ -210,58 +401,148 @@ impl<R: Runtime> UpdateService<R> {
                 .state
                 .lock()
                 .map_err(|_| "native update state lock poisoned".to_string())?;
-            let candidate = state
-                .candidate
-                .clone()
-                .ok_or_else(|| "update_unavailable: check for an update first".to_string())?;
+            let candidate = match &state.candidate {
+                Some(candidate) => candidate.clone(),
+                None => {
+                    drop(state);
+                    self.transition_and_publish(
+                        StateTransition {
+                            state: UpdateState::Error,
+                            channel: public_channel(&settings.update.channel),
+                            error_code: Some(UpdateErrorCode::UpdateUnavailable),
+                            error_detail: Some(
+                                "update_unavailable: check for an update first".to_string(),
+                            ),
+                            retry_action: UpdateRetryAction::Check,
+                            ..Default::default()
+                        },
+                        &publish,
+                    )?;
+                    return Err("update_unavailable: check for an update first".to_string());
+                }
+            };
             let updates = state.updates.clone();
             if updates.is_empty() {
-                return Err("update_unavailable: update metadata is unavailable".into());
+                drop(state);
+                self.transition_and_publish(
+                    StateTransition {
+                        state: UpdateState::Error,
+                        channel: public_channel(&settings.update.channel),
+                        error_code: Some(UpdateErrorCode::UpdateUnavailable),
+                        error_detail: Some(
+                            "update_unavailable: update metadata is unavailable".to_string(),
+                        ),
+                        retry_action: UpdateRetryAction::Check,
+                        ..Default::default()
+                    },
+                    &publish,
+                )?;
+                return Err("update_unavailable: update metadata is unavailable".to_string());
             }
             (candidate, updates)
         };
+
         if candidate.version != requested_target
             || settings.update.skip_version == candidate.version
             || settings.update.channel != core_channel(candidate.channel)
         {
+            self.transition_and_publish(
+                StateTransition {
+                    state: UpdateState::Error,
+                    channel: candidate.channel,
+                    error_code: Some(UpdateErrorCode::StaleUpdate),
+                    error_detail: Some("stale_update: update metadata is stale".to_string()),
+                    retry_action: UpdateRetryAction::Check,
+                    ..Default::default()
+                },
+                &publish,
+            )?;
             return Err("stale_update: update metadata is stale".into());
         }
 
-        let reservation = self
-            .activity
-            .reserve_update()
-            .map_err(update_activity_error)?;
+        let reservation = match self.activity.reserve_update() {
+            Ok(lease) => lease,
+            Err(error) => {
+                let (code, action) = match error {
+                    ActivityReservationError::Closing => {
+                        (UpdateErrorCode::Closing, UpdateRetryAction::None)
+                    }
+                    ActivityReservationError::PhysicalPlaybackActive => {
+                        (UpdateErrorCode::PlaybackActive, UpdateRetryAction::Install)
+                    }
+                    ActivityReservationError::CalibrationAlreadyActive => (
+                        UpdateErrorCode::CalibrationActive,
+                        UpdateRetryAction::Install,
+                    ),
+                    ActivityReservationError::UpdateAlreadyActive => {
+                        (UpdateErrorCode::UpdateBusy, UpdateRetryAction::Install)
+                    }
+                };
+                let message = update_activity_error(error);
+                self.transition_and_publish(
+                    StateTransition {
+                        state: UpdateState::Error,
+                        channel: candidate.channel,
+                        candidate: Some(candidate.clone()),
+                        updates,
+                        error_code: Some(code),
+                        error_detail: Some(message.clone()),
+                        retry_action: action,
+                        ..Default::default()
+                    },
+                    &publish,
+                )?;
+                return Err(message);
+            }
+        };
+
         let operation_id = opaque_id()?;
-        self.set_state(UpdateState::Downloading, Some(operation_id.clone()));
-        publish_progress(
+        self.transition_and_publish(
+            StateTransition {
+                state: UpdateState::Downloading,
+                channel: candidate.channel,
+                candidate: Some(candidate.clone()),
+                updates: updates.clone(),
+                operation_id: Some(operation_id.clone()),
+                progress: Some(UpdateProgressDto {
+                    completed: 0,
+                    total: None,
+                    message: "Downloading update".to_string(),
+                }),
+                ..Default::default()
+            },
             &publish,
-            UpdateState::Downloading,
-            &candidate,
-            &operation_id,
-            0,
-            None,
-            "Downloading update",
         )?;
 
         let candidate_for_download = candidate.clone();
         let operation_for_download = operation_id.clone();
-        let download = first_verified_download(updates, |update| {
+        let updates_for_download = updates.clone();
+        let download = first_verified_download(updates.clone(), |update| {
             tauri::async_runtime::block_on(update.download(
                 {
                     let publish = &publish;
                     let candidate = candidate_for_download.clone();
                     let operation_id = operation_for_download.clone();
+                    let updates = updates_for_download.clone();
                     move |completed, total| {
                         let total = total.filter(|value| *value <= MAX_ARTIFACT_BYTES);
                         let completed = (completed as u64).min(MAX_ARTIFACT_BYTES);
-                        let _ = publish_progress(
-                            publish,
-                            UpdateState::Downloading,
-                            &candidate,
-                            &operation_id,
+                        let progress = UpdateProgressDto {
                             completed,
                             total,
-                            "Downloading update",
+                            message: "Downloading update".to_string(),
+                        };
+                        let _ = self.transition_and_publish(
+                            StateTransition {
+                                state: UpdateState::Downloading,
+                                channel: candidate.channel,
+                                candidate: Some(candidate.clone()),
+                                updates: updates.clone(),
+                                operation_id: Some(operation_id.clone()),
+                                progress: Some(progress),
+                                ..Default::default()
+                            },
+                            publish,
                         );
                     }
                 },
@@ -269,77 +550,108 @@ impl<R: Runtime> UpdateService<R> {
             ))
             .map_err(|error| error.to_string())
         });
+
         let (update, bytes) = match download {
             Ok((update, bytes)) if (bytes.len() as u64) <= MAX_ARTIFACT_BYTES => (update, bytes),
             Ok(_) => {
-                return self.install_error(
-                    &candidate,
-                    &operation_id,
-                    &reservation,
+                let detail = "update artifact exceeds the bounded size".to_string();
+                self.transition_and_publish(
+                    StateTransition {
+                        state: UpdateState::Error,
+                        channel: candidate.channel,
+                        candidate: Some(candidate.clone()),
+                        updates,
+                        operation_id: Some(operation_id),
+                        error_code: Some(UpdateErrorCode::DownloadFailed),
+                        error_detail: Some(detail.clone()),
+                        retry_action: UpdateRetryAction::Install,
+                        ..Default::default()
+                    },
                     &publish,
-                    "update artifact exceeds the bounded size",
-                );
+                )?;
+                return Err(detail);
             }
             Err(error) => {
-                return self.install_error(
-                    &candidate,
-                    &operation_id,
-                    &reservation,
+                let detail = format!("update download failed: {error}");
+                self.transition_and_publish(
+                    StateTransition {
+                        state: UpdateState::Error,
+                        channel: candidate.channel,
+                        candidate: Some(candidate.clone()),
+                        updates,
+                        operation_id: Some(operation_id),
+                        error_code: Some(UpdateErrorCode::DownloadFailed),
+                        error_detail: Some(detail.clone()),
+                        retry_action: UpdateRetryAction::Install,
+                        ..Default::default()
+                    },
                     &publish,
-                    &format!("update download failed: {error}"),
-                );
+                )?;
+                return Err(detail);
             }
         };
 
-        self.set_state(UpdateState::Ready, Some(operation_id.clone()));
-        publish_progress(
+        let bytes_len = bytes.len() as u64;
+        self.transition_and_publish(
+            StateTransition {
+                state: UpdateState::Ready,
+                channel: candidate.channel,
+                candidate: Some(candidate.clone()),
+                updates: updates.clone(),
+                operation_id: Some(operation_id.clone()),
+                progress: Some(UpdateProgressDto {
+                    completed: bytes_len,
+                    total: Some(bytes_len),
+                    message: "Update is ready to install".to_string(),
+                }),
+                ..Default::default()
+            },
             &publish,
-            UpdateState::Ready,
-            &candidate,
-            &operation_id,
-            bytes.len() as u64,
-            Some(bytes.len() as u64),
-            "Update is ready to install",
         )?;
+
         let dto = UpdateHandoffDto {
             handoff_id: operation_id.clone(),
             target_version: candidate.version.clone(),
             state: UpdateState::Installing,
         };
-        self.set_state(UpdateState::Installing, Some(operation_id.clone()));
-        publish_progress(
-            &publish,
-            UpdateState::Installing,
-            &candidate,
-            &operation_id,
-            bytes.len() as u64,
-            Some(bytes.len() as u64),
-            "Installing update and restarting",
-        )?;
-        publish_result(
-            &publish,
-            &UpdateCheckDto {
+
+        self.transition_and_publish(
+            StateTransition {
                 state: UpdateState::Installing,
-                current_version: env!("CARGO_PKG_VERSION").into(),
-                available_version: Some(candidate.version.clone()),
                 channel: candidate.channel,
-                release_notes: candidate.release_notes.clone(),
-                published_at: candidate.published_at.clone(),
-                error: None,
+                candidate: Some(candidate.clone()),
+                updates: updates.clone(),
+                operation_id: Some(operation_id.clone()),
+                progress: Some(UpdateProgressDto {
+                    completed: bytes_len,
+                    total: Some(bytes_len),
+                    message: "Installing update and restarting".to_string(),
+                }),
+                ..Default::default()
             },
+            &publish,
         )?;
 
         // `Update::install` is the official Tauri transaction. On Windows it
         // launches the signed NSIS installer and exits this process; its
         // on_before_exit hook runs the safety hook above first.
         if let Err(error) = update.install(bytes) {
-            return self.install_error(
-                &candidate,
-                &operation_id,
-                &reservation,
+            let detail = format!("update install failed: {error}");
+            self.transition_and_publish(
+                StateTransition {
+                    state: UpdateState::Error,
+                    channel: candidate.channel,
+                    candidate: Some(candidate.clone()),
+                    updates,
+                    operation_id: Some(operation_id),
+                    error_code: Some(UpdateErrorCode::InstallFailed),
+                    error_detail: Some(detail.clone()),
+                    retry_action: UpdateRetryAction::Install,
+                    ..Default::default()
+                },
                 &publish,
-                &format!("update install failed: {error}"),
-            );
+            )?;
+            return Err(detail);
         }
 
         #[cfg(not(windows))]
@@ -387,39 +699,6 @@ impl<R: Runtime> UpdateService<R> {
         let builder = builder.no_proxy();
         tauri::async_runtime::block_on(builder.build().map_err(|error| error.to_string())?.check())
             .map_err(|error| format!("update check failed: {error}"))
-    }
-
-    fn set_state(&self, state_value: UpdateState, operation_id: Option<String>) {
-        if let Ok(mut state) = self.state.lock() {
-            state.state = state_value;
-            state.operation_id = operation_id;
-        }
-    }
-
-    fn install_error(
-        &self,
-        candidate: &NativeUpdateCandidate,
-        operation_id: &str,
-        reservation: &UpdateInstallLease,
-        publish: &impl Fn(UiEvent) -> Result<(), String>,
-        message: &str,
-    ) -> Result<UpdateHandoffDto, String> {
-        let _ = reservation;
-        self.set_state(UpdateState::Error, Some(operation_id.to_owned()));
-        let error = bounded(message);
-        publish_result(
-            publish,
-            &UpdateCheckDto {
-                state: UpdateState::Error,
-                current_version: env!("CARGO_PKG_VERSION").into(),
-                available_version: Some(candidate.version.clone()),
-                channel: candidate.channel,
-                release_notes: candidate.release_notes.clone(),
-                published_at: candidate.published_at.clone(),
-                error: Some(error.clone()),
-            },
-        )?;
-        Err(error)
     }
 
     pub(crate) fn install_safety_hook(&self) -> impl Fn() + Send + Sync + 'static {
@@ -583,14 +862,17 @@ fn metadata_endpoint(channel: UpdateChannel) -> Result<Url, String> {
 
     #[cfg(not(feature = "tauri-update-fixture"))]
     {
-        let endpoint = match channel {
-            UpdateChannel::Stable => V4_STABLE_METADATA_ENDPOINT,
-            UpdateChannel::Beta => V4_BETA_METADATA_ENDPOINT,
-        };
-        let endpoint =
-            Url::parse(endpoint).map_err(|error| format!("v4 metadata URL invalid: {error}"))?;
-        validate_official_metadata_endpoint(&endpoint, channel)?;
-        Ok(endpoint)
+        match channel {
+            UpdateChannel::Stable => {
+                let endpoint = Url::parse(V4_STABLE_METADATA_ENDPOINT)
+                    .map_err(|error| format!("v4 metadata URL invalid: {error}"))?;
+                validate_official_metadata_endpoint(&endpoint, channel)?;
+                Ok(endpoint)
+            }
+            UpdateChannel::Beta => Err(
+                "channel_unavailable: beta update channel is not supported in production".into(),
+            ),
+        }
     }
 }
 
@@ -599,6 +881,11 @@ fn validate_official_metadata_endpoint(
     endpoint: &Url,
     channel: UpdateChannel,
 ) -> Result<(), String> {
+    if channel != UpdateChannel::Stable {
+        return Err(
+            "channel_unavailable: beta update channel is not supported in production".into(),
+        );
+    }
     if endpoint.scheme() != "https"
         || endpoint.host_str() != Some(OFFICIAL_METADATA_HOST)
         || endpoint.port().is_some()
@@ -610,16 +897,12 @@ fn validate_official_metadata_endpoint(
         return Err("v4 metadata URL has an unapproved origin or URL component".into());
     }
 
-    let expected_channel = match channel {
-        UpdateChannel::Stable => "stable",
-        UpdateChannel::Beta => "beta",
-    };
     let expected_segments = [
         OFFICIAL_METADATA_OWNER,
         OFFICIAL_METADATA_REPOSITORY,
         OFFICIAL_METADATA_REF,
         "channels",
-        expected_channel,
+        "stable",
         "latest.json",
     ];
     let actual_segments = endpoint
@@ -629,11 +912,8 @@ fn validate_official_metadata_endpoint(
     if actual_segments != expected_segments
         || endpoint.path()
             != format!(
-                "/{}/{}/{}/channels/{}/latest.json",
-                OFFICIAL_METADATA_OWNER,
-                OFFICIAL_METADATA_REPOSITORY,
-                OFFICIAL_METADATA_REF,
-                expected_channel
+                "/{}/{}/{}/channels/stable/latest.json",
+                OFFICIAL_METADATA_OWNER, OFFICIAL_METADATA_REPOSITORY, OFFICIAL_METADATA_REF
             )
     {
         return Err("v4 metadata URL path is not an approved channel endpoint".into());
@@ -653,42 +933,13 @@ fn candidate_from_update(update: &Update, channel: UpdateChannel) -> NativeUpdat
     }
 }
 
-fn publish_progress(
-    publish: &impl Fn(UiEvent) -> Result<(), String>,
-    state: UpdateState,
-    candidate: &NativeUpdateCandidate,
-    operation_id: &str,
-    completed: u64,
-    total: Option<u64>,
-    message: &str,
-) -> Result<(), String> {
-    publish(UiEvent::UpdateProgress {
-        v: crate::DESKTOP_PROTOCOL_VERSION,
-        payload: UpdateProgressPayload {
-            operation_id: operation_id.to_owned(),
-            state,
-            available_version: candidate.version.clone(),
-            completed,
-            total,
-            message: bounded(message),
-        },
-    })
-}
-
-fn publish_result(
-    publish: &impl Fn(UiEvent) -> Result<(), String>,
-    dto: &UpdateCheckDto,
-) -> Result<(), String> {
-    publish(UiEvent::UpdateResult {
-        v: crate::DESKTOP_PROTOCOL_VERSION,
-        payload: UpdateResultPayload {
-            state: dto.state,
-            current_version: dto.current_version.clone(),
-            available_version: dto.available_version.clone(),
-            channel: dto.channel,
-            error: dto.error.clone(),
-        },
-    })
+fn classify_check_error(error: &str) -> UpdateErrorCode {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("channel_unavailable") {
+        UpdateErrorCode::ChannelUnavailable
+    } else {
+        UpdateErrorCode::CheckFailed
+    }
 }
 
 fn public_channel(channel: &CoreChannel) -> UpdateChannel {
@@ -833,14 +1084,16 @@ mod tests {
     #[test]
     fn production_metadata_endpoints_are_fixed_and_channel_isolated() {
         let stable = metadata_endpoint(UpdateChannel::Stable).unwrap();
-        let beta = metadata_endpoint(UpdateChannel::Beta).unwrap();
         assert_eq!(stable.as_str(), V4_STABLE_METADATA_ENDPOINT);
-        assert_eq!(beta.as_str(), V4_BETA_METADATA_ENDPOINT);
-        assert_ne!(stable, beta);
-        for endpoint in [stable, beta] {
-            assert_eq!(endpoint.scheme(), "https");
-            assert_eq!(endpoint.host_str(), Some("raw.githubusercontent.com"));
-        }
+        assert_eq!(stable.scheme(), "https");
+        assert_eq!(stable.host_str(), Some("raw.githubusercontent.com"));
+
+        let beta_err = metadata_endpoint(UpdateChannel::Beta).unwrap_err();
+        assert!(beta_err.contains("channel_unavailable"));
+        assert_eq!(
+            V4_BETA_METADATA_ENDPOINT,
+            "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json"
+        );
     }
 
     #[cfg(not(feature = "tauri-update-fixture"))]
@@ -969,5 +1222,31 @@ mod tests {
             Err::<Vec<u8>, _>("signature mismatch".into())
         });
         assert_eq!(result.unwrap_err(), "signature mismatch");
+    }
+
+    #[test]
+    fn classify_check_error_maps_known_classes() {
+        use crate::ui_events::UpdateErrorCode;
+        assert_eq!(
+            super::classify_check_error(
+                "channel_unavailable: beta update channel is not supported"
+            ),
+            UpdateErrorCode::ChannelUnavailable
+        );
+        assert_eq!(
+            super::classify_check_error("connection refused while fetching"),
+            UpdateErrorCode::CheckFailed
+        );
+    }
+
+    #[test]
+    fn native_update_state_default_has_zero_revision_and_idle() {
+        use crate::ui_events::{UpdateRetryAction, UpdateState};
+        let state = super::NativeUpdateState::default();
+        assert_eq!(state.revision, 0);
+        assert_eq!(state.state, UpdateState::Idle);
+        assert_eq!(state.retry_action, UpdateRetryAction::None);
+        assert!(state.candidate.is_none());
+        assert!(state.progress.is_none());
     }
 }

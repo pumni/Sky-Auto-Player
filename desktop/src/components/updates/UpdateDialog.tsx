@@ -1,6 +1,7 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { Check, Download, LoaderCircle, X } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
+import { formatUpdateError } from '../../state/updateHelpers';
 
 interface UpdateDialogProps {
   useStore: DesktopStoreHook;
@@ -15,11 +16,16 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
 
   if (!update.dialogOpen) return null;
 
-  const busy = ['downloading', 'ready', 'installing'].includes(update.state);
-  const isChecking = update.state === 'checking';
-  const isAvailable = update.state === 'available' && Boolean(update.availableVersion);
-  const isCurrent = update.state === 'current';
-  const isError = update.state === 'error';
+  const busy =
+    update.installRequestPending || ['downloading', 'ready', 'installing'].includes(update.state);
+  const isChecking = update.checkRequestPending || update.state === 'checking';
+  const isError = update.state === 'error' || Boolean(update.transportError);
+  const isAvailable = !isError && update.state === 'available' && Boolean(update.availableVersion);
+  const isCurrent = !isError && update.state === 'current';
+
+  const errorText = update.transportError
+    ? formatUpdateError(null, update.transportError)
+    : formatUpdateError(update.errorCode, update.errorDetail);
 
   return (
     <ModalOverlay
@@ -58,7 +64,47 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                   Looking for available updates on the {update.channel} channel…
                 </p>
                 <div className="update-actions">
-                  <button className="button" type="button" onClick={() => close(false)}>
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => close(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            ) : isError ? (
+              <>
+                <h3>Update check failed</h3>
+                <p className="inline-error">{errorText}</p>
+                <div className="update-actions">
+                  {(update.retryAction === 'check' || Boolean(update.transportError)) && (
+                    <button
+                      className="button button-primary"
+                      type="button"
+                      disabled={isChecking || busy}
+                      onClick={() => void check('manual')}
+                    >
+                      Check again
+                    </button>
+                  )}
+                  {update.retryAction === 'install' && !update.transportError && (
+                    <button
+                      className="button button-primary"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handoff()}
+                    >
+                      Try again
+                    </button>
+                  )}
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => close(false)}
+                  >
                     Close
                   </button>
                 </div>
@@ -78,19 +124,26 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                   <button
                     className="button button-primary"
                     type="button"
+                    disabled={busy}
                     onClick={() => void handoff()}
                   >
                     <Check size={15} aria-hidden="true" /> Update and restart
                   </button>
-                  <button className="button" type="button" onClick={() => close(false)}>
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => close(false)}
+                  >
                     Later
                   </button>
                   <button
                     className="button button-ghost"
                     type="button"
-                    onClick={() => {
+                    disabled={busy}
+                    onClick={async () => {
                       if (update.availableVersion) {
-                        void patchSettings({
+                        await patchSettings({
                           updatePreferences: { skipVersion: update.availableVersion },
                         });
                       }
@@ -112,26 +165,12 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                   {update.channel} channel.
                 </p>
                 <div className="update-actions">
-                  <button className="button" type="button" onClick={() => close(false)}>
-                    Close
-                  </button>
-                </div>
-              </>
-            ) : isError ? (
-              <>
-                <h3>Update check failed</h3>
-                <p className="inline-error">
-                  {update.error ?? 'The update service is temporarily unavailable.'}
-                </p>
-                <div className="update-actions">
                   <button
-                    className="button button-primary"
+                    className="button"
                     type="button"
-                    onClick={() => void check('manual')}
+                    disabled={busy}
+                    onClick={() => close(false)}
                   >
-                    Check again
-                  </button>
-                  <button className="button" type="button" onClick={() => close(false)}>
                     Close
                   </button>
                 </div>
@@ -149,7 +188,7 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                 </h3>
                 <p className="muted">
                   {busy
-                    ? `${update.progress.message || 'The update is being applied.'}${update.progress.total ? ` (${update.progress.completed}/${update.progress.total} bytes)` : ''}`
+                    ? `${update.progress?.message || 'The update is being applied.'}${update.progress?.total ? ` (${update.progress.completed}/${update.progress.total} bytes)` : ''}`
                     : 'The installed application is up to date.'}
                 </p>
                 {!busy && (
