@@ -17,6 +17,7 @@ describe('SettingsPanel playback timing', () => {
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
 
     expect(screen.getByLabelText('Base Hold')).toBeInTheDocument();
+    expect(document.querySelector('.settings-content')).toHaveClass('scroll-surface');
     const behaviorHeading = screen.getByRole('heading', { name: 'Behavior' });
     const defaultsHeading = screen.getByRole('heading', { name: 'Playback defaults' });
     expect(
