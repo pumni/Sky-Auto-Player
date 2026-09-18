@@ -1132,14 +1132,9 @@ fn v4_release_pipeline_contract_source(
         return Err("production orchestrator must have exactly one pipeline call site".into());
     }
     for marker in [
-        "ValidateRequest",
-        "ValidateRepository",
+        "Preflight",
         "BuildCandidate",
-        "CreateDraft",
-        "DownloadDraft",
-        "QualifyDownloaded",
-        "RecordAttestations",
-        "PublishDraft",
+        "PublishRelease",
         "PromoteMetadata",
         "FinalVerify",
         "unsigned-zero-budget",
@@ -4693,7 +4688,7 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-ValidateRequest ValidateRepository BuildCandidate CreateDraft DownloadDraft QualifyDownloaded RecordAttestations PublishDraft PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1 PublishRelease Preflight Format-V4TransactionMarker Get-V4TransactionMarker Test-V4TransactionMarkerMatch Invoke-DraftSelfCleanup candidate-manifest.json
+Preflight BuildCandidate PublishRelease PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1 Format-V4TransactionMarker Get-V4TransactionMarker Test-V4TransactionMarkerMatch Invoke-DraftSelfCleanup candidate-manifest.json
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }

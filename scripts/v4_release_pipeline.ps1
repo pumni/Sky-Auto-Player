@@ -5,16 +5,8 @@ param(
         "Preflight",
         "BuildCandidate",
         "PublishRelease",
-        "PublishReleaseTransaction",
         "PromoteMetadata",
         "FinalVerify",
-        "ValidateRequest",
-        "ValidateRepository",
-        "CreateDraft",
-        "DownloadDraft",
-        "QualifyDownloaded",
-        "RecordAttestations",
-        "PublishDraft",
         "SelfTest"
     )]
     [string]$State,
@@ -83,10 +75,6 @@ function Get-EffectiveStateRoot {
     return $full
 }
 
-function Get-StatePath {
-    return Join-Path (Get-EffectiveStateRoot) "release-state.json"
-}
-
 function Write-JsonFile([string]$Path, [object]$Value) {
     $parent = Split-Path -Parent $Path
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -146,6 +134,15 @@ function Format-V4TransactionMarker {
         [Parameter(Mandatory = $true)] [string]$Version,
         [Parameter(Mandatory = $true)] [string]$Tag
     )
+    if ([string]::IsNullOrWhiteSpace($Repository)) { Fail "transaction marker requires repository" }
+    if ([string]::IsNullOrWhiteSpace($RunId)) { Fail "transaction marker requires run_id" }
+    if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
+        Fail "transaction marker requires exact 40-character source_sha"
+    }
+    if ([string]::IsNullOrWhiteSpace($Version)) { Fail "transaction marker requires version" }
+    if ([string]::IsNullOrWhiteSpace($Tag) -or $Tag -ne "v$Version") {
+        Fail "transaction marker requires tag exactly matching v<version>"
+    }
     $tx = [ordered]@{
         repository = $Repository
         run_id = $RunId
@@ -160,31 +157,51 @@ function Format-V4TransactionMarker {
 function Get-V4TransactionMarker {
     param([string]$Body)
     if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
-    if ($Body -match '<!--\s*v4-release-tx:\s*(\{.*?\})\s*-->') {
-        try {
-            return ($Matches[1] | ConvertFrom-Json)
-        } catch {
-            return $null
-        }
+    $matches = [regex]::Matches($Body, '<!--\s*v4-release-tx:\s*(\{.*?\})\s*-->')
+    if ($matches.Count -ne 1) { return $null }
+    try {
+        return ($matches[0].Groups[1].Value | ConvertFrom-Json)
+    } catch {
+        return $null
     }
-    return $null
+}
+
+function Assert-V4TransactionMarkerStrictSchema([object]$Marker) {
+    if ($null -eq $Marker) { return $false }
+    $requiredProps = @("repository", "run_id", "source_sha", "version", "tag")
+    foreach ($prop in $requiredProps) {
+        if ($null -eq $Marker.PSObject.Properties[$prop]) { return $false }
+        $val = [string]$Marker.$prop
+        if ([string]::IsNullOrWhiteSpace($val)) { return $false }
+    }
+    if ([string]$Marker.source_sha -notmatch '^[0-9a-fA-F]{40}$') { return $false }
+    if ([string]$Marker.version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') { return $false }
+    if ([string]$Marker.tag -ne "v$([string]$Marker.version)") { return $false }
+    return $true
 }
 
 function Test-V4TransactionMarkerMatch {
     param(
         [object]$Marker,
-        [string]$ExpectedRepo,
-        [string]$ExpectedRunId,
-        [string]$ExpectedSha,
-        [string]$ExpectedTag
+        [Parameter(Mandatory = $true)] [string]$ExpectedRepo,
+        [string]$ExpectedRunId = "",
+        [Parameter(Mandatory = $true)] [string]$ExpectedSha,
+        [Parameter(Mandatory = $true)] [string]$ExpectedVersion,
+        [Parameter(Mandatory = $true)] [string]$ExpectedTag
     )
     if ($null -eq $Marker) { return $false }
-    if ($null -ne $Marker.PSObject.Properties['repository'] -and [string]$Marker.repository -ne $ExpectedRepo) { return $false }
-    if (-not [string]::IsNullOrWhiteSpace($ExpectedRunId) -and
-        $null -ne $Marker.PSObject.Properties['run_id'] -and
-        [string]$Marker.run_id -ne $ExpectedRunId) { return $false }
-    if ($null -ne $Marker.PSObject.Properties['source_sha'] -and [string]$Marker.source_sha.ToLowerInvariant() -ne $ExpectedSha.ToLowerInvariant()) { return $false }
-    if ($null -ne $Marker.PSObject.Properties['tag'] -and [string]$Marker.tag -ne $ExpectedTag) { return $false }
+    if (-not (Assert-V4TransactionMarkerStrictSchema $Marker)) { return $false }
+
+    if ([string]$Marker.repository -ne $ExpectedRepo) { return $false }
+    if ([string]$Marker.source_sha.ToLowerInvariant() -ne $ExpectedSha.ToLowerInvariant()) { return $false }
+    if ([string]$Marker.version -ne $ExpectedVersion) { return $false }
+    if ([string]$Marker.tag -ne $ExpectedTag) { return $false }
+
+    # For same-transaction reconciliation, run_id must match exactly.
+    # For stale cleanup across runs, run_id must exist and be non-empty (verified by schema).
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedRunId)) {
+        if ([string]$Marker.run_id -ne $ExpectedRunId) { return $false }
+    }
     return $true
 }
 
@@ -193,6 +210,7 @@ function Invoke-DraftSelfCleanup {
         [Parameter(Mandatory = $true)] [string]$Repository,
         [Parameter(Mandatory = $true)] [int64]$ReleaseId,
         [Parameter(Mandatory = $true)] [string]$ExpectedSha,
+        [Parameter(Mandatory = $true)] [string]$ExpectedVersion,
         [Parameter(Mandatory = $true)] [string]$ExpectedTag,
         [string]$ExpectedRunId = ""
     )
@@ -212,7 +230,7 @@ function Invoke-DraftSelfCleanup {
         if ($isDraft -and
             $targetCommitish.ToLowerInvariant() -eq $ExpectedSha.ToLowerInvariant() -and
             $tagName -eq $ExpectedTag -and
-            (Test-V4TransactionMarkerMatch $marker $Repository $ExpectedRunId $ExpectedSha $ExpectedTag)) {
+            (Test-V4TransactionMarkerMatch -Marker $marker -ExpectedRepo $Repository -ExpectedRunId $ExpectedRunId -ExpectedSha $ExpectedSha -ExpectedVersion $ExpectedVersion -ExpectedTag $ExpectedTag)) {
             Write-Host "Cleaning up failed unpublished draft release $ReleaseId (tag=$ExpectedTag)"
             Invoke-GitHubApi -Arguments @("api", "--method", "DELETE", "repos/$Repository/releases/$ReleaseId") -AllowNotFound | Out-Null
             Write-Host "Unpublished draft $ReleaseId successfully deleted."
@@ -221,202 +239,6 @@ function Invoke-DraftSelfCleanup {
         }
     } catch {
         Write-Warning "Draft self-cleanup encountered an error: $($_.Exception.Message)"
-    }
-}
-
-function Assert-V4ReleaseStateSchema([object]$State) {
-    if ($null -eq $State) { Fail "release state object is null" }
-
-    $requiredProperties = @(
-        "schema_version",
-        "phase",
-        "source_sha",
-        "version",
-        "channel",
-        "tag",
-        "release_id",
-        "draft",
-        "published",
-        "immutable",
-        "published_at",
-        "attested",
-        "qualified_after_download",
-        "qualification_assets",
-        "public_assets",
-        "metadata_promoted",
-        "promoted_at",
-        "final_verified",
-        "final_verified_at",
-        "reconciled_from_remote",
-        "last_reconciled_at",
-        "failure_class",
-        "error_message"
-    )
-
-    foreach ($prop in $requiredProperties) {
-        if ($null -eq $State.PSObject.Properties[$prop]) {
-            Fail "release state schema validation failed: missing required property '$prop'"
-        }
-    }
-
-    if ([int]$State.schema_version -ne 2) {
-        Fail "unsupported release state schema_version '$($State.schema_version)' (expected 2)"
-    }
-
-    $validPhases = @("READY", "QUALIFIED", "PUBLISHED_PENDING_METADATA", "COMPLETE")
-    if ([string]$State.phase -notin $validPhases) {
-        Fail "invalid release state phase '$($State.phase)'; valid phases are $($validPhases -join ', ')"
-    }
-
-    if ([bool]$State.published) {
-        if ([string]::IsNullOrWhiteSpace([string]$State.published_at)) {
-            Fail "release state is marked published but published_at timestamp is empty"
-        }
-        if ([bool]$State.draft) {
-            Fail "release state cannot be both draft and published"
-        }
-        if ([string]$State.phase -notin @("PUBLISHED_PENDING_METADATA", "COMPLETE")) {
-            Fail "published release state must have phase PUBLISHED_PENDING_METADATA or COMPLETE"
-        }
-    }
-
-    if ([bool]$State.metadata_promoted -and [string]::IsNullOrWhiteSpace([string]$State.promoted_at)) {
-        Fail "release state is marked metadata_promoted but promoted_at timestamp is empty"
-    }
-
-    if ([bool]$State.final_verified -and [string]::IsNullOrWhiteSpace([string]$State.final_verified_at)) {
-        Fail "release state is marked final_verified but final_verified_at timestamp is empty"
-    }
-}
-
-function New-V4CanonicalReleaseState {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$SourceSha,
-        [Parameter(Mandatory = $true)]
-        [string]$Version,
-        [Parameter(Mandatory = $true)]
-        [string]$Channel,
-        [Parameter(Mandatory = $true)]
-        [string]$Tag,
-        [Parameter(Mandatory = $true)]
-        [int64]$ReleaseId,
-        [object[]]$QualificationAssets = @(),
-        [object[]]$PublicAssets = @(),
-        [string]$Phase = "READY"
-    )
-
-    $validPhases = @("READY", "QUALIFIED", "PUBLISHED_PENDING_METADATA", "COMPLETE")
-    if ($Phase -notin $validPhases) {
-        Fail "cannot construct canonical release state with invalid phase '$Phase'"
-    }
-
-    $state = [ordered]@{
-        schema_version = 2
-        phase = [string]$Phase
-        source_sha = $SourceSha.ToLowerInvariant()
-        version = [string]$Version
-        channel = [string]$Channel
-        tag = [string]$Tag
-        release_id = [int64]$ReleaseId
-        draft = $true
-        published = $false
-        immutable = $false
-        published_at = ""
-        attested = $false
-        qualified_after_download = $false
-        qualification_assets = @($QualificationAssets)
-        public_assets = @($PublicAssets)
-        metadata_promoted = $false
-        promoted_at = ""
-        final_verified = $false
-        final_verified_at = ""
-        reconciled_from_remote = $false
-        last_reconciled_at = ""
-        failure_class = ""
-        error_message = ""
-    }
-
-    $obj = [pscustomobject]$state
-    Assert-V4ReleaseStateSchema $obj
-    return $obj
-}
-
-function Convert-V4ReleaseStateV1ToV2([object]$RawState) {
-    if ($null -eq $RawState) { Fail "release state object is null" }
-
-    if ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
-        if ($null -eq $RawState.PSObject.Properties['published_at'] -or [string]::IsNullOrWhiteSpace([string]$RawState.published_at)) {
-            Fail "cannot migrate v1 state: marked published but published_at timestamp is missing"
-        }
-    }
-
-    $schemaVersion = if ($null -ne $RawState.PSObject.Properties['schema_version']) { [int]$RawState.schema_version } else { 1 }
-    if ($schemaVersion -ne 1) {
-        Fail "Convert-V4ReleaseStateV1ToV2 only converts schema_version 1 (got $schemaVersion)"
-    }
-
-    $defaultSha = if ($null -ne $RawState.PSObject.Properties['source_sha']) { [string]$RawState.source_sha } else { "" }
-    $defaultVersion = if ($null -ne $RawState.PSObject.Properties['version']) { [string]$RawState.version } else { "" }
-    $defaultChannel = if ($null -ne $RawState.PSObject.Properties['channel']) { [string]$RawState.channel } else { "stable" }
-    $defaultTag = if ($null -ne $RawState.PSObject.Properties['tag']) { [string]$RawState.tag } else { "" }
-    $defaultReleaseId = if ($null -ne $RawState.PSObject.Properties['release_id']) { [int64]$RawState.release_id } else { 0 }
-
-    $derivedPhase = "READY"
-    if ($null -ne $RawState.PSObject.Properties['final_verified'] -and [bool]$RawState.final_verified) {
-        $derivedPhase = "COMPLETE"
-    } elseif ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
-        $derivedPhase = "PUBLISHED_PENDING_METADATA"
-    } elseif ($null -ne $RawState.PSObject.Properties['qualified_after_download'] -and [bool]$RawState.qualified_after_download) {
-        $derivedPhase = "QUALIFIED"
-    }
-
-    $v2 = New-V4CanonicalReleaseState `
-        -SourceSha $defaultSha `
-        -Version $defaultVersion `
-        -Channel $defaultChannel `
-        -Tag $defaultTag `
-        -ReleaseId $defaultReleaseId `
-        -Phase $derivedPhase
-
-    if ($null -ne $RawState.PSObject.Properties['draft']) { $v2.draft = [bool]$RawState.draft }
-    if ($null -ne $RawState.PSObject.Properties['published']) { $v2.published = [bool]$RawState.published }
-    if ($null -ne $RawState.PSObject.Properties['immutable']) { $v2.immutable = [bool]$RawState.immutable }
-    if ($null -ne $RawState.PSObject.Properties['published_at']) { $v2.published_at = [string]$RawState.published_at }
-    if ($null -ne $RawState.PSObject.Properties['attested']) { $v2.attested = [bool]$RawState.attested }
-    if ($null -ne $RawState.PSObject.Properties['qualified_after_download']) { $v2.qualified_after_download = [bool]$RawState.qualified_after_download }
-    if ($null -ne $RawState.PSObject.Properties['qualification_assets']) { $v2.qualification_assets = @($RawState.qualification_assets) }
-    if ($null -ne $RawState.PSObject.Properties['public_assets']) { $v2.public_assets = @($RawState.public_assets) }
-    if ($null -ne $RawState.PSObject.Properties['metadata_promoted']) { $v2.metadata_promoted = [bool]$RawState.metadata_promoted }
-    if ($null -ne $RawState.PSObject.Properties['promoted_at']) { $v2.promoted_at = [string]$RawState.promoted_at }
-    if ($null -ne $RawState.PSObject.Properties['final_verified']) { $v2.final_verified = [bool]$RawState.final_verified }
-    if ($null -ne $RawState.PSObject.Properties['final_verified_at']) { $v2.final_verified_at = [string]$RawState.final_verified_at }
-    if ($null -ne $RawState.PSObject.Properties['reconciled_from_remote']) { $v2.reconciled_from_remote = [bool]$RawState.reconciled_from_remote }
-    if ($null -ne $RawState.PSObject.Properties['last_reconciled_at']) { $v2.last_reconciled_at = [string]$RawState.last_reconciled_at }
-    if ($null -ne $RawState.PSObject.Properties['failure_class']) { $v2.failure_class = [string]$RawState.failure_class }
-    if ($null -ne $RawState.PSObject.Properties['error_message']) { $v2.error_message = [string]$RawState.error_message }
-
-    Assert-V4ReleaseStateSchema $v2
-    return $v2
-}
-
-function Assert-ExistingUnpublishedDraftMatchesRequest([object]$Release) {
-    if ([string]$Release.tag_name -ne $Tag) {
-        Fail "existing release tag does not match the requested tag"
-    }
-    if (-not [bool]$Release.draft -or
-        -not [string]::IsNullOrWhiteSpace([string]$Release.published_at)) {
-        Fail "repository already contains published release/tag $Tag; published releases and tags are immutable; fresh transaction refuses adoption"
-    }
-    $source = $SourceSha.ToLowerInvariant()
-    $targetCommitish = [string]$Release.target_commitish
-    if ($targetCommitish -notmatch '^[0-9a-fA-F]{40}$' -or
-        $targetCommitish.ToLowerInvariant() -ne $source) {
-        Fail "existing draft source does not match the requested source"
-    }
-    $body = [string]$Release.body
-    if ($body -notmatch "(?m)^source_sha:\s*$([regex]::Escape($source))\s*$") {
-        Fail "existing draft body source does not match the requested source"
     }
 }
 
@@ -988,7 +810,7 @@ function Invoke-Preflight {
 
         # Deterministic stale-draft recognition:
         if ($targetCommitish.ToLowerInvariant() -eq $SourceSha.ToLowerInvariant() -and
-            (Test-V4TransactionMarkerMatch $marker $repository "" $SourceSha $Tag)) {
+            (Test-V4TransactionMarkerMatch -Marker $marker -ExpectedRepo $repository -ExpectedRunId "" -ExpectedSha $SourceSha -ExpectedVersion $Version -ExpectedTag $Tag)) {
             $staleId = [int64]$existingDraft.id
             Write-Host "V4 unpublished draft reuse: recognized stale draft $staleId for $Tag from source $SourceSha; cleaning up"
             Invoke-GitHubApi -Arguments @("api", "--method", "DELETE", "repos/$repository/releases/$staleId") -AllowNotFound | Out-Null
@@ -1261,7 +1083,7 @@ function Invoke-PublishRelease {
         $existing = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection $collection -Tag $Tag
         if ($null -ne $existing -and [bool]$existing.draft) {
             $existingMarker = Get-V4TransactionMarker ([string]$existing.body)
-            if (Test-V4TransactionMarkerMatch $existingMarker $repository $effectiveRunId $SourceSha $Tag) {
+            if (Test-V4TransactionMarkerMatch -Marker $existingMarker -ExpectedRepo $repository -ExpectedRunId $effectiveRunId -ExpectedSha $SourceSha -ExpectedVersion $Version -ExpectedTag $Tag) {
                 Write-Host "Reconciled draft created despite POST error/timeout: id=$($existing.id)"
                 $draft = $existing
             } else {
@@ -1326,12 +1148,16 @@ function Invoke-PublishRelease {
             if ($null -ne $sa.PSObject.Properties['state'] -and [string]$sa.state -ne "uploaded") {
                 Fail "server asset state is not uploaded for ${expectedName}: $($sa.state)"
             }
-            if ($null -ne $sa.PSObject.Properties['digest'] -and -not [string]::IsNullOrWhiteSpace([string]$sa.digest)) {
-                $rawDigest = [string]$sa.digest
-                $remoteSha = if ($rawDigest -match '^sha256:(.+)$') { $Matches[1] } else { $rawDigest }
-                if ($remoteSha.ToLowerInvariant() -ne [string]$expected.sha256.ToLowerInvariant()) {
-                    Fail "server asset digest mismatch for ${expectedName}: expected $($expected.sha256), got $remoteSha"
-                }
+            if ($null -eq $sa.PSObject.Properties['digest'] -or [string]::IsNullOrWhiteSpace([string]$sa.digest)) {
+                Fail "server asset is missing mandatory digest: $expectedName"
+            }
+            $rawDigest = [string]$sa.digest
+            if ($rawDigest -notmatch '^sha256:([0-9a-fA-F]{64})$') {
+                Fail "server asset has invalid or unsupported digest format for ${expectedName}: '$rawDigest' (must be sha256:<64-hex>)"
+            }
+            $remoteSha = $Matches[1]
+            if ($remoteSha.ToLowerInvariant() -ne [string]$expected.sha256.ToLowerInvariant()) {
+                Fail "server asset digest mismatch for ${expectedName}: expected $($expected.sha256), got $remoteSha"
             }
         }
         Write-Host "Server verified exact asset sizes and digests on release draft ${releaseId}: PASS"
@@ -1362,7 +1188,7 @@ function Invoke-PublishRelease {
                 Write-Host "Reconciliation: release was published despite PATCH error"
             } else {
                 # Still unpublished draft: perform self-cleanup
-                Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
+                Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedVersion $Version -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
                 throw $patchError
             }
         }
@@ -1380,7 +1206,7 @@ function Invoke-PublishRelease {
         if ($null -ne $checkRemote -and -not [bool]$checkRemote.draft) {
             Write-Host "Reconciliation: release was published despite error"
         } else {
-            Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
+            Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedVersion $Version -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
             throw $prePubEx
         }
     }
@@ -1399,7 +1225,7 @@ function Invoke-PublishRelease {
     }
 
     if ([bool]$finalRelease.draft) {
-        Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
+        Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedVersion $Version -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
         Fail "publication PATCH failed and remote release remains unpublished draft"
     }
 
@@ -1520,94 +1346,6 @@ function Invoke-FinalVerify {
     Write-Host "V4 final verification: PASS (tag=$Tag channel=$Channel verified via raw endpoint)"
 }
 
-# ==============================================================================
-# Rehearsal & Legacy Compatibility Handlers
-# ==============================================================================
-
-function Invoke-ValidateRequest {
-    Assert-RequestIdentity
-    Assert-ReleaseNotes
-}
-
-function Invoke-ValidateRepository {
-    Assert-RepositoryReleasePolicy
-}
-
-function Invoke-CreateDraft {
-    Assert-RequestIdentity
-    Assert-RepositoryReleasePolicy
-    $repository = Get-CanonicalRepository
-    $manifestPath = Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json"
-    $manifest = Read-JsonFile $manifestPath
-    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
-    Assert-CandidateEvidence @($manifest.qualification_assets)
-
-    $ref = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/refs/tags/$Tag") -AllowNotFound
-    if ($null -ne $ref) {
-        Fail "repository already contains published release/tag $Tag; published tags are immutable"
-    }
-
-    $notesPath = Assert-ReleaseNotes
-    $runId = if ([string]::IsNullOrWhiteSpace($RunId)) { "rehearsal" } else { $RunId }
-    $marker = Format-V4TransactionMarker -Repository $repository -RunId $runId -SourceSha $SourceSha -Version $Version -Tag $Tag
-    $body = (Get-Content -LiteralPath $notesPath -Raw).Trim() + "`n`n" + $marker
-
-    $payloadPath = Join-Path (Get-EffectiveStateRoot) "create-release.json"
-    Write-JsonFile $payloadPath ([ordered]@{
-        tag_name = $Tag
-        target_commitish = $SourceSha.ToLowerInvariant()
-        name = $Tag
-        body = $body
-        draft = $true
-        prerelease = ($Channel -eq "beta")
-        make_latest = Get-V4ReleaseDraftMakeLatestValue
-    })
-    $release = Invoke-GitHubApi -Arguments @("api", "--method", "POST", "repos/$repository/releases", "--input", $payloadPath)
-    if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "repository did not create requested draft release" }
-
-    $uploadUrl = [string]$release.upload_url
-    $uploadUrl = $uploadUrl -replace '\{\?name,label\}$', ''
-    foreach ($record in $publicRecords) {
-        $assetName = [string]$record.release_name
-        $assetFile = Get-StateAssetPath $record
-        Invoke-V4ReleaseAssetUpload -UploadUrl $uploadUrl -AssetName $assetName -FilePath $assetFile
-    }
-}
-
-function Invoke-DownloadDraft {
-    $repository = Get-CanonicalRepository
-    $collection = Get-ReleaseCollection $repository
-    $release = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection $collection -Tag $Tag
-    if ($null -eq $release -or -not [bool]$release.draft) { Fail "draft download requires unpublished draft release" }
-    $manifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
-    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
-    Assert-ExactPublicReleaseAssetSet $release
-    $downloaded = Join-Path (Get-EffectiveStateRoot) "downloaded"
-    if (Test-Path -LiteralPath $downloaded) { Remove-Item -LiteralPath $downloaded -Recurse -Force }
-    New-Item -ItemType Directory -Path $downloaded -Force | Out-Null
-    foreach ($expected in $publicRecords) {
-        $expectedName = [string]$expected.release_name
-        $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedName })
-        if ($asset.Count -ne 1) { Fail "expected repository asset is missing: $expectedName" }
-        $dest = Join-Path $downloaded ([IO.Path]::GetFileName($expectedName))
-        Invoke-GitHubApi -Arguments @("api", [string]$asset[0].url, "--header", "Accept: application/octet-stream") -BinaryOutput -OutputPath $dest
-        $hash = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($hash -ne [string]$expected.sha256) { Fail "downloaded asset digest mismatch: $expectedName" }
-    }
-}
-
-function Invoke-QualifyDownloaded {
-    Invoke-BuildCandidate
-}
-
-function Invoke-RecordAttestations {
-    Write-Host "Attestations recorded."
-}
-
-function Invoke-PublishDraft {
-    Invoke-PublishRelease
-}
-
 function Invoke-SelfTest {
     $scriptPath = (Resolve-Path $PSCommandPath).Path
     $source = Get-Content -LiteralPath $scriptPath -Raw
@@ -1694,16 +1432,8 @@ switch ($State) {
     "Preflight" { Invoke-Preflight }
     "BuildCandidate" { Invoke-BuildCandidate }
     "PublishRelease" { Invoke-PublishRelease }
-    "PublishReleaseTransaction" { Invoke-PublishRelease }
     "PromoteMetadata" { Invoke-PromoteMetadata }
     "FinalVerify" { Invoke-FinalVerify }
-    "ValidateRequest" { Invoke-ValidateRequest }
-    "ValidateRepository" { Invoke-ValidateRepository }
-    "CreateDraft" { Invoke-CreateDraft }
-    "DownloadDraft" { Invoke-DownloadDraft }
-    "QualifyDownloaded" { Invoke-QualifyDownloaded }
-    "RecordAttestations" { Invoke-RecordAttestations }
-    "PublishDraft" { Invoke-PublishDraft }
     "SelfTest" { Invoke-SelfTest }
     default { Fail "Unknown state '$State'" }
 }

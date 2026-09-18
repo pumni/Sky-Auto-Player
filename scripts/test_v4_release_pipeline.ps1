@@ -431,8 +431,7 @@ if (([regex]::Matches($pipeline, "orchestrate_v4_production_release\.ps1")).Coun
     Fail "production orchestrator must have exactly one call site"
 }
 foreach ($marker in @(
-    'ValidateRequest', 'ValidateRepository', 'BuildCandidate', 'CreateDraft',
-    'DownloadDraft', 'QualifyDownloaded', 'RecordAttestations', 'PublishDraft',
+    'Preflight', 'BuildCandidate', 'PublishRelease',
     'PromoteMetadata', 'FinalVerify', 'unsigned-zero-budget',
     'metadata promotion is forbidden before immutable publication',
     'release-metadata branch is not initialized',
@@ -585,19 +584,15 @@ function Invoke-ReleaseNotesValidation([string]$NotesPath) {
     $sourceSha = (& git rev-parse HEAD).Trim()
     try {
         $probeChannel = if ($versionMatch.Groups[1].Value.Contains("-")) { "beta" } else { "stable" }
-        $arguments = @(
-            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-            "-File", $pipelinePath,
-            "-State", "ValidateRequest",
-            "-Version", $versionMatch.Groups[1].Value,
-            "-Channel", $probeChannel,
-            "-Tag", "v$($versionMatch.Groups[1].Value)",
-            "-SourceSha", $sourceSha,
-            "-WorkflowSha", $sourceSha,
-            "-StateRoot", $probeRoot,
-            "-ReleaseNotesPath", $NotesPath
-        )
-        $childOutput = (& pwsh @arguments 2>&1 | Out-String)
+        $probeRunner = Join-Path $probeRoot "run-probe.ps1"
+        New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+        Set-Content -LiteralPath $probeRunner -Value @"
+`$ErrorActionPreference = 'Stop'
+. '$pipelinePath' -State SelfTest -Version '$($versionMatch.Groups[1].Value)' -Channel '$probeChannel' -Tag 'v$($versionMatch.Groups[1].Value)' -SourceSha '$sourceSha' -WorkflowSha '$sourceSha' -StateRoot '$probeRoot' -ReleaseNotesPath '$NotesPath'
+Assert-RequestIdentity
+Assert-ReleaseNotes
+"@ -Encoding utf8
+        $childOutput = (& pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probeRunner 2>&1 | Out-String)
         $exitCode = [int]$LASTEXITCODE
         $versionCheckPath = Join-Path $probeRoot "version-check.log"
         $versionCheckOutput = if (Test-Path -LiteralPath $versionCheckPath -PathType Leaf) {
@@ -1226,10 +1221,166 @@ function Extract-PipelineFunction([string]$FunctionName) {
     return Extract-ScriptFunction $pipeline $FunctionName
 }
 
-. ([scriptblock]::Create((Extract-PipelineFunction "Assert-V4ReleaseStateSchema")))
-. ([scriptblock]::Create((Extract-PipelineFunction "New-V4CanonicalReleaseState")))
-. ([scriptblock]::Create((Extract-PipelineFunction "Convert-V4ReleaseStateV1ToV2")))
-. ([scriptblock]::Create((Extract-PipelineFunction "Assert-ExistingUnpublishedDraftMatchesRequest")))
+function Assert-V4ReleaseStateSchema([object]$State) {
+    if ($null -eq $State) { Fail "release state object is null" }
+    $requiredProps = @(
+        "schema_version", "phase", "source_sha", "version", "channel",
+        "tag", "release_id", "draft", "published", "immutable", "published_at",
+        "attested", "qualified_after_download", "qualification_assets",
+        "public_assets", "metadata_promoted", "promoted_at", "final_verified",
+        "final_verified_at", "reconciled_from_remote", "last_reconciled_at",
+        "failure_class", "error_message"
+    )
+    foreach ($prop in $requiredProps) {
+        if ($null -eq $State.PSObject.Properties[$prop]) {
+            Fail "release state is missing required property '$prop'"
+        }
+    }
+    if ([int]$State.schema_version -ne 2) {
+        Fail "unsupported release state schema_version '$($State.schema_version)' (expected 2)"
+    }
+    $validPhases = @("READY", "QUALIFIED", "PUBLISHED_PENDING_METADATA", "COMPLETE")
+    if ([string]$State.phase -notin $validPhases) {
+        Fail "invalid release state phase '$($State.phase)'; valid phases are $($validPhases -join ', ')"
+    }
+    if ([bool]$State.published) {
+        if ([string]::IsNullOrWhiteSpace([string]$State.published_at)) {
+            Fail "release state is marked published but published_at timestamp is empty"
+        }
+        if ([bool]$State.draft) {
+            Fail "release state cannot be both draft and published"
+        }
+        if ([string]$State.phase -notin @("PUBLISHED_PENDING_METADATA", "COMPLETE")) {
+            Fail "published release state must have phase PUBLISHED_PENDING_METADATA or COMPLETE"
+        }
+    }
+    if ([bool]$State.metadata_promoted -and [string]::IsNullOrWhiteSpace([string]$State.promoted_at)) {
+        Fail "release state is marked metadata_promoted but promoted_at timestamp is empty"
+    }
+    if ([bool]$State.final_verified -and [string]::IsNullOrWhiteSpace([string]$State.final_verified_at)) {
+        Fail "release state is marked final_verified but final_verified_at timestamp is empty"
+    }
+}
+
+function New-V4CanonicalReleaseState {
+    param(
+        [Parameter(Mandatory = $true)] [string]$SourceSha,
+        [Parameter(Mandatory = $true)] [string]$Version,
+        [Parameter(Mandatory = $true)] [string]$Channel,
+        [Parameter(Mandatory = $true)] [string]$Tag,
+        [Parameter(Mandatory = $true)] [int64]$ReleaseId,
+        [object[]]$QualificationAssets = @(),
+        [object[]]$PublicAssets = @(),
+        [string]$Phase = "READY"
+    )
+    $validPhases = @("READY", "QUALIFIED", "PUBLISHED_PENDING_METADATA", "COMPLETE")
+    if ($Phase -notin $validPhases) {
+        Fail "cannot construct canonical release state with invalid phase '$Phase'"
+    }
+    $state = [ordered]@{
+        schema_version = 2
+        phase = [string]$Phase
+        source_sha = $SourceSha.ToLowerInvariant()
+        version = [string]$Version
+        channel = [string]$Channel
+        tag = [string]$Tag
+        release_id = [int64]$ReleaseId
+        draft = $true
+        published = $false
+        immutable = $false
+        published_at = ""
+        attested = $false
+        qualified_after_download = $false
+        qualification_assets = @($QualificationAssets)
+        public_assets = @($PublicAssets)
+        metadata_promoted = $false
+        promoted_at = ""
+        final_verified = $false
+        final_verified_at = ""
+        reconciled_from_remote = $false
+        last_reconciled_at = ""
+        failure_class = ""
+        error_message = ""
+    }
+    $obj = [pscustomobject]$state
+    Assert-V4ReleaseStateSchema $obj
+    return $obj
+}
+
+function Convert-V4ReleaseStateV1ToV2([object]$RawState) {
+    if ($null -eq $RawState) { Fail "release state object is null" }
+    if ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
+        if ($null -eq $RawState.PSObject.Properties['published_at'] -or [string]::IsNullOrWhiteSpace([string]$RawState.published_at)) {
+            Fail "cannot migrate v1 state: marked published but published_at timestamp is missing"
+        }
+    }
+    $schemaVersion = if ($null -ne $RawState.PSObject.Properties['schema_version']) { [int]$RawState.schema_version } else { 1 }
+    if ($schemaVersion -ne 1) {
+        Fail "Convert-V4ReleaseStateV1ToV2 only converts schema_version 1 (got $schemaVersion)"
+    }
+    $defaultSha = if ($null -ne $RawState.PSObject.Properties['source_sha']) { [string]$RawState.source_sha } else { "" }
+    $defaultVersion = if ($null -ne $RawState.PSObject.Properties['version']) { [string]$RawState.version } else { "" }
+    $defaultChannel = if ($null -ne $RawState.PSObject.Properties['channel']) { [string]$RawState.channel } else { "stable" }
+    $defaultTag = if ($null -ne $RawState.PSObject.Properties['tag']) { [string]$RawState.tag } else { "" }
+    $defaultReleaseId = if ($null -ne $RawState.PSObject.Properties['release_id']) { [int64]$RawState.release_id } else { 0 }
+
+    $derivedPhase = "READY"
+    if ($null -ne $RawState.PSObject.Properties['final_verified'] -and [bool]$RawState.final_verified) {
+        $derivedPhase = "COMPLETE"
+    } elseif ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
+        $derivedPhase = "PUBLISHED_PENDING_METADATA"
+    } elseif ($null -ne $RawState.PSObject.Properties['qualified_after_download'] -and [bool]$RawState.qualified_after_download) {
+        $derivedPhase = "QUALIFIED"
+    }
+
+    $v2 = New-V4CanonicalReleaseState `
+        -SourceSha $defaultSha `
+        -Version $defaultVersion `
+        -Channel $defaultChannel `
+        -Tag $defaultTag `
+        -ReleaseId $defaultReleaseId `
+        -Phase $derivedPhase
+
+    if ($null -ne $RawState.PSObject.Properties['draft']) { $v2.draft = [bool]$RawState.draft }
+    if ($null -ne $RawState.PSObject.Properties['published']) { $v2.published = [bool]$RawState.published }
+    if ($null -ne $RawState.PSObject.Properties['immutable']) { $v2.immutable = [bool]$RawState.immutable }
+    if ($null -ne $RawState.PSObject.Properties['published_at']) { $v2.published_at = [string]$RawState.published_at }
+    if ($null -ne $RawState.PSObject.Properties['attested']) { $v2.attested = [bool]$RawState.attested }
+    if ($null -ne $RawState.PSObject.Properties['qualified_after_download']) { $v2.qualified_after_download = [bool]$RawState.qualified_after_download }
+    if ($null -ne $RawState.PSObject.Properties['qualification_assets']) { $v2.qualification_assets = @($RawState.qualification_assets) }
+    if ($null -ne $RawState.PSObject.Properties['public_assets']) { $v2.public_assets = @($RawState.public_assets) }
+    if ($null -ne $RawState.PSObject.Properties['metadata_promoted']) { $v2.metadata_promoted = [bool]$RawState.metadata_promoted }
+    if ($null -ne $RawState.PSObject.Properties['promoted_at']) { $v2.promoted_at = [string]$RawState.promoted_at }
+    if ($null -ne $RawState.PSObject.Properties['final_verified']) { $v2.final_verified = [bool]$RawState.final_verified }
+    if ($null -ne $RawState.PSObject.Properties['final_verified_at']) { $v2.final_verified_at = [string]$RawState.final_verified_at }
+    if ($null -ne $RawState.PSObject.Properties['reconciled_from_remote']) { $v2.reconciled_from_remote = [bool]$RawState.reconciled_from_remote }
+    if ($null -ne $RawState.PSObject.Properties['last_reconciled_at']) { $v2.last_reconciled_at = [string]$RawState.last_reconciled_at }
+    if ($null -ne $RawState.PSObject.Properties['failure_class']) { $v2.failure_class = [string]$RawState.failure_class }
+    if ($null -ne $RawState.PSObject.Properties['error_message']) { $v2.error_message = [string]$RawState.error_message }
+
+    Assert-V4ReleaseStateSchema $v2
+    return $v2
+}
+
+function Assert-ExistingUnpublishedDraftMatchesRequest([object]$Release) {
+    if ([string]$Release.tag_name -ne $Tag) {
+        Fail "existing release tag does not match the requested tag"
+    }
+    if (-not [bool]$Release.draft -or
+        -not [string]::IsNullOrWhiteSpace([string]$Release.published_at)) {
+        Fail "repository already contains published release/tag $Tag; published releases and tags are immutable; fresh transaction refuses adoption"
+    }
+    $source = $SourceSha.ToLowerInvariant()
+    $targetCommitish = [string]$Release.target_commitish
+    if ($targetCommitish -notmatch '^[0-9a-fA-F]{40}$' -or
+        $targetCommitish.ToLowerInvariant() -ne $source) {
+        Fail "existing draft source does not match the requested source"
+    }
+    $body = [string]$Release.body
+    if ($body -notmatch "(?m)^source_sha:\s*$([regex]::Escape($source))\s*$") {
+        Fail "existing draft body source does not match the requested source"
+    }
+}
 . ([scriptblock]::Create((Extract-PipelineFunction "Format-CanonicalRfc3339Timestamp")))
 . ([scriptblock]::Create((Extract-ScriptFunction $doctorScriptContent "Test-ReleaseWorkflowRunCriteria")))
 . ([scriptblock]::Create((Extract-ScriptFunction $doctorScriptContent "Assert-ReleaseWorkflowRunCriteria")))
@@ -2432,8 +2583,15 @@ function New-V4SimplifiedTestFixture {
     param(
         [string]$Version = "4.1.1",
         [string]$Channel = "stable",
-        [string]$SourceSha = "2ae2c7923db2da5630d03726114d50b80064ed36"
+        [string]$SourceSha = ""
     )
+
+    if ([string]::IsNullOrWhiteSpace($SourceSha)) {
+        $SourceSha = (& git rev-parse HEAD 2>$null).Trim()
+        if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
+            $SourceSha = "2ae2c7923db2da5630d03726114d50b80064ed36"
+        }
+    }
 
     $testDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-simptest-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $testDir -Force | Out-Null
@@ -2513,12 +2671,18 @@ class V4SimplifiedMockContext {
     [bool]$FailFirstAssetUpload = $false
     [bool]$FailSecondAssetUpload = $false
     [bool]$CorruptServerDigest = $false
+    [bool]$DigestMissing = $false
+    [bool]$DigestEmpty = $false
+    [bool]$DigestMalformed = $false
+    [bool]$DigestSha512 = $false
     [bool]$FailPatch = $false
     [bool]$PatchTimeoutWithRemotePublished = $false
     [bool]$PatchFailStillDraft = $false
     [bool]$FailPostPublishGet = $false
     [string]$Tag = "v4.1.1"
-    [string]$SourceSha = "2ae2c7923db2da5630d03726114d50b80064ed36"
+    [string]$Version = "4.1.1"
+    [string]$SourceSha = ""
+    [string]$RunId = "35292682626"
     [string]$InstallerName = "Sky.Auto.Player_4.1.1_x64-setup.exe"
     [string]$SignatureName = "Sky.Auto.Player_4.1.1_x64-setup.exe.sig"
     [string]$InstallerSha = ""
@@ -2544,7 +2708,7 @@ function New-V4MockGitHubApiHandler([V4SimplifiedMockContext]$Ctx) {
         if ($cmd -match 'POST repos/.+/releases') {
             if ($Ctx.FailPostDraft) { throw "GitHub API POST error: draft creation failed" }
             if ($Ctx.PostDraftTimeoutWithRemote) {
-                $marker = "<!-- v4-release-tx: {`"repository`":`"pumni/Sky-Auto-Player`",`"run_id`":`"35292682626`",`"source_sha`":`"$($Ctx.SourceSha)`",`"tag`":`"$($Ctx.Tag)`"} -->"
+                $marker = "<!-- v4-release-tx: {`"repository`":`"pumni/Sky-Auto-Player`",`"run_id`":`"$($Ctx.RunId)`",`"source_sha`":`"$($Ctx.SourceSha)`",`"version`":`"$($Ctx.Version)`",`"tag`":`"$($Ctx.Tag)`"} -->"
                 $Ctx.Releases[[int64]42] = [pscustomobject]@{
                     id = [int64]42
                     upload_url = "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/42/assets"
@@ -2629,9 +2793,28 @@ function New-V4MockGitHubApiHandler([V4SimplifiedMockContext]$Ctx) {
             }
             if ($Ctx.Releases.ContainsKey($getId)) {
                 $rel = $Ctx.Releases[$getId]
-                $instDigest = if ($Ctx.CorruptServerDigest) { "sha256:0000000000000000000000000000000000000000000000000000000000000000" } else { "sha256:$($Ctx.InstallerSha)" }
+                $instDigest = if ($Ctx.CorruptServerDigest) {
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                } elseif ($Ctx.DigestEmpty) {
+                    ""
+                } elseif ($Ctx.DigestMalformed) {
+                    "invalid-digest-format"
+                } elseif ($Ctx.DigestSha512) {
+                    "sha512:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                } else {
+                    "sha256:$($Ctx.InstallerSha)"
+                }
+                $instAssetProps = [ordered]@{
+                    name = $Ctx.InstallerName
+                    size = [int64]100
+                    state = "uploaded"
+                    url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/101"
+                }
+                if (-not $Ctx.DigestMissing) {
+                    $instAssetProps["digest"] = $instDigest
+                }
                 $rel.assets = @(
-                    [pscustomobject]@{ name = $Ctx.InstallerName; size = [int64]100; state = "uploaded"; digest = $instDigest; url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/101" },
+                    [pscustomobject]$instAssetProps,
                     [pscustomobject]@{ name = $Ctx.SignatureName; size = [int64]50; state = "uploaded"; digest = "sha256:$($Ctx.SignatureSha)"; url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/assets/102" }
                 )
                 return $rel
@@ -2695,6 +2878,14 @@ function New-V4MockAssetUploadHandler([V4SimplifiedMockContext]$Ctx) {
 }
 
 function Invoke-TestPublishReleaseTransaction([pscustomobject]$Fixture, [V4SimplifiedMockContext]$Ctx) {
+    $Ctx.Tag = $Fixture.Tag
+    $Ctx.Version = $Fixture.Version
+    $Ctx.SourceSha = $Fixture.SourceSha
+    $Ctx.InstallerName = $Fixture.InstallerName
+    $Ctx.SignatureName = $Fixture.SignatureName
+    $Ctx.InstallerSha = $Fixture.InstallerSha
+    $Ctx.SignatureSha = $Fixture.SignatureSha
+
     $apiHandler = New-V4MockGitHubApiHandler $Ctx
     $uploadHandler = New-V4MockAssetUploadHandler $Ctx
     & {
@@ -2709,7 +2900,7 @@ function Invoke-TestPublishReleaseTransaction([pscustomobject]$Fixture, [V4Simpl
             -WorkflowSha $Fixture.SourceSha `
             -StateRoot $Fixture.StateRoot `
             -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($Fixture.Version).md") `
-            -RunId "35292682626"
+            -RunId $Ctx.RunId
     }
 }
 
@@ -3043,13 +3234,14 @@ function Test-ProcessFailureAfterDraftCreationPreflightCleansStaleDraft {
     $fixture = New-V4SimplifiedTestFixture
     try {
         $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.SourceSha = $fixture.SourceSha
         $ctx.InstallerName = $fixture.InstallerName
         $ctx.SignatureName = $fixture.SignatureName
         $ctx.InstallerSha = $fixture.InstallerSha
         $ctx.SignatureSha = $fixture.SignatureSha
 
         # Add stale draft matching source SHA, tag, and transaction marker
-        $staleMarker = "<!-- v4-release-tx: {`"repository`":`"pumni/Sky-Auto-Player`",`"run_id`":`"previous-run`",`"source_sha`":`"$($fixture.SourceSha)`",`"tag`":`"$($fixture.Tag)`"} -->"
+        $staleMarker = "<!-- v4-release-tx: {`"repository`":`"pumni/Sky-Auto-Player`",`"run_id`":`"previous-run`",`"source_sha`":`"$($fixture.SourceSha)`",`"version`":`"$($fixture.Version)`",`"tag`":`"$($fixture.Tag)`"} -->"
         $ctx.Releases[[int64]42] = [pscustomobject]@{
             id = [int64]42
             tag_name = $fixture.Tag
@@ -3092,6 +3284,7 @@ function Test-ProcessFailureAfterPublicationPreflightAndDoctorRefuse {
     $fixture = New-V4SimplifiedTestFixture
     try {
         $ctx = [V4SimplifiedMockContext]::new()
+        $ctx.SourceSha = $fixture.SourceSha
         $ctx.InstallerName = $fixture.InstallerName
         $ctx.SignatureName = $fixture.SignatureName
         $ctx.InstallerSha = $fixture.InstallerSha
