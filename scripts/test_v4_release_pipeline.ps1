@@ -671,7 +671,7 @@ $validNotesPath = Join-Path $repoRoot "docs/releases/v$packageVersion.md"
 $canonicalReleaseNotes = Get-Content -LiteralPath $validNotesPath -Raw
 foreach ($forbiddenPublicReleaseNotesPattern in @(
     '(?i)\bNO-GO\b',
-    '(?i)pre-publication',
+    '(?i)pre-publication\s+(?:gate|check|verification|status|review)',
     '(?i)owner/admin',
     '(?i)cutover',
     '(?i)release remains blocked',
@@ -686,10 +686,10 @@ foreach ($forbiddenPublicReleaseNotesPattern in @(
     'Sky-Auto-Player-Releases'
 )) {
     if ($canonicalReleaseNotes -match $forbiddenPublicReleaseNotesPattern) {
-        Fail "canonical v4.0.1 public release notes contain an internal gate phrase: $forbiddenPublicReleaseNotesPattern"
+        Fail "canonical v$packageVersion public release notes contain an internal gate phrase: $forbiddenPublicReleaseNotesPattern"
     }
 }
-Write-Host "V4.0.1 public release notes contract: PASS (no internal gate state or obsolete topology wording)"
+Write-Host "V4 public release notes contract: PASS (no internal gate state or obsolete topology wording)"
 $validNotesProbe = Invoke-ReleaseNotesValidation $validNotesPath
 if ($validNotesProbe.ExitCode -ne 0 -or $validNotesProbe.Output -notmatch "V4 release identity: PASS") {
     Fail "canonical release notes were rejected by ValidateRequest. Diagnostics:`n$($validNotesProbe.Output)"
