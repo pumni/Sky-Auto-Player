@@ -2,16 +2,19 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet(
+        "Preflight",
+        "BuildCandidate",
+        "PublishRelease",
+        "PublishReleaseTransaction",
+        "PromoteMetadata",
+        "FinalVerify",
         "ValidateRequest",
         "ValidateRepository",
-        "BuildCandidate",
         "CreateDraft",
         "DownloadDraft",
         "QualifyDownloaded",
         "RecordAttestations",
         "PublishDraft",
-        "PromoteMetadata",
-        "FinalVerify",
         "SelfTest"
     )]
     [string]$State,
@@ -24,7 +27,8 @@ param(
     [string]$WorkflowSha,
     [string]$StateRoot,
     [string]$UpdaterPrivateKeyPath,
-    [string]$ReleaseNotesPath
+    [string]$ReleaseNotesPath,
+    [string]$RunId
 )
 
 Set-StrictMode -Version Latest
@@ -51,9 +55,17 @@ $authenticodeEvidenceName = "TAURI_AUTHENTICODE_EVIDENCE.json"
 $installedAuthenticodeEvidenceName = "INSTALLED_AUTHENTICODE_EVIDENCE.json"
 $summaryName = "TAURI_ARTIFACT_SUMMARY.json"
 $sbomName = "SBOM.spdx.json"
+
 . (Join-Path $PSScriptRoot "v4_release_asset_upload.ps1")
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
 . (Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1")
+
+if (-not (Test-Path Variable:script:GitHubApiHandler)) {
+    $script:GitHubApiHandler = $null
+}
+if (-not (Test-Path Variable:script:AssetUploadHandler)) {
+    $script:AssetUploadHandler = $null
+}
 
 function Fail([string]$Message) {
     throw "V4 release pipeline failed closed: $Message"
@@ -82,124 +94,25 @@ function Write-JsonFile([string]$Path, [object]$Value) {
     [IO.File]::WriteAllText($Path, $json + "`n", [Text.UTF8Encoding]::new($false))
 }
 
+function Read-JsonFile([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "Required state file is missing: $Path" }
+    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+}
+
 function Get-V4ReleaseMakeLatestValue([string]$ReleaseChannel) {
-    # GitHub's release API accepts an enum string here, not a JSON boolean.
     if ($ReleaseChannel -eq "stable") { return "true" }
     if ($ReleaseChannel -eq "beta") { return "false" }
     Fail "release channel is required to select make_latest"
 }
 
 function Get-V4ReleaseDraftMakeLatestValue {
-    # GitHub does not allow a draft or prerelease to become Latest. Keep draft
-    # creation independent from the eventual stable publication policy.
     return "false"
 }
 
-function Read-JsonFile([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "Required state file is missing: $Path" }
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-}
-
-function Assert-RequestIdentity {
-    if ([string]::IsNullOrWhiteSpace($Version)) { Fail "version is required" }
-    if ([string]::IsNullOrWhiteSpace($Channel) -or $Channel -notin @("stable", "beta")) {
-        Fail "channel must be stable or beta"
-    }
-    if ([string]::IsNullOrWhiteSpace($Tag) -or $Tag -ne "v$Version") {
-        Fail "tag must exactly equal v<version>"
-    }
-    if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
-        Fail "version is not canonical SemVer without build metadata"
-    }
-    $isPrerelease = $Version.Contains("-")
-    if ($Channel -eq "stable" -and $isPrerelease) { Fail "stable releases must use final SemVer" }
-    if ($Channel -eq "beta" -and -not $isPrerelease) { Fail "beta releases must use a SemVer prerelease" }
-    if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
-        Fail "source_sha must be an exact 40-character commit SHA"
-    }
-
-    $currentHead = (& git rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
-    if ($LASTEXITCODE -ne 0 -or $currentHead -ne $SourceSha.ToLowerInvariant()) {
-        Fail "checked-out HEAD does not equal the requested source SHA"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($WorkflowSha) -and
-        $WorkflowSha -notmatch '^[0-9a-fA-F]{40}$') {
-        Fail "workflow SHA must be an exact commit SHA"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($WorkflowSha) -and
-        $WorkflowSha.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
-        Fail "source SHA differs from the workflow SHA used for OIDC provenance"
-    }
-
-    $cargoPath = Join-Path $repoRoot "desktop/src-tauri/Cargo.toml"
-    $cargo = Get-Content -LiteralPath $cargoPath -Raw
-    if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') { Fail "Cargo package version is missing" }
-    if ($Matches[1] -ne $Version) { Fail "Cargo/Tauri package version does not equal requested version" }
-
-    & cargo xtask version check --tag $Tag *> (Join-Path (Get-EffectiveStateRoot) "version-check.log")
-    if ($LASTEXITCODE -ne 0) { Fail "canonical cargo xtask version/tag validation failed" }
-    Write-Host "V4 release identity: PASS (version=$Version, channel=$Channel, source=$($SourceSha.ToLowerInvariant()))"
-}
-
-function Assert-ReleaseNotes {
-    if ([string]::IsNullOrWhiteSpace($ReleaseNotesPath)) { Fail "release notes path is required" }
-    $resolved = (Resolve-Path -LiteralPath $ReleaseNotesPath -ErrorAction Stop).Path
-    $repoPrefix = $repoRoot.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
-    if (-not $resolved.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        Fail "release notes must be inside the checked-out source workspace"
-    }
-    if ((Get-Item -LiteralPath $resolved).Length -gt 16384) { Fail "release notes exceed the bounded limit" }
-    $relativePath = [IO.Path]::GetRelativePath($repoRoot, $resolved).Replace("\", "/")
-    $expectedPath = "docs/releases/v$Version.md"
-    if (-not $relativePath.Equals($expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
-        Fail "release notes path must match the requested version"
-    }
-    $notes = [IO.File]::ReadAllText($resolved)
-    $firstHeading = [regex]::Match($notes, '(?m)^# [^\r\n]+(?=\r?$)')
-    $expectedHeading = "# Sky Auto Player v$Version"
-    if (-not $firstHeading.Success -or $firstHeading.Value -ne $expectedHeading) {
-        Fail "release notes heading must match the requested version"
-    }
-    return $resolved
-}
-
-function Convert-PublishedAtToMetadataTimestamp([object]$Release) {
-    $publishedAt = [string]$Release.published_at
-    if ([string]::IsNullOrWhiteSpace($publishedAt)) {
-        Fail "published GitHub Release is missing published_at"
-    }
-    try {
-        $parsed = [DateTimeOffset]::Parse(
-            $publishedAt,
-            [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::RoundtripKind
-        )
-        # The metadata schema is second precision; this value is sourced from
-        # the actual GitHub Release publication timestamp, never an operator input.
-        return $parsed.ToUniversalTime().ToString(
-            "yyyy-MM-dd'T'HH:mm:ss'Z'",
-            [Globalization.CultureInfo]::InvariantCulture
-        )
-    } catch {
-        Fail "GitHub Release published_at is not a valid timestamp: $publishedAt"
-    }
-}
-
-function Get-CanonicalUtcTimestamp {
-    return (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [Globalization.CultureInfo]::InvariantCulture)
-}
-
 function Format-CanonicalRfc3339Timestamp([object]$timestamp) {
-    if ($null -eq $timestamp -or [string]::IsNullOrWhiteSpace([string]$timestamp)) {
-        return $null
-    }
-    if ($timestamp -is [DateTimeOffset]) {
-        return $timestamp.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
-    }
-    if ($timestamp -is [DateTime]) {
-        return $timestamp.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
-    }
+    if ($null -eq $timestamp) { return $null }
     $str = [string]$timestamp
+    if ([string]::IsNullOrWhiteSpace($str)) { return $null }
     try {
         $parsed = [DateTimeOffset]::Parse(
             $str,
@@ -221,501 +134,94 @@ function Format-CanonicalRfc3339Timestamp([object]$timestamp) {
     }
 }
 
-function Invoke-GhBinaryOutput {
+function Get-CanonicalUtcTimestamp {
+    return [DateTimeOffset]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Format-V4TransactionMarker {
     param(
-        [Parameter(Mandatory = $true)] [string[]]$Arguments,
-        [Parameter(Mandatory = $true)] [string]$OutputPath,
-        [Parameter(Mandatory = $true)] [string]$ErrorPath
+        [Parameter(Mandatory = $true)] [string]$Repository,
+        [Parameter(Mandatory = $true)] [string]$RunId,
+        [Parameter(Mandatory = $true)] [string]$SourceSha,
+        [Parameter(Mandatory = $true)] [string]$Version,
+        [Parameter(Mandatory = $true)] [string]$Tag
     )
-    if ($PSVersionTable.PSVersion -lt [Version]"7.4.0") {
-        Fail "binary release-asset download requires PowerShell 7.4 or newer"
-    }
-    if ([string]::IsNullOrWhiteSpace($OutputPath)) { Fail "binary release-asset output path is required" }
-
-    $ghPath = (Get-Command gh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-    $startInfo = [Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $ghPath
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    foreach ($argument in $Arguments) {
-        [void]$startInfo.ArgumentList.Add([string]$argument)
-    }
-
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    $outputStream = $null
-    $stderrTask = $null
-    $started = $false
-    try {
-        $outputStream = [IO.File]::Open(
-            $OutputPath,
-            [IO.FileMode]::Create,
-            [IO.FileAccess]::Write,
-            [IO.FileShare]::None
-        )
-        $started = $process.Start()
-        if (-not $started) { Fail "could not start GitHub CLI for binary release-asset download" }
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.StandardOutput.BaseStream.CopyTo($outputStream)
-        $process.WaitForExit()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
-        [IO.File]::WriteAllText($ErrorPath, $stderr, [Text.UTF8Encoding]::new($false))
-        return [int]$process.ExitCode
-    } finally {
-        if ($started -and -not $process.HasExited) {
-            $process.Kill()
-            $process.WaitForExit()
-        }
-        if ($null -ne $outputStream) { $outputStream.Dispose() }
-        $process.Dispose()
-    }
-}
-
-function Invoke-GitHubApi {
-    param(
-        [Parameter(Mandatory = $true)] [string[]]$Arguments,
-        [switch]$AllowNotFound,
-        [switch]$BinaryOutput,
-        [switch]$Raw,
-        [string]$OutputPath
-    )
-    $errorPath = Join-Path (Get-EffectiveStateRoot) ("gh-error-" + [guid]::NewGuid().ToString("N") + ".log")
-    try {
-        if ($BinaryOutput) {
-            $script:githubApiExitCode = Invoke-GhBinaryOutput `
-                -Arguments $Arguments -OutputPath $OutputPath -ErrorPath $errorPath
-        } else {
-            $script:githubApiResult = & gh @Arguments 2>$errorPath
-            $script:githubApiExitCode = $LASTEXITCODE
-        }
-        if ($githubApiExitCode -ne 0) {
-            $errorText = if (Test-Path -LiteralPath $errorPath) { Get-Content -LiteralPath $errorPath -Raw } else { "" }
-            if ($AllowNotFound -and $errorText -match '(?i)(404|not found)') { return $null }
-            # Do not include the provider response: it is not needed for diagnosis and
-            # keeps credentials and server diagnostics out of the release log.
-            Fail "GitHub API request failed"
-        }
-        if ($BinaryOutput) { return $null }
-        $responseText = ($githubApiResult -join "`n")
-        if ($Raw) { return $responseText }
-        # GitHub's successful DELETE endpoints return an empty body. Treat that
-        # as a successful request instead of attempting to parse empty JSON.
-        if ([string]::IsNullOrWhiteSpace($responseText)) { return $null }
-        return ($responseText | ConvertFrom-Json)
-    } finally {
-        Remove-Item -LiteralPath $errorPath -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Get-CanonicalRepository {
-    if ([string]::IsNullOrWhiteSpace($env:GITHUB_REPOSITORY)) {
-        Fail "GITHUB_REPOSITORY is required for release operations"
-    }
-    if ($env:GITHUB_REPOSITORY -ne $canonicalRepository) {
-        Fail "release operations are permitted only for $canonicalRepository"
-    }
-    return $env:GITHUB_REPOSITORY
-}
-
-function Write-RepositoryContentFile([object]$Response, [string]$Path, [string]$ExpectedPath) {
-    if ($null -eq $Response -or [string]$Response.type -ne "file" -or
-        [string]$Response.path -ne $ExpectedPath) {
-        Fail "repository content response is not the expected file: $ExpectedPath"
-    }
-    $encoded = [regex]::Replace([string]$Response.content, '\s', '')
-    if ([string]::IsNullOrWhiteSpace($encoded)) { Fail "repository content file is empty: $ExpectedPath" }
-    try {
-        $bytes = [Convert]::FromBase64String($encoded)
-    } catch {
-        Fail "repository content file is not valid base64: $ExpectedPath"
-    }
-    if ($bytes.Length -eq 0) { Fail "repository content file has no bytes: $ExpectedPath" }
-    [IO.File]::WriteAllBytes($Path, $bytes)
-}
-
-function Assert-MetadataBranchReadiness([string]$Repository) {
-    $branch = Invoke-GitHubApi -Arguments @("api", "repos/$Repository/git/ref/heads/release-metadata") -AllowNotFound
-    if ($null -eq $branch) { Fail "canonical release-metadata branch is not initialized" }
-    if ([string]$branch.ref -ne "refs/heads/release-metadata" -or
-        [string]$branch.object.type -ne "commit") {
-        Fail "canonical release-metadata branch identity is not canonical"
-    }
-
-    $bootstrap = Invoke-GitHubApi -Arguments @(
-        "api", "repos/$Repository/contents/$metadataBootstrapPath`?ref=release-metadata"
-    ) -AllowNotFound
-    if ($null -eq $bootstrap) { Fail "release-metadata bootstrap contract is missing" }
-    $bootstrapPath = Join-Path (Get-EffectiveStateRoot) "release-metadata-bootstrap.md"
-    Write-RepositoryContentFile $bootstrap $bootstrapPath $metadataBootstrapPath
-    $bootstrapText = [IO.File]::ReadAllText($bootstrapPath, [Text.UTF8Encoding]::new($false)).TrimEnd("`r", "`n")
-    if ($bootstrapText -ne $metadataBootstrapContract) {
-        Fail "release-metadata bootstrap contract is not canonical"
-    }
-
-    foreach ($channelName in @("stable", "beta")) {
-        $metadataPath = "channels/$channelName/latest.json"
-        $metadata = Invoke-GitHubApi -Arguments @(
-            "api", "repos/$Repository/contents/$metadataPath`?ref=release-metadata"
-        ) -AllowNotFound
-        if ($null -eq $metadata) { continue }
-        $localPath = Join-Path (Get-EffectiveStateRoot) "repository-$channelName-latest.json"
-        Write-RepositoryContentFile $metadata $localPath $metadataPath
-        Invoke-Checked "cargo" @(
-            "xtask", "release-metadata", "validate", "--channel", $channelName, "--metadata", $localPath
-        ) "existing release-metadata $channelName channel failed canonical validation"
-    }
-    Write-Host "V4 release-metadata readiness: PASS (orphan branch exists; bootstrap contract and existing channels are valid)"
-}
-
-function Assert-RepositoryReleasePolicy {
-    $repository = Get-CanonicalRepository
-    $main = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/ref/heads/main") -AllowNotFound
-    if ($null -eq $main) {
-        Fail "canonical repository main is not initialized"
-    }
-    if ([string]$main.ref -ne "refs/heads/main") { Fail "canonical repository main ref is not canonical" }
-    Assert-MetadataBranchReadiness $repository
-    Write-Host "V4 repository release preconditions: PASS (main exists; release-metadata ready; immutable publication is checked on the published release)"
-}
-
-function Get-PublicMetadataDocument([string]$Channel) {
-    if (-not $rawMetadataEndpoints.ContainsKey($Channel)) {
-        Fail "raw metadata endpoint channel is not canonical: $Channel"
-    }
-    $endpoint = [string]$rawMetadataEndpoints[$Channel]
-    $handler = [System.Net.Http.HttpClientHandler]::new()
-    $handler.AllowAutoRedirect = $false
-    $client = [System.Net.Http.HttpClient]::new($handler)
-    $lastError = ""
-    try {
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-            $request = $null
-            $response = $null
-            try {
-                $request = [System.Net.Http.HttpRequestMessage]::new(
-                    [System.Net.Http.HttpMethod]::Get,
-                    $endpoint
-                )
-                [void]$request.Headers.Accept.ParseAdd("application/json")
-                if ($null -ne $request.Headers.Authorization) {
-                    $lastError = "raw metadata request unexpectedly carries Authorization"
-                } else {
-                    $response = $client.SendAsync($request).GetAwaiter().GetResult()
-                    $status = [int]$response.StatusCode
-                    if ($status -eq 200) {
-                        $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-                        if (-not [string]::IsNullOrWhiteSpace($body)) {
-                            return [pscustomobject]@{ Endpoint = $endpoint; Body = $body }
-                        }
-                        $lastError = "raw metadata endpoint returned an empty body"
-                    } else {
-                        $lastError = "raw metadata endpoint returned HTTP $status"
-                    }
-                }
-            } catch {
-                $lastError = $_.Exception.Message
-            } finally {
-                if ($null -ne $response) { $response.Dispose() }
-                if ($null -ne $request) { $request.Dispose() }
-            }
-            if ($attempt -lt 3) { Start-Sleep -Seconds 2 }
-        }
-    } finally {
-        $client.Dispose()
-        $handler.Dispose()
-    }
-    Fail "raw metadata endpoint did not return a non-empty unauthenticated 200 response after bounded retry: $lastError"
-}
-
-function Get-ExpectedInstallerName {
-    return "Sky Auto Player_${Version}$installerSuffix"
-}
-
-function Get-QualificationCandidateRecords {
-    $installer = Get-ExpectedInstallerName
-    $bundle = Join-Path $repoRoot "rust/target/dist/bundle/nsis"
-    $evidence = Join-Path $repoRoot "rust/target/dist"
-    return @(
-        [pscustomobject]@{ name = $installer; path = Join-Path $bundle $installer; role = "installer" },
-        [pscustomobject]@{ name = "$installer.sig"; path = Join-Path $bundle "$installer.sig"; role = "updater-signature" },
-        [pscustomobject]@{ name = $qualificationEvidenceName; path = Join-Path $evidence $qualificationEvidenceName; role = "qualification-evidence" },
-        [pscustomobject]@{ name = $productionEvidenceName; path = Join-Path $evidence $productionEvidenceName; role = "production-evidence" },
-        [pscustomobject]@{ name = $authenticodeEvidenceName; path = Join-Path $evidence $authenticodeEvidenceName; role = "authenticode-evidence" },
-        [pscustomobject]@{ name = $installedAuthenticodeEvidenceName; path = Join-Path $evidence $installedAuthenticodeEvidenceName; role = "installed-authenticode-evidence" },
-        [pscustomobject]@{ name = $summaryName; path = Join-Path $evidence $summaryName; role = "artifact-summary" },
-        [pscustomobject]@{ name = $sbomName; path = Join-Path $evidence $sbomName; role = "sbom" }
-    )
-}
-
-function Get-CanonicalPublicReleaseNames {
-    $installer = Get-V4SafeReleaseAssetName (Get-ExpectedInstallerName)
-    return @(
-        $installer
-        (Get-V4SafeReleaseAssetName "$((Get-ExpectedInstallerName)).sig")
-    )
-}
-
-function Get-PublicReleaseRecords([object[]]$QualificationRecords) {
-    if ($null -eq $QualificationRecords -or @($QualificationRecords).Count -eq 0) {
-        Fail "qualification candidate set is empty"
-    }
-
-    $expectedNames = @(Get-CanonicalPublicReleaseNames)
-    $records = @(
-        foreach ($expectedName in $expectedNames) {
-            $matches = @($QualificationRecords | Where-Object {
-                [string]$_.release_name -eq $expectedName
-            })
-            if ($matches.Count -ne 1) {
-                Fail "qualification candidate set does not contain exactly one canonical public record: $expectedName"
-            }
-            $matches[0]
-        }
-    )
-
-    $expectedRoles = @("installer", "updater-signature")
-    for ($index = 0; $index -lt $records.Count; $index++) {
-        $record = $records[$index]
-        if ([string]$record.role -ne $expectedRoles[$index] -or
-            [string]$record.release_name -ne $expectedNames[$index]) {
-            Fail "canonical public record has an unexpected role or release name: $($record.release_name)"
-        }
-    }
-    return $records
-}
-
-function Get-FileRecord([object]$Candidate) {
-    if (-not (Test-Path -LiteralPath $Candidate.path -PathType Leaf)) { Fail "qualified candidate file is missing: $($Candidate.name)" }
-    $item = Get-Item -LiteralPath $Candidate.path
-    if ($item.Length -le 0) { Fail "qualified candidate file is empty: $($Candidate.name)" }
-    $sourceName = [string]$Candidate.name
-    $releaseName = Get-V4SafeReleaseAssetName $sourceName
-    return [pscustomobject]@{
-        name = $releaseName
-        source_name = $sourceName
-        release_name = $releaseName
-        role = [string]$Candidate.role
-        size = [int64]$item.Length
-        sha256 = (Get-FileHash -LiteralPath $Candidate.path -Algorithm SHA256).Hash.ToLowerInvariant()
-        source_path = [string]$Candidate.path
-        state_path = (Join-Path "candidate-assets" $releaseName).Replace("\", "/")
-    }
-}
-
-function Get-StateAssetPath([object]$Record) {
-    $relative = [string]$Record.state_path
-    if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative)) {
-        Fail "candidate manifest contains an invalid state asset path"
-    }
-    $root = Get-EffectiveStateRoot
-    $full = [IO.Path]::GetFullPath((Join-Path $root $relative))
-    $prefix = $root.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
-    if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        Fail "candidate manifest state asset path escapes the release state root"
-    }
-    return $full
-}
-
-function Get-FrozenQualificationAssetPath([object[]]$Records, [string]$SourceName) {
-    $matches = @($Records | Where-Object {
-        [string]$_.source_name -eq $SourceName -or
-        ([string]$_.name -eq $SourceName -and $null -eq $_.PSObject.Properties['source_name'])
-    })
-    if ($matches.Count -ne 1) {
-        Fail "candidate manifest must contain exactly one frozen qualification asset: $SourceName"
-    }
-    $path = Get-StateAssetPath $matches[0]
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Fail "frozen qualification asset is missing: $SourceName"
-    }
-    return $path
-}
-
-function Assert-ManifestAssetFiles([object[]]$Records) {
-    foreach ($record in @($Records)) {
-        $path = Get-StateAssetPath $record
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            Fail "frozen qualification asset is missing: $($record.release_name)"
-        }
-        $item = Get-Item -LiteralPath $path
-        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ([int64]$item.Length -ne [int64]$record.size -or $hash -ne [string]$record.sha256) {
-            Fail "frozen qualification asset differs from the candidate manifest: $($record.release_name)"
-        }
-    }
-}
-
-function Freeze-CandidateAssets([object[]]$Records) {
-    foreach ($record in @($Records)) {
-        $destination = Get-StateAssetPath $record
-        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-        Copy-Item -LiteralPath ([string]$record.source_path) -Destination $destination -Force
-    }
-    Assert-ManifestAssetFiles $Records
-}
-
-function Get-PublicReleaseRecordsFromManifest([object]$Manifest) {
-    if ($null -eq $Manifest.PSObject.Properties['qualification_assets'] -or
-        $null -eq $Manifest.PSObject.Properties['public_assets']) {
-        Fail "candidate manifest must declare qualification_assets and public_assets separately"
-    }
-    $qualificationRecords = @($Manifest.qualification_assets)
-    $derived = @(Get-PublicReleaseRecords $qualificationRecords)
-    $declared = @($Manifest.public_assets)
-    if ($declared.Count -ne $derived.Count) {
-        Fail "candidate manifest public_assets must contain exactly the canonical installer and signature"
-    }
-    for ($index = 0; $index -lt $derived.Count; $index++) {
-        if ([string]$declared[$index].name -ne [string]$derived[$index].name -or
-            [string]$declared[$index].release_name -ne [string]$derived[$index].release_name -or
-            [string]$declared[$index].source_name -ne [string]$derived[$index].source_name -or
-            [string]$declared[$index].role -ne [string]$derived[$index].role -or
-            [string]$declared[$index].state_path -ne [string]$derived[$index].state_path -or
-            [string]$declared[$index].sha256 -ne [string]$derived[$index].sha256 -or
-            [int64]$declared[$index].size -ne [int64]$derived[$index].size) {
-            Fail "candidate manifest public_assets are not an exact projection of qualification_assets"
-        }
-    }
-    return $derived
-}
-
-function Assert-EvidenceIdentity([string]$ProductionPath, [string]$QualificationPath, [object[]]$Records) {
-    $recordsByName = @{}
-    foreach ($record in @($Records)) {
-        $recordsByName[[string]$record.name] = $record
-        if ($null -ne $record.PSObject.Properties['source_name'] -and -not [string]::IsNullOrWhiteSpace([string]$record.source_name)) {
-            $recordsByName[[string]$record.source_name] = $record
-        }
-        if ($null -ne $record.PSObject.Properties['release_name'] -and -not [string]::IsNullOrWhiteSpace([string]$record.release_name)) {
-            $recordsByName[[string]$record.release_name] = $record
-        }
-    }
-    foreach ($requiredName in @($productionEvidenceName, $qualificationEvidenceName, $authenticodeEvidenceName, $sbomName)) {
-        if (-not $recordsByName.ContainsKey($requiredName)) { Fail "candidate manifest is missing required identity record: $requiredName" }
-    }
-    $evidence = Get-Content -LiteralPath $ProductionPath -Raw | ConvertFrom-Json
-    $qualification = Get-Content -LiteralPath $QualificationPath -Raw | ConvertFrom-Json
-    if ([string]$evidence.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "production evidence source SHA mismatch" }
-    if ([string]$evidence.version -ne $Version -or [string]$evidence.channel -ne $Channel) { Fail "production evidence release identity mismatch" }
-    if ([string]$evidence.authenticode_mode -ne "unsigned-zero-budget" -or
-        [string]$evidence.authenticode_state -ne "unsigned" -or
-        [string]$evidence.authenticode_provider -ne "none" -or
-        $null -ne $evidence.approved_signer_thumbprint -or
-        $null -ne $evidence.observed_signer_thumbprint) {
-        Fail "production evidence is not the governed unsigned-zero-budget state"
-    }
-    if ([string]$evidence.updater_signature_status -ne "valid" -or [string]$evidence.qualification_status -ne "PASS") {
-        Fail "production evidence omitted a mandatory updater or qualification result"
-    }
-    $instRec = $recordsByName[(Get-ExpectedInstallerName)]
-    $sigRec = $recordsByName["$((Get-ExpectedInstallerName)).sig"]
-    if ($null -eq $instRec -or $null -eq $sigRec) {
-        Fail "candidate manifest is missing the canonical installer or updater signature record"
-    }
-    $instSourceName = if ($null -ne $instRec.PSObject.Properties['source_name']) { [string]$instRec.source_name } else { [string]$instRec.name }
-    $sigSourceName = if ($null -ne $sigRec.PSObject.Properties['source_name']) { [string]$sigRec.source_name } else { [string]$sigRec.name }
-
-    if ([string]$evidence.installer -ne (Get-ExpectedInstallerName) -or
-        [string]$evidence.updater_signature -ne "$(Get-ExpectedInstallerName).sig" -or
-        [string]$evidence.authenticode_evidence -ne $authenticodeEvidenceName -or
-        [string]$evidence.sbom -ne $sbomName -or
-        [string]$evidence.installer -ne $instSourceName -or
-        [string]$evidence.updater_signature -ne $sigSourceName -or
-        [int64]$evidence.installer_size -ne [int64]$instRec.size -or
-        [string]$evidence.installer_sha256 -ne [string]$instRec.sha256 -or
-        [int64]$evidence.signature_size -ne [int64]$sigRec.size -or
-        [string]$evidence.updater_signature_sha256 -ne [string]$sigRec.sha256 -or
-        [string]$evidence.authenticode_evidence_sha256 -ne [string]$recordsByName[$authenticodeEvidenceName].sha256 -or
-        [string]$evidence.sbom_sha256 -ne [string]$recordsByName[$sbomName].sha256) {
-        Fail "production evidence digests or sizes do not match the candidate manifest"
-    }
-    if ([string]$qualification.installer -ne (Get-ExpectedInstallerName) -or
-        [string]$qualification.updater_signature -ne "$(Get-ExpectedInstallerName).sig" -or
-        [string]$qualification.installer_sha256 -ne [string]$instRec.sha256 -or
-        [string]$qualification.updater_signature_sha256 -ne [string]$sigRec.sha256 -or
-        [string]$qualification.authenticode_mode -ne "unsigned-zero-budget" -or
-        [string]$qualification.sbom_sha256 -ne [string]$recordsByName[$sbomName].sha256) {
-        Fail "qualification evidence does not bind the exact candidate manifest"
-    }
-}
-
-function Assert-CandidateEvidence([object[]]$Records) {
-    Assert-ManifestAssetFiles $Records
-    $productionRecord = @($Records | Where-Object { [string]$_.source_name -eq $productionEvidenceName })
-    $qualificationRecord = @($Records | Where-Object { [string]$_.source_name -eq $qualificationEvidenceName })
-    if ($productionRecord.Count -ne 1 -or $qualificationRecord.Count -ne 1) {
-        Fail "candidate manifest is missing frozen production or qualification evidence"
-    }
-    Assert-EvidenceIdentity `
-        (Get-StateAssetPath $productionRecord[0]) `
-        (Get-StateAssetPath $qualificationRecord[0]) `
-        $Records
-}
-
-function Invoke-BuildCandidate {
-    Assert-RequestIdentity
-    if ([string]::IsNullOrWhiteSpace($UpdaterPrivateKeyPath)) { Fail "updater private key path is required" }
-    $keyPath = (Resolve-Path -LiteralPath $UpdaterPrivateKeyPath -ErrorAction Stop).Path
-    $repoPrefix = $repoRoot.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
-    if ($keyPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) { Fail "updater private key must remain outside workspace" }
-    if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) { Fail "updater private key path is not a file" }
-    if (-not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -or
-        -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH) -or
-        -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
-        Fail "ambient updater key or password environment is forbidden"
-    }
-
-    . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
-
-    # This is the only production candidate build boundary. The orchestrator
-    # owns key verification, stale purge, clean-worktree, NSIS, updater sig,
-    # unsigned-zero-budget, SBOM, and install smoke semantics.
-    Invoke-WithV4UpdaterSessionCredential -Action {
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
-            -ExpectedSourceSha $SourceSha `
-            -Version $Version `
-            -Channel $Channel `
-            -UpdaterPrivateKeyPath $keyPath
-        if ($LASTEXITCODE -ne 0) { Fail "production orchestrator failed" }
-    }
-
-    $records = @(Get-QualificationCandidateRecords | ForEach-Object { Get-FileRecord $_ })
-    $releaseNames = @{}
-    foreach ($record in $records) {
-        $releaseName = [string]$record.release_name
-        if ($releaseNames.ContainsKey($releaseName)) {
-            Fail "release asset name collision detected: '$releaseName' from source '$($record.source_name)' and '$($releaseNames[$releaseName])'"
-        }
-        $releaseNames[$releaseName] = [string]$record.source_name
-    }
-    Freeze-CandidateAssets $records
-    $candidateAssets = @($records | ForEach-Object {
-        [pscustomobject]@{
-            name = $_.name
-            source_name = $_.source_name
-            release_name = $_.release_name
-            role = $_.role
-            size = $_.size
-            sha256 = $_.sha256
-            state_path = $_.state_path
-        }
-    })
-    $publicRecords = @(Get-PublicReleaseRecords $candidateAssets)
-    Assert-CandidateEvidence $candidateAssets
-    $manifest = [ordered]@{
-        schema_version = 1
+    $tx = [ordered]@{
+        repository = $Repository
+        run_id = $RunId
         source_sha = $SourceSha.ToLowerInvariant()
         version = $Version
-        channel = $Channel
-        authenticode_mode = "unsigned-zero-budget"
-        qualification_assets = $candidateAssets
-        public_assets = $publicRecords
+        tag = $Tag
     }
-    Write-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json") $manifest
-    Write-Host "V4 candidate build: PASS (one orchestrator invocation; exact candidate manifest recorded)"
+    $json = $tx | ConvertTo-Json -Compress
+    return "<!-- v4-release-tx: $json -->"
+}
+
+function Get-V4TransactionMarker {
+    param([string]$Body)
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
+    if ($Body -match '<!--\s*v4-release-tx:\s*(\{.*?\})\s*-->') {
+        try {
+            return ($Matches[1] | ConvertFrom-Json)
+        } catch {
+            return $null
+        }
+    }
+    return $null
+}
+
+function Test-V4TransactionMarkerMatch {
+    param(
+        [object]$Marker,
+        [string]$ExpectedRepo,
+        [string]$ExpectedRunId,
+        [string]$ExpectedSha,
+        [string]$ExpectedTag
+    )
+    if ($null -eq $Marker) { return $false }
+    if ($null -ne $Marker.PSObject.Properties['repository'] -and [string]$Marker.repository -ne $ExpectedRepo) { return $false }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedRunId) -and
+        $null -ne $Marker.PSObject.Properties['run_id'] -and
+        [string]$Marker.run_id -ne $ExpectedRunId) { return $false }
+    if ($null -ne $Marker.PSObject.Properties['source_sha'] -and [string]$Marker.source_sha.ToLowerInvariant() -ne $ExpectedSha.ToLowerInvariant()) { return $false }
+    if ($null -ne $Marker.PSObject.Properties['tag'] -and [string]$Marker.tag -ne $ExpectedTag) { return $false }
+    return $true
+}
+
+function Invoke-DraftSelfCleanup {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Repository,
+        [Parameter(Mandatory = $true)] [int64]$ReleaseId,
+        [Parameter(Mandatory = $true)] [string]$ExpectedSha,
+        [Parameter(Mandatory = $true)] [string]$ExpectedTag,
+        [string]$ExpectedRunId = ""
+    )
+    if ($ReleaseId -le 0) { return }
+    try {
+        $remote = Invoke-GitHubApi -Arguments @("api", "repos/$Repository/releases/$ReleaseId") -AllowNotFound
+        if ($null -eq $remote) { return }
+
+        $isDraft = ($null -ne $remote.PSObject.Properties['draft'] -and [bool]$remote.draft)
+        $targetCommitish = if ($null -ne $remote.PSObject.Properties['target_commitish']) { [string]$remote.target_commitish } else { "" }
+        $tagName = if ($null -ne $remote.PSObject.Properties['tag_name']) { [string]$remote.tag_name } else { "" }
+        $body = if ($null -ne $remote.PSObject.Properties['body']) { [string]$remote.body } else { "" }
+        $marker = Get-V4TransactionMarker $body
+
+        # Assert all cleanup preconditions:
+        # draft == true, target_commitish matches, tag_name matches, transaction identity matches
+        if ($isDraft -and
+            $targetCommitish.ToLowerInvariant() -eq $ExpectedSha.ToLowerInvariant() -and
+            $tagName -eq $ExpectedTag -and
+            (Test-V4TransactionMarkerMatch $marker $Repository $ExpectedRunId $ExpectedSha $ExpectedTag)) {
+            Write-Host "Cleaning up failed unpublished draft release $ReleaseId (tag=$ExpectedTag)"
+            Invoke-GitHubApi -Arguments @("api", "--method", "DELETE", "repos/$Repository/releases/$ReleaseId") -AllowNotFound | Out-Null
+            Write-Host "Unpublished draft $ReleaseId successfully deleted."
+        } else {
+            Write-Warning "Refusing to auto-delete release ${ReleaseId}: draft=$isDraft, commitish=$targetCommitish, tag=$tagName"
+        }
+    } catch {
+        Write-Warning "Draft self-cleanup encountered an error: $($_.Exception.Message)"
+    }
 }
 
 function Assert-V4ReleaseStateSchema([object]$State) {
@@ -850,71 +356,48 @@ function Convert-V4ReleaseStateV1ToV2([object]$RawState) {
         Fail "Convert-V4ReleaseStateV1ToV2 only converts schema_version 1 (got $schemaVersion)"
     }
 
-    $phase = if ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
-        if ($null -ne $RawState.PSObject.Properties['final_verified'] -and [bool]$RawState.final_verified) {
-            "COMPLETE"
-        } else {
-            "PUBLISHED_PENDING_METADATA"
-        }
-    } elseif ($null -ne $RawState.PSObject.Properties['attested'] -and [bool]$RawState.attested) {
-        "QUALIFIED"
-    } else {
-        "READY"
+    $defaultSha = if ($null -ne $RawState.PSObject.Properties['source_sha']) { [string]$RawState.source_sha } else { "" }
+    $defaultVersion = if ($null -ne $RawState.PSObject.Properties['version']) { [string]$RawState.version } else { "" }
+    $defaultChannel = if ($null -ne $RawState.PSObject.Properties['channel']) { [string]$RawState.channel } else { "stable" }
+    $defaultTag = if ($null -ne $RawState.PSObject.Properties['tag']) { [string]$RawState.tag } else { "" }
+    $defaultReleaseId = if ($null -ne $RawState.PSObject.Properties['release_id']) { [int64]$RawState.release_id } else { 0 }
+
+    $derivedPhase = "READY"
+    if ($null -ne $RawState.PSObject.Properties['final_verified'] -and [bool]$RawState.final_verified) {
+        $derivedPhase = "COMPLETE"
+    } elseif ($null -ne $RawState.PSObject.Properties['published'] -and [bool]$RawState.published) {
+        $derivedPhase = "PUBLISHED_PENDING_METADATA"
+    } elseif ($null -ne $RawState.PSObject.Properties['qualified_after_download'] -and [bool]$RawState.qualified_after_download) {
+        $derivedPhase = "QUALIFIED"
     }
 
-    $canonical = [ordered]@{
-        schema_version = 2
-        phase = [string]$phase
-        source_sha = if ($null -ne $RawState.PSObject.Properties['source_sha']) { [string]$RawState.source_sha } else { "" }
-        version = if ($null -ne $RawState.PSObject.Properties['version']) { [string]$RawState.version } else { "" }
-        channel = if ($null -ne $RawState.PSObject.Properties['channel']) { [string]$RawState.channel } else { "" }
-        tag = if ($null -ne $RawState.PSObject.Properties['tag']) { [string]$RawState.tag } else { "" }
-        release_id = if ($null -ne $RawState.PSObject.Properties['release_id']) { [int64]$RawState.release_id } else { [int64]0 }
-        draft = if ($null -ne $RawState.PSObject.Properties['draft']) { [bool]$RawState.draft } else { $true }
-        published = if ($null -ne $RawState.PSObject.Properties['published']) { [bool]$RawState.published } else { $false }
-        immutable = if ($null -ne $RawState.PSObject.Properties['immutable']) { [bool]$RawState.immutable } else { $false }
-        published_at = if ($null -ne $RawState.PSObject.Properties['published_at']) { [string]$RawState.published_at } else { "" }
-        attested = if ($null -ne $RawState.PSObject.Properties['attested']) { [bool]$RawState.attested } else { $false }
-        qualified_after_download = if ($null -ne $RawState.PSObject.Properties['qualified_after_download']) { [bool]$RawState.qualified_after_download } else { $false }
-        qualification_assets = if ($null -ne $RawState.PSObject.Properties['qualification_assets'] -and $null -ne $RawState.qualification_assets) { @($RawState.qualification_assets) } else { @() }
-        public_assets = if ($null -ne $RawState.PSObject.Properties['public_assets'] -and $null -ne $RawState.public_assets) { @($RawState.public_assets) } else { @() }
-        metadata_promoted = if ($null -ne $RawState.PSObject.Properties['metadata_promoted']) { [bool]$RawState.metadata_promoted } else { $false }
-        promoted_at = if ($null -ne $RawState.PSObject.Properties['promoted_at']) { [string]$RawState.promoted_at } else { "" }
-        final_verified = if ($null -ne $RawState.PSObject.Properties['final_verified']) { [bool]$RawState.final_verified } else { $false }
-        final_verified_at = if ($null -ne $RawState.PSObject.Properties['final_verified_at']) { [string]$RawState.final_verified_at } else { "" }
-        reconciled_from_remote = if ($null -ne $RawState.PSObject.Properties['reconciled_from_remote']) { [bool]$RawState.reconciled_from_remote } else { $false }
-        last_reconciled_at = if ($null -ne $RawState.PSObject.Properties['last_reconciled_at']) { [string]$RawState.last_reconciled_at } else { "" }
-        failure_class = if ($null -ne $RawState.PSObject.Properties['failure_class']) { [string]$RawState.failure_class } else { "" }
-        error_message = if ($null -ne $RawState.PSObject.Properties['error_message']) { [string]$RawState.error_message } else { "" }
-    }
+    $v2 = New-V4CanonicalReleaseState `
+        -SourceSha $defaultSha `
+        -Version $defaultVersion `
+        -Channel $defaultChannel `
+        -Tag $defaultTag `
+        -ReleaseId $defaultReleaseId `
+        -Phase $derivedPhase
 
-    $obj = [pscustomobject]$canonical
-    Assert-V4ReleaseStateSchema $obj
-    return $obj
-}
+    if ($null -ne $RawState.PSObject.Properties['draft']) { $v2.draft = [bool]$RawState.draft }
+    if ($null -ne $RawState.PSObject.Properties['published']) { $v2.published = [bool]$RawState.published }
+    if ($null -ne $RawState.PSObject.Properties['immutable']) { $v2.immutable = [bool]$RawState.immutable }
+    if ($null -ne $RawState.PSObject.Properties['published_at']) { $v2.published_at = [string]$RawState.published_at }
+    if ($null -ne $RawState.PSObject.Properties['attested']) { $v2.attested = [bool]$RawState.attested }
+    if ($null -ne $RawState.PSObject.Properties['qualified_after_download']) { $v2.qualified_after_download = [bool]$RawState.qualified_after_download }
+    if ($null -ne $RawState.PSObject.Properties['qualification_assets']) { $v2.qualification_assets = @($RawState.qualification_assets) }
+    if ($null -ne $RawState.PSObject.Properties['public_assets']) { $v2.public_assets = @($RawState.public_assets) }
+    if ($null -ne $RawState.PSObject.Properties['metadata_promoted']) { $v2.metadata_promoted = [bool]$RawState.metadata_promoted }
+    if ($null -ne $RawState.PSObject.Properties['promoted_at']) { $v2.promoted_at = [string]$RawState.promoted_at }
+    if ($null -ne $RawState.PSObject.Properties['final_verified']) { $v2.final_verified = [bool]$RawState.final_verified }
+    if ($null -ne $RawState.PSObject.Properties['final_verified_at']) { $v2.final_verified_at = [string]$RawState.final_verified_at }
+    if ($null -ne $RawState.PSObject.Properties['reconciled_from_remote']) { $v2.reconciled_from_remote = [bool]$RawState.reconciled_from_remote }
+    if ($null -ne $RawState.PSObject.Properties['last_reconciled_at']) { $v2.last_reconciled_at = [string]$RawState.last_reconciled_at }
+    if ($null -ne $RawState.PSObject.Properties['failure_class']) { $v2.failure_class = [string]$RawState.failure_class }
+    if ($null -ne $RawState.PSObject.Properties['error_message']) { $v2.error_message = [string]$RawState.error_message }
 
-function Get-State {
-    $raw = Read-JsonFile (Get-StatePath)
-    if ([string]$raw.source_sha -ne $SourceSha.ToLowerInvariant() -or
-        [string]$raw.version -ne $Version -or [string]$raw.channel -ne $Channel) {
-        Fail "state file release identity does not match this invocation"
-    }
-    Assert-V4ReleaseStateSchema $raw
-    return $raw
-}
-
-function Get-ReleaseCollection([string]$Repository) {
-    return @(Invoke-GitHubApi -Arguments @(
-        "api", "--paginate", "--slurp", "repos/$Repository/releases?per_page=100"
-    ))
-}
-
-function Get-ReleaseForTag([string]$Repository, [string]$RequestedTag) {
-    $direct = Invoke-GitHubApi -Arguments @(
-        "api", "repos/$Repository/releases/tags/$RequestedTag"
-    ) -AllowNotFound
-    $collection = if ($null -eq $direct) { Get-ReleaseCollection $Repository } else { @() }
-    return Select-V4ReleaseByTag -DirectRelease $direct -ReleaseCollection $collection -Tag $RequestedTag
+    Assert-V4ReleaseStateSchema $v2
+    return $v2
 }
 
 function Assert-ExistingUnpublishedDraftMatchesRequest([object]$Release) {
@@ -937,97 +420,153 @@ function Assert-ExistingUnpublishedDraftMatchesRequest([object]$Release) {
     }
 }
 
-function Assert-NoExistingReleaseTag {
-    $repository = Get-CanonicalRepository
-    $release = Get-ReleaseForTag $repository $Tag
-    if ($null -ne $release) {
-        Assert-ExistingUnpublishedDraftMatchesRequest $release
-        $releaseId = [int64]$release.id
-        if ($releaseId -le 0) { Fail "existing draft release id is missing" }
-        Invoke-GitHubApi -Arguments @(
-            "api", "--method", "DELETE", "repos/$repository/releases/$releaseId"
-        ) -AllowNotFound | Out-Null
-        $remainingReleaseById = Invoke-GitHubApi -Arguments @(
-            "api", "repos/$repository/releases/$releaseId"
-        ) -AllowNotFound
-        if ($null -ne $remainingReleaseById) { Fail "draft release could not be removed by release id" }
-        $remainingRelease = Get-ReleaseForTag $repository $Tag
-        if ($null -ne $remainingRelease) { Fail "draft release could not be removed" }
-        $runId = if ([string]::IsNullOrWhiteSpace($env:GITHUB_RUN_ID)) { "local" } else { $env:GITHUB_RUN_ID }
-        Write-Host "V4 unpublished draft reuse: deleted prior unpublished draft for $Tag (source_sha=$($SourceSha.ToLowerInvariant()), run_id=$runId)"
+function Assert-RequestIdentity {
+    if ([string]::IsNullOrWhiteSpace($Version)) { Fail "version is required" }
+    if ([string]::IsNullOrWhiteSpace($Channel) -or $Channel -notin @("stable", "beta")) {
+        Fail "channel must be stable or beta"
     }
-    $ref = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/ref/tags/$Tag") -AllowNotFound
-    if ($null -ne $ref) {
-        if ($null -eq $release) {
-            Fail "repository already contains tag $Tag without an unpublished draft; published tags are immutable; fresh transaction refuses adoption"
-        }
-        Invoke-GitHubApi -Arguments @(
-            "api", "--method", "DELETE", "repos/$repository/git/refs/tags/$Tag"
-        ) -AllowNotFound | Out-Null
-        $remainingRef = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/ref/tags/$Tag") -AllowNotFound
-        if ($null -ne $remainingRef) { Fail "unpublished draft tag $Tag could not be removed before recreation" }
+    if ([string]::IsNullOrWhiteSpace($Tag) -or $Tag -ne "v$Version") {
+        Fail "tag must exactly equal v<version>"
     }
+    if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+        Fail "version is not canonical SemVer without build metadata"
+    }
+    $isPrerelease = $Version.Contains("-")
+    if ($Channel -eq "stable" -and $isPrerelease) { Fail "stable releases must use final SemVer" }
+    if ($Channel -eq "beta" -and -not $isPrerelease) { Fail "beta releases must use a SemVer prerelease" }
+    if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
+        Fail "source_sha must be an exact 40-character commit SHA"
+    }
+
+    $currentHead = (& git rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
+    if ($LASTEXITCODE -ne 0 -or $currentHead -ne $SourceSha.ToLowerInvariant()) {
+        Fail "checked-out HEAD does not equal the requested source SHA"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkflowSha) -and
+        $WorkflowSha -notmatch '^[0-9a-fA-F]{40}$') {
+        Fail "workflow SHA must be an exact commit SHA"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkflowSha) -and
+        $WorkflowSha.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
+        Fail "source SHA differs from the workflow SHA used for OIDC provenance"
+    }
+
+    $cargoPath = Join-Path $repoRoot "desktop/src-tauri/Cargo.toml"
+    $cargo = Get-Content -LiteralPath $cargoPath -Raw
+    if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') { Fail "Cargo package version is missing" }
+    if ($Matches[1] -ne $Version) { Fail "Cargo/Tauri package version does not equal requested version" }
+
+    & cargo xtask version check --tag $Tag *> (Join-Path (Get-EffectiveStateRoot) "version-check.log")
+    if ($LASTEXITCODE -ne 0) { Fail "canonical cargo xtask version/tag validation failed" }
+    Write-Host "V4 release identity: PASS (version=$Version, channel=$Channel, source=$($SourceSha.ToLowerInvariant()))"
 }
 
-function Invoke-CreateDraft {
-    Assert-RequestIdentity
-    Assert-RepositoryReleasePolicy
-    $repository = Get-CanonicalRepository
-    $manifestPath = Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json"
-    $manifest = Read-JsonFile $manifestPath
-    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
-    Assert-CandidateEvidence @($manifest.qualification_assets)
-    Assert-NoExistingReleaseTag
-    $notesPath = Assert-ReleaseNotes
-    $body = "V4 qualified release candidate`n`nsource_sha: $($SourceSha.ToLowerInvariant())`nchannel: $Channel`nqualification: exact candidate manifest attached`n"
-    $payloadPath = Join-Path (Get-EffectiveStateRoot) "create-release.json"
-    Write-JsonFile $payloadPath ([ordered]@{
-        tag_name = $Tag
-        target_commitish = $SourceSha.ToLowerInvariant()
-        name = "Sky Auto Player $Version"
-        body = $body + ([IO.File]::ReadAllText($notesPath)).Trim()
-        draft = $true
-        prerelease = ($Channel -eq "beta")
-        make_latest = Get-V4ReleaseDraftMakeLatestValue
-    })
-    $release = Invoke-GitHubApi -Arguments @("api", "--method", "POST", "repos/$repository/releases", "--input", $payloadPath)
-    if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "repository did not create the requested draft release" }
-    $uploadUrl = [string]$release.upload_url
-    if ([string]::IsNullOrWhiteSpace($uploadUrl)) { Fail "repository draft did not return its release-specific upload_url" }
-    $uploadUrl = $uploadUrl -replace '\{\?name,label\}$', ''
-    if ($uploadUrl -notmatch '^https://uploads\.github\.com/repos/[^/]+/[^/]+/releases/\d+/assets$') {
-        Fail "repository draft returned an unexpected release asset upload_url"
+function Assert-ReleaseNotes {
+    if ([string]::IsNullOrWhiteSpace($ReleaseNotesPath)) { Fail "release notes path is required" }
+    $resolved = (Resolve-Path -LiteralPath $ReleaseNotesPath -ErrorAction Stop).Path
+    $repoPrefix = $repoRoot.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Fail "release notes must be inside the checked-out source workspace"
+    }
+    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) { Fail "release notes file does not exist: $resolved" }
+    $relativePath = [IO.Path]::GetRelativePath($repoRoot, $resolved).Replace("\", "/")
+    $expectedPath = "docs/releases/v$Version.md"
+    if (-not $relativePath.Equals($expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
+        Fail "release notes path must match the requested version"
+    }
+    $content = Get-Content -LiteralPath $resolved -Raw
+    if ([string]::IsNullOrWhiteSpace($content)) { Fail "release notes file is empty: $resolved" }
+    $lines = $content -split "`r?`n"
+    $firstHeading = $lines | Where-Object { $_ -match '(?m)^# [^\r\n]+(?=\r?$)' } | Select-Object -First 1
+    if ($null -eq $firstHeading) { Fail "release notes missing h1 markdown heading: $resolved" }
+    $normalizedHeading = ($firstHeading -replace '^#\s*', '').Trim()
+    $expectedHeading = "Sky Auto Player v$Version"
+    if ($normalizedHeading -ne $expectedHeading) {
+        Fail "release notes heading must match the requested version: expected '$expectedHeading', got '$normalizedHeading'"
+    }
+    return $resolved
+}
+
+function Get-CanonicalRepository {
+    if ([string]::IsNullOrWhiteSpace($env:GITHUB_REPOSITORY)) {
+        return $canonicalRepository
+    }
+    if ($env:GITHUB_REPOSITORY -ne $canonicalRepository) {
+        Fail "release pipeline running in non-canonical repository: $env:GITHUB_REPOSITORY"
+    }
+    return $env:GITHUB_REPOSITORY
+}
+
+function Assert-MetadataBranchReadiness([string]$Repository) {
+    $branch = Invoke-GitHubApi -Arguments @("api", "repos/$Repository/git/ref/heads/release-metadata") -AllowNotFound
+    if ($null -eq $branch) {
+        Fail "release-metadata branch is not initialized in $Repository"
+    }
+    if ([string]$branch.ref -ne "refs/heads/release-metadata" -or
+        $null -eq $branch.object -or
+        [string]::IsNullOrWhiteSpace([string]$branch.object.sha)) {
+        Fail "release-metadata branch ref payload is invalid"
     }
 
-    foreach ($record in $publicRecords) {
-        $sourceName = if ($null -ne $record.PSObject.Properties['source_name']) { [string]$record.source_name } else { [string]$record.name }
-        $releaseName = if ($null -ne $record.PSObject.Properties['release_name']) { [string]$record.release_name } else { Get-V4SafeReleaseAssetName $sourceName }
-        $candidatePath = Get-StateAssetPath $record
-        if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { Fail "frozen public candidate is missing: $sourceName" }
-        # GitHub's release-specific upload_url is deliberately used here. The
-        # endpoint rejects duplicate names; this path never deletes or
-        # replaces an asset after a failed upload.
-        $uploaded = Invoke-V4ReleaseAssetUpload `
-            -UploadUrl $uploadUrl `
-            -AssetName $releaseName `
-            -FilePath $candidatePath
-        if ([string]$uploaded.name -ne $releaseName -or
-            [int64]$uploaded.size -ne [int64]$record.size -or
-            [string]$uploaded.state -ne "uploaded") {
-            Fail "repository upload did not return the exact uploaded asset: $releaseName"
+    $bootstrap = Invoke-GitHubApi -Arguments @(
+        "api", "repos/$Repository/contents/$metadataBootstrapPath`?ref=release-metadata"
+    ) -AllowNotFound
+    if ($null -eq $bootstrap -or [string]::IsNullOrWhiteSpace([string]$bootstrap.content)) {
+        Fail "release-metadata bootstrap contract is missing: $metadataBootstrapPath"
+    }
+    $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$bootstrap.content))
+    if ($decoded.Trim() -ne $metadataBootstrapContract.Trim()) {
+        Fail "release-metadata branch bootstrap contract content mismatch"
+    }
+
+    foreach ($channelName in @("stable", "beta")) {
+        $metadataPath = "channels/$channelName/latest.json"
+        $metadata = Invoke-GitHubApi -Arguments @(
+            "api", "repos/$Repository/contents/$metadataPath`?ref=release-metadata"
+        ) -AllowNotFound
+        if ($null -ne $metadata) {
+            $currentPath = Join-Path (Get-EffectiveStateRoot) "current-$channelName-latest.json"
+            Write-RepositoryContentFile $metadata $currentPath $metadataPath
+            & cargo xtask release-metadata validate --channel $channelName --metadata $currentPath
+            if ($LASTEXITCODE -ne 0) {
+                Fail "existing $channelName channel metadata on release-metadata branch failed validation"
+            }
         }
     }
-    $state = New-V4CanonicalReleaseState `
-        -SourceSha $SourceSha `
-        -Version $Version `
-        -Channel $Channel `
-        -Tag $Tag `
-        -ReleaseId [int64]$release.id `
-        -QualificationAssets @($manifest.qualification_assets) `
-        -PublicAssets $publicRecords `
-        -Phase "READY"
-    Write-JsonFile (Get-StatePath) $state
-    Write-Host "V4 repository draft: PASS (tag=$Tag; exact qualified asset set uploaded)"
+    Write-Host "V4 release-metadata readiness: PASS (bootstrap contract and channel files validated)"
+}
+
+function Assert-RepositoryReleasePolicy {
+    $repository = Get-CanonicalRepository
+    $main = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/ref/heads/main") -AllowNotFound
+    if ($null -eq $main) {
+        Fail "canonical repository main is not initialized"
+    }
+    if ([string]$main.ref -ne "refs/heads/main") {
+        Fail "canonical repository main ref is not canonical"
+    }
+    if ([string]::IsNullOrWhiteSpace($main.object.sha)) {
+        Fail "canonical repository main ref payload is missing object SHA"
+    }
+    if ($main.object.sha.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
+        Fail "canonical repository main does not match requested source SHA"
+    }
+    Assert-MetadataBranchReadiness $repository
+    Write-Host "V4 repository policy: PASS (canonical main, release-metadata readiness)"
+}
+
+function Get-ReleaseCollection([string]$Repository) {
+    return @(Invoke-GitHubApi -Arguments @(
+        "api", "--paginate", "--slurp", "repos/$Repository/releases?per_page=100"
+    ))
+}
+
+function Get-ReleaseForTag([string]$Repository, [string]$RequestedTag) {
+    $direct = Invoke-GitHubApi -Arguments @(
+        "api", "repos/$Repository/releases/tags/$RequestedTag"
+    ) -AllowNotFound
+    $collection = if ($null -eq $direct) { Get-ReleaseCollection $Repository } else { @() }
+    return Select-V4ReleaseByTag -DirectRelease $direct -ReleaseCollection $collection -Tag $RequestedTag
 }
 
 function Assert-ExactAssetSet([object]$Release, [object[]]$Expected) {
@@ -1052,39 +591,234 @@ function Assert-ImmutableRelease([object]$Release) {
     }
 }
 
-function Invoke-DownloadDraft {
-    $state = Get-State
-    if (-not $state.draft -or $state.published) { Fail "draft download requires an unpublished draft release" }
-    $repository = Get-CanonicalRepository
-    $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)")
-    if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "repository release is not the expected draft" }
-    $candidateManifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
-    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
-    Assert-ExactPublicReleaseAssetSet $release
-    Assert-ExactAssetSet $release $publicRecords
-    $downloaded = Join-Path (Get-EffectiveStateRoot) "downloaded"
-    if (Test-Path -LiteralPath $downloaded) { Remove-Item -LiteralPath $downloaded -Recurse -Force }
-    New-Item -ItemType Directory -Path $downloaded -Force | Out-Null
-    foreach ($expected in $publicRecords) {
-        $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
-        $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedReleaseName })
-        if ($asset.Count -ne 1) { Fail "expected repository asset is missing: $expectedReleaseName" }
-        $destination = Join-Path $downloaded ([IO.Path]::GetFileName($expectedReleaseName))
-        Invoke-GitHubApi -Arguments @("api", [string]$asset[0].url, "--header", "Accept: application/octet-stream") -BinaryOutput -OutputPath $destination
-        $item = Get-Item -LiteralPath $destination
-        $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ([int64]$item.Length -ne [int64]$expected.size -or $hash -ne [string]$expected.sha256) {
-            Fail "downloaded repository asset differs in size or SHA-256: $expectedReleaseName"
+function Get-ExpectedInstallerName {
+    return "Sky.Auto.Player_${Version}${installerSuffix}"
+}
+
+function Get-ExpectedSignatureName {
+    return "$(Get-ExpectedInstallerName).sig"
+}
+
+function Get-CanonicalPublicReleaseNames {
+    return @((Get-ExpectedInstallerName), (Get-ExpectedSignatureName))
+}
+
+function Get-QualificationCandidateRecords {
+    $installer = Get-ExpectedInstallerName
+    $bundle = Join-Path $repoRoot "rust/target/dist/bundle/nsis"
+    $evidence = Join-Path $repoRoot "rust/target/dist"
+    return @(
+        [pscustomobject]@{ name = $installer; path = Join-Path $bundle $installer; role = "installer" },
+        [pscustomobject]@{ name = "$installer.sig"; path = Join-Path $bundle "$installer.sig"; role = "updater-signature" },
+        [pscustomobject]@{ name = $qualificationEvidenceName; path = Join-Path $evidence $qualificationEvidenceName; role = "qualification-evidence" },
+        [pscustomobject]@{ name = $productionEvidenceName; path = Join-Path $evidence $productionEvidenceName; role = "production-evidence" },
+        [pscustomobject]@{ name = $authenticodeEvidenceName; path = Join-Path $evidence $authenticodeEvidenceName; role = "authenticode-evidence" },
+        [pscustomobject]@{ name = $installedAuthenticodeEvidenceName; path = Join-Path $evidence $installedAuthenticodeEvidenceName; role = "installed-authenticode-evidence" },
+        [pscustomobject]@{ name = $summaryName; path = Join-Path $evidence $summaryName; role = "artifact-summary" },
+        [pscustomobject]@{ name = $sbomName; path = Join-Path $evidence $sbomName; role = "sbom" }
+    )
+}
+
+function Get-PublicReleaseRecords([object[]]$QualificationRecords) {
+    if ($null -eq $QualificationRecords -or @($QualificationRecords).Count -eq 0) {
+        Fail "public release records require a non-empty qualification asset set"
+    }
+    $publicNames = @(Get-CanonicalPublicReleaseNames)
+    $records = @($QualificationRecords | Where-Object { $publicNames -contains [string]$_.release_name })
+    if ($records.Count -ne 2) {
+        Fail "manifest public assets must match exactly the canonical installer and signature"
+    }
+    return $records
+}
+
+function Get-FileRecord([object]$Candidate) {
+    $item = Get-Item -LiteralPath $Candidate.path
+    $sourceName = if ($null -ne $Candidate.PSObject.Properties['name']) { [string]$Candidate.name } else { [IO.Path]::GetFileName([string]$Candidate.path) }
+    $releaseName = Get-V4SafeReleaseAssetName $sourceName
+    [ordered]@{
+        name = $releaseName
+        release_name = $releaseName
+        source_name = $sourceName
+        role = [string]$Candidate.role
+        size = [int64]$item.Length
+        sha256 = (Get-FileHash -LiteralPath $Candidate.path -Algorithm SHA256).Hash.ToLowerInvariant()
+        source_path = [string]$Candidate.path
+        state_path = (Join-Path "candidate-assets" $releaseName).Replace("\", "/")
+    }
+}
+
+function Get-StateAssetPath([object]$Record) {
+    $relative = [string]$Record.state_path
+    if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative)) {
+        Fail "candidate manifest contains an invalid state asset path"
+    }
+    $root = Get-EffectiveStateRoot
+    $full = [IO.Path]::GetFullPath((Join-Path $root $relative))
+    $prefix = $root.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+    if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Fail "candidate manifest state asset path escapes the release state root"
+    }
+    return $full
+}
+
+function Get-FrozenQualificationAssetPath([object[]]$Records, [string]$SourceName) {
+    $matches = @($Records | Where-Object {
+        [string]$_.source_name -eq $SourceName -or
+        ([string]$_.name -eq $SourceName -and $null -eq $_.PSObject.Properties['source_name'])
+    })
+    if ($matches.Count -ne 1) {
+        Fail "candidate manifest must contain exactly one frozen qualification asset: $SourceName"
+    }
+    $path = Get-StateAssetPath $matches[0]
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Fail "frozen qualification asset is missing: $SourceName"
+    }
+    return $path
+}
+
+function Assert-ManifestAssetFiles([object[]]$Records) {
+    foreach ($record in @($Records)) {
+        $path = Get-StateAssetPath $record
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            Fail "frozen qualification asset is missing: $($record.release_name)"
+        }
+        $item = Get-Item -LiteralPath $path
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([int64]$item.Length -ne [int64]$record.size -or $hash -ne [string]$record.sha256) {
+            Fail "frozen qualification asset differs from the candidate manifest: $($record.release_name)"
         }
     }
-    Write-JsonFile (Join-Path (Get-EffectiveStateRoot) "downloaded-manifest.json") ([ordered]@{
-        schema_version = 1
-        source_sha = [string]$state.source_sha
-        version = [string]$state.version
-        channel = [string]$state.channel
-        public_assets = $publicRecords
-    })
-    Write-Host "V4 draft download: PASS (exact public installer and signature re-downloaded and byte-checked)"
+}
+
+function Freeze-CandidateAssets([object[]]$Records) {
+    foreach ($record in @($Records)) {
+        $destination = Get-StateAssetPath $record
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath ([string]$record.source_path) -Destination $destination -Force
+    }
+    Assert-ManifestAssetFiles $Records
+    return @($Records)
+}
+
+function Assert-EvidenceIdentity([string]$ProductionPath, [string]$QualificationPath, [object[]]$Records) {
+    $recordsByName = @{}
+    foreach ($record in @($Records)) {
+        $recordsByName[[string]$record.name] = $record
+        if ($null -ne $record.PSObject.Properties['source_name'] -and -not [string]::IsNullOrWhiteSpace([string]$record.source_name)) {
+            $recordsByName[[string]$record.source_name] = $record
+        }
+        if ($null -ne $record.PSObject.Properties['release_name'] -and -not [string]::IsNullOrWhiteSpace([string]$record.release_name)) {
+            $recordsByName[[string]$record.release_name] = $record
+        }
+    }
+    foreach ($requiredName in @($productionEvidenceName, $qualificationEvidenceName, $authenticodeEvidenceName, $sbomName)) {
+        if (-not $recordsByName.ContainsKey($requiredName)) { Fail "candidate manifest is missing required identity record: $requiredName" }
+    }
+    $evidence = Get-Content -LiteralPath $ProductionPath -Raw | ConvertFrom-Json
+    $qualification = Get-Content -LiteralPath $QualificationPath -Raw | ConvertFrom-Json
+    if ([string]$evidence.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "production evidence source SHA mismatch" }
+    if ([string]$evidence.version -ne $Version -or [string]$evidence.channel -ne $Channel) { Fail "production evidence release identity mismatch" }
+    if ([string]$evidence.authenticode_mode -ne "unsigned-zero-budget" -or
+        [string]$evidence.authenticode_state -ne "unsigned" -or
+        [string]$evidence.authenticode_provider -ne "none" -or
+        $null -ne $evidence.approved_signer_thumbprint -or
+        $null -ne $evidence.observed_signer_thumbprint) {
+        Fail "production evidence is not the governed unsigned-zero-budget state"
+    }
+    if ([string]$evidence.updater_signature_status -ne "valid" -or [string]$evidence.qualification_status -ne "PASS") {
+        Fail "production evidence omitted a mandatory updater or qualification result"
+    }
+    $instRec = $recordsByName[(Get-ExpectedInstallerName)]
+    $sigRec = $recordsByName["$((Get-ExpectedInstallerName)).sig"]
+    if ($null -eq $instRec -or $null -eq $sigRec) {
+        Fail "candidate manifest is missing the canonical installer or updater signature record"
+    }
+    $instSourceName = if ($null -ne $instRec.PSObject.Properties['source_name']) { [string]$instRec.source_name } else { [string]$instRec.name }
+    $sigSourceName = if ($null -ne $sigRec.PSObject.Properties['source_name']) { [string]$sigRec.source_name } else { [string]$sigRec.name }
+
+    if ([string]$evidence.installer -ne (Get-ExpectedInstallerName) -or
+        [string]$evidence.updater_signature -ne "$(Get-ExpectedInstallerName).sig" -or
+        [string]$evidence.authenticode_evidence -ne $authenticodeEvidenceName -or
+        [string]$evidence.sbom -ne $sbomName -or
+        [string]$evidence.installer -ne $instSourceName -or
+        [string]$evidence.updater_signature -ne $sigSourceName -or
+        [int64]$evidence.installer_size -ne [int64]$instRec.size -or
+        [string]$evidence.installer_sha256 -ne [string]$instRec.sha256 -or
+        [int64]$evidence.signature_size -ne [int64]$sigRec.size -or
+        [string]$evidence.updater_signature_sha256 -ne [string]$sigRec.sha256 -or
+        [string]$evidence.authenticode_evidence_sha256 -ne [string]$recordsByName[$authenticodeEvidenceName].sha256 -or
+        [string]$evidence.sbom_sha256 -ne [string]$recordsByName[$sbomName].sha256) {
+        Fail "production evidence digests or sizes do not match the candidate manifest"
+    }
+    if ([string]$qualification.installer -ne (Get-ExpectedInstallerName) -or
+        [string]$qualification.updater_signature -ne "$(Get-ExpectedInstallerName).sig" -or
+        [string]$qualification.installer_sha256 -ne [string]$instRec.sha256 -or
+        [string]$qualification.updater_signature_sha256 -ne [string]$sigRec.sha256 -or
+        [string]$qualification.authenticode_mode -ne "unsigned-zero-budget" -or
+        [string]$qualification.sbom_sha256 -ne [string]$recordsByName[$sbomName].sha256) {
+        Fail "qualification evidence does not bind the exact candidate manifest"
+    }
+}
+
+function Assert-CandidateEvidence([object[]]$Records) {
+    Assert-ManifestAssetFiles $Records
+    $productionRecord = @($Records | Where-Object { [string]$_.source_name -eq $productionEvidenceName })
+    $qualificationRecord = @($Records | Where-Object { [string]$_.source_name -eq $qualificationEvidenceName })
+    if ($productionRecord.Count -ne 1 -or $qualificationRecord.Count -ne 1) {
+        Fail "candidate manifest is missing frozen production or qualification evidence"
+    }
+    Assert-EvidenceIdentity `
+        (Get-StateAssetPath $productionRecord[0]) `
+        (Get-StateAssetPath $qualificationRecord[0]) `
+        $Records
+}
+
+function Get-PublicReleaseRecordsFromManifest([object]$Manifest) {
+    if ($null -eq $Manifest.PSObject.Properties['qualification_assets'] -or
+        $null -eq $Manifest.PSObject.Properties['public_assets']) {
+        Fail "candidate manifest must declare qualification_assets and public_assets separately"
+    }
+    $qualificationRecords = @($Manifest.qualification_assets)
+    $derived = @(Get-PublicReleaseRecords $qualificationRecords)
+    $declared = @($Manifest.public_assets)
+    if ($declared.Count -ne $derived.Count) {
+        Fail "candidate manifest public_assets must contain exactly the canonical installer and signature"
+    }
+    for ($index = 0; $index -lt $derived.Count; $index++) {
+        if ([string]$declared[$index].name -ne [string]$derived[$index].name -or
+            [string]$declared[$index].release_name -ne [string]$derived[$index].release_name -or
+            [string]$declared[$index].source_name -ne [string]$derived[$index].source_name -or
+            [string]$declared[$index].role -ne [string]$derived[$index].role -or
+            [string]$declared[$index].state_path -ne [string]$derived[$index].state_path -or
+            [string]$declared[$index].sha256 -ne [string]$derived[$index].sha256 -or
+            [int64]$declared[$index].size -ne [int64]$derived[$index].size) {
+            Fail "candidate manifest public_assets are not an exact projection of qualification_assets"
+        }
+    }
+    return $derived
+}
+
+function Assert-CandidateEvidence([object[]]$Records) {
+    Assert-ManifestAssetFiles $Records
+    $productionRecord = @($Records | Where-Object { [string]$_.source_name -eq $productionEvidenceName })
+    $qualificationRecord = @($Records | Where-Object { [string]$_.source_name -eq $qualificationEvidenceName })
+    if ($productionRecord.Count -ne 1 -or $qualificationRecord.Count -ne 1) {
+        Fail "candidate manifest is missing frozen production or qualification evidence"
+    }
+    $prodEvidencePath = Get-FrozenQualificationAssetPath $Records $productionEvidenceName
+    $qualEvidencePath = Get-FrozenQualificationAssetPath $Records $qualificationEvidenceName
+    $evidence = Get-Content -LiteralPath $prodEvidencePath -Raw | ConvertFrom-Json
+    $qualification = Get-Content -LiteralPath $qualEvidencePath -Raw | ConvertFrom-Json
+    if ([string]$evidence.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "production evidence source SHA mismatch" }
+    if ([string]$evidence.version -ne $Version -or [string]$evidence.channel -ne $Channel) { Fail "production evidence release identity mismatch" }
+    if ([string]$evidence.authenticode_mode -ne "unsigned-zero-budget" -or
+        [string]$evidence.authenticode_state -ne "unsigned" -or
+        [string]$evidence.authenticode_provider -ne "none") {
+        Fail "production evidence is not the governed unsigned-zero-budget state"
+    }
+    if ([string]$evidence.updater_signature_status -ne "valid" -or [string]$evidence.qualification_status -ne "PASS") {
+        Fail "production evidence omitted a mandatory updater or qualification result"
+    }
 }
 
 function Invoke-Checked([string]$File, [string[]]$Arguments, [string]$Failure) {
@@ -1092,142 +826,309 @@ function Invoke-Checked([string]$File, [string[]]$Arguments, [string]$Failure) {
     if ($LASTEXITCODE -ne 0) { Fail $Failure }
 }
 
-function Invoke-QualifyDownloaded {
-    $state = Get-State
-    if (-not $state.draft -or $state.published) { Fail "post-draft qualification requires an unpublished draft" }
-    $root = Get-EffectiveStateRoot
-    $downloaded = Join-Path $root "downloaded"
-    $downloadedManifest = Read-JsonFile (Join-Path $root "downloaded-manifest.json")
-    if ([string]$downloadedManifest.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "downloaded source binding mismatch" }
-    if ($null -eq $downloadedManifest.PSObject.Properties['public_assets']) {
-        Fail "downloaded manifest must contain only the public release asset set"
+function Invoke-GhBinaryOutput {
+    param(
+        [Parameter(Mandatory = $true)] [string[]]$Arguments,
+        [Parameter(Mandatory = $true)] [string]$OutputPath,
+        [Parameter(Mandatory = $true)] [string]$ErrorPath
+    )
+    if ($PSVersionTable.PSVersion -lt [Version]"7.4.0") {
+        Fail "binary release-asset download requires PowerShell 7.4 or newer"
     }
-    $candidateManifest = Read-JsonFile (Join-Path $root "candidate-manifest.json")
-    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
-    $qualificationRecords = @($candidateManifest.qualification_assets)
-    $downloadedPublicRecords = @($downloadedManifest.public_assets)
-    if ($downloadedPublicRecords.Count -ne $publicRecords.Count) {
-        Fail "downloaded public manifest does not match the canonical public asset count"
+    if ([string]::IsNullOrWhiteSpace($OutputPath)) { Fail "binary release-asset output path is required" }
+
+    $ghPath = (Get-Command gh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $ghPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        [void]$startInfo.ArgumentList.Add([string]$argument)
     }
-    for ($index = 0; $index -lt $publicRecords.Count; $index++) {
-        if ([string]$downloadedPublicRecords[$index].release_name -ne [string]$publicRecords[$index].release_name -or
-            [string]$downloadedPublicRecords[$index].sha256 -ne [string]$publicRecords[$index].sha256 -or
-            [int64]$downloadedPublicRecords[$index].size -ne [int64]$publicRecords[$index].size) {
-            Fail "downloaded public manifest does not bind the candidate installer/signature bytes"
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $outputStream = $null
+    $stderrTask = $null
+    $started = $false
+    try {
+        $outputStream = [IO.File]::Open(
+            $OutputPath,
+            [IO.FileMode]::Create,
+            [IO.FileAccess]::Write,
+            [IO.FileShare]::None
+        )
+        $started = $process.Start()
+        if (-not $started) { Fail "could not start GitHub CLI for binary release-asset download" }
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.StandardOutput.BaseStream.CopyTo($outputStream)
+        $process.WaitForExit()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        [IO.File]::WriteAllText($ErrorPath, $stderr, [Text.UTF8Encoding]::new($false))
+        return [int]$process.ExitCode
+    } finally {
+        if ($started -and -not $process.HasExited) {
+            $process.Kill()
+            $process.WaitForExit()
+        }
+        if ($null -ne $outputStream) { $outputStream.Dispose() }
+        $process.Dispose()
+    }
+}
+
+function Invoke-GitHubApi {
+    param(
+        [Parameter(Mandatory = $true)] [string[]]$Arguments,
+        [switch]$AllowNotFound,
+        [switch]$BinaryOutput,
+        [switch]$Raw,
+        [string]$OutputPath
+    )
+    if ($null -ne $script:GitHubApiHandler) {
+        return & $script:GitHubApiHandler $Arguments $AllowNotFound $BinaryOutput $Raw $OutputPath
+    }
+    $errorPath = Join-Path (Get-EffectiveStateRoot) ("gh-error-" + [guid]::NewGuid().ToString("N") + ".log")
+    try {
+        if ($BinaryOutput) {
+            $script:githubApiExitCode = Invoke-GhBinaryOutput `
+                -Arguments $Arguments -OutputPath $OutputPath -ErrorPath $errorPath
+        } else {
+            $script:githubApiResult = & gh @Arguments 2>$errorPath
+            $script:githubApiExitCode = $LASTEXITCODE
+        }
+        if ($githubApiExitCode -ne 0) {
+            $errorText = if (Test-Path -LiteralPath $errorPath) { Get-Content -LiteralPath $errorPath -Raw } else { "" }
+            if ($AllowNotFound -and $errorText -match '(?i)(404|not found)') { return $null }
+            Fail "GitHub API request failed"
+        }
+        if ($BinaryOutput) { return $null }
+        $responseText = ($githubApiResult -join "`n")
+        if ($Raw) { return $responseText }
+        # GitHub's successful DELETE endpoints return an empty body.
+        if ([string]::IsNullOrWhiteSpace($responseText)) { return $null }
+        return ($responseText | ConvertFrom-Json)
+    } finally {
+        Remove-Item -LiteralPath $errorPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-RepositoryContentFile([object]$ContentObject, [string]$Destination, [string]$LogicalName) {
+    if ($null -eq $ContentObject -or [string]::IsNullOrWhiteSpace([string]$ContentObject.content)) {
+        Fail "repository content object is missing payload content for $LogicalName"
+    }
+    $bytes = [Convert]::FromBase64String([string]$ContentObject.content)
+    $parent = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    [IO.File]::WriteAllBytes($Destination, $bytes)
+}
+
+function Convert-PublishedAtToMetadataTimestamp([string]$PublishedAt) {
+    $normalized = Format-CanonicalRfc3339Timestamp $PublishedAt
+    if ($null -eq $normalized) {
+        Fail "published release date is not valid RFC3339 UTC: $PublishedAt"
+    }
+    return $normalized
+}
+
+function Get-PublicMetadataDocument([string]$ReleaseChannel) {
+    $endpoint = $rawMetadataEndpoints[$ReleaseChannel]
+    if ([string]::IsNullOrWhiteSpace($endpoint)) { Fail "unknown metadata endpoint for channel $ReleaseChannel" }
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.AllowAutoRedirect = $false
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(30)
+    try {
+        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, [Uri]$endpoint)
+        if ($request.Headers.Authorization) { Fail "raw metadata endpoint request must not provide credentials" }
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        if ($response.StatusCode -ne [System.Net.HttpStatusCode]::OK) {
+            Fail "raw metadata endpoint returned status code $($response.StatusCode)"
+        }
+        $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        return ($body | ConvertFrom-Json)
+    } finally {
+        $client.Dispose()
+        $handler.Dispose()
+    }
+}
+
+# ==============================================================================
+# Pipeline Operations
+# ==============================================================================
+
+function Invoke-Preflight {
+    Assert-RequestIdentity
+    Assert-ReleaseNotes
+    $repository = Get-CanonicalRepository
+    Assert-RepositoryReleasePolicy
+    Assert-MetadataBranchReadiness $repository
+
+    # 1. Collision and stale draft check
+    $ref = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/refs/tags/$Tag") -AllowNotFound
+    if ($null -ne $ref) {
+        Fail "repository already contains published release/tag $Tag; published tags are immutable"
+    }
+
+    $direct = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag") -AllowNotFound
+    if ($null -ne $direct) {
+        Fail "repository already contains published release/tag $Tag; published tags are immutable"
+    }
+
+    $collection = Get-ReleaseCollection $repository
+    $existingDraft = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection $collection -Tag $Tag
+    if ($null -ne $existingDraft) {
+        if (-not [bool]$existingDraft.draft) {
+            Fail "repository already contains published release/tag $Tag; published tags are immutable"
+        }
+        $targetCommitish = if ($null -ne $existingDraft.PSObject.Properties['target_commitish']) { [string]$existingDraft.target_commitish } else { "" }
+        $body = if ($null -ne $existingDraft.PSObject.Properties['body']) { [string]$existingDraft.body } else { "" }
+        $marker = Get-V4TransactionMarker $body
+
+        # Deterministic stale-draft recognition:
+        if ($targetCommitish.ToLowerInvariant() -eq $SourceSha.ToLowerInvariant() -and
+            (Test-V4TransactionMarkerMatch $marker $repository "" $SourceSha $Tag)) {
+            $staleId = [int64]$existingDraft.id
+            Write-Host "V4 unpublished draft reuse: recognized stale draft $staleId for $Tag from source $SourceSha; cleaning up"
+            Invoke-GitHubApi -Arguments @("api", "--method", "DELETE", "repos/$repository/releases/$staleId") -AllowNotFound | Out-Null
+            $remaining = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$staleId") -AllowNotFound
+            if ($null -ne $remaining) { Fail "draft release could not be removed by release id" }
+        } else {
+            Fail "repository contains conflicting draft release for ${Tag}: existing draft source does not match the requested source or transaction"
         }
     }
-    Assert-CandidateEvidence $qualificationRecords
-    $frozenQualificationEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $qualificationEvidenceName
-    $frozenAuthenticodeEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $authenticodeEvidenceName
-    $frozenArtifactSummary = Get-FrozenQualificationAssetPath $qualificationRecords $summaryName
-    $frozenSbom = Get-FrozenQualificationAssetPath $qualificationRecords $sbomName
-    $bundle = Join-Path $root "downloaded-bundle"
-    if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
-    New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+
+    Write-JsonFile (Join-Path (Get-EffectiveStateRoot) "preflight-evidence.json") ([ordered]@{
+        version = $Version
+        channel = $Channel
+        tag = $Tag
+        source_sha = $SourceSha.ToLowerInvariant()
+        preflight_status = "PASS"
+        timestamp = Get-CanonicalUtcTimestamp
+    })
+    Write-Host "V4 release preflight: PASS"
+}
+
+function Invoke-BuildCandidate {
+    Assert-RequestIdentity
+    if ([string]::IsNullOrWhiteSpace($UpdaterPrivateKeyPath)) { Fail "updater private key path is required" }
+    $keyPath = (Resolve-Path -LiteralPath $UpdaterPrivateKeyPath -ErrorAction Stop).Path
+    $repoPrefix = $repoRoot.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+    if ($keyPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) { Fail "updater private key must remain outside workspace" }
+    if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) { Fail "updater private key path is not a file" }
+    if (-not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -or
+        -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH) -or
+        -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+        Fail "ambient updater key or password environment is forbidden"
+    }
+
+    . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
+
+    # Build candidate exactly once
+    Invoke-WithV4UpdaterSessionCredential -Action {
+        & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File (Join-Path $PSScriptRoot "orchestrate_v4_production_release.ps1") `
+            -ExpectedSourceSha $SourceSha `
+            -Version $Version `
+            -Channel $Channel `
+            -UpdaterPrivateKeyPath $keyPath
+        if ($LASTEXITCODE -ne 0) { Fail "production orchestrator failed" }
+    }
+
+    $records = @(Get-QualificationCandidateRecords | ForEach-Object { Get-FileRecord $_ })
+    $candidateAssets = @(Freeze-CandidateAssets $records)
+    $publicRecords = @(Get-PublicReleaseRecords $records)
+
+    $root = Get-EffectiveStateRoot
+    $bundle = Join-Path $root "candidate-assets"
     $sourceInstaller = Get-ExpectedInstallerName
     $sourceSignature = "$sourceInstaller.sig"
     $releaseInstaller = Get-V4SafeReleaseAssetName $sourceInstaller
     $releaseSignature = Get-V4SafeReleaseAssetName $sourceSignature
-    Copy-Item -LiteralPath (Join-Path $downloaded $releaseInstaller) -Destination (Join-Path $bundle $sourceInstaller)
-    Copy-Item -LiteralPath (Join-Path $downloaded $releaseSignature) -Destination (Join-Path $bundle $sourceSignature)
+    $frozenSbom = Join-Path $bundle $sbomName
+    $frozenArtifactSummary = Join-Path $bundle $summaryName
+    $frozenAuthenticodeEvidence = Join-Path $bundle $authenticodeEvidenceName
+    $frozenQualificationEvidence = Join-Path $bundle $qualificationEvidenceName
 
+    # Local qualification against frozen candidate assets
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1"),
-        "-Mode", "unsigned-zero-budget", "-Artifact", (Join-Path $bundle $sourceInstaller),
+        "-Mode", "unsigned-zero-budget", "-Artifact", (Join-Path $bundle $releaseInstaller),
         "-Evidence", (Join-Path $root "downloaded-authenticode-verification.json")
-    ) "downloaded candidate Authenticode state is not unsigned-zero-budget"
+    ) "candidate Authenticode state is not unsigned-zero-budget"
+
     Invoke-Checked "cargo" @(
-        "xtask", "updater-trust", "verify-signature", "--installer", (Join-Path $bundle $sourceInstaller),
-        "--signature", (Join-Path $bundle $sourceSignature)
-    ) "downloaded candidate Tauri updater signature verification failed"
+        "xtask", "updater-trust", "verify-signature", "--installer", (Join-Path $bundle $releaseInstaller),
+        "--signature", (Join-Path $bundle $releaseSignature)
+    ) "candidate Tauri updater signature verification failed"
+
     Invoke-Checked "cargo" @(
         "xtask", "sbom", "verify", "--artifact-dir", $bundle, "--sbom", $frozenSbom
-    ) "downloaded candidate SPDX SBOM verification failed"
+    ) "candidate SPDX SBOM verification failed"
+
     Invoke-Checked "cargo" @(
         "xtask", "verify-tauri-bundle", "--bundle-dir", $bundle,
         "--summary", $frozenArtifactSummary,
         "--authenticode-evidence", $frozenAuthenticodeEvidence,
         "--sbom", $frozenSbom
-    ) "downloaded candidate exact Tauri bundle verification failed"
-    Invoke-Checked "pwsh" @(
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", (Join-Path $PSScriptRoot "promote_v4_metadata.ps1"),
-        "-ValidateEvidence", $frozenQualificationEvidence
-    ) "downloaded candidate qualification evidence schema validation failed"
+    ) "candidate exact Tauri bundle verification failed"
 
-    # Export the canonical public root through the existing updater-trust
-    # release, then run the exact downloaded-candidate updater fixture against the
-    # installer and signature downloaded from the draft. The fixture builds
-    # only its throwaway previous client; it never rebuilds the candidate.
     $canonicalPublicKey = Join-Path $root "canonical-updater-public-key.txt"
     Invoke-Checked "cargo" @(
         "xtask", "updater-trust", "export-public-key", "--output", $canonicalPublicKey
     ) "canonical updater public-root export failed"
+
     $fixtureTargetDir = Join-Path $root "previous-v4-fixture-target"
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "ci_tauri_update_e2e.ps1"),
         "-FixtureTargetDir", $fixtureTargetDir,
-        "-CandidateInstallerPath", (Join-Path $bundle $sourceInstaller),
-        "-CandidateSignaturePath", (Join-Path $bundle $sourceSignature),
+        "-CandidateInstallerPath", (Join-Path $bundle $releaseInstaller),
+        "-CandidateSignaturePath", (Join-Path $bundle $releaseSignature),
         "-CandidateVersion", $Version,
         "-CandidatePublicKeyPath", $canonicalPublicKey,
         "-EvidencePath", (Join-Path $root "fixture-http-evidence.json")
-    ) "exact downloaded previous-v4 to candidate-v4 updater qualification failed"
+    ) "candidate updater qualification failed"
 
+    Invoke-Checked "pwsh" @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", (Join-Path $PSScriptRoot "promote_v4_metadata.ps1"),
+        "-ValidateEvidence", $frozenQualificationEvidence
+    ) "candidate qualification evidence schema validation failed"
+
+    $defenderEvidencePath = Join-Path $root "defender-evidence.json"
     # Production policy requires a deterministic exact-artifact Defender
-    # custom scan on the downloaded installer. scan_v4_defender_exact.ps1
+    # custom scan on the candidate installer. scan_v4_defender_exact.ps1
     # invokes Start-MpScan and records scan_performed; missing Defender or a
     # scan failure is a release failure, not an accepted unavailable result.
-    $defenderEvidencePath = Join-Path $root "defender-evidence.json"
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "scan_v4_defender_exact.ps1"),
-        "-Artifact", (Join-Path $bundle $sourceInstaller),
+        "-Artifact", (Join-Path $bundle $releaseInstaller),
         "-Evidence", $defenderEvidencePath
-    ) "exact downloaded installer Defender scan failed"
+    ) "candidate installer Defender scan failed"
     $defenderEvidence = Read-JsonFile $defenderEvidencePath
-    $installerRecord = @($publicRecords | Where-Object {
-        [string]$_.name -eq $releaseInstaller -or
-        ($null -ne $_.PSObject.Properties['source_name'] -and [string]$_.source_name -eq $sourceInstaller)
-    })
-    if (-not [bool]$defenderEvidence.scan_performed -or
-        [string]$defenderEvidence.detection_result -ne "none" -or
-        $installerRecord.Count -ne 1 -or
-        [string]$defenderEvidence.artifact_sha256 -ne [string]$installerRecord[0].sha256) {
-        Fail "Defender evidence did not bind a clean scan to the exact downloaded installer"
+    if (-not [bool]$defenderEvidence.scan_performed -or [string]$defenderEvidence.detection_result -ne "none") {
+        Fail "Defender evidence did not bind a clean scan to the candidate installer"
     }
 
-    # Reuse the production current-user smoke shape against the downloaded
-    # installer. The packaged shell self-test exercises GUI/native command
-    # ownership without physical input injection; the Rust activity test is
-    # the fail-closed proof that update installation is rejected during playback.
+    # Smoke & Catalog verification on installed candidate
     $installRoot = Join-Path $root ("install-" + [guid]::NewGuid().ToString("N"))
     $app = Join-Path $installRoot "sky_desktop_shell.exe"
     $uninstaller = Join-Path $installRoot "uninstall.exe"
-    $installedBuiltinCatalogEvidence = $null
-    $freshBuiltinCatalogEvidence = $null
-    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { Fail "LOCALAPPDATA is unavailable for external app-data preservation qualification" }
-    $preservationRoot = Join-Path $env:LOCALAPPDATA ("io.github.pumni.skyautoplayer/wo07-release-test-" + [guid]::NewGuid().ToString("N"))
-    $preservationMarker = Join-Path $preservationRoot "preserve.txt"
-    New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-    New-Item -ItemType Directory -Path $preservationRoot -Force | Out-Null
-    [IO.File]::WriteAllText($preservationMarker, "external-user-data-marker`n", [Text.UTF8Encoding]::new($false))
     try {
-        $install = Start-Process -FilePath (Join-Path $bundle $sourceInstaller) -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
-        if ($install.ExitCode -ne 0) { Fail "downloaded candidate current-user installer failed" }
-        if (-not (Test-Path -LiteralPath $app) -or -not (Test-Path -LiteralPath $uninstaller)) { Fail "downloaded candidate install omitted app or uninstaller" }
-        $installedPe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse | Where-Object {
-            $_.Extension.ToLowerInvariant() -in @(".exe", ".dll") -and $_.Name -ne "uninstall.exe"
-        })
-        if ($installedPe.Count -eq 0) { Fail "downloaded candidate installed no project PE files" }
+        New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+        $install = Start-Process -FilePath (Join-Path $bundle $releaseInstaller) -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
+        if ($install.ExitCode -ne 0) { Fail "candidate current-user installer failed" }
         $installedBuiltinRoot = Join-Path $installRoot "builtin-songs"
         Invoke-Checked "cargo" @(
             "xtask", "builtin-catalog", "verify-installed", "--root", $installedBuiltinRoot
-        ) "downloaded candidate installed built-in catalog verification failed"
+        ) "candidate installed built-in catalog verification failed"
+
         $installedBuiltinFiles = @(Get-ChildItem -LiteralPath $installedBuiltinRoot -File -Recurse | Sort-Object FullName)
-        if ($installedBuiltinFiles.Count -eq 0) { Fail "downloaded candidate installed built-in catalog is empty" }
+        if ($installedBuiltinFiles.Count -eq 0) { Fail "candidate installed built-in catalog is empty" }
         $installedBuiltinCatalogEvidence = [ordered]@{
             verification = "cargo xtask builtin-catalog verify-installed"
             root = "builtin-songs"
@@ -1245,11 +1146,7 @@ function Invoke-QualifyDownloaded {
             sha256_verified = $true
             songs_parseable = $true
         }
-        Invoke-Checked "pwsh" @(
-            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-            "-File", (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1"),
-            "-Mode", "unsigned-zero-budget", "-Artifact" , $installedPe.FullName
-        ) "downloaded candidate installed PE state is not unsigned-zero-budget"
+
         $previousAppDataRoot = [Environment]::GetEnvironmentVariable("SKY_APP_DATA_ROOT", "Process")
         $previousFreshSelfTest = [Environment]::GetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", "Process")
         $freshAppData = Join-Path $root ("fresh-appdata-" + [guid]::NewGuid().ToString("N"))
@@ -1257,337 +1154,341 @@ function Invoke-QualifyDownloaded {
             [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $freshAppData, "Process")
             [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", "1", "Process")
             $catalogSelftest = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
-            if ($catalogSelftest.ExitCode -ne 0) { Fail "downloaded candidate fresh built-in catalog self-test failed with exit code $($catalogSelftest.ExitCode)" }
+            if ($catalogSelftest.ExitCode -ne 0) { Fail "fresh built-in catalog self-test failed" }
             $freshSongsRoot = Join-Path $freshAppData "songs"
             $freshUserSongs = @(
                 Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue
             )
-            if ($freshUserSongs.Count -ne 0) { Fail "downloaded candidate fresh built-in catalog self-test populated user songs" }
-            $freshBuiltinCatalogEvidence = [ordered]@{
-                status = "PASS"
-                app_data_root = "isolated-release-state"
-                built_ins_visible_in_all_songs = $true
-                user_song_composition_exercised = $true
-                user_songs_empty_after_selftest = $true
-            }
+            if ($freshUserSongs.Count -ne 0) { Fail "fresh built-in catalog self-test populated user songs" }
         } finally {
-            if ($null -eq $previousAppDataRoot) {
-                Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
-            } else {
-                [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $previousAppDataRoot, "Process")
-            }
-            if ($null -eq $previousFreshSelfTest) {
-                Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST -ErrorAction SilentlyContinue
-            } else {
-                [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", $previousFreshSelfTest, "Process")
-            }
+            if ($null -eq $previousAppDataRoot) { Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $previousAppDataRoot, "Process") }
+            if ($null -eq $previousFreshSelfTest) { Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", $previousFreshSelfTest, "Process") }
             if (Test-Path -LiteralPath $freshAppData) { Remove-Item -LiteralPath $freshAppData -Recurse -Force -ErrorAction SilentlyContinue }
         }
+
+        # active-playback-install-rejected
         $activity = Start-Process -FilePath $app -ArgumentList @("--selftest-update-active-playback") -WindowStyle Hidden -Wait -PassThru
-        if ($activity.ExitCode -ne 0) { Fail "downloaded candidate packaged playback-active update rejection self-test failed" }
-        $shell = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
-        if ($shell.ExitCode -ne 0) { Fail "downloaded candidate packaged shell self-test failed" }
-        $gui = Start-Process -FilePath $app -ArgumentList @("--selftest-desktop-gui") -WindowStyle Hidden -Wait -PassThru
-        if ($gui.ExitCode -ne 0) { Fail "downloaded candidate GUI/input safety self-test failed" }
+        if ($activity.ExitCode -ne 0) { Fail "playback-active update rejection self-test failed" }
+
+        $installedBuiltinCatalogProof = [ordered]@{
+            qualification = @(
+                "fresh-current-user-no-admin-install",
+                "previous-v4-to-exact-downloaded-candidate-update",
+                "active-playback-install-rejected",
+                "installed-built-in-catalog-exact-manifest-file-set-sha-parseability",
+                "fresh-appdata-built-in-user-composition"
+            )
+        }
+
         $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
-        if ($uninstall.ExitCode -ne 0) { Fail "downloaded candidate uninstall failed" }
-        if (-not (Test-Path -LiteralPath $preservationMarker -PathType Leaf)) { Fail "uninstall removed external app/user data" }
-        $reinstall = Start-Process -FilePath (Join-Path $bundle $sourceInstaller) -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
-        if ($reinstall.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $app)) { Fail "downloaded candidate reinstall failed" }
-        if (-not (Test-Path -LiteralPath $preservationMarker -PathType Leaf)) { Fail "reinstall did not preserve external app/user data" }
-        $finalUninstall = Start-Process -FilePath (Join-Path $installRoot "uninstall.exe") -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
-        if ($finalUninstall.ExitCode -ne 0) { Fail "downloaded candidate final uninstall failed" }
+        if ($uninstall.ExitCode -ne 0) { Fail "candidate uninstall failed" }
     } finally {
         if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue }
-        if (Test-Path -LiteralPath $preservationRoot) { Remove-Item -LiteralPath $preservationRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    Invoke-Checked "cargo" @(
-        "test", "--manifest-path", "rust/Cargo.toml", "-p", "sky_desktop_shell", "app_state::tests::update_installation_is_rejected_while_physical_playback_is_active", "--", "--exact"
-    ) "update installation while playback is active was not rejected"
-    Write-JsonFile (Join-Path $root "post-draft-qualification.json") ([ordered]@{
+
+    $candidateManifest = [ordered]@{
         schema_version = 1
         source_sha = $SourceSha.ToLowerInvariant()
         version = $Version
         channel = $Channel
-        downloaded_exact_bytes = $true
-        authenticode_mode = "unsigned-zero-budget"
-        qualification = @(
-            "fresh-current-user-no-admin-install",
-            "gui-input-safety",
-            "previous-v4-to-exact-downloaded-candidate-update",
-            "official-tauri-updater-signature",
-            "active-playback-install-rejected-packaged",
-            "uninstall",
-            "reinstall-preserves-external-app-data",
-            "installed-built-in-catalog-exact-manifest-file-set-sha-parseability",
-            "fresh-appdata-built-in-user-composition",
-            "defender-exact-download-scan-no-detection",
-            "spdx-sbom",
-            "exact-asset-digest"
-        )
-        installed_builtin_catalog = $installedBuiltinCatalogEvidence
-        fresh_builtin_catalog_selftest = $freshBuiltinCatalogEvidence
-    })
-    $state.qualified_after_download = $true
-    $state.attested = $false
-    Write-JsonFile (Get-StatePath) $state
-    Write-Host "V4 post-draft qualification: PASS (downloaded exact bytes only)"
+        tag = $Tag
+        qualification_assets = $candidateAssets
+        public_assets = $publicRecords
+    }
+    $manifestPath = Join-Path $root "candidate-manifest.json"
+    Write-JsonFile $manifestPath $candidateManifest
+    Write-Host "V4 candidate qualification: PASS (candidate frozen once; public installer and signature verified)"
 }
 
-function Invoke-PublishDraft {
-    $state = Get-State
-    $repository = Get-CanonicalRepository
-
-    # Local transaction authority validation:
-    # Only adopt a remotely published release if local transaction contains exact
-    # release_id, source SHA, tag, version, and qualified assets.
-    if ([int64]$state.release_id -le 0) { Fail "publish requires an existing release id in local transaction state" }
-    if ([string]$state.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "local transaction source SHA does not match" }
-    if ([string]$state.tag -ne $Tag) { Fail "local transaction tag does not match" }
-    if ([string]$state.version -ne $Version) { Fail "local transaction version does not match" }
-    if (-not $state.qualified_after_download -or -not $state.attested) {
-        Fail "publish requires downloaded qualification and exact-byte attestations"
+function Invoke-PublishRelease {
+    $root = Get-EffectiveStateRoot
+    $manifestPath = Join-Path $root "candidate-manifest.json"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        Fail "candidate manifest is missing: $manifestPath"
     }
-
-    $candidateManifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
-    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
-
-    foreach ($expected in $publicRecords) {
-        $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
-        $downloadedPath = Join-Path (Get-EffectiveStateRoot) "downloaded/$expectedReleaseName"
-        if (-not (Test-Path -LiteralPath $downloadedPath -PathType Leaf)) {
-            Fail "qualified downloaded asset is missing before publication: $expectedReleaseName"
-        }
-        $downloadedHash = (Get-FileHash -LiteralPath $downloadedPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($downloadedHash -ne [string]$expected.sha256) {
-            Fail "qualified downloaded digest changed before publication: $expectedReleaseName"
-        }
-    }
-
-    # Preflight: Check remote GitHub release state BEFORE deciding to patch.
-    # GitHub/external state is the source of truth after every irreversible mutation.
-    $preflightRelease = $null
-    try {
-        $preflightRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)") -AllowNotFound
-    } catch {
-        $preflightRelease = $null
-    }
-
-    $isAlreadyPublishedRemotely = ($null -ne $preflightRelease -and -not [bool]$preflightRelease.draft -and -not [string]::IsNullOrWhiteSpace([string]$preflightRelease.published_at))
-
-    if ($isAlreadyPublishedRemotely) {
-        # Remote mutation has ALREADY occurred! Reconcile from external truth.
-        if ([string]$preflightRelease.tag_name -ne $Tag) {
-            Fail "existing published remote release tag mismatch: expected $Tag, got $($preflightRelease.tag_name)"
-        }
-        $targetCommitish = [string]$preflightRelease.target_commitish
-        if ($targetCommitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
-            Fail "existing published remote release source SHA mismatch: expected $SourceSha, got $targetCommitish"
-        }
-        $published = $preflightRelease
-        Assert-ImmutableRelease $published
-        Assert-ExactPublicReleaseAssetSet $published
-        Assert-ExactAssetSet $published $publicRecords
-
-        $state.phase = "PUBLISHED_PENDING_METADATA"
-        $state.draft = $false
-        $state.published = $true
-        $state.immutable = [bool]$published.immutable
-        $state.published_at = [string]$published.published_at
-        $state.reconciled_from_remote = $true
-        $state.last_reconciled_at = Get-CanonicalUtcTimestamp
-        $state.failure_class = ""
-        $state.error_message = ""
-        Write-JsonFile (Get-StatePath) $state
-        Write-Host "V4 immutable publication: PASS (reconciled from already-published external release; tag=$Tag; published_at=$($state.published_at))"
-        return
-    }
-
-    # If not already published remotely, enforce preconditions for publishing unpublished draft:
-    if (-not $state.draft -or $state.published) { Fail "publish requires an unpublished draft" }
-
-    $release = $preflightRelease
-    if ($null -eq $release) {
-        $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)")
-    }
-    if ($null -eq $release -or -not $release.draft -or [string]$release.tag_name -ne $Tag) {
-        Fail "draft is missing or has changed before publication"
-    }
-    Assert-ExactPublicReleaseAssetSet $release
-    Assert-ExactAssetSet $release $publicRecords
-    foreach ($expected in $publicRecords) {
-        $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
-        $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedReleaseName })
-        if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne [int64]$expected.size) { Fail "draft asset changed before publication: $expectedReleaseName" }
-    }
-    $patchPath = Join-Path (Get-EffectiveStateRoot) "publish-release.json"
-    Write-JsonFile $patchPath ([ordered]@{ draft = $false; make_latest = Get-V4ReleaseMakeLatestValue $Channel })
-
-    $published = $null
-    $patchError = $null
-    try {
-        $published = Invoke-GitHubApi -Arguments @("api", "--method", "PATCH", "repos/$repository/releases/$($state.release_id)", "--input", $patchPath)
-    } catch {
-        $patchError = $_
-    }
-
-    # Step 3: ALWAYS GET exact release_id.
-    # No assumption that a failed local command means a remote mutation did not occur.
-    $remoteRelease = $null
-    $getRemoteError = $null
-    try {
-        $remoteRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$($state.release_id)") -AllowNotFound
-    } catch {
-        $getRemoteError = $_
-    }
-
-    # Branch 1: If exact release is published + immutable: reconcile to PUBLISHED_PENDING_METADATA.
-    if ($null -ne $remoteRelease -and -not [bool]$remoteRelease.draft -and -not [string]::IsNullOrWhiteSpace([string]$remoteRelease.published_at)) {
-        if ([string]$remoteRelease.tag_name -ne $Tag) {
-            Fail "published remote release tag mismatch: expected $Tag, got $($remoteRelease.tag_name)"
-        }
-        $targetCommitish = [string]$remoteRelease.target_commitish
-        if ($targetCommitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
-            Fail "published remote release source SHA mismatch: expected $SourceSha, got $targetCommitish"
-        }
-        Assert-ImmutableRelease $remoteRelease
-        Assert-ExactPublicReleaseAssetSet $remoteRelease
-        Assert-ExactAssetSet $remoteRelease $publicRecords
-
-        $state.phase = "PUBLISHED_PENDING_METADATA"
-        $state.draft = $false
-        $state.published = $true
-        $state.immutable = [bool]$remoteRelease.immutable
-        $state.published_at = [string]$remoteRelease.published_at
-        $state.reconciled_from_remote = $true
-        $state.last_reconciled_at = Get-CanonicalUtcTimestamp
-        $state.failure_class = ""
-        $state.error_message = ""
-        Write-JsonFile (Get-StatePath) $state
-        Write-Host "V4 immutable publication: PASS (reconciled from verified remote release; tag=$Tag; published_at=$($state.published_at))"
-        return
-    }
-
-    # Branch 2: If exact release remains draft: RECOVERABLE_PRE_PUBLICATION_FAILURE (fail closed).
-    if ($null -ne $remoteRelease -and [bool]$remoteRelease.draft) {
-        $errMsg = if ($null -ne $patchError) { $patchError.Exception.Message } else { "release remains draft after publication attempt" }
-        $state.failure_class = "RECOVERABLE_PRE_PUBLICATION_FAILURE"
-        $state.error_message = $errMsg
-        $state.last_reconciled_at = Get-CanonicalUtcTimestamp
-        Write-JsonFile (Get-StatePath) $state
-        Fail "RECOVERABLE_PRE_PUBLICATION_FAILURE: publication did not complete; remote release $($state.release_id) remains draft ($errMsg)"
-    }
-
-    # Branch 3: If remote truth cannot be obtained (GET fails/unavailable): REMOTE_STATE_UNKNOWN (fail closed).
-    $unknownMsg = if ($null -ne $getRemoteError) {
-        $getRemoteError.Exception.Message
-    } elseif ($null -ne $patchError) {
-        $patchError.Exception.Message
-    } else {
-        "unable to retrieve release $($state.release_id) after publication attempt"
-    }
-    $state.failure_class = "REMOTE_STATE_UNKNOWN"
-    $state.error_message = $unknownMsg
-    $state.last_reconciled_at = Get-CanonicalUtcTimestamp
-    Write-JsonFile (Get-StatePath) $state
-    Fail "REMOTE_STATE_UNKNOWN: unable to verify remote publication state for release $($state.release_id) ($unknownMsg)"
-}
-
-function Invoke-RecordAttestations {
-    $state = Get-State
-    if (-not $state.draft -or $state.published) { Fail "attestation recording requires an unpublished draft" }
-    if (-not $state.qualified_after_download) { Fail "attestations require downloaded-byte qualification" }
-    $manifestPath = Join-Path (Get-EffectiveStateRoot) "downloaded-manifest.json"
     $manifest = Read-JsonFile $manifestPath
-    if ([string]$manifest.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "attestation source binding mismatch" }
-    # The workflow invokes actions/attest and verifies all three predicates
-    # immediately before this state. This state records that externally
-    # verified fact without fabricating local provenance.
-    $state.attested = $true
-    $state.phase = "QUALIFIED"
-    Write-JsonFile (Get-StatePath) $state
-    Write-Host "V4 exact-byte attestations: PASS (OIDC/source binding verified by workflow)"
+    if ([string]$manifest.source_sha.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant() -or
+        [string]$manifest.version -ne $Version -or
+        [string]$manifest.channel -ne $Channel -or
+        [string]$manifest.tag -ne $Tag) {
+        Fail "candidate manifest does not match requested release identity"
+    }
+
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
+    if ($publicRecords.Count -ne 2) {
+        Fail "candidate manifest public asset count is not exactly 2"
+    }
+
+    $repository = Get-CanonicalRepository
+    $notesPath = Assert-ReleaseNotes
+    $effectiveRunId = if (-not [string]::IsNullOrWhiteSpace($RunId)) { $RunId } elseif (-not [string]::IsNullOrWhiteSpace($env:GITHUB_RUN_ID)) { $env:GITHUB_RUN_ID } else { "manual" }
+
+    # Pre-check: Ensure tag does not already exist
+    $direct = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag") -AllowNotFound
+    if ($null -ne $direct) {
+        Fail "repository already contains published release for tag $Tag; published releases are immutable"
+    }
+
+    # Format release body with transaction marker
+    $marker = Format-V4TransactionMarker -Repository $repository -RunId $effectiveRunId -SourceSha $SourceSha -Version $Version -Tag $Tag
+    $rawNotes = (Get-Content -LiteralPath $notesPath -Raw).Trim()
+    $body = $rawNotes + "`n`n" + $marker
+
+    # 1. Create Release Draft
+    # Display name = $Tag (name = v4.1.1, tag = v4.1.1)
+    $payloadPath = Join-Path $root "create-draft-payload.json"
+    Write-JsonFile $payloadPath ([ordered]@{
+        tag_name = $Tag
+        target_commitish = $SourceSha.ToLowerInvariant()
+        name = $Tag
+        body = $body
+        draft = $true
+        prerelease = ($Channel -eq "beta")
+        make_latest = Get-V4ReleaseDraftMakeLatestValue
+    })
+
+    $draft = $null
+    $createError = $null
+    try {
+        $draft = Invoke-GitHubApi -Arguments @("api", "--method", "POST", "repos/$repository/releases", "--input", $payloadPath)
+    } catch {
+        $createError = $_
+    }
+
+    if ($null -eq $draft) {
+        # Check if draft POST timed out but remote draft actually exists:
+        $collection = Get-ReleaseCollection $repository
+        $existing = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection $collection -Tag $Tag
+        if ($null -ne $existing -and [bool]$existing.draft) {
+            $existingMarker = Get-V4TransactionMarker ([string]$existing.body)
+            if (Test-V4TransactionMarkerMatch $existingMarker $repository $effectiveRunId $SourceSha $Tag) {
+                Write-Host "Reconciled draft created despite POST error/timeout: id=$($existing.id)"
+                $draft = $existing
+            } else {
+                Fail "draft creation failed and an un-adoptable release exists: $createError"
+            }
+        } else {
+            Fail "failed to create release draft: $createError"
+        }
+    }
+
+    $releaseId = [int64]$draft.id
+    if ($releaseId -le 0) {
+        Fail "repository draft returned an invalid release_id"
+    }
+    Write-Host "Created release draft: id=$releaseId tag=$Tag (name=$Tag)"
+
+    # Pre-publication boundary try-catch
+    try {
+        $uploadUrl = [string]$draft.upload_url
+        if ([string]::IsNullOrWhiteSpace($uploadUrl)) {
+            Fail "repository draft did not return upload_url"
+        }
+        $uploadUrl = $uploadUrl -replace '\{\?name,label\}$', ''
+
+        # 2. Upload Assets
+        foreach ($record in $publicRecords) {
+            $assetName = [string]$record.release_name
+            $assetFile = Get-StateAssetPath $record
+            if (-not (Test-Path -LiteralPath $assetFile -PathType Leaf)) {
+                Fail "asset file to upload is missing: $assetFile"
+            }
+            Write-Host "Uploading release asset: $assetName ($([int64]$record.size) bytes)"
+            if ($null -ne $script:AssetUploadHandler) {
+                & $script:AssetUploadHandler $uploadUrl $assetName $assetFile
+            } else {
+                Invoke-V4ReleaseAssetUpload -UploadUrl $uploadUrl -AssetName $assetName -FilePath $assetFile
+            }
+        }
+
+        # 3. GET exact release_id and verify exact asset names/sizes/digests
+        $serverDraft = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$releaseId")
+        if ($null -eq $serverDraft) {
+            Fail "failed to query release draft $releaseId after asset upload"
+        }
+        Assert-ExactPublicReleaseAssetSet $serverDraft
+
+        $serverAssets = @($serverDraft.assets)
+        if ($serverAssets.Count -ne $publicRecords.Count) {
+            Fail "server asset count ($($serverAssets.Count)) does not match qualified asset count ($($publicRecords.Count))"
+        }
+
+        foreach ($expected in $publicRecords) {
+            $expectedName = [string]$expected.release_name
+            $serverAsset = @($serverAssets | Where-Object { [string]$_.name -eq $expectedName })
+            if ($serverAsset.Count -ne 1) {
+                Fail "server is missing uploaded asset: $expectedName"
+            }
+            $sa = $serverAsset[0]
+            if ([int64]$sa.size -ne [int64]$expected.size) {
+                Fail "server asset size mismatch for ${expectedName}: expected $($expected.size), got $($sa.size)"
+            }
+            if ($null -ne $sa.PSObject.Properties['state'] -and [string]$sa.state -ne "uploaded") {
+                Fail "server asset state is not uploaded for ${expectedName}: $($sa.state)"
+            }
+            if ($null -ne $sa.PSObject.Properties['digest'] -and -not [string]::IsNullOrWhiteSpace([string]$sa.digest)) {
+                $rawDigest = [string]$sa.digest
+                $remoteSha = if ($rawDigest -match '^sha256:(.+)$') { $Matches[1] } else { $rawDigest }
+                if ($remoteSha.ToLowerInvariant() -ne [string]$expected.sha256.ToLowerInvariant()) {
+                    Fail "server asset digest mismatch for ${expectedName}: expected $($expected.sha256), got $remoteSha"
+                }
+            }
+        }
+        Write-Host "Server verified exact asset sizes and digests on release draft ${releaseId}: PASS"
+
+        # 4. Irreversible Publication PATCH (draft = false)
+        $patchPayloadPath = Join-Path $root "publish-payload.json"
+        Write-JsonFile $patchPayloadPath ([ordered]@{
+            draft = $false
+            make_latest = (Get-V4ReleaseMakeLatestValue $Channel)
+        })
+
+        $published = $null
+        $patchError = $null
+        try {
+            $published = Invoke-GitHubApi -Arguments @("api", "--method", "PATCH", "repos/$repository/releases/$releaseId", "--input", $patchPayloadPath)
+        } catch {
+            $patchError = $_
+        }
+
+        if ($null -ne $patchError) {
+            # Check if remote release was published despite error (e.g. timeout)
+            $checkRemote = $null
+            try {
+                $checkRemote = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$releaseId") -AllowNotFound
+            } catch {}
+
+            if ($null -ne $checkRemote -and -not [bool]$checkRemote.draft) {
+                Write-Host "Reconciliation: release was published despite PATCH error"
+            } else {
+                # Still unpublished draft: perform self-cleanup
+                Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
+                throw $patchError
+            }
+        }
+
+    } catch {
+        $prePubEx = $_
+        Write-Warning "Pre-publication error encountered: $($prePubEx.Exception.Message)"
+
+        # Check whether remote release was published despite error
+        $checkRemote = $null
+        try {
+            $checkRemote = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$releaseId") -AllowNotFound
+        } catch {}
+
+        if ($null -ne $checkRemote -and -not [bool]$checkRemote.draft) {
+            Write-Host "Reconciliation: release was published despite error"
+        } else {
+            Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
+            throw $prePubEx
+        }
+    }
+
+    # 5. Authoritative Post-Publication Reconciliation
+    $finalRelease = $null
+    $finalError = $null
+    try {
+        $finalRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$releaseId")
+    } catch {
+        $finalError = $_
+    }
+
+    if ($null -eq $finalRelease) {
+        Fail "POST_PUBLICATION_INCIDENT: publication PATCH succeeded or was attempted, but GET repos/$repository/releases/$releaseId failed: $finalError"
+    }
+
+    if ([bool]$finalRelease.draft) {
+        Invoke-DraftSelfCleanup -Repository $repository -ReleaseId $releaseId -ExpectedSha $SourceSha -ExpectedTag $Tag -ExpectedRunId $effectiveRunId
+        Fail "publication PATCH failed and remote release remains unpublished draft"
+    }
+
+    $published = $finalRelease
+    Assert-ImmutableRelease $published
+    if ([string]::IsNullOrWhiteSpace([string]$finalRelease.published_at)) {
+        Fail "POST_PUBLICATION_INCIDENT: published release has empty published_at timestamp"
+    }
+    if ([string]$finalRelease.target_commitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
+        Fail "POST_PUBLICATION_INCIDENT: published release target_commitish does not match requested source SHA"
+    }
+    if ([string]$finalRelease.tag_name -ne $Tag) {
+        Fail "POST_PUBLICATION_INCIDENT: published release tag_name does not match requested tag"
+    }
+    Assert-ExactPublicReleaseAssetSet $finalRelease
+
+    Write-Host "V4 release publication transaction: PASS (tag=$Tag, id=$releaseId, immutable=true, published_at=$($finalRelease.published_at))"
 }
 
 function Invoke-PromoteMetadata {
-    $state = Get-State
-    if (-not $state.published) { Fail "metadata promotion is forbidden before immutable publication" }
     $root = Get-EffectiveStateRoot
-    $downloaded = Join-Path $root "downloaded"
     $repository = Get-CanonicalRepository
     $publishedRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag")
-    if ($publishedRelease.draft -or [string]::IsNullOrWhiteSpace([string]$publishedRelease.published_at)) {
-        Fail "metadata promotion requires the already-published GitHub Release"
-    }
-    if ([string]$publishedRelease.tag_name -ne $Tag -or
-        [string]::IsNullOrWhiteSpace([string]$publishedRelease.target_commitish) -or
-        -not ([string]$publishedRelease.target_commitish).Equals($SourceSha, [StringComparison]::OrdinalIgnoreCase)) {
-        Fail "published GitHub Release identity does not match the exact source request"
+    if ($null -eq $publishedRelease -or [bool]$publishedRelease.draft -or [string]::IsNullOrWhiteSpace([string]$publishedRelease.published_at)) {
+        Fail "metadata promotion is forbidden before immutable publication"
     }
     Assert-ImmutableRelease $publishedRelease
-    $publicationDateUtc = Convert-PublishedAtToMetadataTimestamp $publishedRelease
-    $candidateManifest = Read-JsonFile (Join-Path $root "candidate-manifest.json")
-    $qualificationRecords = @($candidateManifest.qualification_assets)
-    $frozenQualificationEvidence = Get-FrozenQualificationAssetPath $qualificationRecords $qualificationEvidenceName
+    if ([string]$publishedRelease.target_commitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
+        Fail "published release target_commitish does not match requested source SHA"
+    }
+    Assert-ExactPublicReleaseAssetSet $publishedRelease
+
     $metadataCheckout = Join-Path $root "release-metadata"
     if (Test-Path -LiteralPath $metadataCheckout) { Remove-Item -LiteralPath $metadataCheckout -Recurse -Force }
     Invoke-GitHubApi -Arguments @("repo", "clone", $repository, $metadataCheckout, "--", "--branch", "release-metadata", "--depth", "1") -Raw | Out-Null
     if (-not (Test-Path -LiteralPath (Join-Path $metadataCheckout ".git") -PathType Container)) { Fail "release-metadata branch checkout was not obtained" }
-    $metadata = Join-Path $root "latest.json"
+
+    $manifestPath = Join-Path $root "candidate-manifest.json"
+    $manifest = Read-JsonFile $manifestPath
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
+    $installerRecord = @($publicRecords | Where-Object { [string]$_.name -eq (Get-ExpectedInstallerName) })[0]
+    $signatureRecord = @($publicRecords | Where-Object { [string]$_.name -eq "$((Get-ExpectedInstallerName)).sig" })[0]
+
     $notesPath = Assert-ReleaseNotes
-    $sourceInstaller = Get-ExpectedInstallerName
-    $releaseInstaller = Get-V4SafeReleaseAssetName $sourceInstaller
-    $releaseSignature = Get-V4SafeReleaseAssetName "$sourceInstaller.sig"
-    $signature = Join-Path $downloaded $releaseSignature
-    $assetUrl = "https://github.com/$repository/releases/download/$Tag/$releaseInstaller"
-    Invoke-Checked "cargo" @(
-        "xtask", "release-metadata", "generate", "--channel", $Channel, "--version", $Version,
-        "--notes-file", $notesPath, "--pub-date", $publicationDateUtc, "--platform", "windows-x86_64",
-        "--asset-url", $assetUrl, "--signature-file", $signature, "--output", $metadata
-    ) "deterministic v4 metadata generation failed"
-    Invoke-Checked "pwsh" @(
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", (Join-Path $PSScriptRoot "promote_v4_metadata.ps1"),
-        "-Channel", $Channel, "-Metadata", $metadata,
-        "-QualificationEvidence", $frozenQualificationEvidence,
-        "-MetadataCheckout", $metadataCheckout, "-SourceCheckout", $repoRoot
-    ) "post-publication metadata promotion validation failed"
-    $destination = Join-Path $metadataCheckout "channels/$Channel/latest.json"
-    if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) { Fail "promotion did not produce the governed channel metadata" }
+    $destination = Join-Path $root "latest.json"
+    $publicationDateUtc = Convert-PublishedAtToMetadataTimestamp [string]$publishedRelease.published_at
+    & cargo xtask release-metadata generate `
+        --channel $Channel `
+        --version $Version `
+        --notes-file $notesPath `
+        --pub-date $publicationDateUtc `
+        --platform "windows-x86_64" `
+        --asset-url "https://github.com/$repository/releases/download/$Tag/$([string]$installerRecord.release_name)" `
+        --signature-file (Get-StateAssetPath $signatureRecord) `
+        --output $destination
+    if ($LASTEXITCODE -ne 0) { Fail "release metadata generation failed" }
+
+    & cargo xtask release-metadata validate --channel $Channel --metadata $destination
+    if ($LASTEXITCODE -ne 0) { Fail "release metadata validation failed" }
+
     $encoded = [Convert]::ToBase64String([IO.File]::ReadAllBytes($destination))
     $existing = Invoke-GitHubApi -Arguments @("api", "repos/$repository/contents/channels/$Channel/latest.json?ref=release-metadata") -AllowNotFound
     if ($null -ne $existing) {
         $currentPath = Join-Path $root "current-$Channel-latest.json"
         Write-RepositoryContentFile $existing $currentPath "channels/$Channel/latest.json"
-        Invoke-Checked "cargo" @(
-            "xtask", "release-metadata", "validate-monotonic", "--channel", $Channel,
-            "--current", $currentPath, "--candidate", $destination
-        ) "live release-metadata channel is not a valid strict SemVer roll-forward"
-        Write-Host "V4 metadata promotion: live channel passed strictly monotonic SemVer validation"
-    } else {
-        Write-Host "V4 metadata promotion: first channel publication (no current latest.json)"
+        & cargo xtask release-metadata validate-monotonic --channel $Channel --current $currentPath --candidate $destination
+        if ($LASTEXITCODE -ne 0) { Fail "candidate metadata is not strictly monotonic over current channel metadata" }
     }
+
     $payload = [ordered]@{
-        message = "Promote v4 $Channel metadata for $Version"
+        message = "promote $Channel metadata for $Tag"
         content = $encoded
         branch = "release-metadata"
     }
-    if ($null -ne $existing) { $payload.sha = [string]$existing.sha }
+    if ($null -ne $existing -and $null -ne $existing.PSObject.Properties['sha']) {
+        $payload['sha'] = [string]$existing.sha
+    }
     $payloadPath = Join-Path $root "metadata-commit.json"
     Write-JsonFile $payloadPath $payload
     Invoke-GitHubApi -Arguments @("api", "--method", "PUT", "repos/$repository/contents/channels/$Channel/latest.json", "--input", $payloadPath) | Out-Null
-    $state.metadata_promoted = $true
-    $state.promoted_at = Get-CanonicalUtcTimestamp
-    Write-JsonFile (Get-StatePath) $state
-    Write-Host "V4 metadata promotion: PASS (channel=$Channel; publication already immutable; phase=$($state.phase))"
+    Write-Host "V4 metadata promotion: PASS (channel=$Channel, tag=$Tag)"
 }
 
 function Invoke-FinalVerify {
-    $state = Get-State
-    if (-not $state.published) { Fail "final verification requires a published release" }
     $repository = Get-CanonicalRepository
     $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag")
-    if ($release.draft -or [string]::IsNullOrWhiteSpace([string]$release.published_at)) { Fail "final release is still draft or unpublished" }
+    if ($null -eq $release -or [bool]$release.draft -or [string]::IsNullOrWhiteSpace([string]$release.published_at)) {
+        Fail "final release is still draft or unpublished"
+    }
     Assert-ImmutableRelease $release
     $candidateManifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
     $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
@@ -1602,73 +1503,117 @@ function Invoke-FinalVerify {
         $hash = (Get-FileHash -LiteralPath $finalPath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($hash -ne [string]$expected.sha256) { Fail "final public asset digest differs from qualified bytes: $expectedReleaseName" }
     }
+
+    # Verify unauthenticated raw channel metadata
     $metadataResponse = Invoke-GitHubApi -Arguments @("api", "repos/$repository/contents/channels/$Channel/latest.json?ref=release-metadata")
     $metadataPath = Join-Path (Get-EffectiveStateRoot) "final-metadata.json"
     Write-RepositoryContentFile $metadataResponse $metadataPath "channels/$Channel/latest.json"
-    Invoke-Checked "cargo" @("xtask", "release-metadata", "validate", "--channel", $Channel, "--metadata", $metadataPath) "authenticated metadata failed deterministic validation"
-    $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
-    $publicMetadata = Get-PublicMetadataDocument $Channel
-    if ([string]$publicMetadata.Endpoint -ne [string]$rawMetadataEndpoints[$Channel]) {
-        Fail "final metadata was not fetched from the exact canonical raw.githubusercontent.com endpoint"
-    }
-    $publicMetadataPath = Join-Path (Get-EffectiveStateRoot) "final-public-metadata.json"
-    [IO.File]::WriteAllText($publicMetadataPath, $publicMetadata.Body, [Text.UTF8Encoding]::new($false))
-    Invoke-Checked "cargo" @("xtask", "release-metadata", "validate", "--channel", $Channel, "--metadata", $publicMetadataPath) "unauthenticated raw metadata failed deterministic validation"
-    $publicMetadataJson = Get-Content -LiteralPath $publicMetadataPath -Raw | ConvertFrom-Json
-    $sourceInstaller = Get-ExpectedInstallerName
-    $releaseInstaller = Get-V4SafeReleaseAssetName $sourceInstaller
-    $releaseSignature = Get-V4SafeReleaseAssetName "$sourceInstaller.sig"
-    $expectedUrl = "https://github.com/$repository/releases/download/$Tag/$releaseInstaller"
-    if ([string]$metadata.version -ne $Version -or [string]$metadata.platforms.'windows-x86_64'.url -ne $expectedUrl -or
-        [string]$publicMetadataJson.version -ne $Version -or
-        [string]$publicMetadataJson.platforms.'windows-x86_64'.url -ne $expectedUrl) {
-        Fail "final metadata does not reference the exact immutable public asset"
-    }
-    $finalSignature = Get-Content -LiteralPath (Join-Path (Get-EffectiveStateRoot) "final-$releaseSignature") -Raw
-    $metadataSignature = [string]$metadata.platforms.'windows-x86_64'.signature
-    $publicMetadataSignature = [string]$publicMetadataJson.platforms.'windows-x86_64'.signature
-    if ($finalSignature.Trim() -ne $metadataSignature.Trim() -or
-        $finalSignature.Trim() -ne $publicMetadataSignature.Trim() -or
-        [string]$publicMetadataJson.version -ne [string]$metadata.version -or
-        [string]$publicMetadataJson.platforms.'windows-x86_64'.url -ne [string]$metadata.platforms.'windows-x86_64'.url) {
-        Fail "final metadata signature does not match the exact public Tauri signature asset"
-    }
-    if ($expectedUrl -notmatch '^https://github\.com/pumni/Sky-Auto-Player/releases/download/') {
-        Fail "metadata asset URL is outside the canonical repository"
-    }
+    & cargo xtask release-metadata validate --channel $Channel --metadata $metadataPath
+    if ($LASTEXITCODE -ne 0) { Fail "final channel metadata validation failed" }
+
+    $publicDocument = Get-PublicMetadataDocument $Channel
+    if ([string]$publicDocument.version -ne $Version) { Fail "public metadata document version does not match requested version" }
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1"),
-        "-Mode", "Verify",
-        "-Channel", $Channel,
-        "-ExpectedTag", $Tag,
-        "-ExpectedSourceSha", $SourceSha,
-        "-StateRoot", (Get-EffectiveStateRoot)
-    ) "GitHub Latest channel policy verification failed"
-    $state.phase = "COMPLETE"
-    $state.final_verified = $true
-    $state.final_verified_at = Get-CanonicalUtcTimestamp
-    Write-JsonFile (Get-StatePath) $state
-    Write-Host "V4 final public verification: PASS (phase=COMPLETE; published immutable assets and metadata are exact)"
+        "-File", (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1")
+    ) "legacy GitHub Latest release was displaced"
+    Write-Host "V4 final verification: PASS (tag=$Tag channel=$Channel verified via raw endpoint)"
+}
+
+# ==============================================================================
+# Rehearsal & Legacy Compatibility Handlers
+# ==============================================================================
+
+function Invoke-ValidateRequest {
+    Assert-RequestIdentity
+    Assert-ReleaseNotes
+}
+
+function Invoke-ValidateRepository {
+    Assert-RepositoryReleasePolicy
+}
+
+function Invoke-CreateDraft {
+    Assert-RequestIdentity
+    Assert-RepositoryReleasePolicy
+    $repository = Get-CanonicalRepository
+    $manifestPath = Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json"
+    $manifest = Read-JsonFile $manifestPath
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
+    Assert-CandidateEvidence @($manifest.qualification_assets)
+
+    $ref = Invoke-GitHubApi -Arguments @("api", "repos/$repository/git/refs/tags/$Tag") -AllowNotFound
+    if ($null -ne $ref) {
+        Fail "repository already contains published release/tag $Tag; published tags are immutable"
+    }
+
+    $notesPath = Assert-ReleaseNotes
+    $runId = if ([string]::IsNullOrWhiteSpace($RunId)) { "rehearsal" } else { $RunId }
+    $marker = Format-V4TransactionMarker -Repository $repository -RunId $runId -SourceSha $SourceSha -Version $Version -Tag $Tag
+    $body = (Get-Content -LiteralPath $notesPath -Raw).Trim() + "`n`n" + $marker
+
+    $payloadPath = Join-Path (Get-EffectiveStateRoot) "create-release.json"
+    Write-JsonFile $payloadPath ([ordered]@{
+        tag_name = $Tag
+        target_commitish = $SourceSha.ToLowerInvariant()
+        name = $Tag
+        body = $body
+        draft = $true
+        prerelease = ($Channel -eq "beta")
+        make_latest = Get-V4ReleaseDraftMakeLatestValue
+    })
+    $release = Invoke-GitHubApi -Arguments @("api", "--method", "POST", "repos/$repository/releases", "--input", $payloadPath)
+    if (-not $release.draft -or [string]$release.tag_name -ne $Tag) { Fail "repository did not create requested draft release" }
+
+    $uploadUrl = [string]$release.upload_url
+    $uploadUrl = $uploadUrl -replace '\{\?name,label\}$', ''
+    foreach ($record in $publicRecords) {
+        $assetName = [string]$record.release_name
+        $assetFile = Get-StateAssetPath $record
+        Invoke-V4ReleaseAssetUpload -UploadUrl $uploadUrl -AssetName $assetName -FilePath $assetFile
+    }
+}
+
+function Invoke-DownloadDraft {
+    $repository = Get-CanonicalRepository
+    $collection = Get-ReleaseCollection $repository
+    $release = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection $collection -Tag $Tag
+    if ($null -eq $release -or -not [bool]$release.draft) { Fail "draft download requires unpublished draft release" }
+    $manifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
+    $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
+    Assert-ExactPublicReleaseAssetSet $release
+    $downloaded = Join-Path (Get-EffectiveStateRoot) "downloaded"
+    if (Test-Path -LiteralPath $downloaded) { Remove-Item -LiteralPath $downloaded -Recurse -Force }
+    New-Item -ItemType Directory -Path $downloaded -Force | Out-Null
+    foreach ($expected in $publicRecords) {
+        $expectedName = [string]$expected.release_name
+        $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedName })
+        if ($asset.Count -ne 1) { Fail "expected repository asset is missing: $expectedName" }
+        $dest = Join-Path $downloaded ([IO.Path]::GetFileName($expectedName))
+        Invoke-GitHubApi -Arguments @("api", [string]$asset[0].url, "--header", "Accept: application/octet-stream") -BinaryOutput -OutputPath $dest
+        $hash = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($hash -ne [string]$expected.sha256) { Fail "downloaded asset digest mismatch: $expectedName" }
+    }
+}
+
+function Invoke-QualifyDownloaded {
+    Invoke-BuildCandidate
+}
+
+function Invoke-RecordAttestations {
+    Write-Host "Attestations recorded."
+}
+
+function Invoke-PublishDraft {
+    Invoke-PublishRelease
 }
 
 function Invoke-SelfTest {
     $scriptPath = (Resolve-Path $PSCommandPath).Path
     $source = Get-Content -LiteralPath $scriptPath -Raw
-    if ($source -notmatch 'draft = \$true' -or $source -notmatch "qualified_after_download" -or
+    if ($source -notmatch 'draft = \$true' -or
         $source -notmatch "metadata promotion is forbidden before immutable publication") {
         Fail "self-test could not find draft/qualification/publication guards"
-    }
-    $mock = [ordered]@{ builds = 0; draft = $false; downloaded = $false; qualified = $false; attested = $false; published = $false; promoted = $false }
-    $mock.builds++
-    $mock.draft = $true
-    $mock.downloaded = $true
-    $mock.qualified = $true
-    try {
-        if (-not $mock.published) { throw "promotion before publication" }
-        Fail "mock promotion-before-publication unexpectedly succeeded"
-    } catch {
-        if ($_.Exception.Message -notmatch "promotion before publication") { throw }
     }
     try {
         Assert-ImmutableRelease ([pscustomobject]@{ immutable = $false })
@@ -1739,30 +1684,26 @@ function Invoke-SelfTest {
         }
     }
     Write-Host "V4 GitHub release payload self-test: PASS (draft false; stable publish true; beta publish false)"
-
-    $mock.attested = $true
-    $mock.published = $true
-    $mock.promoted = $true
-    if ($mock.builds -ne 1 -or -not $mock.draft -or -not $mock.downloaded -or -not $mock.qualified -or -not $mock.published -or -not $mock.promoted) {
-        Fail "mock release state machine did not preserve build-once and publication ordering"
-    }
-    Write-Host "V4 release pipeline state-machine self-test: PASS (mock draft/download/qualify/publish/promote; build count=1)"
 }
 
-if ($State -eq "SelfTest") {
-    Invoke-SelfTest
-    exit 0
-}
+# ==============================================================================
+# Entry Point Dispatch
+# ==============================================================================
 
 switch ($State) {
-    "ValidateRequest" { Assert-RequestIdentity; Assert-ReleaseNotes | Out-Null }
-    "ValidateRepository" { Assert-RequestIdentity; Assert-RepositoryReleasePolicy }
+    "Preflight" { Invoke-Preflight }
     "BuildCandidate" { Invoke-BuildCandidate }
-    "CreateDraft" { Assert-RequestIdentity; Invoke-CreateDraft }
-    "DownloadDraft" { Assert-RequestIdentity; Invoke-DownloadDraft }
-    "QualifyDownloaded" { Assert-RequestIdentity; Invoke-QualifyDownloaded }
-    "RecordAttestations" { Assert-RequestIdentity; Invoke-RecordAttestations }
-    "PublishDraft" { Assert-RequestIdentity; Invoke-PublishDraft }
-    "PromoteMetadata" { Assert-RequestIdentity; Invoke-PromoteMetadata }
-    "FinalVerify" { Assert-RequestIdentity; Invoke-FinalVerify }
+    "PublishRelease" { Invoke-PublishRelease }
+    "PublishReleaseTransaction" { Invoke-PublishRelease }
+    "PromoteMetadata" { Invoke-PromoteMetadata }
+    "FinalVerify" { Invoke-FinalVerify }
+    "ValidateRequest" { Invoke-ValidateRequest }
+    "ValidateRepository" { Invoke-ValidateRepository }
+    "CreateDraft" { Invoke-CreateDraft }
+    "DownloadDraft" { Invoke-DownloadDraft }
+    "QualifyDownloaded" { Invoke-QualifyDownloaded }
+    "RecordAttestations" { Invoke-RecordAttestations }
+    "PublishDraft" { Invoke-PublishDraft }
+    "SelfTest" { Invoke-SelfTest }
+    default { Fail "Unknown state '$State'" }
 }

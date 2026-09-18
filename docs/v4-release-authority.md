@@ -99,31 +99,46 @@ protected `v4-production-release` environment on the dedicated signing runner, a
 canonical repository token for same-repository release operations. Its transaction is:
 
 ```text
-ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDraft
-  -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
-  -> Snapshot GitHub Latest -> PublishDraft -> Assert-ImmutableRelease
-  -> Latest policy guard -> PromoteMetadata -> FinalVerify
+Preflight -> BuildCandidate -> Attest -> PublishRelease
+  -> Snapshot GitHub Latest -> Verify GitHub Latest policy
+  -> PromoteMetadata -> FinalVerify
 ```
 
 The ordering is security-critical:
 
-1. Validate the canonical repository, `main` source ref, and `release-metadata` branch readiness
-   before creating a draft; immutable status is verified on the published release itself.
-2. Build the exact source SHA once and create a draft in the official repository with
-   `make_latest="false"`; the channel-specific Latest value is applied only at publication.
-3. Re-download the draft installer and signature, then qualify those exact bytes.
-4. Record SBOM and provenance/attestation evidence bound to the exact source and the two public
-   assets; retain internal qualification evidence through bounded CI artifacts/attestations.
-5. Snapshot the current GitHub Latest identity, then publish the already-qualified draft
-   immutably with `make_latest="true"` for stable or `make_latest="false"` for beta.
-6. Verify the channel-aware Latest policy before minting the metadata App token; stable must be
-   the exact new release and beta must leave the captured stable Latest unchanged.
-7. Generate, validate, and promote only the selected stable/beta metadata file after the guard.
-8. Re-fetch the public release and verify the exact unauthenticated `raw.githubusercontent.com`
-   endpoint used by the client.
+1. **Preflight**: Validates the canonical repository, `main` source ref, and `release-metadata` branch
+   readiness before any build or publication attempt. Enforces collision checks: if a published
+   release or tag already exists, preflight fails closed. If a stale unpublished draft release exists
+   with a matching transaction marker (`<!-- v4-release-tx: {...} -->`), preflight cleans it up.
+   Pre-publication GitHub Latest baseline identity is captured.
+2. **BuildCandidate**: Builds the exact source SHA once and completes full qualification against the
+   local candidate bundle (unsigned-zero-budget Authenticode, Tauri updater signature verification,
+   SPDX SBOM, exact bundle verification, previous-v4 E2E fixture, Defender exact scan, catalog
+   verification, and active-playback update rejection). Freezes `candidate-manifest.json` with SHA-256
+   digests and file sizes.
+3. **Attest**: Records GitHub Actions OIDC attestations bound to the exact candidate binary, signature,
+   and SBOM, and verifies attestation claims against the repository and signer workflow.
+4. **PublishRelease**: Executes a single cohesive publication transaction boundary:
+   - Creates a draft in the official repository (`name = $Tag`, `draft = true`, `make_latest = "false"`)
+     embedding a hidden machine-readable transaction marker (`<!-- v4-release-tx: {...} -->`).
+   - If draft POST times out, reconciles via tag lookup and transaction marker match.
+   - Uploads the canonical public installer and updater signature.
+   - Queries GitHub release assets API to server-verify exact byte sizes and SHA-256 digests matching
+     `candidate-manifest.json`.
+   - Commits irreversible publication PATCH (`draft = false`, channel-aware `make_latest`).
+   - Reconciles publication status strictly via exact `release_id` GET.
+   - Fail-closed draft self-cleanup: on any failure prior to the irreversible publication PATCH,
+     the transaction immediately deletes the remote draft release.
+5. **Snapshot GitHub Latest & Verify GitHub Latest policy**: Verifies channel policy before minting the
+   metadata App token; stable must be the exact new release and beta must leave the captured stable
+   Latest unchanged.
+6. **PromoteMetadata**: Mints scoped App token, generates, validates, and promotes only the selected
+   stable/beta metadata file after the guard.
+7. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
+   `raw.githubusercontent.com` endpoint used by the client.
 
-Published release assets and tags are never repaired in place. A failed unpublished draft may be
-recreated after correction; a published fix requires a greater SemVer release.
+Published release assets and tags are never repaired in place. A failed unpublished draft is
+automatically cleaned up or recreated; a published fix requires a greater SemVer release.
 
 ## Qualification and trust properties
 
@@ -131,7 +146,7 @@ The release gate preserves these properties while using one repository:
 
 - build once, then qualify and publish the exact same bytes;
 - mandatory Tauri updater signature verification;
-- exact installer and signature SHA-256 evidence;
+- exact installer and signature SHA-256 evidence frozen in `candidate-manifest.json`;
 - SPDX SBOM and GitHub OIDC provenance/attestation;
 - immutable GitHub Release publication;
 - strict stable/beta SemVer policy and monotonic metadata promotion;
@@ -153,30 +168,29 @@ For runner isolation, evidence retention, and production execution topology, see
 branch protection and secret custody are separate governance operations outside individual workflow
 dispatches.
 
-## Release state model and recovery lifecycle
+## Authoritative state model and recovery lifecycle
 
-The v4 release architecture strictly separates **persisted monotonic phases** from **diagnostic failure classifications**:
+The v4 release architecture treats external GitHub release and `release-metadata` deployment branch
+state as authoritative, eliminating complex mutable intermediate phase files:
 
-### Persisted monotonic phases
+### Transaction marker and candidate manifest
 
-Persisted release state (`release-state.json`, schema version 2) records monotonic progression through the release lifecycle. A release transaction only moves forward through these phases:
-
-```text
-READY -> QUALIFIED -> PUBLISHED_PENDING_METADATA -> COMPLETE
-```
-
-1. **`READY`**: Candidate built and signed; candidate manifest and evidence frozen; ready for draft creation.
-2. **`QUALIFIED`**: Candidate draft created in canonical repository; candidate assets re-downloaded; exact downloaded bytes qualified; GitHub OIDC exact-source attestations verified and recorded.
-3. **`PUBLISHED_PENDING_METADATA`**: Irreversible GitHub publication PATCH committed and confirmed by external truth (`draft = false`, immutable, exact public assets). Channel metadata on `release-metadata` has not yet been promoted.
-4. **`COMPLETE`**: Release published and immutable; channel metadata promoted monotonically on `release-metadata`; public unauthenticated `raw.githubusercontent.com` endpoint verified by `FinalVerify`.
-
-Failures do not regress the monotonic phase; instead, failure class, error message, and reconciliation timestamps are recorded in separate fields (`failure_class`, `error_message`, `last_reconciled_at`).
+1. **`candidate-manifest.json`**: Frozen during `BuildCandidate`, recording exact file paths, roles,
+   sizes, and SHA-256 digests for all candidate assets and public release projections.
+2. **Transaction marker**: When creating the draft, the pipeline embeds a hidden HTML comment marker
+   into the release body:
+   ```text
+   <!-- v4-release-tx: {"repository":"...","run_id":"...","source_sha":"...","version":"...","tag":"..."} -->
+   ```
+   This uniquely binds the remote draft to the specific workflow run, repository, source SHA, and tag,
+   allowing deterministic reconciliation upon network timeout and safe cleanup of stale matching drafts.
 
 ### Diagnostic classifications
 
-The diagnostic release doctor (`release-doctor`) evaluates external truth, local state, and GitHub Actions workflow run evidence to report the observed lifecycle phases and diagnostic classification:
+The diagnostic release doctor (`release-doctor`) evaluates external truth and GitHub Actions workflow
+run evidence to report the observed lifecycle phases and diagnostic classification:
 
-- **`persisted_phase`**: Monotonic phase recorded in local release state (`READY | QUALIFIED | PUBLISHED_PENDING_METADATA | COMPLETE | null`).
+- **`persisted_phase`**: Monotonic phase recorded in local release state if present (`READY | QUALIFIED | PUBLISHED_PENDING_METADATA | COMPLETE | null`).
 - **`external_phase`**: Monotonic phase confirmed by external truth on GitHub (`READY | QUALIFIED | PUBLISHED_PENDING_METADATA | COMPLETE | null`).
 - **`classification`**: Failure or incident diagnostic classification:
   1. **`NOT_READY`**: Request or workspace prerequisites not yet satisfied (e.g., dirty working tree, uncommitted changes, missing release notes, non-canonical branch or tag).
@@ -187,20 +201,20 @@ The diagnostic release doctor (`release-doctor`) evaluates external truth, local
 
 ### Publication reconciliation and diagnostic invariants
 
-1. **Exact `release_id` reconciliation only**: Following an irreversible GitHub publication PATCH attempt, the pipeline queries external truth strictly via `GET repos/$repository/releases/$($state.release_id)`. Tag equality is a verification invariant, not a transaction identifier; the pipeline never falls back to adopting a release via tag lookup. If the exact `release_id` cannot be retrieved, the pipeline records `failure_class = "REMOTE_STATE_UNKNOWN"` and fails closed.
+1. **Exact `release_id` reconciliation only**: Following an irreversible GitHub publication PATCH attempt, the pipeline queries external truth strictly via `GET repos/$repository/releases/$($state.release_id)`. Tag equality is a verification invariant, not a transaction identifier; the pipeline never falls back to adopting a release via tag lookup. If the exact `release_id` cannot be retrieved, the pipeline classifies `REMOTE_STATE_UNKNOWN` and fails closed.
 2. **Strict workflow run repository identity**: Diagnostic workflow run resolution (`release-doctor`) enforces exact repository matching (`repository.full_name == pumni/Sky-Auto-Player`). Workflow runs with missing, empty, or mismatched repository identities are refused and never implicitly trusted.
 3. **Fail-closed canonical UTC RFC3339 timestamps**: Timestamps across machine-readable JSON outputs are strictly canonical UTC formatted with trailing `Z` under invariant culture. Any invalid or unparseable timestamp returns `null` and triggers operator review rather than falling back to unvalidated raw strings.
 
 ### Recovery lifecycle and governance rules
 
 #### Fresh dispatch
-Dispatched manually from `refs/heads/main` via `workflow_dispatch`. Progresses through the canonical pipeline from `READY` through `COMPLETE`. A fresh run refuses adoption of any existing published release.
+Dispatched manually from `refs/heads/main` via `workflow_dispatch`. Progresses through the canonical pipeline. A fresh run refuses adoption of any existing published release.
 
 #### Pre-publication failure (`RECOVERABLE_PRE_PUBLICATION_FAILURE`)
-If a failure occurs during `BuildCandidate`, `CreateDraft`, `DownloadDraft`, `QualifyDownloaded`, or `RecordAttestations`:
+If a failure occurs during `Preflight`, `BuildCandidate`, or before publication PATCH in `PublishRelease`:
 - No external release is published.
-- Any draft release on GitHub retains `draft = true` and `published_at = null`.
-- Recovery: Safe to re-dispatch or rerun. The pipeline cleans up unpublished draft tags and draft releases before recreation.
+- Any draft release on GitHub is automatically deleted by draft self-cleanup, or by `Preflight` on the next run.
+- Recovery: Safe to re-dispatch.
 
 #### Post-publication incident (`POST_PUBLICATION_INCIDENT`)
 Once the GitHub Release PATCH is committed, the publication is irreversible:
