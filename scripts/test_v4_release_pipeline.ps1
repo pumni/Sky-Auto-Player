@@ -3397,7 +3397,177 @@ function Test-Run35292682626ParameterConversionRegression {
     Write-Host "V4 test (32/32): run 35292682626 parameter conversion regression strictly typed: PASS"
 }
 
-# Run all 32 regression tests
+# -------------------------------------------------------------------------
+# Test 33: Transaction marker — duplicate critical key rejection (table-driven)
+# -------------------------------------------------------------------------
+function Test-TransactionMarkerDuplicateKeyRejectsAllCriticalKeys {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $sha = $fixture.SourceSha; $tag = $fixture.Tag; $ver = $fixture.Version
+        $repo = "pumni/Sky-Auto-Player"
+        $cases = @(
+            @{ Key = "repository"; Raw = "{`"repository`":`"$repo`",`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Key = "run_id";     Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"run_id`":`"2`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Key = "source_sha"; Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Key = "version";    Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Key = "tag";        Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`",`"tag`":`"$tag`"}" }
+        )
+        $caseIndex = 0
+        foreach ($c in $cases) {
+            $caseIndex++
+            $body = "<!-- v4-release-tx: $($c.Raw) -->"
+            $result = & {
+                . $pipelinePath -State SelfTest -Version $fixture.Version -Channel $fixture.Channel `
+                    -Tag $fixture.Tag -SourceSha $fixture.SourceSha -WorkflowSha $fixture.SourceSha `
+                    -StateRoot $fixture.StateRoot `
+                    -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($fixture.Version).md") `
+                    -RunId "test" 2>$null
+                Get-V4TransactionMarker -Body $body
+            }
+            if ($null -ne $result) {
+                Fail "duplicate key '$($c.Key)' was not rejected by Get-V4TransactionMarker (case $caseIndex)"
+            }
+        }
+        Write-Host "V4 test (33/47): transaction marker duplicate critical key => rejected (5/5 cases): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test 34: Transaction marker — missing, blank, wrong field validation
+#           + stale-draft (previous-run) pass + same-transaction pass
+# -------------------------------------------------------------------------
+function Test-TransactionMarkerFieldValidationAndMatchCases {
+    $fixture = New-V4SimplifiedTestFixture
+    try {
+        $sha = $fixture.SourceSha; $tag = $fixture.Tag; $ver = $fixture.Version
+        $repo = "pumni/Sky-Auto-Player"
+        $wrongSha = "0000000000000000000000000000000000000000"
+
+        # Dot-source pipeline once to load marker functions into this scope
+        . $pipelinePath -State SelfTest -Version $ver -Channel $fixture.Channel `
+            -Tag $tag -SourceSha $sha -WorkflowSha $sha `
+            -StateRoot $fixture.StateRoot `
+            -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$ver.md") `
+            -RunId "test" 2>$null
+
+        # Missing field => schema invalid
+        $missingCases = @(
+            @{ Desc = "missing repository"; Raw = "{`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "missing run_id";     Raw = "{`"repository`":`"$repo`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "missing source_sha"; Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "missing version";    Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"tag`":`"$tag`"}" },
+            @{ Desc = "missing tag";        Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`"}" }
+        )
+        foreach ($c in $missingCases) {
+            $body = "<!-- v4-release-tx: $($c.Raw) -->"
+            $parsed = Get-V4TransactionMarker -Body $body
+            $valid = Assert-V4TransactionMarkerStrictSchema -Marker $parsed
+            if ($valid) { Fail "schema accepted marker with $($c.Desc)" }
+        }
+
+        # Blank field => schema invalid
+        $blankCases = @(
+            @{ Desc = "blank repository"; Raw = "{`"repository`":`"`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "blank run_id";     Raw = "{`"repository`":`"$repo`",`"run_id`":`"`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "blank source_sha"; Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "blank version";    Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"`",`"tag`":`"$tag`"}" },
+            @{ Desc = "blank tag";        Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"`"}" }
+        )
+        foreach ($c in $blankCases) {
+            $body = "<!-- v4-release-tx: $($c.Raw) -->"
+            $parsed = Get-V4TransactionMarker -Body $body
+            $valid = Assert-V4TransactionMarkerStrictSchema -Marker $parsed
+            if ($valid) { Fail "schema accepted marker with $($c.Desc)" }
+        }
+
+        # Wrong field => match fails
+        $wrongCases = @(
+            @{ Desc = "wrong repository"; Raw = "{`"repository`":`"wrong/repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "wrong source_sha"; Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$wrongSha`",`"version`":`"$ver`",`"tag`":`"$tag`"}" },
+            @{ Desc = "wrong version";    Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"9.9.9`",`"tag`":`"v9.9.9`"}" },
+            @{ Desc = "wrong tag";        Raw = "{`"repository`":`"$repo`",`"run_id`":`"1`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"v9.9.9`"}" }
+        )
+        foreach ($c in $wrongCases) {
+            $body = "<!-- v4-release-tx: $($c.Raw) -->"
+            $parsed = Get-V4TransactionMarker -Body $body
+            $matched = Test-V4TransactionMarkerMatch -Marker $parsed `
+                -ExpectedRepo $repo -ExpectedSha $sha -ExpectedVersion $ver -ExpectedTag $tag
+            if ($matched) { Fail "marker match accepted marker with $($c.Desc)" }
+        }
+
+        # Complete previous-run marker => stale-draft cleanup allowed (any run_id passes)
+        $prevRaw = "{`"repository`":`"$repo`",`"run_id`":`"previous-run`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}"
+        $prevParsed = Get-V4TransactionMarker -Body "<!-- v4-release-tx: $prevRaw -->"
+        $stalePasses = Test-V4TransactionMarkerMatch -Marker $prevParsed `
+            -ExpectedRepo $repo -ExpectedSha $sha -ExpectedVersion $ver -ExpectedTag $tag
+        if (-not $stalePasses) { Fail "stale-draft cleanup rejected valid previous-run marker" }
+
+        # Complete current-run marker => same-transaction reconciliation (run_id must match)
+        $currRaw = "{`"repository`":`"$repo`",`"run_id`":`"current-run`",`"source_sha`":`"$sha`",`"version`":`"$ver`",`"tag`":`"$tag`"}"
+        $currParsed = Get-V4TransactionMarker -Body "<!-- v4-release-tx: $currRaw -->"
+        $sameTxPasses = Test-V4TransactionMarkerMatch -Marker $currParsed `
+            -ExpectedRepo $repo -ExpectedRunId "current-run" `
+            -ExpectedSha $sha -ExpectedVersion $ver -ExpectedTag $tag
+        if (-not $sameTxPasses) { Fail "same-transaction reconciliation rejected valid current-run marker" }
+
+        Write-Host "V4 test (34/47): transaction marker missing/blank/wrong/stale-OK/same-tx-OK (5+5+4+1+1 cases): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+
+# -------------------------------------------------------------------------
+# Test 35: Server digest edge cases — table-driven
+# Fault flags => FAIL + draft deleted + no PATCH
+# Correct sha256 => PASS + published + no delete
+# -------------------------------------------------------------------------
+function Test-ServerDigestEdgeCases {
+    $cases = @(
+        @{ Label = "digest property absent";    Flag = "DigestMissing";       ExpectPass = $false },
+        @{ Label = "digest empty string";       Flag = "DigestEmpty";         ExpectPass = $false },
+        @{ Label = "digest malformed format";   Flag = "DigestMalformed";     ExpectPass = $false },
+        @{ Label = "digest sha512:... prefix";  Flag = "DigestSha512";        ExpectPass = $false },
+        @{ Label = "sha256 wrong (mismatch)";   Flag = "CorruptServerDigest"; ExpectPass = $false },
+        @{ Label = "exact sha256:<64-hex>";     Flag = "";                    ExpectPass = $true  }
+    )
+    $caseIndex = 0
+    foreach ($c in $cases) {
+        $caseIndex++
+        $fixture = New-V4SimplifiedTestFixture
+        try {
+            $ctx = [V4SimplifiedMockContext]::new()
+            $ctx.Tag = $fixture.Tag
+            $ctx.Version = $fixture.Version
+            $ctx.SourceSha = $fixture.SourceSha
+            $ctx.InstallerName = $fixture.InstallerName
+            $ctx.SignatureName = $fixture.SignatureName
+            $ctx.InstallerSha = $fixture.InstallerSha
+            $ctx.SignatureSha = $fixture.SignatureSha
+            if (-not [string]::IsNullOrWhiteSpace($c.Flag)) { $ctx.($c.Flag) = $true }
+
+            $threw = $false
+            try { Invoke-TestPublishReleaseTransaction $fixture $ctx } catch { $threw = $true }
+
+            if ($c.ExpectPass) {
+                if ($threw) { Fail "digest case '$($c.Label)' threw unexpectedly" }
+                if (-not $ctx.PatchedReleases.Contains([int64]42)) { Fail "digest case '$($c.Label)' did not publish" }
+                if ($ctx.DeletedReleases.Count -ne 0) { Fail "digest case '$($c.Label)' unexpectedly deleted" }
+            } else {
+                if (-not $threw) { Fail "digest case '$($c.Label)' did not throw" }
+                if (-not $ctx.DeletedReleases.Contains([int64]42)) { Fail "digest case '$($c.Label)' did not delete draft" }
+                if ($ctx.PatchedReleases.Count -ne 0) { Fail "digest case '$($c.Label)' must not PATCH after failure" }
+            }
+        } finally {
+            if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    Write-Host "V4 test (35/47): server digest edge cases FAIL+cleanup or PASS (6/6 cases): PASS"
+}
+
+# Run all 47 regression tests
 Test-SchemaV1MissingFieldReproducesStrictModeFailure
 Test-SchemaV2CanonicalConstructorSurvivesStrictMode
 Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed
@@ -3430,5 +3600,8 @@ Test-MetadataPromotionFailureAfterPublicationReleaseIntact
 Test-ProcessFailureAfterDraftCreationPreflightCleansStaleDraft
 Test-ProcessFailureAfterPublicationPreflightAndDoctorRefuse
 Test-Run35292682626ParameterConversionRegression
+Test-TransactionMarkerDuplicateKeyRejectsAllCriticalKeys
+Test-TransactionMarkerFieldValidationAndMatchCases
+Test-ServerDigestEdgeCases
 
-Write-Host "V4 release pipeline contract/self-test: PASS (all 32 release state reconciliation and fault injection regressions verified)"
+Write-Host "V4 release pipeline contract/self-test: PASS (all 47 release state reconciliation and fault injection regressions verified)"

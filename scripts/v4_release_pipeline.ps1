@@ -159,8 +159,17 @@ function Get-V4TransactionMarker {
     if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
     $matches = [regex]::Matches($Body, '<!--\s*v4-release-tx:\s*(\{.*?\})\s*-->')
     if ($matches.Count -ne 1) { return $null }
+    $rawJson = $matches[0].Groups[1].Value
+    # Reject duplicate critical keys before ConvertFrom-Json collapses them.
+    # ConvertFrom-Json silently keeps the last value for duplicate keys, so
+    # duplicates must be detected on the raw JSON string.
+    $criticalKeys = @('repository', 'run_id', 'source_sha', 'version', 'tag')
+    foreach ($key in $criticalKeys) {
+        $pattern = '"' + [regex]::Escape($key) + '"' + '\s*:'
+        if ([regex]::Matches($rawJson, $pattern).Count -gt 1) { return $null }
+    }
     try {
-        return ($matches[0].Groups[1].Value | ConvertFrom-Json)
+        return ($rawJson | ConvertFrom-Json)
     } catch {
         return $null
     }
