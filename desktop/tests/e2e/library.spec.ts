@@ -1529,7 +1529,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expectFocusClearance(dialog.getByLabel('Theme'));
   await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
   await expectFocusClearance(dialog.getByLabel('Channel'));
-  await expectFocusClearance(dialog.getByLabel('Skip version'));
+  await expectFocusClearance(dialog.getByRole('button', { name: 'Check for updates' }));
   await dialog.getByRole('button', { name: 'About', exact: true }).click();
   await expect(dialog).toContainText('Native ABI');
   await expectNoSeriousAccessibilityViolations(page);

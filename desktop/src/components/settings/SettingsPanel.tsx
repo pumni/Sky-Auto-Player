@@ -275,17 +275,11 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                       </option>
                     </select>
                   </label>
-                  <label>
-                    Skip version
-                    <input
-                      value={settings.update_preferences.skip_version}
-                      placeholder="Optional version"
-                      onChange={(event) =>
-                        patch({ updatePreferences: { skipVersion: event.target.value } })
-                      }
-                    />
-                  </label>
-                  <button className="button" type="button" onClick={() => void checkForUpdate()}>
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() => void checkForUpdate('manual')}
+                  >
                     {update.state === 'checking' ? 'Checking…' : 'Check for updates'}
                   </button>
                 </section>

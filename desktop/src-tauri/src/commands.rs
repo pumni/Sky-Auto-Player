@@ -273,6 +273,9 @@ pub struct UpdatePreferencesDto {
     pub auto_check: bool,
     pub channel: UpdateChannel,
     pub skip_version: String,
+    pub check_interval_s: i64,
+    pub last_check_ts: i64,
+    pub last_error_ts: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

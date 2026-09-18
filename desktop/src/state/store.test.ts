@@ -2758,3 +2758,318 @@ describe('desktop store', () => {
     expect(oldSessionId).not.toBe(store.getState().playback.sessionId);
   });
 });
+
+describe('desktop update UX and throttle policy', () => {
+  it('manual check opens dialog, bypasses throttle, and presents Current terminal result', async () => {
+    const recentTime = Math.floor(Date.now() / 1000) - 100;
+    const bridge = createMockBridge({
+      updateCheckResult: {
+        state: 'current',
+        current_version: '4.1.0',
+        available_version: null,
+        channel: 'stable',
+        release_notes: null,
+        published_at: null,
+        error: null,
+      },
+    });
+    const checkSpy = vi.spyOn(bridge, 'checkForUpdate');
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    // Pretend a check just happened recently
+    await act(async () => {
+      await store.getState().patchSettings({
+        updatePreferences: {
+          autoCheck: true,
+          channel: 'stable',
+          skipVersion: '',
+        },
+      });
+      store.setState({
+        settings: {
+          ...store.getState().settings!,
+          update_preferences: {
+            ...store.getState().settings!.update_preferences,
+            last_check_ts: recentTime,
+            last_error_ts: 0,
+          },
+        },
+        update: {
+          ...store.getState().update,
+          dialogOpen: false,
+        },
+      });
+    });
+
+    checkSpy.mockClear();
+    // Manual check should bypass throttle and open dialog
+    await act(async () => store.getState().checkForUpdate('manual'));
+
+    expect(checkSpy).toHaveBeenCalledOnce();
+    const update = store.getState().update;
+    expect(update.dialogOpen).toBe(true);
+    expect(update.state).toBe('current');
+    expect(update.currentVersion).toBe('4.1.0');
+    expect(update.availableVersion).toBeNull();
+  });
+
+  it('native updater error resolves Error DTO, surfaces error, and updates native error timestamp', async () => {
+    const bridge = createMockBridge({
+      updateCheckResult: {
+        state: 'error',
+        current_version: '4.1.0',
+        available_version: null,
+        channel: 'stable',
+        release_notes: null,
+        published_at: null,
+        error: 'network_timeout: failed to fetch release metadata',
+      },
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    // Background check on initialize recorded native error timestamp
+    expect(store.getState().settings?.update_preferences.last_error_ts).toBeGreaterThan(0);
+    expect(store.getState().settings?.update_preferences.last_check_ts).toBe(0);
+
+    // Reset store state to test that manual check also refreshes native error timestamp
+    act(() => {
+      store.setState({
+        settings: {
+          ...store.getState().settings!,
+          update_preferences: {
+            ...store.getState().settings!.update_preferences,
+            last_error_ts: 0,
+            last_check_ts: 0,
+          },
+        },
+      });
+    });
+    expect(store.getState().settings?.update_preferences.last_error_ts).toBe(0);
+
+    await act(async () => store.getState().checkForUpdate('manual'));
+
+    const update = store.getState().update;
+    expect(update.state).toBe('error');
+    expect(update.dialogOpen).toBe(true);
+    expect(update.error).toBe(
+      'Could not check for updates. Check your network connection and try again.',
+    );
+
+    // Proves frontend timestamps match native persisted error semantics from getUpdatePreferences()
+    const prefs = store.getState().settings?.update_preferences;
+    expect(prefs?.last_error_ts).toBeGreaterThan(0);
+    expect(prefs?.last_check_ts).toBe(0);
+  });
+
+  it('thrown bridge/IPC failure presents Error state without inventing timestamps', async () => {
+    const bridge = createMockBridge({
+      updateCheckError: 'ipc_connection_failed: backend process terminated',
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const initialPrefs = { ...store.getState().settings?.update_preferences };
+
+    await act(async () => store.getState().checkForUpdate('manual'));
+
+    const update = store.getState().update;
+    expect(update.state).toBe('error');
+    expect(update.dialogOpen).toBe(true);
+
+    // Timestamps are not invented on IPC exception
+    const currentPrefs = store.getState().settings?.update_preferences;
+    expect(currentPrefs?.last_check_ts).toBe(initialPrefs.last_check_ts);
+  });
+
+  it('fresh install with recent error obeys 300s backoff and does not check in background', async () => {
+    const bridge = createMockBridge();
+    const checkSpy = vi.spyOn(bridge, 'checkForUpdate');
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const recentError = Math.floor(Date.now() / 1000) - 60; // 1 minute ago
+    act(() => {
+      store.setState({
+        settings: {
+          ...store.getState().settings!,
+          update_preferences: {
+            ...store.getState().settings!.update_preferences,
+            auto_check: true,
+            last_check_ts: 0,
+            last_error_ts: recentError,
+          },
+        },
+      });
+    });
+
+    checkSpy.mockClear();
+    await act(async () => store.getState().checkForUpdate('background'));
+
+    expect(checkSpy).not.toHaveBeenCalled();
+  });
+
+  it('fresh install with error older than 300s retries background check', async () => {
+    const bridge = createMockBridge({
+      updateCheckResult: {
+        state: 'current',
+        current_version: '4.1.0',
+        available_version: null,
+        channel: 'stable',
+        release_notes: null,
+        published_at: null,
+        error: null,
+      },
+    });
+    const checkSpy = vi.spyOn(bridge, 'checkForUpdate');
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    const oldError = Math.floor(Date.now() / 1000) - 350; // > 300s ago
+    act(() => {
+      store.setState({
+        settings: {
+          ...store.getState().settings!,
+          update_preferences: {
+            ...store.getState().settings!.update_preferences,
+            auto_check: true,
+            last_check_ts: 0,
+            last_error_ts: oldError,
+          },
+        },
+      });
+    });
+
+    checkSpy.mockClear();
+    await act(async () => store.getState().checkForUpdate('background'));
+
+    expect(checkSpy).toHaveBeenCalledOnce();
+  });
+
+  it('background check throttles within interval and does not call bridge', async () => {
+    const bridge = createMockBridge();
+    const checkSpy = vi.spyOn(bridge, 'checkForUpdate');
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    // Set last_check_ts to 1 hour ago (check interval is 24 hours)
+    const recentTime = Math.floor(Date.now() / 1000) - 3600;
+    act(() => {
+      store.setState({
+        settings: {
+          ...store.getState().settings!,
+          update_preferences: {
+            ...store.getState().settings!.update_preferences,
+            auto_check: true,
+            last_check_ts: recentTime,
+            last_error_ts: 0,
+            check_interval_s: 86400,
+          },
+        },
+      });
+    });
+
+    checkSpy.mockClear();
+    await act(async () => store.getState().checkForUpdate('background'));
+
+    expect(checkSpy).not.toHaveBeenCalled();
+  });
+
+  it('background check runs silently and surfaces passive available indicator without modal dialog', async () => {
+    const bridge = createMockBridge({
+      updateCheckResult: {
+        state: 'available',
+        current_version: '4.1.0',
+        available_version: '4.2.0',
+        channel: 'stable',
+        release_notes: 'New release notes',
+        published_at: '2026-09-01T00:00:00Z',
+        error: null,
+      },
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    // Fresh check allowed (last_check_ts = 0)
+    expect(store.getState().update.dialogOpen).toBe(false);
+
+    await act(async () => store.getState().checkForUpdate('background'));
+
+    const update = store.getState().update;
+    expect(update.dialogOpen).toBe(false); // Non-disruptive: dialog does not open
+    expect(update.state).toBe('available');
+    expect(update.availableVersion).toBe('4.2.0');
+  });
+
+  it('background check with transient error does not open dialog', async () => {
+    const bridge = createMockBridge({
+      updateCheckError: 'fetch_failed: server returned 503',
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    expect(store.getState().update.dialogOpen).toBe(false);
+
+    await act(async () => store.getState().checkForUpdate('background'));
+
+    const update = store.getState().update;
+    expect(update.dialogOpen).toBe(false); // Non-disruptive
+    expect(update.state).toBe('error');
+    expect(update.error).toBeDefined();
+  });
+
+  it('translates physical playback rejection during install handoff to user copy', async () => {
+    const bridge = createMockBridge({
+      beginUpdateHandoffError:
+        'playback_active: update installation cannot run during physical playback',
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    act(() => {
+      store.setState({
+        update: {
+          ...store.getState().update,
+          state: 'available',
+          availableVersion: '4.2.0',
+        },
+      });
+    });
+
+    await act(async () => store.getState().beginUpdateHandoff());
+
+    const update = store.getState().update;
+    expect(update.state).toBe('error');
+    expect(update.error).toBe(
+      'Updates cannot be installed while music playback is active. Stop playback and try again.',
+    );
+  });
+
+  it('translates calibration rejection during install handoff to user copy', async () => {
+    const bridge = createMockBridge({
+      beginUpdateHandoffError:
+        'calibration_active: update installation cannot run during calibration',
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    act(() => {
+      store.setState({
+        update: {
+          ...store.getState().update,
+          state: 'available',
+          availableVersion: '4.2.0',
+        },
+      });
+    });
+
+    await act(async () => store.getState().beginUpdateHandoff());
+
+    const update = store.getState().update;
+    expect(update.state).toBe('error');
+    expect(update.error).toBe(
+      'Updates cannot be installed while timing calibration is running. Complete or cancel calibration and try again.',
+    );
+  });
+});

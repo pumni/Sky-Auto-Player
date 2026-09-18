@@ -31,21 +31,19 @@ pub fn should_auto_check(preferences: &UpdatePreferences, now_ts: i64) -> bool {
     if !preferences.auto_check {
         return false;
     }
-    let success_elapsed = now_ts.saturating_sub(preferences.last_check_ts);
-    if now_ts < preferences.last_check_ts || success_elapsed >= preferences.check_interval_s {
+    if preferences.last_error_ts > preferences.last_check_ts {
+        let error_elapsed = now_ts.saturating_sub(preferences.last_error_ts);
+        return now_ts < preferences.last_error_ts || error_elapsed >= RETRY_INTERVAL_S;
+    }
+    if preferences.last_check_ts == 0 {
         return true;
     }
-    if preferences.last_error_ts != 0 {
-        let error_elapsed = now_ts.saturating_sub(preferences.last_error_ts);
-        if now_ts < preferences.last_error_ts || error_elapsed >= RETRY_INTERVAL_S {
-            return true;
-        }
-    }
-    false
+    let success_elapsed = now_ts.saturating_sub(preferences.last_check_ts);
+    now_ts < preferences.last_check_ts || success_elapsed >= preferences.check_interval_s
 }
 
 pub fn retry_delay(preferences: &UpdatePreferences, now_ts: i64) -> i64 {
-    if preferences.last_error_ts == 0 {
+    if preferences.last_error_ts <= preferences.last_check_ts {
         return 0;
     }
     let elapsed = now_ts.saturating_sub(preferences.last_error_ts);
@@ -76,12 +74,41 @@ mod tests {
     }
 
     #[test]
-    fn failed_check_uses_short_backoff() {
+    fn fresh_install_with_recent_error_obeys_backoff() {
         let preferences = UpdatePreferences {
-            last_error_ts: 1_000,
+            last_check_ts: 0,
+            last_error_ts: 1_700_000_000,
             ..Default::default()
         };
-        assert_eq!(retry_delay(&preferences, 1_100), 200);
-        assert!(should_auto_check(&preferences, 1_300));
+        // Before 300s has elapsed, do not check and provide remaining delay
+        assert!(!should_auto_check(&preferences, 1_700_000_100));
+        assert_eq!(retry_delay(&preferences, 1_700_000_100), 200);
+
+        // At or after 300s, retry is allowed
+        assert!(should_auto_check(&preferences, 1_700_000_300));
+        assert_eq!(retry_delay(&preferences, 1_700_000_300), 0);
+    }
+
+    #[test]
+    fn fresh_install_without_error_checks_immediately() {
+        let preferences = UpdatePreferences {
+            last_check_ts: 0,
+            last_error_ts: 0,
+            ..Default::default()
+        };
+        assert!(should_auto_check(&preferences, 1_700_000_000));
+        assert_eq!(retry_delay(&preferences, 1_700_000_000), 0);
+    }
+
+    #[test]
+    fn recent_success_with_no_newer_error_obeys_normal_interval() {
+        let preferences = UpdatePreferences {
+            last_check_ts: 1_700_000_000,
+            last_error_ts: 0,
+            ..Default::default()
+        };
+        assert!(!should_auto_check(&preferences, 1_700_001_000));
+        assert!(should_auto_check(&preferences, 1_700_000_000 + 86_400));
+        assert_eq!(retry_delay(&preferences, 1_700_001_000), 0);
     }
 }
