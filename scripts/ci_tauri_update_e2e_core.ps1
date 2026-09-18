@@ -872,6 +872,9 @@ try {
   if (-not $cutoverResult.StartsWith('update-failed:')) {
     throw "Cutover client accepted an old-root artifact: $cutoverResult"
   }
+  if ($cutoverResult.Length -gt 4096) {
+    throw 'Cutover rejection marker is unexpectedly unbounded'
+  }
   $negativeRequests = @(
     Get-Content -LiteralPath $requestLogPath -ErrorAction Stop |
       Select-Object -Skip $negativeRequestStart |
