@@ -2,6 +2,7 @@ import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { X } from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Bootstrap, SettingsPatch, ThemeId } from '../../bridge/DesktopBridge';
+import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
 import { TimingMarginControl } from './TimingMarginControl';
 import { AutoPlaySwitch } from './AutoPlaySwitch';
@@ -41,6 +42,7 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
   const update = useStore((store: StoreState) => store.update);
   const checkForUpdate = useStore((store: StoreState) => store.checkForUpdate);
   const dialogRef = useRef<HTMLElement>(null);
+  const contentRef = useScrollVisibility<HTMLDivElement>(open);
   const wasOpen = useRef(false);
   const [category, setCategory] = useState<SettingsCategory>('playback');
 
@@ -103,7 +105,7 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
               ))}
             </nav>
 
-            <div className="settings-content">
+            <div ref={contentRef} className="settings-content scroll-surface">
               {category === 'playback' && (
                 <section className="settings-section" aria-labelledby="playback-settings-title">
                   <h3 id="playback-settings-title">Playback</h3>
