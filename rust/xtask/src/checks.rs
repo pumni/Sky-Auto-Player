@@ -2487,10 +2487,14 @@ fn v4_legacy_updater_source_contract(source: &str, surface: &str) -> Result<()> 
         "packaging.version",
         "ActiveUpdateState",
         "active_update_for_install",
+        "legacy_old_dir_sweep_pending",
+        "last_notified_version",
+        "pending_update_version",
+        "auto_apply",
     ] {
         if source.contains(forbidden) {
             return Err(format!(
-                "retired v3 updater marker `{forbidden}` remains in current v4 surface {surface}"
+                "retired v3 updater marker `{forbidden}` remains in current v4 surface {surface} (retired in #324)"
             )
             .into());
         }
@@ -2516,7 +2520,7 @@ fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     for forbidden in ["name = \"sky_updater\"", "name = \"pep440_rs\""] {
         if lockfile_source.contains(forbidden) {
             return Err(format!(
-                "retired v3 dependency `{forbidden}` remains in {}",
+                "retired v3 dependency `{forbidden}` remains in {} (retired in #324)",
                 lockfile.display()
             )
             .into());
@@ -2526,7 +2530,7 @@ fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     let startup_guard = root.join("desktop/src-tauri/src/startup_guard.rs");
     if startup_guard.exists() {
         return Err(format!(
-            "retired custom updater startup admission path remains: {}",
+            "retired custom updater startup admission path remains: {} (retired in #324)",
             startup_guard.display()
         )
         .into());
@@ -2534,12 +2538,20 @@ fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
 
     let current_v4_surfaces = [
         "desktop/src-tauri/src",
+        "desktop/src",
+        "rust/crates/sky_app_core/src",
+        "rust/crates/sky_player/src",
+        "rust/crates/sky_dispatch_core/src",
+        "rust/crates/sky_dispatch_win32/src",
         "rust/xtask/src",
         ".github/workflows/ci.yml",
         ".github/workflows/release-v4.yml",
         "scripts/orchestrate_v4_production_release.ps1",
         "scripts/promote_v4_metadata.ps1",
         "scripts/ci_tauri_update_e2e.ps1",
+        "scripts/v4_release_pipeline.ps1",
+        "scripts/ci_v4_release_latest_guard.ps1",
+        "tests/fixtures/wave2/settings.json",
     ];
     for relative in current_v4_surfaces {
         let path = root.join(relative);
@@ -2561,6 +2573,36 @@ fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
             }
         } else if path.is_file() {
             v4_legacy_updater_source_contract(&fs::read_to_string(&path)?, relative)?;
+        }
+    }
+
+    let native_adapters_source =
+        fs::read_to_string(root.join("rust/crates/sky_native_adapters/src/lib.rs"))?;
+    for forbidden in [
+        "sky_updater",
+        "Sky-Auto-Player-Updater.exe",
+        "ActiveUpdateState",
+        "active_update_for_install",
+        "pep440_rs",
+    ] {
+        if native_adapters_source.contains(forbidden) {
+            return Err(format!(
+                "retired v3 updater marker `{forbidden}` remains in sky_native_adapters (retired in #324)"
+            )
+            .into());
+        }
+    }
+    for required_drop in [
+        "last_notified_version",
+        "legacy_old_dir_sweep_pending",
+        "pending_update_version",
+        "auto_apply",
+    ] {
+        if !native_adapters_source.contains(required_drop) {
+            return Err(format!(
+                "sky_native_adapters must explicitly drop retired update key `{required_drop}` on save/migrate (retired in #324)"
+            )
+            .into());
         }
     }
 
@@ -3138,7 +3180,7 @@ fn walk_source(root: &Path, prefix: &str) -> Result<Vec<std::path::PathBuf>> {
         if entry.file_type().is_file()
             && matches!(
                 entry.path().extension().and_then(|e| e.to_str()),
-                Some("rs" | "toml" | "yml" | "yaml" | "json")
+                Some("rs" | "toml" | "yml" | "yaml" | "json" | "ts" | "tsx")
             )
         {
             files.push(entry.into_path());

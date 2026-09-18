@@ -1197,13 +1197,6 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
                 .max(0),
             last_check_ts: object_i64(update, "last_check_ts", 0),
             last_error_ts: object_i64(update, "last_error_ts", 0),
-            last_notified_version: object_string_only(update, "last_notified_version", ""),
-            legacy_old_dir_sweep_pending: object_bool(
-                update,
-                "legacy_old_dir_sweep_pending",
-                false,
-            ) || update.contains_key("pending_update_version")
-                || update.contains_key("auto_apply"),
         };
     }
     normalize_settings(settings)
@@ -1297,8 +1290,20 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
     ] {
         migrated.remove(key);
     }
+    if let Some(Value::Object(update)) = migrated.get_mut("update") {
+        for key in RETIRED_UPDATE_KEYS {
+            update.remove(key);
+        }
+    }
     migrated
 }
+
+const RETIRED_UPDATE_KEYS: [&str; 4] = [
+    "last_notified_version",
+    "legacy_old_dir_sweep_pending",
+    "pending_update_version",
+    "auto_apply",
+];
 
 fn legacy_profile_hold(profile: &str) -> f64 {
     match profile {
@@ -1580,6 +1585,9 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
         .remove("update")
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
+    for key in RETIRED_UPDATE_KEYS {
+        update.remove(key);
+    }
     update.insert("auto_check".into(), Value::from(settings.update.auto_check));
     update.insert(
         "channel".into(),
@@ -1600,14 +1608,6 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
     update.insert(
         "last_error_ts".into(),
         Value::from(settings.update.last_error_ts),
-    );
-    update.insert(
-        "last_notified_version".into(),
-        Value::from(settings.update.last_notified_version.clone()),
-    );
-    update.insert(
-        "legacy_old_dir_sweep_pending".into(),
-        Value::from(settings.update.legacy_old_dir_sweep_pending),
     );
     raw.insert("update".into(), Value::Object(update));
     for key in [
@@ -1703,6 +1703,73 @@ mod tests {
         assert_eq!(raw["future_field"], 42);
         assert_eq!(raw["update"]["future"], true);
         assert_eq!(raw["game_fps"], 120);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_store_drops_retired_update_fields_while_preserving_unknown_data() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-w4-retired-update-fields-{}",
+            std::process::id()
+        ));
+        let path = root.join("config.json");
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            &path,
+            br#"{
+                "theme": "aurora",
+                "future_root": "keep_me",
+                "update": {
+                    "auto_check": true,
+                    "channel": "beta",
+                    "skip_version": "v3.9.0",
+                    "check_interval_s": 43200,
+                    "last_check_ts": 12345,
+                    "last_error_ts": 0,
+                    "last_notified_version": "v3.8.0",
+                    "legacy_old_dir_sweep_pending": true,
+                    "pending_update_version": "v3.9.0",
+                    "auto_apply": true,
+                    "unknown_nested": {"preserve": 99}
+                }
+            }"#,
+        )
+        .expect("seed old config");
+
+        let store = JsonSettingsStore::new(&path);
+        let settings = store.load().expect("load legacy config safely");
+        assert_eq!(settings.update.channel.as_str(), "beta");
+        assert_eq!(settings.update.skip_version, "v3.9.0");
+        assert_eq!(settings.update.check_interval_s, 43200);
+        assert_eq!(settings.update.last_check_ts, 12345);
+
+        // Save back / overlay settings
+        store
+            .save(&settings)
+            .expect("save settings drops retired keys");
+
+        let raw: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("valid json");
+        let update = raw["update"].as_object().expect("update is object");
+
+        // Assert retired keys are strictly absent
+        assert!(update.get("last_notified_version").is_none());
+        assert!(update.get("legacy_old_dir_sweep_pending").is_none());
+        assert!(update.get("pending_update_version").is_none());
+        assert!(update.get("auto_apply").is_none());
+
+        // Assert active keys are preserved correctly
+        assert_eq!(update["auto_check"], true);
+        assert_eq!(update["channel"], "beta");
+        assert_eq!(update["skip_version"], "v3.9.0");
+        assert_eq!(update["check_interval_s"], 43200);
+        assert_eq!(update["last_check_ts"], 12345);
+        assert_eq!(update["last_error_ts"], 0);
+
+        // Assert unknown/future fields are preserved
+        assert_eq!(raw["future_root"], "keep_me");
+        assert_eq!(update["unknown_nested"]["preserve"], 99);
+
         let _ = fs::remove_dir_all(root);
     }
 

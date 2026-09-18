@@ -95,8 +95,6 @@ pub struct UpdatePreferences {
     pub check_interval_s: i64,
     pub last_check_ts: i64,
     pub last_error_ts: i64,
-    pub last_notified_version: String,
-    pub legacy_old_dir_sweep_pending: bool,
 }
 
 impl Default for UpdatePreferences {
@@ -108,8 +106,6 @@ impl Default for UpdatePreferences {
             check_interval_s: DEFAULT_UPDATE_INTERVAL_S,
             last_check_ts: 0,
             last_error_ts: 0,
-            last_notified_version: String::new(),
-            legacy_old_dir_sweep_pending: false,
         }
     }
 }
