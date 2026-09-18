@@ -101,7 +101,14 @@ function initialSettings(): Settings {
     },
     telemetry_enabled: true,
     verbose_hud: false,
-    update_preferences: { auto_check: true, channel: 'stable', skip_version: '' },
+    update_preferences: {
+      auto_check: true,
+      channel: 'stable',
+      skip_version: '',
+      check_interval_s: 86_400,
+      last_check_ts: 0,
+      last_error_ts: 0,
+    },
   };
 }
 
@@ -115,6 +122,9 @@ export interface MockBridgeOptions {
   emitSnapshots?: boolean;
   dropPlaybackStartConfirmation?: boolean;
   playbackDurationsMs?: number[];
+  updateCheckResult?: UpdateCheck;
+  updateCheckError?: string;
+  beginUpdateHandoffError?: string;
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
@@ -611,7 +621,17 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings;
     },
     async checkForUpdate(): Promise<UpdateCheck> {
-      const result: UpdateCheck = {
+      if (options.updateCheckError) {
+        settings = {
+          ...settings,
+          update_preferences: {
+            ...settings.update_preferences,
+            last_error_ts: Math.floor(Date.now() / 1000),
+          },
+        };
+        throw new Error(options.updateCheckError);
+      }
+      const result: UpdateCheck = options.updateCheckResult ?? {
         state: 'available',
         current_version: '4.0.0-alpha.1-mock',
         available_version: '4.0.0-alpha.2-mock',
@@ -620,17 +640,27 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         published_at: '2026-08-30T00:00:00Z',
         error: null,
       };
-      emit({
-        v: 1,
-        name: 'update.available',
-        payload: {
-          current_version: result.current_version,
-          available_version: result.available_version!,
-          channel: result.channel,
-          release_notes: result.release_notes,
-          published_at: result.published_at,
+      settings = {
+        ...settings,
+        update_preferences: {
+          ...settings.update_preferences,
+          last_check_ts: Math.floor(Date.now() / 1000),
+          last_error_ts: 0,
         },
-      });
+      };
+      if (result.state === 'available' && result.available_version) {
+        emit({
+          v: 1,
+          name: 'update.available',
+          payload: {
+            current_version: result.current_version,
+            available_version: result.available_version,
+            channel: result.channel,
+            release_notes: result.release_notes,
+            published_at: result.published_at,
+          },
+        });
+      }
       emit({
         v: 1,
         name: 'update.result',
@@ -660,6 +690,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings.update_preferences;
     },
     async beginUpdateHandoff(targetVersion: string): Promise<UpdateHandoff> {
+      if (options.beginUpdateHandoffError) {
+        throw new Error(options.beginUpdateHandoffError);
+      }
       const handoff: UpdateHandoff = {
         handoff_id: `h${Date.now().toString(16).padStart(31, '0')}`.slice(-32),
         target_version: targetVersion,

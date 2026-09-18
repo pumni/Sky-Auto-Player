@@ -1,6 +1,8 @@
 import type { DesktopBridge } from '../bridge/DesktopBridge';
 import type { DesktopStore } from './types';
 
+import { formatUpdateError, shouldAutoCheck } from './updateHelpers';
+
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
 export interface SettingsSliceContext {
@@ -71,10 +73,27 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
       return mutation;
     },
 
-    async checkForUpdate() {
-      set({ update: { ...get().update, state: 'checking', error: null } });
+    async checkForUpdate(origin: 'manual' | 'background' = 'manual') {
+      const isManual = origin === 'manual';
+      if (!isManual) {
+        const preferences = get().settings?.update_preferences;
+        if (!preferences || !shouldAutoCheck(preferences)) {
+          return;
+        }
+      }
+
+      set({
+        update: {
+          ...get().update,
+          state: 'checking',
+          error: null,
+          dialogOpen: isManual ? true : get().update.dialogOpen,
+        },
+      });
+
       try {
         const result = await bridge.checkForUpdate();
+        const formattedError = result.error ? formatUpdateError(result.error) : null;
         set({
           update: {
             ...get().update,
@@ -84,18 +103,44 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
             channel: result.channel,
             releaseNotes: result.release_notes,
             publishedAt: result.published_at,
-            error: result.error,
-            dialogOpen: get().update.dialogOpen,
+            error: formattedError,
+            dialogOpen: isManual ? true : get().update.dialogOpen,
           },
         });
+        const currentSettings = get().settings;
+        if (currentSettings) {
+          set({
+            settings: {
+              ...currentSettings,
+              update_preferences: {
+                ...currentSettings.update_preferences,
+                last_check_ts: Math.floor(Date.now() / 1000),
+                last_error_ts: 0,
+              },
+            },
+          });
+        }
       } catch (error) {
         set({
           update: {
             ...get().update,
             state: 'error',
-            error: error instanceof Error ? error.message : String(error),
+            error: formatUpdateError(error),
+            dialogOpen: isManual ? true : get().update.dialogOpen,
           },
         });
+        const currentSettings = get().settings;
+        if (currentSettings) {
+          set({
+            settings: {
+              ...currentSettings,
+              update_preferences: {
+                ...currentSettings.update_preferences,
+                last_error_ts: Math.floor(Date.now() / 1000),
+              },
+            },
+          });
+        }
       }
     },
 
@@ -122,7 +167,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           update: {
             ...get().update,
             state: 'error',
-            error: error instanceof Error ? error.message : String(error),
+            error: formatUpdateError(error),
           },
         });
       }

@@ -1,5 +1,5 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
-import { Check, Download, X } from 'lucide-react';
+import { Check, Download, LoaderCircle, X } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
 
 interface UpdateDialogProps {
@@ -11,9 +11,16 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
   const close = useStore((store) => store.setUpdateDialogOpen);
   const check = useStore((store) => store.checkForUpdate);
   const handoff = useStore((store) => store.beginUpdateHandoff);
+  const patchSettings = useStore((store) => store.patchSettings);
+
   if (!update.dialogOpen) return null;
-  const available = update.state === 'available' && update.availableVersion;
-  const busy = ['checking', 'downloading', 'ready', 'installing'].includes(update.state);
+
+  const busy = ['downloading', 'ready', 'installing'].includes(update.state);
+  const isChecking = update.state === 'checking';
+  const isAvailable = update.state === 'available' && Boolean(update.availableVersion);
+  const isCurrent = update.state === 'current';
+  const isError = update.state === 'error';
+
   return (
     <ModalOverlay
       className="modal-backdrop"
@@ -41,7 +48,22 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
             </button>
           </div>
           <div className="update-status" role="status" aria-live="polite">
-            {available ? (
+            {isChecking ? (
+              <>
+                <div className="update-icon" aria-hidden="true">
+                  <LoaderCircle className="spin" size={20} />
+                </div>
+                <h3>Checking for updates…</h3>
+                <p className="muted">
+                  Looking for available updates on the {update.channel} channel…
+                </p>
+                <div className="update-actions">
+                  <button className="button" type="button" onClick={() => close(false)}>
+                    Close
+                  </button>
+                </div>
+              </>
+            ) : isAvailable ? (
               <>
                 <div className="update-icon" aria-hidden="true">
                   <Download size={20} />
@@ -63,19 +85,49 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                   <button className="button" type="button" onClick={() => close(false)}>
                     Later
                   </button>
+                  <button
+                    className="button button-ghost"
+                    type="button"
+                    onClick={() => {
+                      if (update.availableVersion) {
+                        void patchSettings({
+                          updatePreferences: { skipVersion: update.availableVersion },
+                        });
+                      }
+                      close(false);
+                    }}
+                  >
+                    Skip this version
+                  </button>
                 </div>
               </>
-            ) : update.state === 'error' ? (
+            ) : isCurrent ? (
+              <>
+                <div className="update-icon" aria-hidden="true">
+                  <Check size={20} />
+                </div>
+                <h3>You're up to date</h3>
+                <p className="muted">
+                  You are running version {update.currentVersion ?? 'the latest version'} on the{' '}
+                  {update.channel} channel.
+                </p>
+                <div className="update-actions">
+                  <button className="button" type="button" onClick={() => close(false)}>
+                    Close
+                  </button>
+                </div>
+              </>
+            ) : isError ? (
               <>
                 <h3>Update check failed</h3>
                 <p className="inline-error">
-                  {update.error ?? 'The update service is unavailable.'}
+                  {update.error ?? 'The update service is temporarily unavailable.'}
                 </p>
                 <div className="update-actions">
                   <button
                     className="button button-primary"
                     type="button"
-                    onClick={() => void check()}
+                    onClick={() => void check('manual')}
                   >
                     Check again
                   </button>
@@ -101,9 +153,11 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
                     : 'The installed application is up to date.'}
                 </p>
                 {!busy && (
-                  <button className="button" type="button" onClick={() => close(false)}>
-                    Close
-                  </button>
+                  <div className="update-actions">
+                    <button className="button" type="button" onClick={() => close(false)}>
+                      Close
+                    </button>
+                  </div>
                 )}
               </>
             )}

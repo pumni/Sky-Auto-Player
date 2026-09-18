@@ -187,7 +187,7 @@ export interface DesktopStore {
   setSongLiked: (songId: string, liked: boolean) => Promise<void>;
   reloadLibrary: () => Promise<void>;
   patchSettings: (patch: SettingsPatch) => Promise<Settings | null>;
-  checkForUpdate: () => Promise<void>;
+  checkForUpdate: (origin?: 'manual' | 'background') => Promise<void>;
   setUpdateDialogOpen: (open: boolean) => void;
   beginUpdateHandoff: () => Promise<void>;
   prepareSelectedPlayback: (overrides?: Partial<PlaybackConfig>) => Promise<void>;

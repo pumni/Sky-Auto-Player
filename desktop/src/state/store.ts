@@ -6,6 +6,7 @@ import { createLibrarySlice } from './librarySlice';
 import { createSettingsSlice } from './settingsSlice';
 import { createDiagnosticsSlice } from './diagnosticsSlice';
 import { createPlaybackSlice } from './playbackSlice';
+import { formatUpdateError } from './updateHelpers';
 import { MAX_DIAGNOSTIC_EVENTS, MAX_DIAGNOSTIC_SAMPLES } from './types';
 import type { CalibrationUiState, DesktopStore, DiagnosticsEventLine } from './types';
 import type { LibrarySlice } from './librarySlice';
@@ -200,7 +201,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (bootstrap.catalog_state === 'ready' || get().library.generation > 0) {
             await librarySlice.reconcileCatalog();
           }
-          if (settings.update_preferences.auto_check) void get().checkForUpdate();
+          if (settings.update_preferences.auto_check) void get().checkForUpdate('background');
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           set({ bootstrapState: 'fatal', fatal: message });
@@ -388,7 +389,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
               currentVersion: event.payload.current_version,
               availableVersion: event.payload.available_version,
               channel: event.payload.channel,
-              error: event.payload.error,
+              error: event.payload.error ? formatUpdateError(event.payload.error) : null,
             },
           });
         } else if (event.name === 'update.progress') {

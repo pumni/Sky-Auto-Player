@@ -6189,6 +6189,9 @@ fn update_preferences_dto(settings: &ApplicationSettings) -> UpdatePreferencesDt
             sky_app_core::settings::UpdateChannel::Beta => crate::ui_events::UpdateChannel::Beta,
         },
         skip_version: settings.update.skip_version.clone(),
+        check_interval_s: settings.update.check_interval_s,
+        last_check_ts: settings.update.last_check_ts,
+        last_error_ts: settings.update.last_error_ts,
     }
 }
 
