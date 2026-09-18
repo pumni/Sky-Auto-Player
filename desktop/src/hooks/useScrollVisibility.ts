@@ -2,10 +2,11 @@ import { useEffect, useRef } from 'react';
 
 const SCROLL_HIDE_DELAY_MS = 750;
 
-export function useScrollVisibility<T extends HTMLElement>() {
+export function useScrollVisibility<T extends HTMLElement>(active = true) {
   const ref = useRef<T>(null);
 
   useEffect(() => {
+    if (!active) return;
     const element = ref.current;
     if (!element) return;
 
@@ -25,7 +26,7 @@ export function useScrollVisibility<T extends HTMLElement>() {
       if (hideTimer !== undefined) window.clearTimeout(hideTimer);
       element.classList.remove('is-scrolling');
     };
-  }, []);
+  }, [active]);
 
   return ref;
 }
