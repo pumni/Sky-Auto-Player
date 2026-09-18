@@ -20,7 +20,7 @@ use std::path::Path;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn usage() -> &'static str {
-    "Usage:\n  cargo xtask check <static|rust|desktop|desktop-native|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask version check [--tag <tag>]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>\n  cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]"
+    "Usage:\n  cargo xtask check <static|rust|desktop|desktop-native|all> [--skip-supply-chain]\n  cargo xtask audit supply-chain [--attestation <path>]\n  cargo xtask version check [--version <semver>] [--channel <stable|beta>] [--tag <tag>] [--no-repo-match]\n  cargo xtask bindings <generate|check>\n  cargo xtask branding validate\n  cargo xtask branding build-ico --layers-dir <dir> --output <ico>\n  cargo xtask builtin-catalog <verify|verify-installed|refresh|add|rename|retire|restore> [options]\n  cargo xtask verify-tauri-bundle --bundle-dir <dir> --authenticode-evidence <path> --sbom <path> [--summary <path>]\n  cargo xtask sbom <generate|verify> --artifact-dir <dir> --output|--sbom <path>\n  cargo xtask updater-trust <inventory|export-public-key|verify-private-key|rotation-self-test>\n  cargo xtask release-metadata generate --channel <stable|beta> --version <semver> --notes-file <path> --pub-date <rfc3339> --platform windows-x86_64 --asset-url <url> --signature-file <path> --output <path>\n  cargo xtask release-metadata validate --channel <stable|beta> --metadata <path>\n  cargo xtask release-metadata validate-monotonic --channel <stable|beta> --current <path> --candidate <path>\n  cargo xtask release-doctor [--tag <tag>] [--version <semver>] [--channel <stable|beta>] [--run-id <id>] [--workflow-sha <sha>] [--state-root <dir>] [--format <text|json>]"
 }
 
 fn required_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -58,16 +58,26 @@ fn main() -> Result<()> {
         }
         "version" if args.get(1).map(String::as_str) == Some("check") => {
             let mut tag = None;
+            let mut version = None;
+            let mut channel = None;
+            let mut no_repo_match = false;
             let mut i = 2;
             while i < args.len() {
-                if args[i] == "--tag" {
-                    tag = Some(required_value(&args, &mut i, "--tag")?);
-                } else {
-                    return Err(format!("unknown version option: {}", args[i]).into());
+                match args[i].as_str() {
+                    "--tag" => tag = Some(required_value(&args, &mut i, "--tag")?),
+                    "--version" => version = Some(required_value(&args, &mut i, "--version")?),
+                    "--channel" => channel = Some(required_value(&args, &mut i, "--channel")?),
+                    "--no-repo-match" => no_repo_match = true,
+                    option => return Err(format!("unknown version option: {option}").into()),
                 }
                 i += 1;
             }
-            version::check(tag.as_deref())
+            version::check(version::VersionCheckOptions {
+                version: version.as_deref(),
+                channel: channel.as_deref(),
+                tag: tag.as_deref(),
+                no_repo_match,
+            })
         }
         "bindings" => match args.get(1).map(String::as_str) {
             Some("check") => checks::bindings(),

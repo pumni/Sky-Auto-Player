@@ -31,8 +31,8 @@ if ([string]::IsNullOrWhiteSpace($ExpectedSourceSha)) {
 if ([string]::IsNullOrWhiteSpace($Version)) {
     throw "Missing mandatory parameter: Version"
 }
-if ([string]::IsNullOrWhiteSpace($Channel) -or $Channel -notin @("stable", "beta")) {
-    throw "Missing or invalid mandatory parameter: Channel (must be 'stable' or 'beta')"
+if ([string]::IsNullOrWhiteSpace($Channel)) {
+    throw "Missing mandatory parameter: Channel"
 }
 if ([string]::IsNullOrWhiteSpace($UpdaterPrivateKeyPath)) {
     throw "Missing mandatory parameter: UpdaterPrivateKeyPath"
@@ -161,24 +161,14 @@ try {
         throw "Workspace HEAD ($currentHead) does not match ExpectedSourceSha ($expectedSha)"
     }
 
-    # Verify Cargo project version matches
-    $cargoTomlPath = Join-Path $repoRoot "desktop\src-tauri\Cargo.toml"
-    $cargoToml = Get-Content -LiteralPath $cargoTomlPath -Raw
-    if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
-        throw "Failed to parse version from desktop/src-tauri/Cargo.toml"
-    }
-    $cargoVersion = $Matches[1].Trim()
-    if ($cargoVersion -ne $Version) {
-        throw "Specified version '$Version' does not match Cargo.toml version '$cargoVersion'"
-    }
-
-    # Validate channel vs version SemVer policy (ADR-0006 / release metadata contract)
-    $isPrerelease = $Version.Contains("-")
-    if ($Channel -eq "stable" -and $isPrerelease) {
-        throw "Channel 'stable' rejects prerelease version '$Version' (SemVer without hyphen required)"
-    }
-    if ($Channel -eq "beta" -and -not $isPrerelease) {
-        throw "Channel 'beta' requires a prerelease SemVer version (e.g. '$Version-beta.1')"
+    # Canonical version, channel, and Cargo package validation (owned by cargo xtask)
+    $versionCheckOutput = & cargo xtask version check --version $Version --channel $Channel 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $errorMsg = ($versionCheckOutput | Out-String).Trim()
+        if ($errorMsg -match '(?m)Error:\s*"([^"]+)"') {
+            $errorMsg = $Matches[1]
+        }
+        throw $errorMsg
     }
 
     # Provider inputs are optional under the project policy. Preserve the

@@ -80,7 +80,8 @@ if ($providedBridge) {
   if ($BridgeSourceSha -notmatch '^[0-9a-fA-F]{40}$' -or $BridgeSourceSha -match '^0{40}$') {
     throw 'Provided-bridge updater qualification received an invalid source SHA'
   }
-  if ($BridgeVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+  & cargo xtask version check --version $BridgeVersion --no-repo-match *> $null
+  if ($LASTEXITCODE -ne 0) {
     throw "Provided-bridge updater qualification received a non-canonical SemVer: $BridgeVersion"
   }
   if ($BridgeSentinelSha256 -notmatch '^[0-9a-fA-F]{64}$') {
@@ -98,7 +99,8 @@ if ($providedCandidate) {
     [string]::IsNullOrWhiteSpace($CandidatePublicKeyPath)) {
     throw 'Provided-candidate updater qualification requires installer, signature, version, and public-key paths'
   }
-  if ($CandidateVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+  & cargo xtask version check --version $CandidateVersion --no-repo-match *> $null
+  if ($LASTEXITCODE -ne 0) {
     throw "Provided-candidate updater qualification received a non-canonical SemVer: $CandidateVersion"
   }
 }

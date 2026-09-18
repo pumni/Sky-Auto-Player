@@ -341,6 +341,9 @@ jobs:
       - name: Run V4 updater private-key verifier secret-output regression
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_updater_private_key.ps1
 
+      - name: Run V4 NSIS smoke boundary regression tests
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_nsis_smoke_boundary.ps1
+
       - name: Prepare bounded ephemeral Authenticode test certificate
         timeout-minutes: 2
         shell: pwsh
@@ -1183,8 +1186,6 @@ jobs:
           } finally {
             if ($null -ne $appProcess -and -not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue }
             Exit-V4NsisSmokeScope -Scope $smokeScope
-            if (Test-Path -LiteralPath $freshAppData) { Remove-V4DirectoryWithRetry -Path $freshAppData }
-            if (Test-Path -LiteralPath $installRoot) { Remove-V4DirectoryWithRetry -Path $installRoot }
           }
 
       - name: Emit exact Tauri qualification evidence

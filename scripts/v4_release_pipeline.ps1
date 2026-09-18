@@ -254,18 +254,8 @@ function Invoke-DraftSelfCleanup {
 
 function Assert-RequestIdentity {
     if ([string]::IsNullOrWhiteSpace($Version)) { Fail "version is required" }
-    if ([string]::IsNullOrWhiteSpace($Channel) -or $Channel -notin @("stable", "beta")) {
-        Fail "channel must be stable or beta"
-    }
-    if ([string]::IsNullOrWhiteSpace($Tag) -or $Tag -ne "v$Version") {
-        Fail "tag must exactly equal v<version>"
-    }
-    if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
-        Fail "version is not canonical SemVer without build metadata"
-    }
-    $isPrerelease = $Version.Contains("-")
-    if ($Channel -eq "stable" -and $isPrerelease) { Fail "stable releases must use final SemVer" }
-    if ($Channel -eq "beta" -and -not $isPrerelease) { Fail "beta releases must use a SemVer prerelease" }
+    if ([string]::IsNullOrWhiteSpace($Channel)) { Fail "channel is required" }
+    if ([string]::IsNullOrWhiteSpace($Tag)) { Fail "tag is required" }
     if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
         Fail "source_sha must be an exact 40-character commit SHA"
     }
@@ -283,13 +273,12 @@ function Assert-RequestIdentity {
         Fail "source SHA differs from the workflow SHA used for OIDC provenance"
     }
 
-    $cargoPath = Join-Path $repoRoot "desktop/src-tauri/Cargo.toml"
-    $cargo = Get-Content -LiteralPath $cargoPath -Raw
-    if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') { Fail "Cargo package version is missing" }
-    if ($Matches[1] -ne $Version) { Fail "Cargo/Tauri package version does not equal requested version" }
-
-    & cargo xtask version check --tag $Tag *> (Join-Path (Get-EffectiveStateRoot) "version-check.log")
-    if ($LASTEXITCODE -ne 0) { Fail "canonical cargo xtask version/tag validation failed" }
+    $versionLog = Join-Path (Get-EffectiveStateRoot) "version-check.log"
+    & cargo xtask version check --version $Version --channel $Channel --tag $Tag *> $versionLog
+    if ($LASTEXITCODE -ne 0) {
+        $detail = if (Test-Path -LiteralPath $versionLog) { (Get-Content -LiteralPath $versionLog -Raw).Trim() } else { "" }
+        Fail "canonical cargo xtask version/channel/tag validation failed: $detail"
+    }
     Write-Host "V4 release identity: PASS (version=$Version, channel=$Channel, source=$($SourceSha.ToLowerInvariant()))"
 }
 

@@ -26,12 +26,14 @@ function Protect-V4NsisRegistryState {
     Captures an exact snapshot of monitored product and uninstall registry keys.
     #>
     [CmdletBinding()]
-    param()
+    param(
+        [System.Collections.IList]$Targets = $null
+    )
 
-    $targets = Get-V4NsisMonitoredRegistryKeys
+    $effectiveTargets = if ($null -eq $Targets) { Get-V4NsisMonitoredRegistryKeys } else { $Targets }
     $snapshots = [ordered]@{}
 
-    foreach ($target in $targets) {
+    foreach ($target in $effectiveTargets) {
         $keyPath = $target.Key
         $parentPath = $target.Parent
 
@@ -45,7 +47,7 @@ function Protect-V4NsisRegistryState {
             $regItem = Get-Item -LiteralPath $keyPath
             foreach ($propName in $regItem.GetValueNames()) {
                 $properties[$propName] = [ordered]@{
-                    Value = $regItem.GetValue($propName)
+                    Value = $regItem.GetValue($propName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
                     Kind  = $regItem.GetValueKind($propName)
                 }
             }
@@ -65,10 +67,114 @@ function Protect-V4NsisRegistryState {
     return $snapshots
 }
 
+function Test-V4RegistryValueEqual {
+    param($Value1, $Value2, [Microsoft.Win32.RegistryValueKind]$Kind)
+
+    if ($null -eq $Value1 -and $null -eq $Value2) { return $true }
+    if ($null -eq $Value1 -or $null -eq $Value2) { return $false }
+
+    if ($Kind -eq [Microsoft.Win32.RegistryValueKind]::Binary) {
+        $b1 = [byte[]]$Value1
+        $b2 = [byte[]]$Value2
+        if ($b1.Length -ne $b2.Length) { return $false }
+        for ($i = 0; $i -lt $b1.Length; $i++) {
+            if ($b1[$i] -ne $b2[$i]) { return $false }
+        }
+        return $true
+    }
+
+    if ($Kind -eq [Microsoft.Win32.RegistryValueKind]::MultiString) {
+        $s1 = [string[]]$Value1
+        $s2 = [string[]]$Value2
+        if ($s1.Length -ne $s2.Length) { return $false }
+        for ($i = 0; $i -lt $s1.Length; $i++) {
+            if ($s1[$i] -ne $s2[$i]) { return $false }
+        }
+        return $true
+    }
+
+    return ($Value1 -eq $Value2)
+}
+
+function Assert-V4NsisRegistryEquivalence {
+    <#
+    .SYNOPSIS
+    Asserts that the monitored registry keys match the snapshot state exactly.
+    Fails closed if any unexpected key, value, kind, or subkey residue exists.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$Snapshots
+    )
+
+    foreach ($keyPath in $Snapshots.Keys) {
+        $snapshot = $Snapshots[$keyPath]
+        $keyExisted = $snapshot.KeyExisted
+
+        if (-not $keyExisted) {
+            if (Test-Path -LiteralPath $keyPath) {
+                throw "Registry residue detected: key '$keyPath' was absent prior to smoke test but still exists after restoration."
+            }
+        } else {
+            if (-not (Test-Path -LiteralPath $keyPath)) {
+                throw "Registry restoration failed: key '$keyPath' existed prior to smoke test but is missing after restoration."
+            }
+
+            $regItem = Get-Item -LiteralPath $keyPath
+            $currentNames = @($regItem.GetValueNames())
+            $snapshotProps = $snapshot.Properties
+
+            if ($currentNames.Count -ne $snapshotProps.Count) {
+                throw "Registry residue detected in '$keyPath': expected $($snapshotProps.Count) values, found $($currentNames.Count)."
+            }
+
+            foreach ($name in $currentNames) {
+                if (-not $snapshotProps.Contains($name)) {
+                    $displayName = if ($name -eq '') { '(Default)' } else { "'$name'" }
+                    throw "Registry residue detected in '$keyPath': unexpected value $displayName found after restoration."
+                }
+            }
+
+            foreach ($name in $snapshotProps.Keys) {
+                $expected = $snapshotProps[$name]
+                $actualKind = $regItem.GetValueKind($name)
+                $expectedKind = [Microsoft.Win32.RegistryValueKind]$expected.Kind
+
+                if ($actualKind -ne $expectedKind) {
+                    $displayName = if ($name -eq '') { '(Default)' } else { "'$name'" }
+                    throw "Registry restoration kind mismatch in '$keyPath' for value ${displayName}: expected $expectedKind, got $actualKind."
+                }
+
+                $actualValue = $regItem.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                $expectedValue = $expected.Value
+
+                $valuesEqual = Test-V4RegistryValueEqual -Value1 $actualValue -Value2 $expectedValue -Kind $actualKind
+                if (-not $valuesEqual) {
+                    $displayName = if ($name -eq '') { '(Default)' } else { "'$name'" }
+                    throw "Registry restoration content mismatch in '$keyPath' for value ${displayName}: expected '$expectedValue', got '$actualValue'."
+                }
+            }
+
+            $currentSubKeys = @($regItem.GetSubKeyNames())
+            $expectedSubKeys = @($snapshot.SubKeyNames)
+            if ($currentSubKeys.Count -ne $expectedSubKeys.Count) {
+                throw "Registry residue detected in '$keyPath': expected $($expectedSubKeys.Count) subkeys, found $($currentSubKeys.Count)."
+            }
+            foreach ($subName in $currentSubKeys) {
+                if ($expectedSubKeys -notcontains $subName) {
+                    throw "Registry residue detected in '$keyPath': unexpected subkey '$subName' found after restoration."
+                }
+            }
+        }
+    }
+}
+
 function Restore-V4NsisRegistryState {
     <#
     .SYNOPSIS
     Restores the monitored registry keys to the exact state recorded in the snapshot.
+    Enforces exact value kinds (including default values) and final equivalence assertion.
     #>
     [CmdletBinding()]
     param(
@@ -92,7 +198,7 @@ function Restore-V4NsisRegistryState {
             if (-not $parentExisted -and ($parentPath -ne 'HKCU:\Software') -and (Test-Path -LiteralPath $parentPath)) {
                 $parentItem = Get-Item -LiteralPath $parentPath -ErrorAction SilentlyContinue
                 if ($null -ne $parentItem -and $parentItem.SubKeyCount -eq 0 -and $parentItem.ValueCount -eq 0) {
-                    Remove-Item -LiteralPath $parentPath -Force -ErrorAction SilentlyContinue
+                    Remove-Item -LiteralPath $parentPath -Force -ErrorAction Stop
                 }
             }
         } else {
@@ -101,54 +207,49 @@ function Restore-V4NsisRegistryState {
                 New-Item -Path $keyPath -Force | Out-Null
             }
 
-            $regItem = Get-Item -LiteralPath $keyPath
-            $currentNames = @($regItem.GetValueNames())
-            $snapshotProps = $snapshot.Properties
+            $subPath = $keyPath.Substring('HKCU:\'.Length)
+            $writable = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subPath, $true)
+            if ($null -eq $writable) {
+                throw "Failed to open registry key '$keyPath' for writable restoration."
+            }
 
-            # Remove properties that were added during test
-            foreach ($currentName in $currentNames) {
-                if (-not $snapshotProps.Contains($currentName)) {
-                    if ($currentName -eq '') {
-                        # Default value: delete using .NET RegistryKey to remove the value entry
-                        $subPath = $keyPath.Substring('HKCU:\'.Length)
-                        $writable = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subPath, $true)
-                        if ($null -ne $writable) {
-                            try {
-                                $writable.DeleteValue('', $false)
-                            } finally {
-                                $writable.Close()
-                            }
-                        }
-                    } else {
-                        Remove-ItemProperty -LiteralPath $keyPath -Name $currentName -Force -ErrorAction SilentlyContinue
+            try {
+                $regItem = Get-Item -LiteralPath $keyPath
+                $currentNames = @($regItem.GetValueNames())
+                $snapshotProps = $snapshot.Properties
+
+                # Remove properties that were added during test
+                foreach ($currentName in $currentNames) {
+                    if (-not $snapshotProps.Contains($currentName)) {
+                        $writable.DeleteValue($currentName, $false)
                     }
                 }
-            }
 
-            # Remove subkeys that were added during test
-            $currentSubKeys = @($regItem.GetSubKeyNames())
-            $snapshotSubKeys = @($snapshot.SubKeyNames)
-            foreach ($subName in $currentSubKeys) {
-                if ($snapshotSubKeys -notcontains $subName) {
-                    $subPath = Join-Path $keyPath $subName
-                    Remove-Item -LiteralPath $subPath -Recurse -Force -ErrorAction SilentlyContinue
+                # Remove subkeys that were added during test
+                $currentSubKeys = @($regItem.GetSubKeyNames())
+                $snapshotSubKeys = @($snapshot.SubKeyNames)
+                foreach ($subName in $currentSubKeys) {
+                    if ($snapshotSubKeys -notcontains $subName) {
+                        $writable.DeleteSubKeyTree($subName, $false)
+                    }
                 }
-            }
 
-            # Restore original snapshot properties
-            foreach ($propName in $snapshotProps.Keys) {
-                $propRecord = $snapshotProps[$propName]
-                $propValue = $propRecord.Value
-                $propKind = $propRecord.Kind
+                # Restore original snapshot properties with exact RegistryValueKind
+                foreach ($propName in $snapshotProps.Keys) {
+                    $propRecord = $snapshotProps[$propName]
+                    $propValue = $propRecord.Value
+                    $propKind = [Microsoft.Win32.RegistryValueKind]$propRecord.Kind
 
-                if ($propName -eq '') {
-                    Set-Item -LiteralPath $keyPath -Value $propValue -Force
-                } else {
-                    Set-ItemProperty -LiteralPath $keyPath -Name $propName -Value $propValue -Type $propKind -Force
+                    $writable.SetValue($propName, $propValue, $propKind)
                 }
+            } finally {
+                $writable.Close()
             }
         }
     }
+
+    # Final equivalence assertion: fail closed if any monitored residue remains
+    Assert-V4NsisRegistryEquivalence -Snapshots $Snapshots
 }
 
 function Remove-V4DirectoryWithRetry {
@@ -237,6 +338,8 @@ function Enter-V4NsisSmokeScope {
     New-Item -ItemType Directory -Path $resolvedAppDataRoot -Force | Out-Null
     [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $resolvedAppDataRoot, 'Process')
 
+    $initialErrorCount = if ($null -ne $global:Error) { $global:Error.Count } else { 0 }
+
     return [PSCustomObject]@{
         RegistrySnapshots        = $snapshots
         PreviousAppDataRoot      = $previousAppDataRoot
@@ -245,6 +348,7 @@ function Enter-V4NsisSmokeScope {
         InstallRoot              = $InstallRoot
         ManageInstallRootCleanup = $ManageInstallRootCleanup.IsPresent
         TrackedProcesses         = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+        InitialErrorCount        = $initialErrorCount
     }
 }
 
@@ -253,34 +357,69 @@ function Exit-V4NsisSmokeScope {
     .SYNOPSIS
     Exits the isolated NSIS smoke test scope. Guarantees process termination,
     registry restoration, environment variable cleanup, and fail-closed directory cleanup.
+    Performs attempt-all cleanup across all stages before raising aggregate errors.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Scope
+        [PSCustomObject]$Scope,
+        [System.Exception]$OriginalError = $null
     )
 
-    # 1. Terminate any running smoke processes
-    Stop-V4TrackedProcesses -Processes $Scope.TrackedProcesses
+    $cleanupErrors = [System.Collections.Generic.List[string]]::new()
 
-    # 2. Restore registry state
-    Restore-V4NsisRegistryState -Snapshots $Scope.RegistrySnapshots
+    # 1. Terminate any running smoke processes
+    try {
+        Stop-V4TrackedProcesses -Processes $Scope.TrackedProcesses
+    } catch {
+        $cleanupErrors.Add("Failed to stop tracked processes: $($_.Exception.Message)")
+    }
+
+    # 2. Restore registry state and assert equivalence
+    try {
+        Restore-V4NsisRegistryState -Snapshots $Scope.RegistrySnapshots
+    } catch {
+        $cleanupErrors.Add("Failed to restore registry state: $($_.Exception.Message)")
+    }
 
     # 3. Restore SKY_APP_DATA_ROOT environment variable
-    if ($null -eq $Scope.PreviousAppDataRoot) {
-        Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
-    } else {
-        [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $Scope.PreviousAppDataRoot, 'Process')
+    try {
+        if ($null -eq $Scope.PreviousAppDataRoot) {
+            Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $Scope.PreviousAppDataRoot, 'Process')
+        }
+    } catch {
+        $cleanupErrors.Add("Failed to restore SKY_APP_DATA_ROOT: $($_.Exception.Message)")
     }
 
     # 4. Clean up throwaway AppData root
-    if ($Scope.CreatedAppData -and (Test-Path -LiteralPath $Scope.AppDataRoot)) {
-        Remove-V4DirectoryWithRetry -Path $Scope.AppDataRoot
+    try {
+        if ($Scope.CreatedAppData -and (Test-Path -LiteralPath $Scope.AppDataRoot)) {
+            Remove-V4DirectoryWithRetry -Path $Scope.AppDataRoot
+        }
+    } catch {
+        $cleanupErrors.Add("Failed to clean up AppData root '$($Scope.AppDataRoot)': $($_.Exception.Message)")
     }
 
     # 5. Clean up InstallRoot if requested
-    if ($Scope.ManageInstallRootCleanup -and -not [string]::IsNullOrWhiteSpace($Scope.InstallRoot) -and (Test-Path -LiteralPath $Scope.InstallRoot)) {
-        Remove-V4DirectoryWithRetry -Path $Scope.InstallRoot
+    try {
+        if ($Scope.ManageInstallRootCleanup -and -not [string]::IsNullOrWhiteSpace($Scope.InstallRoot) -and (Test-Path -LiteralPath $Scope.InstallRoot)) {
+            Remove-V4DirectoryWithRetry -Path $Scope.InstallRoot
+        }
+    } catch {
+        $cleanupErrors.Add("Failed to clean up InstallRoot '$($Scope.InstallRoot)': $($_.Exception.Message)")
+    }
+
+    if ($cleanupErrors.Count -gt 0) {
+        $message = "Exit-V4NsisSmokeScope failed with $($cleanupErrors.Count) cleanup error(s):`n - " + ($cleanupErrors -join "`n - ")
+        if ($null -ne $OriginalError) {
+            $message += "`n`nOriginal error before cleanup: $($OriginalError.Message)"
+        } elseif ($null -ne $global:Error -and $global:Error.Count -gt $Scope.InitialErrorCount) {
+            $prior = $global:Error[0].Exception.Message
+            $message += "`n`nPrior context error: $prior"
+        }
+        throw $message
     }
 }
 

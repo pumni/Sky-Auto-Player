@@ -285,3 +285,19 @@ React          = presentation
 | **Tauri Rust** | `desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
 | **React / TypeScript** | `desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
 
+### Concrete domain authority enforcement
+
+1. **Version and Channel Authority**:
+   - `cargo xtask version check [--version <semver>] [--channel <stable|beta>] [--tag <tag>] [--no-repo-match]` is the single canonical source of truth for:
+     - Canonical SemVer parsing without build metadata
+     - Channel prerelease classification (`stable` rejects prerelease versions; `beta` requires prerelease versions)
+     - Release tag exactness (`v<version>`)
+     - Cargo project version matching (`desktop/src-tauri/Cargo.toml`)
+   - PowerShell orchestration scripts (`scripts/v4_release_pipeline.ps1`, `scripts/orchestrate_v4_production_release.ps1`, `scripts/ci_tauri_update_e2e_core.ps1`) delegate all SemVer and channel classification directly to `cargo xtask version check`, eliminating duplicate regex and policy logic.
+
+2. **Hermetic NSIS Smoke Testing Isolation Boundary**:
+   - `scripts/v4_nsis_smoke_boundary.ps1` provides machine-protection boundary isolation across all production-identity NSIS smoke consumers (packaged CI smoke, release pipeline, release orchestrator, updater E2E).
+   - Captures registry state across all product and uninstall namespaces before smoke execution.
+   - Restores default and named registry values with exact captured `RegistryValueKind` and asserts post-restoration equivalence, failing closed on any detected residue.
+   - Enforces an **attempt-all** finalizer in `Exit-V4NsisSmokeScope` that executes process termination, registry restoration, environment restoration, throwaway AppData cleanup, and install-root cleanup before raising aggregate diagnostics, preserving original test failure context.
+
