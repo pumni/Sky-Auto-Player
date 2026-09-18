@@ -244,6 +244,10 @@ function Get-ClassificationForPaths([string[]]$RawPaths) {
             Add-Lane $classification "package_required"
             continue
         }
+        if ($path -match '^scripts/(?:test_)?v4_nsis_smoke_boundary\.ps1$') {
+            Add-Lanes $classification @("release_required", "package_required")
+            continue
+        }
         if ($path -match '^scripts/(v4_release_[^/]+|test_v4_release_[^/]+|orchestrate_v4_production_release|verify_v4_release_runner|cleanup_v4_release_state|cleanup_v4_draft_rehearsal|v4_draft_rehearsal_external_state|v4_release_draft_lookup|test_v4_production_orchestrator|test_v4_production_topology_rehearsal)\.ps1$') {
             Add-Lane $classification "release_required"
             continue

@@ -92,6 +92,7 @@ try {
     Assert-Result "cargo-lock" (@{ rust_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true" }) @("rust/Cargo.lock")
     Assert-Result "updater-script" (@{ updater_required = "true"; rust_required = "false"; package_required = "false" }) @("scripts/ci_tauri_update_e2e_core.ps1")
     Assert-Result "release-script" (@{ release_required = "true"; updater_required = "false"; rust_required = "false" }) @("scripts/v4_release_pipeline.ps1")
+    Assert-Result "smoke-boundary-script" (@{ release_required = "true"; package_required = "true"; updater_required = "false"; rust_required = "false" }) @("scripts/v4_nsis_smoke_boundary.ps1")
     Assert-Result "metadata-promotion" (@{ updater_required = "true"; release_required = "true" }) @("scripts/promote_v4_metadata.ps1")
     Assert-Result "pages-workflow" (@{ site_required = "true"; release_required = "false" }) @(".github/workflows/pages.yml")
     Assert-Result "release-workflow" (@{ release_required = "true"; site_required = "false" }) @(".github/workflows/release-v4.yml")

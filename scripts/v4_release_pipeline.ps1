@@ -51,6 +51,7 @@ $sbomName = "SBOM.spdx.json"
 . (Join-Path $PSScriptRoot "v4_release_asset_upload.ps1")
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
 . (Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1")
+. (Join-Path $PSScriptRoot "v4_nsis_smoke_boundary.ps1")
 
 if (-not (Test-Path Variable:script:GitHubApiHandler)) {
     $script:GitHubApiHandler = $null
@@ -253,18 +254,8 @@ function Invoke-DraftSelfCleanup {
 
 function Assert-RequestIdentity {
     if ([string]::IsNullOrWhiteSpace($Version)) { Fail "version is required" }
-    if ([string]::IsNullOrWhiteSpace($Channel) -or $Channel -notin @("stable", "beta")) {
-        Fail "channel must be stable or beta"
-    }
-    if ([string]::IsNullOrWhiteSpace($Tag) -or $Tag -ne "v$Version") {
-        Fail "tag must exactly equal v<version>"
-    }
-    if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
-        Fail "version is not canonical SemVer without build metadata"
-    }
-    $isPrerelease = $Version.Contains("-")
-    if ($Channel -eq "stable" -and $isPrerelease) { Fail "stable releases must use final SemVer" }
-    if ($Channel -eq "beta" -and -not $isPrerelease) { Fail "beta releases must use a SemVer prerelease" }
+    if ([string]::IsNullOrWhiteSpace($Channel)) { Fail "channel is required" }
+    if ([string]::IsNullOrWhiteSpace($Tag)) { Fail "tag is required" }
     if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
         Fail "source_sha must be an exact 40-character commit SHA"
     }
@@ -282,13 +273,12 @@ function Assert-RequestIdentity {
         Fail "source SHA differs from the workflow SHA used for OIDC provenance"
     }
 
-    $cargoPath = Join-Path $repoRoot "desktop/src-tauri/Cargo.toml"
-    $cargo = Get-Content -LiteralPath $cargoPath -Raw
-    if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') { Fail "Cargo package version is missing" }
-    if ($Matches[1] -ne $Version) { Fail "Cargo/Tauri package version does not equal requested version" }
-
-    & cargo xtask version check --tag $Tag *> (Join-Path (Get-EffectiveStateRoot) "version-check.log")
-    if ($LASTEXITCODE -ne 0) { Fail "canonical cargo xtask version/tag validation failed" }
+    $versionLog = Join-Path (Get-EffectiveStateRoot) "version-check.log"
+    & cargo xtask version check --version $Version --channel $Channel --tag $Tag *> $versionLog
+    if ($LASTEXITCODE -ne 0) {
+        $detail = if (Test-Path -LiteralPath $versionLog) { (Get-Content -LiteralPath $versionLog -Raw).Trim() } else { "" }
+        Fail "canonical cargo xtask version/channel/tag validation failed: $detail"
+    }
     Write-Host "V4 release identity: PASS (version=$Version, channel=$Channel, source=$($SourceSha.ToLowerInvariant()))"
 }
 
@@ -949,9 +939,10 @@ function Invoke-BuildCandidate {
     $installRoot = Join-Path $root ("install-" + [guid]::NewGuid().ToString("N"))
     $app = Join-Path $installRoot "sky_desktop_shell.exe"
     $uninstaller = Join-Path $installRoot "uninstall.exe"
+    $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
     try {
         New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-        $install = Start-Process -FilePath (Join-Path $bundle $releaseInstaller) -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
+        $install = Start-Process -FilePath (Join-Path $bundle $releaseInstaller) -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
         if ($install.ExitCode -ne 0) { Fail "candidate current-user installer failed" }
         $installedBuiltinRoot = Join-Path $installRoot "builtin-songs"
         Invoke-Checked "cargo" @(
@@ -994,7 +985,7 @@ function Invoke-BuildCandidate {
         } finally {
             if ($null -eq $previousAppDataRoot) { Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable("SKY_APP_DATA_ROOT", $previousAppDataRoot, "Process") }
             if ($null -eq $previousFreshSelfTest) { Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable("SKY_BUILTIN_CATALOG_FRESH_SELFTEST", $previousFreshSelfTest, "Process") }
-            if (Test-Path -LiteralPath $freshAppData) { Remove-Item -LiteralPath $freshAppData -Recurse -Force -ErrorAction SilentlyContinue }
+            if (Test-Path -LiteralPath $freshAppData) { Remove-V4DirectoryWithRetry -Path $freshAppData }
         }
 
         # active-playback-install-rejected
@@ -1014,7 +1005,7 @@ function Invoke-BuildCandidate {
         $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
         if ($uninstall.ExitCode -ne 0) { Fail "candidate uninstall failed" }
     } finally {
-        if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue }
+        Exit-V4NsisSmokeScope -Scope $smokeScope
     }
 
     $candidateManifest = [ordered]@{

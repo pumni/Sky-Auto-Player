@@ -21,6 +21,8 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $desktopRoot = Join-Path $repoRoot 'desktop'
+. (Join-Path $PSScriptRoot 'v4_nsis_smoke_boundary.ps1')
+$smokeScope = $null
 $runnerTemp = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
   [IO.Path]::GetTempPath()
 } else {
@@ -78,7 +80,8 @@ if ($providedBridge) {
   if ($BridgeSourceSha -notmatch '^[0-9a-fA-F]{40}$' -or $BridgeSourceSha -match '^0{40}$') {
     throw 'Provided-bridge updater qualification received an invalid source SHA'
   }
-  if ($BridgeVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+  & cargo xtask version check --version $BridgeVersion --no-repo-match *> $null
+  if ($LASTEXITCODE -ne 0) {
     throw "Provided-bridge updater qualification received a non-canonical SemVer: $BridgeVersion"
   }
   if ($BridgeSentinelSha256 -notmatch '^[0-9a-fA-F]{64}$') {
@@ -96,7 +99,8 @@ if ($providedCandidate) {
     [string]::IsNullOrWhiteSpace($CandidatePublicKeyPath)) {
     throw 'Provided-candidate updater qualification requires installer, signature, version, and public-key paths'
   }
-  if ($CandidateVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+  & cargo xtask version check --version $CandidateVersion --no-repo-match *> $null
+  if ($LASTEXITCODE -ne 0) {
     throw "Provided-candidate updater qualification received a non-canonical SemVer: $CandidateVersion"
   }
 }
@@ -673,7 +677,8 @@ try {
   Write-Host "Fixture HTTP manifest contract: PASS (status=200; content-type=application/json; content-length=$($manifestHttp.content_length); body-sha256=$($manifestHttp.body_sha256))"
   Write-Host "Fixture HTTP candidate contract: PASS (status=200; content-type=application/octet-stream; content-length=$($candidateContract.http.content_length); body-sha256=$($candidateContract.http.body_sha256))"
 
-  $installerRun = Start-Process -FilePath $previousInstallerCopy -ArgumentList @('/S', "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
+  $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -ManageInstallRootCleanup:$false
+  $installerRun = Start-Process -FilePath $previousInstallerCopy -ArgumentList @('/S', '/NS', "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
   if ($installerRun.ExitCode -ne 0) { throw "Bridge-v4 installer exited with $($installerRun.ExitCode)" }
   $locationKey = 'HKCU:\Software\pumni\Sky Auto Player'
   New-Item -Path $locationKey -Force -Value $installRoot | Out-Null
@@ -838,11 +843,20 @@ try {
   }
   $fixtureStatus = 'PASS'
 } finally {
-  if ($null -ne $serverJob) {
-    New-Item -ItemType File -Path $stopPath -Force | Out-Null
-    Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
-    Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
+  $finalizerErrors = [System.Collections.Generic.List[string]]::new()
+
+  # Step 1: Stop background server job
+  try {
+    if ($null -ne $serverJob) {
+      New-Item -ItemType File -Path $stopPath -Force | Out-Null
+      Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
+      Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
+    }
+  } catch {
+    $finalizerErrors.Add("Failed to stop mock server job: $($_.Exception.Message)")
   }
+
+  # Step 2: Restore source tree and project files
   try {
     Restore-CanonicalBuiltinCatalog
   } catch {
@@ -851,21 +865,60 @@ try {
     $fixtureStatus = 'FAIL'
     $preservationContract.status = 'FAIL'
     $preservationContract.source_tree_restore = 'FAIL'
+    $finalizerErrors.Add("Updater fixture source-tree restoration failed: $catalogSourceRestoreError")
   }
-  [IO.File]::WriteAllText($candidateCargoPath, $cargoSource, [Text.UTF8Encoding]::new($false))
-  [IO.File]::WriteAllText($lockPath, $lockSource, [Text.UTF8Encoding]::new($false))
-  if ([string]::IsNullOrEmpty($oldAppDataRoot)) {
-    Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
-  } else {
-    [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $oldAppDataRoot, 'Process')
+
+  try {
+    [IO.File]::WriteAllText($candidateCargoPath, $cargoSource, [Text.UTF8Encoding]::new($false))
+  } catch {
+    $finalizerErrors.Add("Failed to restore Cargo.toml: $($_.Exception.Message)")
   }
-  Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-  Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
-  Write-HttpEvidence $fixtureStatus
-  if ($null -ne $catalogSourceRestoreError) {
-    throw "Updater fixture source-tree restoration failed: $catalogSourceRestoreError"
+
+  try {
+    [IO.File]::WriteAllText($lockPath, $lockSource, [Text.UTF8Encoding]::new($false))
+  } catch {
+    $finalizerErrors.Add("Failed to restore Cargo.lock: $($_.Exception.Message)")
   }
-  if (-not $KeepFixtureOnFailure -and (Test-Path -LiteralPath $fixtureRoot)) {
-    Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+  # Step 3: Process environment restoration
+  try {
+    if ([string]::IsNullOrEmpty($oldAppDataRoot)) {
+      Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
+    } else {
+      [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $oldAppDataRoot, 'Process')
+    }
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+  } catch {
+    $finalizerErrors.Add("Failed to restore environment variables: $($_.Exception.Message)")
+  }
+
+  # Step 4: Write HTTP evidence
+  try {
+    Write-HttpEvidence $fixtureStatus
+  } catch {
+    $finalizerErrors.Add("Failed to write HTTP evidence: $($_.Exception.Message)")
+  }
+
+  # Step 5: Exit NSIS smoke scope (registry, process, app data)
+  if ($null -ne $smokeScope) {
+    try {
+      Exit-V4NsisSmokeScope -Scope $smokeScope
+    } catch {
+      $finalizerErrors.Add("Exit-V4NsisSmokeScope failed: $($_.Exception.Message)")
+    }
+  }
+
+  # Step 6: Fixture root cleanup
+  try {
+    if (-not $KeepFixtureOnFailure -and (Test-Path -LiteralPath $fixtureRoot)) {
+      Remove-V4DirectoryWithRetry -Path $fixtureRoot
+    }
+  } catch {
+    $finalizerErrors.Add("Failed to clean up fixture root: $($_.Exception.Message)")
+  }
+
+  if ($finalizerErrors.Count -gt 0) {
+    throw ($finalizerErrors -join " | ")
   }
 }

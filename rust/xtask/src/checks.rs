@@ -552,6 +552,8 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
         "scripts/test_v4_production_orchestrator.ps1",
         "Run V4 updater private-key verifier secret-output regression",
         "scripts/test_v4_updater_private_key.ps1",
+        "Run V4 NSIS smoke boundary regression tests",
+        "scripts/test_v4_nsis_smoke_boundary.ps1",
         "Emit exact Tauri qualification evidence",
         "authenticode_mode = \"unsigned-zero-budget\"",
         "V4_QUALIFICATION_EVIDENCE.json",

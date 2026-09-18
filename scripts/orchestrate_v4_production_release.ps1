@@ -22,6 +22,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot "v4_nsis_smoke_boundary.ps1")
 
 # 1. Validate mandatory parameters explicitly (fail closed without interactive stdin blocking)
 if ([string]::IsNullOrWhiteSpace($ExpectedSourceSha)) {
@@ -30,8 +31,8 @@ if ([string]::IsNullOrWhiteSpace($ExpectedSourceSha)) {
 if ([string]::IsNullOrWhiteSpace($Version)) {
     throw "Missing mandatory parameter: Version"
 }
-if ([string]::IsNullOrWhiteSpace($Channel) -or $Channel -notin @("stable", "beta")) {
-    throw "Missing or invalid mandatory parameter: Channel (must be 'stable' or 'beta')"
+if ([string]::IsNullOrWhiteSpace($Channel)) {
+    throw "Missing mandatory parameter: Channel"
 }
 if ([string]::IsNullOrWhiteSpace($UpdaterPrivateKeyPath)) {
     throw "Missing mandatory parameter: UpdaterPrivateKeyPath"
@@ -160,24 +161,14 @@ try {
         throw "Workspace HEAD ($currentHead) does not match ExpectedSourceSha ($expectedSha)"
     }
 
-    # Verify Cargo project version matches
-    $cargoTomlPath = Join-Path $repoRoot "desktop\src-tauri\Cargo.toml"
-    $cargoToml = Get-Content -LiteralPath $cargoTomlPath -Raw
-    if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
-        throw "Failed to parse version from desktop/src-tauri/Cargo.toml"
-    }
-    $cargoVersion = $Matches[1].Trim()
-    if ($cargoVersion -ne $Version) {
-        throw "Specified version '$Version' does not match Cargo.toml version '$cargoVersion'"
-    }
-
-    # Validate channel vs version SemVer policy (ADR-0006 / release metadata contract)
-    $isPrerelease = $Version.Contains("-")
-    if ($Channel -eq "stable" -and $isPrerelease) {
-        throw "Channel 'stable' rejects prerelease version '$Version' (SemVer without hyphen required)"
-    }
-    if ($Channel -eq "beta" -and -not $isPrerelease) {
-        throw "Channel 'beta' requires a prerelease SemVer version (e.g. '$Version-beta.1')"
+    # Canonical version, channel, and Cargo package validation (owned by cargo xtask)
+    $versionCheckOutput = & cargo xtask version check --version $Version --channel $Channel 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $errorMsg = ($versionCheckOutput | Out-String).Trim()
+        if ($errorMsg -match '(?m)Error:\s*"([^"]+)"') {
+            $errorMsg = $Matches[1]
+        }
+        throw $errorMsg
     }
 
     # Provider inputs are optional under the project policy. Preserve the
@@ -439,10 +430,9 @@ try {
         $installRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-smoke-" + [guid]::NewGuid().ToString("N"))
         $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
         $uninstaller = Join-Path $installRoot "uninstall.exe"
-        $appProcess = $null
+        $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
         try {
-            $instRun = Start-Process -FilePath $installerPath -ArgumentList @("/S", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
-            if ($instRun.ExitCode -ne 0) { throw "Installer exited with code $($instRun.ExitCode)" }
+            Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot | Out-Null
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed executable missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Uninstaller missing: $uninstaller" }
 
@@ -459,18 +449,18 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "Installed PE Authenticode verification failed" }
 
             $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
+            $smokeScope.TrackedProcesses.Add($appProcess) | Out-Null
             Start-Sleep -Seconds 3
             if ($appProcess.HasExited) { throw "Application exited unexpectedly during smoke test" }
             Stop-Process -Id $appProcess.Id -Force
+            $smokeScope.TrackedProcesses.Remove($appProcess) | Out-Null
             $appProcess = $null
 
-            $uninstRun = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
-            if ($uninstRun.ExitCode -ne 0) { throw "Uninstaller exited with code $($uninstRun.ExitCode)" }
+            Invoke-V4NsisUninstaller -UninstallerPath $uninstaller | Out-Null
             $smokeRanAndPassed = $true
             Write-Host "  Install/Launch/Uninstall smoke: PASS"
         } finally {
-            if ($null -ne $appProcess -and -not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue }
-            if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue }
+            Exit-V4NsisSmokeScope -Scope $smokeScope
         }
     } else {
         Write-Host "  Install/Launch/Uninstall smoke: SKIPPED (internal test fixture only)"

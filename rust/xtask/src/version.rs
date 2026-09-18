@@ -13,15 +13,75 @@ pub fn parse(value: &str) -> Result<Version> {
     Ok(parsed)
 }
 
-pub fn check(tag: Option<&str>) -> Result<()> {
+#[derive(Debug, Default, Eq, PartialEq)]
+pub struct VersionCheckOptions<'a> {
+    pub version: Option<&'a str>,
+    pub channel: Option<&'a str>,
+    pub tag: Option<&'a str>,
+    pub no_repo_match: bool,
+}
+
+pub fn check(options: VersionCheckOptions<'_>) -> Result<()> {
     let root = repo::root();
-    let version = repo::project_version(&root)?;
-    let parsed = parse(&version)?;
-    if let Some(tag) = tag {
-        check_tag(tag, &version, &parsed)?;
+    let (effective_version, parsed) = if let Some(v) = options.version {
+        let parsed = parse(v)?;
+        if !options.no_repo_match {
+            let cargo_version = repo::project_version(&root)?;
+            if v != cargo_version {
+                return Err(format!(
+                    "Specified version '{v}' does not match Cargo.toml version '{cargo_version}'"
+                )
+                .into());
+            }
+        }
+        (v.to_owned(), parsed)
+    } else {
+        let version = repo::project_version(&root)?;
+        let parsed = parse(&version)?;
+        (version, parsed)
+    };
+
+    if let Some(channel) = options.channel {
+        validate_channel(channel, &effective_version, &parsed)?;
     }
-    println!("version={version}");
+
+    if let Some(tag) = options.tag {
+        check_tag(tag, &effective_version, &parsed)?;
+    }
+
+    println!("version={effective_version}");
     println!("is_prerelease={}", !parsed.pre.is_empty());
+    if let Some(channel) = options.channel {
+        println!("channel={channel}");
+    }
+    Ok(())
+}
+
+pub fn validate_channel(channel: &str, version: &str, parsed: &Version) -> Result<()> {
+    match channel {
+        "stable" => {
+            if !parsed.pre.is_empty() {
+                return Err(format!(
+                    "Channel 'stable' rejects prerelease version '{version}' (SemVer without hyphen required)"
+                )
+                .into());
+            }
+        }
+        "beta" => {
+            if parsed.pre.is_empty() {
+                return Err(format!(
+                    "Channel 'beta' requires a prerelease SemVer version (e.g. '{version}-beta.1')"
+                )
+                .into());
+            }
+        }
+        _ => {
+            return Err(format!(
+                "Missing or invalid channel: '{channel}' (must be 'stable' or 'beta')"
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -106,5 +166,52 @@ mod tests {
             let parsed = parse(version).unwrap();
             assert!(check_tag(&format!("v{version}"), version, &parsed).is_ok());
         }
+    }
+
+    #[test]
+    fn channel_policy_enforces_stable_and_beta_invariants() {
+        let stable_version = "4.0.0";
+        let parsed_stable = parse(stable_version).unwrap();
+        assert!(validate_channel("stable", stable_version, &parsed_stable).is_ok());
+        let err = validate_channel("beta", stable_version, &parsed_stable).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Channel 'beta' requires a prerelease SemVer version")
+        );
+
+        let beta_version = "4.0.0-beta.1";
+        let parsed_beta = parse(beta_version).unwrap();
+        assert!(validate_channel("beta", beta_version, &parsed_beta).is_ok());
+        let err = validate_channel("stable", beta_version, &parsed_beta).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Channel 'stable' rejects prerelease version")
+        );
+
+        let err = validate_channel("nightly", stable_version, &parsed_stable).unwrap_err();
+        assert!(err.to_string().contains("Missing or invalid channel"));
+    }
+
+    #[test]
+    fn version_check_standalone_no_repo_match() {
+        assert!(
+            check(VersionCheckOptions {
+                version: Some("9.9.9"),
+                channel: Some("stable"),
+                tag: None,
+                no_repo_match: true,
+            })
+            .is_ok()
+        );
+
+        assert!(
+            check(VersionCheckOptions {
+                version: Some("9.9.9-beta.2"),
+                channel: Some("beta"),
+                tag: Some("v9.9.9-beta.2"),
+                no_repo_match: true,
+            })
+            .is_ok()
+        );
     }
 }
