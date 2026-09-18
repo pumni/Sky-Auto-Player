@@ -152,3 +152,75 @@ For runner isolation, evidence retention, and production execution topology, see
 [`v4-release-execution-topology.md`](v4-release-execution-topology.md). Owner/admin actions such as
 branch protection and secret custody are separate governance operations outside individual workflow
 dispatches.
+
+## Release state model and recovery lifecycle
+
+The v4 release architecture strictly separates **persisted monotonic phases** from **diagnostic failure classifications**:
+
+### Persisted monotonic phases
+
+Persisted release state (`release-state.json`, schema version 2) records monotonic progression through the release lifecycle. A release transaction only moves forward through these phases:
+
+```text
+READY -> QUALIFIED -> PUBLISHED_PENDING_METADATA -> COMPLETE
+```
+
+1. **`READY`**: Candidate built and signed; candidate manifest and evidence frozen; ready for draft creation.
+2. **`QUALIFIED`**: Candidate draft created in canonical repository; candidate assets re-downloaded; exact downloaded bytes qualified; GitHub OIDC exact-source attestations verified and recorded.
+3. **`PUBLISHED_PENDING_METADATA`**: Irreversible GitHub publication PATCH committed and confirmed by external truth (`draft = false`, immutable, exact public assets). Channel metadata on `release-metadata` has not yet been promoted.
+4. **`COMPLETE`**: Release published and immutable; channel metadata promoted monotonically on `release-metadata`; public unauthenticated `raw.githubusercontent.com` endpoint verified by `FinalVerify`.
+
+Failures do not regress the monotonic phase; instead, failure class, error message, and reconciliation timestamps are recorded in separate fields (`failure_class`, `error_message`, `last_reconciled_at`).
+
+### Diagnostic classifications
+
+The diagnostic release doctor (`release-doctor`) evaluates external truth, local state, and GitHub Actions workflow run evidence to report the observed lifecycle phases and diagnostic classification:
+
+- **`persisted_phase`**: Monotonic phase recorded in local release state (`READY | QUALIFIED | PUBLISHED_PENDING_METADATA | COMPLETE | null`).
+- **`external_phase`**: Monotonic phase confirmed by external truth on GitHub (`READY | QUALIFIED | PUBLISHED_PENDING_METADATA | COMPLETE | null`).
+- **`classification`**: Failure or incident diagnostic classification:
+  1. **`NOT_READY`**: Request or workspace prerequisites not yet satisfied (e.g., dirty working tree, uncommitted changes, missing release notes, non-canonical branch or tag).
+  2. **`RECOVERABLE_PRE_PUBLICATION_FAILURE`**: Failure occurred before irreversible publication. External truth contains no published release. Any unpublished draft tag or draft release remains mutable and may be safely deleted and recreated.
+  3. **`POST_PUBLICATION_INCIDENT`**: Irreversible publication occurred on GitHub, but post-publication workflow execution failed or invariants remain unsatisfied (e.g. channel metadata was not promoted).
+  4. **`REMOTE_STATE_UNKNOWN`**: Publication was attempted but external state could not be verified (e.g. network partition or GitHub API unavailability). Fails closed without assuming success or failure.
+  5. **`null`**: No failure or incident observed (e.g. release completed successfully or workflow is currently running in progress).
+
+### Publication reconciliation and diagnostic invariants
+
+1. **Exact `release_id` reconciliation only**: Following an irreversible GitHub publication PATCH attempt, the pipeline queries external truth strictly via `GET repos/$repository/releases/$($state.release_id)`. Tag equality is a verification invariant, not a transaction identifier; the pipeline never falls back to adopting a release via tag lookup. If the exact `release_id` cannot be retrieved, the pipeline records `failure_class = "REMOTE_STATE_UNKNOWN"` and fails closed.
+2. **Strict workflow run repository identity**: Diagnostic workflow run resolution (`release-doctor`) enforces exact repository matching (`repository.full_name == pumni/Sky-Auto-Player`). Workflow runs with missing, empty, or mismatched repository identities are refused and never implicitly trusted.
+3. **Fail-closed canonical UTC RFC3339 timestamps**: Timestamps across machine-readable JSON outputs are strictly canonical UTC formatted with trailing `Z` under invariant culture. Any invalid or unparseable timestamp returns `null` and triggers operator review rather than falling back to unvalidated raw strings.
+
+### Recovery lifecycle and governance rules
+
+#### Fresh dispatch
+Dispatched manually from `refs/heads/main` via `workflow_dispatch`. Progresses through the canonical pipeline from `READY` through `COMPLETE`. A fresh run refuses adoption of any existing published release.
+
+#### Pre-publication failure (`RECOVERABLE_PRE_PUBLICATION_FAILURE`)
+If a failure occurs during `BuildCandidate`, `CreateDraft`, `DownloadDraft`, `QualifyDownloaded`, or `RecordAttestations`:
+- No external release is published.
+- Any draft release on GitHub retains `draft = true` and `published_at = null`.
+- Recovery: Safe to re-dispatch or rerun. The pipeline cleans up unpublished draft tags and draft releases before recreation.
+
+#### Post-publication incident (`POST_PUBLICATION_INCIDENT`)
+Once the GitHub Release PATCH is committed, the publication is irreversible:
+- The release is published (`draft = false`), has an immutable `published_at` timestamp, and is marked immutable.
+- The git tag points permanently to the exact source commit SHA.
+- **Strict Governance Rules**:
+  - **NEVER** rerun the failed workflow run (it will fail closed because published releases cannot be recreated).
+  - **NEVER** delete, recreate, or replace the published git tag.
+  - **NEVER** delete, edit, or replace the published GitHub release.
+  - **NEVER** dispatch another release with the same version number.
+  - **NEVER** manually promote `release-metadata` without an explicitly authorized, reviewed recovery procedure.
+- **Corrective Action**:
+  - The default corrective release target after engineering acceptance is a new SemVer release (e.g., `v4.1.1`).
+  - Fix the underlying defect on a corrective branch, qualify locally, and dispatch a fresh release for the new SemVer.
+
+### Diagnostic tooling
+
+The read-only `release-doctor` queries external truth, local state, and workflow execution evidence to classify the current release:
+
+```powershell
+cargo xtask release-doctor --tag <tag> [--run-id <id>] [--workflow-sha <sha>] [--format <text|json>]
+pwsh scripts/release_doctor.ps1 -Tag <tag> [-RunId <id>] [-WorkflowSha <sha>] [-Format <Text|Json>]
+```
