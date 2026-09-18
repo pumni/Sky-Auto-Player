@@ -247,12 +247,11 @@ property assignment error in `v4_release_pipeline.ps1` terminated the workflow i
 before metadata promotion could execute. As a result, GitHub Latest reached `v4.1.0` while
 `channels/stable/latest.json` remained at `4.0.1`.
 
-Under issue #323, two recovery options are defined:
-1. **Direct metadata promotion**: Advance `channels/stable/latest.json` to the already-qualified, immutable
-   `v4.1.0` assets and signature using the verified candidate manifest and OIDC attestations without altering
-   release assets or tags.
-2. **Canonical corrective release**: Dispatch a fresh `release-v4.yml` release transaction for `v4.1.1` from
-   `main` using the hardened pipeline, publishing `v4.1.1` and advancing stable metadata coherently.
+Under coordinator decision for program #322 / issue #323:
+- **No manual metadata promotion**: Out-of-band manual mutation to `release-metadata` for `v4.1.0` is prohibited.
+- **No immediate corrective release**: A corrective release (e.g. `v4.1.1`) is not dispatched at this time solely to reconcile metadata while v3 retirement and update UX standardization remain in flight.
+- **Immutable release preserved**: `v4.1.0` and its assets remain an immutable published incident record.
+- **Reconciliation deferred to final program release**: Stable metadata remains at `4.0.1` until the final stable release of program #322. That final release will execute through the canonical `release-v4.yml` pipeline, simultaneously becoming GitHub Latest and advancing stable metadata in a single transaction.
 
 ### Diagnostic tooling
 
