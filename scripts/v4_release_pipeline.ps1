@@ -939,7 +939,7 @@ function Invoke-BuildCandidate {
     $installRoot = Join-Path $root ("install-" + [guid]::NewGuid().ToString("N"))
     $app = Join-Path $installRoot "sky_desktop_shell.exe"
     $uninstaller = Join-Path $installRoot "uninstall.exe"
-    $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -ManageInstallRootCleanup:$false
+    $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
     try {
         New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
         $install = Start-Process -FilePath (Join-Path $bundle $releaseInstaller) -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
@@ -1006,7 +1006,6 @@ function Invoke-BuildCandidate {
         if ($uninstall.ExitCode -ne 0) { Fail "candidate uninstall failed" }
     } finally {
         Exit-V4NsisSmokeScope -Scope $smokeScope
-        if (Test-Path -LiteralPath $installRoot) { Remove-V4DirectoryWithRetry -Path $installRoot }
     }
 
     $candidateManifest = [ordered]@{

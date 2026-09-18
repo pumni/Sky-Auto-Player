@@ -322,10 +322,12 @@ function Enter-V4NsisSmokeScope {
     param(
         [string]$InstallRoot = $null,
         [string]$AppDataRoot = $null,
-        [switch]$ManageInstallRootCleanup = $true
+        [switch]$ManageInstallRootCleanup = $true,
+        [switch]$ManageAppDataCleanup = $true,
+        [System.Collections.IList]$RegistryTargets = $null
     )
 
-    $snapshots = Protect-V4NsisRegistryState
+    $snapshots = Protect-V4NsisRegistryState -Targets $RegistryTargets
     $previousAppDataRoot = [Environment]::GetEnvironmentVariable('SKY_APP_DATA_ROOT', 'Process')
 
     $createdAppData = $false
@@ -345,8 +347,9 @@ function Enter-V4NsisSmokeScope {
         PreviousAppDataRoot      = $previousAppDataRoot
         AppDataRoot              = $resolvedAppDataRoot
         CreatedAppData           = $createdAppData
+        ManageAppDataCleanup     = [bool]$ManageAppDataCleanup
         InstallRoot              = $InstallRoot
-        ManageInstallRootCleanup = $ManageInstallRootCleanup.IsPresent
+        ManageInstallRootCleanup = [bool]$ManageInstallRootCleanup
         TrackedProcesses         = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
         InitialErrorCount        = $initialErrorCount
     }
@@ -395,7 +398,7 @@ function Exit-V4NsisSmokeScope {
 
     # 4. Clean up throwaway AppData root
     try {
-        if ($Scope.CreatedAppData -and (Test-Path -LiteralPath $Scope.AppDataRoot)) {
+        if ($Scope.ManageAppDataCleanup -and -not [string]::IsNullOrWhiteSpace($Scope.AppDataRoot) -and (Test-Path -LiteralPath $Scope.AppDataRoot)) {
             Remove-V4DirectoryWithRetry -Path $Scope.AppDataRoot
         }
     } catch {

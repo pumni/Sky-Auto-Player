@@ -21,29 +21,25 @@ Write-Host "Running NSIS smoke boundary tests..."
 
 # Test 1: Absent key stays absent after successful scope
 Write-Host "  Test 1: Absent registry key remains absent after success..."
-$testTargets = Get-V4NsisMonitoredRegistryKeys
-$target = $testTargets[0] # HKCU:\Software\github\Sky Auto Player
-$keyPath = $target.Key
+$testCustomKey1 = "HKCU:\Software\__test_sky_absent_success\Sky Auto Player"
+$testCustomParent1 = "HKCU:\Software\__test_sky_absent_success"
+if (Test-Path -LiteralPath $testCustomParent1) {
+    Remove-Item -LiteralPath $testCustomParent1 -Recurse -Force
+}
 
-$snapshotBefore = Protect-V4NsisRegistryState
-$scope = Enter-V4NsisSmokeScope
+$customTargets1 = @([ordered]@{ Key = $testCustomKey1; Parent = $testCustomParent1 })
+$scope1 = Enter-V4NsisSmokeScope -RegistryTargets $customTargets1
 try {
     # Simulate installer writing location key
-    New-Item -Path $keyPath -Force -Value "C:\fake\smoke\install" | Out-Null
-    Set-ItemProperty -Path $keyPath -Name "Installer Language" -Value "1033"
-    Assert-True (Test-Path -LiteralPath $keyPath) "Simulated installer key was created"
+    New-Item -Path $testCustomKey1 -Force -Value "C:\fake\smoke\install" | Out-Null
+    Set-ItemProperty -Path $testCustomKey1 -Name "Installer Language" -Value "1033"
+    Assert-True (Test-Path -LiteralPath $testCustomKey1) "Simulated installer key was created"
 } finally {
-    Exit-V4NsisSmokeScope -Scope $scope
+    Exit-V4NsisSmokeScope -Scope $scope1
 }
 
-$keyExistedBefore = $snapshotBefore[$keyPath].KeyExisted
-if (-not $keyExistedBefore) {
-    Assert-True (-not (Test-Path -LiteralPath $keyPath)) "Absent registry key was left behind after success"
-} else {
-    # If it existed before running the test suite, it must be restored to its original value
-    $curVal = (Get-Item -LiteralPath $keyPath).GetValue('')
-    Assert-Equal $curVal $snapshotBefore[$keyPath].Properties[''].Value "Original default value was restored"
-}
+Assert-True (-not (Test-Path -LiteralPath $testCustomKey1)) "Absent registry key was left behind after success"
+Assert-True (-not (Test-Path -LiteralPath $testCustomParent1)) "Parent manufacturer key was left behind after success"
 Write-Host "    PASS"
 
 # Test 2: Absent registry key remains absent after injected failure

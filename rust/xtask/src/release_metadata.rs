@@ -166,23 +166,7 @@ fn validate_metadata(metadata: &TauriMetadata, channel: Channel) -> Result<()> {
         )
         .into());
     }
-    match channel {
-        Channel::Stable if !parsed_version.pre.is_empty() => {
-            return Err(format!(
-                "stable metadata must not contain a prerelease version: {}",
-                metadata.version
-            )
-            .into());
-        }
-        Channel::Beta if parsed_version.pre.is_empty() => {
-            return Err(format!(
-                "beta metadata must contain a prerelease version: {}",
-                metadata.version
-            )
-            .into());
-        }
-        _ => {}
-    }
+    version::validate_channel(channel_name(channel), &metadata.version, &parsed_version)?;
     if metadata.notes.chars().count() > MAX_NOTES_CHARS || metadata.notes.contains('\0') {
         return Err("updater notes are empty-safe but must be bounded and NUL-free".into());
     }

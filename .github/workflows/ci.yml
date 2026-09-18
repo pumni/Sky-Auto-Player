@@ -1142,11 +1142,10 @@ jobs:
           $summary = Get-Content rust/target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
           $installer = Join-Path $env:SKY_TAURI_BUNDLE $summary.installer
           $installRoot = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-smoke-" + [guid]::NewGuid().ToString("N"))
-          $freshAppData = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-fresh-appdata-" + [guid]::NewGuid().ToString("N"))
           $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
           $uninstaller = Join-Path $installRoot "uninstall.exe"
           . scripts/v4_nsis_smoke_boundary.ps1
-          $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -AppDataRoot $freshAppData
+          $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
           $appProcess = $null
           try {
             $installerRun = Start-Process -FilePath $installer -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
@@ -1167,7 +1166,7 @@ jobs:
             try {
               $catalogSelftest = Start-Process -FilePath $appPath -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
               if ($catalogSelftest.ExitCode -ne 0) { throw "Packaged built-in catalog self-test exited with $($catalogSelftest.ExitCode)" }
-              $userSongs = @(Get-ChildItem -LiteralPath (Join-Path $freshAppData "songs") -File -Recurse -ErrorAction SilentlyContinue)
+              $userSongs = @(Get-ChildItem -LiteralPath (Join-Path $smokeScope.AppDataRoot "songs") -File -Recurse -ErrorAction SilentlyContinue)
               if ($userSongs.Count -ne 0) { throw "Built-in catalog self-test populated the user songs directory" }
               "Packaged built-in catalog fresh-install self-test: PASS (user songs remain empty; user composition exercised)" | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding UTF8
             } finally {

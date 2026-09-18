@@ -843,11 +843,20 @@ try {
   }
   $fixtureStatus = 'PASS'
 } finally {
-  if ($null -ne $serverJob) {
-    New-Item -ItemType File -Path $stopPath -Force | Out-Null
-    Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
-    Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
+  $finalizerErrors = [System.Collections.Generic.List[string]]::new()
+
+  # Step 1: Stop background server job
+  try {
+    if ($null -ne $serverJob) {
+      New-Item -ItemType File -Path $stopPath -Force | Out-Null
+      Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
+      Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
+    }
+  } catch {
+    $finalizerErrors.Add("Failed to stop mock server job: $($_.Exception.Message)")
   }
+
+  # Step 2: Restore source tree and project files
   try {
     Restore-CanonicalBuiltinCatalog
   } catch {
@@ -856,24 +865,60 @@ try {
     $fixtureStatus = 'FAIL'
     $preservationContract.status = 'FAIL'
     $preservationContract.source_tree_restore = 'FAIL'
+    $finalizerErrors.Add("Updater fixture source-tree restoration failed: $catalogSourceRestoreError")
   }
-  [IO.File]::WriteAllText($candidateCargoPath, $cargoSource, [Text.UTF8Encoding]::new($false))
-  [IO.File]::WriteAllText($lockPath, $lockSource, [Text.UTF8Encoding]::new($false))
-  if ([string]::IsNullOrEmpty($oldAppDataRoot)) {
-    Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
-  } else {
-    [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $oldAppDataRoot, 'Process')
+
+  try {
+    [IO.File]::WriteAllText($candidateCargoPath, $cargoSource, [Text.UTF8Encoding]::new($false))
+  } catch {
+    $finalizerErrors.Add("Failed to restore Cargo.toml: $($_.Exception.Message)")
   }
-  Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-  Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
-  Write-HttpEvidence $fixtureStatus
-  if ($null -ne $catalogSourceRestoreError) {
-    throw "Updater fixture source-tree restoration failed: $catalogSourceRestoreError"
+
+  try {
+    [IO.File]::WriteAllText($lockPath, $lockSource, [Text.UTF8Encoding]::new($false))
+  } catch {
+    $finalizerErrors.Add("Failed to restore Cargo.lock: $($_.Exception.Message)")
   }
+
+  # Step 3: Process environment restoration
+  try {
+    if ([string]::IsNullOrEmpty($oldAppDataRoot)) {
+      Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
+    } else {
+      [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $oldAppDataRoot, 'Process')
+    }
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+  } catch {
+    $finalizerErrors.Add("Failed to restore environment variables: $($_.Exception.Message)")
+  }
+
+  # Step 4: Write HTTP evidence
+  try {
+    Write-HttpEvidence $fixtureStatus
+  } catch {
+    $finalizerErrors.Add("Failed to write HTTP evidence: $($_.Exception.Message)")
+  }
+
+  # Step 5: Exit NSIS smoke scope (registry, process, app data)
   if ($null -ne $smokeScope) {
-    Exit-V4NsisSmokeScope -Scope $smokeScope
+    try {
+      Exit-V4NsisSmokeScope -Scope $smokeScope
+    } catch {
+      $finalizerErrors.Add("Exit-V4NsisSmokeScope failed: $($_.Exception.Message)")
+    }
   }
-  if (-not $KeepFixtureOnFailure -and (Test-Path -LiteralPath $fixtureRoot)) {
-    Remove-V4DirectoryWithRetry -Path $fixtureRoot
+
+  # Step 6: Fixture root cleanup
+  try {
+    if (-not $KeepFixtureOnFailure -and (Test-Path -LiteralPath $fixtureRoot)) {
+      Remove-V4DirectoryWithRetry -Path $fixtureRoot
+    }
+  } catch {
+    $finalizerErrors.Add("Failed to clean up fixture root: $($_.Exception.Message)")
+  }
+
+  if ($finalizerErrors.Count -gt 0) {
+    throw ($finalizerErrors -join " | ")
   }
 }
