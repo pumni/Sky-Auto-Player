@@ -43,7 +43,7 @@ function Get-LatestRelease {
         Fail "GitHub Latest must be published and non-prerelease: $($latest.tag_name)"
     }
     if ([string]$latest.tag_name -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
-        Fail "GitHub Latest is outside the supported stable transition namespace: $($latest.tag_name)"
+        Fail "GitHub Latest is outside the supported stable namespace: $($latest.tag_name)"
     }
     return $latest
 }
@@ -77,7 +77,6 @@ V4 GitHub Latest baseline guard: PASS
 repository=$canonicalRepository
 latest_tag=$($latest.tag_name)
 latest_release=$($latest.html_url)
-transition_compatible=true
 read_only=true
 "@ | Write-Host
     exit 0

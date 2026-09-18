@@ -80,9 +80,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -132,9 +130,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -184,9 +180,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -239,9 +233,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -299,9 +291,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -360,9 +350,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -420,9 +408,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -481,9 +467,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -543,9 +527,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -610,9 +592,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -696,9 +676,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -793,9 +771,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {
@@ -869,9 +845,7 @@
             "skip_version": "",
             "check_interval_s": 86400,
             "last_check_ts": 0,
-            "last_error_ts": 0,
-            "last_notified_version": "",
-            "legacy_old_dir_sweep_pending": false
+            "last_error_ts": 0
           }
         },
         "migrated": {

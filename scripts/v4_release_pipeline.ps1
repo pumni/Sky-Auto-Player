@@ -1351,7 +1351,7 @@ function Invoke-FinalVerify {
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1")
-    ) "legacy GitHub Latest release was displaced"
+    ) "GitHub Latest guard verification failed"
     Write-Host "V4 final verification: PASS (tag=$Tag channel=$Channel verified via raw endpoint)"
 }
 
