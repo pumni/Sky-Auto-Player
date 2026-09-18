@@ -270,7 +270,9 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                       }
                     >
                       <option value="stable">Stable</option>
-                      <option value="beta">Beta</option>
+                      <option value="beta" disabled>
+                        Beta (unavailable)
+                      </option>
                     </select>
                   </label>
                   <label>

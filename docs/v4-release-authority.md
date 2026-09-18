@@ -42,6 +42,14 @@ release-metadata/
 Each promotion validates the complete Tauri metadata contract and requires a strictly greater
 SemVer than the current file in that channel. Equal-version and downgrade writes are rejected.
 
+### Beta channel operational status
+
+The beta update channel is currently unpopulated (`channels/beta/latest.json` does not exist on
+`release-metadata`). Because no v4 beta release has been qualified and published, the beta channel
+is not operational. Normal users and runtime environments must not be exposed to a dead/404 channel;
+the desktop update channel selector marks Beta as unavailable until a qualified prerelease is
+promoted through the canonical release pipeline.
+
 ## Canonical release asset
 
 The supported Windows package is the Tauri NSIS installer and its updater signature:
@@ -229,6 +237,21 @@ Once the GitHub Release PATCH is committed, the publication is irreversible:
 - **Corrective Action**:
   - The default corrective release target after engineering acceptance is a new SemVer release (e.g., `v4.1.1`).
   - Fix the underlying defect on a corrective branch, qualify locally, and dispatch a fresh release for the new SemVer.
+
+#### Post-publication incident case study: v4.1.0
+
+During the publication of `v4.1.0` (run `35255186714`, source SHA `5e5ab9d9a89aaced2af97a32c64fff21681c4c56`),
+candidate qualification, draft asset upload, and exact-byte OIDC attestations succeeded, and the GitHub
+Release was transitioned to published (`draft = false`, making it GitHub Latest). However, a state-object
+property assignment error in `v4_release_pipeline.ps1` terminated the workflow immediately after publication,
+before metadata promotion could execute. As a result, GitHub Latest reached `v4.1.0` while
+`channels/stable/latest.json` remained at `4.0.1`.
+
+Under coordinator decision for program #322 / issue #323:
+- **No manual metadata promotion**: Out-of-band manual mutation to `release-metadata` for `v4.1.0` is prohibited.
+- **No immediate corrective release**: A corrective release (e.g. `v4.1.1`) is not dispatched at this time solely to reconcile metadata while v3 retirement and update UX standardization remain in flight.
+- **Immutable release preserved**: `v4.1.0` and its assets remain an immutable published incident record.
+- **Reconciliation deferred to final program release**: Stable metadata remains at `4.0.1` until the final stable release of program #322. That final release will execute through the canonical `release-v4.yml` pipeline, simultaneously becoming GitHub Latest and advancing stable metadata in a single transaction.
 
 ### Diagnostic tooling
 
