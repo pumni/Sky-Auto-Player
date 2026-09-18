@@ -1077,4 +1077,188 @@ mod ipc_tests {
 
         let _ = tauri::test::get_ipc_response(&webview, request("shutdown", json!({}), 86));
     }
+
+    #[test]
+    fn candidate_invalidation_matrix_for_settings_and_update_preferences_patches() {
+        use crate::native_update::NativeUpdateCandidate;
+        use crate::ui_events::{UpdateChannel, UpdateState};
+
+        let (paths, _cleanup) = test_install_root();
+        let state = AppState::with_test_paths(paths);
+        let app = tauri::test::mock_builder()
+            .manage(state.clone())
+            .invoke_handler(tauri::generate_handler![
+                super::commands::patch_settings,
+                super::commands::patch_update_preferences,
+                super::commands::shutdown,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app");
+
+        state
+            .configure_update_service(app.handle().clone())
+            .expect("configure update service");
+        let update_service = state
+            .update_service()
+            .expect("lock")
+            .expect("update service");
+        let runtime = state.ensure_native_blocking().expect("runtime");
+
+        let set_available = |version: &str| {
+            let mut s = update_service.state.lock().unwrap();
+            s.channel = UpdateChannel::Stable;
+            s.candidate = Some(NativeUpdateCandidate {
+                version: version.to_string(),
+                channel: UpdateChannel::Stable,
+                release_notes: Some("Release notes".to_string()),
+                published_at: None,
+            });
+            s.state = UpdateState::Available;
+        };
+
+        // --- 1. Generic patch_settings path ---
+
+        // 1a. Available + auto_check-only mutation => candidate/snapshot remains Available
+        set_available("4.2.0");
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: Some(false),
+                    channel: None,
+                    skip_version: None,
+                }),
+            })
+            .expect("patch auto_check false");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1b. Available + Stable->Stable no-op => candidate remains Available
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: Some(UpdateChannel::Stable),
+                    skip_version: None,
+                }),
+            })
+            .expect("patch stable->stable");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1c. Available + skip X->X no-op => candidate remains Available
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.1.0".to_string()),
+                }),
+            })
+            .expect("set skip_version");
+        set_available("4.2.0");
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.1.0".to_string()),
+                }),
+            })
+            .expect("patch skip 4.1.0->4.1.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.2.0"));
+
+        // 1d. Available + actual skip change => Idle and candidate cleared
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                theme: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: None,
+                auto_play: None,
+                update_preferences: Some(crate::commands::UpdatePreferencesPatch {
+                    auto_check: None,
+                    channel: None,
+                    skip_version: Some("4.2.0".to_string()),
+                }),
+            })
+            .expect("patch skip 4.1.0->4.2.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Idle);
+        assert!(snap.available_version.is_none());
+
+        // --- 2. Dedicated patch_update_preferences path ---
+
+        // 2a. Available + auto_check-only mutation => candidate/snapshot remains Available
+        set_available("4.3.0");
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: Some(true),
+                channel: None,
+                skip_version: None,
+            })
+            .expect("patch auto_check true");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2b. Available + Stable->Stable no-op => candidate remains Available
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: Some(UpdateChannel::Stable),
+                skip_version: None,
+            })
+            .expect("patch stable->stable");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2c. Available + skip X->X no-op => candidate remains Available
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: None,
+                skip_version: Some("4.2.0".to_string()),
+            })
+            .expect("patch skip 4.2.0->4.2.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Available);
+        assert_eq!(snap.available_version.as_deref(), Some("4.3.0"));
+
+        // 2d. Available + actual skip change => Idle and candidate cleared
+        runtime
+            .patch_update_preferences(crate::commands::UpdatePreferencesPatch {
+                auto_check: None,
+                channel: None,
+                skip_version: Some("4.3.0".to_string()),
+            })
+            .expect("patch skip 4.2.0->4.3.0");
+        let snap = update_service.current_snapshot();
+        assert_eq!(snap.state, UpdateState::Idle);
+        assert!(snap.available_version.is_none());
+    }
 }

@@ -257,6 +257,8 @@ describe('UpdateDialog', () => {
       });
     });
 
+    const patchSpy = vi.spyOn(useStore.getState(), 'patchSettings');
+
     render(<UpdateDialog useStore={useStore} />);
     const skipBtn = screen.getByRole('button', { name: 'Skip this version' });
 
@@ -264,7 +266,41 @@ describe('UpdateDialog', () => {
       fireEvent.click(skipBtn);
     });
 
+    expect(patchSpy).toHaveBeenCalledWith({
+      updatePreferences: { skipVersion: '4.2.0' },
+    });
+    const patchResult = await patchSpy.mock.results[0]?.value;
+    expect(patchResult).toBeNull();
     // Dialog stays open because skipVersion failed to persist
     expect(useStore.getState().update.dialogOpen).toBe(true);
   });
+
+  it.each([
+    { errorCode: 'stale_update', expectedHeading: 'Update failed', retryAction: 'check' },
+    { errorCode: 'update_unavailable', expectedHeading: 'Update failed', retryAction: 'check' },
+    { errorCode: 'closing', expectedHeading: 'Update failed', retryAction: 'none' },
+    { errorCode: 'check_failed', expectedHeading: 'Update check failed', retryAction: 'check' },
+  ] as const)(
+    'classifies $errorCode heading as "$expectedHeading"',
+    async ({ errorCode, expectedHeading, retryAction }) => {
+      const bridge = createMockBridge();
+      const useStore = createDesktopStore(bridge);
+      await act(async () => useStore.getState().initialize());
+
+      act(() => {
+        useStore.setState({
+          update: {
+            ...useStore.getState().update,
+            state: 'error',
+            errorCode,
+            retryAction,
+            dialogOpen: true,
+          },
+        });
+      });
+
+      render(<UpdateDialog useStore={useStore} />);
+      expect(screen.getByRole('heading', { name: expectedHeading })).toBeInTheDocument();
+    },
+  );
 });

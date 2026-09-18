@@ -196,7 +196,7 @@ impl Default for StateTransition {
 pub(crate) struct UpdateService<R: Runtime> {
     app: AppHandle<R>,
     activity: ActivityCoordinator,
-    state: Mutex<NativeUpdateState>,
+    pub(crate) state: Mutex<NativeUpdateState>,
     safety_hook: Arc<Mutex<Option<SafetyHook>>>,
 }
 
@@ -266,6 +266,29 @@ impl<R: Runtime> UpdateService<R> {
         Ok(snapshot)
     }
 
+    pub(crate) fn handle_check_persistence_failure(
+        &self,
+        channel: UpdateChannel,
+        error: impl std::fmt::Display,
+        publish: &impl Fn(UiEvent) -> Result<(), String>,
+    ) -> Result<UpdateCheckAckDto, String> {
+        let detail = format!("update timestamp persistence failed: {error}");
+        self.transition_and_publish(
+            StateTransition {
+                state: UpdateState::Error,
+                channel,
+                error_code: Some(UpdateErrorCode::StatePersistenceFailed),
+                error_detail: Some(detail),
+                retry_action: UpdateRetryAction::Check,
+                ..Default::default()
+            },
+            publish,
+        )?;
+        Ok(UpdateCheckAckDto {
+            disposition: UpdateCheckDisposition::Performed,
+        })
+    }
+
     pub(crate) fn check(
         &self,
         request: &UpdateCheckRequest,
@@ -300,21 +323,7 @@ impl<R: Runtime> UpdateService<R> {
                 }) =>
             {
                 if let Err(error) = settings.record_update_success(timestamp) {
-                    let detail = format!("update timestamp persistence failed: {error}");
-                    self.transition_and_publish(
-                        StateTransition {
-                            state: UpdateState::Error,
-                            channel,
-                            error_code: Some(UpdateErrorCode::StatePersistenceFailed),
-                            error_detail: Some(detail),
-                            retry_action: UpdateRetryAction::Check,
-                            ..Default::default()
-                        },
-                        &publish,
-                    )?;
-                    return Ok(UpdateCheckAckDto {
-                        disposition: UpdateCheckDisposition::Performed,
-                    });
+                    return self.handle_check_persistence_failure(channel, error, &publish);
                 }
                 let candidate =
                     candidate_from_update(updates.first().expect("update exists"), channel);
@@ -334,21 +343,7 @@ impl<R: Runtime> UpdateService<R> {
             }
             Ok(_) => {
                 if let Err(error) = settings.record_update_success(timestamp) {
-                    let detail = format!("update timestamp persistence failed: {error}");
-                    self.transition_and_publish(
-                        StateTransition {
-                            state: UpdateState::Error,
-                            channel,
-                            error_code: Some(UpdateErrorCode::StatePersistenceFailed),
-                            error_detail: Some(detail),
-                            retry_action: UpdateRetryAction::Check,
-                            ..Default::default()
-                        },
-                        &publish,
-                    )?;
-                    return Ok(UpdateCheckAckDto {
-                        disposition: UpdateCheckDisposition::Performed,
-                    });
+                    return self.handle_check_persistence_failure(channel, error, &publish);
                 }
                 self.transition_and_publish(
                     StateTransition {
@@ -364,21 +359,7 @@ impl<R: Runtime> UpdateService<R> {
             }
             Err(error) => {
                 if let Err(persist_error) = settings.record_update_error(timestamp) {
-                    let detail = format!("update timestamp persistence failed: {persist_error}");
-                    self.transition_and_publish(
-                        StateTransition {
-                            state: UpdateState::Error,
-                            channel,
-                            error_code: Some(UpdateErrorCode::StatePersistenceFailed),
-                            error_detail: Some(detail),
-                            retry_action: UpdateRetryAction::Check,
-                            ..Default::default()
-                        },
-                        &publish,
-                    )?;
-                    return Ok(UpdateCheckAckDto {
-                        disposition: UpdateCheckDisposition::Performed,
-                    });
+                    return self.handle_check_persistence_failure(channel, persist_error, &publish);
                 }
                 let error_code = classify_check_error(&error);
                 let message = bounded(error);
@@ -1460,5 +1441,57 @@ mod tests {
         assert!(snap8.progress.is_none());
         assert_eq!(snap8.retry_action, UpdateRetryAction::None);
         assert_eq!(state.snapshot(), snap8);
+    }
+
+    #[test]
+    fn check_persistence_failure_produces_state_persistence_failed_and_performed_ack() {
+        use super::UpdateService;
+        use crate::app_state::ActivityCoordinator;
+        use crate::ui_events::{
+            UiEvent, UpdateChannel, UpdateCheckDisposition, UpdateErrorCode, UpdateRetryAction,
+            UpdateState,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let activity = ActivityCoordinator::default();
+        let service = UpdateService::new(app.handle().clone(), activity);
+
+        let event_count = AtomicUsize::new(0);
+        let ack = service
+            .handle_check_persistence_failure(
+                UpdateChannel::Stable,
+                "disk write error (simulated)",
+                &|event| {
+                    event_count.fetch_add(1, Ordering::SeqCst);
+                    if let UiEvent::UpdateChanged { v, payload } = event {
+                        assert_eq!(v, 1);
+                        assert_eq!(payload.state, UpdateState::Error);
+                        assert_eq!(
+                            payload.error_code,
+                            Some(UpdateErrorCode::StatePersistenceFailed)
+                        );
+                        assert_eq!(payload.retry_action, UpdateRetryAction::Check);
+                        assert!(payload.error_detail.unwrap().contains("disk write error"));
+                    } else {
+                        panic!("unexpected event: {event:?}");
+                    }
+                    Ok(())
+                },
+            )
+            .expect("handled persistence failure");
+
+        assert_eq!(ack.disposition, UpdateCheckDisposition::Performed);
+        assert_eq!(event_count.load(Ordering::SeqCst), 1);
+
+        let snapshot = service.current_snapshot();
+        assert_eq!(snapshot.state, UpdateState::Error);
+        assert_eq!(
+            snapshot.error_code,
+            Some(UpdateErrorCode::StatePersistenceFailed)
+        );
+        assert_eq!(snapshot.retry_action, UpdateRetryAction::Check);
     }
 }

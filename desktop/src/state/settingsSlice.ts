@@ -59,7 +59,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           set({ settingsState: 'fatal', fatal: message });
-          return get().settings;
+          return null;
         }
       });
       // Keep the queue alive after an individual mutation fails. Later user
@@ -73,6 +73,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
 
     async checkForUpdate(origin: 'manual' | 'background' = 'manual') {
       const isManual = origin === 'manual';
+      const requestRevision = get().update.lastNativeRevision;
       set({
         update: {
           ...get().update,
@@ -91,12 +92,18 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           },
         });
       } catch (error) {
+        const current = get().update;
+        const hasNewerSnapshot = current.lastNativeRevision > requestRevision;
         set({
           update: {
-            ...get().update,
+            ...current,
             checkRequestPending: false,
-            transportError: error instanceof Error ? error.message : String(error),
-            dialogOpen: isManual ? true : get().update.dialogOpen,
+            transportError: hasNewerSnapshot
+              ? null
+              : error instanceof Error
+                ? error.message
+                : String(error),
+            dialogOpen: isManual ? true : current.dialogOpen,
           },
         });
         // Thrown bridge/IPC failure; do not invent timestamps
@@ -113,6 +120,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
       }
       const targetVersion = get().update.availableVersion;
       if (!targetVersion) return;
+      const requestRevision = get().update.lastNativeRevision;
       set({
         update: {
           ...get().update,
@@ -129,11 +137,17 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           },
         });
       } catch (error) {
+        const current = get().update;
+        const hasNewerSnapshot = current.lastNativeRevision > requestRevision;
         set({
           update: {
-            ...get().update,
+            ...current,
             installRequestPending: false,
-            transportError: error instanceof Error ? error.message : String(error),
+            transportError: hasNewerSnapshot
+              ? null
+              : error instanceof Error
+                ? error.message
+                : String(error),
           },
         });
       }

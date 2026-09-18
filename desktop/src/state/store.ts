@@ -376,7 +376,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           if (event.payload.revision <= current.lastNativeRevision) return;
           set({
             update: {
-              ...current,
+              // frontend-local only
               dialogOpen: current.dialogOpen,
               checkRequestPending: current.checkRequestPending,
               installRequestPending: current.installRequestPending,

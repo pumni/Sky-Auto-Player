@@ -1904,7 +1904,7 @@ impl NativeDesktopRuntime {
         timing_margin_recommendation(self.paths.calibration_cache_path())
     }
 
-    fn patch_settings(&self, patch: SettingsPatch) -> Result<SettingsDto, String> {
+    pub(crate) fn patch_settings(&self, patch: SettingsPatch) -> Result<SettingsDto, String> {
         if patch.update_preferences.as_ref().and_then(|u| u.channel)
             == Some(crate::ui_events::UpdateChannel::Beta)
         {
@@ -1912,10 +1912,6 @@ impl NativeDesktopRuntime {
                 "channel_unavailable: beta update channel is not supported in production".into(),
             );
         }
-        let candidate_invalidation_needed = patch
-            .update_preferences
-            .as_ref()
-            .is_some_and(|u| u.channel.is_some() || u.skip_version.is_some());
         let auto_play_only = patch.auto_play.is_some()
             && patch.theme.is_none()
             && patch.telemetry_enabled.is_none()
@@ -1952,7 +1948,11 @@ impl NativeDesktopRuntime {
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
+        let before_channel = settings.snapshot().update.channel.clone();
+        let before_skip_version = settings.snapshot().update.skip_version.clone();
         let snapshot = settings.patch(&core_patch).map_err(settings_error)?.clone();
+        let candidate_invalidation_needed = before_channel != snapshot.update.channel
+            || before_skip_version != snapshot.update.skip_version;
         drop(settings);
         if !auto_play_only {
             self.playback.invalidate_settings();
@@ -2012,7 +2012,7 @@ impl NativeDesktopRuntime {
             .install(&settings, &target_version, |event| self.publish(event))
     }
 
-    fn patch_update_preferences(
+    pub(crate) fn patch_update_preferences(
         &self,
         patch: UpdatePreferencesPatch,
     ) -> Result<UpdatePreferencesDto, String> {
@@ -2021,11 +2021,12 @@ impl NativeDesktopRuntime {
                 "channel_unavailable: beta update channel is not supported in production".into(),
             );
         }
-        let candidate_invalidation_needed = patch.channel.is_some() || patch.skip_version.is_some();
         let mut settings = self
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
+        let before_channel = settings.snapshot().update.channel.clone();
+        let before_skip_version = settings.snapshot().update.skip_version.clone();
         let snapshot = settings
             .patch(&sky_app_core::settings::SettingsPatch {
                 update: Some(CoreUpdatePreferencesPatch {
@@ -2042,7 +2043,11 @@ impl NativeDesktopRuntime {
                 }),
                 ..Default::default()
             })
-            .map_err(settings_error)?;
+            .map_err(settings_error)?
+            .clone();
+        let candidate_invalidation_needed = before_channel != snapshot.update.channel
+            || before_skip_version != snapshot.update.skip_version;
+        drop(settings);
         if candidate_invalidation_needed && let Some(update_service) = &self.update_service {
             let channel = match snapshot.update.channel {
                 sky_app_core::settings::UpdateChannel::Stable => {
@@ -2054,7 +2059,7 @@ impl NativeDesktopRuntime {
             };
             update_service.reset_and_publish_idle(channel, |event| self.publish(event))?;
         }
-        Ok(update_preferences_dto(snapshot))
+        Ok(update_preferences_dto(&snapshot))
     }
 
     pub(crate) fn catalog_readiness(&self) -> Result<(CatalogReadiness, Option<u64>), String> {

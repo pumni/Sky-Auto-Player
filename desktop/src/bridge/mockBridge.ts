@@ -144,13 +144,17 @@ export interface MockBridgeOptions {
     published_at?: string | null;
     error?: string | null;
   };
+  updateCheckTransportError?: string;
   updateCheckError?: string;
   updateSnapshot?: Partial<UpdateSnapshotPayload>;
   updateCheckDisposition?: UpdateCheckDisposition;
-  beginUpdateHandoffError?: string;
+  beginUpdateProductError?: {
+    code: UpdateErrorCode;
+    detail: string;
+    retryAction: UpdateRetryAction;
+  };
+  beginUpdateTransportError?: string;
   beginUpdateHandoffTransportError?: string;
-  beginUpdateHandoffErrorCode?: UpdateErrorCode;
-  beginUpdateHandoffRetryAction?: UpdateRetryAction;
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
@@ -707,15 +711,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings;
     },
     async checkForUpdate(request: UpdateCheckRequest): Promise<UpdateCheck> {
-      if (options.updateCheckError) {
-        settings = {
-          ...settings,
-          update_preferences: {
-            ...settings.update_preferences,
-            last_error_ts: Math.floor(Date.now() / 1000),
-          },
-        };
-        throw new Error(options.updateCheckError);
+      const transportError = options.updateCheckTransportError ?? options.updateCheckError;
+      if (transportError) {
+        throw new Error(transportError);
       }
       if (request.origin === 'background') {
         if (!settings.update_preferences.auto_check) {
@@ -868,24 +866,12 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       return settings.update_preferences;
     },
     async beginUpdateHandoff(targetVersion: string): Promise<UpdateInstallAck> {
-      if (options.beginUpdateHandoffTransportError) {
-        throw new Error(options.beginUpdateHandoffTransportError);
+      const transportError =
+        options.beginUpdateTransportError ?? options.beginUpdateHandoffTransportError;
+      if (transportError) {
+        throw new Error(transportError);
       }
-      if (options.beginUpdateHandoffError) {
-        const isPlayback = options.beginUpdateHandoffError.includes('playback_active');
-        const isCalibration = options.beginUpdateHandoffError.includes('calibration_active');
-        const isClosing = options.beginUpdateHandoffError.includes('closing');
-        const errorCode =
-          options.beginUpdateHandoffErrorCode ??
-          (isPlayback
-            ? 'playback_active'
-            : isCalibration
-              ? 'calibration_active'
-              : isClosing
-                ? 'closing'
-                : 'install_failed');
-        const retryAction =
-          options.beginUpdateHandoffRetryAction ?? (isClosing ? 'none' : 'install');
+      if (options.beginUpdateProductError) {
         emitUpdateSnapshot({
           state: 'error',
           current_version: currentUpdateSnapshot.current_version,
@@ -893,9 +879,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           channel: settings.update_preferences.channel,
           release_notes: currentUpdateSnapshot.release_notes,
           published_at: currentUpdateSnapshot.published_at,
-          error_code: errorCode,
-          error_detail: options.beginUpdateHandoffError,
-          retry_action: retryAction,
+          error_code: options.beginUpdateProductError.code,
+          error_detail: options.beginUpdateProductError.detail,
+          retry_action: options.beginUpdateProductError.retryAction,
           operation_id: null,
           progress: null,
         });

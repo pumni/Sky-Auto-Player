@@ -1,7 +1,36 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { Check, Download, LoaderCircle, X } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
+import type { UpdateErrorCode, UpdateRetryAction } from '../../bridge/DesktopBridge';
 import { formatUpdateError } from '../../state/updateHelpers';
+
+function getErrorHeading(
+  errorCode: UpdateErrorCode | null,
+  retryAction: UpdateRetryAction,
+): string {
+  if (
+    errorCode === 'check_failed' ||
+    errorCode === 'state_persistence_failed' ||
+    errorCode === 'channel_unavailable' ||
+    errorCode === 'update_service_unavailable'
+  ) {
+    return 'Update check failed';
+  }
+  if (
+    errorCode === 'playback_active' ||
+    errorCode === 'calibration_active' ||
+    errorCode === 'update_busy' ||
+    errorCode === 'closing' ||
+    errorCode === 'stale_update' ||
+    errorCode === 'update_unavailable' ||
+    errorCode === 'download_failed' ||
+    errorCode === 'install_failed' ||
+    retryAction === 'install'
+  ) {
+    return 'Update failed';
+  }
+  return 'Update check failed';
+}
 
 interface UpdateDialogProps {
   useStore: DesktopStoreHook;
@@ -76,13 +105,7 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
               </>
             ) : isError ? (
               <>
-                <h3>
-                  {update.retryAction === 'install' ||
-                  update.errorCode === 'download_failed' ||
-                  update.errorCode === 'install_failed'
-                    ? 'Update failed'
-                    : 'Update check failed'}
-                </h3>
+                <h3>{getErrorHeading(update.errorCode, update.retryAction)}</h3>
                 <p className="inline-error">{errorText}</p>
                 <div className="update-actions">
                   {(update.retryAction === 'check' || Boolean(update.transportError)) && (
