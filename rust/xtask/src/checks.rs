@@ -4794,7 +4794,7 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-Preflight BuildCandidate PublishRelease PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile New-ExpectedV4Metadata Assert-ExactFileBytes Assert-ExactPublishedPublicAssetRecords Assert-RawMetadataConverges RawMetadataRetryBudgetSeconds raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization ReadAsByteArrayAsync GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1 Format-V4TransactionMarker Get-V4TransactionMarker Test-V4TransactionMarkerMatch Invoke-DraftSelfCleanup candidate-manifest.json v4_release_latest_policy.ps1 Get-RemoteLatestRelease Assert-V4GitHubLatestPolicy
+Preflight BuildCandidate PublishRelease PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Invoke-PrePublicationMetadataQualification New-ExpectedV4Metadata Assert-ExactFileBytes Assert-ExactPublishedPublicAssetRecords Assert-RawMetadataConverges Assert-RawMetadataRetryConfiguration RawMetadataRetryBudgetSeconds raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization ReadAsByteArrayAsync GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1 Format-V4TransactionMarker Get-V4TransactionMarker Test-V4TransactionMarkerMatch Invoke-DraftSelfCleanup candidate-manifest.json v4_release_latest_policy.ps1 Get-RemoteLatestRelease Assert-V4GitHubLatestPolicy
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
@@ -4816,7 +4816,8 @@ function Test-StrictModeEmptyFreshUserSongs { Set-StrictMode -Version Latest; fr
 function Test-DraftLookupFallback { by-tag-404; paginated releases collection; duplicate releases use the requested tag }
 class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$UploadedThroughReleaseUrl = $false; [bool]$ExactDownloadedBytes = $false; [bool]$immutable = $false; candidate rebuilt; promotion before immutable publication; BuildCount -ne 1; UploadedThroughReleaseUrl; ExactDownloadedBytes; immutable }
 "#;
-        assert!(v4_release_pipeline_contract_source(workflow, pipeline, regression).is_ok());
+        let pipeline_contract = v4_release_pipeline_contract_source(workflow, pipeline, regression);
+        assert!(pipeline_contract.is_ok(), "{pipeline_contract:?}");
 
         let reordered = workflow.replace(
             "-State Preflight\n    -State BuildCandidate",
@@ -4862,10 +4863,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
       - name: Preflight release request and repository readiness
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Publish the qualified candidate immutably
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Mint release-metadata GitHub App token
+      - name: Mint release-metadata GitHub App token before publication
         id: metadata-app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
@@ -4874,6 +4872,13 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
+      - name: Probe release-metadata App access before publication
+        env:
+          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+        run: scripts/probe_v4_metadata_app_access.ps1
+      - name: Publish the qualified candidate immutably
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Promote release metadata only after immutable publication
         env:
           GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
@@ -4884,8 +4889,8 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         assert!(validate_metadata_app_token_scope(workflow).is_ok());
 
         let broad_token = workflow.replace(
-            "GH_TOKEN: ${{ github.token }}\n      - name: Publish",
-            "GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}\n      - name: Publish",
+            "- name: Publish the qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ github.token }}",
+            "- name: Publish the qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
         );
         assert!(validate_metadata_app_token_scope(&broad_token).is_err());
 
