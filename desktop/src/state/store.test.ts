@@ -3104,6 +3104,33 @@ describe('desktop update UX and native authority', () => {
     expect(store.getState().update.availableVersion).toBe('4.1.0');
   });
 
+  it('copies native cumulative update progress without adding chunks in the frontend', () => {
+    const store = createDesktopStore(createMockBridge());
+    const completed = [16_000, 32_000, 40_000];
+
+    completed.forEach((value, index) => {
+      store.getState().applyEvent({
+        v: 1,
+        name: 'update.changed',
+        payload: {
+          revision: index + 1,
+          state: 'downloading',
+          current_version: '4.0.0',
+          available_version: '4.1.0',
+          channel: 'stable',
+          release_notes: null,
+          published_at: null,
+          error_code: null,
+          error_detail: null,
+          retry_action: 'none',
+          operation_id: '0123456789abcdef0123456789abcdef',
+          progress: { completed: value, total: 40_000, message: 'Downloading update' },
+        },
+      });
+      expect(store.getState().update.progress?.completed).toBe(value);
+    });
+  });
+
   it('does not emit update.changed when background check is disabled by auto_check=false', async () => {
     const bridge = createMockBridge();
     await bridge.patchUpdatePreferences({ autoCheck: false });

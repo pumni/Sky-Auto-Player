@@ -272,6 +272,32 @@ describe('UpdateDialog', () => {
     expect(screen.getByRole('button', { name: 'Close update' })).toBeDisabled();
   });
 
+  it('renders the native cumulative progress snapshot without recalculating it', async () => {
+    const bridge = createMockBridge();
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'downloading',
+          availableVersion: '4.2.0',
+          dialogOpen: true,
+          progress: {
+            completed: 32_000,
+            total: 40_000,
+            message: 'Downloading update',
+          },
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+
+    expect(screen.getByText('Downloading update (32000/40000 bytes)')).toBeInTheDocument();
+  });
+
   it('does not close dialog if skipping version fails to persist', async () => {
     const bridge = createMockBridge();
     bridge.patchSettings = async () => {
