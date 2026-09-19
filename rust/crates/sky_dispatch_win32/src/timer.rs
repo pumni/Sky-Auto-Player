@@ -1,5 +1,7 @@
 //! High-resolution Waitable Timer wrapper for microsecond-accurate kernel sleeps.
 
+use std::num::NonZeroU64;
+
 #[cfg(all(feature = "test-support", windows))]
 pub mod test_support {
     use std::cell::RefCell;
@@ -150,9 +152,9 @@ impl WaitableTimer {
     }
 
     pub fn sleep_us(&self, us: u64) -> Result<(), u32> {
-        if us == 0 {
+        let Some(us) = NonZeroU64::new(us) else {
             return Ok(());
-        }
+        };
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
@@ -168,16 +170,16 @@ impl WaitableTimer {
         }
         #[cfg(not(windows))]
         {
-            std::thread::sleep(std::time::Duration::from_micros(us));
+            std::thread::sleep(std::time::Duration::from_micros(us.get()));
             Ok(())
         }
     }
 
     #[cfg(windows)]
-    pub(crate) fn arm_relative_us(&self, us: u64) -> Result<(), u32> {
+    pub(crate) fn arm_relative_us(&self, us: NonZeroU64) -> Result<(), u32> {
         use windows_sys::Win32::System::Threading::SetWaitableTimer;
 
-        let Some(ticks_100ns) = us.checked_mul(10) else {
+        let Some(ticks_100ns) = us.get().checked_mul(10) else {
             return Err(87);
         };
         let Ok(ticks_100ns) = i64::try_from(ticks_100ns) else {
