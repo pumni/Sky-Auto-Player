@@ -743,11 +743,26 @@ function Assert-EvidenceIdentity([string]$ProductionPath, [string]$Qualification
     if ([string]$qualification.updater_signature -ne $sigSourceName) {
         Fail "qualification evidence updater_signature name mismatch: expected '$sigSourceName', got '$([string]$qualification.updater_signature)'"
     }
+    if ([string]$qualification.authenticode_evidence -ne $authenticodeEvidenceName) {
+        Fail "qualification evidence authenticode_evidence name mismatch: expected '$authenticodeEvidenceName', got '$([string]$qualification.authenticode_evidence)'"
+    }
+    if ([string]$qualification.sbom -ne $sbomName) {
+        Fail "qualification evidence sbom name mismatch: expected '$sbomName', got '$([string]$qualification.sbom)'"
+    }
+    if ([int64]$qualification.installer_size -ne $instExpectedSize) {
+        Fail "qualification evidence installer size mismatch: expected $instExpectedSize, got $([int64]$qualification.installer_size)"
+    }
+    if ([int64]$qualification.signature_size -ne $sigExpectedSize) {
+        Fail "qualification evidence updater signature size mismatch: expected $sigExpectedSize, got $([int64]$qualification.signature_size)"
+    }
     if ([string]$qualification.installer_sha256 -ne $instExpectedSha) {
         Fail "qualification evidence installer SHA-256 mismatch: expected '$instExpectedSha', got '$([string]$qualification.installer_sha256)'"
     }
     if ([string]$qualification.updater_signature_sha256 -ne $sigExpectedSha) {
         Fail "qualification evidence updater signature SHA-256 mismatch: expected '$sigExpectedSha', got '$([string]$qualification.updater_signature_sha256)'"
+    }
+    if ([string]$qualification.authenticode_evidence_sha256 -ne $authExpectedSha) {
+        Fail "qualification evidence Authenticode evidence SHA-256 mismatch: expected '$authExpectedSha', got '$([string]$qualification.authenticode_evidence_sha256)'"
     }
     if ([string]$qualification.authenticode_mode -ne "unsigned-zero-budget") {
         Fail "qualification evidence authenticode_mode mismatch: expected 'unsigned-zero-budget', got '$([string]$qualification.authenticode_mode)'"

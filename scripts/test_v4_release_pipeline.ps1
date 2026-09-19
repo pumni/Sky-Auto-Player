@@ -277,8 +277,9 @@ foreach ($marker in @(
     }
 }
 foreach ($marker in @(
-    '"-State", "QualifyDownloaded"',
-    '"-StateRoot", $effectiveStateRoot'
+    'candidate-bundle',
+    'candidate-evidence',
+    'V4 production-topology rehearsal: PASS'
 )) {
     if (-not $topologyRehearsal.Contains($marker)) {
         Fail "production-topology rehearsal marker is missing: $marker"
@@ -4395,10 +4396,18 @@ function Test-ProducerConsumerEvidenceBindingRegression {
             @{ Field = "updater_signature_sha256"; Mutation = ('f' * 64); Target = "prod"; ExpectedError = "production evidence updater signature SHA-256 mismatch" },
             @{ Field = "authenticode_evidence_sha256"; Mutation = ('f' * 64); Target = "prod"; ExpectedError = "production evidence Authenticode evidence SHA-256 mismatch" },
             @{ Field = "sbom_sha256"; Mutation = ('f' * 64); Target = "prod"; ExpectedError = "production evidence SBOM SHA-256 mismatch" },
+            # Qualification evidence: all 11 fields fault-injected individually
             @{ Field = "installer"; Mutation = "MutatedName.exe"; Target = "qual"; ExpectedError = "qualification evidence installer name mismatch" },
             @{ Field = "updater_signature"; Mutation = "MutatedSig.sig"; Target = "qual"; ExpectedError = "qualification evidence updater_signature name mismatch" },
+            @{ Field = "authenticode_evidence"; Mutation = "WRONG_EVIDENCE.json"; Target = "qual"; ExpectedError = "qualification evidence authenticode_evidence name mismatch" },
+            @{ Field = "sbom"; Mutation = "WRONG_SBOM.json"; Target = "qual"; ExpectedError = "qualification evidence sbom name mismatch" },
+            @{ Field = "installer_size"; Mutation = [int64]999; Target = "qual"; ExpectedError = "qualification evidence installer size mismatch" },
+            @{ Field = "signature_size"; Mutation = [int64]999; Target = "qual"; ExpectedError = "qualification evidence updater signature size mismatch" },
             @{ Field = "installer_sha256"; Mutation = ('f' * 64); Target = "qual"; ExpectedError = "qualification evidence installer SHA-256 mismatch" },
-            @{ Field = "updater_signature_sha256"; Mutation = ('f' * 64); Target = "qual"; ExpectedError = "qualification evidence updater signature SHA-256 mismatch" }
+            @{ Field = "updater_signature_sha256"; Mutation = ('f' * 64); Target = "qual"; ExpectedError = "qualification evidence updater signature SHA-256 mismatch" },
+            @{ Field = "authenticode_evidence_sha256"; Mutation = ('f' * 64); Target = "qual"; ExpectedError = "qualification evidence Authenticode evidence SHA-256 mismatch" },
+            @{ Field = "authenticode_mode"; Mutation = "wrong-mode"; Target = "qual"; ExpectedError = "qualification evidence authenticode_mode mismatch" },
+            @{ Field = "sbom_sha256"; Mutation = ('f' * 64); Target = "qual"; ExpectedError = "qualification evidence SBOM SHA-256 mismatch" }
         )
 
         foreach ($case in $diagnosticCases) {
