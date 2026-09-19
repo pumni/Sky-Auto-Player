@@ -2115,15 +2115,15 @@ mod tests {
     fn normal_prepared_sender_does_not_consume_phase_two_authorization() {
         let loop_source = include_str!("dispatch_loop.rs");
         let loop_production = loop_source
-            .split("#[cfg(test)]\nmod tests")
-            .next()
+            .split_once("#[cfg(test)]")
+            .map(|(production, _)| production)
             .expect("dispatch loop production source");
         assert!(!loop_production.contains("prepared_down_is_authorized"));
         assert!(loop_production.contains("invalidate_prepared_down_authorization"));
         let prepared_source = include_str!("dispatch/prepared.rs");
         let prepared_production = prepared_source
-            .split("#[cfg(test)]\nmod tests")
-            .next()
+            .split_once("#[cfg(test)]")
+            .map(|(production, _)| production)
             .expect("prepared dispatch production source");
         assert!(!prepared_production.contains("PreparedDownAuthorization"));
         assert!(!prepared_production.contains("prepared_down_is_authorized"));
