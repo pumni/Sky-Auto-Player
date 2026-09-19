@@ -744,10 +744,10 @@ function Assert-EvidenceIdentity([string]$ProductionPath, [string]$Qualification
         Fail "qualification evidence updater_signature name mismatch: expected '$sigSourceName', got '$([string]$qualification.updater_signature)'"
     }
     if ([string]$qualification.authenticode_evidence -ne $authenticodeEvidenceName) {
-        Fail "qualification evidence authenticode_evidence name mismatch: expected '$authenticodeEvidenceName', got '$([string]$qualification.authenticode_evidence)'"
+        Fail "qualification evidence Authenticode evidence name mismatch: expected '$authenticodeEvidenceName', got '$([string]$qualification.authenticode_evidence)'"
     }
     if ([string]$qualification.sbom -ne $sbomName) {
-        Fail "qualification evidence sbom name mismatch: expected '$sbomName', got '$([string]$qualification.sbom)'"
+        Fail "qualification evidence SBOM name mismatch: expected '$sbomName', got '$([string]$qualification.sbom)'"
     }
     if ([int64]$qualification.installer_size -ne $instExpectedSize) {
         Fail "qualification evidence installer size mismatch: expected $instExpectedSize, got $([int64]$qualification.installer_size)"

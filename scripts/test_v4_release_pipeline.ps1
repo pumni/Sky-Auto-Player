@@ -279,11 +279,19 @@ foreach ($marker in @(
 foreach ($marker in @(
     'candidate-bundle',
     'candidate-evidence',
+    'cargo xtask sbom verify',
+    'cargo xtask verify-tauri-bundle',
     'V4 production-topology rehearsal: PASS'
 )) {
     if (-not $topologyRehearsal.Contains($marker)) {
         Fail "production-topology rehearsal marker is missing: $marker"
     }
+}
+if ($topologyRehearsal.Contains('QualifyDownloaded')) {
+    Fail "production-topology rehearsal must not reference retired QualifyDownloaded state"
+}
+if ($topologyRehearsal.Contains('4.1.1')) {
+    Fail "production-topology rehearsal must resolve the current package version dynamically"
 }
 if (-not $pipeline.Contains("FixtureTargetDir")) {
     Fail "production qualification must pass an explicit fixture target directory"
@@ -4399,8 +4407,8 @@ function Test-ProducerConsumerEvidenceBindingRegression {
             # Qualification evidence: all 11 fields fault-injected individually
             @{ Field = "installer"; Mutation = "MutatedName.exe"; Target = "qual"; ExpectedError = "qualification evidence installer name mismatch" },
             @{ Field = "updater_signature"; Mutation = "MutatedSig.sig"; Target = "qual"; ExpectedError = "qualification evidence updater_signature name mismatch" },
-            @{ Field = "authenticode_evidence"; Mutation = "WRONG_EVIDENCE.json"; Target = "qual"; ExpectedError = "qualification evidence authenticode_evidence name mismatch" },
-            @{ Field = "sbom"; Mutation = "WRONG_SBOM.json"; Target = "qual"; ExpectedError = "qualification evidence sbom name mismatch" },
+            @{ Field = "authenticode_evidence"; Mutation = "WRONG_EVIDENCE.json"; Target = "qual"; ExpectedError = "qualification evidence Authenticode evidence name mismatch" },
+            @{ Field = "sbom"; Mutation = "WRONG_SBOM.json"; Target = "qual"; ExpectedError = "qualification evidence SBOM name mismatch" },
             @{ Field = "installer_size"; Mutation = [int64]999; Target = "qual"; ExpectedError = "qualification evidence installer size mismatch" },
             @{ Field = "signature_size"; Mutation = [int64]999; Target = "qual"; ExpectedError = "qualification evidence updater signature size mismatch" },
             @{ Field = "installer_sha256"; Mutation = ('f' * 64); Target = "qual"; ExpectedError = "qualification evidence installer SHA-256 mismatch" },
