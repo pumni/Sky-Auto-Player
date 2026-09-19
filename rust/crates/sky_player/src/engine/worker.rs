@@ -89,6 +89,8 @@ pub(crate) use planning::plan_next_dispatch;
 #[cfg(test)]
 pub(crate) use planning::plan_structure_is_valid;
 pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
+#[cfg(test)]
+pub(crate) use prepared::PreparedDownHoldLimit;
 pub(crate) use prepared::{PreparedDispatchEntry, PreparedDispatchFrame, PreparedDispatchStream};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
