@@ -716,12 +716,16 @@ Set-StrictMode -Version Latest
 `$qualificationEvidenceName = 'V4_QUALIFICATION_EVIDENCE.json'
 `$authenticodeEvidenceName = 'TAURI_AUTHENTICODE_EVIDENCE.json'
 `$sbomName = 'SBOM.spdx.json'
+. (Join-Path (Split-Path -Parent '$($pipelineScript.Replace('\', '/'))') 'v4_qualification_evidence.ps1')
+`$safeInstallerName = Get-V4SafeReleaseAssetName '$installerName'
+`$safeSignatureName = Get-V4SafeReleaseAssetName '$signatureName'
 function Fail([string]`$Message) { throw `$Message }
-function Get-ExpectedInstallerName { return '$installerName' }
+function Get-ExpectedInstallerName { return `$safeInstallerName }
+function Get-ExpectedSignatureName { return `$safeSignatureName }
 
 `$Records = @(
-    [pscustomobject]@{ name = '$installerName'; size = [int64]1234567; sha256 = '$testInstallerSha' },
-    [pscustomobject]@{ name = '$signatureName'; size = [int64]512; sha256 = '$testSigSha' },
+    [pscustomobject]@{ name = `$safeInstallerName; release_name = `$safeInstallerName; source_name = '$installerName'; size = [int64]1234567; sha256 = '$testInstallerSha' },
+    [pscustomobject]@{ name = `$safeSignatureName; release_name = `$safeSignatureName; source_name = '$signatureName'; size = [int64]512; sha256 = '$testSigSha' },
     [pscustomobject]@{ name = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'; size = [int64]100; sha256 = '$('1' * 64)' },
     [pscustomobject]@{ name = 'V4_QUALIFICATION_EVIDENCE.json'; size = [int64]100; sha256 = '$('2' * 64)' },
     [pscustomobject]@{ name = 'TAURI_AUTHENTICODE_EVIDENCE.json'; size = [int64]100; sha256 = '$testAuthSha' },

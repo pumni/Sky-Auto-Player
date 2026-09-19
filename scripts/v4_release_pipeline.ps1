@@ -412,12 +412,20 @@ function Assert-ImmutableRelease([object]$Release) {
     }
 }
 
+function Get-ExpectedSourceInstallerName {
+    return "Sky Auto Player_${Version}${installerSuffix}"
+}
+
+function Get-ExpectedSourceSignatureName {
+    return "$(Get-ExpectedSourceInstallerName).sig"
+}
+
 function Get-ExpectedInstallerName {
-    return "Sky.Auto.Player_${Version}${installerSuffix}"
+    return Get-V4SafeReleaseAssetName (Get-ExpectedSourceInstallerName)
 }
 
 function Get-ExpectedSignatureName {
-    return "$(Get-ExpectedInstallerName).sig"
+    return Get-V4SafeReleaseAssetName (Get-ExpectedSourceSignatureName)
 }
 
 function Get-CanonicalPublicReleaseNames {
@@ -425,12 +433,13 @@ function Get-CanonicalPublicReleaseNames {
 }
 
 function Get-QualificationCandidateRecords {
-    $installer = Get-ExpectedInstallerName
+    $installer = Get-ExpectedSourceInstallerName
+    $signature = Get-ExpectedSourceSignatureName
     $bundle = Join-Path $repoRoot "rust/target/dist/bundle/nsis"
     $evidence = Join-Path $repoRoot "rust/target/dist"
     return @(
         [pscustomobject]@{ name = $installer; path = Join-Path $bundle $installer; role = "installer" },
-        [pscustomobject]@{ name = "$installer.sig"; path = Join-Path $bundle "$installer.sig"; role = "updater-signature" },
+        [pscustomobject]@{ name = $signature; path = Join-Path $bundle $signature; role = "updater-signature" },
         [pscustomobject]@{ name = $qualificationEvidenceName; path = Join-Path $evidence $qualificationEvidenceName; role = "qualification-evidence" },
         [pscustomobject]@{ name = $productionEvidenceName; path = Join-Path $evidence $productionEvidenceName; role = "production-evidence" },
         [pscustomobject]@{ name = $authenticodeEvidenceName; path = Join-Path $evidence $authenticodeEvidenceName; role = "authenticode-evidence" },
@@ -550,19 +559,17 @@ function Assert-EvidenceIdentity([string]$ProductionPath, [string]$Qualification
         Fail "production evidence omitted a mandatory updater or qualification result"
     }
     $instRec = $recordsByName[(Get-ExpectedInstallerName)]
-    $sigRec = $recordsByName["$((Get-ExpectedInstallerName)).sig"]
+    $sigRec = $recordsByName[(Get-ExpectedSignatureName)]
     if ($null -eq $instRec -or $null -eq $sigRec) {
         Fail "candidate manifest is missing the canonical installer or updater signature record"
     }
     $instSourceName = if ($null -ne $instRec.PSObject.Properties['source_name']) { [string]$instRec.source_name } else { [string]$instRec.name }
     $sigSourceName = if ($null -ne $sigRec.PSObject.Properties['source_name']) { [string]$sigRec.source_name } else { [string]$sigRec.name }
 
-    if ([string]$evidence.installer -ne (Get-ExpectedInstallerName) -or
-        [string]$evidence.updater_signature -ne "$(Get-ExpectedInstallerName).sig" -or
+    if ([string]$evidence.installer -ne $instSourceName -or
+        [string]$evidence.updater_signature -ne $sigSourceName -or
         [string]$evidence.authenticode_evidence -ne $authenticodeEvidenceName -or
         [string]$evidence.sbom -ne $sbomName -or
-        [string]$evidence.installer -ne $instSourceName -or
-        [string]$evidence.updater_signature -ne $sigSourceName -or
         [int64]$evidence.installer_size -ne [int64]$instRec.size -or
         [string]$evidence.installer_sha256 -ne [string]$instRec.sha256 -or
         [int64]$evidence.signature_size -ne [int64]$sigRec.size -or
@@ -571,8 +578,8 @@ function Assert-EvidenceIdentity([string]$ProductionPath, [string]$Qualification
         [string]$evidence.sbom_sha256 -ne [string]$recordsByName[$sbomName].sha256) {
         Fail "production evidence digests or sizes do not match the candidate manifest"
     }
-    if ([string]$qualification.installer -ne (Get-ExpectedInstallerName) -or
-        [string]$qualification.updater_signature -ne "$(Get-ExpectedInstallerName).sig" -or
+    if ([string]$qualification.installer -ne $instSourceName -or
+        [string]$qualification.updater_signature -ne $sigSourceName -or
         [string]$qualification.installer_sha256 -ne [string]$instRec.sha256 -or
         [string]$qualification.updater_signature_sha256 -ne [string]$sigRec.sha256 -or
         [string]$qualification.authenticode_mode -ne "unsigned-zero-budget" -or
@@ -863,10 +870,10 @@ function Invoke-BuildCandidate {
 
     $root = Get-EffectiveStateRoot
     $bundle = Join-Path $root "candidate-assets"
-    $sourceInstaller = Get-ExpectedInstallerName
-    $sourceSignature = "$sourceInstaller.sig"
-    $releaseInstaller = Get-V4SafeReleaseAssetName $sourceInstaller
-    $releaseSignature = Get-V4SafeReleaseAssetName $sourceSignature
+    $sourceInstaller = Get-ExpectedSourceInstallerName
+    $sourceSignature = Get-ExpectedSourceSignatureName
+    $releaseInstaller = Get-ExpectedInstallerName
+    $releaseSignature = Get-ExpectedSignatureName
     $frozenSbom = Join-Path $bundle $sbomName
     $frozenArtifactSummary = Join-Path $bundle $summaryName
     $frozenAuthenticodeEvidence = Join-Path $bundle $authenticodeEvidenceName
@@ -1267,7 +1274,7 @@ function Invoke-PromoteMetadata {
     $manifest = Read-JsonFile $manifestPath
     $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
     $installerRecord = @($publicRecords | Where-Object { [string]$_.name -eq (Get-ExpectedInstallerName) })[0]
-    $signatureRecord = @($publicRecords | Where-Object { [string]$_.name -eq "$((Get-ExpectedInstallerName)).sig" })[0]
+    $signatureRecord = @($publicRecords | Where-Object { [string]$_.name -eq (Get-ExpectedSignatureName) })[0]
 
     $notesPath = Assert-ReleaseNotes
     $destination = Join-Path $root "latest.json"
