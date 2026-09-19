@@ -96,6 +96,9 @@ impl NativeUpdateState {
         transition: StateTransition,
     ) -> (u64, UpdateSnapshotPayload) {
         self.revision += 1;
+
+        let error_detail = transition.error_detail.as_deref().map(bounded);
+
         self.state = transition.state;
         self.channel = transition.channel;
         self.candidate = transition.candidate.clone();
@@ -103,7 +106,7 @@ impl NativeUpdateState {
         self.operation_id = transition.operation_id.clone();
         self.progress = transition.progress.clone();
         self.error_code = transition.error_code;
-        self.error_detail = transition.error_detail.clone();
+        self.error_detail = error_detail.clone();
         self.retry_action = transition.retry_action;
 
         let (available_version, release_notes, published_at) = match &transition.candidate {
@@ -124,7 +127,7 @@ impl NativeUpdateState {
             release_notes,
             published_at,
             error_code: transition.error_code,
-            error_detail: transition.error_detail,
+            error_detail,
             retry_action: transition.retry_action,
             operation_id: transition.operation_id,
             progress: transition.progress,
@@ -1493,5 +1496,105 @@ mod tests {
         );
         assert_eq!(snapshot.retry_action, UpdateRetryAction::Check);
         assert!(snapshot.error_detail.as_ref().unwrap().len() <= 4096);
+    }
+
+    #[test]
+    fn native_update_state_bounds_oversized_error_detail_at_transition_boundary() {
+        use super::{NativeUpdateState, StateTransition};
+        use crate::ui_events::{UpdateChannel, UpdateErrorCode, UpdateRetryAction, UpdateState};
+
+        let oversized = "x".repeat(8_192);
+        let mut state = NativeUpdateState::default();
+
+        let (_, snapshot) = state.apply_transition(StateTransition {
+            state: UpdateState::Error,
+            channel: UpdateChannel::Stable,
+            error_code: Some(UpdateErrorCode::DownloadFailed),
+            error_detail: Some(oversized),
+            retry_action: UpdateRetryAction::Install,
+            ..Default::default()
+        });
+
+        let detail = snapshot
+            .error_detail
+            .as_deref()
+            .expect("error detail must be present");
+
+        assert_eq!(detail.chars().count(), 4096);
+        assert_eq!(detail, "x".repeat(4096));
+
+        assert_eq!(snapshot.error_code, Some(UpdateErrorCode::DownloadFailed));
+        assert_eq!(snapshot.retry_action, UpdateRetryAction::Install);
+
+        let stored = state.snapshot();
+
+        assert_eq!(stored.error_detail, snapshot.error_detail);
+        assert_eq!(
+            stored
+                .error_detail
+                .as_deref()
+                .expect("stored detail")
+                .chars()
+                .count(),
+            4096
+        );
+    }
+
+    #[test]
+    fn native_update_state_preserves_short_error_detail_exactly() {
+        use super::{NativeUpdateState, StateTransition};
+        use crate::ui_events::{UpdateChannel, UpdateErrorCode, UpdateRetryAction, UpdateState};
+
+        let detail = "update install failed: signature verification failed";
+        let mut state = NativeUpdateState::default();
+
+        let (_, snapshot) = state.apply_transition(StateTransition {
+            state: UpdateState::Error,
+            channel: UpdateChannel::Stable,
+            error_code: Some(UpdateErrorCode::InstallFailed),
+            error_detail: Some(detail.to_string()),
+            retry_action: UpdateRetryAction::Install,
+            ..Default::default()
+        });
+
+        assert_eq!(snapshot.error_detail.as_deref(), Some(detail));
+        assert_eq!(state.snapshot().error_detail.as_deref(), Some(detail));
+        assert_eq!(snapshot.error_code, Some(UpdateErrorCode::InstallFailed));
+        assert_eq!(snapshot.retry_action, UpdateRetryAction::Install);
+    }
+
+    #[test]
+    fn native_update_state_bounds_error_detail_by_characters() {
+        use super::{NativeUpdateState, StateTransition};
+        use crate::ui_events::{UpdateChannel, UpdateErrorCode, UpdateRetryAction, UpdateState};
+
+        let oversized = "é".repeat(5_000);
+        let mut state = NativeUpdateState::default();
+
+        let (_, snapshot) = state.apply_transition(StateTransition {
+            state: UpdateState::Error,
+            channel: UpdateChannel::Stable,
+            error_code: Some(UpdateErrorCode::DownloadFailed),
+            error_detail: Some(oversized),
+            retry_action: UpdateRetryAction::Install,
+            ..Default::default()
+        });
+
+        let detail = snapshot.error_detail.as_deref().unwrap();
+
+        assert_eq!(detail.chars().count(), 4096);
+        assert_eq!(detail, "é".repeat(4096));
+
+        let stored = state.snapshot();
+        assert_eq!(stored.error_detail, snapshot.error_detail);
+        assert_eq!(
+            stored
+                .error_detail
+                .as_deref()
+                .expect("stored detail")
+                .chars()
+                .count(),
+            4096
+        );
     }
 }
