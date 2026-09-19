@@ -6,6 +6,7 @@ use super::{
 use crate::clock::{DurationTicks, QpcClock, QpcTicks};
 use crate::event::OwnedEvent;
 use crate::timer::{TimerResolutionGuard, WaitableTimer};
+use std::num::NonZeroU64;
 
 pub struct HybridWaiter {
     timer: Option<WaitableTimer>,
@@ -244,20 +245,17 @@ impl HybridWaiter {
                 continue;
             }
 
-            let kernel_wait_ticks = match remaining_ticks.checked_sub(spin_threshold_ticks.as_u64())
-            {
-                Some(value) => value,
-                None => {
-                    return WaitResult::failed(WaitFailure::Clock);
-                }
-            };
-            let kernel_wait_us =
-                match qpc_clock.duration_to_us(DurationTicks::from_raw(kernel_wait_ticks)) {
+            let Some(kernel_wait_us) =
+                (match classify_kernel_wait_us(qpc_clock, remaining_ticks, spin_threshold_ticks) {
                     Ok(value) => value,
-                    Err(_) => {
-                        return WaitResult::failed(WaitFailure::Clock);
-                    }
-                };
+                    Err(failure) => return WaitResult::failed(failure),
+                })
+            else {
+                // A positive QPC remainder can floor to zero microseconds. A
+                // zero delay cannot arm a waitable timer, so recheck QPC
+                // directly instead of entering an infinite multi-wait.
+                continue;
+            };
             #[cfg(windows)]
             if self.event_wait_enabled {
                 if let Some(timer) = &self.timer {
@@ -297,7 +295,7 @@ impl HybridWaiter {
             // above and then re-arm it to a 1 ms cap: that turns every
             // long gap into a polling loop and distorts wake metrics.
             {
-                match timer.sleep_us(kernel_wait_us) {
+                match timer.sleep_us(kernel_wait_us.get()) {
                     Ok(()) => continue,
                     Err(error) => {
                         return WaitResult::failed(WaitFailure::TimerWait { win32_error: error });
@@ -307,7 +305,9 @@ impl HybridWaiter {
 
             // Portable/degraded fallback remains bounded so a command cannot
             // be hidden behind a long song gap.
-            std::thread::sleep(std::time::Duration::from_micros(kernel_wait_us.min(2_000)));
+            std::thread::sleep(std::time::Duration::from_micros(
+                kernel_wait_us.get().min(2_000),
+            ));
             let wake_ticks = match qpc_clock.now() {
                 Ok(ticks) => ticks,
                 Err(_) => {
@@ -405,6 +405,20 @@ impl HybridWaiter {
     }
 }
 
+fn classify_kernel_wait_us(
+    qpc_clock: QpcClock,
+    remaining_ticks: u64,
+    spin_threshold_ticks: DurationTicks,
+) -> Result<Option<NonZeroU64>, WaitFailure> {
+    let kernel_wait_ticks = remaining_ticks
+        .checked_sub(spin_threshold_ticks.as_u64())
+        .ok_or(WaitFailure::Clock)?;
+    let kernel_wait_us = qpc_clock
+        .duration_to_us(DurationTicks::from_raw(kernel_wait_ticks))
+        .map_err(|_| WaitFailure::Clock)?;
+    Ok(NonZeroU64::new(kernel_wait_us))
+}
+
 fn classify_interrupt_with_fresh_qpc(
     qpc_clock: QpcClock,
     spin_started_ticks: Option<QpcTicks>,
@@ -466,9 +480,13 @@ impl Default for HybridWaiter {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_interrupt_after_refresh, classify_wake, percentile_from_sorted};
-    use crate::clock::QpcTicks;
+    use super::{
+        classify_interrupt_after_refresh, classify_kernel_wait_us, classify_wake,
+        percentile_from_sorted,
+    };
+    use crate::clock::{DurationTicks, QpcClock, QpcTicks};
     use crate::wait::WaitOutcome;
+    use std::num::NonZeroU64;
 
     #[test]
     fn thirty_two_sample_p95_does_not_promote_one_extreme_maximum() {
@@ -533,5 +551,61 @@ mod tests {
         assert_eq!(result.outcome, WaitOutcome::Interrupted);
         assert_eq!(result.wake_qpc, Some(refreshed_ticks));
         assert_eq!(result.spin_ticks, crate::clock::DurationTicks::from_raw(1));
+    }
+
+    #[test]
+    fn kernel_wait_floors_are_safe_at_10mhz() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
+        let spin_threshold = DurationTicks::from_raw(100);
+
+        assert_eq!(
+            classify_kernel_wait_us(clock, 100, spin_threshold),
+            Ok(None),
+            "exactly the spin threshold must not arm a timer"
+        );
+        for ticks in [1, 2, 9] {
+            assert_eq!(
+                classify_kernel_wait_us(clock, 100 + ticks, spin_threshold),
+                Ok(None),
+                "positive sub-microsecond remainder of {ticks} QPC ticks must spin"
+            );
+        }
+        assert_eq!(
+            classify_kernel_wait_us(clock, 110, spin_threshold),
+            Ok(NonZeroU64::new(1)),
+            "exactly 1 microsecond must remain an ordinary timer wait"
+        );
+        assert_eq!(
+            classify_kernel_wait_us(clock, 111, spin_threshold),
+            Ok(NonZeroU64::new(1)),
+            "1 microsecond plus one QPC tick preserves floor conversion"
+        );
+    }
+
+    #[test]
+    fn kernel_wait_floors_are_safe_at_3579545hz() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(3_579_545).unwrap());
+        let spin_threshold = DurationTicks::from_raw(100);
+
+        assert_eq!(
+            classify_kernel_wait_us(clock, 101, spin_threshold),
+            Ok(None),
+            "a positive sub-microsecond remainder must not arm a timer"
+        );
+        assert_eq!(
+            classify_kernel_wait_us(clock, 103, spin_threshold),
+            Ok(None),
+            "the last sub-microsecond remainder must stay on QPC recheck"
+        );
+        assert_eq!(
+            classify_kernel_wait_us(clock, 104, spin_threshold),
+            Ok(NonZeroU64::new(1)),
+            "the first nonzero floored microsecond must arm normally"
+        );
+        assert_eq!(
+            classify_kernel_wait_us(clock, 105, spin_threshold),
+            Ok(NonZeroU64::new(1)),
+            "the boundary after the first nonzero microsecond remains stable"
+        );
     }
 }
