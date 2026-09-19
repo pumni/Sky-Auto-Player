@@ -792,10 +792,19 @@ fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
         .map(|(_, block)| block.as_str())
         .ok_or("v4 release workflow is missing the metadata App access probe")?;
 
+    if workflow.contains("app-id:") {
+        return Err("canonical release workflow must not use deprecated app-id".into());
+    }
+    if workflow.contains("V4_RELEASE_METADATA_APP_ID") {
+        return Err(
+            "canonical release workflow must not use the deprecated App ID variable".into(),
+        );
+    }
+
     for marker in [
         "id: metadata-app-token",
         "uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
-        "app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}",
+        "client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}",
         "private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}",
         "owner: ${{ github.repository_owner }}",
         "repositories: ${{ github.event.repository.name }}",
@@ -4903,7 +4912,7 @@ jobs:
         id: metadata-app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
+          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}
           private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
@@ -5035,7 +5044,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         id: metadata-app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
+          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}
           private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
@@ -5056,6 +5065,33 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
 "#;
         assert!(validate_metadata_app_token_scope(workflow).is_ok());
 
+        let missing_client_id = workflow.replace(
+            "          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}\n",
+            "",
+        );
+        assert!(
+            validate_metadata_app_token_scope(&missing_client_id).is_err(),
+            "metadata App token contract must reject a missing client-id"
+        );
+
+        let deprecated_app_id = workflow.replace(
+            "client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}",
+            "app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}",
+        );
+        assert!(
+            validate_metadata_app_token_scope(&deprecated_app_id).is_err(),
+            "metadata App token contract must reject deprecated app-id"
+        );
+
+        let deprecated_client_id_variable = workflow.replace(
+            "client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}",
+            "client-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}",
+        );
+        assert!(
+            validate_metadata_app_token_scope(&deprecated_client_id_variable).is_err(),
+            "metadata App token contract must reject the deprecated App ID variable"
+        );
+
         let broad_token = workflow.replace(
             "- name: Publish the qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ github.token }}",
             "- name: Publish the qualified candidate immutably\n        env:\n          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
@@ -5069,8 +5105,8 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         assert!(validate_metadata_app_token_scope(&repository_token_for_promotion).is_err());
 
         let private_key_in_env = workflow.replace(
-            "        with:\n          app-id:",
-            "        env:\n          app-id:",
+            "        with:\n          client-id:",
+            "        env:\n          client-id:",
         );
         assert!(validate_metadata_app_token_scope(&private_key_in_env).is_err());
     }
