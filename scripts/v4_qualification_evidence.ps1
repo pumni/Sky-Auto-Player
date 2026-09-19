@@ -136,3 +136,20 @@ function Get-V4SafeReleaseAssetName {
 
     return $safeName
 }
+
+function Get-RecordPropertyValue([object]$Record, [string]$PropertyName) {
+    if ($null -eq $Record -or [string]::IsNullOrWhiteSpace($PropertyName)) { return $null }
+    if ($Record -is [System.Collections.IDictionary]) {
+        if ($Record.Contains($PropertyName)) { return $Record[$PropertyName] }
+        return $null
+    }
+    $prop = $Record.PSObject.Properties[$PropertyName]
+    if ($null -ne $prop) { return $prop.Value }
+    return $null
+}
+
+function Get-RecordPropertyString([object]$Record, [string]$PropertyName) {
+    $value = Get-RecordPropertyValue $Record $PropertyName
+    if ($null -eq $value) { return "" }
+    return [string]$value
+}

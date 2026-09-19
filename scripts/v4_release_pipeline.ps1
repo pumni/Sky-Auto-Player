@@ -390,10 +390,28 @@ function Get-ReleaseForTag([string]$Repository, [string]$RequestedTag) {
     return Select-V4ReleaseByTag -DirectRelease $direct -ReleaseCollection $collection -Tag $RequestedTag
 }
 
+function Get-RecordPropertyValue([object]$Record, [string]$PropertyName) {
+    if ($null -eq $Record -or [string]::IsNullOrWhiteSpace($PropertyName)) { return $null }
+    if ($Record -is [System.Collections.IDictionary]) {
+        if ($Record.Contains($PropertyName)) { return $Record[$PropertyName] }
+        return $null
+    }
+    $prop = $Record.PSObject.Properties[$PropertyName]
+    if ($null -ne $prop) { return $prop.Value }
+    return $null
+}
+
+function Get-RecordPropertyString([object]$Record, [string]$PropertyName) {
+    $value = Get-RecordPropertyValue $Record $PropertyName
+    if ($null -eq $value) { return "" }
+    return [string]$value
+}
+
 function Assert-ExactAssetSet([object]$Release, [object[]]$Expected) {
     $actual = @($Release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
     $expectedNames = @($Expected | ForEach-Object {
-        if ($null -ne $_.PSObject.Properties['release_name']) { [string]$_.release_name } else { [string]$_.name }
+        $relName = Get-RecordPropertyString $_ 'release_name'
+        if (-not [string]::IsNullOrWhiteSpace($relName)) { $relName } else { Get-RecordPropertyString $_ 'name' }
     } | Sort-Object)
     if (($actual -join "`n") -ne ($expectedNames -join "`n")) { Fail "repository release asset set differs from the qualified candidate set" }
 }
@@ -454,7 +472,7 @@ function Get-PublicReleaseRecords([object[]]$QualificationRecords) {
         Fail "public release records require a non-empty qualification asset set"
     }
     $publicNames = @(Get-CanonicalPublicReleaseNames)
-    $records = @($QualificationRecords | Where-Object { $publicNames -contains [string]$_.release_name })
+    $records = @($QualificationRecords | Where-Object { $publicNames -contains (Get-RecordPropertyString $_ 'release_name') })
     if ($records.Count -ne 2) {
         Fail "manifest public assets must match exactly the canonical installer and signature"
     }
@@ -462,23 +480,34 @@ function Get-PublicReleaseRecords([object[]]$QualificationRecords) {
 }
 
 function Get-FileRecord([object]$Candidate) {
-    $item = Get-Item -LiteralPath $Candidate.path
-    $sourceName = if ($null -ne $Candidate.PSObject.Properties['name']) { [string]$Candidate.name } else { [IO.Path]::GetFileName([string]$Candidate.path) }
+    $candidatePath = [string](Get-RecordPropertyValue $Candidate 'path')
+    if ([string]::IsNullOrWhiteSpace($candidatePath)) {
+        $candidatePath = [string]$Candidate.path
+    }
+    $item = Get-Item -LiteralPath $candidatePath
+    $candName = Get-RecordPropertyString $Candidate 'name'
+    $sourceName = if (-not [string]::IsNullOrWhiteSpace($candName)) { $candName } else { [IO.Path]::GetFileName($candidatePath) }
     $releaseName = Get-V4SafeReleaseAssetName $sourceName
+    $role = Get-RecordPropertyString $Candidate 'role'
+    $relativeFolder = if ($role -in @("installer", "updater-signature")) {
+        "candidate-bundle"
+    } else {
+        "candidate-evidence"
+    }
     [ordered]@{
         name = $releaseName
         release_name = $releaseName
         source_name = $sourceName
-        role = [string]$Candidate.role
+        role = $role
         size = [int64]$item.Length
-        sha256 = (Get-FileHash -LiteralPath $Candidate.path -Algorithm SHA256).Hash.ToLowerInvariant()
-        source_path = [string]$Candidate.path
-        state_path = (Join-Path "candidate-assets" $releaseName).Replace("\", "/")
+        sha256 = (Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        source_path = $candidatePath
+        state_path = (Join-Path $relativeFolder $sourceName).Replace("\", "/")
     }
 }
 
 function Get-StateAssetPath([object]$Record) {
-    $relative = [string]$Record.state_path
+    $relative = Get-RecordPropertyString $Record "state_path"
     if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative)) {
         Fail "candidate manifest contains an invalid state asset path"
     }
@@ -493,8 +522,8 @@ function Get-StateAssetPath([object]$Record) {
 
 function Get-FrozenQualificationAssetPath([object[]]$Records, [string]$SourceName) {
     $matches = @($Records | Where-Object {
-        [string]$_.source_name -eq $SourceName -or
-        ([string]$_.name -eq $SourceName -and $null -eq $_.PSObject.Properties['source_name'])
+        (Get-RecordPropertyString $_ "source_name") -eq $SourceName -or
+        ((Get-RecordPropertyString $_ "name") -eq $SourceName -and [string]::IsNullOrWhiteSpace((Get-RecordPropertyString $_ "source_name")))
     })
     if ($matches.Count -ne 1) {
         Fail "candidate manifest must contain exactly one frozen qualification asset: $SourceName"
@@ -509,13 +538,19 @@ function Get-FrozenQualificationAssetPath([object[]]$Records, [string]$SourceNam
 function Assert-ManifestAssetFiles([object[]]$Records) {
     foreach ($record in @($Records)) {
         $path = Get-StateAssetPath $record
+        $releaseName = Get-RecordPropertyString $record "release_name"
+        if ([string]::IsNullOrWhiteSpace($releaseName)) {
+            $releaseName = Get-RecordPropertyString $record "name"
+        }
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            Fail "frozen qualification asset is missing: $($record.release_name)"
+            Fail "frozen qualification asset is missing: $releaseName"
         }
         $item = Get-Item -LiteralPath $path
         $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ([int64]$item.Length -ne [int64]$record.size -or $hash -ne [string]$record.sha256) {
-            Fail "frozen qualification asset differs from the candidate manifest: $($record.release_name)"
+        $expectedSize = [int64](Get-RecordPropertyValue $record "size")
+        $expectedSha = Get-RecordPropertyString $record "sha256"
+        if ([int64]$item.Length -ne $expectedSize -or $hash -ne $expectedSha) {
+            Fail "frozen qualification asset differs from the candidate manifest: $releaseName"
         }
     }
 }
@@ -524,21 +559,91 @@ function Freeze-CandidateAssets([object[]]$Records) {
     foreach ($record in @($Records)) {
         $destination = Get-StateAssetPath $record
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-        Copy-Item -LiteralPath ([string]$record.source_path) -Destination $destination -Force
+        Copy-Item -LiteralPath ([string](Get-RecordPropertyString $record "source_path")) -Destination $destination -Force
     }
     Assert-ManifestAssetFiles $Records
     return @($Records)
 }
 
+function Assert-FrozenCandidateTopology([object[]]$Records) {
+    $root = Get-EffectiveStateRoot
+    $bundleDir = Join-Path $root "candidate-bundle"
+    $evidenceDir = Join-Path $root "candidate-evidence"
+
+    if (-not (Test-Path -LiteralPath $bundleDir -PathType Container)) {
+        Fail "candidate-bundle directory is missing: $bundleDir"
+    }
+    if (-not (Test-Path -LiteralPath $evidenceDir -PathType Container)) {
+        Fail "candidate-evidence directory is missing: $evidenceDir"
+    }
+
+    $sourceInstaller = Get-ExpectedSourceInstallerName
+    $sourceSignature = Get-ExpectedSourceSignatureName
+    $expectedBundleNames = @($sourceInstaller, $sourceSignature) | Sort-Object
+
+    $bundleFiles = @(Get-ChildItem -LiteralPath $bundleDir -File | Sort-Object Name)
+    $actualBundleNames = @($bundleFiles | ForEach-Object { $_.Name } | Sort-Object)
+
+    if (($actualBundleNames -join "`n") -ne ($expectedBundleNames -join "`n")) {
+        Fail "candidate-bundle must contain exactly the source installer and updater signature, found: $($actualBundleNames -join ', ')"
+    }
+    if ($bundleFiles.Count -ne 2) {
+        Fail "candidate-bundle must contain exactly 2 files, found $($bundleFiles.Count)"
+    }
+    foreach ($file in $bundleFiles) {
+        if ($file.Extension -eq ".json") {
+            Fail "candidate-bundle must not contain JSON evidence files: $($file.Name)"
+        }
+    }
+
+    $dottedInstaller = Get-ExpectedInstallerName
+    $dottedSignature = Get-ExpectedSignatureName
+    if (Test-Path -LiteralPath (Join-Path $bundleDir $dottedInstaller) -PathType Leaf) {
+        Fail "candidate-bundle must not contain dotted release asset copy: $dottedInstaller"
+    }
+    if (Test-Path -LiteralPath (Join-Path $bundleDir $dottedSignature) -PathType Leaf) {
+        Fail "candidate-bundle must not contain dotted release asset copy: $dottedSignature"
+    }
+    if (Test-Path -LiteralPath (Join-Path $root $dottedInstaller) -PathType Leaf) {
+        Fail "state root must not contain dotted release asset copy: $dottedInstaller"
+    }
+    if (Test-Path -LiteralPath (Join-Path $root $dottedSignature) -PathType Leaf) {
+        Fail "state root must not contain dotted release asset copy: $dottedSignature"
+    }
+
+    $expectedEvidenceNames = @(
+        $productionEvidenceName,
+        $qualificationEvidenceName,
+        $authenticodeEvidenceName,
+        $installedAuthenticodeEvidenceName,
+        $summaryName,
+        $sbomName
+    ) | Sort-Object
+
+    $evidenceFiles = @(Get-ChildItem -LiteralPath $evidenceDir -File | Sort-Object Name)
+    $actualEvidenceNames = @($evidenceFiles | ForEach-Object { $_.Name } | Sort-Object)
+
+    foreach ($name in $expectedEvidenceNames) {
+        if ($actualEvidenceNames -notcontains $name) {
+            Fail "candidate-evidence is missing required evidence file: $name"
+        }
+    }
+}
+
 function Assert-EvidenceIdentity([string]$ProductionPath, [string]$QualificationPath, [object[]]$Records) {
     $recordsByName = @{}
     foreach ($record in @($Records)) {
-        $recordsByName[[string]$record.name] = $record
-        if ($null -ne $record.PSObject.Properties['source_name'] -and -not [string]::IsNullOrWhiteSpace([string]$record.source_name)) {
-            $recordsByName[[string]$record.source_name] = $record
+        $name = Get-RecordPropertyString $record "name"
+        $sourceName = Get-RecordPropertyString $record "source_name"
+        $releaseName = Get-RecordPropertyString $record "release_name"
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+            $recordsByName[$name] = $record
         }
-        if ($null -ne $record.PSObject.Properties['release_name'] -and -not [string]::IsNullOrWhiteSpace([string]$record.release_name)) {
-            $recordsByName[[string]$record.release_name] = $record
+        if (-not [string]::IsNullOrWhiteSpace($sourceName)) {
+            $recordsByName[$sourceName] = $record
+        }
+        if (-not [string]::IsNullOrWhiteSpace($releaseName)) {
+            $recordsByName[$releaseName] = $record
         }
     }
     foreach ($requiredName in @($productionEvidenceName, $qualificationEvidenceName, $authenticodeEvidenceName, $sbomName)) {
@@ -558,40 +663,120 @@ function Assert-EvidenceIdentity([string]$ProductionPath, [string]$Qualification
     if ([string]$evidence.updater_signature_status -ne "valid" -or [string]$evidence.qualification_status -ne "PASS") {
         Fail "production evidence omitted a mandatory updater or qualification result"
     }
-    $instRec = $recordsByName[(Get-ExpectedInstallerName)]
-    $sigRec = $recordsByName[(Get-ExpectedSignatureName)]
+
+    $instExpectedPublic = if (Get-Command "Get-ExpectedInstallerName" -ErrorAction SilentlyContinue) { Get-ExpectedInstallerName } else { "" }
+    $instExpectedSource = if (Get-Command "Get-ExpectedSourceInstallerName" -ErrorAction SilentlyContinue) { Get-ExpectedSourceInstallerName } else { "" }
+    $sigExpectedPublic = if (Get-Command "Get-ExpectedSignatureName" -ErrorAction SilentlyContinue) { Get-ExpectedSignatureName } else { "" }
+    $sigExpectedSource = if (Get-Command "Get-ExpectedSourceSignatureName" -ErrorAction SilentlyContinue) { Get-ExpectedSourceSignatureName } else { "" }
+
+    $instRec = if (-not [string]::IsNullOrWhiteSpace($instExpectedPublic) -and $recordsByName.ContainsKey($instExpectedPublic)) {
+        $recordsByName[$instExpectedPublic]
+    } elseif (-not [string]::IsNullOrWhiteSpace($instExpectedSource) -and $recordsByName.ContainsKey($instExpectedSource)) {
+        $recordsByName[$instExpectedSource]
+    } else {
+        $candidates = @($Records | Where-Object { (Get-RecordPropertyString $_ 'role') -eq 'installer' })
+        if ($candidates.Count -eq 1) { $candidates[0] } else { $null }
+    }
+    $sigRec = if (-not [string]::IsNullOrWhiteSpace($sigExpectedPublic) -and $recordsByName.ContainsKey($sigExpectedPublic)) {
+        $recordsByName[$sigExpectedPublic]
+    } elseif (-not [string]::IsNullOrWhiteSpace($sigExpectedSource) -and $recordsByName.ContainsKey($sigExpectedSource)) {
+        $recordsByName[$sigExpectedSource]
+    } else {
+        $candidates = @($Records | Where-Object { (Get-RecordPropertyString $_ 'role') -eq 'updater-signature' })
+        if ($candidates.Count -eq 1) { $candidates[0] } else { $null }
+    }
     if ($null -eq $instRec -or $null -eq $sigRec) {
         Fail "candidate manifest is missing the canonical installer or updater signature record"
     }
-    $instSourceName = if ($null -ne $instRec.PSObject.Properties['source_name']) { [string]$instRec.source_name } else { [string]$instRec.name }
-    $sigSourceName = if ($null -ne $sigRec.PSObject.Properties['source_name']) { [string]$sigRec.source_name } else { [string]$sigRec.name }
 
-    if ([string]$evidence.installer -ne $instSourceName -or
-        [string]$evidence.updater_signature -ne $sigSourceName -or
-        [string]$evidence.authenticode_evidence -ne $authenticodeEvidenceName -or
-        [string]$evidence.sbom -ne $sbomName -or
-        [int64]$evidence.installer_size -ne [int64]$instRec.size -or
-        [string]$evidence.installer_sha256 -ne [string]$instRec.sha256 -or
-        [int64]$evidence.signature_size -ne [int64]$sigRec.size -or
-        [string]$evidence.updater_signature_sha256 -ne [string]$sigRec.sha256 -or
-        [string]$evidence.authenticode_evidence_sha256 -ne [string]$recordsByName[$authenticodeEvidenceName].sha256 -or
-        [string]$evidence.sbom_sha256 -ne [string]$recordsByName[$sbomName].sha256) {
-        Fail "production evidence digests or sizes do not match the candidate manifest"
+    $instSourceName = Get-RecordPropertyString $instRec "source_name"
+    if ([string]::IsNullOrWhiteSpace($instSourceName)) {
+        $instSourceName = Get-RecordPropertyString $instRec "name"
     }
-    if ([string]$qualification.installer -ne $instSourceName -or
-        [string]$qualification.updater_signature -ne $sigSourceName -or
-        [string]$qualification.installer_sha256 -ne [string]$instRec.sha256 -or
-        [string]$qualification.updater_signature_sha256 -ne [string]$sigRec.sha256 -or
-        [string]$qualification.authenticode_mode -ne "unsigned-zero-budget" -or
-        [string]$qualification.sbom_sha256 -ne [string]$recordsByName[$sbomName].sha256) {
-        Fail "qualification evidence does not bind the exact candidate manifest"
+    $sigSourceName = Get-RecordPropertyString $sigRec "source_name"
+    if ([string]::IsNullOrWhiteSpace($sigSourceName)) {
+        $sigSourceName = Get-RecordPropertyString $sigRec "name"
+    }
+
+    # Production evidence field-specific fail-closed assertions
+    if ([string]$evidence.installer -ne $instSourceName) {
+        Fail "production evidence installer name mismatch: expected '$instSourceName', got '$([string]$evidence.installer)'"
+    }
+    if ([string]$evidence.updater_signature -ne $sigSourceName) {
+        Fail "production evidence updater_signature name mismatch: expected '$sigSourceName', got '$([string]$evidence.updater_signature)'"
+    }
+    if ([string]$evidence.authenticode_evidence -ne $authenticodeEvidenceName) {
+        Fail "production evidence Authenticode evidence name mismatch: expected '$authenticodeEvidenceName', got '$([string]$evidence.authenticode_evidence)'"
+    }
+    if ([string]$evidence.sbom -ne $sbomName) {
+        Fail "production evidence SBOM name mismatch: expected '$sbomName', got '$([string]$evidence.sbom)'"
+    }
+    $instExpectedSize = [int64](Get-RecordPropertyValue $instRec "size")
+    if ([int64]$evidence.installer_size -ne $instExpectedSize) {
+        Fail "production evidence installer size mismatch: expected $instExpectedSize, got $([int64]$evidence.installer_size)"
+    }
+    $instExpectedSha = Get-RecordPropertyString $instRec "sha256"
+    if ([string]$evidence.installer_sha256 -ne $instExpectedSha) {
+        Fail "production evidence installer SHA-256 mismatch: expected '$instExpectedSha', got '$([string]$evidence.installer_sha256)'"
+    }
+    $sigExpectedSize = [int64](Get-RecordPropertyValue $sigRec "size")
+    if ([int64]$evidence.signature_size -ne $sigExpectedSize) {
+        Fail "production evidence updater signature size mismatch: expected $sigExpectedSize, got $([int64]$evidence.signature_size)"
+    }
+    $sigExpectedSha = Get-RecordPropertyString $sigRec "sha256"
+    if ([string]$evidence.updater_signature_sha256 -ne $sigExpectedSha) {
+        Fail "production evidence updater signature SHA-256 mismatch: expected '$sigExpectedSha', got '$([string]$evidence.updater_signature_sha256)'"
+    }
+    $authExpectedSha = Get-RecordPropertyString $recordsByName[$authenticodeEvidenceName] "sha256"
+    if ([string]$evidence.authenticode_evidence_sha256 -ne $authExpectedSha) {
+        Fail "production evidence Authenticode evidence SHA-256 mismatch: expected '$authExpectedSha', got '$([string]$evidence.authenticode_evidence_sha256)'"
+    }
+    $sbomExpectedSha = Get-RecordPropertyString $recordsByName[$sbomName] "sha256"
+    if ([string]$evidence.sbom_sha256 -ne $sbomExpectedSha) {
+        Fail "production evidence SBOM SHA-256 mismatch: expected '$sbomExpectedSha', got '$([string]$evidence.sbom_sha256)'"
+    }
+
+    # Qualification evidence field-specific fail-closed assertions
+    if ([string]$qualification.installer -ne $instSourceName) {
+        Fail "qualification evidence installer name mismatch: expected '$instSourceName', got '$([string]$qualification.installer)'"
+    }
+    if ([string]$qualification.updater_signature -ne $sigSourceName) {
+        Fail "qualification evidence updater_signature name mismatch: expected '$sigSourceName', got '$([string]$qualification.updater_signature)'"
+    }
+    if ([string]$qualification.authenticode_evidence -ne $authenticodeEvidenceName) {
+        Fail "qualification evidence Authenticode evidence name mismatch: expected '$authenticodeEvidenceName', got '$([string]$qualification.authenticode_evidence)'"
+    }
+    if ([string]$qualification.sbom -ne $sbomName) {
+        Fail "qualification evidence SBOM name mismatch: expected '$sbomName', got '$([string]$qualification.sbom)'"
+    }
+    if ([int64]$qualification.installer_size -ne $instExpectedSize) {
+        Fail "qualification evidence installer size mismatch: expected $instExpectedSize, got $([int64]$qualification.installer_size)"
+    }
+    if ([int64]$qualification.signature_size -ne $sigExpectedSize) {
+        Fail "qualification evidence updater signature size mismatch: expected $sigExpectedSize, got $([int64]$qualification.signature_size)"
+    }
+    if ([string]$qualification.installer_sha256 -ne $instExpectedSha) {
+        Fail "qualification evidence installer SHA-256 mismatch: expected '$instExpectedSha', got '$([string]$qualification.installer_sha256)'"
+    }
+    if ([string]$qualification.updater_signature_sha256 -ne $sigExpectedSha) {
+        Fail "qualification evidence updater signature SHA-256 mismatch: expected '$sigExpectedSha', got '$([string]$qualification.updater_signature_sha256)'"
+    }
+    if ([string]$qualification.authenticode_evidence_sha256 -ne $authExpectedSha) {
+        Fail "qualification evidence Authenticode evidence SHA-256 mismatch: expected '$authExpectedSha', got '$([string]$qualification.authenticode_evidence_sha256)'"
+    }
+    if ([string]$qualification.authenticode_mode -ne "unsigned-zero-budget") {
+        Fail "qualification evidence authenticode_mode mismatch: expected 'unsigned-zero-budget', got '$([string]$qualification.authenticode_mode)'"
+    }
+    if ([string]$qualification.sbom_sha256 -ne $sbomExpectedSha) {
+        Fail "qualification evidence SBOM SHA-256 mismatch: expected '$sbomExpectedSha', got '$([string]$qualification.sbom_sha256)'"
     }
 }
 
 function Assert-CandidateEvidence([object[]]$Records) {
     Assert-ManifestAssetFiles $Records
-    $productionRecord = @($Records | Where-Object { [string]$_.source_name -eq $productionEvidenceName })
-    $qualificationRecord = @($Records | Where-Object { [string]$_.source_name -eq $qualificationEvidenceName })
+    Assert-FrozenCandidateTopology $Records
+    $productionRecord = @($Records | Where-Object { (Get-RecordPropertyString $_ 'source_name') -eq $productionEvidenceName })
+    $qualificationRecord = @($Records | Where-Object { (Get-RecordPropertyString $_ 'source_name') -eq $qualificationEvidenceName })
     if ($productionRecord.Count -ne 1 -or $qualificationRecord.Count -ne 1) {
         Fail "candidate manifest is missing frozen production or qualification evidence"
     }
@@ -602,24 +787,27 @@ function Assert-CandidateEvidence([object[]]$Records) {
 }
 
 function Get-PublicReleaseRecordsFromManifest([object]$Manifest) {
-    if ($null -eq $Manifest.PSObject.Properties['qualification_assets'] -or
-        $null -eq $Manifest.PSObject.Properties['public_assets']) {
+    $qualAssets = Get-RecordPropertyValue $Manifest 'qualification_assets'
+    $pubAssets = Get-RecordPropertyValue $Manifest 'public_assets'
+    if ($null -eq $qualAssets -or $null -eq $pubAssets) {
         Fail "candidate manifest must declare qualification_assets and public_assets separately"
     }
-    $qualificationRecords = @($Manifest.qualification_assets)
+    $qualificationRecords = @($qualAssets)
     $derived = @(Get-PublicReleaseRecords $qualificationRecords)
-    $declared = @($Manifest.public_assets)
+    $declared = @($pubAssets)
     if ($declared.Count -ne $derived.Count) {
         Fail "candidate manifest public_assets must contain exactly the canonical installer and signature"
     }
     for ($index = 0; $index -lt $derived.Count; $index++) {
-        if ([string]$declared[$index].name -ne [string]$derived[$index].name -or
-            [string]$declared[$index].release_name -ne [string]$derived[$index].release_name -or
-            [string]$declared[$index].source_name -ne [string]$derived[$index].source_name -or
-            [string]$declared[$index].role -ne [string]$derived[$index].role -or
-            [string]$declared[$index].state_path -ne [string]$derived[$index].state_path -or
-            [string]$declared[$index].sha256 -ne [string]$derived[$index].sha256 -or
-            [int64]$declared[$index].size -ne [int64]$derived[$index].size) {
+        $decl = $declared[$index]
+        $der = $derived[$index]
+        if ((Get-RecordPropertyString $decl 'name') -ne (Get-RecordPropertyString $der 'name') -or
+            (Get-RecordPropertyString $decl 'release_name') -ne (Get-RecordPropertyString $der 'release_name') -or
+            (Get-RecordPropertyString $decl 'source_name') -ne (Get-RecordPropertyString $der 'source_name') -or
+            (Get-RecordPropertyString $decl 'role') -ne (Get-RecordPropertyString $der 'role') -or
+            (Get-RecordPropertyString $decl 'state_path') -ne (Get-RecordPropertyString $der 'state_path') -or
+            (Get-RecordPropertyString $decl 'sha256') -ne (Get-RecordPropertyString $der 'sha256') -or
+            [int64](Get-RecordPropertyValue $decl 'size') -ne [int64](Get-RecordPropertyValue $der 'size')) {
             Fail "candidate manifest public_assets are not an exact projection of qualification_assets"
         }
     }
@@ -847,27 +1035,30 @@ function Invoke-BuildCandidate {
     $publicRecords = @(Get-PublicReleaseRecords $records)
 
     $root = Get-EffectiveStateRoot
-    $bundle = Join-Path $root "candidate-assets"
+    $bundle = Join-Path $root "candidate-bundle"
+    $evidenceDir = Join-Path $root "candidate-evidence"
     $sourceInstaller = Get-ExpectedSourceInstallerName
     $sourceSignature = Get-ExpectedSourceSignatureName
     $releaseInstaller = Get-ExpectedInstallerName
     $releaseSignature = Get-ExpectedSignatureName
-    $frozenSbom = Join-Path $bundle $sbomName
-    $frozenArtifactSummary = Join-Path $bundle $summaryName
-    $frozenAuthenticodeEvidence = Join-Path $bundle $authenticodeEvidenceName
-    $frozenQualificationEvidence = Join-Path $bundle $qualificationEvidenceName
+    $frozenInstaller = Join-Path $bundle $sourceInstaller
+    $frozenSignature = Join-Path $bundle $sourceSignature
+    $frozenSbom = Join-Path $evidenceDir $sbomName
+    $frozenArtifactSummary = Join-Path $evidenceDir $summaryName
+    $frozenAuthenticodeEvidence = Join-Path $evidenceDir $authenticodeEvidenceName
+    $frozenQualificationEvidence = Join-Path $evidenceDir $qualificationEvidenceName
 
     # Local qualification against frozen candidate assets
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1"),
-        "-Mode", "unsigned-zero-budget", "-Artifact", (Join-Path $bundle $releaseInstaller),
+        "-Mode", "unsigned-zero-budget", "-Artifact", $frozenInstaller,
         "-Evidence", (Join-Path $root "downloaded-authenticode-verification.json")
     ) "candidate Authenticode state is not unsigned-zero-budget"
 
     Invoke-Checked "cargo" @(
-        "xtask", "updater-trust", "verify-signature", "--installer", (Join-Path $bundle $releaseInstaller),
-        "--signature", (Join-Path $bundle $releaseSignature)
+        "xtask", "updater-trust", "verify-signature", "--installer", $frozenInstaller,
+        "--signature", $frozenSignature
     ) "candidate Tauri updater signature verification failed"
 
     Invoke-Checked "cargo" @(
@@ -891,8 +1082,8 @@ function Invoke-BuildCandidate {
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "ci_tauri_update_e2e.ps1"),
         "-FixtureTargetDir", $fixtureTargetDir,
-        "-CandidateInstallerPath", (Join-Path $bundle $releaseInstaller),
-        "-CandidateSignaturePath", (Join-Path $bundle $releaseSignature),
+        "-CandidateInstallerPath", $frozenInstaller,
+        "-CandidateSignaturePath", $frozenSignature,
         "-CandidateVersion", $Version,
         "-CandidatePublicKeyPath", $canonicalPublicKey,
         "-EvidencePath", (Join-Path $root "fixture-http-evidence.json")
@@ -912,7 +1103,7 @@ function Invoke-BuildCandidate {
     Invoke-Checked "pwsh" @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $PSScriptRoot "scan_v4_defender_exact.ps1"),
-        "-Artifact", (Join-Path $bundle $releaseInstaller),
+        "-Artifact", $frozenInstaller,
         "-Evidence", $defenderEvidencePath
     ) "candidate installer Defender scan failed"
     $defenderEvidence = Read-JsonFile $defenderEvidencePath
@@ -927,7 +1118,7 @@ function Invoke-BuildCandidate {
     $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
     try {
         New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-        $install = Start-Process -FilePath (Join-Path $bundle $releaseInstaller) -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
+        $install = Start-Process -FilePath $frozenInstaller -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
         if ($install.ExitCode -ne 0) { Fail "candidate current-user installer failed" }
         $installedBuiltinRoot = Join-Path $installRoot "builtin-songs"
         Invoke-Checked "cargo" @(
@@ -1251,19 +1442,22 @@ function Invoke-PromoteMetadata {
     $manifestPath = Join-Path $root "candidate-manifest.json"
     $manifest = Read-JsonFile $manifestPath
     $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
-    $installerRecord = @($publicRecords | Where-Object { [string]$_.name -eq (Get-ExpectedInstallerName) })[0]
-    $signatureRecord = @($publicRecords | Where-Object { [string]$_.name -eq (Get-ExpectedSignatureName) })[0]
+    $expectedInstaller = Get-ExpectedInstallerName
+    $expectedSignature = Get-ExpectedSignatureName
+    $installerRecord = @($publicRecords | Where-Object { (Get-RecordPropertyString $_ 'name') -eq $expectedInstaller -or (Get-RecordPropertyString $_ 'release_name') -eq $expectedInstaller })[0]
+    $signatureRecord = @($publicRecords | Where-Object { (Get-RecordPropertyString $_ 'name') -eq $expectedSignature -or (Get-RecordPropertyString $_ 'release_name') -eq $expectedSignature })[0]
 
     $notesPath = Assert-ReleaseNotes
     $destination = Join-Path $root "latest.json"
     $publicationDateUtc = Convert-PublishedAtToMetadataTimestamp [string]$publishedRelease.published_at
+    $installerReleaseName = Get-RecordPropertyString $installerRecord 'release_name'
     & cargo xtask release-metadata generate `
         --channel $Channel `
         --version $Version `
         --notes-file $notesPath `
         --pub-date $publicationDateUtc `
         --platform "windows-x86_64" `
-        --asset-url "https://github.com/$repository/releases/download/$Tag/$([string]$installerRecord.release_name)" `
+        --asset-url "https://github.com/$repository/releases/download/$Tag/$installerReleaseName" `
         --signature-file (Get-StateAssetPath $signatureRecord) `
         --output $destination
     if ($LASTEXITCODE -ne 0) { Fail "release metadata generation failed" }
@@ -1306,13 +1500,18 @@ function Invoke-FinalVerify {
     Assert-ExactPublicReleaseAssetSet $release
     Assert-ExactAssetSet $release $publicRecords
     foreach ($expected in $publicRecords) {
-        $expectedReleaseName = if ($null -ne $expected.PSObject.Properties['release_name']) { [string]$expected.release_name } else { [string]$expected.name }
+        $expectedReleaseName = Get-RecordPropertyString $expected 'release_name'
+        if ([string]::IsNullOrWhiteSpace($expectedReleaseName)) {
+            $expectedReleaseName = Get-RecordPropertyString $expected 'name'
+        }
         $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedReleaseName })
-        if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne [int64]$expected.size) { Fail "final public asset identity changed: $expectedReleaseName" }
+        $expectedSize = [int64](Get-RecordPropertyValue $expected 'size')
+        if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne $expectedSize) { Fail "final public asset identity changed: $expectedReleaseName" }
         $finalPath = Join-Path (Get-EffectiveStateRoot) "final-$expectedReleaseName"
         Invoke-GitHubApi -Arguments @("api", [string]$asset[0].url, "--header", "Accept: application/octet-stream") -BinaryOutput -OutputPath $finalPath
         $hash = (Get-FileHash -LiteralPath $finalPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($hash -ne [string]$expected.sha256) { Fail "final public asset digest differs from qualified bytes: $expectedReleaseName" }
+        $expectedSha = Get-RecordPropertyString $expected 'sha256'
+        if ($hash -ne $expectedSha) { Fail "final public asset digest differs from qualified bytes: $expectedReleaseName" }
     }
 
     # Verify unauthenticated raw channel metadata
