@@ -19,6 +19,8 @@ pub(crate) mod observer;
 mod observer_trace;
 mod observer_wake;
 mod prepared;
+#[cfg(test)]
+mod prepared_characterization_tests;
 mod recovery;
 pub(crate) mod timing;
 

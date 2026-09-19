@@ -11,15 +11,27 @@ use super::{DispatchPreparationProbe, QpcClock};
 use sky_dispatch_core::coordinator::{
     CoordinatorError, PreparedAuthoredCommit, RuntimeDispatchCoordinator,
 };
-use sky_dispatch_core::model::GenerationId;
-use sky_dispatch_core::time::TimelineTicks;
+use sky_dispatch_core::model::{GenerationId, MAX_KEYS};
+use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::QpcTicks;
 use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PreparedDownHoldLimit {
+    NoPairedRelease,
+    HoldSlack(DurationTicks),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedDownPolicy {
+    pub(crate) hold_limit: PreparedDownHoldLimit,
+}
 
 #[derive(Debug)]
 pub(crate) struct PreparedDispatchFrame {
     pub(crate) offset_ticks: TimelineTicks,
     pub(crate) view: AuthoredBatchView,
+    pub(crate) down_policy: Option<PreparedDownPolicy>,
 }
 
 #[derive(Debug)]
@@ -47,6 +59,8 @@ impl PreparedDispatchStream {
         instrument_key_profile: &MaterializedInstrumentKeyProfile,
     ) -> Result<(Self, RuntimeDispatchCoordinator), String> {
         let mut entries = Vec::new();
+        let mut open_by_slot: [Option<OpenPreparedDown>; MAX_KEYS] = [None; MAX_KEYS];
+        let min_hold_ticks = simulator.min_hold_ticks;
 
         while simulator.cursor < simulator.schedule.batches.len() {
             let mut plan = NextDispatchPlan::default();
@@ -70,6 +84,14 @@ impl PreparedDispatchStream {
                 }
                 NextDispatchPlan::Metadata(metadata) => {
                     let offset_ticks = metadata.deadline_ticks;
+                    record_prepared_commit_intents(
+                        &mut entries,
+                        &metadata.commit,
+                        None,
+                        offset_ticks,
+                        min_hold_ticks,
+                        &mut open_by_slot,
+                    )?;
                     simulator
                         .commit_prepared_authored_frame_metadata_frozen(&metadata.commit)
                         .map_err(|error| {
@@ -105,6 +127,25 @@ impl PreparedDispatchStream {
                         ));
                     }
                     let offset_ticks = view.prepared_batch.effective_scheduled_ticks;
+                    let entry_index = entries.len();
+                    let down_policy = (commit.frame.down_mask != 0).then_some(PreparedDownPolicy {
+                        hold_limit: PreparedDownHoldLimit::NoPairedRelease,
+                    });
+                    entries.push(PreparedDispatchEntry::Physical(Box::new(
+                        PreparedDispatchFrame {
+                            offset_ticks,
+                            view,
+                            down_policy,
+                        },
+                    )));
+                    record_prepared_commit_intents(
+                        &mut entries,
+                        &commit,
+                        Some(entry_index),
+                        offset_ticks,
+                        min_hold_ticks,
+                        &mut open_by_slot,
+                    )?;
                     simulator
                         .commit_prepared_authored_frame_success_frozen(
                             &commit,
@@ -114,9 +155,6 @@ impl PreparedDispatchStream {
                         .map_err(|error| {
                             format!("normal prepared physical simulation failed: {error}")
                         })?;
-                    entries.push(PreparedDispatchEntry::Physical(Box::new(
-                        PreparedDispatchFrame { offset_ticks, view },
-                    )));
                 }
             }
         }
@@ -225,4 +263,83 @@ impl PreparedDispatchStream {
     pub(crate) fn entries(&self) -> &[PreparedDispatchEntry] {
         &self.entries
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OpenPreparedDown {
+    generation_id: GenerationId,
+    entry_index: usize,
+    down_offset_ticks: TimelineTicks,
+}
+
+fn record_prepared_commit_intents(
+    entries: &mut [PreparedDispatchEntry],
+    commit: &PreparedAuthoredCommit,
+    entry_index: Option<usize>,
+    offset_ticks: TimelineTicks,
+    min_hold_ticks: DurationTicks,
+    open_by_slot: &mut [Option<OpenPreparedDown>; MAX_KEYS],
+) -> Result<(), String> {
+    for up_intent in &commit.up_intents {
+        let slot = usize::from(up_intent.intent.key_slot());
+        let Some(open) = open_by_slot.get(slot).copied().flatten() else {
+            // Unmatched/stale Up metadata retains its existing behavior and
+            // does not manufacture a pairing.
+            continue;
+        };
+        if open.generation_id != up_intent.intent.generation_id() {
+            return Err(format!(
+                "prepared hold pairing generation mismatch at key slot {slot}: open {}, Up {}",
+                open.generation_id,
+                up_intent.intent.generation_id()
+            ));
+        }
+        let hold_interval = offset_ticks
+            .checked_duration_since(open.down_offset_ticks)
+            .map_err(|error| format!("prepared hold interval arithmetic failed: {error}"))?;
+        let hold_slack = hold_interval
+            .checked_sub(min_hold_ticks)
+            .map_err(|error| format!("prepared hold slack underflow: {error}"))?;
+        let Some(PreparedDispatchEntry::Physical(frame)) = entries.get_mut(open.entry_index) else {
+            return Err(format!(
+                "prepared hold pairing entry {} is not physical",
+                open.entry_index
+            ));
+        };
+        let Some(policy) = frame.down_policy.as_mut() else {
+            return Err(format!(
+                "prepared hold pairing entry {} has no Down policy",
+                open.entry_index
+            ));
+        };
+        policy.hold_limit = match policy.hold_limit {
+            PreparedDownHoldLimit::NoPairedRelease => PreparedDownHoldLimit::HoldSlack(hold_slack),
+            PreparedDownHoldLimit::HoldSlack(existing) => {
+                PreparedDownHoldLimit::HoldSlack(existing.min(hold_slack))
+            }
+        };
+        open_by_slot[slot] = None;
+    }
+
+    for down_intent in &commit.down_intents {
+        let slot = usize::from(down_intent.intent.key_slot());
+        if open_by_slot.get(slot).is_some_and(Option::is_some) {
+            return Err(format!(
+                "prepared Down slot {slot} already has an open generation"
+            ));
+        }
+        let Some(entry_index) = entry_index else {
+            return Err("prepared Down metadata has no physical entry".to_string());
+        };
+        let Some(slot_state) = open_by_slot.get_mut(slot) else {
+            return Err(format!("prepared Down key slot {slot} is outside MAX_KEYS"));
+        };
+        *slot_state = Some(OpenPreparedDown {
+            generation_id: down_intent.intent.generation_id(),
+            entry_index,
+            down_offset_ticks: offset_ticks,
+        });
+    }
+
+    Ok(())
 }

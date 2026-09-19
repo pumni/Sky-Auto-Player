@@ -793,6 +793,8 @@ fn production_profile_has_no_observer_samples_or_trace_records() {
 
 #[test]
 fn normal_prepared_overdue_boundaries_send_once_without_scheduler_misses() {
+    // Phase 1 characterization: Phase 2 will intentionally supersede this
+    // current overdue-send behavior with future authorization.
     for lateness_us in [2_000, 10_000, 50_000, 100_000] {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         let calls = harness.configure_send_counter();
@@ -809,6 +811,29 @@ fn normal_prepared_overdue_boundaries_send_once_without_scheduler_misses() {
         assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
     }
+}
+
+#[test]
+fn normal_prepared_overdue_boundaries_currently_drain_sequentially() {
+    // Phase 1 characterization: multiple overdue prepared Down boundaries
+    // currently remain sendable one at a time; Phase 2 will supersede this.
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(2, 10_000);
+    let calls = harness.configure_send_counter();
+    let mut stream = harness.build_prepared_stream_for_test();
+
+    for lateness_us in [50_000, 50_000] {
+        let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, lateness_us);
+        assert!(
+            matches!(step, super::worker::DispatchStep::Dispatched),
+            "overdue boundary must remain sendable in Phase 1 characterization: {step:?}"
+        );
+    }
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
+    assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+    assert_eq!(harness.timeline_rebase_count_for_test(), 0);
 }
 
 #[test]
