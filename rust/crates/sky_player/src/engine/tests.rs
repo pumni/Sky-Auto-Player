@@ -792,9 +792,7 @@ fn production_profile_has_no_observer_samples_or_trace_records() {
 }
 
 #[test]
-fn normal_prepared_overdue_boundaries_send_once_without_scheduler_misses() {
-    // Phase 1 characterization: Phase 2 will intentionally supersede this
-    // current overdue-send behavior with future authorization.
+fn normal_prepared_overdue_boundaries_are_unobserved_backlog() {
     for lateness_us in [2_000, 10_000, 50_000, 100_000] {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         let calls = harness.configure_send_counter();
@@ -803,10 +801,10 @@ fn normal_prepared_overdue_boundaries_send_once_without_scheduler_misses() {
         let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, lateness_us);
         assert!(
             matches!(step, super::worker::DispatchStep::Dispatched),
-            "lateness {lateness_us}us step: {step:?}"
+            "backlog recovery {lateness_us}us step: {step:?}"
         );
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "lateness {lateness_us}us");
-        assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "lateness {lateness_us}us");
+        assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 1);
         assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
         assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
@@ -815,9 +813,10 @@ fn normal_prepared_overdue_boundaries_send_once_without_scheduler_misses() {
 
 #[test]
 fn normal_prepared_overdue_boundaries_currently_drain_sequentially() {
-    // Phase 1 characterization: multiple overdue prepared Down boundaries
-    // currently remain sendable one at a time; Phase 2 will supersede this.
-    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(2, 10_000);
+    // An unobserved prepared Down is reconciled once and never physically
+    // caught up; the next frozen boundary may then be processed normally.
+    let mut harness =
+        ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(10_000);
     let calls = harness.configure_send_counter();
     let mut stream = harness.build_prepared_stream_for_test();
 
@@ -825,15 +824,105 @@ fn normal_prepared_overdue_boundaries_currently_drain_sequentially() {
         let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, lateness_us);
         assert!(
             matches!(step, super::worker::DispatchStep::Dispatched),
-            "overdue boundary must remain sendable in Phase 1 characterization: {step:?}"
+            "overdue boundary recovery: {step:?}"
         );
     }
 
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 2);
     assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
     assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+}
+
+#[test]
+fn prepared_stale_up_after_dropped_down_is_physical_noop_for_accounting() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let packets = harness.configure_packet_capture();
+    let mut stream = harness.build_prepared_stream_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(packets.lock().expect("packet capture").is_empty());
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(
+        *packets.lock().expect("packet capture"),
+        vec![sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0)]
+    );
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 1);
+    assert_eq!(harness.backend_active_mask(), 0);
+}
+
+#[test]
+fn prepared_mixed_backlog_sends_only_the_canonical_up_prefix() {
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let packets = harness.configure_packet_capture();
+    harness.prepare_prepared_stream_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(
+        *packets.lock().expect("packet capture"),
+        vec![sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0)]
+    );
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 2);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+}
+
+#[test]
+fn prepared_mixed_sender_cutoff_sends_only_the_canonical_up_prefix() {
+    let mut harness = ProductionDispatchTestHarness::new_mixed_then_future_down();
+    let packets = harness.configure_packet_capture();
+    harness.prepare_prepared_stream_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(0),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(20_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(
+        *packets.lock().expect("packet capture"),
+        vec![
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b001),
+            sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0),
+        ]
+    );
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 1);
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
+}
+
+#[test]
+fn prepared_mixed_up_prefix_transport_failure_is_fail_closed() {
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    harness.configure_deadline_missed_packet_sender();
+    harness.prepare_prepared_stream_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000);
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::Terminate(_) | super::worker::DispatchStep::TerminateStatic(_)
+    ));
+    assert_eq!(harness.resources.coordinator.cursor, 1);
+    assert_eq!(harness.backend_active_mask(), 0);
 }
 
 #[test]
@@ -887,7 +976,7 @@ fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
     let frame_offsets_before = harness.prepared_frame_offsets_for_test();
 
     assert!(matches!(
-        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        harness.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(2_000),
         super::worker::DispatchStep::Dispatched
     ));
     assert_eq!(packets.lock().expect("prepared packet capture").len(), 1);
@@ -909,7 +998,7 @@ fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
         super::worker::DispatchStep::Dispatched
     ));
     assert!(matches!(
-        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        harness.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(2_000),
         super::worker::DispatchStep::Dispatched
     ));
     assert_eq!(packets.lock().expect("prepared packet capture").len(), 3);
@@ -1237,7 +1326,8 @@ fn normal_prepared_final_control_race_suppresses_send_without_cursor_advance() {
         },
     );
 
-    let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+    let step =
+        harness.dispatch_prepared_current_at_lateness_authorized_for_test(&mut stream, 10_000);
 
     assert!(matches!(step, super::worker::DispatchStep::Continue));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1294,13 +1384,23 @@ fn normal_prepared_precision_suffix_suppresses_all_final_control_races() {
 
 #[test]
 fn normal_prepared_zero_progress_is_fail_closed_without_cursor_advance() {
-    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let mut harness =
+        ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(10_000);
     let calls = harness.configure_prepared_zero_progress_sender_for_test();
     let mut stream = harness.build_prepared_stream_for_test();
 
-    let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+    let step =
+        harness.dispatch_prepared_current_at_lateness_authorized_for_test(&mut stream, 1_000);
 
-    assert!(matches!(step, super::worker::DispatchStep::Terminate(_)));
+    assert!(
+        matches!(
+            step,
+            super::worker::DispatchStep::Terminate(_)
+                | super::worker::DispatchStep::TerminateStatic(_)
+        ),
+        "unexpected zero-progress step: {step:?}, calls: {}",
+        calls.load(Ordering::SeqCst)
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(harness.resources.coordinator.cursor, 0);
     assert_eq!(harness.backend_active_mask(), 0);

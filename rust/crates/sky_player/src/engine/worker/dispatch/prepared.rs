@@ -1,5 +1,6 @@
 //! Normal prepared-frame precision envelope.
 
+use super::super::prepared::PreparedDownHoldLimit;
 use super::super::{
     DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
     PreparedDispatchFrame, QpcClock, RuntimeDispatchCoordinator, TargetStamp, TrackedKeyState,
@@ -9,13 +10,13 @@ use super::super::{
 };
 use super::authored::record_prepared_normal_send_outcome;
 use super::recovery::{DownMissReason, recover_missed_down_boundary};
-use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue};
+use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalBoundaryStamp};
 use crate::engine::shared::{SharedProgressClock, SystemPowerState};
 use crate::engine::worker::physical_timing_guard::PhysicalTimingWindow;
 use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionOutcome;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreparedNormalAdmission {
@@ -27,7 +28,57 @@ enum PreparedNormalAdmission {
 
 enum PreparedNormalPrecisionResult {
     Rejected(PreparedNormalAdmission),
+    UnobservedBacklog,
     Sent(sky_dispatch_win32::input::SendTransactionOutcome),
+}
+
+#[inline]
+fn prepared_down_boundary(
+    frame: &PreparedDispatchFrame,
+    physical_target_qpc: QpcTicks,
+) -> PhysicalBoundaryStamp {
+    PhysicalBoundaryStamp {
+        first_batch_index: frame.view.prepared_batch.index,
+        packet_index: frame.view.prepared_batch.packet_index,
+        packet_batch_count: frame.view.prepared_batch.packet_batch_count,
+        source_action_index: frame.view.batch_source_action_index,
+        up_mask: frame.view.packet_masks.up_mask,
+        down_mask: frame.view.packet_masks.down_mask,
+        physical_target_qpc,
+    }
+}
+
+#[inline]
+fn prepared_down_sender_cutoff(
+    frame: &PreparedDispatchFrame,
+    physical_target_qpc: QpcTicks,
+) -> Result<Option<QpcTicks>, &'static str> {
+    let Some(policy) = frame.down_policy else {
+        return Ok(None);
+    };
+    match policy.hold_limit {
+        PreparedDownHoldLimit::NoPairedRelease => Ok(None),
+        PreparedDownHoldLimit::HoldSlack(slack) => physical_target_qpc
+            .checked_add_duration(slack)
+            .map(Some)
+            .map_err(|_| "prepared Down sender cutoff arithmetic overflow"),
+    }
+}
+
+#[inline]
+fn normal_prepared_timing_window(
+    physical_target_qpc: QpcTicks,
+    sender_cutoff_qpc: Option<QpcTicks>,
+) -> PhysicalTimingWindow {
+    PhysicalTimingWindow {
+        authored_target_qpc: physical_target_qpc,
+        musical_up_not_before_qpc: physical_target_qpc,
+        down_not_before_qpc: physical_target_qpc,
+        packet_not_before_qpc: physical_target_qpc,
+        latest_down_start_qpc: sender_cutoff_qpc,
+        hold_floor_mask: 0,
+        release_floor_mask: 0,
+    }
 }
 
 /// The complete normal precision suffix.  The payload has already been
@@ -48,6 +99,8 @@ fn send_prepared_normal_precision_frame(
     desired_pause: &AtomicBool,
     supervisor_expired: &AtomicBool,
     system_power: &SystemPowerState,
+    down_authorized: bool,
+    sender_cutoff_qpc: Option<QpcTicks>,
     preflight_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))] post_focus_race_hook: Option<
         &crate::engine::config::FinalGateRaceHook,
@@ -119,10 +172,15 @@ fn send_prepared_normal_precision_frame(
         ));
     }
 
+    if has_down_events && !down_authorized {
+        return Ok(PreparedNormalPrecisionResult::UnobservedBacklog);
+    }
+
     // The prepared payload and Win32 call metadata are fully resolved by the
     // sender before its authoritative pre-call QPC boundary.
-    let result = backend.send_prepared_physical_packet_at_final_boundary_without_cutoff(
+    let result = backend.send_prepared_physical_packet_at_final_boundary(
         &frame.view.prepared_packet,
+        sender_cutoff_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_now_ticks,
         #[cfg(not(any(test, feature = "test-support")))]
@@ -171,6 +229,17 @@ pub(crate) fn dispatch_prepared_normal_frame(
     let _ = now_ticks;
     let view = &frame.view;
     let has_down_events = view.packet_masks.down_mask != 0;
+    let down_authorized = if has_down_events {
+        let boundary = prepared_down_boundary(frame, physical_target_qpc);
+        let target_generation = target_generation.load(Ordering::Acquire);
+        runtime.prepared_down_is_authorized(boundary, target_generation)
+    } else {
+        true
+    };
+    let sender_cutoff_qpc = match prepared_down_sender_cutoff(frame, physical_target_qpc) {
+        Ok(cutoff) => cutoff,
+        Err(error) => return DispatchStep::TerminateStatic(error),
+    };
     // Keep this cheap outer read for the distinct preroll/focus-pause path.
     // The precision helper still performs the authoritative final atomic
     // admission; removing this read would merge the preroll fault path with
@@ -223,6 +292,8 @@ pub(crate) fn dispatch_prepared_normal_frame(
         desired_pause,
         supervisor_expired,
         system_power,
+        down_authorized,
+        sender_cutoff_qpc,
         preflight_target,
         #[cfg(any(test, feature = "test-support"))]
         runtime.final_gate_post_focus_race_hook.as_ref(),
@@ -253,6 +324,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
         }
         PreparedNormalPrecisionResult::Rejected(PreparedNormalAdmission::TargetChanged) => {
             runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
             return DispatchStep::Continue;
         }
         PreparedNormalPrecisionResult::Rejected(PreparedNormalAdmission::LateControl) => {
@@ -260,7 +332,29 @@ pub(crate) fn dispatch_prepared_normal_frame(
             record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Control);
             return DispatchStep::Continue;
         }
+        PreparedNormalPrecisionResult::UnobservedBacklog => {
+            runtime.invalidate_prepared_down_authorization();
+            return recover_missed_down_boundary(
+                view,
+                config,
+                runtime,
+                local_metrics,
+                &mut resources.backend,
+                &mut resources.coordinator,
+                &mut resources.playback,
+                normal_prepared_timing_window(physical_target_qpc, sender_cutoff_qpc),
+                now_ticks,
+                effective_now_ticks,
+                DownMissReason::UnobservedBacklog,
+                false,
+                explicitly_cancelled_by_suspension,
+                observer,
+            );
+        }
     };
+    if has_down_events {
+        runtime.invalidate_prepared_down_authorization();
+    }
     debug_assert_eq!(view.prepared_packet.packet(), view.packet_masks);
     record_prepared_normal_send_outcome(
         view,
@@ -275,6 +369,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
         &mut resources.playback,
         effective_now_ticks,
         physical_target_qpc,
+        sender_cutoff_qpc,
         boundary_crossing_qpc,
         result,
         explicitly_cancelled_by_suspension,
@@ -297,6 +392,8 @@ pub(super) fn record_down_send_result(
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
     physical_timing_window: Option<PhysicalTimingWindow>,
+    normal_prepared_sender_cutoff: bool,
+    normal_sender_cutoff_qpc: Option<QpcTicks>,
     target_crossing_qpc: Option<QpcTicks>,
     trace_kind: u8,
     prepared_final_policy_qpc: Option<QpcTicks>,
@@ -338,14 +435,19 @@ pub(super) fn record_down_send_result(
         result.status,
         sky_dispatch_win32::input::SendTransactionStatus::DownExpiredBeforeSend
     ) && view.packet_masks.down_mask != 0
-        && timing.strict_timing
+        && (timing.strict_timing || normal_prepared_sender_cutoff)
     {
         let Some(observed_qpc) = result.evidence.started_ticks else {
             return DispatchStep::TerminateStatic(
                 "DownExpiredBeforeSend missing authoritative start boundary",
             );
         };
-        let Some(physical_timing_window) = physical_timing_window else {
+        let Some(physical_timing_window) = physical_timing_window.or_else(|| {
+            normal_prepared_sender_cutoff.then_some(normal_prepared_timing_window(
+                physical_target_qpc,
+                normal_sender_cutoff_qpc,
+            ))
+        }) else {
             return DispatchStep::TerminateStatic(
                 "strict Down recovery is missing physical timing evidence",
             );
@@ -363,6 +465,7 @@ pub(super) fn record_down_send_result(
             effective_now_ticks,
             DownMissReason::DownExpiredBeforeSend,
             false,
+            explicitly_cancelled_by_suspension,
             observer,
         );
     }
@@ -396,8 +499,13 @@ pub(super) fn record_down_send_result(
     let final_policy_qpc = prepared_final_policy_qpc
         .or(result_started_ticks)
         .unwrap_or(physical_target_qpc);
-    let physical_timing_window = physical_timing_window
-        .unwrap_or_else(|| PhysicalTimingWindow::authored_only(physical_target_qpc));
+    let physical_timing_window = physical_timing_window.unwrap_or_else(|| {
+        if normal_prepared_sender_cutoff {
+            normal_prepared_timing_window(physical_target_qpc, normal_sender_cutoff_qpc)
+        } else {
+            PhysicalTimingWindow::authored_only(physical_target_qpc)
+        }
+    });
     super::authored::finalize_down_send_outcome(
         view,
         config,
@@ -506,15 +614,8 @@ mod tests {
             precision_call < post_send,
             "normal precision suffix must precede post-send work"
         );
-        let normal_body = source
-            .split("pub(crate) fn dispatch_prepared_normal_frame")
-            .nth(1)
-            .expect("normal dispatch body")
-            .split("pub(super) fn record_down_send_result")
-            .next()
-            .expect("normal dispatch body before shared outcome accounting");
-        assert!(!normal_body.contains("PhysicalTimingWindow"));
-        assert!(!normal_body.contains("physical_timing_window"));
+        assert!(!outer[..precision_call].contains("PhysicalTimingWindow"));
+        assert!(!outer[..precision_call].contains("physical_timing_guard"));
         for forbidden in [
             "plan_next_dispatch_projected",
             "prepare_current_authored_packet",
@@ -566,11 +667,9 @@ mod tests {
                 "prepared precision suffix contains forbidden reference {forbidden}"
             );
         }
-        assert!(
-            helper
-                .contains("backend.send_prepared_physical_packet_at_final_boundary_without_cutoff")
-        );
-        assert!(!helper.contains("backend.send_prepared_physical_packet_at_final_boundary("));
+        assert!(helper.contains("backend.send_prepared_physical_packet_at_final_boundary("));
+        assert!(helper.contains("sender_cutoff_qpc"));
+        assert!(!helper.contains("_without_cutoff"));
 
         let tracked = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),

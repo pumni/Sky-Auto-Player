@@ -218,6 +218,7 @@ fn commit_down_send_outcome(
                 }
             },
             runtime.pending_up_recovery.is_some(),
+            &[],
             observer,
         );
     }
@@ -618,6 +619,8 @@ pub(super) fn record_down_send_outcome(
         effective_now_ticks,
         physical_target_qpc,
         Some(physical_timing_window),
+        false,
+        None,
         target_crossing_qpc,
         trace_kind,
         prepared_final_policy_qpc,
@@ -641,6 +644,7 @@ pub(super) fn record_prepared_normal_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
+    sender_cutoff_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     target_crossing_qpc: Option<QpcTicks>,
     result: SendTransactionOutcome,
     explicitly_cancelled_by_suspension: &[GenerationId],
@@ -661,6 +665,8 @@ pub(super) fn record_prepared_normal_send_outcome(
         effective_now_ticks,
         physical_target_qpc,
         None,
+        true,
+        sender_cutoff_qpc,
         target_crossing_qpc,
         trace_kind_for_packet_kind(view.prepared_batch.packet_kind),
         None,

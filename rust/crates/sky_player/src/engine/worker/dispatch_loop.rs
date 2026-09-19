@@ -2112,7 +2112,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_prepared_sender_does_not_consume_phase_two_authorization() {
+    fn normal_prepared_source_boundaries_keep_authorization_ownership_split() {
         let loop_source = include_str!("dispatch_loop.rs");
         let loop_production = loop_source
             .split_once("#[cfg(test)]")
@@ -2126,7 +2126,7 @@ mod tests {
             .map(|(production, _)| production)
             .expect("prepared dispatch production source");
         assert!(!prepared_production.contains("PreparedDownAuthorization"));
-        assert!(!prepared_production.contains("prepared_down_is_authorized"));
+        assert!(prepared_production.contains("prepared_down_is_authorized"));
     }
 
     #[test]
@@ -2266,7 +2266,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_normal_observer_uses_authored_only_timing_evidence() {
+    fn prepared_normal_observer_uses_static_sender_cutoff_evidence() {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_packet_capture();
@@ -2298,9 +2298,11 @@ mod tests {
             observation.physical_timing_window.packet_not_before_qpc,
             observation.physical_target_qpc
         );
-        assert_eq!(
-            observation.physical_timing_window.latest_down_start_qpc,
-            None
+        assert!(
+            observation
+                .physical_timing_window
+                .latest_down_start_qpc
+                .is_some()
         );
         assert_eq!(observation.physical_timing_window.hold_floor_mask, 0);
         assert_eq!(observation.physical_timing_window.release_floor_mask, 0);

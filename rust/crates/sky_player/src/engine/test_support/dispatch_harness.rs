@@ -10,10 +10,10 @@ use crate::engine::shared::{SharedProgressClock, SystemPowerState};
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
-use crate::engine::worker::dispatch::PendingObservationQueue;
 use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
 };
+use crate::engine::worker::dispatch::{PendingObservationQueue, PhysicalBoundaryStamp};
 use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts,
     PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundary, WaitBoundaryInput,
@@ -1621,11 +1621,30 @@ impl ProductionDispatchTestHarness {
         &mut self,
         lateness_us: u64,
     ) -> DispatchStep {
+        self.dispatch_prepared_current_at_lateness_without_stream_inner_for_test(lateness_us, false)
+    }
+
+    pub fn dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(
+        &mut self,
+        lateness_us: u64,
+    ) -> DispatchStep {
+        self.dispatch_prepared_current_at_lateness_without_stream_inner_for_test(lateness_us, true)
+    }
+
+    fn dispatch_prepared_current_at_lateness_without_stream_inner_for_test(
+        &mut self,
+        lateness_us: u64,
+        authorize: bool,
+    ) -> DispatchStep {
         let mut stream = self
             .prepared_stream_for_test
             .take()
             .expect("prepared stream test setup");
-        let step = self.dispatch_prepared_current_at_lateness_for_test(&mut stream, lateness_us);
+        let step = self.dispatch_prepared_current_at_lateness_inner_for_test(
+            &mut stream,
+            lateness_us,
+            authorize,
+        );
         self.prepared_stream_for_test = Some(stream);
         step
     }
@@ -1667,6 +1686,24 @@ impl ProductionDispatchTestHarness {
             .clock
             .now()
             .map_err(|error| format!("prepared benchmark wait-entry QPC: {error:?}"))?;
+        if let Some(target) = preflight_target {
+            let boundary = PhysicalBoundaryStamp {
+                first_batch_index: frame.view.prepared_batch.index,
+                packet_index: frame.view.prepared_batch.packet_index,
+                packet_batch_count: frame.view.prepared_batch.packet_batch_count,
+                source_action_index: frame.view.batch_source_action_index,
+                up_mask: frame.view.packet_masks.up_mask,
+                down_mask: frame.view.packet_masks.down_mask,
+                physical_target_qpc: target_qpc,
+            };
+            self.runtime
+                .record_prepared_down_authorization(
+                    boundary,
+                    target.generation,
+                    target_qpc > wait_entry_qpc,
+                )
+                .map_err(|error| format!("prepared wait authorization: {error}"))?;
+        }
         self.prepared_target_qpc = Some(target_qpc);
         self.prepared_wait_entry_qpc = Some(wait_entry_qpc);
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
@@ -1771,6 +1808,23 @@ impl ProductionDispatchTestHarness {
         stream: &mut PreparedDispatchStream,
         lateness_us: u64,
     ) -> DispatchStep {
+        self.dispatch_prepared_current_at_lateness_inner_for_test(stream, lateness_us, false)
+    }
+
+    pub(crate) fn dispatch_prepared_current_at_lateness_authorized_for_test(
+        &mut self,
+        stream: &mut PreparedDispatchStream,
+        lateness_us: u64,
+    ) -> DispatchStep {
+        self.dispatch_prepared_current_at_lateness_inner_for_test(stream, lateness_us, true)
+    }
+
+    fn dispatch_prepared_current_at_lateness_inner_for_test(
+        &mut self,
+        stream: &mut PreparedDispatchStream,
+        lateness_us: u64,
+        authorize: bool,
+    ) -> DispatchStep {
         let frame = match stream.current() {
             Some(PreparedDispatchEntry::Physical(frame)) => frame,
             Some(PreparedDispatchEntry::Metadata { .. }) => {
@@ -1807,6 +1861,20 @@ impl ProductionDispatchTestHarness {
             hwnd: self.target_hwnd.load(Ordering::Acquire),
             generation: self.target_generation.load(Ordering::Acquire),
         });
+        if authorize && let Some(target) = preflight_target {
+            let boundary = PhysicalBoundaryStamp {
+                first_batch_index: frame.view.prepared_batch.index,
+                packet_index: frame.view.prepared_batch.packet_index,
+                packet_batch_count: frame.view.prepared_batch.packet_batch_count,
+                source_action_index: frame.view.batch_source_action_index,
+                up_mask: frame.view.packet_masks.up_mask,
+                down_mask: frame.view.packet_masks.down_mask,
+                physical_target_qpc,
+            };
+            self.runtime
+                .record_prepared_down_authorization(boundary, target.generation, true)
+                .expect("prepared test authorization");
+        }
         let step = dispatch_prepared_normal_frame(
             frame,
             &self.config,

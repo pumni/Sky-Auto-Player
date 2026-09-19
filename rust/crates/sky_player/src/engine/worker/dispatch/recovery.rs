@@ -6,6 +6,7 @@ use super::{
     AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalCommit, RecoveryDescriptor,
 };
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
+use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_win32::input::TrackedKeyState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -259,6 +260,7 @@ pub(super) fn recover_missed_down_boundary(
     wake_ticks: sky_dispatch_core::time::TimelineTicks,
     reason: DownMissReason,
     already_classified: bool,
+    explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     if !already_classified {
@@ -380,11 +382,12 @@ pub(super) fn recover_missed_down_boundary(
     };
     let commit_result = match &view.commit {
         PhysicalCommit::Authored(commit) => coordinator
-            .commit_prepared_authored_frame_deadline_miss(
+            .commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
                 commit,
                 up_mask,
                 view.packet_masks.down_mask,
                 started_effective,
+                explicitly_cancelled_by_suspension,
             ),
         PhysicalCommit::Coalesced {
             authored,
@@ -399,12 +402,14 @@ pub(super) fn recover_missed_down_boundary(
             coordinator
                 .commit_pending_release_success(*release_mask, started_effective)
                 .and_then(|()| {
-                    coordinator.commit_prepared_authored_frame_deadline_miss(
-                        authored,
-                        authored.frame.immediate_up_mask,
-                        authored.frame.down_mask,
-                        started_effective,
-                    )
+                    coordinator
+                        .commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
+                            authored,
+                            authored.frame.immediate_up_mask,
+                            authored.frame.down_mask,
+                            started_effective,
+                            explicitly_cancelled_by_suspension,
+                        )
                 })
         }
         PhysicalCommit::PendingRelease { .. } => {
