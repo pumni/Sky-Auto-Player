@@ -4875,7 +4875,30 @@ jobs:
       - name: Preflight release request and repository readiness
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -File scripts/v4_release_pipeline.ps1 `
+            -State Preflight `
+            -Version $env:V4_RELEASE_VERSION `
+            -Channel $env:V4_RELEASE_CHANNEL `
+            -Tag $env:V4_RELEASE_TAG `
+            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
+            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
+            -StateRoot $env:V4_RELEASE_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
+            -RunId $env:GITHUB_RUN_ID
       - name: Build and qualify the single production candidate
+        run: |
+          pwsh -File scripts/v4_release_pipeline.ps1 `
+            -State BuildCandidate `
+            -Version $env:V4_RELEASE_VERSION `
+            -Channel $env:V4_RELEASE_CHANNEL `
+            -Tag $env:V4_RELEASE_TAG `
+            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
+            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
+            -StateRoot $env:V4_RELEASE_STATE_ROOT `
+            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
+            -RunId $env:GITHUB_RUN_ID
       - name: Mint release-metadata GitHub App token before publication
         id: metadata-app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
@@ -4892,12 +4915,43 @@ jobs:
       - name: Publish the qualified candidate immutably
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -File scripts/v4_release_pipeline.ps1 `
+            -State PublishRelease `
+            -Version $env:V4_RELEASE_VERSION `
+            -Channel $env:V4_RELEASE_CHANNEL `
+            -Tag $env:V4_RELEASE_TAG `
+            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
+            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
+            -StateRoot $env:V4_RELEASE_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
+            -RunId $env:GITHUB_RUN_ID
       - name: Promote release metadata only after immutable publication
         env:
           GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+        run: |
+          pwsh -File scripts/v4_release_pipeline.ps1 `
+            -State PromoteMetadata `
+            -Version $env:V4_RELEASE_VERSION `
+            -Channel $env:V4_RELEASE_CHANNEL `
+            -Tag $env:V4_RELEASE_TAG `
+            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
+            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
+            -StateRoot $env:V4_RELEASE_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
       - name: Re-fetch and verify final public release and metadata
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -File scripts/v4_release_pipeline.ps1 `
+            -State FinalVerify `
+            -Version $env:V4_RELEASE_VERSION `
+            -Channel $env:V4_RELEASE_CHANNEL `
+            -Tag $env:V4_RELEASE_TAG `
+            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
+            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
+            -StateRoot $env:V4_RELEASE_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
     Verify isolated production runner boundary
     verify_v4_release_runner.ps1
     cleanup_v4_release_state.ps1
@@ -4905,11 +4959,6 @@ jobs:
     -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
     persist-credentials: false
     GH_TOKEN: ${{ github.token }}
-    -State Preflight
-    -State BuildCandidate
-    -State PublishRelease
-    -State PromoteMetadata
-    -State FinalVerify
     actions/attest@v4
     actions/upload-artifact@v7
     --source-digest $env:GITHUB_SHA
@@ -4941,10 +4990,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         let pipeline_contract = v4_release_pipeline_contract_source(workflow, pipeline, regression);
         assert!(pipeline_contract.is_ok(), "{pipeline_contract:?}");
 
-        let reordered = workflow.replace(
-            "-State Preflight\n    -State BuildCandidate",
-            "-State BuildCandidate\n    -State Preflight",
-        );
+        let reordered = workflow.replacen("-State Preflight `", "-State BuildCandidate `", 1);
         assert!(v4_release_pipeline_contract_source(&reordered, pipeline, regression).is_err());
         let duplicated_build = pipeline.replace(
             "function Invoke-PublishRelease",
