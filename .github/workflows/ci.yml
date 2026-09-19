@@ -332,6 +332,12 @@ jobs:
       - name: Promotion digest regression self-test
         run: pwsh scripts/promote_v4_metadata.ps1 -SelfTest
 
+      - name: Run V4 release Latest guard behavioral test
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_v4_release_latest_guard.ps1
+
+      - name: Run V4 post-publication transaction behavioral test
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_post_publication_transaction.ps1
+
       - name: V4 release pipeline mock state-machine self-test
         run: pwsh scripts/test_v4_release_pipeline.ps1
 

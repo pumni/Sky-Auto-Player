@@ -145,7 +145,7 @@ function New-TransactionApiHandler([System.Collections.IDictionary]$Ctx) {
                     browser_download_url = "https://github.com/pumni/Sky-Auto-Player/releases/download/$($Ctx.Fixture.Tag)/$($Ctx.Fixture.SignatureName)"
                 }
             )
-            if ($Ctx.Fault -eq "WrongLatest") { $Ctx.Latest = $Ctx.PreLatest }
+            if ($Ctx.Fault -eq "WrongLatest" -or $Ctx.Fault -eq "BetaHappy") { $Ctx.Latest = $Ctx.PreLatest }
             elseif ($Ctx.Fault -eq "BetaDisplacesLatest") { $Ctx.Latest = $Ctx.Release }
             else {
                 $Ctx.Latest = [pscustomobject]@{
@@ -221,7 +221,7 @@ function New-TransactionRawHandler([System.Collections.IDictionary]$Ctx) {
     }.GetNewClosure()
 }
 
-function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channel, [string]$Fault, [bool]$ExpectedPass) {
+function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channel, [string]$Fault, [bool]$ExpectedPass, [string]$ExpectedError = "") {
     $fixture = New-TransactionFixture $Version $Channel $Fault
     $ctx = New-TransactionContext $fixture $Fault
     $failed = $false
@@ -246,6 +246,10 @@ function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channe
     } catch {
         $failed = $true
         if ($ExpectedPass) { throw }
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedError) -and
+            $_.Exception.Message -notlike "*$ExpectedError*") {
+            throw "FAILED: $Name expected diagnostic '$ExpectedError' but got '$($_.Exception.Message)'"
+        }
     } finally {
         $script:GitHubApiHandler = $null
         $script:AssetUploadHandler = $null
@@ -259,20 +263,21 @@ function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channe
 }
 
 Invoke-TransactionCase "stable happy path with stale-then-converged raw endpoint" "4.1.2" "stable" "Happy" $true
+Invoke-TransactionCase "beta happy path preserves stable Latest" "4.0.0-rc.1" "beta" "BetaHappy" $true
 foreach ($case in @(
-    @("stable wrong Latest", "4.1.2", "stable", "WrongLatest"),
-    @("beta publication displaces Latest", "4.0.0-rc.1", "beta", "BetaDisplacesLatest"),
-    @("published source mismatch", "4.1.2", "stable", "SourceMismatch"),
-    @("immutable false", "4.1.2", "stable", "ImmutableFalse"),
-    @("immutable missing", "4.1.2", "stable", "ImmutableMissing"),
-    @("non-monotonic metadata", "4.1.2", "stable", "NonMonotonic"),
-    @("wrong stored metadata bytes", "4.1.2", "stable", "StoredWrongBytes"),
-    @("tampered updater signature in metadata", "4.1.2", "stable", "TamperedMetadataSignature"),
-    @("wrong asset URL", "4.1.2", "stable", "WrongAssetUrl"),
-    @("raw endpoint does not converge", "4.1.2", "stable", "RawNeverConverges"),
-    @("installer downloaded bytes mismatch", "4.1.2", "stable", "InstallerBytesMismatch"),
-    @("signature downloaded bytes mismatch", "4.1.2", "stable", "SignatureBytesMismatch")
+    @("stable wrong Latest", "4.1.2", "stable", "WrongLatest", "stable publication did not become the exact GitHub Latest release"),
+    @("beta publication displaces Latest", "4.0.0-rc.1", "beta", "BetaDisplacesLatest", "GitHub Latest must be published and non-prerelease"),
+    @("published source mismatch", "4.1.2", "stable", "SourceMismatch", "POST_PUBLICATION_INCIDENT: published release target_commitish does not match requested source SHA"),
+    @("immutable false", "4.1.2", "stable", "ImmutableFalse", "repository release is not marked immutable"),
+    @("immutable missing", "4.1.2", "stable", "ImmutableMissing", "repository release is not marked immutable"),
+    @("non-monotonic metadata", "4.1.2", "stable", "NonMonotonic", "candidate metadata is not strictly monotonic over current channel metadata"),
+    @("wrong stored metadata bytes", "4.1.2", "stable", "StoredWrongBytes", "stored release-metadata stable document bytes differ"),
+    @("tampered updater signature in metadata", "4.1.2", "stable", "TamperedMetadataSignature", "stored release-metadata stable document bytes differ"),
+    @("wrong asset URL", "4.1.2", "stable", "WrongAssetUrl", "published asset does not exactly match the qualified"),
+    @("raw endpoint does not converge", "4.1.2", "stable", "RawNeverConverges", "raw metadata endpoint did not converge within"),
+    @("installer downloaded bytes mismatch", "4.1.2", "stable", "InstallerBytesMismatch", "final public asset digest differs from qualified bytes"),
+    @("signature downloaded bytes mismatch", "4.1.2", "stable", "SignatureBytesMismatch", "final public asset digest differs from qualified bytes")
 )) {
-    Invoke-TransactionCase $case[0] $case[1] $case[2] $case[3] $false
+    Invoke-TransactionCase $case[0] $case[1] $case[2] $case[3] $false $case[4]
 }
 Write-Host "V4 post-publication transaction behavioral test: PASS (mocked transports; zero network; zero production mutation)"

@@ -462,7 +462,10 @@ function Assert-ExactPublishedPublicAssetRecords([object]$Release, [object[]]$Ex
 }
 
 function Assert-ImmutableRelease([object]$Release) {
-    if ($null -eq $Release.immutable -or -not [bool]$Release.immutable) {
+    if ($null -eq $Release -or
+        $null -eq $Release.PSObject.Properties['immutable'] -or
+        $null -eq $Release.immutable -or
+        -not [bool]$Release.immutable) {
         Fail "repository release is not marked immutable"
     }
 }

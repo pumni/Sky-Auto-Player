@@ -536,6 +536,8 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
 
     let ci_path = root.join(".github/workflows/ci.yml");
     let ci = fs::read_to_string(&ci_path)?;
+    v4_release_contract_ci_wiring(&ci)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     for marker in [
         "release_contract:",
         "name: V4 release contract acceptance",
@@ -618,6 +620,27 @@ fn workflow_job_blocks(source: &str) -> Vec<(String, String)> {
     }
 
     jobs
+}
+
+fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result<(), String> {
+    let release_contract = workflow_job_blocks(source)
+        .into_iter()
+        .find(|(job_id, _)| job_id == "release_contract")
+        .map(|(_, block)| block)
+        .ok_or_else(|| "CI is missing the release_contract job block".to_owned())?;
+    for marker in [
+        "name: Run V4 release Latest guard behavioral test",
+        "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_v4_release_latest_guard.ps1",
+        "name: Run V4 post-publication transaction behavioral test",
+        "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_post_publication_transaction.ps1",
+    ] {
+        if !release_contract.contains(marker) {
+            return Err(format!(
+                "release_contract job is missing the behavioral regression marker: {marker}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn workflow_step_blocks(source: &str) -> Vec<(String, String)> {
@@ -4905,6 +4928,33 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
             "        env:\n          app-id:",
         );
         assert!(validate_metadata_app_token_scope(&private_key_in_env).is_err());
+    }
+
+    #[test]
+    fn release_contract_ci_wiring_requires_both_behavioral_regressions() {
+        let source = r#"
+jobs:
+  release_contract:
+    name: V4 release contract acceptance
+    steps:
+      - name: Run V4 release Latest guard behavioral test
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_v4_release_latest_guard.ps1
+      - name: Run V4 post-publication transaction behavioral test
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_post_publication_transaction.ps1
+  status:
+    needs: release_contract
+"#;
+        assert!(v4_release_contract_ci_wiring(source).is_ok());
+        for marker in [
+            "scripts/test_ci_v4_release_latest_guard.ps1",
+            "scripts/test_v4_post_publication_transaction.ps1",
+        ] {
+            let without_marker = source.replace(marker, "scripts/removed_behavioral_test.ps1");
+            assert!(
+                v4_release_contract_ci_wiring(&without_marker).is_err(),
+                "removing {marker} must fail the release contract wiring"
+            );
+        }
     }
 
     #[test]
