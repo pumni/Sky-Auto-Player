@@ -324,6 +324,9 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
+      - name: Run V4 release workflow state CLI invocation contract
+        run: cargo xtask check static --skip-supply-chain
+
       - name: Read-only GitHub Latest baseline guard
         env:
           GH_TOKEN: ${{ github.token }}

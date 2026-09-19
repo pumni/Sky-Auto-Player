@@ -672,6 +672,102 @@ fn workflow_step_blocks(source: &str) -> Vec<(String, String)> {
     steps
 }
 
+const V4_RELEASE_STATE_INVOCATION_REQUIREMENTS: &[(&str, &[&str])] = &[
+    (
+        "Preflight release request and repository readiness",
+        &[
+            "-State Preflight",
+            "-Version $env:V4_RELEASE_VERSION",
+            "-Channel $env:V4_RELEASE_CHANNEL",
+            "-Tag $env:V4_RELEASE_TAG",
+            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
+            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
+            "-StateRoot $env:V4_RELEASE_STATE_ROOT",
+            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
+            "-RunId $env:GITHUB_RUN_ID",
+        ],
+    ),
+    (
+        "Build and qualify the single production candidate",
+        &[
+            "-State BuildCandidate",
+            "-Version $env:V4_RELEASE_VERSION",
+            "-Channel $env:V4_RELEASE_CHANNEL",
+            "-Tag $env:V4_RELEASE_TAG",
+            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
+            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
+            "-StateRoot $env:V4_RELEASE_STATE_ROOT",
+            "-UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH",
+            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
+            "-RunId $env:GITHUB_RUN_ID",
+        ],
+    ),
+    (
+        "Publish the qualified candidate immutably",
+        &[
+            "-State PublishRelease",
+            "-Version $env:V4_RELEASE_VERSION",
+            "-Channel $env:V4_RELEASE_CHANNEL",
+            "-Tag $env:V4_RELEASE_TAG",
+            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
+            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
+            "-StateRoot $env:V4_RELEASE_STATE_ROOT",
+            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
+            "-RunId $env:GITHUB_RUN_ID",
+        ],
+    ),
+    (
+        "Promote release metadata only after immutable publication",
+        &[
+            "-State PromoteMetadata",
+            "-Version $env:V4_RELEASE_VERSION",
+            "-Channel $env:V4_RELEASE_CHANNEL",
+            "-Tag $env:V4_RELEASE_TAG",
+            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
+            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
+            "-StateRoot $env:V4_RELEASE_STATE_ROOT",
+            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
+        ],
+    ),
+    (
+        "Re-fetch and verify final public release and metadata",
+        &[
+            "-State FinalVerify",
+            "-Version $env:V4_RELEASE_VERSION",
+            "-Channel $env:V4_RELEASE_CHANNEL",
+            "-Tag $env:V4_RELEASE_TAG",
+            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
+            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
+            "-StateRoot $env:V4_RELEASE_STATE_ROOT",
+            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
+        ],
+    ),
+];
+
+fn validate_v4_release_state_invocations(workflow: &str) -> std::result::Result<(), String> {
+    let release_job = workflow_job_blocks(workflow)
+        .into_iter()
+        .find(|(job_id, _)| job_id == "release")
+        .map(|(_, block)| block)
+        .ok_or_else(|| "v4 release workflow is missing the release job block".to_owned())?;
+    let steps = workflow_step_blocks(&release_job);
+    for &(step_name, required_arguments) in V4_RELEASE_STATE_INVOCATION_REQUIREMENTS {
+        let step = steps
+            .iter()
+            .find(|(name, _)| name == step_name)
+            .map(|(_, block)| block.as_str())
+            .ok_or_else(|| format!("v4 release workflow is missing state step `{step_name}`"))?;
+        for &required_argument in required_arguments {
+            if !step.contains(required_argument) {
+                return Err(format!(
+                    "state step `{step_name}` is missing required CLI argument `{required_argument}`"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     const MINT_STEP: &str = "Mint release-metadata GitHub App token before publication";
     const PROBE_STEP: &str = "Probe release-metadata App access before publication";
@@ -1086,6 +1182,9 @@ fn v4_release_pipeline_contract_source(
         }
         previous = position;
     }
+    validate_v4_release_state_invocations(&workflow)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    println!("[xtask] v4 release workflow state CLI invocation contract: PASS");
     for forbidden in [
         "cargo xtask dist",
         "softprops/action-gh-release",
@@ -4928,6 +5027,46 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
             "        env:\n          app-id:",
         );
         assert!(validate_metadata_app_token_scope(&private_key_in_env).is_err());
+    }
+
+    #[test]
+    fn release_workflow_state_invocation_contract_rejects_missing_required_arguments() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read_to_string(root.join(".github/workflows/release-v4.yml"))
+            .expect("production release workflow fixture must exist");
+        validate_v4_release_state_invocations(&source)
+            .expect("production release workflow must satisfy every state CLI requirement");
+
+        let remove_from_step = |source: &str, step_name: &str, argument: &str| {
+            let step_marker = format!("      - name: {step_name}");
+            let step_start = source
+                .find(&step_marker)
+                .expect("state step fixture must exist");
+            let step_end = source[step_start..]
+                .find("\n      - name: ")
+                .map_or(source.len(), |offset| step_start + offset);
+            let block = &source[step_start..step_end];
+            let without_argument = block.replacen(argument, "", 1);
+            assert_ne!(block, without_argument, "argument fixture must exist");
+            format!(
+                "{}{}{}",
+                &source[..step_start],
+                without_argument,
+                &source[step_end..]
+            )
+        };
+
+        for &(step_name, required_arguments) in V4_RELEASE_STATE_INVOCATION_REQUIREMENTS {
+            for &required_argument in required_arguments {
+                let missing = remove_from_step(&source, step_name, required_argument);
+                let error = validate_v4_release_state_invocations(&missing)
+                    .expect_err("missing state CLI arguments must fail the static contract");
+                assert!(
+                    error.contains(required_argument),
+                    "diagnostic must identify the missing argument: {error}"
+                );
+            }
+        }
     }
 
     #[test]

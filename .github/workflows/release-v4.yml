@@ -204,7 +204,8 @@ jobs:
             -Tag $env:V4_RELEASE_TAG `
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
+            -StateRoot $env:V4_RELEASE_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
 
       - name: Re-fetch and verify final public release and metadata
         env:
@@ -217,7 +218,8 @@ jobs:
             -Tag $env:V4_RELEASE_TAG `
             -SourceSha $env:V4_RELEASE_SOURCE_SHA `
             -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
+            -StateRoot $env:V4_RELEASE_STATE_ROOT `
+            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
 
       - name: Clean runner-local release state
         if: always()
