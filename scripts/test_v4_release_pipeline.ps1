@@ -549,7 +549,7 @@ foreach ($workflowSource in @(
     if ($workflowSource.Text -match 'sbom-path:\s+\$\{\{ runner\.temp \}\}[^\r\n]*\\downloaded\\SBOM\.spdx\.json') {
         Fail "$($workflowSource.Name) still attests an SBOM from downloaded/"
     }
-    if (-not $workflowSource.Text.Contains('candidate-assets\SBOM.spdx.json')) {
+    if (-not $workflowSource.Text.Contains('candidate-evidence\SBOM.spdx.json')) {
         Fail "$($workflowSource.Name) does not attest the frozen candidate SBOM"
     }
 }
@@ -715,7 +715,7 @@ foreach ($marker in @(
 }
 foreach ($marker in @(
     'candidate-manifest.json',
-    'candidate-assets\*.json',
+    'candidate-evidence\*.json',
     'fixture-http-evidence.json',
     'defender-evidence.json',
     'preflight-evidence.json'
@@ -724,7 +724,7 @@ foreach ($marker in @(
 }
 foreach ($marker in @(
     'candidate-manifest.json',
-    'candidate-assets\*.json',
+    'candidate-evidence\*.json',
     'downloaded-manifest.json',
     'downloaded-authenticode-verification.json',
     'fixture-http-evidence.json',
@@ -955,17 +955,31 @@ $safeSig = Get-V4SafeReleaseAssetName "$TestInstaller.sig"
 function Fail([string]$Message) { throw $Message }
 function Get-ExpectedInstallerName { return $safeInstaller }
 function Get-ExpectedSignatureName { return $safeSig }
+function Get-ExpectedSourceInstallerName { return $TestInstaller }
+function Get-ExpectedSourceSignatureName { return "$TestInstaller.sig" }
 
 $pipelineCode = Get-Content -LiteralPath $PipelinePath -Raw
-$startIdx = $pipelineCode.IndexOf('function Assert-EvidenceIdentity(')
-if ($startIdx -lt 0) { throw 'Could not locate Assert-EvidenceIdentity function start' }
-$openBrace = $pipelineCode.IndexOf('{', $startIdx)
-if ($openBrace -lt 0) { throw 'Could not locate Assert-EvidenceIdentity body start' }
-$closeBrace = $pipelineCode.IndexOf("`n}", $openBrace)
-if ($closeBrace -lt 0) { throw 'Could not locate Assert-EvidenceIdentity body end' }
-$fnBody = $pipelineCode.Substring($openBrace + 1, $closeBrace - $openBrace - 1)
 
-$fn = [scriptblock]::Create("param([string]`$ProductionPath, [string]`$QualificationPath, [object[]]`$Records)`n$fnBody")
+function Extract-Function([string]$fnName) {
+    $startIdx = $pipelineCode.IndexOf("function $fnName")
+    if ($startIdx -lt 0) { throw "Could not locate $fnName" }
+    $openBrace = $pipelineCode.IndexOf('{', $startIdx)
+    $depth = 0
+    for ($i = $openBrace; $i -lt $pipelineCode.Length; $i++) {
+        if ($pipelineCode[$i] -eq '{') { $depth++ }
+        elseif ($pipelineCode[$i] -eq '}') {
+            $depth--
+            if ($depth -eq 0) {
+                return $pipelineCode.Substring($startIdx, $i - $startIdx + 1)
+            }
+        }
+    }
+    throw "Unclosed brace for $fnName"
+}
+
+. ([scriptblock]::Create((Extract-Function 'Get-RecordPropertyValue')))
+. ([scriptblock]::Create((Extract-Function 'Get-RecordPropertyString')))
+. ([scriptblock]::Create((Extract-Function 'Assert-EvidenceIdentity')))
 
 $recs = @(
     [pscustomobject]@{ name = $safeInstaller; release_name = $safeInstaller; source_name = $TestInstaller; size = [int64]1234567; sha256 = $TestInstallerSha },
@@ -976,7 +990,7 @@ $recs = @(
     [pscustomobject]@{ name = 'SBOM.spdx.json'; size = [int64]100; sha256 = $TestSbomSha }
 )
 
-& $fn $TargetProdPath $QualPath $recs
+Assert-EvidenceIdentity $TargetProdPath $QualPath $recs
 '@
         $worker = Join-Path $evidenceTestRoot "assert_worker.ps1"
         Set-Content -LiteralPath $worker -Value $scopedScript -Encoding utf8
@@ -2601,13 +2615,15 @@ function New-V4SimplifiedTestFixture {
     New-Item -ItemType Directory -Path $testDir -Force | Out-Null
     $stateRoot = Join-Path $testDir "state-root"
     New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
-    $assetsDir = Join-Path $stateRoot "candidate-assets"
-    New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
+    $bundleDir = Join-Path $stateRoot "candidate-bundle"
+    New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
 
+    $sourceInstallerName = "Sky Auto Player_${Version}_x64-setup.exe"
+    $sourceSigName = "$sourceInstallerName.sig"
     $installerName = "Sky.Auto.Player_${Version}_x64-setup.exe"
     $sigName = "$installerName.sig"
-    $installerPath = Join-Path $assetsDir $installerName
-    $sigPath = Join-Path $assetsDir $sigName
+    $installerPath = Join-Path $bundleDir $sourceInstallerName
+    $sigPath = Join-Path $bundleDir $sourceSigName
 
     [IO.File]::WriteAllBytes($installerPath, [byte[]](1..100))
     [IO.File]::WriteAllBytes($sigPath, [byte[]](1..50))
@@ -2618,22 +2634,22 @@ function New-V4SimplifiedTestFixture {
     $installerRecord = [ordered]@{
         name = $installerName
         release_name = $installerName
-        source_name = $installerName
+        source_name = $sourceInstallerName
         role = "installer"
         size = [int64]100
         sha256 = $installerSha
         source_path = $installerPath
-        state_path = "candidate-assets/$installerName"
+        state_path = "candidate-bundle/$sourceInstallerName"
     }
     $sigRecord = [ordered]@{
         name = $sigName
         release_name = $sigName
-        source_name = $sigName
+        source_name = $sourceSigName
         role = "updater-signature"
         size = [int64]50
         sha256 = $sigSha
         source_path = $sigPath
-        state_path = "candidate-assets/$sigName"
+        state_path = "candidate-bundle/$sourceSigName"
     }
 
     $manifest = [ordered]@{
@@ -2651,7 +2667,7 @@ function New-V4SimplifiedTestFixture {
     return [pscustomobject]@{
         TestDir = $testDir
         StateRoot = $stateRoot
-        AssetsDir = $assetsDir
+        AssetsDir = $bundleDir
         InstallerName = $installerName
         SignatureName = $sigName
         InstallerSha = $installerSha
@@ -3636,7 +3652,7 @@ function Extract-Body([string]$fnName) {
     if ((Get-V4SafeReleaseAssetName $names.SourceSignature) -ne $names.PublicSignature) {
         Fail "Get-V4SafeReleaseAssetName(sourceSignature) does not equal publicSignature"
     }
-    Write-Host "V4 test (48/51): source vs public naming contract probe (Test A): PASS"
+    Write-Host "V4 test (48/56): source vs public naming contract probe (Test A): PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -3725,7 +3741,7 @@ return @(Get-QualificationCandidateRecords)
     if ((Get-V4SafeReleaseAssetName $sigCand[0].name) -ne $expectedPublicSig) {
         Fail "safe mapping of updater-signature candidate name must be canonical public dotted name"
     }
-    Write-Host "V4 test (49/51): qualification candidate record probe (Test B): PASS"
+    Write-Host "V4 test (49/56): qualification candidate record probe (Test B): PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -3822,17 +3838,31 @@ $sbomName = 'SBOM.spdx.json'
 function Fail([string]$Message) { throw $Message }
 function Get-ExpectedInstallerName { return $SafeInstaller }
 function Get-ExpectedSignatureName { return $SafeSig }
+function Get-ExpectedSourceInstallerName { return $SrcInstaller }
+function Get-ExpectedSourceSignatureName { return $SrcSig }
 
 $pipelineCode = Get-Content -LiteralPath $PipelinePath -Raw
-$startIdx = $pipelineCode.IndexOf('function Assert-EvidenceIdentity(')
-if ($startIdx -lt 0) { throw 'Could not locate Assert-EvidenceIdentity function start' }
-$openBrace = $pipelineCode.IndexOf('{', $startIdx)
-if ($openBrace -lt 0) { throw 'Could not locate Assert-EvidenceIdentity body start' }
-$closeBrace = $pipelineCode.IndexOf("`n}", $openBrace)
-if ($closeBrace -lt 0) { throw 'Could not locate Assert-EvidenceIdentity body end' }
-$fnBody = $pipelineCode.Substring($openBrace + 1, $closeBrace - $openBrace - 1)
 
-$fn = [scriptblock]::Create("param([string]`$ProductionPath, [string]`$QualificationPath, [object[]]`$Records)`n$fnBody")
+function Extract-Function([string]$fnName) {
+    $startIdx = $pipelineCode.IndexOf("function $fnName")
+    if ($startIdx -lt 0) { throw "Could not locate $fnName" }
+    $openBrace = $pipelineCode.IndexOf('{', $startIdx)
+    $depth = 0
+    for ($i = $openBrace; $i -lt $pipelineCode.Length; $i++) {
+        if ($pipelineCode[$i] -eq '{') { $depth++ }
+        elseif ($pipelineCode[$i] -eq '}') {
+            $depth--
+            if ($depth -eq 0) {
+                return $pipelineCode.Substring($startIdx, $i - $startIdx + 1)
+            }
+        }
+    }
+    throw "Unclosed brace for $fnName"
+}
+
+. ([scriptblock]::Create((Extract-Function 'Get-RecordPropertyValue')))
+. ([scriptblock]::Create((Extract-Function 'Get-RecordPropertyString')))
+. ([scriptblock]::Create((Extract-Function 'Assert-EvidenceIdentity')))
 
 $recs = @(
     [pscustomobject]@{ name = $SafeInstaller; release_name = $SafeInstaller; source_name = $SrcInstaller; size = [int64]1234567; sha256 = $InstSha },
@@ -3843,7 +3873,7 @@ $recs = @(
     [pscustomobject]@{ name = 'SBOM.spdx.json'; size = [int64]100; sha256 = $SbomSha }
 )
 
-& $fn $ProdPath $QualPath $recs
+Assert-EvidenceIdentity $ProdPath $QualPath $recs
 '@
         $worker = Join-Path $evidenceMappingTestRoot "evidence_mapping_worker.ps1"
         Set-Content -LiteralPath $worker -Value $workerScript -Encoding utf8
@@ -3888,7 +3918,7 @@ $recs = @(
             Fail "Assert-EvidenceIdentity accepted evidence with mutated dotted installer name (expected fail-closed)"
         }
 
-        Write-Host "V4 test (50/51): evidence mapping regression probe (Test C): PASS"
+        Write-Host "V4 test (50/56): evidence mapping regression probe (Test C): PASS"
     } finally {
         if (Test-Path -LiteralPath $evidenceMappingTestRoot) {
             Remove-Item -LiteralPath $evidenceMappingTestRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -3922,10 +3952,734 @@ function Test-CandidateEvidenceProductionWiringRegression {
         Fail "Invoke-BuildCandidate ordering violation: expected Freeze-CandidateAssets ($freezeIndex) < Assert-CandidateEvidence ($evidenceGateIndex) < Get-PublicReleaseRecords ($publicProjectionIndex)"
     }
 
-    Write-Host "V4 test (51/51): candidate evidence production wiring regression probe (Test D): PASS"
+    Write-Host "V4 test (51/56): candidate evidence production wiring regression probe (Test D): PASS"
 }
 
-# Run all 51 regression tests
+# -------------------------------------------------------------------------
+# Test E: Issue #340 - Production shape record regression
+# -------------------------------------------------------------------------
+function Test-ProductionShapeRecordRegression {
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-prod-shape-test-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        $v = $packageVersion
+        $srcInstaller = "Sky Auto Player_${v}_x64-setup.exe"
+        $srcSig = "$srcInstaller.sig"
+        $dottedInstaller = "Sky.Auto.Player_${v}_x64-setup.exe"
+        $dottedSig = "$dottedInstaller.sig"
+
+        $instPath = Join-Path $tempDir $srcInstaller
+        $sigPath = Join-Path $tempDir $srcSig
+        [IO.File]::WriteAllBytes($instPath, [byte[]](1..100))
+        [IO.File]::WriteAllBytes($sigPath, [byte[]](1..50))
+
+        $instCand = [pscustomobject]@{ name = $srcInstaller; path = $instPath; role = "installer" }
+        $sigCand = [pscustomobject]@{ name = $srcSig; path = $sigPath; role = "updater-signature" }
+
+        $pipelineCode = Get-Content -LiteralPath $pipelinePath -Raw
+
+        function Extract-FunctionLocal([string]$fnName) {
+            $startIdx = $pipelineCode.IndexOf("function $fnName")
+            if ($startIdx -lt 0) { throw "Could not locate $fnName" }
+            $openBrace = $pipelineCode.IndexOf('{', $startIdx)
+            $depth = 0
+            for ($i = $openBrace; $i -lt $pipelineCode.Length; $i++) {
+                if ($pipelineCode[$i] -eq '{') { $depth++ }
+                elseif ($pipelineCode[$i] -eq '}') {
+                    $depth--
+                    if ($depth -eq 0) {
+                        return $pipelineCode.Substring($startIdx, $i - $startIdx + 1)
+                    }
+                }
+            }
+            throw "Unclosed brace for $fnName"
+        }
+
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-RecordPropertyValue')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-RecordPropertyString')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-FileRecord')))
+
+        # 1. Test Get-FileRecord output shape on installer
+        $instRec = Get-FileRecord $instCand
+        if ($instRec -isnot [System.Collections.IDictionary]) {
+            Fail "Get-FileRecord must produce an IDictionary/OrderedDictionary, got $($instRec.GetType().FullName)"
+        }
+        if ((Get-RecordPropertyString $instRec 'role') -ne 'installer') {
+            Fail "installer record role mismatch: $(Get-RecordPropertyString $instRec 'role')"
+        }
+        if ((Get-RecordPropertyString $instRec 'source_name') -ne $srcInstaller) {
+            Fail "installer record source_name must have spaces: $(Get-RecordPropertyString $instRec 'source_name')"
+        }
+        if ((Get-RecordPropertyString $instRec 'release_name') -ne $dottedInstaller) {
+            Fail "installer record release_name must be dotted: $(Get-RecordPropertyString $instRec 'release_name')"
+        }
+        if ((Get-RecordPropertyString $instRec 'name') -ne $dottedInstaller) {
+            Fail "installer record name must match dotted release_name: $(Get-RecordPropertyString $instRec 'name')"
+        }
+        if ((Get-RecordPropertyString $instRec 'state_path') -ne "candidate-bundle/$srcInstaller") {
+            Fail "installer record state_path must be candidate-bundle/<source_name>, got: $(Get-RecordPropertyString $instRec 'state_path')"
+        }
+        if ([int64](Get-RecordPropertyValue $instRec 'size') -ne 100) {
+            Fail "installer record size mismatch: $(Get-RecordPropertyValue $instRec 'size')"
+        }
+
+        # 2. Test Get-FileRecord output shape on updater signature
+        $sigRec = Get-FileRecord $sigCand
+        if ($sigRec -isnot [System.Collections.IDictionary]) {
+            Fail "Get-FileRecord must produce an IDictionary/OrderedDictionary for signature"
+        }
+        if ((Get-RecordPropertyString $sigRec 'role') -ne 'updater-signature') {
+            Fail "signature record role mismatch"
+        }
+        if ((Get-RecordPropertyString $sigRec 'source_name') -ne $srcSig) {
+            Fail "signature record source_name must have spaces"
+        }
+        if ((Get-RecordPropertyString $sigRec 'release_name') -ne $dottedSig) {
+            Fail "signature record release_name must be dotted"
+        }
+        if ((Get-RecordPropertyString $sigRec 'state_path') -ne "candidate-bundle/$srcSig") {
+            Fail "signature record state_path must be candidate-bundle/<source_name>, got: $(Get-RecordPropertyString $sigRec 'state_path')"
+        }
+
+        # 3. Test Get-FileRecord output shape on evidence roles
+        $evidenceRoles = @(
+            @{ Role = "production-evidence"; Name = "V4_PRODUCTION_RELEASE_EVIDENCE.json" },
+            @{ Role = "qualification-evidence"; Name = "V4_QUALIFICATION_EVIDENCE.json" },
+            @{ Role = "authenticode-evidence"; Name = "TAURI_AUTHENTICODE_EVIDENCE.json" },
+            @{ Role = "installed-authenticode-evidence"; Name = "INSTALLED_AUTHENTICODE_EVIDENCE.json" },
+            @{ Role = "artifact-summary"; Name = "TAURI_ARTIFACT_SUMMARY.json" },
+            @{ Role = "sbom"; Name = "SBOM.spdx.json" }
+        )
+        foreach ($er in $evidenceRoles) {
+            $ePath = Join-Path $tempDir $er.Name
+            Set-Content -LiteralPath $ePath -Value "{}" -Encoding utf8
+            $eCand = [pscustomobject]@{ name = $er.Name; path = $ePath; role = $er.Role }
+            $eRec = Get-FileRecord $eCand
+            if ((Get-RecordPropertyString $eRec 'state_path') -ne "candidate-evidence/$($er.Name)") {
+                Fail "evidence role $($er.Role) state_path must be candidate-evidence/$($er.Name), got: $(Get-RecordPropertyString $eRec 'state_path')"
+            }
+            if ((Get-RecordPropertyString $eRec 'release_name') -ne $er.Name) {
+                Fail "evidence release_name mismatch for $($er.Name)"
+            }
+        }
+
+        # 4. Test Get-RecordPropertyValue and Get-RecordPropertyString duality (OrderedDictionary vs PSCustomObject)
+        $dict = [ordered]@{ key1 = "val1"; num = 42 }
+        $pso = [pscustomobject]@{ key1 = "val1"; num = 42 }
+
+        foreach ($target in @($dict, $pso)) {
+            if ((Get-RecordPropertyString $target 'key1') -ne 'val1') { Fail "failed to read string from $($target.GetType().Name)" }
+            if ([int](Get-RecordPropertyValue $target 'num') -ne 42) { Fail "failed to read int from $($target.GetType().Name)" }
+            if ($null -ne (Get-RecordPropertyValue $target 'nonexistent')) { Fail "nonexistent property must return null" }
+            if ((Get-RecordPropertyString $target 'nonexistent') -ne '') { Fail "nonexistent property string must return empty string" }
+        }
+        if ($null -ne (Get-RecordPropertyValue $null 'key1')) { Fail "null record must return null property value" }
+        if ((Get-RecordPropertyString $null 'key1') -ne '') { Fail "null record must return empty property string" }
+
+        Write-Host "V4 test (52/56): production shape record regression probe (Test E): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $tempDir) {
+            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test F: Issue #340 - Frozen candidate topology regression
+# -------------------------------------------------------------------------
+function Test-FrozenTopologyRegression {
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-frozen-topo-test-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        $stateRoot = Join-Path $tempDir "state-root"
+        $sourceDir = Join-Path $tempDir "sources"
+        New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
+        New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
+
+        $v = $packageVersion
+        $installerSuffix = '_x64-setup.exe'
+        $Version = $v
+        $productionEvidenceName = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'
+        $qualificationEvidenceName = 'V4_QUALIFICATION_EVIDENCE.json'
+        $authenticodeEvidenceName = 'TAURI_AUTHENTICODE_EVIDENCE.json'
+        $installedAuthenticodeEvidenceName = 'INSTALLED_AUTHENTICODE_EVIDENCE.json'
+        $summaryName = 'TAURI_ARTIFACT_SUMMARY.json'
+        $sbomName = 'SBOM.spdx.json'
+
+        $srcInstaller = "Sky Auto Player_${v}_x64-setup.exe"
+        $srcSig = "$srcInstaller.sig"
+        $dottedInstaller = "Sky.Auto.Player_${v}_x64-setup.exe"
+        $dottedSig = "$dottedInstaller.sig"
+
+        $pipelineCode = Get-Content -LiteralPath $pipelinePath -Raw
+
+        function Extract-FunctionLocal([string]$fnName) {
+            $startIdx = $pipelineCode.IndexOf("function $fnName")
+            if ($startIdx -lt 0) { throw "Could not locate $fnName" }
+            $openBrace = $pipelineCode.IndexOf('{', $startIdx)
+            $depth = 0
+            for ($i = $openBrace; $i -lt $pipelineCode.Length; $i++) {
+                if ($pipelineCode[$i] -eq '{') { $depth++ }
+                elseif ($pipelineCode[$i] -eq '}') {
+                    $depth--
+                    if ($depth -eq 0) {
+                        return $pipelineCode.Substring($startIdx, $i - $startIdx + 1)
+                    }
+                }
+            }
+            throw "Unclosed brace for $fnName"
+        }
+
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-RecordPropertyValue')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-RecordPropertyString')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSourceInstallerName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSourceSignatureName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedInstallerName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSignatureName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-StateAssetPath')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Assert-ManifestAssetFiles')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Freeze-CandidateAssets')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Assert-FrozenCandidateTopology')))
+
+        function Get-EffectiveStateRoot { return $stateRoot }
+
+        # Create source files
+        $fileDefs = @(
+            @{ Name = $srcInstaller; Role = "installer"; Path = (Join-Path $sourceDir $srcInstaller); Content = "installer bytes"; StatePath = "candidate-bundle/$srcInstaller"; RelName = $dottedInstaller },
+            @{ Name = $srcSig; Role = "updater-signature"; Path = (Join-Path $sourceDir $srcSig); Content = "sig bytes"; StatePath = "candidate-bundle/$srcSig"; RelName = $dottedSig },
+            @{ Name = $productionEvidenceName; Role = "production-evidence"; Path = (Join-Path $sourceDir $productionEvidenceName); Content = "{}"; StatePath = "candidate-evidence/$productionEvidenceName"; RelName = $productionEvidenceName },
+            @{ Name = $qualificationEvidenceName; Role = "qualification-evidence"; Path = (Join-Path $sourceDir $qualificationEvidenceName); Content = "{}"; StatePath = "candidate-evidence/$qualificationEvidenceName"; RelName = $qualificationEvidenceName },
+            @{ Name = $authenticodeEvidenceName; Role = "authenticode-evidence"; Path = (Join-Path $sourceDir $authenticodeEvidenceName); Content = "{}"; StatePath = "candidate-evidence/$authenticodeEvidenceName"; RelName = $authenticodeEvidenceName },
+            @{ Name = $installedAuthenticodeEvidenceName; Role = "installed-authenticode-evidence"; Path = (Join-Path $sourceDir $installedAuthenticodeEvidenceName); Content = "{}"; StatePath = "candidate-evidence/$installedAuthenticodeEvidenceName"; RelName = $installedAuthenticodeEvidenceName },
+            @{ Name = $summaryName; Role = "artifact-summary"; Path = (Join-Path $sourceDir $summaryName); Content = "{}"; StatePath = "candidate-evidence/$summaryName"; RelName = $summaryName },
+            @{ Name = $sbomName; Role = "sbom"; Path = (Join-Path $sourceDir $sbomName); Content = "{}"; StatePath = "candidate-evidence/$sbomName"; RelName = $sbomName }
+        )
+
+        $records = @()
+        foreach ($fd in $fileDefs) {
+            Set-Content -LiteralPath $fd.Path -Value $fd.Content -Encoding utf8
+            $item = Get-Item -LiteralPath $fd.Path
+            $records += [ordered]@{
+                name = $fd.RelName
+                release_name = $fd.RelName
+                source_name = $fd.Name
+                role = $fd.Role
+                size = [int64]$item.Length
+                sha256 = (Get-FileHash -LiteralPath $fd.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+                source_path = $fd.Path
+                state_path = $fd.StatePath
+            }
+        }
+
+        # 1. Freeze-CandidateAssets into state root
+        $frozen = Freeze-CandidateAssets $records
+        if ($frozen.Count -ne 8) { Fail "Freeze-CandidateAssets must return all 8 records" }
+
+        # 2. Positive assertion: Assert-FrozenCandidateTopology must PASS
+        Assert-FrozenCandidateTopology $records
+
+        # Direct disk verification:
+        $bundleDir = Join-Path $stateRoot "candidate-bundle"
+        $evidenceDir = Join-Path $stateRoot "candidate-evidence"
+        $bundleFiles = @(Get-ChildItem -LiteralPath $bundleDir -File)
+        $evidenceFiles = @(Get-ChildItem -LiteralPath $evidenceDir -File)
+
+        if ($bundleFiles.Count -ne 2) { Fail "candidate-bundle on disk must have exactly 2 files, found $($bundleFiles.Count)" }
+        if ($evidenceFiles.Count -ne 6) { Fail "candidate-evidence on disk must have exactly 6 files, found $($evidenceFiles.Count)" }
+        if (Test-Path -LiteralPath (Join-Path $bundleDir $dottedInstaller)) { Fail "dotted installer found in candidate-bundle" }
+        if (Test-Path -LiteralPath (Join-Path $stateRoot $dottedInstaller)) { Fail "dotted installer found in state root" }
+
+        # 3. Fault injection A: JSON evidence in bundle must fail closed
+        $injectedJson = Join-Path $bundleDir "stray.json"
+        Set-Content -LiteralPath $injectedJson -Value "{}" -Encoding utf8
+        $threw = $false
+        try { Assert-FrozenCandidateTopology $records } catch {
+            $threw = $true
+            if ($_.Exception.Message -notmatch "must not contain JSON evidence files|must contain exactly") {
+                Fail "unexpected error on JSON in bundle: $($_.Exception.Message)"
+            }
+        }
+        if (-not $threw) { Fail "Assert-FrozenCandidateTopology accepted JSON file in candidate-bundle" }
+        Remove-Item -LiteralPath $injectedJson -Force
+
+        # 4. Fault injection B: Dotted copy in candidate-bundle must fail closed
+        $injectedDotted = Join-Path $bundleDir $dottedInstaller
+        Set-Content -LiteralPath $injectedDotted -Value "stray" -Encoding utf8
+        $threw = $false
+        try { Assert-FrozenCandidateTopology $records } catch {
+            $threw = $true
+            if ($_.Exception.Message -notmatch "must not contain dotted release asset copy|must contain exactly") {
+                Fail "unexpected error on dotted file in bundle: $($_.Exception.Message)"
+            }
+        }
+        if (-not $threw) { Fail "Assert-FrozenCandidateTopology accepted dotted file in candidate-bundle" }
+        Remove-Item -LiteralPath $injectedDotted -Force
+
+        # 5. Fault injection C: Dotted copy in state root must fail closed
+        $injectedRootDotted = Join-Path $stateRoot $dottedInstaller
+        Set-Content -LiteralPath $injectedRootDotted -Value "stray" -Encoding utf8
+        $threw = $false
+        try { Assert-FrozenCandidateTopology $records } catch {
+            $threw = $true
+            if ($_.Exception.Message -notmatch "state root must not contain dotted release asset copy") {
+                Fail "unexpected error on dotted file in state root: $($_.Exception.Message)"
+            }
+        }
+        if (-not $threw) { Fail "Assert-FrozenCandidateTopology accepted dotted file in state root" }
+        Remove-Item -LiteralPath $injectedRootDotted -Force
+
+        # 6. Fault injection D: Missing evidence file in candidate-evidence must fail closed
+        $targetEvidence = Join-Path $evidenceDir $sbomName
+        $sbomBackup = Get-Content -LiteralPath $targetEvidence -Raw
+        Remove-Item -LiteralPath $targetEvidence -Force
+        $threw = $false
+        try { Assert-FrozenCandidateTopology $records } catch {
+            $threw = $true
+            if ($_.Exception.Message -notmatch "candidate-evidence is missing required evidence file: $sbomName") {
+                Fail "unexpected error on missing evidence: $($_.Exception.Message)"
+            }
+        }
+        if (-not $threw) { Fail "Assert-FrozenCandidateTopology accepted missing evidence file" }
+        Set-Content -LiteralPath $targetEvidence -Value $sbomBackup -Encoding utf8
+
+        Write-Host "V4 test (53/56): frozen candidate topology regression probe (Test F): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $tempDir) {
+            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test G: Issue #340 - Producer-consumer evidence binding regression
+# -------------------------------------------------------------------------
+function Test-ProducerConsumerEvidenceBindingRegression {
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-binding-test-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        $v = $packageVersion
+        $installerSuffix = '_x64-setup.exe'
+        $Version = $v
+        $Channel = 'stable'
+        $SourceSha = "1234567890abcdef1234567890abcdef12345678"
+        $productionEvidenceName = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'
+        $qualificationEvidenceName = 'V4_QUALIFICATION_EVIDENCE.json'
+        $authenticodeEvidenceName = 'TAURI_AUTHENTICODE_EVIDENCE.json'
+        $installedAuthenticodeEvidenceName = 'INSTALLED_AUTHENTICODE_EVIDENCE.json'
+        $summaryName = 'TAURI_ARTIFACT_SUMMARY.json'
+        $sbomName = 'SBOM.spdx.json'
+
+        $srcInstaller = "Sky Auto Player_${v}_x64-setup.exe"
+        $srcSig = "$srcInstaller.sig"
+        $dottedInstaller = "Sky.Auto.Player_${v}_x64-setup.exe"
+        $dottedSig = "$dottedInstaller.sig"
+
+        $pipelineCode = Get-Content -LiteralPath $pipelinePath -Raw
+
+        function Extract-FunctionLocal([string]$fnName) {
+            $startIdx = $pipelineCode.IndexOf("function $fnName")
+            if ($startIdx -lt 0) { throw "Could not locate $fnName" }
+            $openBrace = $pipelineCode.IndexOf('{', $startIdx)
+            $depth = 0
+            for ($i = $openBrace; $i -lt $pipelineCode.Length; $i++) {
+                if ($pipelineCode[$i] -eq '{') { $depth++ }
+                elseif ($pipelineCode[$i] -eq '}') {
+                    $depth--
+                    if ($depth -eq 0) {
+                        return $pipelineCode.Substring($startIdx, $i - $startIdx + 1)
+                    }
+                }
+            }
+            throw "Unclosed brace for $fnName"
+        }
+
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-RecordPropertyValue')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-RecordPropertyString')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSourceInstallerName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSourceSignatureName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedInstallerName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSignatureName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-FileRecord')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Assert-EvidenceIdentity')))
+
+        # Set script scope variables so Assert-EvidenceIdentity can resolve them
+        $script:SourceSha = $SourceSha
+        $script:Version = $Version
+        $script:Channel = $Channel
+        $script:productionEvidenceName = $productionEvidenceName
+        $script:qualificationEvidenceName = $qualificationEvidenceName
+        $script:authenticodeEvidenceName = $authenticodeEvidenceName
+        $script:sbomName = $sbomName
+
+        # Create physical files for producer Get-FileRecord
+        $files = @{
+            $srcInstaller = [byte[]](1..100)
+            $srcSig = [byte[]](1..50)
+            $productionEvidenceName = [Text.Encoding]::UTF8.GetBytes("{}")
+            $qualificationEvidenceName = [Text.Encoding]::UTF8.GetBytes("{}")
+            $authenticodeEvidenceName = [Text.Encoding]::UTF8.GetBytes("auth evidence content")
+            $installedAuthenticodeEvidenceName = [Text.Encoding]::UTF8.GetBytes("{}")
+            $summaryName = [Text.Encoding]::UTF8.GetBytes("{}")
+            $sbomName = [Text.Encoding]::UTF8.GetBytes("sbom evidence content")
+        }
+
+        $records = @()
+        foreach ($entry in $files.GetEnumerator()) {
+            $filePath = Join-Path $tempDir $entry.Key
+            [IO.File]::WriteAllBytes($filePath, $entry.Value)
+            $role = if ($entry.Key -eq $srcInstaller) { "installer" }
+                    elseif ($entry.Key -eq $srcSig) { "updater-signature" }
+                    elseif ($entry.Key -eq $productionEvidenceName) { "production-evidence" }
+                    elseif ($entry.Key -eq $qualificationEvidenceName) { "qualification-evidence" }
+                    elseif ($entry.Key -eq $authenticodeEvidenceName) { "authenticode-evidence" }
+                    elseif ($entry.Key -eq $installedAuthenticodeEvidenceName) { "installed-authenticode-evidence" }
+                    elseif ($entry.Key -eq $summaryName) { "artifact-summary" }
+                    elseif ($entry.Key -eq $sbomName) { "sbom" }
+                    else { "unknown" }
+            $cand = [pscustomobject]@{ name = $entry.Key; path = $filePath; role = $role }
+            $records += (Get-FileRecord $cand)
+        }
+
+        $instRecord = @($records | Where-Object { (Get-RecordPropertyString $_ 'role') -eq 'installer' })[0]
+        $sigRecord = @($records | Where-Object { (Get-RecordPropertyString $_ 'role') -eq 'updater-signature' })[0]
+        $authRecord = @($records | Where-Object { (Get-RecordPropertyString $_ 'role') -eq 'authenticode-evidence' })[0]
+        $sbomRecord = @($records | Where-Object { (Get-RecordPropertyString $_ 'role') -eq 'sbom' })[0]
+
+        $instSha = Get-RecordPropertyString $instRecord 'sha256'
+        $sigSha = Get-RecordPropertyString $sigRecord 'sha256'
+        $authSha = Get-RecordPropertyString $authRecord 'sha256'
+        $sbomSha = Get-RecordPropertyString $sbomRecord 'sha256'
+
+        # Baseline valid production and qualification evidence
+        $validProd = New-V4CanonicalProductionEvidence `
+            -SourceSha $SourceSha `
+            -Version $Version `
+            -Channel $Channel `
+            -InstallerName $srcInstaller `
+            -SignatureName $srcSig `
+            -InstallerSize 100 `
+            -SignatureSize 50 `
+            -InstallerSha256 $instSha `
+            -SignatureSha256 $sigSha `
+            -AuthenticodeEvidenceSha256 $authSha `
+            -SbomSha256 $sbomSha `
+            -UpdaterKeyId "19AABD2E7838818C"
+
+        $validQual = New-V4CanonicalQualificationEvidence `
+            -Version $Version `
+            -InstallerName $srcInstaller `
+            -SignatureName $srcSig `
+            -InstallerSize 100 `
+            -SignatureSize 50 `
+            -InstallerSha256 $instSha `
+            -SignatureSha256 $sigSha `
+            -AuthenticodeEvidenceSha256 $authSha `
+            -SbomSha256 $sbomSha
+
+        $prodPath = Join-Path $tempDir "test_prod.json"
+        $qualPath = Join-Path $tempDir "test_qual.json"
+
+        $validProd | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $prodPath -Encoding utf8
+        $validQual | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $qualPath -Encoding utf8
+
+        # 1. Base case: must PASS
+        Assert-EvidenceIdentity $prodPath $qualPath $records
+
+        # 2. Field-specific diagnostic assertions
+        $diagnosticCases = @(
+            @{ Field = "installer"; Mutation = "MutatedName.exe"; Target = "prod"; ExpectedError = "production evidence installer name mismatch" },
+            @{ Field = "updater_signature"; Mutation = "MutatedSig.sig"; Target = "prod"; ExpectedError = "production evidence updater_signature name mismatch" },
+            @{ Field = "installer_size"; Mutation = [int64]999; Target = "prod"; ExpectedError = "production evidence installer size mismatch" },
+            @{ Field = "signature_size"; Mutation = [int64]999; Target = "prod"; ExpectedError = "production evidence updater signature size mismatch" },
+            @{ Field = "installer_sha256"; Mutation = ('f' * 64); Target = "prod"; ExpectedError = "production evidence installer SHA-256 mismatch" },
+            @{ Field = "updater_signature_sha256"; Mutation = ('f' * 64); Target = "prod"; ExpectedError = "production evidence updater signature SHA-256 mismatch" },
+            @{ Field = "authenticode_evidence_sha256"; Mutation = ('f' * 64); Target = "prod"; ExpectedError = "production evidence Authenticode evidence SHA-256 mismatch" },
+            @{ Field = "sbom_sha256"; Mutation = ('f' * 64); Target = "prod"; ExpectedError = "production evidence SBOM SHA-256 mismatch" },
+            @{ Field = "installer"; Mutation = "MutatedName.exe"; Target = "qual"; ExpectedError = "qualification evidence installer name mismatch" },
+            @{ Field = "updater_signature"; Mutation = "MutatedSig.sig"; Target = "qual"; ExpectedError = "qualification evidence updater_signature name mismatch" },
+            @{ Field = "installer_sha256"; Mutation = ('f' * 64); Target = "qual"; ExpectedError = "qualification evidence installer SHA-256 mismatch" },
+            @{ Field = "updater_signature_sha256"; Mutation = ('f' * 64); Target = "qual"; ExpectedError = "qualification evidence updater signature SHA-256 mismatch" }
+        )
+
+        foreach ($case in $diagnosticCases) {
+            $pObj = Get-Content -LiteralPath $prodPath -Raw | ConvertFrom-Json
+            $qObj = Get-Content -LiteralPath $qualPath -Raw | ConvertFrom-Json
+            if ($case.Target -eq "prod") {
+                $pObj.($case.Field) = $case.Mutation
+            } else {
+                $qObj.($case.Field) = $case.Mutation
+            }
+
+            $mutatedProdPath = Join-Path $tempDir "mutated_prod_$($case.Field)_$($case.Target).json"
+            $mutatedQualPath = Join-Path $tempDir "mutated_qual_$($case.Field)_$($case.Target).json"
+            $pObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $mutatedProdPath -Encoding utf8
+            $qObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $mutatedQualPath -Encoding utf8
+
+            $threw = $false
+            try {
+                Assert-EvidenceIdentity $mutatedProdPath $mutatedQualPath $records
+            } catch {
+                $threw = $true
+                if ($_.Exception.Message -notmatch [regex]::Escape($case.ExpectedError)) {
+                    Fail "case '$($case.Field)' ($($case.Target)) expected error '$($case.ExpectedError)', got: $($_.Exception.Message)"
+                }
+            }
+            if (-not $threw) {
+                Fail "case '$($case.Field)' ($($case.Target)) should have failed closed but passed"
+            }
+        }
+
+        Write-Host "V4 test (54/56): producer-consumer evidence binding regression probe (Test G): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $tempDir) {
+            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test H: Issue #340 - Public upload projection regression
+# -------------------------------------------------------------------------
+function Test-PublicUploadProjectionRegression {
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-pub-proj-test-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        $stateRoot = Join-Path $tempDir "state-root"
+        New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
+
+        $v = $packageVersion
+        $installerSuffix = '_x64-setup.exe'
+        $Version = $v
+        $srcInstaller = "Sky Auto Player_${v}_x64-setup.exe"
+        $srcSig = "$srcInstaller.sig"
+        $dottedInstaller = "Sky.Auto.Player_${v}_x64-setup.exe"
+        $dottedSig = "$dottedInstaller.sig"
+
+        $pipelineCode = Get-Content -LiteralPath $pipelinePath -Raw
+
+        function Extract-FunctionLocal([string]$fnName) {
+            $startIdx = $pipelineCode.IndexOf("function $fnName")
+            if ($startIdx -lt 0) { throw "Could not locate $fnName" }
+            $openBrace = $pipelineCode.IndexOf('{', $startIdx)
+            $depth = 0
+            for ($i = $openBrace; $i -lt $pipelineCode.Length; $i++) {
+                if ($pipelineCode[$i] -eq '{') { $depth++ }
+                elseif ($pipelineCode[$i] -eq '}') {
+                    $depth--
+                    if ($depth -eq 0) {
+                        return $pipelineCode.Substring($startIdx, $i - $startIdx + 1)
+                    }
+                }
+            }
+            throw "Unclosed brace for $fnName"
+        }
+
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-RecordPropertyValue')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-RecordPropertyString')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSourceInstallerName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSourceSignatureName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedInstallerName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-ExpectedSignatureName')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-CanonicalPublicReleaseNames')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-PublicReleaseRecords')))
+        . ([scriptblock]::Create((Extract-FunctionLocal 'Get-StateAssetPath')))
+
+        function Get-EffectiveStateRoot { return $stateRoot }
+
+        # Setup frozen candidate assets
+        $bundleDir = Join-Path $stateRoot "candidate-bundle"
+        New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+        $frozenInstallerPath = Join-Path $bundleDir $srcInstaller
+        $frozenSigPath = Join-Path $bundleDir $srcSig
+        [IO.File]::WriteAllBytes($frozenInstallerPath, [byte[]](1..100))
+        [IO.File]::WriteAllBytes($frozenSigPath, [byte[]](1..50))
+
+        $instSha = (Get-FileHash -LiteralPath $frozenInstallerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $sigSha = (Get-FileHash -LiteralPath $frozenSigPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+        $qualRecords = @(
+            [ordered]@{
+                name = $dottedInstaller
+                release_name = $dottedInstaller
+                source_name = $srcInstaller
+                role = "installer"
+                size = [int64]100
+                sha256 = $instSha
+                source_path = $frozenInstallerPath
+                state_path = "candidate-bundle/$srcInstaller"
+            },
+            [ordered]@{
+                name = $dottedSig
+                release_name = $dottedSig
+                source_name = $srcSig
+                role = "updater-signature"
+                size = [int64]50
+                sha256 = $sigSha
+                source_path = $frozenSigPath
+                state_path = "candidate-bundle/$srcSig"
+            },
+            [ordered]@{
+                name = "V4_PRODUCTION_RELEASE_EVIDENCE.json"
+                release_name = "V4_PRODUCTION_RELEASE_EVIDENCE.json"
+                source_name = "V4_PRODUCTION_RELEASE_EVIDENCE.json"
+                role = "production-evidence"
+                size = [int64]10
+                sha256 = ('a' * 64)
+                source_path = ""
+                state_path = "candidate-evidence/V4_PRODUCTION_RELEASE_EVIDENCE.json"
+            }
+        )
+
+        # 1. Project public release records from qualification records
+        $publicRecords = Get-PublicReleaseRecords $qualRecords
+        if ($publicRecords.Count -ne 2) {
+            Fail "Get-PublicReleaseRecords must filter to exactly the 2 canonical public assets, got $($publicRecords.Count)"
+        }
+
+        # 2. Verify projection properties
+        $pubInst = @($publicRecords | Where-Object { (Get-RecordPropertyString $_ 'role') -eq 'installer' })[0]
+        $pubSig = @($publicRecords | Where-Object { (Get-RecordPropertyString $_ 'role') -eq 'updater-signature' })[0]
+
+        if ((Get-RecordPropertyString $pubInst 'release_name') -ne $dottedInstaller) {
+            Fail "projected installer release_name must be dotted: $(Get-RecordPropertyString $pubInst 'release_name')"
+        }
+        if ((Get-RecordPropertyString $pubInst 'source_name') -ne $srcInstaller) {
+            Fail "projected installer source_name must have spaces: $(Get-RecordPropertyString $pubInst 'source_name')"
+        }
+        if ((Get-RecordPropertyString $pubSig 'release_name') -ne $dottedSig) {
+            Fail "projected signature release_name must be dotted"
+        }
+        if ((Get-RecordPropertyString $pubSig 'source_name') -ne $srcSig) {
+            Fail "projected signature source_name must have spaces"
+        }
+
+        # 3. Simulate upload loop: reads source-named file in candidate-bundle and maps to dotted release asset name
+        $uploaded = @()
+        foreach ($record in $publicRecords) {
+            $filePath = Get-StateAssetPath $record
+            $assetName = Get-RecordPropertyString $record "release_name"
+            if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+                Fail "upload target file does not exist: $filePath"
+            }
+            if ([IO.Path]::GetFileName($filePath) -ne (Get-RecordPropertyString $record "source_name")) {
+                Fail "upload target file is not source-named: $filePath"
+            }
+            if ($assetName -ne (Get-V4SafeReleaseAssetName ([IO.Path]::GetFileName($filePath)))) {
+                Fail "asset name does not equal safe release name"
+            }
+            $uploaded += @{ AssetName = $assetName; FilePath = $filePath }
+        }
+
+        if ($uploaded.Count -ne 2) { Fail "upload loop must process exactly 2 assets" }
+
+        # Verify zero dotted files created locally
+        $dottedInBundle = Join-Path $bundleDir $dottedInstaller
+        $dottedInRoot = Join-Path $stateRoot $dottedInstaller
+        if (Test-Path -LiteralPath $dottedInBundle) {
+            Fail "local dotted file created in candidate-bundle during projection/upload"
+        }
+        if (Test-Path -LiteralPath $dottedInRoot) {
+            Fail "local dotted file created in state-root during projection/upload"
+        }
+
+        Write-Host "V4 test (55/56): public upload projection regression probe (Test H): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $tempDir) {
+            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test I: Issue #340 - Frozen bundle verifier isolation regression
+# -------------------------------------------------------------------------
+function Test-FrozenBundleVerifierIsolationRegression {
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-verifier-iso-test-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        $bundleDir = Join-Path $tempDir "candidate-bundle"
+        $evidenceDir = Join-Path $tempDir "candidate-evidence"
+        New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
+
+        $v = $packageVersion
+        $installerName = "Sky Auto Player_${v}_x64-setup.exe"
+        $sigName = "$installerName.sig"
+
+        $instPath = Join-Path $bundleDir $installerName
+        $sigPath = Join-Path $bundleDir $sigName
+        Set-Content -LiteralPath $instPath -Value "installer executable mock content" -Encoding utf8
+        Set-Content -LiteralPath $sigPath -Value "untrusted comment: mock signature`nRWmockdata..." -Encoding utf8
+
+        # 1. Generate SBOM from clean 2-file candidate-bundle
+        $sbomPath = Join-Path $evidenceDir "SBOM.spdx.json"
+        & cargo xtask sbom generate --artifact-dir $bundleDir --output $sbomPath
+        if ($LASTEXITCODE -ne 0) { Fail "cargo xtask sbom generate failed on 2-file bundle" }
+
+        # 2. Verify SBOM succeeds on clean 2-file candidate-bundle
+        & cargo xtask sbom verify --artifact-dir $bundleDir --sbom $sbomPath
+        if ($LASTEXITCODE -ne 0) { Fail "cargo xtask sbom verify failed on clean 2-file bundle" }
+
+        # 3. Create valid unsigned-zero-budget Authenticode evidence
+        $authPayload = [ordered]@{
+            schema_version = 1
+            evidence_type = "authenticode-verification"
+            mode = "unsigned-zero-budget"
+            expected_signer_thumbprint = $null
+            verification_policy = "unsigned-project-owned-pe-files-and-canonical-nsis"
+            files = @(
+                [ordered]@{
+                    name = $installerName
+                    path = $instPath
+                    status = "NotSigned"
+                    platform_status = "NotSigned"
+                    verification = "authenticode-unsigned-zero-budget"
+                    trust_exception = "unsigned-zero-budget-policy"
+                    integrity_verifier = "not-applicable-unsigned-zero-budget"
+                    integrity_status = "NotSigned"
+                    signed_digest_algorithm = $null
+                    signed_digest = $null
+                    computed_digest = $null
+                    sha256 = (Get-FileHash -LiteralPath $instPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    signer_thumbprint = $null
+                    signer_subject = $null
+                }
+            )
+        }
+        $authPath = Join-Path $evidenceDir "TAURI_AUTHENTICODE_EVIDENCE.json"
+        $authPayload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $authPath -Encoding utf8
+
+        # 4. Verify Tauri bundle succeeds on clean 2-file candidate-bundle
+        & cargo xtask verify-tauri-bundle --bundle-dir $bundleDir --authenticode-evidence $authPath --sbom $sbomPath
+        if ($LASTEXITCODE -ne 0) { Fail "cargo xtask verify-tauri-bundle failed on clean 2-file bundle" }
+
+        # 5. Fault Injection: place extra evidence JSON into candidate-bundle (reproducing run 35418967615)
+        $strayJsonPath = Join-Path $bundleDir "V4_PRODUCTION_RELEASE_EVIDENCE.json"
+        Set-Content -LiteralPath $strayJsonPath -Value "{}" -Encoding utf8
+
+        # Assert SBOM verify fails closed on mixed directory
+        $sbomMixedOutput = & cargo xtask sbom verify --artifact-dir $bundleDir --sbom $sbomPath 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) { Fail "cargo xtask sbom verify accepted mixed evidence in bundle directory" }
+        if ($sbomMixedOutput -notmatch "SBOM artifact-set SHA-256 does not match|SBOM file set does not match") {
+            Fail "unexpected SBOM verify error on mixed bundle directory: $sbomMixedOutput"
+        }
+
+        # Assert verify-tauri-bundle fails closed on mixed directory
+        $tauriMixedOutput = & cargo xtask verify-tauri-bundle --bundle-dir $bundleDir --authenticode-evidence $authPath --sbom $sbomPath 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) { Fail "cargo xtask verify-tauri-bundle accepted mixed evidence in bundle directory" }
+        if ($tauriMixedOutput -notmatch "Tauri NSIS bundle must contain only the setup executable and its \.sig") {
+            Fail "unexpected verify-tauri-bundle error on mixed bundle directory: $tauriMixedOutput"
+        }
+
+        Write-Host "V4 test (56/56): frozen bundle verifier isolation regression probe (Test I): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $tempDir) {
+            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# Run all 56 regression tests
 Test-SchemaV1MissingFieldReproducesStrictModeFailure
 Test-SchemaV2CanonicalConstructorSurvivesStrictMode
 Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed
@@ -3965,5 +4719,10 @@ Test-ReleasePipelineSourceVsPublicNamingContract
 Test-QualificationCandidateRecordRegression
 Test-EvidenceMappingRegression
 Test-CandidateEvidenceProductionWiringRegression
+Test-ProductionShapeRecordRegression
+Test-FrozenTopologyRegression
+Test-ProducerConsumerEvidenceBindingRegression
+Test-PublicUploadProjectionRegression
+Test-FrozenBundleVerifierIsolationRegression
 
-Write-Host "V4 release pipeline contract/self-test: PASS (all 51 release state reconciliation, naming identity, and fault injection regressions verified)"
+Write-Host "V4 release pipeline contract/self-test: PASS (all 56 release state reconciliation, naming identity, topology, and fault injection regressions verified)"

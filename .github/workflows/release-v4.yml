@@ -128,7 +128,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-manifest.json
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\*.json
+            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-evidence\*.json
             ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\fixture-http-evidence.json
             ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\defender-evidence.json
             ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\preflight-evidence.json
@@ -137,21 +137,21 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\*.exe
-            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\*.sig
+            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-bundle\*.exe
+            ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-bundle\*.sig
 
       - name: Attest SPDX SBOM for exact candidate
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\*.exe
-          sbom-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-assets\SBOM.spdx.json
+          subject-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-bundle\*.exe
+          sbom-path: ${{ runner.temp }}\sky-v4-release-${{ github.run_id }}\candidate-evidence\SBOM.spdx.json
 
       - name: Verify exact-source OIDC attestations
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $gh = (Get-Command gh.exe -CommandType Application -ErrorAction Stop).Source
-          $assetsDir = Join-Path $env:V4_RELEASE_STATE_ROOT "candidate-assets"
+          $assetsDir = Join-Path $env:V4_RELEASE_STATE_ROOT "candidate-bundle"
           $installer = @(Get-ChildItem -LiteralPath $assetsDir -Filter "*.exe" -File)
           $signature = @(Get-ChildItem -LiteralPath $assetsDir -Filter "*.sig" -File)
           if ($installer.Count -ne 1 -or $signature.Count -ne 1) { throw "Attestation subject set is not exact" }
