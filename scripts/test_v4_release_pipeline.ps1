@@ -3575,7 +3575,7 @@ function Test-ServerDigestEdgeCases {
 # Test A: Issue #336 - Source vs public naming contract
 # -------------------------------------------------------------------------
 function Test-ReleasePipelineSourceVsPublicNamingContract {
-    $currentVersion = "4.1.1"
+    $currentVersion = $packageVersion
 
     $namingScript = @'
 param([string]$PipelinePath, [string]$TargetVersion)
@@ -3636,7 +3636,7 @@ function Extract-Body([string]$fnName) {
     if ((Get-V4SafeReleaseAssetName $names.SourceSignature) -ne $names.PublicSignature) {
         Fail "Get-V4SafeReleaseAssetName(sourceSignature) does not equal publicSignature"
     }
-    Write-Host "V4 test (48/50): source vs public naming contract probe (Test A): PASS"
+    Write-Host "V4 test (48/51): source vs public naming contract probe (Test A): PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -3653,8 +3653,8 @@ $repoRoot = $RepoRoot
 $qualificationEvidenceName = 'V4_QUALIFICATION_EVIDENCE.json'
 $productionEvidenceName = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'
 $authenticodeEvidenceName = 'TAURI_AUTHENTICODE_EVIDENCE.json'
-$installedAuthenticodeEvidenceName = 'TAURI_INSTALLED_AUTHENTICODE_EVIDENCE.json'
-$summaryName = 'ARTIFACT_SUMMARY.json'
+$installedAuthenticodeEvidenceName = 'INSTALLED_AUTHENTICODE_EVIDENCE.json'
+$summaryName = 'TAURI_ARTIFACT_SUMMARY.json'
 $sbomName = 'SBOM.spdx.json'
 . (Join-Path (Split-Path -Parent $PipelinePath) 'v4_qualification_evidence.ps1')
 
@@ -3686,17 +3686,25 @@ function Extract-Body([string]$fnName) {
 return @(Get-QualificationCandidateRecords)
 '@
     $sb = [scriptblock]::Create($candidateScript)
-    $cands = & $sb $pipelinePath "4.1.1" $repoRoot
+    $cands = & $sb $pipelinePath $packageVersion $repoRoot
     $instCand = @($cands | Where-Object { $_.role -eq 'installer' })
     $sigCand = @($cands | Where-Object { $_.role -eq 'updater-signature' })
+    $authInstCand = @($cands | Where-Object { $_.role -eq 'installed-authenticode-evidence' })
+    $summaryCand = @($cands | Where-Object { $_.role -eq 'artifact-summary' })
 
     if ($instCand.Count -ne 1) { Fail "expected exactly one installer candidate record" }
     if ($sigCand.Count -ne 1) { Fail "expected exactly one updater-signature candidate record" }
+    if ($authInstCand.Count -ne 1 -or $authInstCand[0].name -ne 'INSTALLED_AUTHENTICODE_EVIDENCE.json') {
+        Fail "installed-authenticode-evidence candidate record mismatch"
+    }
+    if ($summaryCand.Count -ne 1 -or $summaryCand[0].name -ne 'TAURI_ARTIFACT_SUMMARY.json') {
+        Fail "artifact-summary candidate record mismatch"
+    }
 
-    $expectedSourceInst = "Sky Auto Player_4.1.1_x64-setup.exe"
-    $expectedPublicInst = "Sky.Auto.Player_4.1.1_x64-setup.exe"
-    $expectedSourceSig = "Sky Auto Player_4.1.1_x64-setup.exe.sig"
-    $expectedPublicSig = "Sky.Auto.Player_4.1.1_x64-setup.exe.sig"
+    $expectedSourceInst = "Sky Auto Player_${packageVersion}_x64-setup.exe"
+    $expectedPublicInst = "Sky.Auto.Player_${packageVersion}_x64-setup.exe"
+    $expectedSourceSig = "Sky Auto Player_${packageVersion}_x64-setup.exe.sig"
+    $expectedPublicSig = "Sky.Auto.Player_${packageVersion}_x64-setup.exe.sig"
 
     if ($instCand[0].name -ne $expectedSourceInst) {
         Fail "installer candidate name must be source filename with spaces: $($instCand[0].name)"
@@ -3717,7 +3725,7 @@ return @(Get-QualificationCandidateRecords)
     if ((Get-V4SafeReleaseAssetName $sigCand[0].name) -ne $expectedPublicSig) {
         Fail "safe mapping of updater-signature candidate name must be canonical public dotted name"
     }
-    Write-Host "V4 test (49/50): qualification candidate record probe (Test B): PASS"
+    Write-Host "V4 test (49/51): qualification candidate record probe (Test B): PASS"
 }
 
 # -------------------------------------------------------------------------
@@ -3727,7 +3735,7 @@ function Test-EvidenceMappingRegression {
     $evidenceMappingTestRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-evidence-mapping-test-" + [guid]::NewGuid().ToString("N"))
     try {
         New-Item -ItemType Directory -Path $evidenceMappingTestRoot -Force | Out-Null
-        $v = "4.1.1"
+        $v = $packageVersion
         $srcInstaller = "Sky Auto Player_${v}_x64-setup.exe"
         $srcSig = "$srcInstaller.sig"
         $safeInstaller = "Sky.Auto.Player_${v}_x64-setup.exe"
@@ -3880,7 +3888,7 @@ $recs = @(
             Fail "Assert-EvidenceIdentity accepted evidence with mutated dotted installer name (expected fail-closed)"
         }
 
-        Write-Host "V4 test (50/50): evidence mapping regression probe (Test C): PASS"
+        Write-Host "V4 test (50/51): evidence mapping regression probe (Test C): PASS"
     } finally {
         if (Test-Path -LiteralPath $evidenceMappingTestRoot) {
             Remove-Item -LiteralPath $evidenceMappingTestRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -3888,7 +3896,36 @@ $recs = @(
     }
 }
 
-# Run all 50 regression tests
+# -------------------------------------------------------------------------
+# Test D: Issue #336 corrective - Candidate evidence production wiring regression
+# -------------------------------------------------------------------------
+function Test-CandidateEvidenceProductionWiringRegression {
+    $pipeline = Get-Content -LiteralPath $pipelinePath -Raw
+    $defMatches = [regex]::Matches($pipeline, '(?m)^function Assert-CandidateEvidence\(')
+    if ($defMatches.Count -ne 1) {
+        Fail "Expected exactly one Assert-CandidateEvidence definition in release pipeline, found $($defMatches.Count)"
+    }
+
+    $freezeMarker = '$candidateAssets = @(Freeze-CandidateAssets $records)'
+    $evidenceGateMarker = 'Assert-CandidateEvidence $candidateAssets'
+    $publicProjectionMarker = '$publicRecords = @(Get-PublicReleaseRecords $records)'
+
+    $freezeIndex = $pipeline.IndexOf($freezeMarker)
+    $evidenceGateIndex = $pipeline.IndexOf($evidenceGateMarker)
+    $publicProjectionIndex = $pipeline.IndexOf($publicProjectionMarker)
+
+    if ($freezeIndex -lt 0) { Fail "Missing freeze marker in pipeline: $freezeMarker" }
+    if ($evidenceGateIndex -lt 0) { Fail "Missing candidate evidence gate call in pipeline: $evidenceGateMarker" }
+    if ($publicProjectionIndex -lt 0) { Fail "Missing public release projection marker in pipeline: $publicProjectionMarker" }
+
+    if (-not ($freezeIndex -lt $evidenceGateIndex -and $evidenceGateIndex -lt $publicProjectionIndex)) {
+        Fail "Invoke-BuildCandidate ordering violation: expected Freeze-CandidateAssets ($freezeIndex) < Assert-CandidateEvidence ($evidenceGateIndex) < Get-PublicReleaseRecords ($publicProjectionIndex)"
+    }
+
+    Write-Host "V4 test (51/51): candidate evidence production wiring regression probe (Test D): PASS"
+}
+
+# Run all 51 regression tests
 Test-SchemaV1MissingFieldReproducesStrictModeFailure
 Test-SchemaV2CanonicalConstructorSurvivesStrictMode
 Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed
@@ -3927,5 +3964,6 @@ Test-ServerDigestEdgeCases
 Test-ReleasePipelineSourceVsPublicNamingContract
 Test-QualificationCandidateRecordRegression
 Test-EvidenceMappingRegression
+Test-CandidateEvidenceProductionWiringRegression
 
-Write-Host "V4 release pipeline contract/self-test: PASS (all 50 release state reconciliation, naming identity, and fault injection regressions verified)"
+Write-Host "V4 release pipeline contract/self-test: PASS (all 51 release state reconciliation, naming identity, and fault injection regressions verified)"

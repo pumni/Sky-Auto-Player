@@ -626,29 +626,6 @@ function Get-PublicReleaseRecordsFromManifest([object]$Manifest) {
     return $derived
 }
 
-function Assert-CandidateEvidence([object[]]$Records) {
-    Assert-ManifestAssetFiles $Records
-    $productionRecord = @($Records | Where-Object { [string]$_.source_name -eq $productionEvidenceName })
-    $qualificationRecord = @($Records | Where-Object { [string]$_.source_name -eq $qualificationEvidenceName })
-    if ($productionRecord.Count -ne 1 -or $qualificationRecord.Count -ne 1) {
-        Fail "candidate manifest is missing frozen production or qualification evidence"
-    }
-    $prodEvidencePath = Get-FrozenQualificationAssetPath $Records $productionEvidenceName
-    $qualEvidencePath = Get-FrozenQualificationAssetPath $Records $qualificationEvidenceName
-    $evidence = Get-Content -LiteralPath $prodEvidencePath -Raw | ConvertFrom-Json
-    $qualification = Get-Content -LiteralPath $qualEvidencePath -Raw | ConvertFrom-Json
-    if ([string]$evidence.source_sha -ne $SourceSha.ToLowerInvariant()) { Fail "production evidence source SHA mismatch" }
-    if ([string]$evidence.version -ne $Version -or [string]$evidence.channel -ne $Channel) { Fail "production evidence release identity mismatch" }
-    if ([string]$evidence.authenticode_mode -ne "unsigned-zero-budget" -or
-        [string]$evidence.authenticode_state -ne "unsigned" -or
-        [string]$evidence.authenticode_provider -ne "none") {
-        Fail "production evidence is not the governed unsigned-zero-budget state"
-    }
-    if ([string]$evidence.updater_signature_status -ne "valid" -or [string]$evidence.qualification_status -ne "PASS") {
-        Fail "production evidence omitted a mandatory updater or qualification result"
-    }
-}
-
 function Invoke-Checked([string]$File, [string[]]$Arguments, [string]$Failure) {
     & $File @Arguments
     if ($LASTEXITCODE -ne 0) { Fail $Failure }
@@ -866,6 +843,7 @@ function Invoke-BuildCandidate {
 
     $records = @(Get-QualificationCandidateRecords | ForEach-Object { Get-FileRecord $_ })
     $candidateAssets = @(Freeze-CandidateAssets $records)
+    Assert-CandidateEvidence $candidateAssets
     $publicRecords = @(Get-PublicReleaseRecords $records)
 
     $root = Get-EffectiveStateRoot
