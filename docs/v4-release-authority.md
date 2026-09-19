@@ -235,7 +235,7 @@ Once the GitHub Release PATCH is committed, the publication is irreversible:
   - **NEVER** dispatch another release with the same version number.
   - **NEVER** manually promote `release-metadata` without an explicitly authorized, reviewed recovery procedure.
 - **Corrective Action**:
-  - The default corrective release target after engineering acceptance is a new SemVer release (e.g., `v4.1.1`).
+  - The default corrective release target after engineering acceptance is a new SemVer release (for this incident, `v4.1.2`).
   - Fix the underlying defect on a corrective branch, qualify locally, and dispatch a fresh release for the new SemVer.
 
 #### Post-publication incident case study: v4.1.0
@@ -300,4 +300,3 @@ React          = presentation
    - Captures registry state across all product and uninstall namespaces before smoke execution.
    - Restores default and named registry values with exact captured `RegistryValueKind` and asserts post-restoration equivalence, failing closed on any detected residue.
    - Enforces an **attempt-all** finalizer in `Exit-V4NsisSmokeScope` that executes process termination, registry restoration, environment restoration, throwaway AppData cleanup, and install-root cleanup before raising aggregate diagnostics, preserving original test failure context.
-

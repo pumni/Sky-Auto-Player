@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: v4-release-${{ inputs.source_sha }}
+  group: v4-release-control-plane
   cancel-in-progress: false
 
 defaults:

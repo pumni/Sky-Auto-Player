@@ -27,7 +27,9 @@ $externalState = Get-Content -LiteralPath $externalStatePath -Raw
 $draftLookup = Get-Content -LiteralPath $draftLookupPath -Raw
 $testHarness = Get-Content -LiteralPath $PSCommandPath -Raw
 $latestGuardPath = Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1"
-$latestGuard = Get-Content -LiteralPath $latestGuardPath -Raw
+$latestGuard = (Get-Content -LiteralPath $latestGuardPath -Raw) + (Get-Content -LiteralPath (Join-Path $PSScriptRoot "v4_release_latest_policy.ps1") -Raw)
+
+function Fail([string]$Message) { throw "FAILED: $Message" }
 
 foreach ($source in @(
     [pscustomobject]@{ Name = "release workflow"; Text = $workflow },
@@ -57,14 +59,15 @@ foreach ($source in @(
 }
 
 foreach ($marker in @(
-    'ValidateSet("Baseline", "Capture", "Verify")',
+    'ValidateSet("Baseline", "Verify")',
     'Get-GitHubJson "repos/$canonicalRepository/releases/latest"',
-    'github-latest-before.json',
     'ExpectedTag', 'ExpectedSourceSha',
     'make_latest=$(if ($Channel -eq "stable") { "true" } else { "false" })',
     'stable publication did not become the exact GitHub Latest release',
     'beta publication changed GitHub Latest identity',
-    'read_only=true'
+    'beta publication displaced GitHub Latest',
+    'read_only=true',
+    'v4_release_latest_policy.ps1'
 )) {
     if (-not $latestGuard.Contains($marker)) {
         Fail "GitHub Latest policy guard marker is missing: $marker"
@@ -74,12 +77,10 @@ if ($latestGuard.Contains('^v3\.')) {
     Fail "GitHub Latest policy guard still hard-codes the retired v3-only namespace"
 }
 
-function Fail([string]$Message) { throw "FAILED: $Message" }
-
 foreach ($marker in @(
     'name: V4 Controlled Same-Repository Draft Rehearsal',
     'workflow_dispatch:',
-    'group: v4-release-${{ inputs.source_sha }}',
+    'group: v4-release-control-plane',
     'draft-rehearsal-dispatch-boundary',
     'runs-on: [self-hosted, windows, v4-release, single-tenant]',
     'environment: v4-production-release',
@@ -446,12 +447,14 @@ foreach ($marker in @(
     'release-metadata branch is not initialized',
     'Assert-MetadataBranchReadiness', 'metadataBootstrapContract',
     'release-metadata readiness', 'validate-monotonic', 'strictly monotonic',
-    'Get-PublicMetadataDocument', 'Write-RepositoryContentFile',
+    'New-ExpectedV4Metadata', 'Assert-ExactFileBytes', 'Write-RepositoryContentFile',
+    'Assert-RawMetadataConverges', 'RawMetadataRetryBudgetSeconds',
+    'Assert-V4GitHubLatestPolicy', 'Get-RemoteLatestRelease',
     'Convert-PublishedAtToMetadataTimestamp', '$publicationDateUtc',
     'publishedRelease.target_commitish', 'published_at',
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json',
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json',
-    'AllowAutoRedirect', 'Headers.Authorization',
+    'AllowAutoRedirect', 'Headers.Authorization', 'ReadAsByteArrayAsync',
     'repository already contains published release/tag', 'unpublished draft reuse',
     'published tags are immutable', 'git/refs/tags/$Tag',
     'GitHub''s successful DELETE endpoints return an empty body',
@@ -567,7 +570,7 @@ $finalVerifyBody = $pipeline.Substring(
     $pipeline.IndexOf('function Invoke-SelfTest', [StringComparison]::Ordinal) -
         $pipeline.IndexOf('function Invoke-FinalVerify', [StringComparison]::Ordinal)
 )
-if (-not $finalVerifyBody.Contains('Assert-ExactPublicReleaseAssetSet $release') -or
+if (-not $finalVerifyBody.Contains('Assert-ExactPublishedPublicAssetRecords $release $publicRecords $repository') -or
     -not $finalVerifyBody.Contains('Assert-ExactAssetSet $release $publicRecords') -or
     -not $finalVerifyBody.Contains('Get-PublicReleaseRecordsFromManifest $candidateManifest') -or
     -not $finalVerifyBody.Contains('Get-FileHash')) {
@@ -712,9 +715,9 @@ foreach ($marker in @(
     'repositories: ${{ github.event.repository.name }}',
     'permission-contents: write',
     'GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}',
-    'Snapshot GitHub Latest before publication',
-    'Verify GitHub Latest channel policy before metadata promotion',
-    'scripts/ci_v4_release_latest_guard.ps1',
+    'Mint release-metadata GitHub App token before publication',
+    'Probe release-metadata App access before publication',
+    'probe_v4_metadata_app_access.ps1',
     'Verify isolated production runner boundary',
     'verify_v4_release_runner.ps1',
     'cleanup_v4_release_state.ps1',
@@ -748,39 +751,26 @@ if ($workflow.Contains('inputs:') -or $workflow.Contains('inputs.')) {
 }
 $metadataTokenMarker = 'GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}'
 $metadataTokenUses = ([regex]::Matches($workflow, [regex]::Escape($metadataTokenMarker))).Count
-if ($metadataTokenUses -ne 1) {
-    Fail "metadata App installation token must be used exactly once"
+if ($metadataTokenUses -ne 2) {
+    Fail "metadata App installation token must be used by the pre-publication probe and promotion"
 }
 $metadataPrivateKeyMarker = 'secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY'
 $metadataPrivateKeyUses = ([regex]::Matches($workflow, [regex]::Escape($metadataPrivateKeyMarker))).Count
 if ($metadataPrivateKeyUses -ne 1) {
     Fail "metadata App private key must be consumed exactly once by the token-mint action"
 }
-$captureLatestStep = $workflow.IndexOf('- name: Snapshot GitHub Latest before publication', [StringComparison]::Ordinal)
 $publishStep = $workflow.IndexOf('- name: Publish the qualified candidate immutably', [StringComparison]::Ordinal)
-$latestPolicyStep = $workflow.IndexOf('- name: Verify GitHub Latest channel policy before metadata promotion', [StringComparison]::Ordinal)
-$metadataTokenStep = $workflow.IndexOf('- name: Mint release-metadata GitHub App token', [StringComparison]::Ordinal)
-if ($captureLatestStep -lt 0 -or $publishStep -lt 0 -or $latestPolicyStep -lt 0 -or $metadataTokenStep -lt 0 -or
-    $captureLatestStep -ge $publishStep -or $publishStep -ge $latestPolicyStep -or $latestPolicyStep -ge $metadataTokenStep) {
-    Fail "GitHub Latest capture/policy guard ordering is not fail-closed"
+$metadataTokenStep = $workflow.IndexOf('- name: Mint release-metadata GitHub App token before publication', [StringComparison]::Ordinal)
+$probeStep = $workflow.IndexOf('- name: Probe release-metadata App access before publication', [StringComparison]::Ordinal)
+if ($metadataTokenStep -lt 0 -or $probeStep -lt 0 -or $publishStep -lt 0 -or
+    $metadataTokenStep -ge $probeStep -or $probeStep -ge $publishStep) {
+    Fail "metadata App mint/probe must precede immutable publication"
 }
-$latestPolicyStepEnd = $workflow.IndexOf("`n      - name:", $latestPolicyStep + 1, [StringComparison]::Ordinal)
-if ($latestPolicyStepEnd -lt 0) { $latestPolicyStepEnd = $workflow.Length }
-$latestPolicyBlock = $workflow.Substring($latestPolicyStep, $latestPolicyStepEnd - $latestPolicyStep)
-$captureLatestStepEnd = $workflow.IndexOf("`n      - name:", $captureLatestStep + 1, [StringComparison]::Ordinal)
-if ($captureLatestStepEnd -lt 0) { $captureLatestStepEnd = $workflow.Length }
-$captureLatestBlock = $workflow.Substring($captureLatestStep, $captureLatestStepEnd - $captureLatestStep)
-if (-not $captureLatestBlock.Contains('GH_TOKEN: ${{ github.token }}') -or
-    -not $captureLatestBlock.Contains('scripts/ci_v4_release_latest_guard.ps1') -or
-    -not $captureLatestBlock.Contains('-Mode Capture') -or
-    -not $captureLatestBlock.Contains('-StateRoot')) {
-    Fail "pre-publication Latest snapshot must be read-only and use the isolated state root"
-}
-if (-not $latestPolicyBlock.Contains('GH_TOKEN: ${{ github.token }}') -or
-    -not $latestPolicyBlock.Contains('scripts/ci_v4_release_latest_guard.ps1') -or
-    -not $latestPolicyBlock.Contains('-Mode Verify') -or
-    -not $latestPolicyBlock.Contains('-ExpectedSourceSha')) {
-    Fail "post-publication Latest policy guard must be read-only and verify exact source identity"
+$probeEnd = $workflow.IndexOf("`n      - name:", $probeStep + 1, [StringComparison]::Ordinal)
+if ($probeEnd -lt 0) { $probeEnd = $workflow.Length }
+$probeBlock = $workflow.Substring($probeStep, $probeEnd - $probeStep)
+if (-not $probeBlock.Contains($metadataTokenMarker) -or $probeBlock.Contains('github.token')) {
+    Fail "pre-publication App access probe must use only the short-lived App token"
 }
 $promotionStart = $workflow.IndexOf('- name: Promote release metadata only after immutable publication', [StringComparison]::Ordinal)
 if ($promotionStart -lt 0) { Fail "metadata promotion step is missing" }
@@ -2608,7 +2598,7 @@ function Test-TimestampFormattingFailClosedAndCultureInvariance {
 
 function New-V4SimplifiedTestFixture {
     param(
-        [string]$Version = "4.1.1",
+        [string]$Version = "4.1.2",
         [string]$Channel = "stable",
         [string]$SourceSha = ""
     )
@@ -2635,7 +2625,7 @@ function New-V4SimplifiedTestFixture {
     $sigPath = Join-Path $bundleDir $sourceSigName
 
     [IO.File]::WriteAllBytes($installerPath, [byte[]](1..100))
-    [IO.File]::WriteAllBytes($sigPath, [byte[]](1..50))
+    [IO.File]::WriteAllBytes($sigPath, [Text.Encoding]::ASCII.GetBytes(("A" * 48) + "`r`n"))
 
     $installerSha = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $sigSha = (Get-FileHash -LiteralPath $sigPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -2708,12 +2698,12 @@ class V4SimplifiedMockContext {
     [bool]$PatchTimeoutWithRemotePublished = $false
     [bool]$PatchFailStillDraft = $false
     [bool]$FailPostPublishGet = $false
-    [string]$Tag = "v4.1.1"
-    [string]$Version = "4.1.1"
+    [string]$Tag = "v4.1.2"
+    [string]$Version = "4.1.2"
     [string]$SourceSha = ""
     [string]$RunId = "35292682626"
-    [string]$InstallerName = "Sky.Auto.Player_4.1.1_x64-setup.exe"
-    [string]$SignatureName = "Sky.Auto.Player_4.1.1_x64-setup.exe.sig"
+    [string]$InstallerName = "Sky.Auto.Player_4.1.2_x64-setup.exe"
+    [string]$SignatureName = "Sky.Auto.Player_4.1.2_x64-setup.exe.sig"
     [string]$InstallerSha = ""
     [string]$SignatureSha = ""
 }
@@ -2723,8 +2713,17 @@ function New-V4MockGitHubApiHandler([V4SimplifiedMockContext]$Ctx) {
         param($Arguments, $AllowNotFound, $BinaryOutput, $Raw, $OutputPath)
         $cmd = $Arguments -join ' '
 
-        if ($cmd -match 'releases/tags/v4.1.1') {
-            $existing = @($Ctx.Releases.Values | Where-Object { [string]$_.tag_name -eq 'v4.1.1' -and -not [bool]$_.draft })
+        if ($cmd -match 'releases/latest') {
+            $published = @($Ctx.Releases.Values | Where-Object { -not [bool]$_.draft })
+            if ($published.Count -gt 0) { return $published[0] }
+            return [pscustomobject]@{
+                id = [int64]41; tag_name = 'v4.0.1'; target_commitish = ('0' * 40)
+                draft = $false; prerelease = $false; published_at = '2026-09-01T00:00:00Z'
+                url = 'https://api.github.com/repos/pumni/Sky-Auto-Player/releases/41'
+            }
+        }
+        if ($cmd -match ('releases/tags/' + [regex]::Escape($Ctx.Tag))) {
+            $existing = @($Ctx.Releases.Values | Where-Object { [string]$_.tag_name -eq $Ctx.Tag -and -not [bool]$_.draft })
             if ($existing.Count -gt 0) { return $existing[0] }
             if ($AllowNotFound) { return $null }
             return $null
@@ -2742,6 +2741,7 @@ function New-V4MockGitHubApiHandler([V4SimplifiedMockContext]$Ctx) {
                     id = [int64]42
                     upload_url = "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/42/assets"
                     draft = $true
+                    prerelease = $false
                     tag_name = $Ctx.Tag
                     target_commitish = $Ctx.SourceSha
                     body = "Notes`n`n$marker"
@@ -2761,6 +2761,7 @@ function New-V4MockGitHubApiHandler([V4SimplifiedMockContext]$Ctx) {
                 id = [int64]42
                 upload_url = "https://uploads.github.com/repos/pumni/Sky-Auto-Player/releases/42/assets"
                 draft = $true
+                prerelease = $false
                 tag_name = $Ctx.Tag
                 target_commitish = $Ctx.SourceSha
                 body = $body
@@ -3227,7 +3228,7 @@ function Test-MetadataPromotionFailureAfterPublicationReleaseIntact {
             $apiHandler = {
                 param($Arguments, $AllowNotFound, $BinaryOutput, $Raw, $OutputPath)
                 $cmd = $Arguments -join ' '
-                if ($cmd -match 'releases/tags/v4.1.1') { return $ctx.Releases[[int64]42] }
+                if ($cmd -match ('releases/tags/' + [regex]::Escape($ctx.Tag))) { return $ctx.Releases[[int64]42] }
                 if ($cmd -match 'repo clone') { throw "Git clone authentication failure" }
                 return $null
             }
