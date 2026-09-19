@@ -709,7 +709,7 @@ foreach ($marker in @(
     'Mint release-metadata GitHub App token',
     'id: metadata-app-token',
     'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1',
-    'app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}',
+    'client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}',
     'private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}',
     'owner: ${{ github.repository_owner }}',
     'repositories: ${{ github.event.repository.name }}',
@@ -724,6 +724,9 @@ foreach ($marker in @(
     'Preflight', 'BuildCandidate', 'PublishRelease', 'PromoteMetadata', 'FinalVerify'
 )) {
     if (-not $workflow.Contains($marker)) { Fail "workflow marker is missing: $marker" }
+}
+if ($workflow.Contains('app-id:') -or $workflow.Contains('V4_RELEASE_METADATA_APP_ID')) {
+    Fail "canonical release workflow must use client-id with the actual Client ID variable"
 }
 foreach ($marker in @(
     'candidate-manifest.json',
