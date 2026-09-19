@@ -949,8 +949,12 @@ $productionEvidenceName = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'
 $qualificationEvidenceName = 'V4_QUALIFICATION_EVIDENCE.json'
 $authenticodeEvidenceName = 'TAURI_AUTHENTICODE_EVIDENCE.json'
 $sbomName = 'SBOM.spdx.json'
+. (Join-Path (Split-Path -Parent $PipelinePath) 'v4_qualification_evidence.ps1')
+$safeInstaller = Get-V4SafeReleaseAssetName $TestInstaller
+$safeSig = Get-V4SafeReleaseAssetName "$TestInstaller.sig"
 function Fail([string]$Message) { throw $Message }
-function Get-ExpectedInstallerName { return $TestInstaller }
+function Get-ExpectedInstallerName { return $safeInstaller }
+function Get-ExpectedSignatureName { return $safeSig }
 
 $pipelineCode = Get-Content -LiteralPath $PipelinePath -Raw
 $startIdx = $pipelineCode.IndexOf('function Assert-EvidenceIdentity(')
@@ -964,8 +968,8 @@ $fnBody = $pipelineCode.Substring($openBrace + 1, $closeBrace - $openBrace - 1)
 $fn = [scriptblock]::Create("param([string]`$ProductionPath, [string]`$QualificationPath, [object[]]`$Records)`n$fnBody")
 
 $recs = @(
-    [pscustomobject]@{ name = $TestInstaller; size = [int64]1234567; sha256 = $TestInstallerSha },
-    [pscustomobject]@{ name = "$TestInstaller.sig"; size = [int64]512; sha256 = $TestSigSha },
+    [pscustomobject]@{ name = $safeInstaller; release_name = $safeInstaller; source_name = $TestInstaller; size = [int64]1234567; sha256 = $TestInstallerSha },
+    [pscustomobject]@{ name = $safeSig; release_name = $safeSig; source_name = "$TestInstaller.sig"; size = [int64]512; sha256 = $TestSigSha },
     [pscustomobject]@{ name = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'; size = [int64]100; sha256 = ('1' * 64) },
     [pscustomobject]@{ name = 'V4_QUALIFICATION_EVIDENCE.json'; size = [int64]100; sha256 = ('2' * 64) },
     [pscustomobject]@{ name = 'TAURI_AUTHENTICODE_EVIDENCE.json'; size = [int64]100; sha256 = $TestAuthSha },
@@ -3567,7 +3571,361 @@ function Test-ServerDigestEdgeCases {
     Write-Host "V4 test (35/47): server digest edge cases FAIL+cleanup or PASS (6/6 cases): PASS"
 }
 
-# Run all 47 regression tests
+# -------------------------------------------------------------------------
+# Test A: Issue #336 - Source vs public naming contract
+# -------------------------------------------------------------------------
+function Test-ReleasePipelineSourceVsPublicNamingContract {
+    $currentVersion = $packageVersion
+
+    $namingScript = @'
+param([string]$PipelinePath, [string]$TargetVersion)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$Version = $TargetVersion
+$installerSuffix = '_x64-setup.exe'
+. (Join-Path (Split-Path -Parent $PipelinePath) 'v4_qualification_evidence.ps1')
+
+$pipelineCode = Get-Content -LiteralPath $PipelinePath -Raw
+
+function Extract-Body([string]$fnName) {
+    $startIdx = $pipelineCode.IndexOf("function $fnName")
+    if ($startIdx -lt 0) { throw "Could not locate $fnName" }
+    $openBrace = $pipelineCode.IndexOf('{', $startIdx)
+    $depth = 0
+    for ($i = $openBrace; $i -lt $pipelineCode.Length; $i++) {
+        if ($pipelineCode[$i] -eq '{') { $depth++ }
+        elseif ($pipelineCode[$i] -eq '}') {
+            $depth--
+            if ($depth -eq 0) {
+                return $pipelineCode.Substring($openBrace + 1, $i - $openBrace - 1)
+            }
+        }
+    }
+    throw "Unclosed brace for $fnName"
+}
+
+. ([scriptblock]::Create("function Get-ExpectedSourceInstallerName { " + (Extract-Body 'Get-ExpectedSourceInstallerName') + " }"))
+. ([scriptblock]::Create("function Get-ExpectedSourceSignatureName { " + (Extract-Body 'Get-ExpectedSourceSignatureName') + " }"))
+. ([scriptblock]::Create("function Get-ExpectedInstallerName { " + (Extract-Body 'Get-ExpectedInstallerName') + " }"))
+. ([scriptblock]::Create("function Get-ExpectedSignatureName { " + (Extract-Body 'Get-ExpectedSignatureName') + " }"))
+
+[pscustomobject]@{
+    SourceInstaller = Get-ExpectedSourceInstallerName
+    PublicInstaller = Get-ExpectedInstallerName
+    SourceSignature = Get-ExpectedSourceSignatureName
+    PublicSignature = Get-ExpectedSignatureName
+}
+'@
+    $sb = [scriptblock]::Create($namingScript)
+    $names = & $sb $pipelinePath $currentVersion
+    if ($names.SourceInstaller -ne "Sky Auto Player_${currentVersion}_x64-setup.exe") {
+        Fail "Get-ExpectedSourceInstallerName did not match source name with spaces: $($names.SourceInstaller)"
+    }
+    if ($names.PublicInstaller -ne "Sky.Auto.Player_${currentVersion}_x64-setup.exe") {
+        Fail "Get-ExpectedInstallerName did not match canonical public dotted name: $($names.PublicInstaller)"
+    }
+    if ($names.SourceSignature -ne "Sky Auto Player_${currentVersion}_x64-setup.exe.sig") {
+        Fail "Get-ExpectedSourceSignatureName did not match source signature with spaces: $($names.SourceSignature)"
+    }
+    if ($names.PublicSignature -ne "Sky.Auto.Player_${currentVersion}_x64-setup.exe.sig") {
+        Fail "Get-ExpectedSignatureName did not match canonical public dotted signature: $($names.PublicSignature)"
+    }
+    if ((Get-V4SafeReleaseAssetName $names.SourceInstaller) -ne $names.PublicInstaller) {
+        Fail "Get-V4SafeReleaseAssetName(sourceInstaller) does not equal publicInstaller"
+    }
+    if ((Get-V4SafeReleaseAssetName $names.SourceSignature) -ne $names.PublicSignature) {
+        Fail "Get-V4SafeReleaseAssetName(sourceSignature) does not equal publicSignature"
+    }
+    Write-Host "V4 test (48/51): source vs public naming contract probe (Test A): PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test B: Issue #336 - Qualification candidate record regression
+# -------------------------------------------------------------------------
+function Test-QualificationCandidateRecordRegression {
+    $candidateScript = @'
+param([string]$PipelinePath, [string]$TargetVersion, [string]$RepoRoot)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$Version = $TargetVersion
+$installerSuffix = '_x64-setup.exe'
+$repoRoot = $RepoRoot
+$qualificationEvidenceName = 'V4_QUALIFICATION_EVIDENCE.json'
+$productionEvidenceName = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'
+$authenticodeEvidenceName = 'TAURI_AUTHENTICODE_EVIDENCE.json'
+$installedAuthenticodeEvidenceName = 'INSTALLED_AUTHENTICODE_EVIDENCE.json'
+$summaryName = 'TAURI_ARTIFACT_SUMMARY.json'
+$sbomName = 'SBOM.spdx.json'
+. (Join-Path (Split-Path -Parent $PipelinePath) 'v4_qualification_evidence.ps1')
+
+$pipelineCode = Get-Content -LiteralPath $PipelinePath -Raw
+
+function Extract-Body([string]$fnName) {
+    $startIdx = $pipelineCode.IndexOf("function $fnName")
+    if ($startIdx -lt 0) { throw "Could not locate $fnName" }
+    $openBrace = $pipelineCode.IndexOf('{', $startIdx)
+    $depth = 0
+    for ($i = $openBrace; $i -lt $pipelineCode.Length; $i++) {
+        if ($pipelineCode[$i] -eq '{') { $depth++ }
+        elseif ($pipelineCode[$i] -eq '}') {
+            $depth--
+            if ($depth -eq 0) {
+                return $pipelineCode.Substring($openBrace + 1, $i - $openBrace - 1)
+            }
+        }
+    }
+    throw "Unclosed brace for $fnName"
+}
+
+. ([scriptblock]::Create("function Get-ExpectedSourceInstallerName { " + (Extract-Body 'Get-ExpectedSourceInstallerName') + " }"))
+. ([scriptblock]::Create("function Get-ExpectedSourceSignatureName { " + (Extract-Body 'Get-ExpectedSourceSignatureName') + " }"))
+. ([scriptblock]::Create("function Get-ExpectedInstallerName { " + (Extract-Body 'Get-ExpectedInstallerName') + " }"))
+. ([scriptblock]::Create("function Get-ExpectedSignatureName { " + (Extract-Body 'Get-ExpectedSignatureName') + " }"))
+. ([scriptblock]::Create("function Get-QualificationCandidateRecords { " + (Extract-Body 'Get-QualificationCandidateRecords') + " }"))
+
+return @(Get-QualificationCandidateRecords)
+'@
+    $sb = [scriptblock]::Create($candidateScript)
+    $cands = & $sb $pipelinePath $packageVersion $repoRoot
+    $instCand = @($cands | Where-Object { $_.role -eq 'installer' })
+    $sigCand = @($cands | Where-Object { $_.role -eq 'updater-signature' })
+    $authInstCand = @($cands | Where-Object { $_.role -eq 'installed-authenticode-evidence' })
+    $summaryCand = @($cands | Where-Object { $_.role -eq 'artifact-summary' })
+
+    if ($instCand.Count -ne 1) { Fail "expected exactly one installer candidate record" }
+    if ($sigCand.Count -ne 1) { Fail "expected exactly one updater-signature candidate record" }
+    if ($authInstCand.Count -ne 1 -or $authInstCand[0].name -ne 'INSTALLED_AUTHENTICODE_EVIDENCE.json') {
+        Fail "installed-authenticode-evidence candidate record mismatch"
+    }
+    if ($summaryCand.Count -ne 1 -or $summaryCand[0].name -ne 'TAURI_ARTIFACT_SUMMARY.json') {
+        Fail "artifact-summary candidate record mismatch"
+    }
+
+    $expectedSourceInst = "Sky Auto Player_${packageVersion}_x64-setup.exe"
+    $expectedPublicInst = "Sky.Auto.Player_${packageVersion}_x64-setup.exe"
+    $expectedSourceSig = "Sky Auto Player_${packageVersion}_x64-setup.exe.sig"
+    $expectedPublicSig = "Sky.Auto.Player_${packageVersion}_x64-setup.exe.sig"
+
+    if ($instCand[0].name -ne $expectedSourceInst) {
+        Fail "installer candidate name must be source filename with spaces: $($instCand[0].name)"
+    }
+    if ([IO.Path]::GetFileName($instCand[0].path) -ne $expectedSourceInst) {
+        Fail "installer candidate path filename must be source filename with spaces: $($instCand[0].path)"
+    }
+    if ((Get-V4SafeReleaseAssetName $instCand[0].name) -ne $expectedPublicInst) {
+        Fail "safe mapping of installer candidate name must be canonical public dotted name"
+    }
+
+    if ($sigCand[0].name -ne $expectedSourceSig) {
+        Fail "updater-signature candidate name must be source signature with spaces: $($sigCand[0].name)"
+    }
+    if ([IO.Path]::GetFileName($sigCand[0].path) -ne $expectedSourceSig) {
+        Fail "updater-signature candidate path filename must be source signature with spaces: $($sigCand[0].path)"
+    }
+    if ((Get-V4SafeReleaseAssetName $sigCand[0].name) -ne $expectedPublicSig) {
+        Fail "safe mapping of updater-signature candidate name must be canonical public dotted name"
+    }
+    Write-Host "V4 test (49/51): qualification candidate record probe (Test B): PASS"
+}
+
+# -------------------------------------------------------------------------
+# Test C: Issue #336 - Evidence mapping regression
+# -------------------------------------------------------------------------
+function Test-EvidenceMappingRegression {
+    $evidenceMappingTestRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-evidence-mapping-test-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $evidenceMappingTestRoot -Force | Out-Null
+        $v = $packageVersion
+        $srcInstaller = "Sky Auto Player_${v}_x64-setup.exe"
+        $srcSig = "$srcInstaller.sig"
+        $safeInstaller = "Sky.Auto.Player_${v}_x64-setup.exe"
+        $safeSig = "$safeInstaller.sig"
+        $testSha = "1234567890abcdef1234567890abcdef12345678"
+        $instSha = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        $sigSha = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        $authSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        $sbomSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+        # Production evidence with spaces
+        $prodObj = New-V4CanonicalProductionEvidence `
+            -SourceSha $testSha `
+            -Version $v `
+            -Channel "stable" `
+            -InstallerName $srcInstaller `
+            -SignatureName $srcSig `
+            -InstallerSize 1234567 `
+            -SignatureSize 512 `
+            -InstallerSha256 $instSha `
+            -SignatureSha256 $sigSha `
+            -AuthenticodeEvidenceSha256 $authSha `
+            -SbomSha256 $sbomSha `
+            -UpdaterKeyId "19AABD2E7838818C"
+        $validProdPath = Join-Path $evidenceMappingTestRoot "valid_prod.json"
+        $prodObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $validProdPath -Encoding utf8
+
+        # Qualification evidence with spaces
+        $qualObj = New-V4CanonicalQualificationEvidence `
+            -Version $v `
+            -InstallerName $srcInstaller `
+            -SignatureName $srcSig `
+            -InstallerSize 1234567 `
+            -SignatureSize 512 `
+            -InstallerSha256 $instSha `
+            -SignatureSha256 $sigSha `
+            -AuthenticodeEvidenceSha256 $authSha `
+            -SbomSha256 $sbomSha
+        $qualPath = Join-Path $evidenceMappingTestRoot "valid_qual.json"
+        $qualObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $qualPath -Encoding utf8
+
+        # Mutated production evidence: installer name has dots instead of spaces
+        $mutatedProdObj = New-V4CanonicalProductionEvidence `
+            -SourceSha $testSha `
+            -Version $v `
+            -Channel "stable" `
+            -InstallerName $safeInstaller `
+            -SignatureName $srcSig `
+            -InstallerSize 1234567 `
+            -SignatureSize 512 `
+            -InstallerSha256 $instSha `
+            -SignatureSha256 $sigSha `
+            -AuthenticodeEvidenceSha256 $authSha `
+            -SbomSha256 $sbomSha `
+            -UpdaterKeyId "19AABD2E7838818C"
+        $mutatedProdPath = Join-Path $evidenceMappingTestRoot "mutated_prod.json"
+        $mutatedProdObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $mutatedProdPath -Encoding utf8
+
+        $workerScript = @'
+param(
+    [string]$PipelinePath,
+    [string]$ProdPath,
+    [string]$QualPath,
+    [string]$SafeInstaller,
+    [string]$SafeSig,
+    [string]$SrcInstaller,
+    [string]$SrcSig,
+    [string]$InstSha,
+    [string]$SigSha,
+    [string]$AuthSha,
+    [string]$SbomSha,
+    [string]$TestSha,
+    [string]$TestVersion
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$SourceSha = $TestSha
+$Version = $TestVersion
+$Channel = 'stable'
+$productionEvidenceName = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'
+$qualificationEvidenceName = 'V4_QUALIFICATION_EVIDENCE.json'
+$authenticodeEvidenceName = 'TAURI_AUTHENTICODE_EVIDENCE.json'
+$sbomName = 'SBOM.spdx.json'
+function Fail([string]$Message) { throw $Message }
+function Get-ExpectedInstallerName { return $SafeInstaller }
+function Get-ExpectedSignatureName { return $SafeSig }
+
+$pipelineCode = Get-Content -LiteralPath $PipelinePath -Raw
+$startIdx = $pipelineCode.IndexOf('function Assert-EvidenceIdentity(')
+if ($startIdx -lt 0) { throw 'Could not locate Assert-EvidenceIdentity function start' }
+$openBrace = $pipelineCode.IndexOf('{', $startIdx)
+if ($openBrace -lt 0) { throw 'Could not locate Assert-EvidenceIdentity body start' }
+$closeBrace = $pipelineCode.IndexOf("`n}", $openBrace)
+if ($closeBrace -lt 0) { throw 'Could not locate Assert-EvidenceIdentity body end' }
+$fnBody = $pipelineCode.Substring($openBrace + 1, $closeBrace - $openBrace - 1)
+
+$fn = [scriptblock]::Create("param([string]`$ProductionPath, [string]`$QualificationPath, [object[]]`$Records)`n$fnBody")
+
+$recs = @(
+    [pscustomobject]@{ name = $SafeInstaller; release_name = $SafeInstaller; source_name = $SrcInstaller; size = [int64]1234567; sha256 = $InstSha },
+    [pscustomobject]@{ name = $SafeSig; release_name = $SafeSig; source_name = $SrcSig; size = [int64]512; sha256 = $SigSha },
+    [pscustomobject]@{ name = 'V4_PRODUCTION_RELEASE_EVIDENCE.json'; size = [int64]100; sha256 = ('1' * 64) },
+    [pscustomobject]@{ name = 'V4_QUALIFICATION_EVIDENCE.json'; size = [int64]100; sha256 = ('2' * 64) },
+    [pscustomobject]@{ name = 'TAURI_AUTHENTICODE_EVIDENCE.json'; size = [int64]100; sha256 = $AuthSha },
+    [pscustomobject]@{ name = 'SBOM.spdx.json'; size = [int64]100; sha256 = $SbomSha }
+)
+
+& $fn $ProdPath $QualPath $recs
+'@
+        $worker = Join-Path $evidenceMappingTestRoot "evidence_mapping_worker.ps1"
+        Set-Content -LiteralPath $worker -Value $workerScript -Encoding utf8
+
+        # 1. Valid mapping (source names with spaces in evidence) must PASS
+        $resPass = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $worker `
+            -PipelinePath $pipelinePath `
+            -ProdPath $validProdPath `
+            -QualPath $qualPath `
+            -SafeInstaller $safeInstaller `
+            -SafeSig $safeSig `
+            -SrcInstaller $srcInstaller `
+            -SrcSig $srcSig `
+            -InstSha $instSha `
+            -SigSha $sigSha `
+            -AuthSha $authSha `
+            -SbomSha $sbomSha `
+            -TestSha $testSha `
+            -TestVersion $v 2>&1 | Out-String
+
+        if ($LASTEXITCODE -ne 0) {
+            Fail "Assert-EvidenceIdentity rejected valid source/public mapping: $resPass"
+        }
+
+        # 2. Mutated mapping (evidence with dotted public name) must FAIL CLOSED
+        $resFail = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $worker `
+            -PipelinePath $pipelinePath `
+            -ProdPath $mutatedProdPath `
+            -QualPath $qualPath `
+            -SafeInstaller $safeInstaller `
+            -SafeSig $safeSig `
+            -SrcInstaller $srcInstaller `
+            -SrcSig $srcSig `
+            -InstSha $instSha `
+            -SigSha $sigSha `
+            -AuthSha $authSha `
+            -SbomSha $sbomSha `
+            -TestSha $testSha `
+            -TestVersion $v 2>&1 | Out-String
+
+        if ($LASTEXITCODE -eq 0) {
+            Fail "Assert-EvidenceIdentity accepted evidence with mutated dotted installer name (expected fail-closed)"
+        }
+
+        Write-Host "V4 test (50/51): evidence mapping regression probe (Test C): PASS"
+    } finally {
+        if (Test-Path -LiteralPath $evidenceMappingTestRoot) {
+            Remove-Item -LiteralPath $evidenceMappingTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# -------------------------------------------------------------------------
+# Test D: Issue #336 corrective - Candidate evidence production wiring regression
+# -------------------------------------------------------------------------
+function Test-CandidateEvidenceProductionWiringRegression {
+    $pipeline = Get-Content -LiteralPath $pipelinePath -Raw
+    $defMatches = [regex]::Matches($pipeline, '(?m)^function Assert-CandidateEvidence\(')
+    if ($defMatches.Count -ne 1) {
+        Fail "Expected exactly one Assert-CandidateEvidence definition in release pipeline, found $($defMatches.Count)"
+    }
+
+    $freezeMarker = '$candidateAssets = @(Freeze-CandidateAssets $records)'
+    $evidenceGateMarker = 'Assert-CandidateEvidence $candidateAssets'
+    $publicProjectionMarker = '$publicRecords = @(Get-PublicReleaseRecords $records)'
+
+    $freezeIndex = $pipeline.IndexOf($freezeMarker)
+    $evidenceGateIndex = $pipeline.IndexOf($evidenceGateMarker)
+    $publicProjectionIndex = $pipeline.IndexOf($publicProjectionMarker)
+
+    if ($freezeIndex -lt 0) { Fail "Missing freeze marker in pipeline: $freezeMarker" }
+    if ($evidenceGateIndex -lt 0) { Fail "Missing candidate evidence gate call in pipeline: $evidenceGateMarker" }
+    if ($publicProjectionIndex -lt 0) { Fail "Missing public release projection marker in pipeline: $publicProjectionMarker" }
+
+    if (-not ($freezeIndex -lt $evidenceGateIndex -and $evidenceGateIndex -lt $publicProjectionIndex)) {
+        Fail "Invoke-BuildCandidate ordering violation: expected Freeze-CandidateAssets ($freezeIndex) < Assert-CandidateEvidence ($evidenceGateIndex) < Get-PublicReleaseRecords ($publicProjectionIndex)"
+    }
+
+    Write-Host "V4 test (51/51): candidate evidence production wiring regression probe (Test D): PASS"
+}
+
+# Run all 51 regression tests
 Test-SchemaV1MissingFieldReproducesStrictModeFailure
 Test-SchemaV2CanonicalConstructorSurvivesStrictMode
 Test-MalformedOrMissingCriticalSchemaV2FieldFailsClosed
@@ -3603,5 +3961,9 @@ Test-Run35292682626ParameterConversionRegression
 Test-TransactionMarkerDuplicateKeyRejectsAllCriticalKeys
 Test-TransactionMarkerFieldValidationAndMatchCases
 Test-ServerDigestEdgeCases
+Test-ReleasePipelineSourceVsPublicNamingContract
+Test-QualificationCandidateRecordRegression
+Test-EvidenceMappingRegression
+Test-CandidateEvidenceProductionWiringRegression
 
-Write-Host "V4 release pipeline contract/self-test: PASS (all 47 release state reconciliation and fault injection regressions verified)"
+Write-Host "V4 release pipeline contract/self-test: PASS (all 51 release state reconciliation, naming identity, and fault injection regressions verified)"
