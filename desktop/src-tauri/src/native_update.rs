@@ -512,37 +512,63 @@ impl<R: Runtime> UpdateService<R> {
         let operation_for_download = operation_id.clone();
         let updates_for_download = updates.clone();
         let download = first_verified_download(updates.clone(), |update| {
+            let progress_accumulator = Arc::new(Mutex::new(DownloadProgressAccumulator::default()));
+            let progress_error = Arc::new(Mutex::new(None::<String>));
+            let callback_accumulator = Arc::clone(&progress_accumulator);
+            let callback_error = Arc::clone(&progress_error);
             tauri::async_runtime::block_on(update.download(
                 {
                     let publish = &publish;
                     let candidate = candidate_for_download.clone();
                     let operation_id = operation_for_download.clone();
                     let updates = updates_for_download.clone();
-                    move |completed, total| {
-                        let total = total.filter(|value| *value <= MAX_ARTIFACT_BYTES);
-                        let completed = (completed as u64).min(MAX_ARTIFACT_BYTES);
-                        let progress = UpdateProgressDto {
-                            completed,
-                            total,
-                            message: "Downloading update".to_string(),
-                        };
-                        let _ = self.transition_and_publish(
-                            StateTransition {
-                                state: UpdateState::Downloading,
-                                channel: candidate.channel,
-                                candidate: Some(candidate.clone()),
-                                updates: updates.clone(),
-                                operation_id: Some(operation_id.clone()),
-                                progress: Some(progress),
-                                ..Default::default()
-                            },
-                            publish,
-                        );
+                    move |chunk_length, total| {
+                        let already_failed = callback_error
+                            .lock()
+                            .map(|error| error.is_some())
+                            .unwrap_or(true);
+                        if already_failed {
+                            return;
+                        }
+                        let progress = callback_accumulator
+                            .lock()
+                            .map_err(|_| "native update progress state lock poisoned".to_string())
+                            .and_then(|mut accumulator| {
+                                accumulator.record_chunk(chunk_length, total)
+                            });
+                        match progress {
+                            Ok(progress) => {
+                                let _ = self.transition_and_publish(
+                                    StateTransition {
+                                        state: UpdateState::Downloading,
+                                        channel: candidate.channel,
+                                        candidate: Some(candidate.clone()),
+                                        updates: updates.clone(),
+                                        operation_id: Some(operation_id.clone()),
+                                        progress: Some(progress),
+                                        ..Default::default()
+                                    },
+                                    publish,
+                                );
+                            }
+                            Err(error) => {
+                                if let Ok(mut progress_error) = callback_error.lock() {
+                                    *progress_error = Some(error);
+                                }
+                            }
+                        }
                     }
                 },
                 || {},
             ))
             .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                let progress_error = progress_error
+                    .lock()
+                    .map_err(|_| "native update progress state lock poisoned".to_string())?
+                    .clone();
+                progress_error.map_or(Ok(bytes), Err)
+            })
         });
 
         let (update, bytes) = match download {
@@ -585,7 +611,7 @@ impl<R: Runtime> UpdateService<R> {
             }
         };
 
-        let bytes_len = bytes.len() as u64;
+        let ready_progress = verified_artifact_progress(&bytes, "Update is ready to install");
         self.transition_and_publish(
             StateTransition {
                 state: UpdateState::Ready,
@@ -593,16 +619,14 @@ impl<R: Runtime> UpdateService<R> {
                 candidate: Some(candidate.clone()),
                 updates: updates.clone(),
                 operation_id: Some(operation_id.clone()),
-                progress: Some(UpdateProgressDto {
-                    completed: bytes_len,
-                    total: Some(bytes_len),
-                    message: "Update is ready to install".to_string(),
-                }),
+                progress: Some(ready_progress),
                 ..Default::default()
             },
             &publish,
         )?;
 
+        let installing_progress =
+            verified_artifact_progress(&bytes, "Installing update and restarting");
         self.transition_and_publish(
             StateTransition {
                 state: UpdateState::Installing,
@@ -610,11 +634,7 @@ impl<R: Runtime> UpdateService<R> {
                 candidate: Some(candidate.clone()),
                 updates: updates.clone(),
                 operation_id: Some(operation_id.clone()),
-                progress: Some(UpdateProgressDto {
-                    completed: bytes_len,
-                    total: Some(bytes_len),
-                    message: "Installing update and restarting".to_string(),
-                }),
+                progress: Some(installing_progress),
                 ..Default::default()
             },
             &publish,
@@ -970,6 +990,51 @@ fn bounded(value: impl ToString) -> String {
     value.to_string().chars().take(4096).collect()
 }
 
+#[derive(Debug, Default)]
+struct DownloadProgressAccumulator {
+    downloaded: u64,
+}
+
+impl DownloadProgressAccumulator {
+    fn record_chunk(
+        &mut self,
+        chunk_length: usize,
+        content_length: Option<u64>,
+    ) -> Result<UpdateProgressDto, String> {
+        let chunk_length = u64::try_from(chunk_length)
+            .map_err(|_| "update download chunk length is not representable".to_string())?;
+        let downloaded = self
+            .downloaded
+            .checked_add(chunk_length)
+            .ok_or_else(|| "update download progress overflowed".to_string())?;
+        if downloaded > MAX_ARTIFACT_BYTES {
+            return Err("update download exceeds the bounded artifact size".to_string());
+        }
+
+        let total = content_length.filter(|value| (1..=MAX_ARTIFACT_BYTES).contains(value));
+        if total.is_some_and(|total| downloaded > total) {
+            return Err("update download progress exceeds its content length".to_string());
+        }
+
+        self.downloaded = downloaded;
+        Ok(UpdateProgressDto {
+            completed: downloaded,
+            total,
+            message: "Downloading update".to_string(),
+        })
+    }
+}
+
+fn verified_artifact_progress(bytes: &[u8], message: &str) -> UpdateProgressDto {
+    let bytes_len = bytes.len() as u64;
+    debug_assert!(bytes_len <= MAX_ARTIFACT_BYTES);
+    UpdateProgressDto {
+        completed: bytes_len,
+        total: Some(bytes_len),
+        message: message.to_string(),
+    }
+}
+
 fn opaque_id() -> Result<String, String> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes)
@@ -995,12 +1060,15 @@ pub(crate) fn check_disposition(
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        DownloadProgressAccumulator, MAX_ARTIFACT_BYTES, bounded, first_verified_download,
+        update_activity_error, verified_artifact_progress,
+    };
     #[cfg(not(feature = "tauri-update-fixture"))]
     use super::{
         V4_BETA_METADATA_ENDPOINT, V4_STABLE_METADATA_ENDPOINT, V4_TAURI_UPDATER_PUBLIC_KEY,
         V4_TAURI_UPDATER_PUBLIC_KEYS, metadata_endpoint, validate_official_metadata_endpoint,
     };
-    use super::{bounded, first_verified_download, update_activity_error};
     use crate::app_state::ActivityReservationError;
     #[cfg(not(feature = "tauri-update-fixture"))]
     use crate::ui_events::UpdateChannel;
@@ -1161,6 +1229,99 @@ mod tests {
             update_activity_error(ActivityReservationError::PhysicalPlaybackActive)
                 .contains("playback_active")
         );
+    }
+
+    #[test]
+    fn download_progress_accumulates_chunk_lengths() {
+        let mut accumulator = DownloadProgressAccumulator::default();
+        let completed = [16_000_usize, 16_000, 8_000]
+            .into_iter()
+            .map(|chunk_length| {
+                accumulator
+                    .record_chunk(chunk_length, Some(40_000))
+                    .expect("valid chunk should produce progress")
+                    .completed
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completed, [16_000, 32_000, 40_000]);
+    }
+
+    #[test]
+    fn download_progress_never_decreases_within_an_attempt() {
+        let mut accumulator = DownloadProgressAccumulator::default();
+        let mut previous = 0;
+        for chunk_length in [16_000_usize, 16_000, 8_000, 1_000] {
+            let progress = accumulator
+                .record_chunk(chunk_length, Some(41_000))
+                .expect("valid chunk should produce progress");
+            assert!(progress.completed >= previous);
+            previous = progress.completed;
+        }
+    }
+
+    #[test]
+    fn download_progress_stays_within_a_valid_total() {
+        let mut accumulator = DownloadProgressAccumulator::default();
+        for chunk_length in [16_000_usize, 16_000, 8_000] {
+            let progress = accumulator
+                .record_chunk(chunk_length, Some(40_000))
+                .expect("valid chunk should produce progress");
+            assert!(progress.completed <= progress.total.expect("total is valid"));
+        }
+    }
+
+    #[test]
+    fn download_progress_accumulates_without_a_content_length() {
+        let mut accumulator = DownloadProgressAccumulator::default();
+        let progress = [16_000_usize, 16_000, 8_000]
+            .into_iter()
+            .map(|chunk_length| {
+                accumulator
+                    .record_chunk(chunk_length, None)
+                    .expect("chunk without total should produce progress")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            progress
+                .iter()
+                .map(|value| value.completed)
+                .collect::<Vec<_>>(),
+            [16_000, 32_000, 40_000]
+        );
+        assert!(progress.iter().all(|value| value.total.is_none()));
+    }
+
+    #[test]
+    fn download_progress_fails_closed_at_the_artifact_bound() {
+        let mut accumulator = DownloadProgressAccumulator::default();
+        assert!(
+            accumulator
+                .record_chunk(MAX_ARTIFACT_BYTES as usize, None)
+                .is_ok()
+        );
+        assert!(accumulator.record_chunk(1, None).is_err());
+
+        let mut invalid_total = DownloadProgressAccumulator::default();
+        let progress = invalid_total
+            .record_chunk(1, Some(MAX_ARTIFACT_BYTES + 1))
+            .expect("oversized content length is treated as unknown");
+        assert_eq!(progress.total, None);
+
+        let mut overflowed = DownloadProgressAccumulator {
+            downloaded: u64::MAX,
+        };
+        assert!(overflowed.record_chunk(1, None).is_err());
+    }
+
+    #[test]
+    fn final_ready_and_installing_progress_use_exact_verified_artifact_length() {
+        let bytes = vec![0_u8; 40_000];
+        let ready = verified_artifact_progress(&bytes, "Update is ready to install");
+        let installing = verified_artifact_progress(&bytes, "Installing update and restarting");
+        assert_eq!(ready.completed, bytes.len() as u64);
+        assert_eq!(ready.total, Some(bytes.len() as u64));
+        assert_eq!(installing.completed, bytes.len() as u64);
+        assert_eq!(installing.total, Some(bytes.len() as u64));
     }
 
     #[test]
