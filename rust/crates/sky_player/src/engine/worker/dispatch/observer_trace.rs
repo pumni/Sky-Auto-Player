@@ -1,6 +1,7 @@
 use super::super::DispatchStep;
 use super::observation::{
-    BlockedUnfocusedObservation, DownMissObservation, StaleMetadataObservation,
+    BlockedUnfocusedObservation, DownMissObservation, DownMissTimingEvidence,
+    StaleMetadataObservation,
 };
 use crate::engine::worker::timing::signed_timeline_delta_ticks;
 use crate::engine::{
@@ -72,14 +73,40 @@ pub(super) fn drain_down_miss(
     observation: &DownMissObservation,
     telemetry: &mut TelemetryCollector,
 ) -> Result<(), DispatchStep> {
+    let (
+        physical_target_qpc,
+        physical_not_before_qpc,
+        hold_floor_qpc,
+        release_floor_qpc,
+        latest_down_start_qpc,
+        hold_floor_mask,
+        release_floor_mask,
+    ) = match observation.timing_evidence {
+        DownMissTimingEvidence::Physical(window) => (
+            window.authored_target_qpc,
+            Some(window.packet_not_before_qpc),
+            Some(window.musical_up_not_before_qpc),
+            Some(window.down_not_before_qpc),
+            window.latest_down_start_qpc,
+            window.hold_floor_mask,
+            window.release_floor_mask,
+        ),
+        DownMissTimingEvidence::Prepared {
+            physical_target_qpc,
+            sender_cutoff_qpc,
+        } => (
+            physical_target_qpc,
+            Some(physical_target_qpc),
+            Some(physical_target_qpc),
+            Some(physical_target_qpc),
+            sender_cutoff_qpc,
+            0,
+            0,
+        ),
+    };
     let dispatch_start_error_ticks = signed_timeline_delta_ticks(
         TimelineTicks::from_raw(observation.observed_qpc.as_u64()),
-        TimelineTicks::from_raw(
-            observation
-                .physical_timing_window
-                .authored_target_qpc
-                .as_u64(),
-        ),
+        TimelineTicks::from_raw(physical_target_qpc.as_u64()),
     )
     .map_err(|error| {
         DispatchStep::Terminate(format!(
@@ -125,36 +152,13 @@ pub(super) fn drain_down_miss(
                 authored_ticks: observation.authored_ticks,
                 effective_deadline_ticks: observation.effective_deadline_ticks,
                 wake_ticks: observation.wake_ticks,
-                physical_target_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .authored_target_qpc
-                        .as_u64(),
-                ),
-                physical_not_before_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .packet_not_before_qpc
-                        .as_u64(),
-                ),
-                hold_floor_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .musical_up_not_before_qpc
-                        .as_u64(),
-                ),
-                release_floor_qpc_ticks: Some(
-                    observation
-                        .physical_timing_window
-                        .down_not_before_qpc
-                        .as_u64(),
-                ),
-                latest_down_start_qpc_ticks: observation
-                    .physical_timing_window
-                    .latest_down_start_qpc
-                    .map(|ticks| ticks.as_u64()),
-                hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
-                release_floor_mask: observation.physical_timing_window.release_floor_mask,
+                physical_target_qpc_ticks: Some(physical_target_qpc.as_u64()),
+                physical_not_before_qpc_ticks: physical_not_before_qpc.map(|ticks| ticks.as_u64()),
+                hold_floor_qpc_ticks: hold_floor_qpc.map(|ticks| ticks.as_u64()),
+                release_floor_qpc_ticks: release_floor_qpc.map(|ticks| ticks.as_u64()),
+                latest_down_start_qpc_ticks: latest_down_start_qpc.map(|ticks| ticks.as_u64()),
+                hold_floor_mask,
+                release_floor_mask,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
                 observation_qpc_ticks: Some(observation.observed_qpc.as_u64()),
@@ -285,7 +289,15 @@ mod tests {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(20),
-            physical_timing_window: physical_window(1_000, 1_005, 1_020, 1_020, Some(1_010), 1, 2),
+            timing_evidence: DownMissTimingEvidence::Physical(physical_window(
+                1_000,
+                1_005,
+                1_020,
+                1_020,
+                Some(1_010),
+                1,
+                2,
+            )),
             observed_qpc: QpcTicks::from_raw(1_021),
             up_mask: 0b0001,
             down_mask: 0b0001,
@@ -344,7 +356,15 @@ mod tests {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(20),
-            physical_timing_window: physical_window(1_000, 1_000, 1_000, 1_000, Some(1_010), 0, 0),
+            timing_evidence: DownMissTimingEvidence::Physical(physical_window(
+                1_000,
+                1_000,
+                1_000,
+                1_000,
+                Some(1_010),
+                0,
+                0,
+            )),
             observed_qpc: QpcTicks::from_raw(1_021),
             up_mask: 0,
             down_mask: 0b11,
@@ -384,7 +404,15 @@ mod tests {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
             wake_ticks: TimelineTicks::from_raw(20),
-            physical_timing_window: physical_window(1_000, 1_000, 1_000, 1_000, Some(1_010), 0, 0),
+            timing_evidence: DownMissTimingEvidence::Physical(physical_window(
+                1_000,
+                1_000,
+                1_000,
+                1_000,
+                Some(1_010),
+                0,
+                0,
+            )),
             observed_qpc: QpcTicks::from_raw(1_021),
             up_mask: 0,
             down_mask: 0b101,

@@ -25,7 +25,7 @@ use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
     DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
 };
-use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, PhysicalKey};
+use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, PhysicalKey, SendTransactionStatus};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -923,6 +923,181 @@ fn prepared_mixed_up_prefix_transport_failure_is_fail_closed() {
     ));
     assert_eq!(harness.resources.coordinator.cursor, 1);
     assert_eq!(harness.backend_active_mask(), 0);
+}
+
+#[test]
+fn prepared_no_catch_up_burst_matrix_is_exact_for_2_3_and_15_boundaries() {
+    for boundary_count in [2, 3, 15] {
+        let mut harness =
+            ProductionDispatchTestHarness::new_overdue_down_burst_for_test(boundary_count);
+        let calls = harness.configure_send_counter();
+        let mut stream = harness.build_prepared_stream_for_test();
+
+        for _ in 0..boundary_count {
+            assert!(matches!(
+                harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 50_000),
+                super::worker::DispatchStep::Dispatched
+            ));
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            harness.prepared_normal_backlog_count_for_test(),
+            boundary_count as u64
+        );
+        assert_eq!(harness.prepared_up_prefix_recovery_sends_for_test(), 0);
+        assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+        assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    }
+}
+
+#[test]
+fn prepared_transport_fault_matrix_is_fail_closed() {
+    for status in [
+        SendTransactionStatus::Complete,
+        SendTransactionStatus::ZeroProgress,
+        SendTransactionStatus::PartialProgress,
+        SendTransactionStatus::IntegrityLost,
+        SendTransactionStatus::ClockFailureBeforeSend,
+        SendTransactionStatus::ClockFailureAfterSend,
+    ] {
+        let mut harness = ProductionDispatchTestHarness::new_mixed();
+        harness.configure_prepared_transport_outcome_for_test(status);
+        harness.prepare_prepared_stream_for_test();
+
+        assert!(matches!(
+            harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+            super::worker::DispatchStep::Dispatched
+        ));
+        let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000);
+        if status == SendTransactionStatus::Complete {
+            assert!(matches!(step, super::worker::DispatchStep::Dispatched));
+            assert_eq!(harness.resources.coordinator.cursor, 3);
+        } else {
+            assert!(matches!(
+                step,
+                super::worker::DispatchStep::Terminate(_)
+                    | super::worker::DispatchStep::TerminateStatic(_)
+            ));
+            assert_eq!(harness.resources.coordinator.cursor, 1);
+        }
+        assert_eq!(harness.backend_active_mask(), 0);
+        assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    }
+}
+
+#[test]
+fn prepared_acceptance_counters_cover_backlog_prefix_and_sender_expiry() {
+    let mut backlog = ProductionDispatchTestHarness::new_mixed();
+    backlog.prepare_prepared_stream_for_test();
+    assert!(matches!(
+        backlog.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        backlog.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+
+    let mut sender_expiry = ProductionDispatchTestHarness::new_mixed_then_future_down();
+    sender_expiry.prepare_prepared_stream_for_test();
+    assert!(matches!(
+        sender_expiry.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(0),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        sender_expiry
+            .dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(20_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+
+    assert_eq!(backlog.prepared_normal_backlog_count_for_test(), 2);
+    assert_eq!(backlog.prepared_up_prefix_recovery_sends_for_test(), 1);
+    assert_eq!(backlog.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(sender_expiry.prepared_normal_backlog_count_for_test(), 0);
+    assert_eq!(
+        sender_expiry.prepared_up_prefix_recovery_sends_for_test(),
+        1
+    );
+    assert_eq!(
+        sender_expiry.prepared_normal_sender_expiry_count_for_test(),
+        1
+    );
+    assert_eq!(backlog.timeline_rebase_count_for_test(), 0);
+    assert_eq!(sender_expiry.timeline_rebase_count_for_test(), 0);
+}
+
+#[test]
+fn prepared_authorization_causality_is_future_backlog_future() {
+    let mut harness =
+        ProductionDispatchTestHarness::new_prepared_authorization_causality_sequence_for_test();
+    let packets = harness.configure_packet_capture();
+    harness.prepare_prepared_stream_for_test();
+    harness
+        .align_prepared_current_to_benchmark_margin_for_test(10_000)
+        .expect("future first prepared boundary");
+    assert!(matches!(
+        harness.wait_and_dispatch_prepared_current_for_test(),
+        Ok(super::worker::DispatchStep::Dispatched)
+    ));
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(50_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 1);
+    assert_eq!(harness.prepared_up_prefix_recovery_sends_for_test(), 0);
+
+    harness
+        .align_prepared_current_to_benchmark_margin_for_test(10_000)
+        .expect("future next prepared boundary");
+    assert!(matches!(
+        harness.wait_and_dispatch_prepared_current_for_test(),
+        Ok(super::worker::DispatchStep::Dispatched)
+    ));
+    assert_eq!(
+        *packets.lock().expect("causality packet capture"),
+        vec![
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b001),
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b100),
+        ]
+    );
+    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+}
+
+#[test]
+fn prepared_suspension_times_miss_preserves_cancellation_and_drops_down() {
+    let mut harness =
+        ProductionDispatchTestHarness::new_prepared_resumable_suspension_mixed_miss_for_test();
+    let packets = harness.configure_packet_capture();
+    harness.prepare_prepared_stream_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(0),
+        super::worker::DispatchStep::Dispatched
+    ));
+    let cancelled = harness
+        .suspend_live_input_for_test()
+        .expect("resumable suspension cancellation");
+    assert_eq!(cancelled, vec![0]);
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(
+        *packets.lock().expect("suspension packet capture"),
+        vec![
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b001),
+            sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0),
+        ]
+    );
+    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 1);
+    assert_eq!(harness.prepared_up_prefix_recovery_sends_for_test(), 1);
+    assert_eq!(harness.backend_active_mask(), 0);
+    assert_eq!(harness.backend_possibly_active_mask(), 0);
+    assert_eq!(harness.timeline_rebase_count_for_test(), 0);
 }
 
 #[test]

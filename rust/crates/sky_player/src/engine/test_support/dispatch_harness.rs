@@ -145,6 +145,72 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    pub fn new_prepared_resumable_suspension_mixed_miss_for_test() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared-suspension-down-a".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared-suspension-up-a".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x16].into(),
+                reason: "prepared-suspension-down-b".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 40_000,
+                scan_codes: vec![0x16].into(),
+                reason: "prepared-suspension-cleanup".into(),
+            },
+        ])
+    }
+
+    pub fn new_prepared_authorization_causality_sequence_for_test() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared-causality-first".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x16].into(),
+                reason: "prepared-causality-backlog".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: vec![0x17].into(),
+                reason: "prepared-causality-next-future".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 120_000,
+                scan_codes: vec![0x15, 0x16, 0x17].into(),
+                reason: "prepared-causality-cleanup".into(),
+            },
+        ])
+    }
+
     /// Build two independent Down boundaries five milliseconds apart.  The
     /// first boundary is used for a controlled late send; the second proves
     /// that its authored target remains unchanged.
@@ -386,6 +452,37 @@ impl ProductionDispatchTestHarness {
                 reason: "stall-cleanup".into(),
             },
         ])
+    }
+
+    /// Build an exact-size deterministic DownOnly burst for the active
+    /// no-catch-up matrix. Each Down owns a distinct physical key, so every
+    /// overdue boundary remains an independent prepared frame.
+    pub fn new_overdue_down_burst_for_test(boundary_count: usize) -> Self {
+        assert!((2..=15).contains(&boundary_count));
+        let mut actions = Vec::with_capacity(boundary_count + 1);
+        for (index, scan_code) in PHYSICAL_INSTRUMENT_SCAN_CODES
+            .iter()
+            .copied()
+            .take(boundary_count)
+            .enumerate()
+        {
+            actions.push(KeyActionInput {
+                source_action_index: index as u32,
+                kind: ActionKind::Down,
+                scheduled_us: (index as u64).saturating_mul(1_000),
+                scan_codes: vec![scan_code].into(),
+                reason: format!("prepared-overdue-down-{index}").into(),
+            });
+        }
+        let all_scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..boundary_count].to_vec();
+        actions.push(KeyActionInput {
+            source_action_index: boundary_count as u32,
+            kind: ActionKind::Up,
+            scheduled_us: (boundary_count as u64).saturating_mul(1_000),
+            scan_codes: all_scan_codes.into(),
+            reason: "prepared-overdue-cleanup".into(),
+        });
+        Self::create_harness(&actions)
     }
 
     /// A deferred release for key A shares an authored timestamp with an
@@ -1154,6 +1251,18 @@ impl ProductionDispatchTestHarness {
         self.local_metrics.missed_unobserved_backlog_boundaries
     }
 
+    pub fn prepared_up_prefix_recovery_sends_for_test(&self) -> u64 {
+        self.local_metrics.prepared_up_prefix_recovery_sends
+    }
+
+    pub fn prepared_normal_backlog_count_for_test(&self) -> u64 {
+        self.local_metrics.prepared_normal_backlog_boundaries
+    }
+
+    pub fn prepared_normal_sender_expiry_count_for_test(&self) -> u64 {
+        self.local_metrics.prepared_normal_sender_expirations
+    }
+
     pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
         publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
         (
@@ -1393,6 +1502,69 @@ impl ProductionDispatchTestHarness {
                     started_ticks: Some(now),
                     completed_ticks: Some(now),
                     timing_error: None,
+                },
+            }
+        });
+        calls
+    }
+
+    pub fn configure_prepared_transport_outcome_for_test(
+        &mut self,
+        status: SendTransactionStatus,
+    ) -> Arc<AtomicU64> {
+        let calls = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&calls);
+        let clock = self.resources.clock;
+        self.resources.backend.set_packet_emitter(move |packet| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let requested_mask = packet.up_mask | packet.down_mask;
+            let started_ticks = clock.now().ok();
+            let (confirmed_mask, first_inserted, attempts, completed_ticks, timing_error) =
+                match status {
+                    SendTransactionStatus::Complete => {
+                        (requested_mask, packet.event_count(), 1, started_ticks, None)
+                    }
+                    SendTransactionStatus::ZeroProgress => (0, 0, 1, started_ticks, None),
+                    SendTransactionStatus::PartialProgress => (
+                        packet.up_mask | (packet.down_mask & packet.down_mask.wrapping_sub(1)),
+                        1,
+                        1,
+                        started_ticks,
+                        None,
+                    ),
+                    SendTransactionStatus::IntegrityLost => (0, 1, 1, started_ticks, None),
+                    SendTransactionStatus::ClockFailureBeforeSend => (
+                        0,
+                        0,
+                        0,
+                        None,
+                        Some(sky_dispatch_win32::clock::QpcError::CounterUnavailable),
+                    ),
+                    SendTransactionStatus::ClockFailureAfterSend => (
+                        0,
+                        packet.event_count(),
+                        1,
+                        None,
+                        Some(sky_dispatch_win32::clock::QpcError::CounterUnavailable),
+                    ),
+                    SendTransactionStatus::DownExpiredBeforeSend => (0, 0, 0, None, None),
+                    SendTransactionStatus::PreparationRejected => (0, 0, 0, None, None),
+                };
+            SendTransactionOutcome {
+                status,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask,
+                    skipped_mask: 0,
+                    first_inserted,
+                    attempts,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks,
+                    completed_ticks,
+                    timing_error,
                 },
             }
         });

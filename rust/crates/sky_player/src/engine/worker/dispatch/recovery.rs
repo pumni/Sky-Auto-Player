@@ -1,7 +1,9 @@
 use super::super::super::{PlaybackClockState, QpcTicks};
 use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime, WorkerTimingState};
-use super::observation::{DispatchObservation, DownMissKind, DownMissObservation};
+use super::observation::{
+    DispatchObservation, DownMissKind, DownMissObservation, DownMissTimingEvidence,
+};
 use super::{
     AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalCommit, RecoveryDescriptor,
 };
@@ -38,7 +40,7 @@ pub(super) fn queue_down_miss_observation(
     local_metrics: &mut WorkerMetricsLocal,
     observer: Option<&PendingObservationQueue>,
     wake_ticks: sky_dispatch_core::time::TimelineTicks,
-    physical_timing_window: PhysicalTimingWindow,
+    timing_evidence: DownMissTimingEvidence,
     observed_qpc: QpcTicks,
     reason: DownMissReason,
 ) {
@@ -52,7 +54,7 @@ pub(super) fn queue_down_miss_observation(
             authored_ticks: view.authored_batch_scheduled_ticks,
             effective_deadline_ticks: view.batch_scheduled_ticks,
             wake_ticks,
-            physical_timing_window,
+            timing_evidence,
             observed_qpc,
             up_mask: view.packet_masks.up_mask,
             down_mask: view.packet_masks.down_mask,
@@ -146,7 +148,7 @@ pub(crate) fn classify_missed_down_boundary(
         local_metrics,
         observer,
         wake_ticks,
-        physical_timing_window,
+        DownMissTimingEvidence::Physical(physical_timing_window),
         observed_qpc,
         reason,
     );
@@ -159,6 +161,52 @@ pub(crate) fn classify_missed_down_boundary(
         observed_qpc,
         reason,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn classify_normal_prepared_miss(
+    view: &AuthoredBatchView,
+    local_metrics: &mut WorkerMetricsLocal,
+    observer: Option<&PendingObservationQueue>,
+    wake_ticks: sky_dispatch_core::time::TimelineTicks,
+    physical_target_qpc: QpcTicks,
+    sender_cutoff_qpc: Option<QpcTicks>,
+    observed_qpc: QpcTicks,
+    reason: DownMissReason,
+) {
+    queue_down_miss_observation(
+        view,
+        local_metrics,
+        observer,
+        wake_ticks,
+        DownMissTimingEvidence::Prepared {
+            physical_target_qpc,
+            sender_cutoff_qpc,
+        },
+        observed_qpc,
+        reason,
+    );
+    record_missed_down_classification(
+        local_metrics,
+        view.batch_source_action_index,
+        view.packet_masks.down_mask,
+        physical_target_qpc,
+        observed_qpc,
+        reason,
+    );
+    match reason {
+        DownMissReason::UnobservedBacklog => {
+            local_metrics.prepared_normal_backlog_boundaries = local_metrics
+                .prepared_normal_backlog_boundaries
+                .saturating_add(1);
+        }
+        DownMissReason::DownExpiredBeforeSend => {
+            local_metrics.prepared_normal_sender_expirations = local_metrics
+                .prepared_normal_sender_expirations
+                .saturating_add(1);
+        }
+        DownMissReason::PhysicalWindowExpired => {}
+    }
 }
 
 pub(crate) fn record_physical_floor_delays(
@@ -179,6 +227,47 @@ pub(crate) fn record_recovery_hold_floor_delay(
         window,
         window.hold_floor_mask & recovered_up_mask,
     );
+}
+
+/// Emit only the immutable, bounded Up prefix required to reconcile a missed
+/// prepared Down. This helper intentionally knows nothing about dynamic
+/// physical timing policy; callers own any policy/guard observation around
+/// the transport result.
+pub(crate) fn emit_prepared_up_prefix_if_needed(
+    view: &AuthoredBatchView,
+    backend: &mut TrackedKeyState,
+    observed_qpc: QpcTicks,
+) -> Result<sky_dispatch_win32::input::SendTransactionOutcome, &'static str> {
+    #[cfg(not(any(test, feature = "test-support")))]
+    let _ = observed_qpc;
+    let up_mask = view.packet_masks.up_mask;
+    let RecoveryDescriptor::UpPrefix {
+        up_len,
+        up_mask: descriptor_up_mask,
+    } = view.recovery
+    else {
+        return Err("missing_prepared_up_recovery_descriptor");
+    };
+    if descriptor_up_mask != up_mask || up_len != up_mask.count_ones() as u8 {
+        return Err("invalid_prepared_up_recovery_descriptor");
+    }
+    let Some(prepared_up_packet) = view.prepared_packet.up_recovery_view() else {
+        return Err("missing_prepared_up_recovery_view");
+    };
+    if prepared_up_packet.packet() != sky_dispatch_win32::input::PhysicalPacket::new(up_mask, 0)
+        || prepared_up_packet.packet().event_count() != up_len
+    {
+        return Err("invalid_prepared_up_recovery_view");
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    let result = backend.send_prepared_physical_packet_view_with_start_and_cutoff(
+        prepared_up_packet,
+        observed_qpc,
+        None,
+    );
+    #[cfg(not(any(test, feature = "test-support")))]
+    let result = backend.send_prepared_physical_packet_view_with_cutoff(prepared_up_packet, None);
+    Ok(result)
 }
 
 fn record_hold_floor_delay(
@@ -246,6 +335,155 @@ fn record_release_floor_infeasibility(
     }
 }
 
+pub(crate) fn commit_missed_down_boundary(
+    view: &AuthoredBatchView,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    clock_state: &mut PlaybackClockState,
+    runtime: &WorkerRuntime,
+    started_qpc: QpcTicks,
+    explicitly_cancelled_by_suspension: &[GenerationId],
+) -> DispatchStep {
+    let started_effective = match clock_state
+        .get_elapsed_allow_pre_epoch(started_qpc, runtime.allow_pre_epoch_startup_dispatch)
+    {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return DispatchStep::Terminate(format!(
+                "playback clock failure during missed Down recovery: {error}"
+            ));
+        }
+    };
+    let up_mask = view.packet_masks.up_mask;
+    let commit_result = match &view.commit {
+        PhysicalCommit::Authored(commit) => coordinator
+            .commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
+                commit,
+                up_mask,
+                view.packet_masks.down_mask,
+                started_effective,
+                explicitly_cancelled_by_suspension,
+            ),
+        PhysicalCommit::Coalesced {
+            authored,
+            release_mask,
+            due_ticks,
+        } => {
+            if started_effective < *due_ticks {
+                return DispatchStep::TerminateStatic(
+                    "coalesced missed Down recovery started before Up due boundary",
+                );
+            }
+            coordinator
+                .commit_pending_release_success(*release_mask, started_effective)
+                .and_then(|()| {
+                    coordinator
+                        .commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
+                            authored,
+                            authored.frame.immediate_up_mask,
+                            authored.frame.down_mask,
+                            started_effective,
+                            explicitly_cancelled_by_suspension,
+                        )
+                })
+        }
+        PhysicalCommit::PendingRelease { .. } => {
+            return DispatchStep::TerminateStatic(
+                "pending release cannot carry a missed authored Down",
+            );
+        }
+    };
+    if let Err(error) = commit_result {
+        return DispatchStep::Terminate(format!("coordinator missed Down commit failure: {error}"));
+    }
+    DispatchStep::Dispatched
+}
+
+/// Resolve a prepared-normal deadline miss without entering dynamic timing
+/// window or physical guard policy. Only the bounded immutable Up prefix and
+/// the shared frozen deadline-miss commit are reused here.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn resolve_normal_prepared_deadline_miss(
+    view: &AuthoredBatchView,
+    runtime: &mut WorkerRuntime,
+    local_metrics: &mut WorkerMetricsLocal,
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    clock_state: &mut PlaybackClockState,
+    effective_now_ticks: sky_dispatch_core::time::TimelineTicks,
+    physical_target_qpc: QpcTicks,
+    sender_cutoff_qpc: Option<QpcTicks>,
+    observed_qpc: QpcTicks,
+    reason: DownMissReason,
+    explicitly_cancelled_by_suspension: &[GenerationId],
+    observer: Option<&PendingObservationQueue>,
+) -> DispatchStep {
+    classify_normal_prepared_miss(
+        view,
+        local_metrics,
+        observer,
+        effective_now_ticks,
+        physical_target_qpc,
+        sender_cutoff_qpc,
+        observed_qpc,
+        reason,
+    );
+
+    let up_mask = view.packet_masks.up_mask;
+    let started_qpc = if up_mask == 0 {
+        observed_qpc
+    } else {
+        let result = match emit_prepared_up_prefix_if_needed(view, backend, observed_qpc) {
+            Ok(result) => result,
+            Err(error) => return DispatchStep::TerminateStatic(error),
+        };
+        if backend.timing_error.take().is_some() {
+            return DispatchStep::TerminateStatic("QPC failure during prepared Down Up recovery");
+        }
+        if !result.is_success()
+            || result.evidence.confirmed_mask != up_mask
+            || result.evidence.skipped_mask != 0
+        {
+            return DispatchStep::TerminateStatic(
+                "prepared Down Up-prefix recovery transport failure",
+            );
+        }
+        let Some(started_qpc) = result.evidence.started_ticks else {
+            return DispatchStep::TerminateStatic("prepared Down safety Up missing start boundary");
+        };
+        let Some(completed_qpc) = result.evidence.completed_ticks else {
+            return DispatchStep::TerminateStatic(
+                "prepared Down Up-prefix recovery missing completion boundary",
+            );
+        };
+        runtime.production_forensics.observe_recovery_up(
+            up_mask,
+            view.batch_source_action_index,
+            physical_target_qpc,
+            started_qpc,
+            completed_qpc,
+            true,
+            local_metrics,
+        );
+        local_metrics.prepared_up_prefix_recovery_sends = local_metrics
+            .prepared_up_prefix_recovery_sends
+            .saturating_add(1);
+        started_qpc
+    };
+
+    let step = commit_missed_down_boundary(
+        view,
+        coordinator,
+        clock_state,
+        runtime,
+        started_qpc,
+        explicitly_cancelled_by_suspension,
+    );
+    if matches!(step, DispatchStep::Dispatched) {
+        backend.last_error = None;
+    }
+    step
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn recover_missed_down_boundary(
     view: &AuthoredBatchView,
@@ -285,33 +523,10 @@ pub(super) fn recover_missed_down_boundary(
     let (started_qpc, _completed_qpc) = if up_mask == 0 {
         (observed_qpc, observed_qpc)
     } else {
-        let RecoveryDescriptor::UpPrefix {
-            up_len,
-            up_mask: descriptor_up_mask,
-        } = view.recovery
-        else {
-            return DispatchStep::TerminateStatic("missing_prepared_up_recovery_descriptor");
+        let result = match emit_prepared_up_prefix_if_needed(view, backend, observed_qpc) {
+            Ok(result) => result,
+            Err(error) => return DispatchStep::TerminateStatic(error),
         };
-        if descriptor_up_mask != up_mask || up_len != up_mask.count_ones() as u8 {
-            return DispatchStep::TerminateStatic("invalid_prepared_up_recovery_descriptor");
-        }
-        let Some(prepared_up_packet) = view.prepared_packet.up_recovery_view() else {
-            return DispatchStep::TerminateStatic("missing_prepared_up_recovery_view");
-        };
-        if prepared_up_packet.packet() != sky_dispatch_win32::input::PhysicalPacket::new(up_mask, 0)
-            || prepared_up_packet.packet().event_count() != up_len
-        {
-            return DispatchStep::TerminateStatic("invalid_prepared_up_recovery_view");
-        };
-        #[cfg(any(test, feature = "test-support"))]
-        let result = backend.send_prepared_physical_packet_view_with_start_and_cutoff(
-            prepared_up_packet,
-            observed_qpc,
-            None,
-        );
-        #[cfg(not(any(test, feature = "test-support")))]
-        let result =
-            backend.send_prepared_physical_packet_view_with_cutoff(prepared_up_packet, None);
         if backend.timing_error.take().is_some() {
             if result.evidence.attempts != 0
                 && let Some(guard) = runtime.physical_timing_guard.as_mut()
@@ -370,56 +585,16 @@ pub(super) fn recover_missed_down_boundary(
         record_recovery_hold_floor_delay(local_metrics, physical_timing_window, up_mask);
         (started, completed)
     };
-    let started_effective = match clock_state
-        .get_elapsed_allow_pre_epoch(started_qpc, runtime.allow_pre_epoch_startup_dispatch)
-    {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return DispatchStep::Terminate(format!(
-                "playback clock failure during missed Down recovery: {error}"
-            ));
-        }
-    };
-    let commit_result = match &view.commit {
-        PhysicalCommit::Authored(commit) => coordinator
-            .commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
-                commit,
-                up_mask,
-                view.packet_masks.down_mask,
-                started_effective,
-                explicitly_cancelled_by_suspension,
-            ),
-        PhysicalCommit::Coalesced {
-            authored,
-            release_mask,
-            due_ticks,
-        } => {
-            if started_effective < *due_ticks {
-                return DispatchStep::TerminateStatic(
-                    "coalesced missed Down recovery started before Up due boundary",
-                );
-            }
-            coordinator
-                .commit_pending_release_success(*release_mask, started_effective)
-                .and_then(|()| {
-                    coordinator
-                        .commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
-                            authored,
-                            authored.frame.immediate_up_mask,
-                            authored.frame.down_mask,
-                            started_effective,
-                            explicitly_cancelled_by_suspension,
-                        )
-                })
-        }
-        PhysicalCommit::PendingRelease { .. } => {
-            return DispatchStep::TerminateStatic(
-                "pending release cannot carry a missed authored Down",
-            );
-        }
-    };
-    if let Err(error) = commit_result {
-        return DispatchStep::Terminate(format!("coordinator missed Down commit failure: {error}"));
+    let commit_step = commit_missed_down_boundary(
+        view,
+        coordinator,
+        clock_state,
+        runtime,
+        started_qpc,
+        explicitly_cancelled_by_suspension,
+    );
+    if !matches!(commit_step, DispatchStep::Dispatched) {
+        return commit_step;
     }
 
     backend.last_error = None;

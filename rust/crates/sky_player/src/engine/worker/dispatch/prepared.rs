@@ -9,10 +9,9 @@ use super::super::{
     handle_final_focus_loss, record_final_gate_rejection, record_sendinput_pre_call_lateness,
 };
 use super::authored::record_prepared_normal_send_outcome;
-use super::recovery::{DownMissReason, recover_missed_down_boundary};
+use super::recovery::DownMissReason;
 use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalBoundaryStamp};
 use crate::engine::shared::{SharedProgressClock, SystemPowerState};
-use crate::engine::worker::physical_timing_guard::PhysicalTimingWindow;
 use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionOutcome;
@@ -62,22 +61,6 @@ fn prepared_down_sender_cutoff(
             .checked_add_duration(slack)
             .map(Some)
             .map_err(|_| "prepared Down sender cutoff arithmetic overflow"),
-    }
-}
-
-#[inline]
-fn normal_prepared_timing_window(
-    physical_target_qpc: QpcTicks,
-    sender_cutoff_qpc: Option<QpcTicks>,
-) -> PhysicalTimingWindow {
-    PhysicalTimingWindow {
-        authored_target_qpc: physical_target_qpc,
-        musical_up_not_before_qpc: physical_target_qpc,
-        down_not_before_qpc: physical_target_qpc,
-        packet_not_before_qpc: physical_target_qpc,
-        latest_down_start_qpc: sender_cutoff_qpc,
-        hold_floor_mask: 0,
-        release_floor_mask: 0,
     }
 }
 
@@ -334,19 +317,18 @@ pub(crate) fn dispatch_prepared_normal_frame(
         }
         PreparedNormalPrecisionResult::UnobservedBacklog => {
             runtime.invalidate_prepared_down_authorization();
-            return recover_missed_down_boundary(
+            return super::recovery::resolve_normal_prepared_deadline_miss(
                 view,
-                config,
                 runtime,
                 local_metrics,
                 &mut resources.backend,
                 &mut resources.coordinator,
                 &mut resources.playback,
-                normal_prepared_timing_window(physical_target_qpc, sender_cutoff_qpc),
-                now_ticks,
                 effective_now_ticks,
+                physical_target_qpc,
+                sender_cutoff_qpc,
+                now_ticks,
                 DownMissReason::UnobservedBacklog,
-                false,
                 explicitly_cancelled_by_suspension,
                 observer,
             );
@@ -391,9 +373,7 @@ pub(super) fn record_down_send_result(
     clock_state: &mut super::super::PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
-    physical_timing_window: Option<PhysicalTimingWindow>,
-    normal_prepared_sender_cutoff: bool,
-    normal_sender_cutoff_qpc: Option<QpcTicks>,
+    physical_timing_window: super::super::physical_timing_guard::PhysicalTimingWindow,
     target_crossing_qpc: Option<QpcTicks>,
     trace_kind: u8,
     prepared_final_policy_qpc: Option<QpcTicks>,
@@ -435,24 +415,14 @@ pub(super) fn record_down_send_result(
         result.status,
         sky_dispatch_win32::input::SendTransactionStatus::DownExpiredBeforeSend
     ) && view.packet_masks.down_mask != 0
-        && (timing.strict_timing || normal_prepared_sender_cutoff)
+        && timing.strict_timing
     {
         let Some(observed_qpc) = result.evidence.started_ticks else {
             return DispatchStep::TerminateStatic(
                 "DownExpiredBeforeSend missing authoritative start boundary",
             );
         };
-        let Some(physical_timing_window) = physical_timing_window.or_else(|| {
-            normal_prepared_sender_cutoff.then_some(normal_prepared_timing_window(
-                physical_target_qpc,
-                normal_sender_cutoff_qpc,
-            ))
-        }) else {
-            return DispatchStep::TerminateStatic(
-                "strict Down recovery is missing physical timing evidence",
-            );
-        };
-        return recover_missed_down_boundary(
+        return super::recovery::recover_missed_down_boundary(
             view,
             config,
             runtime,
@@ -499,13 +469,6 @@ pub(super) fn record_down_send_result(
     let final_policy_qpc = prepared_final_policy_qpc
         .or(result_started_ticks)
         .unwrap_or(physical_target_qpc);
-    let physical_timing_window = physical_timing_window.unwrap_or_else(|| {
-        if normal_prepared_sender_cutoff {
-            normal_prepared_timing_window(physical_target_qpc, normal_sender_cutoff_qpc)
-        } else {
-            PhysicalTimingWindow::authored_only(physical_target_qpc)
-        }
-    });
     super::authored::finalize_down_send_outcome(
         view,
         config,
@@ -552,11 +515,26 @@ mod tests {
     #[test]
     fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
         let source = include_str!("prepared.rs");
+        let miss_resolver = include_str!("recovery.rs")
+            .split("pub(super) fn resolve_normal_prepared_deadline_miss")
+            .nth(1)
+            .expect("normal prepared miss resolver")
+            .split(
+                "#[allow(clippy::too_many_arguments)]\npub(super) fn recover_missed_down_boundary",
+            )
+            .next()
+            .expect("normal prepared miss resolver body");
+        for forbidden in ["PhysicalTimingWindow", "physical_timing_guard"] {
+            assert!(
+                !miss_resolver.contains(forbidden),
+                "normal prepared miss resolver contains dynamic timing policy {forbidden}"
+            );
+        }
         let outer = source
             .split("pub(crate) fn dispatch_prepared_normal_frame")
             .nth(1)
             .expect("normal precision helper")
-            .split("#[cfg(test)]")
+            .split("#[allow(clippy::too_many_arguments)]\npub(super) fn record_down_send_result")
             .next()
             .expect("normal precision helper body");
         let helper = source
@@ -614,8 +592,12 @@ mod tests {
             precision_call < post_send,
             "normal precision suffix must precede post-send work"
         );
-        assert!(!outer[..precision_call].contains("PhysicalTimingWindow"));
-        assert!(!outer[..precision_call].contains("physical_timing_guard"));
+        for forbidden in ["PhysicalTimingWindow", "physical_timing_guard"] {
+            assert!(
+                !outer.contains(forbidden),
+                "normal prepared dispatch/miss resolver contains dynamic timing policy {forbidden}"
+            );
+        }
         for forbidden in [
             "plan_next_dispatch_projected",
             "prepare_current_authored_packet",
