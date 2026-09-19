@@ -52,6 +52,14 @@ pub(crate) struct PhysicalBoundaryStamp {
     pub(crate) physical_target_qpc: QpcTicks,
 }
 
+/// Prepared-normal future observation tied to one exact physical boundary and
+/// the target generation that was verified before waiting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedDownAuthorization {
+    pub(crate) boundary: PhysicalBoundaryStamp,
+    pub(crate) target_generation: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum DownBoundaryState {
     #[default]
