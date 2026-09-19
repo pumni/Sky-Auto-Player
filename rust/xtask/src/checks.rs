@@ -468,16 +468,19 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
 
     let acceptance_path = root.join("scripts/ci_v4_release_latest_guard.ps1");
     let acceptance = fs::read_to_string(&acceptance_path)?;
+    let latest_policy = fs::read_to_string(root.join("scripts/v4_release_latest_policy.ps1"))?;
+    let acceptance_contract = format!("{acceptance}\n{latest_policy}");
     for marker in [
         "V4 GitHub Latest policy guard",
+        "v4_release_latest_policy.ps1",
         "$canonicalRepository = \"pumni/Sky-Auto-Player\"",
         "releases/latest",
         "make_latest=$(if ($Channel -eq \"stable\") { \"true\" } else { \"false\" })",
         "read_only=true",
         "ExpectedSourceSha",
-        "github-latest-before.json",
+        "Assert-V4GitHubLatestPolicy",
     ] {
-        if !acceptance.contains(marker) {
+        if !acceptance_contract.contains(marker) {
             return Err(format!(
                 "v4 release contract acceptance is missing its read-only marker: {marker}"
             )
@@ -490,7 +493,7 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
         "gh release delete",
         "softprops/action-gh-release",
     ] {
-        if acceptance.contains(forbidden) {
+        if acceptance_contract.contains(forbidden) {
             return Err(format!(
                 "read-only v4 release contract acceptance contains a release mutation: {forbidden}"
             )
@@ -503,22 +506,12 @@ fn release_metadata_contract(root: &Path) -> Result<()> {
     for marker in [
         "$productionAuthenticodeMode = \"unsigned-zero-budget\"",
         "governed unsigned-zero-budget Authenticode evidence",
-        "[ValidateSet(\"stable\", \"beta\")]",
-        "$canonicalRepository = \"pumni/Sky-Auto-Player\"",
-        "$QualificationEvidence",
-        "release-metadata validate --channel $Channel",
-        "releases/tags/v$version",
-        "published_at",
+        "$ValidateEvidence",
+        "Assert-QualificationEvidence",
         "installer_sha256",
         "updater_signature_sha256",
-        "Get-PublishedAssetSha256",
-        "Assert-PublishedAsset",
-        "validate-monotonic",
-        "strictly monotonic",
         "Invoke-PromotionSelfTest",
         "same-name/different-bytes",
-        "Copy-Item -LiteralPath $Metadata",
-        "never publishes or mutates a GitHub release",
     ] {
         if !promotion.contains(marker) {
             return Err(format!(
@@ -657,7 +650,8 @@ fn workflow_step_blocks(source: &str) -> Vec<(String, String)> {
 }
 
 fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
-    const MINT_STEP: &str = "Mint release-metadata GitHub App token";
+    const MINT_STEP: &str = "Mint release-metadata GitHub App token before publication";
+    const PROBE_STEP: &str = "Probe release-metadata App access before publication";
     const PROMOTE_STEP: &str = "Promote release metadata only after immutable publication";
     const APP_TOKEN_OUTPUT: &str = "steps.metadata-app-token.outputs.token";
     const APP_PRIVATE_KEY: &str = "secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY";
@@ -673,6 +667,11 @@ fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
         .find(|(name, _)| name == PROMOTE_STEP)
         .map(|(_, block)| block.as_str())
         .ok_or("v4 release workflow is missing the metadata promotion step")?;
+    let probe = steps
+        .iter()
+        .find(|(name, _)| name == PROBE_STEP)
+        .map(|(_, block)| block.as_str())
+        .ok_or("v4 release workflow is missing the metadata App access probe")?;
 
     for marker in [
         "id: metadata-app-token",
@@ -700,13 +699,19 @@ fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
             "metadata App private key must occur exactly once in the release workflow".into(),
         );
     }
-    if workflow.matches(APP_TOKEN_OUTPUT).count() != 1 {
+    if workflow.matches(APP_TOKEN_OUTPUT).count() != 2 {
         return Err(
-            "metadata App installation token must be used by exactly one workflow step".into(),
+            "metadata App installation token must be used by exactly the probe and promotion steps"
+                .into(),
         );
     }
-    if !promote.contains(APP_TOKEN_OUTPUT) {
-        return Err("only PromoteMetadata may consume the metadata App token".into());
+    if !promote.contains(APP_TOKEN_OUTPUT) || !probe.contains(APP_TOKEN_OUTPUT) {
+        return Err(
+            "metadata App token must be consumed by the read-only probe and PromoteMetadata".into(),
+        );
+    }
+    if probe.contains("GH_TOKEN: ${{ github.token }}") {
+        return Err("metadata App access probe must not use the repository GITHUB_TOKEN".into());
     }
     if promote.contains("GH_TOKEN: ${{ github.token }}") {
         return Err("PromoteMetadata must not use the repository GITHUB_TOKEN".into());
@@ -718,7 +723,7 @@ fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
                 format!("metadata App private key escaped the token-mint action: {name}").into(),
             );
         }
-        if name != PROMOTE_STEP && block.contains(APP_TOKEN_OUTPUT) {
+        if name != PROBE_STEP && name != PROMOTE_STEP && block.contains(APP_TOKEN_OUTPUT) {
             return Err(
                 format!("metadata App token was used outside PromoteMetadata: {name}").into(),
             );
@@ -744,13 +749,24 @@ fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
     }
 
     let mint_position = workflow
-        .find("- name: Mint release-metadata GitHub App token")
+        .find("- name: Mint release-metadata GitHub App token before publication")
         .ok_or("metadata App token mint step position is unavailable")?;
+    let probe_position = workflow
+        .find("- name: Probe release-metadata App access before publication")
+        .ok_or("metadata App access probe position is unavailable")?;
+    let publish_position = workflow
+        .find("- name: Publish the qualified candidate immutably")
+        .ok_or("publication step position is unavailable")?;
     let promote_position = workflow
         .find("- name: Promote release metadata only after immutable publication")
         .ok_or("metadata promotion step position is unavailable")?;
-    if mint_position >= promote_position {
-        return Err("metadata App token must be minted immediately before promotion".into());
+    if mint_position >= probe_position
+        || probe_position >= publish_position
+        || publish_position >= promote_position
+    {
+        return Err(
+            "metadata App token must be minted and probed before immutable publication".into(),
+        );
     }
 
     Ok(())
@@ -1010,10 +1026,12 @@ fn v4_release_pipeline_contract_source(
         "actions/upload-artifact@",
         "--source-digest $env:GITHUB_SHA",
         "Build and qualify the single production candidate",
+        "concurrency:",
+        "group: v4-release-control-plane",
+        "Mint release-metadata GitHub App token before publication",
+        "Probe release-metadata App access before publication",
+        "probe_v4_metadata_app_access.ps1",
         "Publish the qualified candidate immutably",
-        "Snapshot GitHub Latest before publication",
-        "Verify GitHub Latest channel policy before metadata promotion",
-        "scripts/ci_v4_release_latest_guard.ps1",
         "PromoteMetadata",
         "FinalVerify",
     ] {
@@ -1076,54 +1094,46 @@ fn v4_release_pipeline_contract_source(
     }
     validate_metadata_app_token_scope(&workflow)?;
 
-    let capture_latest_step = workflow
-        .find("- name: Snapshot GitHub Latest before publication")
-        .ok_or("v4 release workflow is missing the pre-publication Latest snapshot")?;
     let publish_step = workflow
         .find("- name: Publish the qualified candidate immutably")
         .ok_or("v4 release workflow is missing the publication step")?;
-    let latest_policy_step = workflow
-        .find("- name: Verify GitHub Latest channel policy before metadata promotion")
-        .ok_or("v4 release workflow is missing the post-publication Latest policy guard")?;
     let metadata_token_step = workflow
-        .find("- name: Mint release-metadata GitHub App token")
+        .find("- name: Mint release-metadata GitHub App token before publication")
         .ok_or("v4 release workflow is missing the metadata App token step")?;
-    if capture_latest_step >= publish_step
-        || publish_step >= latest_policy_step
-        || latest_policy_step >= metadata_token_step
+    let probe_step = workflow
+        .find("- name: Probe release-metadata App access before publication")
+        .ok_or("v4 release workflow is missing the metadata App access probe")?;
+    if metadata_token_step >= probe_step || probe_step >= publish_step {
+        return Err(
+            "metadata App mint and read-only probe must precede immutable publication".into(),
+        );
+    }
+    let probe_end = workflow[probe_step..]
+        .find("\n      - name:")
+        .map_or(workflow.len(), |relative| probe_step + relative);
+    let probe_block = &workflow[probe_step..probe_end];
+    if !probe_block.contains("GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}")
+        || probe_block.contains("GH_TOKEN: ${{ github.token }}")
+        || !probe_block.contains("probe_v4_metadata_app_access.ps1")
     {
         return Err(
-            "GitHub Latest capture and policy guard must surround PublishRelease before the metadata App token"
+            "metadata App access probe must be read-only and use only the short-lived App token"
                 .into(),
         );
     }
-    let capture_latest_end = workflow[capture_latest_step..]
-        .find("\n      - name:")
-        .map_or(workflow.len(), |relative| capture_latest_step + relative);
-    let capture_latest_block = &workflow[capture_latest_step..capture_latest_end];
-    if !capture_latest_block.contains("GH_TOKEN: ${{ github.token }}")
-        || !capture_latest_block.contains("scripts/ci_v4_release_latest_guard.ps1")
-        || !capture_latest_block.contains("-Mode Capture")
-        || !capture_latest_block.contains("-StateRoot")
-    {
-        return Err(
-            "pre-publication Latest snapshot must be read-only and use the isolated state root"
-                .into(),
-        );
-    }
-    let latest_policy_end = workflow[latest_policy_step..]
-        .find("\n      - name:")
-        .map_or(workflow.len(), |relative| latest_policy_step + relative);
-    let latest_policy_block = &workflow[latest_policy_step..latest_policy_end];
-    if !latest_policy_block.contains("GH_TOKEN: ${{ github.token }}")
-        || !latest_policy_block.contains("scripts/ci_v4_release_latest_guard.ps1")
-        || !latest_policy_block.contains("-Mode Verify")
-        || !latest_policy_block.contains("-ExpectedSourceSha")
-    {
-        return Err(
-            "post-publication Latest policy guard must be read-only and verify exact source identity"
-                .into(),
-        );
+    for forbidden in [
+        "Snapshot GitHub Latest before publication",
+        "Verify GitHub Latest channel policy before metadata promotion",
+        "-Mode Capture",
+        "-Mode Verify",
+        "release-state.json",
+    ] {
+        if workflow.contains(forbidden) {
+            return Err(format!(
+                "production workflow retains retired Latest/state handoff: {forbidden}"
+            )
+            .into());
+        }
     }
 
     if pipeline
@@ -1156,7 +1166,11 @@ fn v4_release_pipeline_contract_source(
         "verify-tauri-bundle",
         "current-user",
         "active-playback-install-rejected",
-        "ci_v4_release_latest_guard.ps1",
+        "v4_release_latest_policy.ps1",
+        "Get-RemoteLatestRelease",
+        "Assert-V4GitHubLatestPolicy",
+        "Invoke-PrePublicationMetadataQualification",
+        "Assert-RawMetadataRetryConfiguration",
         "promote_v4_metadata.ps1",
         "release-metadata",
         "published_at",
@@ -1170,11 +1184,16 @@ fn v4_release_pipeline_contract_source(
         "branch = \"release-metadata\"",
         "validate-monotonic",
         "Write-RepositoryContentFile",
-        "Get-PublicMetadataDocument",
+        "New-ExpectedV4Metadata",
+        "Assert-ExactFileBytes",
+        "Assert-ExactPublishedPublicAssetRecords",
+        "Assert-RawMetadataConverges",
+        "RawMetadataRetryBudgetSeconds",
         "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json",
         "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json",
         "AllowAutoRedirect",
         "Headers.Authorization",
+        "ReadAsByteArrayAsync",
         "GITHUB_REPOSITORY",
         "Invoke-GitHubApi",
         "v4_release_asset_upload.ps1",
@@ -1226,6 +1245,12 @@ fn v4_release_pipeline_contract_source(
             "ValidateRepository must not call the administration-only immutable-releases endpoint"
                 .into(),
         );
+    }
+    if pipeline.contains("repo\", \"clone") || pipeline.contains("release-metadata checkout") {
+        return Err("PromoteMetadata must not clone or checkout release-metadata".into());
+    }
+    if pipeline.contains("release-state.json") {
+        return Err("production release pipeline must not depend on release-state.json".into());
     }
     for marker in [
         "PublishRelease",
@@ -1311,7 +1336,7 @@ fn v4_draft_rehearsal_contract_source(
     for marker in [
         "name: V4 Controlled Same-Repository Draft Rehearsal",
         "workflow_dispatch:",
-        "group: v4-release-${{ inputs.source_sha }}",
+        "group: v4-release-control-plane",
         "contents: read",
         "contents: write",
         "id-token: write",
@@ -2124,6 +2149,22 @@ const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/rehearse-v4.yml",
 ];
 
+fn validate_active_github_hosted_ubuntu_labels(source: &str) -> Result<()> {
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("runs-on:") || !trimmed.contains("ubuntu-") {
+            continue;
+        }
+        if !trimmed.contains("ubuntu-latest") {
+            return Err(format!(
+                "active GitHub-hosted Linux job must use runs-on: ubuntu-latest: {trimmed}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn ci_control_plane_contract(root: &Path) -> Result<()> {
     let workflows_root = root.join(".github/workflows");
     let mut observed = BTreeSet::new();
@@ -2157,6 +2198,11 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
             "active CI workflow set is not locked: observed={observed:?}, expected={expected:?}"
         )
         .into());
+    }
+    for relative in ACTIVE_CI_WORKFLOW_FILES {
+        let source = fs::read_to_string(root.join(relative))?;
+        validate_active_github_hosted_ubuntu_labels(&source)
+            .map_err(|error| format!("{relative}: {error}"))?;
     }
 
     let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?;
@@ -2390,7 +2436,7 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "name: Desktop web and browser validation",
         "needs: changes",
         "if: needs.changes.outputs.desktop_required == 'true'",
-        "runs-on: ubuntu-24.04",
+        "runs-on: ubuntu-latest",
         "bun-version: 1.4.0",
         "bun install --frozen-lockfile",
         "bun run check",
@@ -4494,7 +4540,8 @@ releases/latest
 make_latest=$(if ($Channel -eq "stable") { "true" } else { "false" })
 read_only=true
 ExpectedSourceSha
-github-latest-before.json
+v4_release_latest_policy.ps1
+Assert-V4GitHubLatestPolicy
 "#;
         assert!(acceptance.contains("GitHub Latest policy guard"));
         assert!(acceptance.contains("releases/latest"));
@@ -4544,6 +4591,23 @@ github-latest-before.json
         )
         .expect_err("legacy authority marker must be rejected in release workflow surfaces");
         assert!(workflow_error.to_string().contains("rehearse-v4.yml"));
+    }
+
+    #[test]
+    fn active_github_hosted_ubuntu_contract_accepts_latest() {
+        validate_active_github_hosted_ubuntu_labels(
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n",
+        )
+        .expect("active GitHub-hosted Ubuntu jobs should use ubuntu-latest");
+    }
+
+    #[test]
+    fn active_github_hosted_ubuntu_contract_rejects_numbered_labels() {
+        let error = validate_active_github_hosted_ubuntu_labels(
+            "jobs:\n  build:\n    runs-on: ubuntu-24.04\n",
+        )
+        .expect_err("numbered GitHub-hosted Ubuntu labels must be rejected");
+        assert!(error.to_string().contains("ubuntu-latest"));
     }
 
     #[test]
@@ -4665,6 +4729,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: v4-release-control-plane
 jobs:
   release:
     permissions:
@@ -4688,18 +4754,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Build and qualify the single production candidate
-      - name: Snapshot GitHub Latest before publication
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: scripts/ci_v4_release_latest_guard.ps1 -Mode Capture -StateRoot $env:V4_RELEASE_STATE_ROOT
-      - name: Publish the qualified candidate immutably
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Verify GitHub Latest channel policy before metadata promotion
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: scripts/ci_v4_release_latest_guard.ps1 -Mode Verify -Channel $env:V4_RELEASE_CHANNEL -ExpectedTag $env:V4_RELEASE_TAG -ExpectedSourceSha $env:V4_RELEASE_SOURCE_SHA -StateRoot $env:V4_RELEASE_STATE_ROOT
-      - name: Mint release-metadata GitHub App token
+      - name: Mint release-metadata GitHub App token before publication
         id: metadata-app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
@@ -4708,6 +4763,13 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
+      - name: Probe release-metadata App access before publication
+        env:
+          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+        run: scripts/probe_v4_metadata_app_access.ps1
+      - name: Publish the qualified candidate immutably
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Promote release metadata only after immutable publication
         env:
           GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
@@ -4732,13 +4794,13 @@ jobs:
     GH_TOKEN: ${{ github.token }}
 "#;
         let pipeline = r#"
-Preflight BuildCandidate PublishRelease PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Get-PublicMetadataDocument raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1 Format-V4TransactionMarker Get-V4TransactionMarker Test-V4TransactionMarkerMatch Invoke-DraftSelfCleanup candidate-manifest.json
+Preflight BuildCandidate PublishRelease PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile New-ExpectedV4Metadata Assert-ExactFileBytes Assert-ExactPublishedPublicAssetRecords Assert-RawMetadataConverges RawMetadataRetryBudgetSeconds raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization ReadAsByteArrayAsync GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1 Format-V4TransactionMarker Get-V4TransactionMarker Test-V4TransactionMarkerMatch Invoke-DraftSelfCleanup candidate-manifest.json v4_release_latest_policy.ps1 Get-RemoteLatestRelease Assert-V4GitHubLatestPolicy
 function Invoke-BuildCandidate {
   & pwsh -File orchestrate_v4_production_release.ps1
 }
 function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; Get-V4ReleaseDraftMakeLatestValue; make_latest = Get-V4ReleaseDraftMakeLatestValue; draft payload make_latest false; GitHub's successful DELETE endpoints return an empty body }
 function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
-function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; freshUserSongs = @(; Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; ci_v4_release_latest_guard.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
+function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; freshUserSongs = @(; Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; v4_release_latest_policy.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
 function Invoke-RecordAttestations { GH_TOKEN }
 function Invoke-PublishRelease {
   make_latest = Get-V4ReleaseDraftMakeLatestValue
@@ -4861,7 +4923,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
     name: Desktop web and browser validation
     needs: changes
     if: needs.changes.outputs.desktop_required == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - run: bun install --frozen-lockfile
       - run: bun run check

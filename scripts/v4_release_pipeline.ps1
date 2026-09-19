@@ -20,7 +20,10 @@ param(
     [string]$StateRoot,
     [string]$UpdaterPrivateKeyPath,
     [string]$ReleaseNotesPath,
-    [string]$RunId
+    [string]$RunId,
+    [int]$RawMetadataRetryBudgetSeconds = 60,
+    [int]$RawMetadataRetryIntervalSeconds = 5,
+    [switch]$NoDispatch
 )
 
 Set-StrictMode -Version Latest
@@ -52,12 +55,19 @@ $sbomName = "SBOM.spdx.json"
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
 . (Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1")
 . (Join-Path $PSScriptRoot "v4_nsis_smoke_boundary.ps1")
+. (Join-Path $PSScriptRoot "v4_release_latest_policy.ps1")
 
 if (-not (Test-Path Variable:script:GitHubApiHandler)) {
     $script:GitHubApiHandler = $null
 }
 if (-not (Test-Path Variable:script:AssetUploadHandler)) {
     $script:AssetUploadHandler = $null
+}
+if (-not (Test-Path Variable:script:RawMetadataHandler)) {
+    $script:RawMetadataHandler = $null
+}
+if (-not (Test-Path Variable:script:RawMetadataSleepHandler)) {
+    $script:RawMetadataSleepHandler = $null
 }
 
 function Fail([string]$Message) {
@@ -390,6 +400,16 @@ function Get-ReleaseForTag([string]$Repository, [string]$RequestedTag) {
     return Select-V4ReleaseByTag -DirectRelease $direct -ReleaseCollection $collection -Tag $RequestedTag
 }
 
+function Get-RemoteLatestRelease([string]$Repository) {
+    $latest = Invoke-GitHubApi -Arguments @("api", "repos/$Repository/releases/latest")
+    try {
+        Assert-V4StableLatestRelease $latest
+    } catch {
+        Fail $_.Exception.Message
+    }
+    return $latest
+}
+
 function Get-RecordPropertyValue([object]$Record, [string]$PropertyName) {
     if ($null -eq $Record -or [string]::IsNullOrWhiteSpace($PropertyName)) { return $null }
     if ($Record -is [System.Collections.IDictionary]) {
@@ -421,6 +441,23 @@ function Assert-ExactPublicReleaseAssetSet([object]$Release) {
     $expected = @(Get-CanonicalPublicReleaseNames | Sort-Object)
     if (($actual -join "`n") -ne ($expected -join "`n")) {
         Fail "repository release must contain exactly the canonical installer and updater signature"
+    }
+}
+
+function Assert-ExactPublishedPublicAssetRecords([object]$Release, [object[]]$ExpectedRecords, [string]$Repository) {
+    Assert-ExactPublicReleaseAssetSet $Release
+    foreach ($expected in @($ExpectedRecords)) {
+        $expectedName = Get-RecordPropertyString $expected 'release_name'
+        if ([string]::IsNullOrWhiteSpace($expectedName)) { $expectedName = Get-RecordPropertyString $expected 'name' }
+        $asset = @($Release.assets | Where-Object { [string]$_.name -eq $expectedName })
+        $expectedSize = [int64](Get-RecordPropertyValue $expected 'size')
+        $expectedSha = (Get-RecordPropertyString $expected 'sha256').ToLowerInvariant()
+        $expectedUrl = "https://github.com/$Repository/releases/download/$Tag/$([Uri]::EscapeDataString($expectedName))"
+        if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne $expectedSize -or
+            [string]$asset[0].browser_download_url -ne $expectedUrl -or
+            [string]$asset[0].digest -ne "sha256:$expectedSha") {
+            Fail "published asset does not exactly match the qualified $expectedName record"
+        }
     }
 }
 
@@ -925,25 +962,136 @@ function Convert-PublishedAtToMetadataTimestamp([string]$PublishedAt) {
     return $normalized
 }
 
-function Get-PublicMetadataDocument([string]$ReleaseChannel) {
+function Get-RawMetadataObservation([string]$ReleaseChannel) {
     $endpoint = $rawMetadataEndpoints[$ReleaseChannel]
     if ([string]::IsNullOrWhiteSpace($endpoint)) { Fail "unknown metadata endpoint for channel $ReleaseChannel" }
+    if ($null -ne $script:RawMetadataHandler) {
+        return & $script:RawMetadataHandler $endpoint
+    }
+
     $handler = [System.Net.Http.HttpClientHandler]::new()
     $handler.AllowAutoRedirect = $false
     $client = [System.Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds(30)
+    $client.Timeout = [TimeSpan]::FromSeconds(10)
     try {
         $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, [Uri]$endpoint)
         if ($request.Headers.Authorization) { Fail "raw metadata endpoint request must not provide credentials" }
         $response = $client.SendAsync($request).GetAwaiter().GetResult()
-        if ($response.StatusCode -ne [System.Net.HttpStatusCode]::OK) {
-            Fail "raw metadata endpoint returned status code $($response.StatusCode)"
+        $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        return [pscustomobject]@{
+            status = [int]$response.StatusCode
+            bytes = $bytes
+            sha256 = if ($bytes.Length -gt 0) {
+                ([Security.Cryptography.SHA256]::Create().ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join ""
+            } else { "" }
         }
-        $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-        return ($body | ConvertFrom-Json)
+    } catch {
+        return [pscustomobject]@{ status = 0; bytes = [byte[]]@(); sha256 = ""; error = $_.Exception.Message }
     } finally {
         $client.Dispose()
         $handler.Dispose()
+    }
+}
+
+function Assert-ExactFileBytes([string]$ExpectedPath, [string]$ActualPath, [string]$Description) {
+    $expected = [IO.File]::ReadAllBytes($ExpectedPath)
+    $actual = [IO.File]::ReadAllBytes($ActualPath)
+    $expectedSha = (Get-FileHash -LiteralPath $ExpectedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualSha = (Get-FileHash -LiteralPath $ActualPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($expected.Length -ne $actual.Length -or $expectedSha -ne $actualSha) {
+        Fail "$Description bytes differ: expected_sha256=$expectedSha actual_sha256=$actualSha"
+    }
+}
+
+function Assert-RawMetadataConverges([string]$ReleaseChannel, [string]$ExpectedPath) {
+    $expectedBytes = [IO.File]::ReadAllBytes($ExpectedPath)
+    $expectedSha = (Get-FileHash -LiteralPath $ExpectedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $started = [DateTimeOffset]::UtcNow
+    $deadline = $started.AddSeconds($RawMetadataRetryBudgetSeconds)
+    $last = $null
+    while ($true) {
+        $last = Get-RawMetadataObservation $ReleaseChannel
+        $isEqual = $false
+        if ([int]$last.status -eq 200 -and $null -ne $last.bytes) {
+            $actualBytes = [byte[]]$last.bytes
+            $isEqual = $actualBytes.Length -eq $expectedBytes.Length -and
+                ((Get-FileHash -InputStream ([IO.MemoryStream]::new($actualBytes)) -Algorithm SHA256).Hash.ToLowerInvariant() -eq $expectedSha)
+            if ($isEqual) {
+                Write-Host "V4 raw metadata convergence: PASS (channel=$ReleaseChannel, sha256=$expectedSha)"
+                return
+            }
+        }
+        if ([DateTimeOffset]::UtcNow -ge $deadline) { break }
+        if ($null -ne $script:RawMetadataSleepHandler) {
+            & $script:RawMetadataSleepHandler $RawMetadataRetryIntervalSeconds
+        } elseif ($RawMetadataRetryIntervalSeconds -gt 0) {
+            Start-Sleep -Seconds $RawMetadataRetryIntervalSeconds
+        }
+    }
+    $lastStatus = if ($null -eq $last) { "none" } else { [string]$last.status }
+    $lastSha = if ($null -eq $last) { "" } else { [string]$last.sha256 }
+    Fail "raw metadata endpoint did not converge within ${RawMetadataRetryBudgetSeconds}s: expected_sha256=$expectedSha last_status=$lastStatus last_observed_sha256=$lastSha"
+}
+
+function Assert-RawMetadataRetryConfiguration {
+    if ($RawMetadataRetryBudgetSeconds -le 0) {
+        Fail "raw metadata convergence retry budget must be positive"
+    }
+    if ($RawMetadataRetryIntervalSeconds -lt 0 -or
+        $RawMetadataRetryIntervalSeconds -gt $RawMetadataRetryBudgetSeconds) {
+        Fail "raw metadata convergence retry interval must be between zero and the retry budget"
+    }
+}
+
+function New-ExpectedV4Metadata {
+    param(
+        [Parameter(Mandatory = $true)] [string]$OutputPath,
+        [Parameter(Mandatory = $true)] [string]$PublishedAt,
+        [Parameter(Mandatory = $true)] [string]$NotesPath,
+        [Parameter(Mandatory = $true)] [string]$InstallerReleaseName,
+        [Parameter(Mandatory = $true)] [string]$SignaturePath,
+        [Parameter(Mandatory = $true)] [string]$Repository
+    )
+    $publicationDateUtc = Convert-PublishedAtToMetadataTimestamp $PublishedAt
+    $metadataOutput = $OutputPath
+    & cargo xtask release-metadata generate `
+        --channel $Channel `
+        --version $Version `
+        --notes-file $NotesPath `
+        --pub-date $publicationDateUtc `
+        --platform "windows-x86_64" `
+        --asset-url "https://github.com/$Repository/releases/download/$Tag/$InstallerReleaseName" `
+        --signature-file $SignaturePath `
+        --output $metadataOutput
+    if ($LASTEXITCODE -ne 0) { Fail "release metadata generation failed" }
+    & cargo xtask release-metadata validate --channel $Channel --metadata $metadataOutput
+    if ($LASTEXITCODE -ne 0) { Fail "release metadata validation failed" }
+    return $OutputPath
+}
+
+function Invoke-PrePublicationMetadataQualification([object]$Manifest, [object[]]$PublicRecords, [string]$Repository) {
+    $notesPath = Assert-ReleaseNotes
+    $signatureName = Get-ExpectedSignatureName
+    $signatureRecord = @($PublicRecords | Where-Object {
+        (Get-RecordPropertyString $_ 'name') -eq $signatureName -or
+        (Get-RecordPropertyString $_ 'release_name') -eq $signatureName
+    })
+    if ($signatureRecord.Count -ne 1) { Fail "candidate manifest has no exact updater signature for metadata dry-run" }
+    $temporary = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-metadata-dry-run-" + [guid]::NewGuid().ToString("N") + ".json")
+    try {
+        New-ExpectedV4Metadata -OutputPath $temporary -PublishedAt "2000-01-01T00:00:00Z" `
+            -NotesPath $notesPath -InstallerReleaseName (Get-ExpectedInstallerName) `
+            -SignaturePath (Get-StateAssetPath $signatureRecord[0]) -Repository $Repository | Out-Null
+        $existing = Invoke-GitHubApi -Arguments @("api", "repos/$Repository/contents/channels/$Channel/latest.json?ref=release-metadata") -AllowNotFound
+        if ($null -ne $existing) {
+            $currentPath = Join-Path (Get-EffectiveStateRoot) "prepublication-$Channel-latest.json"
+            Write-RepositoryContentFile $existing $currentPath "channels/$Channel/latest.json"
+            & cargo xtask release-metadata validate-monotonic --channel $Channel --current $currentPath --candidate $temporary
+            if ($LASTEXITCODE -ne 0) { Fail "candidate metadata is not strictly monotonic over current channel metadata" }
+        }
+        Write-Host "V4 pre-publication metadata qualification: PASS (dry-run, schema, and monotonicity)"
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -952,6 +1100,7 @@ function Get-PublicMetadataDocument([string]$ReleaseChannel) {
 # ==============================================================================
 
 function Invoke-Preflight {
+    Assert-RawMetadataRetryConfiguration
     Assert-RequestIdentity
     Assert-ReleaseNotes
     $repository = Get-CanonicalRepository
@@ -1199,6 +1348,7 @@ function Invoke-BuildCandidate {
 }
 
 function Invoke-PublishRelease {
+    Assert-RawMetadataRetryConfiguration
     $root = Get-EffectiveStateRoot
     $manifestPath = Join-Path $root "candidate-manifest.json"
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
@@ -1220,6 +1370,12 @@ function Invoke-PublishRelease {
     $repository = Get-CanonicalRepository
     $notesPath = Assert-ReleaseNotes
     $effectiveRunId = if (-not [string]::IsNullOrWhiteSpace($RunId)) { $RunId } elseif (-not [string]::IsNullOrWhiteSpace($env:GITHUB_RUN_ID)) { $env:GITHUB_RUN_ID } else { "manual" }
+
+    # All deterministic metadata failures and the pre-publication Latest identity
+    # are resolved before a release draft can be created. The identity remains in
+    # memory for the beta policy; no phase-state file is used.
+    Invoke-PrePublicationMetadataQualification $manifest $publicRecords $repository
+    $prePublicationLatest = Get-RemoteLatestRelease $repository
 
     # Pre-check: Ensure tag does not already exist
     $direct = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag") -AllowNotFound
@@ -1418,6 +1574,19 @@ function Invoke-PublishRelease {
     }
     Assert-ExactPublicReleaseAssetSet $finalRelease
 
+    $postPublicationLatest = Get-RemoteLatestRelease $repository
+    try {
+        Assert-V4GitHubLatestPolicy `
+            -Channel $Channel `
+            -PublishedRelease $finalRelease `
+            -PrePublicationLatest $prePublicationLatest `
+            -PostPublicationLatest $postPublicationLatest `
+            -ExpectedTag $Tag `
+            -ExpectedSourceSha $SourceSha.ToLowerInvariant()
+    } catch {
+        Fail $_.Exception.Message
+    }
+
     Write-Host "V4 release publication transaction: PASS (tag=$Tag, id=$releaseId, immutable=true, published_at=$($finalRelease.published_at))"
 }
 
@@ -1429,41 +1598,39 @@ function Invoke-PromoteMetadata {
         Fail "metadata promotion is forbidden before immutable publication"
     }
     Assert-ImmutableRelease $publishedRelease
+    if ([string]$publishedRelease.tag_name -ne $Tag) {
+        Fail "published release tag does not match the requested metadata tag"
+    }
     if ([string]$publishedRelease.target_commitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
         Fail "published release target_commitish does not match requested source SHA"
     }
+    if (($Channel -eq "stable" -and [bool]$publishedRelease.prerelease) -or
+        ($Channel -eq "beta" -and -not [bool]$publishedRelease.prerelease)) {
+        Fail "published release prerelease state does not match channel $Channel"
+    }
     Assert-ExactPublicReleaseAssetSet $publishedRelease
-
-    $metadataCheckout = Join-Path $root "release-metadata"
-    if (Test-Path -LiteralPath $metadataCheckout) { Remove-Item -LiteralPath $metadataCheckout -Recurse -Force }
-    Invoke-GitHubApi -Arguments @("repo", "clone", $repository, $metadataCheckout, "--", "--branch", "release-metadata", "--depth", "1") -Raw | Out-Null
-    if (-not (Test-Path -LiteralPath (Join-Path $metadataCheckout ".git") -PathType Container)) { Fail "release-metadata branch checkout was not obtained" }
 
     $manifestPath = Join-Path $root "candidate-manifest.json"
     $manifest = Read-JsonFile $manifestPath
     $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)
+    Assert-ExactPublishedPublicAssetRecords $publishedRelease $publicRecords $repository
     $expectedInstaller = Get-ExpectedInstallerName
     $expectedSignature = Get-ExpectedSignatureName
     $installerRecord = @($publicRecords | Where-Object { (Get-RecordPropertyString $_ 'name') -eq $expectedInstaller -or (Get-RecordPropertyString $_ 'release_name') -eq $expectedInstaller })[0]
     $signatureRecord = @($publicRecords | Where-Object { (Get-RecordPropertyString $_ 'name') -eq $expectedSignature -or (Get-RecordPropertyString $_ 'release_name') -eq $expectedSignature })[0]
+    if ($null -eq $installerRecord -or $null -eq $signatureRecord) {
+        Fail "candidate manifest is missing the exact installer/signature pair for metadata promotion"
+    }
 
     $notesPath = Assert-ReleaseNotes
     $destination = Join-Path $root "latest.json"
-    $publicationDateUtc = Convert-PublishedAtToMetadataTimestamp [string]$publishedRelease.published_at
     $installerReleaseName = Get-RecordPropertyString $installerRecord 'release_name'
-    & cargo xtask release-metadata generate `
-        --channel $Channel `
-        --version $Version `
-        --notes-file $notesPath `
-        --pub-date $publicationDateUtc `
-        --platform "windows-x86_64" `
-        --asset-url "https://github.com/$repository/releases/download/$Tag/$installerReleaseName" `
-        --signature-file (Get-StateAssetPath $signatureRecord) `
-        --output $destination
-    if ($LASTEXITCODE -ne 0) { Fail "release metadata generation failed" }
-
-    & cargo xtask release-metadata validate --channel $Channel --metadata $destination
-    if ($LASTEXITCODE -ne 0) { Fail "release metadata validation failed" }
+    New-ExpectedV4Metadata -OutputPath $destination `
+        -PublishedAt ([string]$publishedRelease.published_at) `
+        -NotesPath $notesPath `
+        -InstallerReleaseName $installerReleaseName `
+        -SignaturePath (Get-StateAssetPath $signatureRecord[0]) `
+        -Repository $repository | Out-Null
 
     $encoded = [Convert]::ToBase64String([IO.File]::ReadAllBytes($destination))
     $existing = Invoke-GitHubApi -Arguments @("api", "repos/$repository/contents/channels/$Channel/latest.json?ref=release-metadata") -AllowNotFound
@@ -1484,8 +1651,16 @@ function Invoke-PromoteMetadata {
     }
     $payloadPath = Join-Path $root "metadata-commit.json"
     Write-JsonFile $payloadPath $payload
-    Invoke-GitHubApi -Arguments @("api", "--method", "PUT", "repos/$repository/contents/channels/$Channel/latest.json", "--input", $payloadPath) | Out-Null
-    Write-Host "V4 metadata promotion: PASS (channel=$Channel, tag=$Tag)"
+    $putResult = Invoke-GitHubApi -Arguments @("api", "--method", "PUT", "repos/$repository/contents/channels/$Channel/latest.json", "--input", $payloadPath)
+    if ($null -eq $putResult) { Fail "metadata Contents API PUT returned no response" }
+
+    # The Contents API branch is authoritative immediately after the write. Read
+    # it back over the same transport and bind the stored bytes to this candidate.
+    $stored = Invoke-GitHubApi -Arguments @("api", "repos/$repository/contents/channels/$Channel/latest.json?ref=release-metadata")
+    $storedPath = Join-Path $root "stored-$Channel-latest.json"
+    Write-RepositoryContentFile $stored $storedPath "channels/$Channel/latest.json"
+    Assert-ExactFileBytes $destination $storedPath "stored release-metadata $Channel document"
+    Write-Host "V4 metadata promotion: PASS (channel=$Channel, tag=$Tag, exact_sha256=$((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()))"
 }
 
 function Invoke-FinalVerify {
@@ -1495,10 +1670,23 @@ function Invoke-FinalVerify {
         Fail "final release is still draft or unpublished"
     }
     Assert-ImmutableRelease $release
+    if ([string]$release.tag_name -ne $Tag) { Fail "final release tag does not match the exact requested tag" }
+    if ([string]$release.target_commitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
+        Fail "final release source does not match the exact requested source SHA"
+    }
+    if (($Channel -eq "stable" -and [bool]$release.prerelease) -or
+        ($Channel -eq "beta" -and -not [bool]$release.prerelease)) {
+        Fail "final release prerelease state does not match channel $Channel"
+    }
     $candidateManifest = Read-JsonFile (Join-Path (Get-EffectiveStateRoot) "candidate-manifest.json")
     $publicRecords = @(Get-PublicReleaseRecordsFromManifest $candidateManifest)
-    Assert-ExactPublicReleaseAssetSet $release
     Assert-ExactAssetSet $release $publicRecords
+    Assert-ExactPublishedPublicAssetRecords $release $publicRecords $repository
+    $signatureRecord = @($publicRecords | Where-Object {
+        (Get-RecordPropertyString $_ 'name') -eq (Get-ExpectedSignatureName) -or
+        (Get-RecordPropertyString $_ 'release_name') -eq (Get-ExpectedSignatureName)
+    })
+    if ($signatureRecord.Count -ne 1) { Fail "final candidate manifest has no exact updater signature" }
     foreach ($expected in $publicRecords) {
         $expectedReleaseName = Get-RecordPropertyString $expected 'release_name'
         if ([string]::IsNullOrWhiteSpace($expectedReleaseName)) {
@@ -1506,27 +1694,47 @@ function Invoke-FinalVerify {
         }
         $asset = @($release.assets | Where-Object { [string]$_.name -eq $expectedReleaseName })
         $expectedSize = [int64](Get-RecordPropertyValue $expected 'size')
-        if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne $expectedSize) { Fail "final public asset identity changed: $expectedReleaseName" }
+        $expectedSha = (Get-RecordPropertyString $expected 'sha256').ToLowerInvariant()
+        if ($asset.Count -ne 1 -or [int64]$asset[0].size -ne $expectedSize) {
+            Fail "final public asset size changed: $expectedReleaseName"
+        }
         $finalPath = Join-Path (Get-EffectiveStateRoot) "final-$expectedReleaseName"
         Invoke-GitHubApi -Arguments @("api", [string]$asset[0].url, "--header", "Accept: application/octet-stream") -BinaryOutput -OutputPath $finalPath
         $hash = (Get-FileHash -LiteralPath $finalPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        $expectedSha = Get-RecordPropertyString $expected 'sha256'
         if ($hash -ne $expectedSha) { Fail "final public asset digest differs from qualified bytes: $expectedReleaseName" }
     }
 
-    # Verify unauthenticated raw channel metadata
+    $notesPath = Assert-ReleaseNotes
+    $expectedMetadataPath = Join-Path (Get-EffectiveStateRoot) "final-expected-metadata.json"
+    New-ExpectedV4Metadata -OutputPath $expectedMetadataPath `
+        -PublishedAt ([string]$release.published_at) `
+        -NotesPath $notesPath `
+        -InstallerReleaseName (Get-ExpectedInstallerName) `
+        -SignaturePath (Get-StateAssetPath $signatureRecord[0]) `
+        -Repository $repository | Out-Null
+
+    # The branch Contents API is the authoritative stored document, and the raw
+    # unauthenticated endpoint must converge to the same independently generated bytes.
     $metadataResponse = Invoke-GitHubApi -Arguments @("api", "repos/$repository/contents/channels/$Channel/latest.json?ref=release-metadata")
     $metadataPath = Join-Path (Get-EffectiveStateRoot) "final-metadata.json"
     Write-RepositoryContentFile $metadataResponse $metadataPath "channels/$Channel/latest.json"
+    Assert-ExactFileBytes $expectedMetadataPath $metadataPath "final release-metadata $Channel document"
     & cargo xtask release-metadata validate --channel $Channel --metadata $metadataPath
     if ($LASTEXITCODE -ne 0) { Fail "final channel metadata validation failed" }
 
-    $publicDocument = Get-PublicMetadataDocument $Channel
-    if ([string]$publicDocument.version -ne $Version) { Fail "public metadata document version does not match requested version" }
-    Invoke-Checked "pwsh" @(
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1")
-    ) "GitHub Latest guard verification failed"
+    Assert-RawMetadataConverges $Channel $expectedMetadataPath
+    $latest = Get-RemoteLatestRelease $repository
+    try {
+        Assert-V4GitHubLatestPolicy `
+            -Channel $Channel `
+            -PublishedRelease $release `
+            -PrePublicationLatest $latest `
+            -PostPublicationLatest $latest `
+            -ExpectedTag $Tag `
+            -ExpectedSourceSha $SourceSha.ToLowerInvariant()
+    } catch {
+        Fail $_.Exception.Message
+    }
     Write-Host "V4 final verification: PASS (tag=$Tag channel=$Channel verified via raw endpoint)"
 }
 
@@ -1612,12 +1820,14 @@ function Invoke-SelfTest {
 # Entry Point Dispatch
 # ==============================================================================
 
-switch ($State) {
-    "Preflight" { Invoke-Preflight }
-    "BuildCandidate" { Invoke-BuildCandidate }
-    "PublishRelease" { Invoke-PublishRelease }
-    "PromoteMetadata" { Invoke-PromoteMetadata }
-    "FinalVerify" { Invoke-FinalVerify }
-    "SelfTest" { Invoke-SelfTest }
-    default { Fail "Unknown state '$State'" }
+if (-not $NoDispatch) {
+    switch ($State) {
+        "Preflight" { Invoke-Preflight }
+        "BuildCandidate" { Invoke-BuildCandidate }
+        "PublishRelease" { Invoke-PublishRelease }
+        "PromoteMetadata" { Invoke-PromoteMetadata }
+        "FinalVerify" { Invoke-FinalVerify }
+        "SelfTest" { Invoke-SelfTest }
+        default { Fail "Unknown state '$State'" }
+    }
 }

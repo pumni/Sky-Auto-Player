@@ -613,7 +613,7 @@ jobs:
     name: Desktop web and browser validation
     needs: changes
     if: needs.changes.outputs.desktop_required == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
@@ -1252,7 +1252,7 @@ jobs:
     name: Website validation
     needs: changes
     if: needs.changes.outputs.site_required == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read

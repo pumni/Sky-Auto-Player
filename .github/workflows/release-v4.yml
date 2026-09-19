@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: v4-release-${{ github.sha }}
+  group: v4-release-control-plane
   cancel-in-progress: false
 
 defaults:
@@ -163,10 +163,20 @@ jobs:
           & $gh attestation verify $installer[0].FullName -R $env:GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3 --source-digest $env:GITHUB_SHA --signer-workflow $signerWorkflow
           if ($LASTEXITCODE -ne 0) { throw "SBOM exact-source attestation verification failed" }
 
-      - name: Snapshot GitHub Latest before publication
+      - name: Mint release-metadata GitHub App token before publication
+        id: metadata-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v1.11.0
+        with:
+          app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
+          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Probe release-metadata App access before publication
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1 -Mode Capture -StateRoot $env:V4_RELEASE_STATE_ROOT
+          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/probe_v4_metadata_app_access.ps1
 
       - name: Publish the qualified candidate immutably
         env:
@@ -182,27 +192,6 @@ jobs:
             -StateRoot $env:V4_RELEASE_STATE_ROOT `
             -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
             -RunId $env:GITHUB_RUN_ID
-
-      - name: Verify GitHub Latest channel policy before metadata promotion
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/ci_v4_release_latest_guard.ps1 `
-            -Mode Verify `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -ExpectedTag $env:V4_RELEASE_TAG `
-            -ExpectedSourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT
-
-      - name: Mint release-metadata GitHub App token
-        id: metadata-app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v1.11.0
-        with:
-          app-id: ${{ vars.V4_RELEASE_METADATA_APP_ID }}
-          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
 
       - name: Promote release metadata only after immutable publication
         env:
