@@ -235,7 +235,7 @@ Once the GitHub Release PATCH is committed, the publication is irreversible:
   - **NEVER** dispatch another release with the same version number.
   - **NEVER** manually promote `release-metadata` without an explicitly authorized, reviewed recovery procedure.
 - **Corrective Action**:
-  - The default corrective release target after engineering acceptance is a new SemVer release (for this incident, `v4.1.2`).
+  - The default corrective release target after engineering acceptance is a new SemVer release (`v4.1.2` for the prior v4.1.1 incident; `v4.1.3` for the current v4.1.2 incident).
   - Fix the underlying defect on a corrective branch, qualify locally, and dispatch a fresh release for the new SemVer.
 
 #### Post-publication incident case study: v4.1.0
