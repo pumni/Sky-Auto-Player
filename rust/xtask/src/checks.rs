@@ -2327,7 +2327,7 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
             .map_err(|error| format!("{relative}: {error}"))?;
     }
 
-    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?;
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?.replace("\r\n", "\n");
     for output in [
         "rust_required",
         "desktop_required",
