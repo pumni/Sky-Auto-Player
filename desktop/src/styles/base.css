@@ -94,10 +94,10 @@ h3 {
 .button {
   padding: 0 14px;
 }
-.button:not(.button-primary):not(.button-danger):hover {
+.button:not(.button-primary):not(.button-danger):hover:not(:disabled) {
   background: var(--control-hover);
 }
-.button:not(.button-primary):not(.button-danger):active {
+.button:not(.button-primary):not(.button-danger):active:not(:disabled) {
   background: var(--control-pressed);
 }
 .button-primary {
@@ -120,14 +120,14 @@ h3 {
   width: 34px;
   padding: 0;
 }
-.icon-button:hover {
+.icon-button:hover:not(:disabled) {
   background: var(--control-hover);
 }
 .icon-button:not(.button-primary):not(.button-danger):not(.player-secondary-action):not(
     .player-tool-button
   ):not(.player-like-button):not(.profile-summary-button):not(.library-more-button):not(
     .library-add-button
-  ):not(.track-actions-button):not(.utility-close-button):active {
+  ):not(.track-actions-button):not(.utility-close-button):active:not(:disabled) {
   background: var(--control-pressed);
 }
 .update-indicator {

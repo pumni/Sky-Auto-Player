@@ -262,6 +262,20 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(contrastRatio(colors.focusRing, colors.surfaceRaised)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colors.focusRing, colors.canvas)).toBeGreaterThanOrEqual(3);
   }
+
+  await page.locator('html').evaluate((root) => root.removeAttribute('data-palette'));
+  await expect(page.locator('html')).not.toHaveAttribute('data-palette');
+  const aurora = expected.aurora;
+  for (const [name, value] of Object.entries({
+    '--selection-bg': aurora.selectionBg,
+    '--accent-hover': aurora.accentHover,
+    '--control-border': aurora.controlBorder,
+    '--accent': aurora.accent,
+    '--on-accent': aurora.onAccent,
+    '--focus-ring': aurora.focusRing,
+  })) {
+    await expect.poll(() => token(page, name)).toBe(value);
+  }
 });
 
 test('semantic consumers and interaction states use the locked hierarchy', async ({ page }) => {
@@ -310,6 +324,19 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await settings.getByRole('button', { name: 'Playback', exact: true }).click();
   const settingsSelect = settings.locator('.settings-section select').first();
   await assertBorderUsesToken(page, settingsSelect, '--control-border');
+  await settings
+    .locator('.settings-section')
+    .first()
+    .evaluate((section) => {
+      const input = document.createElement('input');
+      input.className = 'palette-audit-settings-text-input';
+      input.type = 'text';
+      input.setAttribute('aria-label', 'Palette audit text input');
+      section.append(input);
+    });
+  const settingsTextInput = settings.locator('.palette-audit-settings-text-input');
+  await assertBorderUsesToken(page, settingsTextInput, '--control-border');
+  await settingsTextInput.evaluate((element) => element.remove());
   const closeSettings = settings.getByRole('button', { name: 'Close settings' });
   await closeSettings.hover();
   await assertBackgroundUsesToken(page, closeSettings, '--control-hover');
