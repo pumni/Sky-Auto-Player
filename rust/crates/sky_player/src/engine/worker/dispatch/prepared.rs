@@ -52,6 +52,10 @@ pub(super) fn prepared_down_sender_cutoff(
     frame: &PreparedDispatchFrame,
     physical_target_qpc: QpcTicks,
 ) -> Result<Option<QpcTicks>, &'static str> {
+    // A paired Down's cutoff is the static authored hold-validity boundary:
+    // target + (authored Up - authored Down - effective_min_hold).  It is not
+    // PhysicalTimingWindow/PhysicalTimingGuard policy and is never extended
+    // to compensate for scheduler lateness.
     let Some(policy) = frame.down_policy else {
         return Ok(None);
     };

@@ -18,7 +18,11 @@ use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PreparedDownHoldLimit {
+    /// An unpaired Down has no invented finite sender cutoff.  It still
+    /// requires the exact future authorization proof before its target.
     NoPairedRelease,
+    /// Static authored hold-validity slack, frozen during preparation.  This
+    /// is not a dynamic PhysicalTimingWindow or scheduler-lateness allowance.
     HoldSlack(DurationTicks),
 }
 

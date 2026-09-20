@@ -135,6 +135,16 @@ fn compare_integrity_rids(
     }
 }
 
+fn classify_integrity_rids(
+    current_integrity_rid: Option<u32>,
+    target_integrity_rid: Option<u32>,
+) -> TargetIntegrityCompatibility {
+    match (current_integrity_rid, target_integrity_rid) {
+        (Some(current), Some(target)) => compare_integrity_rids(current, target),
+        _ => TargetIntegrityCompatibility::Unknown,
+    }
+}
+
 /// Compare the current process token with the exact target window owner's
 /// token. This is a read-only, control-plane preflight; it does not authorize
 /// input and it never runs on the realtime dispatch thread.
@@ -224,13 +234,10 @@ pub fn target_integrity_compatibility(hwnd: isize) -> TargetIntegrityCompatibili
     let target_opened = current_opened
         && unsafe { OpenProcessToken(target_process, TOKEN_QUERY, &mut target_token) } != 0;
     let result = if target_opened {
-        match (
+        classify_integrity_rids(
             token_integrity_rid(current_token),
             token_integrity_rid(target_token),
-        ) {
-            (Some(current), Some(target)) => compare_integrity_rids(current, target),
-            _ => TargetIntegrityCompatibility::Unknown,
-        }
+        )
     } else {
         TargetIntegrityCompatibility::Unknown
     };
@@ -410,10 +417,11 @@ pub fn virtual_key_for_scan_code(_hwnd: isize, _scan_code: u16) -> Result<i32, S
 /// Resolve the visible Sky window using the same title/process admission
 /// boundary as the legacy desktop target adapter.  This is deliberately kept
 /// in the Win32 crate so application code never has to own unsafe window API
-/// calls. The returned HWND is a target hint. Precision-boundary Down
-/// admission uses the supervisor's published focus state and atomic target
-/// proof; exact foreground validation remains for startup and control-plane
-/// revalidation outside that envelope.
+/// calls. The returned HWND is a target hint. At the precision boundary, an
+/// eligible `require_focus=true` Down receives exactly one fresh synchronous
+/// foreground proof, then target-stamp, published-focus, and late-control
+/// rechecks. UpOnly and `require_focus=false` Down traffic perform zero fresh
+/// foreground queries; only the query-to-`SendInput` race remains.
 #[cfg(windows)]
 pub fn find_sky_window(process_names: &[String], allow_title_fallback: bool) -> Option<isize> {
     use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
@@ -546,7 +554,7 @@ pub fn focus_window_and_verify(hwnd: isize, budget: std::time::Duration) -> bool
 
 #[cfg(test)]
 mod tests {
-    use super::{TargetIntegrityCompatibility, compare_integrity_rids};
+    use super::{TargetIntegrityCompatibility, classify_integrity_rids, compare_integrity_rids};
 
     #[test]
     fn higher_target_integrity_is_the_only_mismatch() {
@@ -562,5 +570,64 @@ mod tests {
             compare_integrity_rids(0x2000, 0x3000),
             TargetIntegrityCompatibility::Mismatch
         );
+    }
+
+    #[test]
+    fn integrity_query_failures_are_unknown_not_mismatch() {
+        for (current, target) in [(None, None), (None, Some(0x2000)), (Some(0x2000), None)] {
+            assert_eq!(
+                classify_integrity_rids(current, target),
+                TargetIntegrityCompatibility::Unknown
+            );
+        }
+    }
+
+    #[test]
+    fn integrity_classification_has_only_the_target_higher_mismatch() {
+        assert_eq!(
+            classify_integrity_rids(Some(0x1000), Some(0x2000)),
+            TargetIntegrityCompatibility::Mismatch
+        );
+        assert_eq!(
+            classify_integrity_rids(Some(0x2000), Some(0x2000)),
+            TargetIntegrityCompatibility::Compatible
+        );
+        assert_eq!(
+            classify_integrity_rids(Some(0x3000), Some(0x2000)),
+            TargetIntegrityCompatibility::Compatible
+        );
+    }
+
+    #[test]
+    fn integrity_preflight_is_absent_from_realtime_worker_hot_paths() {
+        let sources = [
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../sky_player/src/engine/worker/dispatch_loop.rs"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../sky_player/src/engine/worker/dispatch/prepared.rs"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../sky_player/src/engine/worker/dispatch/recovery.rs"
+            )),
+        ];
+        for source in sources {
+            let source = source.replace("\r\n", "\n");
+            for forbidden in [
+                "target_integrity_compatibility",
+                "GetTokenInformation",
+                "OpenProcessToken",
+                "TOKEN_QUERY",
+                "PROCESS_QUERY_LIMITED_INFORMATION",
+            ] {
+                assert!(
+                    !source.contains(forbidden),
+                    "realtime worker hot path contains forbidden integrity query {forbidden}"
+                );
+            }
+        }
     }
 }
