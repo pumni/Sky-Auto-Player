@@ -8,6 +8,15 @@ Supersedes the normal-playback policy portions of ADR-0011, ADR-0012, and
 ADR-0013. Those documents remain historical qualification records; they are
 not the current normal-dispatch contract.
 
+Phase 5 clarification: [ADR-0015](ADR-0015-prepared-down-validity-and-causal-admission.md)
+refines only the prepared-Down validity and causal-admission wording below.
+The statements that a normal prepared frame has no sender cutoff and that an
+authorized late Down is always sent are superseded for paired Down frames by
+the static authored hold-validity cutoff. Unpaired Down frames retain no
+invented finite cutoff but require the exact future authorization proof. The
+prepared architecture, immutable packets, one-send transport boundary, and
+strict/diagnostic `PhysicalTimingGuard` separation remain accepted.
+
 ## Decision
 
 Normal playback is a prepared absolute-frame dispatcher. The healthy precision

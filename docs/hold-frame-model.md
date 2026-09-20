@@ -14,11 +14,13 @@ promised identical latency.
 For a physical boundary, native preparation materializes and validates
 one immutable packet before the interruptible wait. Normal playback uses one
 hybrid wait and bounded QPC spin to the authored target, then performs cheap
-control/target/focus checks and one prepared `SendInput` call. Strict/diagnostic
-dispatch may additionally apply physical floors and a physical latest-start
-bound. The worker records `final_policy_qpc` as evidence, not a musical
-deadline. The prepared sender then takes the true `pre_call_qpc` immediately
-before the syscall.
+control/target/focus checks and one prepared `SendInput` call. A paired Down's
+prepared sender also uses its frozen static authored hold-validity cutoff; an
+unpaired Down has no invented finite cutoff but requires future authorization.
+Strict/diagnostic dispatch may additionally apply physical floors and a
+physical latest-start bound. The worker records `final_policy_qpc` as
+evidence, not a musical deadline. The prepared sender then takes the true
+`pre_call_qpc` immediately before the syscall.
 Up entries precede Down entries;
 an overlapping Up/Down mask is rejected during preparation. A partial Up is
 reported with partial-progress evidence but is never silently retried by this
@@ -38,7 +40,10 @@ The user-owned Timing Margin defaults to `500 µs`, ranges from `0` through
 `3,000 µs` in `100 µs` steps, and applies equally to Hold and Release Gap.
 It defines the strict/diagnostic physical latest Down start:
 `packet_not_before` must not exceed `physical_latest_down_start = authored
-target + this margin`. Normal playback has no separate late-note sender cutoff.
+target + this margin`. Normal prepared paired Down traffic instead uses the
+static authored hold-validity cutoff derived from the remaining authored hold
+slack; an unpaired Down has no finite sender cutoff and relies on causal future
+authorization.
 Calibration never supplies part of the
 authored timing equation. Qualified calibration may produce an advisory
 recommendation from measured transport reserve plus a fixed `100 µs` guard.
@@ -74,8 +79,10 @@ strict_sender_cutoff = physical_latest_down_start
 ```
 
 Strict mode remains bounded by the physical boundary. Normal prepared playback
-uses the authored target and does not suppress a clean late frame. Authored Up
-and mixed Up-prefix recovery respect the authored hold/release contract.
+uses the authored target and does not add scheduler lateness grace. A paired
+frame crossing its static sender cutoff is recovered as a missed authored
+boundary; unpaired Down traffic has no invented finite cutoff. Authored Up and
+mixed Up-prefix recovery respect the authored hold/release contract.
 Emergency, focus-loss, and cleanup Ups bypass musical floors so safety release
 stays immediate. Completion evidence never proves that Sky sampled the
 transition.
@@ -103,9 +110,10 @@ min_release_gap_us = frame_us + timing_margin_us
 Timing Margin is the only user-owned authored headroom and remains part of the
 hold/release materialization. Zero is a valid strict/no-headroom choice. In
 strict mode, equality at `physical_latest_down_start` is allowed and the first
-tick beyond it is a missed Down. Normal lateness is observational. A Down
-chord is never split or retried. Up-only safety releases remain exempt from
-musical floors.
+tick beyond it is a missed Down. Normal paired Down validity uses its frozen
+authored hold-slack cutoff; an unpaired Down has no finite cutoff but still
+requires future authorization. A Down chord is never split or retried. Up-only
+safety releases remain exempt from musical floors.
 
 At 60 FPS with the default margin:
 
