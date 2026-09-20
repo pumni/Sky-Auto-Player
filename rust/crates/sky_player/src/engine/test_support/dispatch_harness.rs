@@ -10,10 +10,10 @@ use crate::engine::shared::{SharedProgressClock, SystemPowerState};
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
-use crate::engine::worker::dispatch::PendingObservationQueue;
 use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
 };
+use crate::engine::worker::dispatch::{PendingObservationQueue, PhysicalBoundaryStamp};
 use crate::engine::worker::{
     DispatchHealthOptions, DispatchPath, NextDispatchPlan, PreparationCounts,
     PreparedDispatchEntry, PreparedDispatchStream, TargetStamp, WaitBoundary, WaitBoundaryInput,
@@ -143,6 +143,89 @@ impl ProductionDispatchTestHarness {
                 reason: "prepared-suspension-sentinel-j".into(),
             },
         ])
+    }
+
+    pub fn new_prepared_resumable_suspension_mixed_miss_for_test() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared-suspension-down-a".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared-suspension-up-a".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x16].into(),
+                reason: "prepared-suspension-down-b".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 40_000,
+                scan_codes: vec![0x16].into(),
+                reason: "prepared-suspension-cleanup".into(),
+            },
+        ])
+    }
+
+    pub fn new_prepared_authorization_causality_sequence_for_test() -> Self {
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "prepared-causality-first".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: vec![0x16].into(),
+                reason: "prepared-causality-unseen-backlog-a".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 2_000,
+                scan_codes: vec![0x17].into(),
+                reason: "prepared-causality-unseen-backlog-b".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: vec![0x18].into(),
+                reason: "prepared-causality-next-future".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 120_000,
+                scan_codes: vec![0x15, 0x16, 0x17, 0x18].into(),
+                reason: "prepared-causality-cleanup".into(),
+            },
+        ])
+    }
+
+    pub fn new_prepared_unpaired_down_for_test() -> Self {
+        Self::create_harness(&[KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15, 0x16].into(),
+            reason: "prepared-unpaired-down".into(),
+        }])
     }
 
     /// Build two independent Down boundaries five milliseconds apart.  The
@@ -386,6 +469,37 @@ impl ProductionDispatchTestHarness {
                 reason: "stall-cleanup".into(),
             },
         ])
+    }
+
+    /// Build an exact-size deterministic DownOnly burst for the active
+    /// no-catch-up matrix. Each Down owns a distinct physical key, so every
+    /// overdue boundary remains an independent prepared frame.
+    pub fn new_overdue_down_burst_for_test(boundary_count: usize) -> Self {
+        assert!((2..=15).contains(&boundary_count));
+        let mut actions = Vec::with_capacity(boundary_count + 1);
+        for (index, scan_code) in PHYSICAL_INSTRUMENT_SCAN_CODES
+            .iter()
+            .copied()
+            .take(boundary_count)
+            .enumerate()
+        {
+            actions.push(KeyActionInput {
+                source_action_index: index as u32,
+                kind: ActionKind::Down,
+                scheduled_us: (index as u64).saturating_mul(1_000),
+                scan_codes: vec![scan_code].into(),
+                reason: format!("prepared-overdue-down-{index}").into(),
+            });
+        }
+        let all_scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..boundary_count].to_vec();
+        actions.push(KeyActionInput {
+            source_action_index: boundary_count as u32,
+            kind: ActionKind::Up,
+            scheduled_us: (boundary_count as u64).saturating_mul(1_000),
+            scan_codes: all_scan_codes.into(),
+            reason: "prepared-overdue-cleanup".into(),
+        });
+        Self::create_harness(&actions)
     }
 
     /// A deferred release for key A shares an authored timestamp with an
@@ -1154,6 +1268,18 @@ impl ProductionDispatchTestHarness {
         self.local_metrics.missed_unobserved_backlog_boundaries
     }
 
+    pub fn prepared_up_prefix_recovery_sends_for_test(&self) -> u64 {
+        self.local_metrics.prepared_up_prefix_recovery_sends
+    }
+
+    pub fn prepared_normal_backlog_count_for_test(&self) -> u64 {
+        self.local_metrics.prepared_normal_backlog_boundaries
+    }
+
+    pub fn prepared_normal_sender_expiry_count_for_test(&self) -> u64 {
+        self.local_metrics.prepared_normal_sender_expirations
+    }
+
     pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
         publish_backend_counters(&self.resources.backend, &mut self.local_metrics);
         (
@@ -1399,6 +1525,73 @@ impl ProductionDispatchTestHarness {
         calls
     }
 
+    pub fn configure_prepared_transport_outcome_for_test(
+        &mut self,
+        status: SendTransactionStatus,
+    ) -> Arc<Mutex<Vec<SendEvidence>>> {
+        let evidence = Arc::new(Mutex::new(Vec::with_capacity(2)));
+        let captured = Arc::clone(&evidence);
+        let clock = self.resources.clock;
+        self.resources.backend.set_packet_emitter(move |packet| {
+            let requested_mask = packet.up_mask | packet.down_mask;
+            let started_ticks = clock.now().ok();
+            let (confirmed_mask, first_inserted, attempts, completed_ticks, timing_error) =
+                match status {
+                    SendTransactionStatus::Complete => {
+                        (requested_mask, packet.event_count(), 1, started_ticks, None)
+                    }
+                    SendTransactionStatus::ZeroProgress => (0, 0, 1, started_ticks, None),
+                    SendTransactionStatus::PartialProgress => (
+                        packet.up_mask | (packet.down_mask & packet.down_mask.wrapping_sub(1)),
+                        1,
+                        1,
+                        started_ticks,
+                        None,
+                    ),
+                    SendTransactionStatus::IntegrityLost => (0, 1, 1, started_ticks, None),
+                    SendTransactionStatus::ClockFailureBeforeSend => (
+                        0,
+                        0,
+                        0,
+                        None,
+                        Some(sky_dispatch_win32::clock::QpcError::CounterUnavailable),
+                    ),
+                    SendTransactionStatus::ClockFailureAfterSend => (
+                        0,
+                        packet.event_count(),
+                        1,
+                        None,
+                        Some(sky_dispatch_win32::clock::QpcError::CounterUnavailable),
+                    ),
+                    SendTransactionStatus::DownExpiredBeforeSend => (0, 0, 0, None, None),
+                    SendTransactionStatus::PreparationRejected => (0, 0, 0, None, None),
+                };
+            let outcome = SendTransactionOutcome {
+                status,
+                evidence: SendEvidence {
+                    requested_mask,
+                    confirmed_mask,
+                    skipped_mask: 0,
+                    first_inserted,
+                    attempts,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks,
+                    completed_ticks,
+                    timing_error,
+                },
+            };
+            captured
+                .lock()
+                .expect("prepared transport evidence lock")
+                .push(outcome.evidence);
+            outcome
+        });
+        evidence
+    }
+
     /// Capture the exact directional packet masks presented to the production
     /// packet emitter.  This is intentionally a test-support seam: assertions
     /// can distinguish an authored Down chord from a deferred Up or a
@@ -1595,6 +1788,136 @@ impl ProductionDispatchTestHarness {
         self.prepared_stream_for_test = Some(stream);
     }
 
+    pub fn authorize_prepared_current_for_test(&mut self) -> Result<(), String> {
+        let stream = self
+            .prepared_stream_for_test
+            .as_ref()
+            .ok_or_else(|| "prepared stream test setup".to_string())?;
+        let frame = match stream.current() {
+            Some(PreparedDispatchEntry::Physical(frame)) => frame,
+            Some(PreparedDispatchEntry::Metadata { .. }) => {
+                return Err("prepared authorization test requires a physical frame".to_string());
+            }
+            None => return Err("prepared stream test is exhausted".to_string()),
+        };
+        let target_qpc = self
+            .resources
+            .playback
+            .epoch
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .map_err(|error| format!("prepared authorization target arithmetic: {error}"))?;
+        let now_qpc = self
+            .resources
+            .clock
+            .now()
+            .map_err(|error| format!("prepared authorization QPC: {error:?}"))?;
+        if target_qpc <= now_qpc {
+            return Err("prepared authorization target is not future".to_string());
+        }
+        if frame.view.packet_masks.down_mask != 0 {
+            let target = TargetStamp {
+                hwnd: self.target_hwnd.load(Ordering::Acquire),
+                generation: self.target_generation.load(Ordering::Acquire),
+            };
+            self.runtime
+                .record_prepared_down_authorization(
+                    PhysicalBoundaryStamp {
+                        first_batch_index: frame.view.prepared_batch.index,
+                        packet_index: frame.view.prepared_batch.packet_index,
+                        packet_batch_count: frame.view.prepared_batch.packet_batch_count,
+                        source_action_index: frame.view.batch_source_action_index,
+                        up_mask: frame.view.packet_masks.up_mask,
+                        down_mask: frame.view.packet_masks.down_mask,
+                        physical_target_qpc: target_qpc,
+                    },
+                    target.generation,
+                    true,
+                )
+                .map_err(|error| format!("prepared authorization: {error}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn dispatch_prepared_current_after_authorized_stall_for_test(
+        &mut self,
+        stall_us: u64,
+    ) -> DispatchStep {
+        let mut stream = self
+            .prepared_stream_for_test
+            .take()
+            .expect("prepared stream test setup");
+        let frame = match stream.current() {
+            Some(PreparedDispatchEntry::Physical(frame)) => frame,
+            Some(PreparedDispatchEntry::Metadata { .. }) => {
+                panic!("prepared stall test requires a physical frame")
+            }
+            None => panic!("prepared stream is exhausted"),
+        };
+        let physical_target_qpc = self
+            .resources
+            .playback
+            .epoch
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .expect("prepared authorized target arithmetic");
+        let stall_ticks = self
+            .resources
+            .clock
+            .duration_from_us(stall_us)
+            .expect("prepared stall conversion");
+        let stalled_target_qpc = physical_target_qpc
+            .checked_add_duration(stall_ticks)
+            .expect("prepared stalled target arithmetic");
+        while self.resources.clock.now().expect("prepared stall wait QPC") < stalled_target_qpc {
+            std::hint::spin_loop();
+        }
+        let wall_now = self.resources.clock.now().expect("prepared stall QPC");
+        assert!(
+            wall_now >= stalled_target_qpc,
+            "prepared physical stall did not cross target + stall: now={wall_now:?} target={stalled_target_qpc:?}"
+        );
+        let elapsed_from_epoch = wall_now
+            .checked_duration_since(self.resources.playback.epoch)
+            .expect("prepared stalled QPC precedes playback epoch");
+        let effective_now_ticks = TimelineTicks::from_raw(elapsed_from_epoch.as_u64());
+        let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
+            hwnd: self.target_hwnd.load(Ordering::Acquire),
+            generation: self.target_generation.load(Ordering::Acquire),
+        });
+        let step = dispatch_prepared_normal_frame(
+            frame,
+            &self.config,
+            &mut self.resources,
+            &mut self.health,
+            &self.timing,
+            &mut self.runtime,
+            &mut self.local_metrics,
+            &self.focus_active,
+            &self.target_hwnd,
+            &self.target_generation,
+            &self.quit_requested,
+            &self.skip_requested,
+            &self.panic_requested,
+            &self.desired_pause,
+            &self.supervisor_expired,
+            &self.system_power,
+            &self.progress_clock,
+            Some(&self.observer),
+            preflight_target,
+            physical_target_qpc,
+            effective_now_ticks,
+            wall_now,
+            false,
+            Some(wall_now),
+            stream.explicitly_cancelled_generation_ids(),
+            false,
+        );
+        if matches!(step, DispatchStep::Dispatched) {
+            stream.advance().expect("prepared stream advance");
+        }
+        self.prepared_stream_for_test = Some(stream);
+        step
+    }
+
     pub fn prepared_stream_built_qpc_for_test(&self) -> Option<QpcTicks> {
         self.prepared_stream_built_qpc
     }
@@ -1621,11 +1944,30 @@ impl ProductionDispatchTestHarness {
         &mut self,
         lateness_us: u64,
     ) -> DispatchStep {
+        self.dispatch_prepared_current_at_lateness_without_stream_inner_for_test(lateness_us, false)
+    }
+
+    pub fn dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(
+        &mut self,
+        lateness_us: u64,
+    ) -> DispatchStep {
+        self.dispatch_prepared_current_at_lateness_without_stream_inner_for_test(lateness_us, true)
+    }
+
+    fn dispatch_prepared_current_at_lateness_without_stream_inner_for_test(
+        &mut self,
+        lateness_us: u64,
+        authorize: bool,
+    ) -> DispatchStep {
         let mut stream = self
             .prepared_stream_for_test
             .take()
             .expect("prepared stream test setup");
-        let step = self.dispatch_prepared_current_at_lateness_for_test(&mut stream, lateness_us);
+        let step = self.dispatch_prepared_current_at_lateness_inner_for_test(
+            &mut stream,
+            lateness_us,
+            authorize,
+        );
         self.prepared_stream_for_test = Some(stream);
         step
     }
@@ -1667,6 +2009,24 @@ impl ProductionDispatchTestHarness {
             .clock
             .now()
             .map_err(|error| format!("prepared benchmark wait-entry QPC: {error:?}"))?;
+        if let Some(target) = preflight_target {
+            let boundary = PhysicalBoundaryStamp {
+                first_batch_index: frame.view.prepared_batch.index,
+                packet_index: frame.view.prepared_batch.packet_index,
+                packet_batch_count: frame.view.prepared_batch.packet_batch_count,
+                source_action_index: frame.view.batch_source_action_index,
+                up_mask: frame.view.packet_masks.up_mask,
+                down_mask: frame.view.packet_masks.down_mask,
+                physical_target_qpc: target_qpc,
+            };
+            self.runtime
+                .record_prepared_down_authorization(
+                    boundary,
+                    target.generation,
+                    target_qpc > wait_entry_qpc,
+                )
+                .map_err(|error| format!("prepared wait authorization: {error}"))?;
+        }
         self.prepared_target_qpc = Some(target_qpc);
         self.prepared_wait_entry_qpc = Some(wait_entry_qpc);
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
@@ -1771,6 +2131,23 @@ impl ProductionDispatchTestHarness {
         stream: &mut PreparedDispatchStream,
         lateness_us: u64,
     ) -> DispatchStep {
+        self.dispatch_prepared_current_at_lateness_inner_for_test(stream, lateness_us, false)
+    }
+
+    pub(crate) fn dispatch_prepared_current_at_lateness_authorized_for_test(
+        &mut self,
+        stream: &mut PreparedDispatchStream,
+        lateness_us: u64,
+    ) -> DispatchStep {
+        self.dispatch_prepared_current_at_lateness_inner_for_test(stream, lateness_us, true)
+    }
+
+    fn dispatch_prepared_current_at_lateness_inner_for_test(
+        &mut self,
+        stream: &mut PreparedDispatchStream,
+        lateness_us: u64,
+        authorize: bool,
+    ) -> DispatchStep {
         let frame = match stream.current() {
             Some(PreparedDispatchEntry::Physical(frame)) => frame,
             Some(PreparedDispatchEntry::Metadata { .. }) => {
@@ -1807,6 +2184,20 @@ impl ProductionDispatchTestHarness {
             hwnd: self.target_hwnd.load(Ordering::Acquire),
             generation: self.target_generation.load(Ordering::Acquire),
         });
+        if authorize && let Some(target) = preflight_target {
+            let boundary = PhysicalBoundaryStamp {
+                first_batch_index: frame.view.prepared_batch.index,
+                packet_index: frame.view.prepared_batch.packet_index,
+                packet_batch_count: frame.view.prepared_batch.packet_batch_count,
+                source_action_index: frame.view.batch_source_action_index,
+                up_mask: frame.view.packet_masks.up_mask,
+                down_mask: frame.view.packet_masks.down_mask,
+                physical_target_qpc,
+            };
+            self.runtime
+                .record_prepared_down_authorization(boundary, target.generation, true)
+                .expect("prepared test authorization");
+        }
         let step = dispatch_prepared_normal_frame(
             frame,
             &self.config,

@@ -873,12 +873,14 @@ fn production_normal_late_down_dispatch_no_alloc() {
 #[test]
 fn production_prepared_normal_frame_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let mut harness =
+        ProductionDispatchTestHarness::new_dense_future_boundary_with_gap_for_test(10_000);
     let calls = harness.configure_send_counter();
     harness.prepare_prepared_stream_for_test();
 
     enable_counting();
-    let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(10_000);
+    let step =
+        harness.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(1_000);
     let allocs = disable_counting();
 
     assert_eq!(

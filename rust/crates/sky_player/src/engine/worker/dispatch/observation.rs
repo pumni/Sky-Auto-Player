@@ -83,13 +83,22 @@ pub enum DownMissKind {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub(crate) enum DownMissTimingEvidence {
+    Physical(PhysicalTimingWindow),
+    Prepared {
+        physical_target_qpc: QpcTicks,
+        sender_cutoff_qpc: Option<QpcTicks>,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct DownMissObservation {
     pub source_action_index: u32,
     pub compiled_packet_index: Option<u64>,
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub wake_ticks: TimelineTicks,
-    pub(crate) physical_timing_window: PhysicalTimingWindow,
+    pub(crate) timing_evidence: DownMissTimingEvidence,
     pub observed_qpc: QpcTicks,
     pub up_mask: u16,
     pub down_mask: u16,
@@ -100,13 +109,24 @@ impl DownMissObservation {
     #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
     pub fn physical_authored_target_qpc(&self) -> QpcTicks {
-        self.physical_timing_window.authored_target_qpc
+        match self.timing_evidence {
+            DownMissTimingEvidence::Physical(window) => window.authored_target_qpc,
+            DownMissTimingEvidence::Prepared {
+                physical_target_qpc,
+                ..
+            } => physical_target_qpc,
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
     pub fn physical_latest_down_start_qpc(&self) -> Option<QpcTicks> {
-        self.physical_timing_window.latest_down_start_qpc
+        match self.timing_evidence {
+            DownMissTimingEvidence::Physical(window) => window.latest_down_start_qpc,
+            DownMissTimingEvidence::Prepared {
+                sender_cutoff_qpc, ..
+            } => sender_cutoff_qpc,
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -119,7 +139,7 @@ impl DownMissObservation {
             authored_ticks: TimelineTicks::from_raw(n),
             effective_deadline_ticks: TimelineTicks::from_raw(n),
             wake_ticks: TimelineTicks::from_raw(n),
-            physical_timing_window: PhysicalTimingWindow {
+            timing_evidence: DownMissTimingEvidence::Physical(PhysicalTimingWindow {
                 authored_target_qpc,
                 musical_up_not_before_qpc: authored_target_qpc,
                 down_not_before_qpc: authored_target_qpc,
@@ -127,7 +147,7 @@ impl DownMissObservation {
                 latest_down_start_qpc: Some(authored_target_qpc),
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
-            },
+            }),
             observed_qpc: authored_target_qpc,
             up_mask: 0,
             down_mask: 1,

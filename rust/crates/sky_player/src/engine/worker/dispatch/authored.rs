@@ -218,6 +218,7 @@ fn commit_down_send_outcome(
                 }
             },
             runtime.pending_up_recovery.is_some(),
+            &[],
             observer,
         );
     }
@@ -617,7 +618,7 @@ pub(super) fn record_down_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
-        Some(physical_timing_window),
+        physical_timing_window,
         target_crossing_qpc,
         trace_kind,
         prepared_final_policy_qpc,
@@ -641,12 +642,51 @@ pub(super) fn record_prepared_normal_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
+    sender_cutoff_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     target_crossing_qpc: Option<QpcTicks>,
     result: SendTransactionOutcome,
     explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     debug_assert!(!timing.strict_timing);
+    if matches!(
+        result.status,
+        sky_dispatch_win32::input::SendTransactionStatus::DownExpiredBeforeSend
+    ) && view.packet_masks.down_mask != 0
+    {
+        let Some(observed_qpc) = result.evidence.started_ticks else {
+            return DispatchStep::TerminateStatic(
+                "DownExpiredBeforeSend missing authoritative start boundary",
+            );
+        };
+        if let Some(started_qpc) = result.evidence.started_ticks
+            && let Err(error) = super::super::record_sendinput_pre_call_lateness(
+                physical_target_qpc,
+                started_qpc,
+                timing,
+                local_metrics,
+            )
+        {
+            return DispatchStep::Terminate(error);
+        }
+        return super::recovery::resolve_normal_prepared_deadline_miss(
+            view,
+            runtime,
+            local_metrics,
+            backend,
+            coordinator,
+            clock_state,
+            effective_now_ticks,
+            physical_target_qpc,
+            sender_cutoff_qpc,
+            observed_qpc,
+            DownMissReason::DownExpiredBeforeSend,
+            explicitly_cancelled_by_suspension,
+            observer,
+        );
+    }
+    let mut normal_observation_window = PhysicalTimingWindow::authored_only(physical_target_qpc);
+    normal_observation_window.latest_down_start_qpc = sender_cutoff_qpc;
     super::prepared::record_down_send_result(
         view,
         config,
@@ -660,7 +700,7 @@ pub(super) fn record_prepared_normal_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
-        None,
+        normal_observation_window,
         target_crossing_qpc,
         trace_kind_for_packet_kind(view.prepared_batch.packet_kind),
         None,

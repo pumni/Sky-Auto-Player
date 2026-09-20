@@ -358,6 +358,336 @@ fn missed_authored_frame_releases_up_drops_down_and_invalidates_later_up() {
 }
 
 #[test]
+fn frozen_up_after_dropped_expired_is_noop_while_later_mixed_down_commits() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+            reason: "first-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 100,
+            scan_codes: vec![0x15].into(),
+            reason: "first-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 100,
+            scan_codes: vec![0x16].into(),
+            reason: "missed-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 200,
+            scan_codes: vec![0x16].into(),
+            reason: "stale-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 4,
+            kind: ActionKind::Down,
+            scheduled_us: 200,
+            scan_codes: vec![0x17].into(),
+            reason: "later-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 5,
+            kind: ActionKind::Up,
+            scheduled_us: 300,
+            scan_codes: vec![0x17].into(),
+            reason: "later-up".into(),
+        },
+    ];
+    let schedule = compile_runtime_intents(&actions, &[0x15, 0x16, 0x17]).expect("valid schedule");
+    let mut expected = RuntimeDispatchCoordinator::new(
+        schedule.clone(),
+        0,
+        0,
+        crate::time::TimelineTicks::from_raw,
+    );
+    let first = expected
+        .prepare_current_authored_packet()
+        .expect("prepare first Down")
+        .expect("first Down exists");
+    expected
+        .commit_prepared_authored_frame_success_frozen(
+            &first.commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("commit first Down");
+    let mixed = expected
+        .prepare_current_authored_packet()
+        .expect("prepare missed Mixed")
+        .expect("missed Mixed exists");
+    expected
+        .commit_prepared_authored_frame_success_frozen(
+            &mixed.commit,
+            TimelineTicks::from_raw(100),
+            TimelineTicks::from_raw(100),
+        )
+        .expect("commit expected Mixed");
+    let later_mixed = expected
+        .prepare_current_authored_packet()
+        .expect("prepare later Mixed")
+        .expect("later Mixed exists");
+    let later_mixed_commit = later_mixed.commit.clone();
+    expected
+        .commit_prepared_authored_frame_success_frozen(
+            &later_mixed.commit,
+            TimelineTicks::from_raw(200),
+            TimelineTicks::from_raw(200),
+        )
+        .expect("commit later Mixed");
+    let later_up = expected
+        .prepare_current_authored_packet()
+        .expect("prepare later Up")
+        .expect("later Up exists");
+    let later_up_commit = later_up.commit.clone();
+
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+    let first = coordinator
+        .prepare_current_authored_packet()
+        .expect("prepare runtime first Down")
+        .expect("runtime first Down exists");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &first.commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("commit runtime first Down");
+    let missed = coordinator
+        .prepare_current_authored_packet()
+        .expect("prepare runtime missed Mixed")
+        .expect("runtime missed Mixed exists");
+    coordinator
+        .commit_prepared_authored_frame_deadline_miss(
+            &missed.commit,
+            missed.frame.immediate_up_mask,
+            missed.frame.down_mask,
+            TimelineTicks::from_raw(100),
+        )
+        .expect("commit runtime missed Mixed");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &later_mixed_commit,
+            TimelineTicks::from_raw(200),
+            TimelineTicks::from_raw(200),
+        )
+        .expect("stale Up is a logical no-op and later Down commits");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &later_up_commit,
+            TimelineTicks::from_raw(300),
+            TimelineTicks::from_raw(300),
+        )
+        .expect("later Up releases the later Down");
+
+    let counts = coordinator.generation_status_counts();
+    assert_eq!(counts.get("released"), Some(&2));
+    assert_eq!(counts.get("dropped_expired"), Some(&1));
+    assert_eq!(coordinator.active_mask, 0);
+    assert!(coordinator.is_finished());
+}
+
+#[test]
+fn frozen_up_after_dropped_expired_same_key_continues_next_generation() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+            reason: "same-key-first-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 100,
+            scan_codes: vec![0x15].into(),
+            reason: "same-key-first-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 200,
+            scan_codes: vec![0x15].into(),
+            reason: "same-key-dropped-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 300,
+            scan_codes: vec![0x15].into(),
+            reason: "same-key-frozen-stale-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 4,
+            kind: ActionKind::Down,
+            scheduled_us: 400,
+            scan_codes: vec![0x15].into(),
+            reason: "same-key-next-generation-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 5,
+            kind: ActionKind::Up,
+            scheduled_us: 500,
+            scan_codes: vec![0x15].into(),
+            reason: "same-key-next-generation-up".into(),
+        },
+    ];
+    let schedule = compile_runtime_intents(&actions, &[0x15]).expect("valid same-key schedule");
+    let mut expected = RuntimeDispatchCoordinator::new(
+        schedule.clone(),
+        0,
+        0,
+        crate::time::TimelineTicks::from_raw,
+    );
+    let first = expected
+        .prepare_current_authored_packet()
+        .expect("prepare first same-key Down")
+        .expect("first same-key Down exists");
+    expected
+        .commit_prepared_authored_frame_success_frozen(
+            &first.commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("commit first same-key Down");
+
+    let first_up = expected
+        .prepare_current_authored_packet()
+        .expect("prepare first same-key Up")
+        .expect("first same-key Up exists");
+    expected
+        .commit_prepared_authored_frame_success_frozen(
+            &first_up.commit,
+            TimelineTicks::from_raw(100),
+            TimelineTicks::from_raw(100),
+        )
+        .expect("release first same-key generation");
+
+    let expected_dropped = expected
+        .prepare_current_authored_packet()
+        .expect("prepare dropped same-key Down")
+        .expect("dropped same-key Down exists");
+    expected
+        .commit_prepared_authored_frame_success_frozen(
+            &expected_dropped.commit,
+            TimelineTicks::from_raw(200),
+            TimelineTicks::from_raw(200),
+        )
+        .expect("commit expected same-key Down");
+
+    let stale_up_commit = {
+        let stale_up = expected
+            .prepare_current_authored_packet()
+            .expect("prepare frozen same-key Up")
+            .expect("expected frozen same-key Up exists");
+        assert_eq!(stale_up.packet.up_mask(), 0b1);
+        stale_up.commit.clone()
+    };
+    expected
+        .commit_prepared_authored_frame_success_frozen(
+            &stale_up_commit,
+            TimelineTicks::from_raw(300),
+            TimelineTicks::from_raw(300),
+        )
+        .expect("commit expected same-key Up");
+    let next_down_commit = expected
+        .prepare_current_authored_packet()
+        .expect("prepare expected next same-key Down")
+        .expect("expected next same-key Down exists")
+        .commit;
+    expected
+        .commit_prepared_authored_frame_success_frozen(
+            &next_down_commit,
+            TimelineTicks::from_raw(400),
+            TimelineTicks::from_raw(400),
+        )
+        .expect("commit expected next same-key Down");
+    let next_up_commit = expected
+        .prepare_current_authored_packet()
+        .expect("prepare expected next same-key Up")
+        .expect("expected next same-key Up exists")
+        .commit;
+
+    let mut coordinator =
+        RuntimeDispatchCoordinator::new(schedule, 0, 0, crate::time::TimelineTicks::from_raw);
+    let first = coordinator
+        .prepare_current_authored_packet()
+        .expect("prepare runtime first same-key Down")
+        .expect("runtime first same-key Down exists");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &first.commit,
+            TimelineTicks::ZERO,
+            TimelineTicks::ZERO,
+        )
+        .expect("commit runtime first same-key Down");
+    let first_up = coordinator
+        .prepare_current_authored_packet()
+        .expect("prepare runtime first same-key Up")
+        .expect("runtime first same-key Up exists");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &first_up.commit,
+            TimelineTicks::from_raw(100),
+            TimelineTicks::from_raw(100),
+        )
+        .expect("release runtime first same-key generation");
+    let dropped = coordinator
+        .prepare_current_authored_packet()
+        .expect("prepare runtime dropped same-key Down")
+        .expect("runtime dropped same-key Down exists");
+    assert_eq!(dropped.frame.immediate_up_mask, 0);
+    assert_eq!(dropped.frame.down_mask, 0b1);
+    coordinator
+        .commit_prepared_authored_frame_deadline_miss(
+            &dropped.commit,
+            dropped.frame.immediate_up_mask,
+            dropped.frame.down_mask,
+            TimelineTicks::from_raw(200),
+        )
+        .expect("commit runtime dropped same-key Down");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &stale_up_commit,
+            TimelineTicks::from_raw(300),
+            TimelineTicks::from_raw(300),
+        )
+        .expect("consume frozen same-key Up as logical no-op");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &next_down_commit,
+            TimelineTicks::from_raw(400),
+            TimelineTicks::from_raw(400),
+        )
+        .expect("commit next same-key Down");
+    coordinator
+        .commit_prepared_authored_frame_success_frozen(
+            &next_up_commit,
+            TimelineTicks::from_raw(500),
+            TimelineTicks::from_raw(500),
+        )
+        .expect("release next same-key generation");
+
+    let counts = coordinator.generation_status_counts();
+    assert_eq!(counts.get("released"), Some(&2));
+    assert_eq!(counts.get("dropped_expired"), Some(&1));
+    assert_eq!(coordinator.active_mask, 0);
+    assert_eq!(coordinator.blocked_mask, 0);
+    assert!(coordinator.is_finished());
+}
+
+#[test]
 fn packet_commit_releases_before_disjoint_down_and_advances_once() {
     let schedule = compile_runtime_intents(
         &[

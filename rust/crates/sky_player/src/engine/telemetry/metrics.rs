@@ -84,6 +84,12 @@ pub struct WorkerMetricsLocal {
     pub missed_down_keys: u64,
     pub missed_unobserved_backlog_boundaries: u64,
     pub missed_physical_window_boundaries: u64,
+    /// Phase 3 prepared-normal acceptance counters. These are distinct from
+    /// authored/dynamic recovery counters so the deterministic report can
+    /// prove the prepared miss resolver did not enter dynamic policy.
+    pub prepared_up_prefix_recovery_sends: u64,
+    pub prepared_normal_backlog_boundaries: u64,
+    pub prepared_normal_sender_expirations: u64,
     /// Final authored Down admission rejections observed after target
     /// crossing and before the authoritative SendInput timestamp.
     pub final_gate_control_rejections: u64,

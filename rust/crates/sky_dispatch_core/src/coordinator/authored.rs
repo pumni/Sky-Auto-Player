@@ -777,6 +777,14 @@ impl RuntimeDispatchCoordinator {
                         self.reconcile_resumable_cancelled_generation(generation_id)?;
                         continue;
                     }
+                    if self.frozen_up_matches_dropped_expired_generation(prepared, up) {
+                        // The matching Down was terminalized as
+                        // DroppedExpired and its mutable schedule Up was
+                        // invalidated. The immutable prepared stream may
+                        // still carry that Up; consume it as a logical
+                        // no-op without changing terminal state or counters.
+                        continue;
+                    }
                     return Err(CoordinatorError::Invariant(
                         CoordinatorInvariantError::Accounting(
                             "authored immediate Up has no active generation".into(),
@@ -832,6 +840,26 @@ impl RuntimeDispatchCoordinator {
     }
 
     fn frozen_up_matches_cancelled_generation(
+        &self,
+        prepared: PreparedAuthoredFrame,
+        up: &PreparedUpIntent,
+    ) -> bool {
+        self.frozen_up_matches_invalidated_generation(prepared, up)
+    }
+
+    fn frozen_up_matches_dropped_expired_generation(
+        &self,
+        prepared: PreparedAuthoredFrame,
+        up: &PreparedUpIntent,
+    ) -> bool {
+        let generation_id = up.intent.generation_id();
+        self.generation_states
+            .get(generation_id as usize)
+            .is_some_and(|state| *state == GenerationStatus::DroppedExpired)
+            && self.frozen_up_matches_invalidated_generation(prepared, up)
+    }
+
+    fn frozen_up_matches_invalidated_generation(
         &self,
         prepared: PreparedAuthoredFrame,
         up: &PreparedUpIntent,
@@ -969,6 +997,44 @@ impl RuntimeDispatchCoordinator {
         missed_down_mask: u16,
         started: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
+        self.commit_prepared_authored_frame_deadline_miss_with_resumable_cancellation(
+            commit,
+            confirmed_up_mask,
+            missed_down_mask,
+            started,
+            &[],
+        )
+    }
+
+    /// Commit a missed prepared frame while proving that an immediate Up may
+    /// belong to a generation cancelled by a resumable suspension. The
+    /// suspended generation is reconciled exactly once; newly missed Downs
+    /// are still terminalized as `DroppedExpired` in the same frozen commit.
+    pub fn commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        confirmed_up_mask: u16,
+        missed_down_mask: u16,
+        started: TimelineTicks,
+        explicitly_cancelled_by_suspension: &[GenerationId],
+    ) -> Result<(), CoordinatorError> {
+        self.commit_prepared_authored_frame_deadline_miss_with_resumable_cancellation(
+            commit,
+            confirmed_up_mask,
+            missed_down_mask,
+            started,
+            explicitly_cancelled_by_suspension,
+        )
+    }
+
+    fn commit_prepared_authored_frame_deadline_miss_with_resumable_cancellation(
+        &mut self,
+        commit: &PreparedAuthoredCommit,
+        confirmed_up_mask: u16,
+        missed_down_mask: u16,
+        started: TimelineTicks,
+        explicitly_cancelled_by_suspension: &[GenerationId],
+    ) -> Result<(), CoordinatorError> {
         let prepared = commit.frame;
         if prepared.first_batch_index != self.cursor {
             return Err(CoordinatorError::PreparedBatchMismatch {
@@ -985,7 +1051,12 @@ impl RuntimeDispatchCoordinator {
             ));
         }
 
-        self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
+        self.commit_prepared_up_intents_frozen_with_resumable_cancellation(
+            prepared,
+            &commit.up_intents,
+            started,
+            explicitly_cancelled_by_suspension,
+        )?;
 
         let mut observed_down_mask = 0u16;
         for down in &commit.down_intents {
