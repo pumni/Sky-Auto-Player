@@ -1092,6 +1092,11 @@ fn prepared_future_authorization_before_stall_later_unseen_backlog_future() {
         matches!(first_step, super::worker::DispatchStep::Dispatched),
         "authorized before stall step: {first_step:?}"
     );
+    assert_eq!(
+        *packets.lock().expect("authorized first packet capture"),
+        vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b001)],
+        "authorized first boundary must send its full packet after the physical stall"
+    );
 
     assert!(matches!(
         harness.dispatch_prepared_current_at_lateness_without_stream_for_test(50_000),

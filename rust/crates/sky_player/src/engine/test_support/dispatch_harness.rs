@@ -1859,22 +1859,26 @@ impl ProductionDispatchTestHarness {
             .epoch
             .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
             .expect("prepared authorized target arithmetic");
-        while self.resources.clock.now().expect("prepared stall wait QPC") < physical_target_qpc {
-            std::hint::spin_loop();
-        }
-        let wall_now = self.resources.clock.now().expect("prepared stall QPC");
         let stall_ticks = self
             .resources
             .clock
             .duration_from_us(stall_us)
             .expect("prepared stall conversion");
-        let effective_now_ticks = TimelineTicks::from_raw(
-            frame
-                .offset_ticks
-                .as_u64()
-                .checked_add(stall_ticks.as_u64())
-                .expect("prepared stall timeline arithmetic"),
+        let stalled_target_qpc = physical_target_qpc
+            .checked_add_duration(stall_ticks)
+            .expect("prepared stalled target arithmetic");
+        while self.resources.clock.now().expect("prepared stall wait QPC") < stalled_target_qpc {
+            std::hint::spin_loop();
+        }
+        let wall_now = self.resources.clock.now().expect("prepared stall QPC");
+        assert!(
+            wall_now >= stalled_target_qpc,
+            "prepared physical stall did not cross target + stall: now={wall_now:?} target={stalled_target_qpc:?}"
         );
+        let elapsed_from_epoch = wall_now
+            .checked_duration_since(self.resources.playback.epoch)
+            .expect("prepared stalled QPC precedes playback epoch");
+        let effective_now_ticks = TimelineTicks::from_raw(elapsed_from_epoch.as_u64());
         let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
             hwnd: self.target_hwnd.load(Ordering::Acquire),
             generation: self.target_generation.load(Ordering::Acquire),
