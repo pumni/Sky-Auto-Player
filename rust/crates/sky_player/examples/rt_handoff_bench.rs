@@ -38,7 +38,7 @@ fn due_us() -> u64 {
     std::env::var("RT_HANDOFF_BENCH_DUE_US")
         .ok()
         .and_then(|value| value.parse().ok())
-        .filter(|value: &u64| (1..=60_000).contains(value))
+        .filter(|value: &u64| (1..=1_000_000).contains(value))
         .unwrap_or(DUE_US)
 }
 
