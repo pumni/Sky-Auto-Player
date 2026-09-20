@@ -952,7 +952,7 @@ fn prepared_no_catch_up_burst_matrix_is_exact_for_2_3_and_15_boundaries() {
 }
 
 #[test]
-fn prepared_transport_fault_matrix_is_fail_closed() {
+fn prepared_up_prefix_transport_fault_matrix_is_fail_closed() {
     for status in [
         SendTransactionStatus::Complete,
         SendTransactionStatus::ZeroProgress,
@@ -983,6 +983,54 @@ fn prepared_transport_fault_matrix_is_fail_closed() {
         }
         assert_eq!(harness.backend_active_mask(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    }
+}
+
+#[test]
+fn prepared_full_packet_transport_outcome_matrix_is_fail_closed() {
+    for (status, expected_attempts, expected_possibly_active) in [
+        (SendTransactionStatus::Complete, 1, 0),
+        (SendTransactionStatus::ZeroProgress, 1, 0),
+        (SendTransactionStatus::PartialProgress, 1, 1),
+        (SendTransactionStatus::IntegrityLost, 1, 1),
+        (SendTransactionStatus::ClockFailureBeforeSend, 0, 0),
+        (SendTransactionStatus::ClockFailureAfterSend, 1, 1),
+    ] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let evidence = harness.configure_prepared_transport_outcome_for_test(status);
+        harness.prepare_prepared_stream_for_test();
+
+        let step =
+            harness.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(0);
+        let captured = evidence.lock().expect("full transport evidence lock");
+        assert_eq!(
+            captured.len(),
+            1,
+            "full prepared sender calls for {status:?}"
+        );
+        assert_eq!(captured[0].requested_mask, 0b001);
+        assert_eq!(captured[0].attempts, expected_attempts);
+        assert_eq!(
+            harness.resources.coordinator.cursor,
+            u16::from(status == SendTransactionStatus::Complete) as usize
+        );
+        assert_eq!(
+            harness.backend_active_mask(),
+            u16::from(status == SendTransactionStatus::Complete)
+        );
+        assert_eq!(
+            harness.backend_possibly_active_mask(),
+            expected_possibly_active
+        );
+        if status == SendTransactionStatus::Complete {
+            assert!(matches!(step, super::worker::DispatchStep::Dispatched));
+        } else {
+            assert!(matches!(
+                step,
+                super::worker::DispatchStep::Terminate(_)
+                    | super::worker::DispatchStep::TerminateStatic(_)
+            ));
+        }
     }
 }
 
@@ -1028,7 +1076,7 @@ fn prepared_acceptance_counters_cover_backlog_prefix_and_sender_expiry() {
 }
 
 #[test]
-fn prepared_authorization_causality_is_future_backlog_future() {
+fn prepared_future_authorization_before_stall_later_unseen_backlog_future() {
     let mut harness =
         ProductionDispatchTestHarness::new_prepared_authorization_causality_sequence_for_test();
     let packets = harness.configure_packet_capture();
@@ -1036,16 +1084,24 @@ fn prepared_authorization_causality_is_future_backlog_future() {
     harness
         .align_prepared_current_to_benchmark_margin_for_test(10_000)
         .expect("future first prepared boundary");
-    assert!(matches!(
-        harness.wait_and_dispatch_prepared_current_for_test(),
-        Ok(super::worker::DispatchStep::Dispatched)
-    ));
+    harness
+        .authorize_prepared_current_for_test()
+        .expect("authorize first prepared boundary before stall");
+    let first_step = harness.dispatch_prepared_current_after_authorized_stall_for_test(50_000);
+    assert!(
+        matches!(first_step, super::worker::DispatchStep::Dispatched),
+        "authorized before stall step: {first_step:?}"
+    );
 
     assert!(matches!(
         harness.dispatch_prepared_current_at_lateness_without_stream_for_test(50_000),
         super::worker::DispatchStep::Dispatched
     ));
-    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 1);
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(50_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 2);
     assert_eq!(harness.prepared_up_prefix_recovery_sends_for_test(), 0);
 
     harness
@@ -1059,11 +1115,44 @@ fn prepared_authorization_causality_is_future_backlog_future() {
         *packets.lock().expect("causality packet capture"),
         vec![
             sky_dispatch_win32::input::PhysicalPacket::new(0, 0b001),
-            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b100),
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1000),
         ]
     );
     assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+}
+
+#[test]
+fn prepared_unpaired_down_has_no_cutoff_but_requires_causal_authorization() {
+    let mut backlog = ProductionDispatchTestHarness::new_prepared_unpaired_down_for_test();
+    let backlog_packets = backlog.configure_packet_capture();
+    backlog.prepare_prepared_stream_for_test();
+    assert!(matches!(
+        backlog.dispatch_prepared_current_at_lateness_without_stream_for_test(20_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(
+        backlog_packets
+            .lock()
+            .expect("unpaired backlog packet capture")
+            .is_empty()
+    );
+    assert_eq!(backlog.prepared_normal_backlog_count_for_test(), 1);
+
+    let mut authorized = ProductionDispatchTestHarness::new_prepared_unpaired_down_for_test();
+    let authorized_packets = authorized.configure_packet_capture();
+    authorized.prepare_prepared_stream_for_test();
+    assert!(matches!(
+        authorized.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(20_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(
+        *authorized_packets
+            .lock()
+            .expect("unpaired authorized packet capture"),
+        vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b11)]
+    );
+    assert_eq!(authorized.prepared_normal_backlog_count_for_test(), 0);
 }
 
 #[test]

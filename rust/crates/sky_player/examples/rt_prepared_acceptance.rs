@@ -62,30 +62,7 @@ fn main() -> Result<(), String> {
             "normal_sender_expiry_count": normal_sender_expiry_count,
             "transport_anomaly_count": transport_anomaly_count,
             "timeline_rebase_count": timeline_rebase_count,
-            "matrix": {
-                "no_catch_up_burst_boundaries": [2, 3, 15],
-                "backlog_boundaries": 2,
-                "sender_expiry_boundaries": 1,
-                "up_prefix_recovery_sends": 2,
-                "cursor_fail_closed_fault_cases": 5,
-                "hold_geometry": [
-                    "exact_minimum_equality",
-                    "plus_one_qpc_sender_expiry",
-                    "long_note",
-                    "minimum_paired_chord_slack",
-                    "unpaired_no_finite_cutoff"
-                ],
-                "frozen_continuation": ["mixed", "same_key"],
-                "suspension_miss": "cancelled_up_then_dropped_down",
-                "transport_faults": [
-                    "Complete",
-                    "ZeroProgress",
-                    "PartialProgress",
-                    "IntegrityLost",
-                    "ClockFailureBeforeSend",
-                    "ClockFailureAfterSend"
-                ],
-            }
+            "report_kind": "counter_report"
         }))
         .map_err(|error| error.to_string())?
     );

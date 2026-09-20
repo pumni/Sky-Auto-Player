@@ -48,7 +48,7 @@ fn prepared_down_boundary(
 }
 
 #[inline]
-fn prepared_down_sender_cutoff(
+pub(super) fn prepared_down_sender_cutoff(
     frame: &PreparedDispatchFrame,
     physical_target_qpc: QpcTicks,
 ) -> Result<Option<QpcTicks>, &'static str> {
@@ -519,9 +519,7 @@ mod tests {
             .split("pub(super) fn resolve_normal_prepared_deadline_miss")
             .nth(1)
             .expect("normal prepared miss resolver")
-            .split(
-                "#[allow(clippy::too_many_arguments)]\npub(super) fn recover_missed_down_boundary",
-            )
+            .split("pub(super) fn recover_missed_down_boundary")
             .next()
             .expect("normal prepared miss resolver body");
         for forbidden in ["PhysicalTimingWindow", "physical_timing_guard"] {
@@ -534,7 +532,7 @@ mod tests {
             .split("pub(crate) fn dispatch_prepared_normal_frame")
             .nth(1)
             .expect("normal precision helper")
-            .split("#[allow(clippy::too_many_arguments)]\npub(super) fn record_down_send_result")
+            .split("pub(super) fn record_down_send_result")
             .next()
             .expect("normal precision helper body");
         let helper = source

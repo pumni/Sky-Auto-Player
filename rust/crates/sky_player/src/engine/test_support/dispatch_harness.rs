@@ -192,23 +192,40 @@ impl ProductionDispatchTestHarness {
                 kind: ActionKind::Down,
                 scheduled_us: 1_000,
                 scan_codes: vec![0x16].into(),
-                reason: "prepared-causality-backlog".into(),
+                reason: "prepared-causality-unseen-backlog-a".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
-                scheduled_us: 100_000,
+                scheduled_us: 2_000,
                 scan_codes: vec![0x17].into(),
-                reason: "prepared-causality-next-future".into(),
+                reason: "prepared-causality-unseen-backlog-b".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
+                kind: ActionKind::Down,
+                scheduled_us: 100_000,
+                scan_codes: vec![0x18].into(),
+                reason: "prepared-causality-next-future".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
                 kind: ActionKind::Up,
                 scheduled_us: 120_000,
-                scan_codes: vec![0x15, 0x16, 0x17].into(),
+                scan_codes: vec![0x15, 0x16, 0x17, 0x18].into(),
                 reason: "prepared-causality-cleanup".into(),
             },
         ])
+    }
+
+    pub fn new_prepared_unpaired_down_for_test() -> Self {
+        Self::create_harness(&[KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15, 0x16].into(),
+            reason: "prepared-unpaired-down".into(),
+        }])
     }
 
     /// Build two independent Down boundaries five milliseconds apart.  The
@@ -1511,12 +1528,11 @@ impl ProductionDispatchTestHarness {
     pub fn configure_prepared_transport_outcome_for_test(
         &mut self,
         status: SendTransactionStatus,
-    ) -> Arc<AtomicU64> {
-        let calls = Arc::new(AtomicU64::new(0));
-        let counter = Arc::clone(&calls);
+    ) -> Arc<Mutex<Vec<SendEvidence>>> {
+        let evidence = Arc::new(Mutex::new(Vec::with_capacity(2)));
+        let captured = Arc::clone(&evidence);
         let clock = self.resources.clock;
         self.resources.backend.set_packet_emitter(move |packet| {
-            counter.fetch_add(1, Ordering::SeqCst);
             let requested_mask = packet.up_mask | packet.down_mask;
             let started_ticks = clock.now().ok();
             let (confirmed_mask, first_inserted, attempts, completed_ticks, timing_error) =
@@ -1550,7 +1566,7 @@ impl ProductionDispatchTestHarness {
                     SendTransactionStatus::DownExpiredBeforeSend => (0, 0, 0, None, None),
                     SendTransactionStatus::PreparationRejected => (0, 0, 0, None, None),
                 };
-            SendTransactionOutcome {
+            let outcome = SendTransactionOutcome {
                 status,
                 evidence: SendEvidence {
                     requested_mask,
@@ -1566,9 +1582,14 @@ impl ProductionDispatchTestHarness {
                     completed_ticks,
                     timing_error,
                 },
-            }
+            };
+            captured
+                .lock()
+                .expect("prepared transport evidence lock")
+                .push(outcome.evidence);
+            outcome
         });
-        calls
+        evidence
     }
 
     /// Capture the exact directional packet masks presented to the production
@@ -1765,6 +1786,132 @@ impl ProductionDispatchTestHarness {
         self.prepared_target_qpc = None;
         self.prepared_wait_entry_qpc = None;
         self.prepared_stream_for_test = Some(stream);
+    }
+
+    pub fn authorize_prepared_current_for_test(&mut self) -> Result<(), String> {
+        let stream = self
+            .prepared_stream_for_test
+            .as_ref()
+            .ok_or_else(|| "prepared stream test setup".to_string())?;
+        let frame = match stream.current() {
+            Some(PreparedDispatchEntry::Physical(frame)) => frame,
+            Some(PreparedDispatchEntry::Metadata { .. }) => {
+                return Err("prepared authorization test requires a physical frame".to_string());
+            }
+            None => return Err("prepared stream test is exhausted".to_string()),
+        };
+        let target_qpc = self
+            .resources
+            .playback
+            .epoch
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .map_err(|error| format!("prepared authorization target arithmetic: {error}"))?;
+        let now_qpc = self
+            .resources
+            .clock
+            .now()
+            .map_err(|error| format!("prepared authorization QPC: {error:?}"))?;
+        if target_qpc <= now_qpc {
+            return Err("prepared authorization target is not future".to_string());
+        }
+        if frame.view.packet_masks.down_mask != 0 {
+            let target = TargetStamp {
+                hwnd: self.target_hwnd.load(Ordering::Acquire),
+                generation: self.target_generation.load(Ordering::Acquire),
+            };
+            self.runtime
+                .record_prepared_down_authorization(
+                    PhysicalBoundaryStamp {
+                        first_batch_index: frame.view.prepared_batch.index,
+                        packet_index: frame.view.prepared_batch.packet_index,
+                        packet_batch_count: frame.view.prepared_batch.packet_batch_count,
+                        source_action_index: frame.view.batch_source_action_index,
+                        up_mask: frame.view.packet_masks.up_mask,
+                        down_mask: frame.view.packet_masks.down_mask,
+                        physical_target_qpc: target_qpc,
+                    },
+                    target.generation,
+                    true,
+                )
+                .map_err(|error| format!("prepared authorization: {error}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn dispatch_prepared_current_after_authorized_stall_for_test(
+        &mut self,
+        stall_us: u64,
+    ) -> DispatchStep {
+        let mut stream = self
+            .prepared_stream_for_test
+            .take()
+            .expect("prepared stream test setup");
+        let frame = match stream.current() {
+            Some(PreparedDispatchEntry::Physical(frame)) => frame,
+            Some(PreparedDispatchEntry::Metadata { .. }) => {
+                panic!("prepared stall test requires a physical frame")
+            }
+            None => panic!("prepared stream is exhausted"),
+        };
+        let physical_target_qpc = self
+            .resources
+            .playback
+            .epoch
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .expect("prepared authorized target arithmetic");
+        while self.resources.clock.now().expect("prepared stall wait QPC") < physical_target_qpc {
+            std::hint::spin_loop();
+        }
+        let wall_now = self.resources.clock.now().expect("prepared stall QPC");
+        let stall_ticks = self
+            .resources
+            .clock
+            .duration_from_us(stall_us)
+            .expect("prepared stall conversion");
+        let effective_now_ticks = TimelineTicks::from_raw(
+            frame
+                .offset_ticks
+                .as_u64()
+                .checked_add(stall_ticks.as_u64())
+                .expect("prepared stall timeline arithmetic"),
+        );
+        let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
+            hwnd: self.target_hwnd.load(Ordering::Acquire),
+            generation: self.target_generation.load(Ordering::Acquire),
+        });
+        let step = dispatch_prepared_normal_frame(
+            frame,
+            &self.config,
+            &mut self.resources,
+            &mut self.health,
+            &self.timing,
+            &mut self.runtime,
+            &mut self.local_metrics,
+            &self.focus_active,
+            &self.target_hwnd,
+            &self.target_generation,
+            &self.quit_requested,
+            &self.skip_requested,
+            &self.panic_requested,
+            &self.desired_pause,
+            &self.supervisor_expired,
+            &self.system_power,
+            &self.progress_clock,
+            Some(&self.observer),
+            preflight_target,
+            physical_target_qpc,
+            effective_now_ticks,
+            wall_now,
+            false,
+            Some(wall_now),
+            stream.explicitly_cancelled_generation_ids(),
+            false,
+        );
+        if matches!(step, DispatchStep::Dispatched) {
+            stream.advance().expect("prepared stream advance");
+        }
+        self.prepared_stream_for_test = Some(stream);
+        step
     }
 
     pub fn prepared_stream_built_qpc_for_test(&self) -> Option<QpcTicks> {
