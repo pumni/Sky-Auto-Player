@@ -224,6 +224,71 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
+    pub fn new_prepared_zero_slack_down_up_for_test(min_hold_us: u64) -> Self {
+        Self::create_harness_with_min_hold(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "prepared-zero-slack-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: min_hold_us,
+                    scan_codes: vec![0x15].into(),
+                    reason: "prepared-zero-slack-up".into(),
+                },
+            ],
+            min_hold_us,
+        )
+    }
+
+    pub fn new_prepared_materialized_causality_sequence_for_test(min_hold_us: u64) -> Self {
+        Self::create_harness_with_min_hold(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: vec![0x15].into(),
+                    reason: "prepared-materialized-causality-first".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Down,
+                    scheduled_us: 1_000,
+                    scan_codes: vec![0x16].into(),
+                    reason: "prepared-materialized-causality-unseen-a".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 2_000,
+                    scan_codes: vec![0x17].into(),
+                    reason: "prepared-materialized-causality-unseen-b".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Down,
+                    scheduled_us: 200_000,
+                    scan_codes: vec![0x18].into(),
+                    reason: "prepared-materialized-causality-later".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 4,
+                    kind: ActionKind::Up,
+                    scheduled_us: 220_000,
+                    scan_codes: vec![0x15, 0x16, 0x17, 0x18].into(),
+                    reason: "prepared-materialized-causality-cleanup".into(),
+                },
+            ],
+            min_hold_us,
+        )
+    }
+
     pub fn new_prepared_unpaired_down_for_test() -> Self {
         Self::create_harness(&[
             KeyActionInput {
@@ -2187,6 +2252,22 @@ impl ProductionDispatchTestHarness {
 
     pub fn prepared_target_qpc_for_test(&self) -> Option<QpcTicks> {
         self.prepared_target_qpc
+    }
+
+    pub fn prepared_current_target_qpc_for_test(&self) -> Option<QpcTicks> {
+        let frame = self
+            .prepared_stream_for_test
+            .as_ref()
+            .and_then(PreparedDispatchStream::current)
+            .and_then(|entry| match entry {
+                PreparedDispatchEntry::Physical(frame) => Some(frame),
+                PreparedDispatchEntry::Metadata { .. } => None,
+            })?;
+        self.resources
+            .playback
+            .epoch
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .ok()
     }
 
     pub fn prepared_alignment_qpc_for_test(&self) -> Option<QpcTicks> {

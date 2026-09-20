@@ -19,6 +19,7 @@ use super::{
     supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     wake_lateness_ticks,
 };
+use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::TimelineTicks;
@@ -31,6 +32,11 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const TEST_WALL_CLOCK_PREROLL_US: u64 = 500_000;
+
+fn issue_379_materialized_policy() -> MaterializedTimingPolicy {
+    MaterializedTimingPolicy::from_user_margin(60, 1.0, 500)
+        .expect("issue #379 materialized timing policy")
+}
 
 fn test_session_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
@@ -1129,7 +1135,14 @@ fn prepared_future_authorization_before_stall_later_unseen_backlog_future() {
 }
 
 #[test]
-fn prepared_authorized_down_lateness_matrix_preserves_causality_and_no_cutoff() {
+fn materialized_zero_slack_authorized_down_lateness_matrix() {
+    let policy = issue_379_materialized_policy();
+    assert_eq!(policy.frame_us, 16_667);
+    assert_eq!(policy.frame_base_hold_us, 16_667);
+    assert_eq!(policy.timing_margin_us, 500);
+    assert_eq!(policy.min_hold_us, 17_167);
+    assert_eq!(policy.min_release_gap_us, 17_167);
+
     for (label, lateness_us) in [
         ("one QPC tick", None),
         ("100 us", Some(100)),
@@ -1138,17 +1151,29 @@ fn prepared_authorized_down_lateness_matrix_preserves_causality_and_no_cutoff() 
         ("20,000 us", Some(20_000)),
         ("100,000 us", Some(100_000)),
     ] {
-        let mut harness =
-            ProductionDispatchTestHarness::new_prepared_authorization_causality_sequence_for_test();
+        let mut harness = ProductionDispatchTestHarness::new_prepared_zero_slack_down_up_for_test(
+            policy.min_hold_us,
+        );
         let (packets, evidence) =
             harness.configure_prepared_packet_capture_with_evidence_for_test();
         harness.prepare_prepared_stream_for_test();
+        let authored_offsets = harness.prepared_frame_offsets_for_test();
+        assert_eq!(authored_offsets.len(), 2, "{label}: paired Down/Up frames");
+        let expected_hold_ticks = harness
+            .qpc_duration_from_us_for_test(policy.min_hold_us)
+            .unwrap_or_else(|error| panic!("{label}: hold conversion: {error}"));
+        assert_eq!(
+            authored_offsets[1] - authored_offsets[0],
+            expected_hold_ticks.as_u64(),
+            "{label}: authored Up - authored Down must equal policy.min_hold_us"
+        );
         harness
             .align_prepared_current_to_benchmark_margin_for_test(10_000)
             .expect("future authored boundary alignment");
+        let initial_epoch = harness.playback_epoch_qpc_for_test();
 
         let authored_target = harness
-            .prepared_target_qpc_for_test()
+            .prepared_current_target_qpc_for_test()
             .expect("prepared authored target");
         let now = harness
             .qpc_now_for_test()
@@ -1160,6 +1185,11 @@ fn prepared_authorized_down_lateness_matrix_preserves_causality_and_no_cutoff() 
         harness
             .authorize_prepared_current_for_test()
             .unwrap_or_else(|error| panic!("{label}: authorize boundary A: {error}"));
+        assert_eq!(
+            harness.playback_epoch_qpc_for_test(),
+            initial_epoch,
+            "{label}: authorization must not rebase playback"
+        );
 
         let lateness = lateness_us.map_or(DurationTicks::from_raw(1), |us| {
             harness
@@ -1170,6 +1200,11 @@ fn prepared_authorized_down_lateness_matrix_preserves_causality_and_no_cutoff() 
             harness.dispatch_prepared_current_after_authorized_stall_ticks_for_test(lateness),
             super::worker::DispatchStep::Dispatched
         ));
+        assert_eq!(
+            harness.playback_epoch_qpc_for_test(),
+            initial_epoch,
+            "{label}: late authorized Down must not rebase playback"
+        );
         assert_eq!(
             *packets.lock().expect("boundary A packet capture"),
             vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b0001)],
@@ -1185,91 +1220,116 @@ fn prepared_authorized_down_lateness_matrix_preserves_causality_and_no_cutoff() 
             assert_eq!(captured[0].attempts, 1, "{label}: boundary A send attempts");
         }
 
-        let backlog_wall_lateness = core::cmp::max(
-            lateness,
-            harness
-                .qpc_duration_from_us_for_test(10_000)
-                .unwrap_or_else(|error| panic!("{label}: backlog lateness conversion: {error}")),
-        );
-        let backlog_wall_now = authored_target
-            .checked_add_duration(backlog_wall_lateness)
-            .unwrap_or_else(|error| panic!("{label}: backlog wall QPC arithmetic: {error}"));
-        for boundary in ["B", "C"] {
-            assert!(matches!(
-                harness.dispatch_prepared_current_at_synthetic_wall_qpc_for_test(backlog_wall_now),
-                super::worker::DispatchStep::Dispatched
-            ));
-            assert_eq!(
-                packets
-                    .lock()
-                    .expect("unseen backlog packet capture")
-                    .as_slice(),
-                &[sky_dispatch_win32::input::PhysicalPacket::new(0, 0b0001)],
-                "{label}: overdue {boundary} must not create a catch-up Down"
-            );
-        }
-        assert_eq!(harness.prepared_normal_backlog_count_for_test(), 2);
-        assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 2);
-        assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
-        assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
-        assert_eq!(
-            evidence.lock().expect("backlog transport evidence").len(),
-            1
-        );
-        while harness.pending_observation_count() != 0 {
-            harness
-                .drain_observer()
-                .unwrap_or_else(|error| panic!("{label}: drain backlog observation: {error:?}"));
-        }
-
-        let backlog_records = harness
-            .telemetry_records_for_test()
-            .into_iter()
-            .filter(|record| record.outcome == trace_outcome_code("down_unobserved_backlog"))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            backlog_records.len(),
-            2,
-            "{label}: B/C must be classified as UnobservedBacklog"
-        );
-        assert!(backlog_records.iter().all(|record| {
-            record.down_mask != 0 && record.send_attempts == 0 && record.sent_count == 0
-        }));
-
-        harness
-            .align_prepared_current_to_benchmark_margin_for_test(10_000)
-            .expect("future reauthorization alignment");
-        let next_target = harness
-            .prepared_target_qpc_for_test()
-            .expect("next authored target");
-        assert!(
-            next_target > harness.qpc_now_for_test().expect("next authorization QPC"),
-            "{label}: next boundary must be future before authorization"
-        );
-        harness
-            .authorize_prepared_current_for_test()
-            .unwrap_or_else(|error| panic!("{label}: authorize next boundary: {error}"));
-        assert!(matches!(
-            harness.dispatch_prepared_current_after_authorized_stall_ticks_for_test(
-                DurationTicks::from_raw(1)
-            ),
-            super::worker::DispatchStep::Dispatched
-        ));
-        assert_eq!(
-            *packets.lock().expect("next future packet capture"),
-            vec![
-                sky_dispatch_win32::input::PhysicalPacket::new(0, 0b0001),
-                sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1000),
-            ],
-            "{label}: causal authorization must resume on a new future boundary"
-        );
-        let captured = evidence.lock().expect("final transport evidence");
-        assert_eq!(captured.len(), 2, "{label}: exactly two physical sends");
-        assert!(captured.iter().all(|entry| entry.attempts == 1));
         assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
         assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
     }
+}
+
+#[test]
+fn late_authorized_down_does_not_catch_up_unseen_boundaries() {
+    let policy = issue_379_materialized_policy();
+    let mut harness =
+        ProductionDispatchTestHarness::new_prepared_materialized_causality_sequence_for_test(
+            policy.min_hold_us,
+        );
+    let (packets, evidence) = harness.configure_prepared_packet_capture_with_evidence_for_test();
+    harness.prepare_prepared_stream_for_test();
+    harness
+        .align_prepared_current_to_benchmark_margin_for_test(10_000)
+        .expect("future authored boundary alignment");
+    let initial_epoch = harness.playback_epoch_qpc_for_test();
+    let authored_target = harness
+        .prepared_current_target_qpc_for_test()
+        .expect("prepared authored target");
+    assert!(authored_target > harness.qpc_now_for_test().expect("authorization QPC"));
+    harness
+        .authorize_prepared_current_for_test()
+        .expect("authorize boundary A before stall");
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+
+    let lateness = harness
+        .qpc_duration_from_us_for_test(100_000)
+        .expect("100 ms lateness conversion");
+    assert!(matches!(
+        harness.dispatch_prepared_current_after_authorized_stall_ticks_for_test(lateness),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+    assert_eq!(
+        *packets.lock().expect("boundary A packet capture"),
+        vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b0001)]
+    );
+
+    let backlog_wall_now = authored_target
+        .checked_add_duration(lateness)
+        .expect("backlog wall QPC arithmetic");
+    for boundary in ["B", "C"] {
+        assert!(matches!(
+            harness.dispatch_prepared_current_at_synthetic_wall_qpc_for_test(backlog_wall_now),
+            super::worker::DispatchStep::Dispatched
+        ));
+        assert_eq!(
+            harness.playback_epoch_qpc_for_test(),
+            initial_epoch,
+            "overdue {boundary} must not rebase playback"
+        );
+    }
+    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 2);
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 2);
+    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+    assert_eq!(
+        evidence.lock().expect("backlog transport evidence").len(),
+        1
+    );
+    while harness.pending_observation_count() != 0 {
+        harness
+            .drain_observer()
+            .expect("drain causal backlog observation");
+    }
+    let backlog_records = harness
+        .telemetry_records_for_test()
+        .into_iter()
+        .filter(|record| record.outcome == trace_outcome_code("down_unobserved_backlog"))
+        .collect::<Vec<_>>();
+    assert_eq!(backlog_records.len(), 2);
+    assert!(backlog_records.iter().all(|record| {
+        record.down_mask != 0 && record.send_attempts == 0 && record.sent_count == 0
+    }));
+
+    let later_target = harness
+        .prepared_current_target_qpc_for_test()
+        .expect("later D target");
+    assert!(
+        later_target > harness.qpc_now_for_test().expect("later D QPC"),
+        "D must remain naturally future after B/C classification"
+    );
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+    harness
+        .authorize_prepared_current_for_test()
+        .expect("authorize naturally future D");
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+    assert!(matches!(
+        harness.dispatch_prepared_current_after_authorized_stall_ticks_for_test(
+            DurationTicks::from_raw(1)
+        ),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+    assert_eq!(
+        *packets.lock().expect("causal packet capture"),
+        vec![
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b0001),
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1000),
+        ]
+    );
+    let captured = evidence.lock().expect("causal transport evidence");
+    assert_eq!(captured.len(), 2);
+    assert!(captured.iter().all(|entry| entry.attempts == 1));
+    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+    assert_eq!(harness.timeline_rebase_count_for_test(), 0);
 }
 
 #[test]
