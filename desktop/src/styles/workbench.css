@@ -154,12 +154,12 @@ body.is-resizing * {
 
 .library-nav-item:hover {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .library-nav-item.is-active {
   color: var(--text-primary);
-  background: var(--surface-selected);
+  background: var(--selection-bg);
 }
 
 .library-nav-item-icon {
@@ -218,11 +218,11 @@ body.is-resizing * {
 }
 
 .library-nav-action-row:hover {
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .library-nav-action-row.is-active {
-  background: var(--surface-selected);
+  background: var(--selection-bg);
 }
 
 .library-nav-action-row .library-nav-item:hover,
@@ -243,7 +243,7 @@ body.is-resizing * {
 .library-more-button:hover,
 .library-more-button:focus-visible {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .library-nav-action-row:hover .library-more-button,
@@ -317,7 +317,7 @@ body.is-resizing * {
 
 .library-add-button:hover {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .library-add-button.is-collapsed {
@@ -336,7 +336,7 @@ body.is-resizing * {
 
 .library-inline-error {
   margin-top: 10px;
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .library-menu-popover,
@@ -374,7 +374,7 @@ body.is-resizing * {
 .library-menu-item:hover,
 .library-menu-item[data-focused='true'] {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .library-menu-item svg {
@@ -389,7 +389,7 @@ body.is-resizing * {
 }
 
 .library-menu-item.is-danger {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .library-menu-item:disabled,
@@ -445,13 +445,14 @@ body.is-resizing * {
 }
 
 .button-danger {
-  border-color: var(--danger);
-  color: #fff;
-  background: var(--danger);
+  border-color: var(--danger-border);
+  color: var(--on-danger);
+  background: var(--danger-fill);
 }
 
 .button-danger:hover {
-  filter: brightness(1.08);
+  filter: none;
+  background: var(--danger-fill-hover);
 }
 
 @container utility (max-width: 300px) {
@@ -532,7 +533,7 @@ body.is-resizing * {
 
 .track-browser-back-button:hover {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .playlist-add-songs-button {
@@ -550,7 +551,7 @@ body.is-resizing * {
 
 .playlist-add-songs-button:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .track-browser-header h1 {
@@ -650,11 +651,11 @@ body.is-resizing * {
 
 .utility-view-tabs [role='tab']:hover {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .utility-view-tabs [role='tab'][aria-selected='true'] {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--selection-indicator);
   color: var(--text-primary);
 }
 
@@ -718,7 +719,7 @@ body.is-resizing * {
 
 .diagnostics-export-button:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .diagnostics-export-button:disabled {
@@ -878,7 +879,7 @@ body.is-resizing * {
 }
 
 .diagnostics-tabs [role='tab'][aria-selected='true'] {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--selection-indicator);
   color: var(--text-primary);
 }
 
@@ -977,7 +978,7 @@ body.is-resizing * {
 }
 
 .diagnostics-empty-state.is-error strong {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .diagnostics-backend-status {
@@ -995,18 +996,18 @@ body.is-resizing * {
 }
 
 .diagnostics-backend-status.is-healthy {
-  border-color: color-mix(in srgb, var(--success) 55%, var(--border-subtle));
-  color: var(--success);
+  border-color: var(--success-border);
+  color: var(--success-fg);
 }
 
 .diagnostics-backend-status.is-degraded {
-  border-color: color-mix(in srgb, var(--warning) 55%, var(--border-subtle));
-  color: var(--warning);
+  border-color: var(--warning-border);
+  color: var(--warning-fg);
 }
 
 .diagnostics-backend-status.is-error {
-  border-color: color-mix(in srgb, var(--danger) 55%, var(--border-subtle));
-  color: var(--danger);
+  border-color: var(--danger-border);
+  color: var(--danger-fg);
 }
 
 .diagnostics-plot {
@@ -1086,11 +1087,39 @@ body.is-resizing * {
 }
 
 .diagnostics-lines .log-error {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .diagnostics-lines .log-warning {
-  color: var(--warning);
+  color: var(--warning-fg);
+}
+
+@media (forced-colors: active) {
+  .library-nav-item.is-active,
+  .library-nav-action-row.is-active,
+  .settings-nav-item.is-active {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  .library-nav-item.is-active .library-nav-item-icon {
+    color: HighlightText;
+  }
+
+  .button-danger {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  .diagnostics-backend-status.is-healthy,
+  .diagnostics-backend-status.is-degraded,
+  .diagnostics-backend-status.is-error {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: Canvas;
+  }
 }
 
 @media (max-width: 1040px) {

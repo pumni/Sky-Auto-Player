@@ -17,7 +17,6 @@ import type {
   LibraryPlaylistSummary,
   LibraryPlaylistImportResult,
   LibraryNavigation,
-  ThemeId,
   UiEvent,
   ViewportRequest,
   ViewportResult,
@@ -89,7 +88,7 @@ const rows = Array.from({ length: 500 }, (_, index) =>
 
 function initialSettings(): Settings {
   return {
-    theme: 'aurora',
+    palette: 'aurora',
     ui_background_mode: 'opaque',
     playback_defaults: {
       hold_frames: 1,
@@ -496,7 +495,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           timing_margin_max_us: 3_000,
           timing_margin_step_us: 100,
         },
-        theme: settings.theme,
+        palette: settings.palette,
+        theme: settings.palette,
         telemetry_enabled: settings.telemetry_enabled,
         update_preferences: settings.update_preferences,
         catalog_state: 'ready',
@@ -655,7 +655,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       const playback = patch.playbackDefaults;
       settings = {
         ...settings,
-        ...(patch.theme === undefined ? {} : { theme: patch.theme as ThemeId }),
+        ...(patch.palette === undefined ? {} : { palette: patch.palette }),
         ...(patch.telemetryEnabled === undefined
           ? {}
           : { telemetry_enabled: patch.telemetryEnabled }),

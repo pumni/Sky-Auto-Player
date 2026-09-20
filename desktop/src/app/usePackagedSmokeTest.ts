@@ -77,22 +77,22 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
       ) {
         throw new Error('packaged GUI library store postcondition failed');
       }
-      const expectedTheme = state.settings?.theme ?? 'aurora';
-      const smokeTheme = expectedTheme === 'aurora' ? 'slate' : 'aurora';
-      const patched = await bridge.patchSettings({ theme: smokeTheme });
-      if (patched.theme !== smokeTheme) {
+      const expectedPalette = state.settings?.palette ?? 'aurora';
+      const smokePalette = expectedPalette === 'aurora' ? 'slate' : 'aurora';
+      const patched = await bridge.patchSettings({ palette: smokePalette });
+      if (patched.palette !== smokePalette) {
         throw new Error('packaged GUI settings mutation postcondition failed');
       }
       const reread = await bridge.getSettings();
-      if (reread.theme !== smokeTheme) {
+      if (reread.palette !== smokePalette) {
         throw new Error('packaged GUI settings round-trip postcondition failed');
       }
-      const restored = await bridge.patchSettings({ theme: expectedTheme });
-      if (restored.theme !== expectedTheme) {
+      const restored = await bridge.patchSettings({ palette: expectedPalette });
+      if (restored.palette !== expectedPalette) {
         throw new Error('packaged GUI settings restore postcondition failed');
       }
       const restoredRead = await bridge.getSettings();
-      if (restoredRead.theme !== expectedTheme) {
+      if (restoredRead.palette !== expectedPalette) {
         throw new Error('packaged GUI settings restore round-trip failed');
       }
       const afterSettings = useStore.getState();
