@@ -4746,14 +4746,15 @@ impl NativePlaybackService {
             settings.allow_title_fallback,
         )
         .ok_or_else(|| "no admissible visible Sky window was found".to_string())?;
-        if matches!(
+        match target_integrity_startup_failure(
             sky_dispatch_win32::focus::target_integrity_compatibility(target),
-            sky_dispatch_win32::focus::TargetIntegrityCompatibility::Mismatch
         ) {
-            return Err(
-                "target Sky process has higher integrity than Sky Auto Player; Windows UIPI can block SendInput"
-                    .to_string(),
-            );
+            Some(error) => return Err(error.to_string()),
+            None => {
+                // Compatible and Unknown are both allowed to continue.  The
+                // integrity query is a bounded startup/control-plane hint;
+                // it is never repeated by the realtime worker.
+            }
         }
         if !sky_dispatch_win32::focus::focus_window_and_verify(target, Duration::from_millis(100)) {
             return Err("validated Sky window could not be focused".into());
@@ -5230,6 +5231,18 @@ impl NativePlaybackService {
                 thread::sleep(Duration::from_millis(10));
             }
         }
+    }
+}
+
+fn target_integrity_startup_failure(
+    compatibility: sky_dispatch_win32::focus::TargetIntegrityCompatibility,
+) -> Option<&'static str> {
+    match compatibility {
+        sky_dispatch_win32::focus::TargetIntegrityCompatibility::Mismatch => Some(
+            "target Sky process has higher integrity than Sky Auto Player; Windows UIPI can block SendInput",
+        ),
+        sky_dispatch_win32::focus::TargetIntegrityCompatibility::Compatible
+        | sky_dispatch_win32::focus::TargetIntegrityCompatibility::Unknown => None,
     }
 }
 
@@ -6646,8 +6659,8 @@ mod tests {
         recommended_calibrated_timing_margin_us, release_terminal_ownership,
         remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
         safe_calibration_evidence, sender_sample_summary, sender_trace_export_json,
-        settings_fingerprint, supervisor_heartbeat_loop, timing_margin_recommendation,
-        validate_playback_start_request,
+        settings_fingerprint, supervisor_heartbeat_loop, target_integrity_startup_failure,
+        timing_margin_recommendation, validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
@@ -9180,6 +9193,48 @@ mod tests {
                 (expected_code, expected_message)
             );
         }
+    }
+
+    #[test]
+    fn target_integrity_startup_admission_fails_only_for_mismatch() {
+        use sky_dispatch_win32::focus::TargetIntegrityCompatibility;
+
+        assert!(
+            target_integrity_startup_failure(TargetIntegrityCompatibility::Compatible).is_none()
+        );
+        assert!(target_integrity_startup_failure(TargetIntegrityCompatibility::Unknown).is_none());
+        assert_eq!(
+            target_integrity_startup_failure(TargetIntegrityCompatibility::Mismatch),
+            Some(
+                "target Sky process has higher integrity than Sky Auto Player; Windows UIPI can block SendInput"
+            )
+        );
+    }
+
+    #[test]
+    fn target_integrity_admission_precedes_focus_and_session_arm() {
+        let source = include_str!("native_runtime.rs").replace("\r\n", "\n");
+        let create = source
+            .split("fn create_native_player(")
+            .nth(1)
+            .expect("native player creation chain");
+        let integrity = create
+            .find("target_integrity_startup_failure")
+            .expect("startup integrity admission");
+        let focus = create
+            .find("focus_window_and_verify")
+            .expect("target focus verification");
+        let session = create
+            .find("NativeDispatchSession::new_with_power_endpoint")
+            .expect("native session construction");
+        assert!(integrity < focus);
+        assert!(integrity < session);
+
+        let arm = source.find("player.arm(0)?").expect("physical session arm");
+        let create_call = source
+            .find("self.create_native_player(")
+            .expect("native player creation call");
+        assert!(create_call < arm);
     }
 
     #[test]

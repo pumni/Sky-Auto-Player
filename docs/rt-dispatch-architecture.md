@@ -138,9 +138,10 @@ The current application default is a `500 µs` user Timing Margin at 60 FPS:
 are `17,167 µs`; focus restore grace remains `100,000 µs`. Historical
 acceptance runs retain their exact recorded values and are not rewritten when
 product defaults change.
-Normal playback has no configurable late-note cutoff. A prepared frame is
-delivered once it is due and authorized; lateness is evidence, not suppression.
-Strict/diagnostic mode may still use
+Normal playback has no configurable late-note tolerance. A prepared frame is
+delivered once it is due and causally authorized, subject to the paired
+frame's static authored hold-validity cutoff. An unpaired Down has no invented
+finite cutoff but still requires future authorization. Strict/diagnostic mode may still use
 `physical_latest_down_start = authored target + Timing Margin` as its
 intentional physical bound.
 Controlled A/B runs may pass `--timing-margin-us 0..3000` in `100 µs` steps;
@@ -258,8 +259,10 @@ The worker-owned target crossing happens before final policy admission. The
 worker's `final_policy_qpc` is the post-revalidation policy/lease evidence
 sample. The trusted prepared sender then resolves the fixed payload pointer
 and length, resets thread-local Win32 error state, and takes the true
-`pre_call_qpc` immediately before the syscall. Normal mode has no late-note
-sender cutoff; strict mode may apply its physical latest-start bound.
+`pre_call_qpc` immediately before the syscall. For normal prepared Down
+traffic, paired frames use the frozen authored hold-validity cutoff and
+unpaired frames have no finite cutoff; strict mode may additionally apply its
+physical latest-start bound.
 The sender performs no target wait or policy recheck after receiving the
 prepared packet.
 The transport reports `sendinput_completion_qpc`; production does not subtract
@@ -432,8 +435,10 @@ The final precision spin performs only its QPC wait-target comparison and
 are completed before that stage; no interrupt-generation polling or control
 branch is inserted into the final spin. The QPC deadline check remains
 authoritative and cannot be bypassed by an event. The sender independently
-checks the strict physical Down sender cutoff with its true pre-call QPC sample
-when strict mode is enabled. Normal playback has no late-note cutoff.
+checks the applicable cutoff with its true pre-call QPC sample: strict physical
+cutoff when strict mode is enabled, or the frozen paired prepared hold-validity
+cutoff for normal prepared Down traffic. An unpaired normal Down has no finite
+cutoff but is still gated by future authorization.
 Production admission requires the high-resolution waitable timer and event wait
 and terminates on startup or runtime wait failure; it does not degrade to sleep
 timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
@@ -467,12 +472,13 @@ latency and a same-boundary `Continue`/replan, but not a changed plan, target,
 epoch, pause, focus rebase, or completed/missed commit. A kernel wait result is
 not the musical proof.
 
-In normal prepared playback a due Down is sent once; scheduler lateness does
-not create `UnobservedBacklog`, `DownExpiredBeforeSend`, or
-`PhysicalWindowExpired`. Strict/test-support dynamic dispatch may retain those
-classifications. A failed or uncertain safety Up remains terminal. Up-only
-safety releases bypass musical floors and are sent even when late. Missed
-Downs are never retried or emitted as a catch-up burst.
+In normal prepared playback a causally authorized Down is sent once while its
+static paired hold-validity cutoff permits it. A missing future proof is
+`UnobservedBacklog`; crossing the paired sender cutoff is
+`DownExpiredBeforeSend`. Normal prepared recovery does not construct a
+`PhysicalWindowExpired` policy. A failed or uncertain safety Up remains
+terminal. Up-only safety releases bypass musical floors and are sent even when
+late. Missed Downs are never retried or emitted as a catch-up burst.
 
 ## 7. Failure and publication boundaries
 

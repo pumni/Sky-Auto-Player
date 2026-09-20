@@ -23,7 +23,8 @@ microsecond conversions.
 | `timing_margin` | User-owned persisted value, from `0` through `3,000 µs` in `100 µs` steps; frozen into each prepared session. |
 | `min_hold` | Fixed materialized floor equal to the selected frame-based hold plus the exact user Timing Margin. |
 | `physical_latest_down_start` | `authored_target + Timing Margin`; the physical/musical feasibility boundary for a Down-bearing packet. |
-| `sender_cutoff` | Strict/diagnostic mode may use `physical_latest_down_start`; normal playback has no late-note cutoff. |
+| `sender_cutoff` | Strict/diagnostic mode uses `physical_latest_down_start`; a paired normal prepared Down uses its frozen static authored hold-validity cutoff. |
+| `prepared_sender_cutoff` | Paired Down only: `physical_target + hold_slack`, where `hold_slack = authored_up - authored_down - effective_min_hold`; an unpaired Down has no invented finite cutoff. |
 | `musical_up_not_before` | Per-key floor from the last successful Down completion plus `frame_base_hold_ticks`. |
 | `down_not_before` | Per-key floor from the last successful Up completion plus `frame_ticks`. |
 | `min_release_gap` | One frame period plus the same exact user Timing Margin between a same-key Up and the next same-key Down. |
@@ -74,27 +75,34 @@ target or rebase the timeline.
 
 Strict/diagnostic Down-bearing packets evaluate physical feasibility against the
 Timing Margin boundary. Normal prepared packets use the immutable authored
-target and have no late-note sender cutoff:
+target. A paired Down also carries a static authored hold-validity cutoff;
+this is not dynamic physical-window policy or scheduler-lateness grace. An
+unpaired Down has no finite cutoff, but still requires causal future
+authorization:
 
 ```text
 physical_latest_down_start_qpc = authored_target_qpc + timing_margin_ticks
 packet_not_before_qpc = max(authored_target_qpc, relevant physical floors)
 packet_not_before_qpc <= physical_latest_down_start_qpc
 strict_sender_cutoff_qpc = physical_latest_down_start_qpc
-normal pre_call_qpc = authoritative sender evidence; no lateness cutoff
+paired prepared_sender_cutoff_qpc = physical_target_qpc + authored_hold_slack_ticks
+unpaired prepared_sender_cutoff_qpc = none; future authorization is required
+normal pre_call_qpc = authoritative sender evidence for the applicable cutoff
 strict pre_call_qpc <= strict_sender_cutoff_qpc
 ```
 
 If the physical floor is later than `physical_latest_down_start_qpc`, strict or
 diagnostic dispatch classifies the complete Down chord as
-`PhysicalWindowExpired`. Normal prepared playback does not turn scheduler
-lateness into a drop. Emergency and cleanup Ups bypass musical floors. Partial, uncertain, or post-send clock failures
+`PhysicalWindowExpired`. Normal prepared playback has no dynamic physical
+floor, but a paired sender that crosses its static authored validity cutoff is
+classified as `DownExpiredBeforeSend`; an unobserved due Down is
+`UnobservedBacklog`. Emergency and cleanup Ups bypass musical floors. Partial, uncertain, or post-send clock failures
 invalidate guard evidence and fail closed through cleanup.
 
 Timing Margin remains the only user-owned authored headroom: it extends the
 authored hold and release targets and defines `physical_latest_down_start` for
-strict/diagnostic qualification. Normal playback exposes no late-note timing
-policy.
+strict/diagnostic qualification. Prepared paired Down hold slack is static
+authored validity, not a configurable late-note timing policy.
 
 Before a native session starts, the boundary validator rejects every authored
 same-key Down→Up interval below `min_hold_us`, including intervals
@@ -216,12 +224,13 @@ the future. The identity stamp survives waiter-entry latency and a same-plan
 control replan, and is consumed before the boundary is admitted. A changed
 plan, pause, focus/epoch reset, or completed boundary clears it.
 
-In normal prepared playback, an overdue but authorized Down is sent once;
-scheduler lateness does not create `unobserved_backlog`,
-`physical_window_expired`, or `final_sender_window_expired`. Strict/test-support
-dynamic dispatch may retain those classifications. All missed Down targets
-remain immutable and are never retried, rebased, or emitted as a catch-up
-burst.
+In normal prepared playback, an authorized Down is sent once while its static
+authored hold-validity cutoff permits it. A due Down without the exact future
+proof is `unobserved_backlog`; a paired Down rejected by the sender cutoff is
+`final_sender_window_expired`/`DownExpiredBeforeSend`. Normal prepared
+recovery never constructs a dynamic `physical_window_expired` policy. All
+missed Down targets remain immutable and are never retried, rebased, or
+emitted as a catch-up burst.
 
 ## 4. Authoritative send ordering
 
@@ -249,8 +258,10 @@ mixed integrity loss is never blindly retried. A skipped key that the
 coordinator still owns is state disagreement and requires full cleanup and
 termination. Any zero/partial transport result is terminal for the playback
 worker; cleanup is a separate fail-closed release-all operation. The typed
-`DownExpiredBeforeSend` remains a strict/test-support classification; normal
-scheduler lateness does not enter that recovery path.
+`DownExpiredBeforeSend` is also the normal prepared paired-sender expiry result
+when the static authored validity cutoff is crossed. Its recovery uses only
+the immutable bounded Up prefix and frozen missed-boundary commit; normal
+recovery never enters `PhysicalTimingWindow` or `PhysicalTimingGuard` policy.
 
 Up-only traffic uses command admission but not the Down focus gate. Down
 traffic compares the stamped HWND with the published target/focus atomics at
