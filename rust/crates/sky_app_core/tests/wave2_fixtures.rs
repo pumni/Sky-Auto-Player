@@ -41,17 +41,17 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
     );
     assert_eq!(
         raw["config_layouts"]["legacy_v2"]["migrated_schema_version"],
-        8
+        9
     );
     assert_eq!(
-        raw["config_layouts"]["current_v3"]["normalized_theme"],
+        raw["config_layouts"]["current_v3"]["normalized_palette"],
         "slate"
     );
     let valid = &raw["valid_patch"];
     let mut service = SettingsService::load(MemoryStore::default()).expect("load settings");
     let patched = service
         .patch(&SettingsPatch {
-            theme: Some(valid["theme"].as_str().unwrap().into()),
+            palette: Some(valid["palette"].as_str().unwrap().into()),
             telemetry_enabled: Some(valid["telemetry_enabled"].as_bool().unwrap()),
             verbose_hud: Some(valid["verbose_hud"].as_bool().unwrap()),
             playback_defaults: Some(PlaybackDefaultsPatch {
@@ -73,7 +73,7 @@ fn settings_fixture_preserves_python_patch_and_atomic_failure_semantics() {
             }),
         })
         .expect("valid patch");
-    assert_eq!(patched.theme, "slate");
+    assert_eq!(patched.palette, "slate");
     assert_eq!(patched.playback_defaults.fps, 120);
     assert!(patched.playback_behavior.auto_play);
     assert_eq!(

@@ -124,7 +124,7 @@ fn v4_adapters_operate_with_immutable_install_payload_snapshot_proof() {
     let settings_store = JsonSettingsStore::new(paths.settings_path());
     let mut settings_service = SettingsService::load(settings_store).expect("load settings");
     let patch = sky_app_core::settings::SettingsPatch {
-        theme: Some("slate".into()),
+        palette: Some("slate".into()),
         ..Default::default()
     };
     settings_service

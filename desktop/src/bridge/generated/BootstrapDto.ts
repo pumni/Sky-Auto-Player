@@ -15,4 +15,12 @@ settings: SettingsDto,
 /**
  * Flattened fields remain additive compatibility aliases for protocol v1 clients.
  */
-playback_defaults: PlaybackDefaultsDto, timing_margin_recommendation: TimingMarginRecommendationDto, option_sets: PlaybackOptionSetsDto, theme: string, telemetry_enabled: boolean, update_preferences: UpdatePreferencesDto, catalog_state: CatalogReadiness, catalog_generation: number | null, };
+playback_defaults: PlaybackDefaultsDto, timing_margin_recommendation: TimingMarginRecommendationDto, option_sets: PlaybackOptionSetsDto, 
+/**
+ * Canonical flattened palette field for protocol-v1 clients.
+ */
+palette: string, 
+/**
+ * Legacy/deprecated protocol-v1 compatibility alias for `palette`.
+ */
+theme: string, telemetry_enabled: boolean, update_preferences: UpdatePreferencesDto, catalog_state: CatalogReadiness, catalog_generation: number | null, };

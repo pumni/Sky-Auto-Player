@@ -8,7 +8,7 @@ use crate::library::{LibraryError, LikedSongs};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 pub const DEFAULT_GAME_FPS: u16 = 60;
 pub const VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240];
 pub const DEFAULT_HOLD_FRAMES: f64 = 1.0;
@@ -22,7 +22,7 @@ pub const DEFAULT_SONGS_DIR: &str = "songs";
 pub const DEFAULT_UPDATE_INTERVAL_S: i64 = 86_400;
 pub const MAX_SKIP_VERSION_BYTES: usize = 128;
 
-pub const THEME_IDS: [&str; 5] = ["aurora", "minimalist", "slate", "cyberpunk", "classic"];
+pub const PALETTE_IDS: [&str; 5] = ["aurora", "minimalist", "slate", "cyberpunk", "classic"];
 pub const BACKGROUND_MODES: [&str; 2] = ["transparent", "painted"];
 pub const DEFAULT_PROCESS_NAMES: [&str; 2] = ["Sky.exe", "Sky Children of the Light.exe"];
 
@@ -149,7 +149,7 @@ impl Default for PlaybackDefaults {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplicationSettings {
-    pub theme: String,
+    pub palette: String,
     pub ui_background_mode: String,
     pub playback_defaults: PlaybackDefaults,
     #[serde(default)]
@@ -172,7 +172,7 @@ pub struct ApplicationSettings {
 impl Default for ApplicationSettings {
     fn default() -> Self {
         Self {
-            theme: "aurora".into(),
+            palette: "aurora".into(),
             ui_background_mode: "transparent".into(),
             playback_defaults: PlaybackDefaults::default(),
             playback_behavior: PlaybackBehaviorSettings::default(),
@@ -209,7 +209,7 @@ pub struct UpdatePreferencesPatch {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsPatch {
-    pub theme: Option<String>,
+    pub palette: Option<String>,
     pub telemetry_enabled: Option<bool>,
     pub verbose_hud: Option<bool>,
     pub playback_defaults: Option<PlaybackDefaultsPatch>,
@@ -305,7 +305,7 @@ impl<S: SettingsStore> SettingsService<S> {
 }
 
 pub fn normalize_settings(mut settings: ApplicationSettings) -> ApplicationSettings {
-    settings.theme = normalized_theme(&settings.theme);
+    settings.palette = normalized_palette(&settings.palette);
     settings.ui_background_mode = normalized_background(&settings.ui_background_mode);
     settings.playback_defaults.hold_frames =
         normalize_hold_frames(settings.playback_defaults.hold_frames);
@@ -325,8 +325,8 @@ pub fn apply_patch(
 ) -> Result<ApplicationSettings, SettingsError> {
     let mut next = current.clone();
 
-    if let Some(theme) = &patch.theme {
-        next.theme = validate_theme(theme)?;
+    if let Some(palette) = &patch.palette {
+        next.palette = validate_palette(palette)?;
     }
     if let Some(value) = patch.telemetry_enabled {
         next.telemetry_enabled = value;
@@ -366,9 +366,9 @@ pub fn apply_patch(
     Ok(next)
 }
 
-fn normalized_theme(value: &str) -> String {
+fn normalized_palette(value: &str) -> String {
     let value = value.trim().to_ascii_lowercase();
-    if THEME_IDS.contains(&value.as_str()) {
+    if PALETTE_IDS.contains(&value.as_str()) {
         value
     } else {
         "aurora".into()
@@ -437,14 +437,14 @@ fn normalize_process_names(values: Vec<String>) -> Vec<String> {
     names
 }
 
-fn validate_theme(value: &str) -> Result<String, SettingsError> {
+fn validate_palette(value: &str) -> Result<String, SettingsError> {
     let normalized = value.trim().to_ascii_lowercase();
-    if THEME_IDS.contains(&normalized.as_str()) {
+    if PALETTE_IDS.contains(&normalized.as_str()) {
         Ok(normalized)
     } else {
         Err(SettingsError::InvalidField {
-            field: "theme".into(),
-            message: "must be a known theme ID".into(),
+            field: "palette".into(),
+            message: "must be a known palette ID".into(),
         })
     }
 }
@@ -508,7 +508,7 @@ fn validate_skip_version(value: &str) -> Result<String, SettingsError> {
 /// Stable list of patch keys used by delivery-layer contract tests.
 pub fn patchable_field_names() -> BTreeSet<&'static str> {
     [
-        "theme",
+        "palette",
         "telemetry_enabled",
         "verbose_hud",
         "playback_defaults",
@@ -541,7 +541,7 @@ mod tests {
         let before = service.snapshot().clone();
         let error = service
             .patch(&SettingsPatch {
-                theme: Some("slate".into()),
+                palette: Some("slate".into()),
                 playback_defaults: Some(PlaybackDefaultsPatch {
                     fps: Some(61),
                     ..Default::default()
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn defaults_match_current_python_normalized_defaults() {
         let settings = normalize_settings(ApplicationSettings::default());
-        assert_eq!(settings.theme, "aurora");
+        assert_eq!(settings.palette, "aurora");
         assert_eq!(settings.playback_defaults.fps, 60);
         assert_eq!(
             settings.playback_defaults.timing_margin_us,
@@ -629,7 +629,7 @@ mod tests {
             let error = apply_patch(
                 &defaults,
                 &SettingsPatch {
-                    theme: Some("slate".into()),
+                    palette: Some("slate".into()),
                     playback_defaults: Some(PlaybackDefaultsPatch {
                         timing_margin_us: Some(value),
                         ..Default::default()
@@ -641,14 +641,14 @@ mod tests {
             assert!(
                 matches!(error, SettingsError::InvalidField { field, .. } if field == "timing_margin_us")
             );
-            assert_eq!(defaults.theme, "aurora");
+            assert_eq!(defaults.palette, "aurora");
         }
 
         let mut service = SettingsService::load(MemoryStore::default()).expect("load settings");
         let before = service.snapshot().clone();
         let error = service
             .patch(&SettingsPatch {
-                theme: Some("slate".into()),
+                palette: Some("slate".into()),
                 playback_defaults: Some(PlaybackDefaultsPatch {
                     timing_margin_us: Some(799),
                     ..Default::default()
