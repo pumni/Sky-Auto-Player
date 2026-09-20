@@ -90,6 +90,8 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
 use super::FaultInjectionScript;
+#[cfg(any(test, feature = "test-support"))]
+use super::SystemPowerState;
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) type RestoreRaceHook = Arc<dyn Fn(&AtomicBool, &AtomicIsize, &AtomicU64) + Send + Sync>;
@@ -107,6 +109,7 @@ pub(crate) type FinalGateRaceHook = Arc<
             &AtomicBool,
             &AtomicBool,
             &AtomicBool,
+            &SystemPowerState,
         ) + Send
         + Sync,
 >;

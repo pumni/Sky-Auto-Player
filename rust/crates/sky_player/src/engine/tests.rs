@@ -1590,7 +1590,8 @@ fn normal_prepared_final_control_race_suppresses_send_without_cursor_advance() {
          quit_requested,
          _skip_requested,
          _panic_requested,
-         _desired_pause| {
+         _desired_pause,
+         _system_power| {
             quit_requested.store(true, Ordering::Release);
         },
     );
@@ -1623,7 +1624,8 @@ fn normal_prepared_precision_suffix_suppresses_all_final_control_races() {
                      _quit,
                      _skip,
                      _panic,
-                     _pause| {
+                     _pause,
+                     _system_power| {
                         focus_active.store(false, Ordering::Release);
                     },
                 );
@@ -1632,7 +1634,14 @@ fn normal_prepared_precision_suffix_suppresses_all_final_control_races() {
                 assert!(harness.notify_system_power_for_test(true));
             }
             7 => harness.set_final_gate_race_hook(
-                |_focus_active, _target_hwnd, target_generation, _quit, _skip, _panic, _pause| {
+                |_focus_active,
+                 _target_hwnd,
+                 target_generation,
+                 _quit,
+                 _skip,
+                 _panic,
+                 _pause,
+                 _system_power| {
                     target_generation.store(1, Ordering::Release);
                 },
             ),
@@ -2969,8 +2978,9 @@ fn focus_admission_uses_the_expected_hwnd_without_reloading_target() {
 }
 
 #[test]
-fn early_focus_gate_is_atomic_only_and_final_admission_queries_zero_times() {
+fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::reset_foreground_query_count();
     let focus_active = AtomicBool::new(true);
     let target = AtomicIsize::new(123);
@@ -2994,7 +3004,8 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_zero_times() {
         }),
         DownAdmission::Allowed
     );
-    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
 }
 
 #[test]
@@ -3047,13 +3058,13 @@ fn final_down_target_admission_checks_target_before_focus() {
 }
 
 #[test]
-fn final_admission_uses_published_focus_and_accepts_stale_foreground_observation() {
+fn final_admission_requires_fresh_foreground_match_and_rechecks_atomic_focus() {
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
     sky_dispatch_win32::focus::reset_foreground_query_count();
 
-    // The supervisor hint is stale-true, but the final boundary deliberately
-    // does not close the observer race with a synchronous foreground query.
+    // The supervisor hint is stale-true, but the fresh foreground proof rejects
+    // the Down before the sender boundary.
     let focus_active = AtomicBool::new(true);
     let target_hwnd = AtomicIsize::new(123);
     let target_generation = AtomicU64::new(1);
@@ -3069,11 +3080,11 @@ fn final_admission_uses_published_focus_and_accepts_stale_foreground_observation
         post_focus_race_hook: None,
         post_focus_control_signals: None,
     });
-    assert_eq!(final_admission, DownAdmission::Allowed);
-    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+    assert_eq!(final_admission, DownAdmission::FocusLost);
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
 
-    // Once the producer publishes the loss, the same atomic-only admission
-    // suppresses the boundary without consulting the foreground API.
+    // Once the producer publishes the loss, the early atomic gate suppresses
+    // the boundary without issuing a second foreground query.
     focus_active.store(false, Ordering::Release);
     assert_eq!(
         final_down_target_admission(FinalTargetSignals {
@@ -3090,7 +3101,94 @@ fn final_admission_uses_published_focus_and_accepts_stale_foreground_observation
         }),
         DownAdmission::FocusLost
     );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn prepared_down_final_foreground_proof_has_exact_query_scope() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    let mut matching = ProductionDispatchTestHarness::new_down_only();
+    matching.config.focus.require_focus = true;
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    let mut matching_stream = matching.build_prepared_stream_for_test();
+    let matching_step = matching
+        .dispatch_prepared_current_at_lateness_authorized_for_test(&mut matching_stream, 10_000);
+    assert!(matches!(
+        matching_step,
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    let mut mismatch = ProductionDispatchTestHarness::new_down_only();
+    mismatch.config.focus.require_focus = true;
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    let mismatch_calls = mismatch.configure_send_counter();
+    let mut mismatch_stream = mismatch.build_prepared_stream_for_test();
+    let mismatch_step = mismatch
+        .dispatch_prepared_current_at_lateness_authorized_for_test(&mut mismatch_stream, 10_000);
+    assert!(!matches!(
+        mismatch_step,
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(mismatch_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(mismatch.resources.coordinator.cursor, 0);
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+
+    let mut disabled = ProductionDispatchTestHarness::new_down_only();
+    disabled.config.focus.require_focus = false;
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    let mut disabled_stream = disabled.build_prepared_stream_for_test();
+    let disabled_step = disabled
+        .dispatch_prepared_current_at_lateness_authorized_for_test(&mut disabled_stream, 10_000);
+    assert!(matches!(
+        disabled_step,
+        super::worker::DispatchStep::Dispatched
+    ));
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+
+    let mut up_only = ProductionDispatchTestHarness::new_uponly_release_with_gap(100_000);
+    up_only.config.focus.require_focus = true;
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    let up_only_plan = up_only.plan_current_dispatch();
+    let up_only_step = up_only.dispatch_at_plan_target_for_test(&up_only_plan);
+    assert!(!matches!(
+        up_only_step,
+        super::worker::DispatchStep::Terminate(_)
+    ));
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn final_down_foreground_proof_rejects_invalid_target_without_query() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    let focus_active = AtomicBool::new(true);
+    let target_hwnd = AtomicIsize::new(0);
+    let target_generation = AtomicU64::new(1);
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 0,
+                generation: 1,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target_hwnd: &target_hwnd,
+            target_generation: &target_generation,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::FocusLost
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
 }
 
 #[test]
@@ -3321,7 +3419,14 @@ fn prepared_up_only_has_one_final_gate_for_every_hard_stop() {
             4 => harness.supervisor_expired.store(true, Ordering::Release),
             5 => assert!(harness.notify_system_power_for_test(true)),
             6 => harness.set_final_gate_race_hook(
-                |_focus_active, _target_hwnd, _target_generation, quit, _skip, _panic, _pause| {
+                |_focus_active,
+                 _target_hwnd,
+                 _target_generation,
+                 quit,
+                 _skip,
+                 _panic,
+                 _pause,
+                 _system_power| {
                     quit.store(true, Ordering::Release);
                 },
             ),
@@ -4217,13 +4322,15 @@ fn authored_down_final_control_races_never_reach_transport() {
         let calls = harness.configure_send_counter();
         harness.advance_playback_time_us(100_000);
         let plan = harness.plan_current_dispatch();
-        harness.set_final_gate_race_hook(move |_, _, _, quit, skip, panic, pause| match command {
-            "pause" => pause.store(true, Ordering::Release),
-            "quit" => quit.store(true, Ordering::Release),
-            "skip" => skip.store(true, Ordering::Release),
-            "panic" => panic.store(true, Ordering::Release),
-            _ => unreachable!("control race table"),
-        });
+        harness.set_final_gate_race_hook(
+            move |_, _, _, quit, skip, panic, pause, _system_power| match command {
+                "pause" => pause.store(true, Ordering::Release),
+                "quit" => quit.store(true, Ordering::Release),
+                "skip" => skip.store(true, Ordering::Release),
+                "panic" => panic.store(true, Ordering::Release),
+                _ => unreachable!("control race table"),
+            },
+        );
 
         let step = harness.dispatch_at_plan_target_for_test(&plan);
 
@@ -4241,7 +4348,7 @@ fn authored_down_target_change_after_crossing_never_reaches_transport() {
     let calls = harness.configure_send_counter();
     harness.advance_playback_time_us(100_000);
     let plan = harness.plan_current_dispatch();
-    harness.set_final_gate_race_hook(|_, hwnd, generation, _, _, _, _| {
+    harness.set_final_gate_race_hook(|_, hwnd, generation, _, _, _, _, _| {
         hwnd.store(456, Ordering::Release);
         generation.fetch_add(1, Ordering::AcqRel);
     });
@@ -4275,7 +4382,7 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     let coordinator_active_mask = harness.resources.coordinator.active_mask;
     while harness.pop_observation().is_some() {}
     let plan = harness.plan_current_dispatch();
-    harness.set_final_gate_race_hook(|focus, _, _, _, _, _, _| {
+    harness.set_final_gate_race_hook(|focus, _, _, _, _, _, _, _| {
         focus.store(false, Ordering::Release);
     });
 
@@ -4307,37 +4414,51 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
 #[test]
 fn authored_down_post_foreground_revalidation_blocks_atomic_races() {
     use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::event::OwnedEvent;
 
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
-    for race in ["target", "control"] {
+    for race in ["target", "quit", "skip", "panic", "pause", "suspend"] {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         harness.config.focus.require_focus = true;
         let calls = harness.configure_send_counter();
         harness.advance_playback_time_us(100_000);
         let plan = harness.plan_current_dispatch();
-        harness.set_post_focus_revalidation_race_hook(move |_, hwnd, generation, quit, _, _, _| {
-            match race {
+        sky_dispatch_win32::focus::reset_foreground_query_count();
+        let interrupt = Arc::new(OwnedEvent::new_auto_reset().expect("post-focus interrupt"));
+        harness.set_post_focus_revalidation_race_hook(
+            move |_, hwnd, generation, quit, skip, panic, pause, system_power| match race {
                 "target" => {
                     hwnd.store(456, Ordering::Release);
                     generation.fetch_add(1, Ordering::AcqRel);
                 }
-                "control" => quit.store(true, Ordering::Release),
+                "quit" => quit.store(true, Ordering::Release),
+                "skip" => skip.store(true, Ordering::Release),
+                "panic" => panic.store(true, Ordering::Release),
+                "pause" => pause.store(true, Ordering::Release),
+                "suspend" => {
+                    assert!(system_power.notify_at(true, None, interrupt.as_ref()));
+                }
                 _ => unreachable!("post-focus race table"),
-            }
-        });
+            },
+        );
 
         let step = harness.dispatch_at_plan_target_for_test(&plan);
 
         assert!(matches!(step, super::worker::DispatchStep::Continue));
         assert_eq!(calls.load(Ordering::SeqCst), 0, "{race} sent Down");
         assert_eq!(
+            sky_dispatch_win32::focus::foreground_query_count(),
+            1,
+            "{race} query count"
+        );
+        assert_eq!(
             harness.local_metrics.final_gate_target_changes,
             u64::from(race == "target")
         );
         assert_eq!(
             harness.local_metrics.final_gate_control_rejections,
-            u64::from(race == "control")
+            u64::from(race != "target")
         );
     }
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);

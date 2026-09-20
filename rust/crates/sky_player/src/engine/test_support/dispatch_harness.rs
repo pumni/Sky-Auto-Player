@@ -5,8 +5,9 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
+use crate::engine::SystemPowerState;
 use crate::engine::config::{DispatchProfile, WorkerConfig};
-use crate::engine::shared::{SharedProgressClock, SystemPowerState};
+use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
@@ -1027,6 +1028,13 @@ impl ProductionDispatchTestHarness {
             .duration_from_us(spin_threshold_us)
             .map_err(|error| format!("benchmark spin threshold conversion: {error:?}"))?;
         Ok(())
+    }
+
+    /// Enable the shipping focus requirement for benchmark qualification.
+    /// This only changes the test harness configuration; production callers
+    /// continue to receive focus policy from the application configuration.
+    pub fn set_require_focus_for_benchmark(&mut self, require_focus: bool) {
+        self.config.focus.require_focus = require_focus;
     }
 
     pub fn is_physically_feasible_for_test(
@@ -2249,6 +2257,7 @@ impl ProductionDispatchTestHarness {
                 &AtomicBool,
                 &AtomicBool,
                 &AtomicBool,
+                &SystemPowerState,
             ) + Send
             + Sync
             + 'static,
@@ -2269,6 +2278,7 @@ impl ProductionDispatchTestHarness {
                 &AtomicBool,
                 &AtomicBool,
                 &AtomicBool,
+                &SystemPowerState,
             ) + Send
             + Sync
             + 'static,

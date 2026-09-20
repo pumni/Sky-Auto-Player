@@ -102,8 +102,25 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .split("pub(crate) fn enter_focus_pause")
         .next()
         .expect("target admission body");
-    assert!(target_admission_body.contains("focus_matches("));
-    assert!(!target_admission_body.contains("focus_matches_hwnd"));
+    let atomic_focus = target_admission_body
+        .find("focus_matches(target.require_focus")
+        .expect("published focus hint check");
+    let foreground = target_admission_body
+        .find("focus_matches_hwnd(")
+        .expect("fresh foreground proof");
+    let post_focus_hook = target_admission_body
+        .find("target.post_focus_race_hook")
+        .expect("post-focus race seam");
+    let target_recheck = target_admission_body
+        .rfind("target_stamp_still_current(")
+        .expect("target recheck");
+    let final_atomic_focus = target_admission_body
+        .rfind("focus_matches(target.require_focus")
+        .expect("final published focus recheck");
+    assert!(atomic_focus < foreground);
+    assert!(foreground < post_focus_hook);
+    assert!(post_focus_hook < target_recheck);
+    assert!(target_recheck < final_atomic_focus);
 
     let sender = source
         .split("fn record_down_send_outcome")

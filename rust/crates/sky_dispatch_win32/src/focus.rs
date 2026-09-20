@@ -49,6 +49,8 @@ pub fn foreground_window_matches(target_hwnd: isize) -> bool {
         return false;
     }
     #[cfg(feature = "test-support")]
+    FOREGROUND_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    #[cfg(feature = "test-support")]
     {
         let overridden = TEST_FOREGROUND_HWND.load(Ordering::Acquire);
         if overridden != isize::MIN {
@@ -57,8 +59,6 @@ pub fn foreground_window_matches(target_hwnd: isize) -> bool {
     }
     #[cfg(windows)]
     {
-        #[cfg(feature = "test-support")]
-        FOREGROUND_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         // SAFETY: GetForegroundWindow takes no pointers and returns a borrowed
         // window handle that this function only compares numerically.
         let foreground =

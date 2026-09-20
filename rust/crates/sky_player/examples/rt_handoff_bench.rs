@@ -47,6 +47,20 @@ fn iterations() -> usize {
         .unwrap_or(DEFAULT_ITERATIONS)
 }
 
+fn require_focus_for_benchmark() -> bool {
+    matches!(
+        std::env::var("RT_HANDOFF_BENCH_REQUIRE_FOCUS").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+fn configure_focus_for_benchmark(harness: &mut ProductionDispatchTestHarness) {
+    if require_focus_for_benchmark() {
+        harness.set_require_focus_for_benchmark(true);
+    }
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+}
+
 fn rust_version() -> String {
     std::process::Command::new("rustc")
         .arg("--version")
@@ -226,6 +240,7 @@ struct Samples {
     missed_down_physical_window_expired: usize,
     missed_down_final_sender_window_expired: usize,
     transport_anomaly_count: usize,
+    foreground_query_count: Vec<u64>,
     spin_time_us: Vec<u64>,
     wall_time_us: Vec<u64>,
 }
@@ -268,6 +283,7 @@ impl Samples {
             prepared_stream_build_us,
             missed_pre_call_lateness_us,
             missed_excess_beyond_latest_start_us,
+            foreground_query_count,
             spin_time_us,
             wall_time_us,
         );
@@ -1525,6 +1541,9 @@ fn wait_and_dispatch_or_record(
             harness.dispatch_at_phase_a_production_boundary_for_test(plan)
         }
     };
+    samples
+        .foreground_query_count
+        .push(sky_dispatch_win32::focus::foreground_query_count());
     if matches!(step, DispatchStep::Dispatched) {
         Ok(Some(()))
     } else {
@@ -1673,6 +1692,7 @@ fn run_down_iteration(
 ) -> Result<(), String> {
     let iteration_started = Instant::now();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
+    configure_focus_for_benchmark(&mut harness);
     harness.enable_dispatch_ready_timing_for_benchmark();
     let alignment_margin_us = if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
         0
@@ -1715,12 +1735,16 @@ fn run_prepared_down_iteration(
 ) -> Result<(), String> {
     let iteration_started = Instant::now();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
+    configure_focus_for_benchmark(&mut harness);
     harness.enable_dispatch_ready_timing_for_benchmark();
     harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
     harness.prepare_prepared_stream_for_test();
     harness.reset_preparation_counts_for_test();
     harness.align_prepared_current_to_benchmark_margin_for_test(gap_us)?;
     let step = harness.wait_and_dispatch_prepared_current_for_test()?;
+    samples
+        .foreground_query_count
+        .push(sky_dispatch_win32::focus::foreground_query_count());
     if !matches!(step, DispatchStep::Dispatched) {
         samples.record_step_failure(&step);
         samples
@@ -1787,6 +1811,7 @@ fn run_up(
                 continue;
             }
         };
+        configure_focus_for_benchmark(&mut harness);
         harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
         while harness.pop_observation().is_some() {}
@@ -1847,6 +1872,7 @@ fn run_mixed(
                 continue;
             }
         };
+        configure_focus_for_benchmark(&mut harness);
         harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
         while harness.pop_observation().is_some() {}
@@ -2343,7 +2369,8 @@ fn baseline_report() -> serde_json::Value {
              quit_requested,
              _skip_requested,
              _panic_requested,
-             _desired_pause| {
+             _desired_pause,
+             _system_power| {
                 quit_requested.store(true, Ordering::Release);
             },
         );
@@ -2734,6 +2761,7 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
             samples.missed_excess_beyond_latest_start_us,
         ),
         "transport_anomaly_count": samples.transport_anomaly_count,
+        "foreground_query_count": unsigned_summary(samples.foreground_query_count),
         "spin_time_us": unsigned_summary(samples.spin_time_us),
         "wall_time_us": unsigned_summary(samples.wall_time_us),
         "total_spin_time_us": total_spin_time_us,
@@ -2872,6 +2900,10 @@ fn main() {
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
     {
         panic!("phase_b0 requires real_wait benchmark mode");
+    }
+    let require_focus = require_focus_for_benchmark();
+    if require_focus {
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
     }
     if matches!(benchmark_scope, BenchmarkScope::RealWaitCore)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
@@ -3053,11 +3085,16 @@ fn main() {
         "iterations": iterations(),
         "deadline_us": due_us(),
         "transport": "deterministic_mock",
+        "require_focus": require_focus,
+        "foreground_query_scope": "one fresh final query for eligible require-focus Down traffic; zero for UpOnly or require-focus=false traffic",
         "observation_enqueue_ab": observation_enqueue_ab,
         "modes": mode_reports,
         "elapsed_ms": started.elapsed().as_millis(),
     }))
     .expect("serialize benchmark output");
+    if require_focus {
+        sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    }
     if let Some(path) = std::env::args_os().nth(1) {
         std::fs::write(path, &output).expect("write benchmark output");
     }

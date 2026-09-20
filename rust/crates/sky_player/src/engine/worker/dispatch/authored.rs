@@ -448,6 +448,7 @@ fn finalize_authored_down_admission(
         skip_requested,
         panic_requested,
         desired_pause,
+        system_power,
     );
     let control_signals = FinalControlSignals {
         quit_requested,
