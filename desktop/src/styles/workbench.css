@@ -160,6 +160,7 @@ body.is-resizing * {
 .library-nav-item.is-active {
   color: var(--text-primary);
   background: var(--selection-bg);
+  box-shadow: inset 2px 0 var(--selection-indicator);
 }
 
 .library-nav-item-icon {
@@ -223,6 +224,7 @@ body.is-resizing * {
 
 .library-nav-action-row.is-active {
   background: var(--selection-bg);
+  box-shadow: inset 2px 0 var(--selection-indicator);
 }
 
 .library-nav-action-row .library-nav-item:hover,
@@ -1101,6 +1103,11 @@ body.is-resizing * {
     border-color: Highlight;
     color: HighlightText;
     background: Highlight;
+  }
+
+  .library-nav-item.is-active,
+  .library-nav-action-row.is-active {
+    box-shadow: inset 2px 0 Highlight;
   }
 
   .library-nav-item.is-active .library-nav-item-icon {

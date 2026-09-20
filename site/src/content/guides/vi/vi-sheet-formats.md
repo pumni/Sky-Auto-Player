@@ -72,4 +72,4 @@ chỉnh tempo multiplier hoặc FPS trong cài đặt theo bài.
 
 ## Cấu hình theo bài
 
-Sky Auto Player lưu cài đặt riêng cho từng bài (chọn hold frame, tempo, FPS, theme) tách biệt với file sheet. Thay đổi file sheet không reset các cài đặt này.
+Sky Auto Player lưu cài đặt riêng cho từng bài (chọn hold frame, tempo, FPS, bảng màu) tách biệt với file sheet. Thay đổi file sheet không reset các cài đặt này.
