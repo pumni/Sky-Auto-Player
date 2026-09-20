@@ -64,6 +64,6 @@ describe('mock bridge timing contracts', () => {
         release_gap_us: 17_167,
       },
     });
-    expect(trace.telemetry.schema_version).toBe(16);
+    expect(trace.telemetry.schema_version).toBe(17);
   });
 });

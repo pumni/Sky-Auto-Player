@@ -141,8 +141,9 @@ These compatibility counters may remain in snapshots and UI DTOs:
 - `release_floor_infeasible_boundaries`.
 
 They are deprecated, remain zero in production, and do not control execution.
-The retired latest-start field is zero or unavailable. There is no active
-`DownExpiredBeforeSend` or `PhysicalWindowExpired` runtime outcome.
+Native telemetry schema version 17 contains the authored target and physical
+floor fields without a latest-start field. Legacy deadline-rejection outcomes
+are historical terminology and are not active runtime outcomes.
 
 ## Security and verification
 

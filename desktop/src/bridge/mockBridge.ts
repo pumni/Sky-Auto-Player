@@ -1229,7 +1229,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           release_gap_us: 17_167,
         },
         telemetry: {
-          schema_version: 16,
+          schema_version: 17,
           qpc_frequency_hz: 10_000_000,
           records: [],
           attempted: 0,

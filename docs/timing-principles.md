@@ -120,9 +120,9 @@ The following public counters may remain for schema compatibility:
 - `release_floor_infeasible_boundaries`.
 
 They are deprecated, remain zero in production, and do not control dispatch.
-The retired `latest_down_start_qpc` compatibility field is emitted as zero or
-unavailable. `DownExpiredBeforeSend` and `PhysicalWindowExpired` are not
-active runtime outcomes.
+Native telemetry schema version 17 exports the authored target and physical
+floors directly; it contains no latest-start field. Legacy deadline-rejection
+outcomes are historical terminology and are not active runtime outcomes.
 
 ## Security and verification
 

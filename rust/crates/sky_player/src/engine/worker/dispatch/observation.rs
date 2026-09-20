@@ -483,7 +483,6 @@ pub(super) fn record_down_send_telemetry(
                         .down_not_before_qpc
                         .as_u64(),
                 ),
-                latest_down_start_qpc_ticks: None,
                 hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
                 release_floor_mask: observation.physical_timing_window.release_floor_mask,
                 pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
@@ -571,7 +570,6 @@ pub(super) fn record_release_telemetry(
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
                 release_floor_qpc_ticks: None,
-                latest_down_start_qpc_ticks: None,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
                 pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),

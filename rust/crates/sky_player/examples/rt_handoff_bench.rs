@@ -291,10 +291,7 @@ struct Samples {
     hot_wait_count: usize,
     cold_wait_count: usize,
     missed_pre_call_lateness_us: Vec<i64>,
-    missed_excess_beyond_latest_start_us: Vec<i64>,
     missed_down_unobserved_backlog: usize,
-    missed_down_physical_window_expired: usize,
-    missed_down_final_sender_window_expired: usize,
     transport_anomaly_count: usize,
     foreground_query_count: Vec<u64>,
     real_foreground_query_count: Vec<u64>,
@@ -339,7 +336,6 @@ impl Samples {
             alignment_to_wait_entry_us,
             prepared_stream_build_us,
             missed_pre_call_lateness_us,
-            missed_excess_beyond_latest_start_us,
             foreground_query_count,
             real_foreground_query_count,
             spin_time_us,
@@ -368,12 +364,6 @@ impl Samples {
         self.missed_down_unobserved_backlog = self
             .missed_down_unobserved_backlog
             .saturating_add(other.missed_down_unobserved_backlog);
-        self.missed_down_physical_window_expired = self
-            .missed_down_physical_window_expired
-            .saturating_add(other.missed_down_physical_window_expired);
-        self.missed_down_final_sender_window_expired = self
-            .missed_down_final_sender_window_expired
-            .saturating_add(other.missed_down_final_sender_window_expired);
         self.transport_anomaly_count = self
             .transport_anomaly_count
             .saturating_add(other.transport_anomaly_count);
@@ -394,10 +384,7 @@ impl Samples {
     fn record_step_failure(&mut self, step: &DispatchStep) {
         let reason = match step {
             DispatchStep::TerminateStatic(reason)
-                if matches!(
-                    *reason,
-                    "down_physical_window_expired" | "down_unobserved_backlog"
-                ) =>
+                if matches!(*reason, "down_unobserved_backlog") =>
             {
                 self.deadline_missed_count += 1;
                 *reason
@@ -971,7 +958,7 @@ fn baseline_completion_floor_variant(
             "non_send"
         },
         "packet_n_plus_one_packet_count": n1_packet_count,
-        "physical_window_expired_boundaries": harness
+        "missed_physical_window_boundaries": harness
             .missed_physical_window_boundaries_for_test(),
     })
 }
@@ -1046,21 +1033,21 @@ fn baseline_completion_floor_report(evidence: &mut BaselineEvidence) -> serde_js
         "delayed_completion": delayed_report,
         "delayed_completion_does_not_move_later_scheduling": delayed_does_not_move_later_scheduling,
         "control_has_no_downstream_floor_pressure": control_is_not_pressured,
-        "completion_feedback_physical_window_expired": control_report[
-            "physical_window_expired_boundaries"
+        "completion_feedback_missed_physical_boundaries": control_report[
+            "missed_physical_window_boundaries"
         ]
         .as_u64()
         .unwrap_or(0)
             != 0
-            || delayed_report["physical_window_expired_boundaries"]
+            || delayed_report["missed_physical_window_boundaries"]
                 .as_u64()
                 .unwrap_or(0)
                 != 0,
         "acceptance_clean": delayed_does_not_move_later_scheduling
             && completion_qpc_differs
             && control_is_not_pressured
-            && control_report["physical_window_expired_boundaries"] == json!(0)
-            && delayed_report["physical_window_expired_boundaries"] == json!(0),
+            && control_report["missed_physical_window_boundaries"] == json!(0)
+            && delayed_report["missed_physical_window_boundaries"] == json!(0),
         "policy_changed": true,
     })
 }
@@ -2923,13 +2910,8 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         },
         "missed_down": {
             "unobserved_backlog": samples.missed_down_unobserved_backlog,
-            "physical_window_expired": samples.missed_down_physical_window_expired,
-            "final_sender_window_expired": samples.missed_down_final_sender_window_expired,
         },
         "missed_pre_call_lateness_us": signed_summary(samples.missed_pre_call_lateness_us),
-        "missed_excess_beyond_latest_start_us": signed_summary(
-            samples.missed_excess_beyond_latest_start_us,
-        ),
         "transport_anomaly_count": samples.transport_anomaly_count,
         "foreground_query_count": unsigned_summary(samples.foreground_query_count),
         "real_foreground_query_count": unsigned_summary(samples.real_foreground_query_count),

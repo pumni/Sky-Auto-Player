@@ -838,7 +838,7 @@ fn production_normal_late_down_dispatch_no_alloc() {
     let target = harness
         .physical_target_qpc_for_test(&plan)
         .expect("physical target");
-    // Target pre-call time is beyond physical_latest_down_start. Normal sender
+    // Target pre-call time is beyond the authored physical target. Normal sender
     // admission must still dispatch without a lateness-only cutoff.
     let late_offset_us = timing_margin_us + 1_000;
     let late_now = target

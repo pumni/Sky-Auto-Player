@@ -2850,8 +2850,6 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
                 hold_floor_qpc_available: false,
                 release_floor_qpc_ticks: 0,
                 release_floor_qpc_available: false,
-                latest_down_start_qpc_ticks: 0,
-                latest_down_start_qpc_available: false,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
                 pre_call_qpc_ticks: 0,
@@ -5665,7 +5663,6 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             physical_not_before_qpc_ticks: Some(105),
             hold_floor_qpc_ticks: Some(103),
             release_floor_qpc_ticks: Some(105),
-            latest_down_start_qpc_ticks: None,
             hold_floor_mask: 1,
             release_floor_mask: 2,
             pre_call_qpc_ticks: Some(120),
@@ -5702,7 +5699,6 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert!(record.physical_not_before_qpc_available);
     assert_eq!(record.hold_floor_qpc_ticks, 103);
     assert_eq!(record.release_floor_qpc_ticks, 105);
-    assert_eq!(record.latest_down_start_qpc_ticks, 0);
     assert_eq!(record.hold_floor_mask, 1);
     assert_eq!(record.release_floor_mask, 2);
     assert_eq!(record.pre_call_qpc_ticks, 120);
@@ -5743,7 +5739,6 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
             release_floor_qpc_ticks: None,
-            latest_down_start_qpc_ticks: None,
             hold_floor_mask: 0,
             release_floor_mask: 0,
             pre_call_qpc_ticks: None,
@@ -5796,7 +5791,6 @@ fn native_summary_ignores_non_backend_trace() {
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
             release_floor_qpc_ticks: None,
-            latest_down_start_qpc_ticks: None,
             hold_floor_mask: 0,
             release_floor_mask: 0,
             pre_call_qpc_ticks: None,

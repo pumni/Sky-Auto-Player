@@ -29,8 +29,6 @@ fn last_missed_down_reason(valid: bool, reason_code: u8) -> Option<String> {
     }
     match reason_code {
         1 => Some("down_unobserved_backlog".to_string()),
-        2 => Some("down_physical_window_expired".to_string()),
-        3 => Some("down_final_sender_window_expired".to_string()),
         _ => None,
     }
 }

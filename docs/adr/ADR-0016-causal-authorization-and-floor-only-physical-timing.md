@@ -43,9 +43,9 @@ musical floors.
 Existing public fields for sender-window expirations, physical-window misses,
 and release-floor infeasibility remain only to avoid unrelated schema churn.
 They are deprecated, remain zero in production, and do not control execution.
-The retired latest-start field is zero or unavailable. Historical ADR text is
-not rewritten; current behavior is defined by this ADR and the normative timing
-documents.
+Native telemetry schema version 17 exports the authored target and physical
+floor fields without a latest-start field. Historical ADR text is not rewritten;
+current behavior is defined by this ADR and the normative timing documents.
 
 ## Consequences
 

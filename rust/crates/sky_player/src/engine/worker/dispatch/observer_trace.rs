@@ -38,7 +38,6 @@ pub(super) fn drain_stale_metadata_observation(
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
                 release_floor_qpc_ticks: None,
-                latest_down_start_qpc_ticks: None,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
                 pre_call_qpc_ticks: None,
@@ -144,7 +143,6 @@ pub(super) fn drain_down_miss(
                 physical_not_before_qpc_ticks: physical_not_before_qpc.map(|ticks| ticks.as_u64()),
                 hold_floor_qpc_ticks: hold_floor_qpc.map(|ticks| ticks.as_u64()),
                 release_floor_qpc_ticks: release_floor_qpc.map(|ticks| ticks.as_u64()),
-                latest_down_start_qpc_ticks: None,
                 hold_floor_mask,
                 release_floor_mask,
                 pre_call_qpc_ticks: None,
@@ -208,7 +206,6 @@ pub(super) fn drain_blocked_unfocused_observation(
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
                 release_floor_qpc_ticks: None,
-                latest_down_start_qpc_ticks: None,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
                 pre_call_qpc_ticks: None,
@@ -295,7 +292,6 @@ mod tests {
         );
         assert_eq!(record.send_status, TRACE_SEND_STATUS_NOT_ATTEMPTED);
         assert_eq!(record.authored_target_qpc_ticks, 1_000);
-        assert_eq!(record.latest_down_start_qpc_ticks, 0);
         assert!(!record.pre_call_qpc_available);
         assert!(!record.sendinput_completion_qpc_available);
         assert!(record.observation_qpc_available);
