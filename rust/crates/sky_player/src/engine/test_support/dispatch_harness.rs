@@ -9,7 +9,7 @@ use crate::engine::SystemPowerState;
 use crate::engine::config::{DispatchProfile, WorkerConfig};
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
-    SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
+    RtTraceRecord, SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
 use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
@@ -1420,6 +1420,17 @@ impl ProductionDispatchTestHarness {
         self.local_metrics.timeline_rebase_count
     }
 
+    pub fn telemetry_records_for_test(&self) -> Vec<RtTraceRecord> {
+        self.resources
+            .telemetry
+            .lock()
+            .output
+            .records
+            .iter()
+            .copied()
+            .collect()
+    }
+
     pub fn fine_pre_call_bucket_counts_for_test(&self) -> [u64; 7] {
         [
             self.local_metrics.pre_call_lt_250us,
@@ -1724,14 +1735,27 @@ impl ProductionDispatchTestHarness {
     /// coalesced Mixed transaction without inferring packet identity from a
     /// final coordinator snapshot.
     pub fn configure_packet_capture(&mut self) -> Arc<Mutex<Vec<PhysicalPacket>>> {
+        self.configure_prepared_packet_capture_with_evidence_for_test()
+            .0
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn configure_prepared_packet_capture_with_evidence_for_test(
+        &mut self,
+    ) -> (
+        Arc<Mutex<Vec<PhysicalPacket>>>,
+        Arc<Mutex<Vec<SendEvidence>>>,
+    ) {
         let packets = Arc::new(Mutex::new(Vec::with_capacity(32)));
+        let evidence = Arc::new(Mutex::new(Vec::with_capacity(32)));
         let captured = Arc::clone(&packets);
+        let captured_evidence = Arc::clone(&evidence);
         let clock = self.resources.clock;
         self.resources.backend.set_packet_emitter(move |packet| {
             captured.lock().expect("packet capture lock").push(packet);
             let now = clock.now().expect("test QPC");
             let requested_mask = packet.up_mask | packet.down_mask;
-            SendTransactionOutcome {
+            let outcome = SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
                 evidence: SendEvidence {
                     requested_mask,
@@ -1747,9 +1771,14 @@ impl ProductionDispatchTestHarness {
                     completed_ticks: Some(now),
                     timing_error: None,
                 },
-            }
+            };
+            captured_evidence
+                .lock()
+                .expect("packet evidence capture lock")
+                .push(outcome.evidence);
+            outcome
         });
-        packets
+        (packets, evidence)
     }
 
     /// Run production `plan_next_dispatch` for the harness state.
@@ -1945,6 +1974,18 @@ impl ProductionDispatchTestHarness {
         &mut self,
         stall_us: u64,
     ) -> DispatchStep {
+        let stall_ticks = self
+            .resources
+            .clock
+            .duration_from_us(stall_us)
+            .expect("prepared stall conversion");
+        self.dispatch_prepared_current_after_authorized_stall_ticks_for_test(stall_ticks)
+    }
+
+    pub fn dispatch_prepared_current_after_authorized_stall_ticks_for_test(
+        &mut self,
+        stall_ticks: DurationTicks,
+    ) -> DispatchStep {
         let mut stream = self
             .prepared_stream_for_test
             .take()
@@ -1962,11 +2003,6 @@ impl ProductionDispatchTestHarness {
             .epoch
             .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
             .expect("prepared authorized target arithmetic");
-        let stall_ticks = self
-            .resources
-            .clock
-            .duration_from_us(stall_us)
-            .expect("prepared stall conversion");
         let stalled_target_qpc = physical_target_qpc
             .checked_add_duration(stall_ticks)
             .expect("prepared stalled target arithmetic");
@@ -2030,12 +2066,127 @@ impl ProductionDispatchTestHarness {
         step
     }
 
+    /// Dispatch the current prepared frame at a synthetic authored-target
+    /// lateness without changing the frozen playback epoch. This keeps
+    /// backlog rows on the same prepared stream while making each boundary
+    /// independently overdue in a deterministic test.
+    pub fn dispatch_prepared_current_at_synthetic_lateness_ticks_for_test(
+        &mut self,
+        lateness_ticks: DurationTicks,
+    ) -> DispatchStep {
+        let physical_target_qpc = {
+            let stream = self
+                .prepared_stream_for_test
+                .as_ref()
+                .expect("prepared stream test setup");
+            let frame = match stream.current() {
+                Some(PreparedDispatchEntry::Physical(frame)) => frame,
+                Some(PreparedDispatchEntry::Metadata { .. }) => {
+                    panic!("prepared synthetic lateness test requires a physical frame")
+                }
+                None => panic!("prepared stream is exhausted"),
+            };
+            self.resources
+                .playback
+                .epoch
+                .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+                .expect("prepared synthetic target arithmetic")
+        };
+        let wall_now = physical_target_qpc
+            .checked_add_duration(lateness_ticks)
+            .expect("prepared synthetic lateness arithmetic");
+        self.dispatch_prepared_current_at_synthetic_wall_qpc_for_test(wall_now)
+    }
+
+    /// Dispatch the current prepared frame at a fixed synthetic wall QPC
+    /// without changing the frozen playback epoch. This lets a regression
+    /// prove that multiple unseen boundaries are overdue at one observation
+    /// point, rather than advancing the test timeline between boundaries.
+    pub fn dispatch_prepared_current_at_synthetic_wall_qpc_for_test(
+        &mut self,
+        wall_now: QpcTicks,
+    ) -> DispatchStep {
+        let mut stream = self
+            .prepared_stream_for_test
+            .take()
+            .expect("prepared stream test setup");
+        let frame = match stream.current() {
+            Some(PreparedDispatchEntry::Physical(frame)) => frame,
+            Some(PreparedDispatchEntry::Metadata { .. }) => {
+                panic!("prepared synthetic lateness test requires a physical frame")
+            }
+            None => panic!("prepared stream is exhausted"),
+        };
+        let physical_target_qpc = self
+            .resources
+            .playback
+            .epoch
+            .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
+            .expect("prepared synthetic target arithmetic");
+        let effective_now_ticks = TimelineTicks::from_raw(
+            wall_now
+                .checked_duration_since(self.resources.playback.epoch)
+                .expect("prepared synthetic elapsed time")
+                .as_u64(),
+        );
+        let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
+            hwnd: self.target_hwnd.load(Ordering::Acquire),
+            generation: self.target_generation.load(Ordering::Acquire),
+        });
+        let physical_timing_window = self
+            .runtime
+            .physical_timing_window_for_test(
+                physical_target_qpc,
+                frame.view.packet_masks.up_mask,
+                frame.view.packet_masks.down_mask,
+            )
+            .expect("prepared synthetic timing window");
+        let step = dispatch_prepared_normal_frame(
+            frame,
+            &self.config,
+            &mut self.resources,
+            &mut self.health,
+            &self.timing,
+            &mut self.runtime,
+            &mut self.local_metrics,
+            &self.focus_active,
+            &self.target_hwnd,
+            &self.target_generation,
+            &self.quit_requested,
+            &self.skip_requested,
+            &self.panic_requested,
+            &self.desired_pause,
+            &self.supervisor_expired,
+            &self.system_power,
+            &self.progress_clock,
+            Some(&self.observer),
+            preflight_target,
+            physical_target_qpc,
+            physical_timing_window,
+            effective_now_ticks,
+            wall_now,
+            false,
+            Some(wall_now),
+            stream.explicitly_cancelled_generation_ids(),
+            false,
+        );
+        if matches!(step, DispatchStep::Dispatched) {
+            stream.advance().expect("prepared stream advance");
+        }
+        self.prepared_stream_for_test = Some(stream);
+        step
+    }
+
     pub fn prepared_stream_built_qpc_for_test(&self) -> Option<QpcTicks> {
         self.prepared_stream_built_qpc
     }
 
     pub fn prepared_stream_build_duration_us_for_test(&self) -> Option<u64> {
         self.prepared_stream_build_duration_us
+    }
+
+    pub fn prepared_target_qpc_for_test(&self) -> Option<QpcTicks> {
+        self.prepared_target_qpc
     }
 
     pub fn prepared_alignment_qpc_for_test(&self) -> Option<QpcTicks> {

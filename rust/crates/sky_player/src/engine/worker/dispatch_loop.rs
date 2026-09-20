@@ -2432,7 +2432,8 @@ mod tests {
             .clock
             .duration_from_us(3_000)
             .expect("strict completion test allowance");
-        let packets = harness.configure_packet_capture();
+        let evidence =
+            harness.configure_prepared_transport_outcome_for_test(SendTransactionStatus::Complete);
         let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("Down target");
         assert_no_work(harness.dispatch_at_qpc_for_test(
@@ -2441,7 +2442,10 @@ mod tests {
         ));
         let late_now = add_us(&harness, target, 501);
         assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, late_now));
-        assert_eq!(packets.lock().expect("packet capture").len(), 1);
+        let captured = evidence.lock().expect("strict small-lateness evidence");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].requested_mask, 1);
+        assert_eq!(captured[0].attempts, 1);
         assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
@@ -2454,7 +2458,8 @@ mod tests {
             .clock
             .duration_from_us(60_000)
             .expect("strict completion test allowance");
-        let packets = harness.configure_packet_capture();
+        let evidence =
+            harness.configure_prepared_transport_outcome_for_test(SendTransactionStatus::Complete);
         let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("Down target");
         assert_no_work(harness.dispatch_at_qpc_for_test(
@@ -2463,7 +2468,10 @@ mod tests {
         ));
         let late_now = add_us(&harness, target, 50_000);
         assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, late_now));
-        assert_eq!(packets.lock().expect("packet capture").len(), 1);
+        let captured = evidence.lock().expect("strict large-lateness evidence");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].requested_mask, 1);
+        assert_eq!(captured[0].attempts, 1);
         assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
