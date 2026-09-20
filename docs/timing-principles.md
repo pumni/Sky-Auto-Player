@@ -37,9 +37,12 @@ saturation fields are accepted only for compatibility and are non-operative.
 
 The timing evidence has four distinct boundaries: the authored target, the
 sender pre-call QPC, the SendInput completion QPC, and game observation. Only
-the first three are available to this application. `require_focus=true` is a
-safety profile with a final foreground-verification cost; it must not be
-described as having the same latency as `require_focus=false`.
+the first three are available to this application. For a `require_focus=true`
+Down, the accepted final contract performs exactly one fresh synchronous
+foreground proof, then rechecks the target stamp, published focus, and late
+control before the sender. UpOnly traffic and every `require_focus=false`
+path perform zero fresh foreground queries. The only remaining focus race is
+the interval from that query to `SendInput`.
 
 ## 2. Hold and release contract
 
@@ -239,10 +242,14 @@ The final physical path is ordered and fail-closed:
 1. Prepare and validate the immutable packet before the target wait.
 2. One interruptible high-resolution hybrid waiter crosses the immutable
    authored target. Strict/diagnostic mode may include its physical floors.
-3. Recheck command/control, the stamped target, and the published focus state
-   (Down only) after target crossing. A rejection performs no packet syscall.
-4. Recheck the program-owned control, target stamp, and focus atomics. This is
-   a cheap revalidation and does not issue a foreground query.
+3. Apply the initial command/control and Down target/published-focus checks
+   after target crossing. An eligible `require_focus=true` Down then performs
+   exactly one fresh synchronous foreground query; UpOnly and
+   `require_focus=false` perform zero fresh queries. A rejection performs no
+   packet syscall.
+4. After that query, recheck the target stamp, then the published focus, then
+   late control. These rechecks are atomic and do not issue another foreground
+   query.
 5. Take `final_policy_qpc` as evidence after those checks.
 6. Enter the trusted prepared sender. It resets Win32 last-error state, takes
    the true `pre_call_qpc` after payload resolution, applies only the strict
@@ -263,11 +270,13 @@ when the static authored validity cutoff is crossed. Its recovery uses only
 the immutable bounded Up prefix and frozen missed-boundary commit; normal
 recovery never enters `PhysicalTimingWindow` or `PhysicalTimingGuard` policy.
 
-Up-only traffic uses command admission but not the Down focus gate. Down
-traffic compares the stamped HWND with the published target/focus atomics at
-the final gate. Exact foreground validation remains in startup, restoration,
-and resume lifecycle paths. Focus hints and early loop gates are wake hints,
-not physical authorization.
+Up-only traffic uses command admission but not the Down focus gate and issues
+zero fresh foreground queries. Down traffic first uses the stamped HWND and
+published target/focus atomics; an eligible `require_focus=true` Down then
+gets exactly one fresh synchronous foreground proof, followed by target-stamp,
+published-focus, and late-control rechecks. `require_focus=false` Down traffic
+also issues zero fresh queries. Only the query-to-`SendInput` race remains;
+focus hints and early loop gates are wake hints, not physical authorization.
 
 ## 5. Wait, wake, and spin
 
@@ -287,11 +296,13 @@ it changes waiting cost only, never authored timestamps and never dispatch lead.
 
 The final precision loop performs the QPC target comparison and bounded
 interrupt-generation polling. It does not inspect lease state, focus, or
-commands. The worker then performs the final control/target/focus proof, runs
-one cheap atomic revalidation of the program-owned state, and records
-`final_policy_qpc` for lease admission. The trusted sender samples the true
-`pre_call_qpc` after payload resolution and immediately before the
-sender-cutoff/`SendInput` pair, closing the worker-to-syscall preemption window.
+commands. The worker then performs initial control/target/published-focus
+admission; an eligible `require_focus=true` Down receives exactly one fresh
+synchronous foreground proof, followed by target-stamp, published-focus, and
+late-control rechecks. UpOnly and `require_focus=false` perform zero fresh
+queries. The trusted sender samples the true `pre_call_qpc` after payload
+resolution and immediately before the sender-cutoff/`SendInput` pair; only the
+query-to-`SendInput` race remains.
 Physical feasibility still uses the materialized session margin; normal
 playback applies the fixed internal total tolerance through the effective
 cutoff, while strict mode uses the physical boundary unchanged.
