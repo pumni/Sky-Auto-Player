@@ -902,10 +902,8 @@ fn baseline_floor_json(
         "musical_up_not_before_qpc": floor.musical_up_not_before_qpc.as_u64(),
         "down_not_before_qpc": floor.down_not_before_qpc.as_u64(),
         "packet_not_before_qpc": floor.packet_not_before_qpc.as_u64(),
-        "latest_down_start_qpc": serde_json::Value::Null,
         "hold_floor_mask": floor.hold_floor_mask,
         "release_floor_mask": floor.release_floor_mask,
-        "down_feasible": serde_json::Value::Null,
         "packet_not_before_after_authored_qpc": floor
             .packet_not_before_qpc
             .as_u64()

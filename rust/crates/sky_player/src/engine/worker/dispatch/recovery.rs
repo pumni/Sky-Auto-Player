@@ -571,26 +571,24 @@ mod tests {
 
     #[test]
     fn every_primary_miss_reason_is_mutually_exclusive_and_counts_once() {
-        for reason in [DownMissReason::UnobservedBacklog] {
-            let mut metrics = WorkerMetricsLocal::default();
-            record_missed_down_classification(
-                &mut metrics,
-                9,
-                0b101,
-                QpcTicks::from_raw(2_000),
-                QpcTicks::from_raw(2_007),
-                reason,
-            );
+        let mut metrics = WorkerMetricsLocal::default();
+        record_missed_down_classification(
+            &mut metrics,
+            9,
+            0b101,
+            QpcTicks::from_raw(2_000),
+            QpcTicks::from_raw(2_007),
+            DownMissReason::UnobservedBacklog,
+        );
 
-            assert_eq!(metrics.missed_down_boundaries, 1);
-            assert_eq!(metrics.missed_down_keys, 2);
-            assert_eq!(
-                metrics.missed_unobserved_backlog_boundaries
-                    + metrics.missed_physical_window_boundaries
-                    + metrics.final_sender_window_expirations,
-                1
-            );
-        }
+        assert_eq!(metrics.missed_down_boundaries, 1);
+        assert_eq!(metrics.missed_down_keys, 2);
+        assert_eq!(
+            metrics.missed_unobserved_backlog_boundaries
+                + metrics.missed_physical_window_boundaries
+                + metrics.final_sender_window_expirations,
+            1
+        );
     }
 
     #[test]

@@ -1,539 +1,156 @@
 # Real-Time Dispatch Architecture
 
-This is the normative implementation contract for the Rust playback worker.
-The scheduler remains pure; the platform boundary is the only place that
-touches Windows. All physical input uses `SendInput`.
+This document is normative for the real-time playback path. The application
+reads authored schedules, materializes paired musical generations, and emits
+physical keyboard input through the Windows `SendInput` boundary.
 
-## 1. Ownership and thread split
+## Ownership boundaries
 
-The worker dispatch thread owns the real-time sequence and the coordinator
-owns schedule/generation state. The dispatch thread may read or commit
-coordinator state only at the defined planning and ownership boundaries. It
-must not perform telemetry formatting, unbounded allocation, observer health
-updates, or learned timing estimation on the physical path.
+`sky_dispatch_core` owns schedule compilation, generation pairing, authored
+hold/release validation, and causal schedule identity. It has no Win32 or QPC
+sender implementation.
 
-The healthy Down/Up hot path must never introduce heap allocation, locks, extra
-timing queries, dynamic dispatch, blocking/unbounded communication, or
-reference-count clones. The realtime worker maintains bounded, nonblocking
-queues and emergency release-all cleanup. Any modification to the realtime path
-requires specialized no-allocation, assembly, and Windows timing verification.
+`sky_player` owns worker orchestration, prepared packet selection, exact future
+authorization, physical waits, final admission, completion evidence, and
+per-key physical floors. `sky_native_adapters` owns OS and process-facing
+adapters. `sky_dispatch_win32` owns packet materialization and the one
+`SendInput` transaction. No other crate may simulate gameplay input.
 
-Strict-timing diagnostics use a separate consumer thread. A bounded
-`crossbeam_queue::ArrayQueue<DispatchObservation>` (capacity 64) is shared
-between the diagnostic dispatch path and that consumer:
+The coordinator owns authored cursor and generation state. The worker owns
+runtime QPC state and a fixed-size `PhysicalTimingGuard`; completion timestamps
+never enter the domain schedule or move authored targets.
+
+## Authored generations and plans
+
+The compiler opens a generation on a musical Down and closes that same
+generation on its matching authored Up. A Down left open at end of input is a
+typed compile error. The independent validator repeats the end-of-walk check
+against the compiled schedule. Overlapping same-key Down, same-key matched
+Up+Down at one authored timestamp, and invalid hold or release spacing remain
+rejected. Stale unmatched Up metadata is retained only as non-musical
+metadata. Cleanup and safety releases are outside the ledger.
+
+The worker plans one of:
+
+- metadata-only work with no physical packet;
+- one immutable physical packet and one authored target; or
+- no work.
+
+The physical packet contains canonical Up entries before Down entries. A mixed
+packet remains one transaction and is never split. The authored target is
+derived once from the playback epoch and the immutable schedule timestamp.
+
+## Causal authorization
+
+Every Down-bearing prepared boundary has an exact identity: authored target,
+packet masks, source/generation identity, and target generation. The worker
+records authorization only when that exact authored target is strictly in the
+future. Waiting to a later physical floor does not change the identity used by
+authorization.
+
+Once authorized, waiter or scheduler lateness does not revoke the boundary.
+Pause, focus or epoch reset, target-generation changes, suspend, and consumed
+or completed boundaries invalidate it. An overdue boundary that was never
+authorized is `UnobservedBacklog`, performs zero Down `SendInput` attempts, and
+is dropped. Later overdue boundaries are not caught up; the next future
+boundary can authorize normally.
+
+## Physical floors and waiting
+
+After a complete successful musical packet with trustworthy sender completion
+QPC, the guard updates only the affected keys:
 
 ```text
-dispatch thread --nonblocking push--> ArrayQueue --single consumer--> observer thread
-                                      full: drop new observation
+musical_up_not_before[key] = Down completion + frame_base_hold
+down_not_before[key]        = Up completion + frame_us
+packet_not_before           = max(authored_target, relevant floors)
 ```
 
-The diagnostic producer records a drop and continues. It never waits for slack
-and never evicts an older observation. Production allocates neither this queue
-nor an observer thread; it retains only bounded scalar worker counters. The
-diagnostic consumer owns health windows, telemetry materialization, shared
-observer metrics, and its own local timing state. It cannot authorize,
-reorder, retry, or commit physical input. Diagnostic shutdown signals the
-consumer, joins it, merges its local metrics, and then publishes the final
-report.
+The guard is floor-only. It has no Timing Margin, latest start, sender cutoff,
+or lateness rejection. The normal and strict/diagnostic completion paths share
+the same update helper. Transport failures do not create completion evidence.
+Lifecycle reset and invalidation clear stale floors.
 
-Playback pause ownership is a closed typed set (`Manual` and `Focus`) backed by
-a bitmask. The clock retains the first opener as typed attribution, so pause
-overlap bookkeeping has no hash table or reason-string allocation.
+For a physical plan the loop queries the guard before waiting. It waits to
+`packet_not_before_qpc`; metadata-only work waits to its authored target. Causal
+authorization still compares against the authored target. If a floor delays an
+authorized packet, the packet is sent when the floor is reached. A mixed packet
+waits to the maximum member floor and remains atomic. No authored timeline
+rebase occurs.
 
-## 2. Immutable plan
+Up-prefix recovery for an unobserved mixed Down is bounded and immutable. A
+valid prepared Up prefix may be sent once; a trustworthy successful completion
+updates the released keys' Down floors. The dropped Down remains unauthorized
+and is never emitted by recovery. Safety and cleanup Ups bypass musical floors.
 
-One outer worker epoch builds one typed plan from the coordinator. The plan is
-`NoWork`, a metadata boundary, or a physical boundary. A physical plan carries
-one prepared authored/pending view, its commit proof, and one absolute QPC
-target. Observer health budgets are not physical-plan inputs. The plan is
-reused by waiting, due selection, and physical dispatch. Commands,
-focus/pause transitions, target changes, lease-only wakes, and interrupts
-invalidate it and cause a replan.
+## Final physical path
 
-The planner writes this product into the caller-owned plan slot instead of
-returning the large physical enum through the `Result` ABI. The release
-assembly report in `scripts/audit_dispatch_assembly.ps1` covers the planner,
-physical-plan construction, and the dispatch-loop caller, while its hard
-copy/stack/division policy applies only to due dispatch and missed-Down
-recovery. Planner materialization remains a report-only optimization objective
-before the precision wait; the optimizer may inline planner helpers.
+The worker performs the following sequence:
 
-The `rt_handoff_bench` JSON separates structural/counter success from timing
-acceptance. A deadline miss, non-dispatch, early dispatch, failure reason, or
-observation gap makes the scenario and aggregate `acceptance_clean=false`; the
-aggregate is `statistics_eligible` only when every scenario is clean and has at
-least 10,000 iterations. A host-preemption event is therefore retained for
-paired baseline comparison instead of being silently reported as green.
-The feature-gated `rt-native-acceptance` binary exercises the existing
-`NativeDispatchSession` and `BackendConfig::Production` path. It is not a raw
-sender or a timing benchmark. Real-input qualification requires the explicit
-`--allow-real-input` flag, an exact target HWND, schema-v3 ready evidence, and
-the live project-owned `pwsh.exe` window identity. There is no foreground,
-environment, PID-only, or no-focus fallback.
+1. Resolve and validate the immutable packet before the wait.
+2. Wait to the authored target or queried physical floor.
+3. Apply quit, skip, pause, suspend, lease, target, and focus gates.
+4. For eligible `require_focus=true` Down traffic, make one fresh foreground
+   proof and then recheck target, published focus, and late control.
+5. Record `final_policy_qpc`, enter the trusted sender, reset Win32 last error,
+   take the sender-owned `pre_call_qpc`, and call `SendInput` exactly once.
+6. Validate completion QPC, confirmed/skipped masks, and packet integrity.
+7. Commit coordinator ownership and update floors only after complete success.
+8. Record bounded production evidence or enqueue one diagnostic observation.
 
-Start the two receive-only project-owned WinForms observers separately. The
-normal sink and the inert focus probe both log KeyDown/KeyUp; the probe never
-emits input and has its own evidence file:
+Up-only and `require_focus=false` paths do not perform the fresh foreground
+query. Partial or ambiguous Down transport is never retried. A skipped key
+still owned by the coordinator is a state disagreement and follows fail-closed
+cleanup.
 
-`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -Mode ReceiveOnly -RunId <run-id> -ReadyFile .benchmarks/sink.json -EventLog .benchmarks/sink-events.json`
+## Timing materialization
 
-`Pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -Mode InertFocusProbe -RunId <run-id> -ReadyFile .benchmarks/focus-probe.json -EventLog .benchmarks/focus-probe-events.json`
-
-The physical command is an explicit, feature-gated qualification run:
-
-`cargo run --locked --release --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance -- run --allow-real-input --run-id <run-id> --sink-ready .benchmarks/sink.json --sink-events .benchmarks/sink-events.json --target-hwnd <sink-hwnd> --scenario <scenario> --evidence .benchmarks/rt-native-acceptance.jsonl`
-
-The supported physical scenario names are `canonical-single`, `canonical-chord`,
-`canonical-max-chord`, `hold`, `long-single-sequence`, `dense-alternating`,
-`chord-sweep`, `near-minimum-retrigger`, `rapid-retrigger`, `mixed-up-down`,
-`focus-loss`, `target-hwnd-change`, `pause-resume`, `suspend-resume`,
-`stop-cleanup`, `skip-cleanup`, `supervisor-lease-expiry`,
-`cleanup-full-release`, `w4-noncanonical`, `timing-margin-sweep`, and
-`release-gap-stress`. Each invocation appends one JSONL report with the
-scenario name and its `PASS`, `NON_QUALIFYING`, `FAIL`, or `INCONCLUSIVE`
-verdict. Normal completion-relative hold/release floor observations remain
-raw physical-forensics evidence and do not by themselves fail a normal
-prepared delivery verdict. Strict/diagnostic timing retains its intentional
-physical latest-start/floor rejection. The stress scenario is
-`NON_QUALIFYING` when it collects fewer than 512 release-gap samples. It
-authors 513 same-key Down/Up cycles at the configured Hold and Release Gap
-and keeps the supervisor heartbeat alive while the approximately 18-second
-workload runs at the default margin. The target-change scenario changes the session target to the invalid
-sentinel `0` before the first authored Down and requires the production
-control-plane path to fail closed with no gameplay KeyDown delivery. The
-fail-closed path may emit the bounded full-cleanup KeyUp safety pass; those
-unpaired KeyUps are expected and the report requires zero keys inserted before
-failure. It intentionally does not require `final_gate_target_changes`, which
-belongs to deterministic final-admission race-seam tests. Pause/resume first waits for a physical
-canonical Down/Up pair, pauses the running session, resumes it, and requires a
-later pair to reach the sink. Manual pause performs a fail-closed full
-15-key Up sweep; the report reconciles that sweep alongside authored Up events
-and the post-resume pair. Stop and skip first wait for an active physical Down,
-then require the corresponding cleanup Up and clean terminal release.
-
-Each ready record includes a process-generated `event_log_id` and explicitly binds
-`event_schema_version = 3`. Before publishing ready evidence, the helper flushes
-a schema-v3 `stream_start` header containing the run ID, role, and same event-log
-ID to the exact event file. Keyboard records are observed synchronously in the
-sink Form's `WndProc`; native scan code (`lParam` bits 16..23), extended bit
-(bit 24), and direction are authoritative. Raw `wParam` VK, including
-`VK_PROCESSKEY`, is diagnostic only. The harness rejects v2, empty, stale, or
-mismatched event streams before `arm`; later records must retain the same
-binding. The receive-side decoder self-test is no-input and runs with:
-
-`pwsh -NoProfile -File scripts/native_acceptance_sink.ps1 -SelfTest`
-
-After terminal/join, qualification drains the bound JSONL stream with a 10 ms
-poll and a 1,000 ms maximum observation bound. Positive expected-event scenarios
-require the expected physical set and then 100 ms of quiet before reconciliation.
-The focus probe uses typed `ZeroEventSafety` semantics instead: it cannot
-early-complete on quiet, and any keyboard event anywhere in the full 1,000 ms is
-FAIL. Only a valid, continuously bound, event-free stream through the full
-deadline can satisfy the probe zero-event predicate; truncation, sequence
-corruption, or binding loss is INCONCLUSIVE. These are acceptance-observer
-bounds and do not change production scheduler or timing policy.
-
-The current application default is a `500 µs` user Timing Margin at 60 FPS:
-`frame_us = 16,667`, so both the 1-frame minimum hold and minimum release gap
-are `17,167 µs`; focus restore grace remains `100,000 µs`. Historical
-acceptance runs retain their exact recorded values and are not rewritten when
-product defaults change.
-Normal playback has no configurable late-note tolerance. A prepared frame is
-delivered once it is due and causally authorized, subject to the paired
-frame's static authored hold-validity cutoff. An unpaired Down has no invented
-finite cutoff but still requires future authorization. Strict/diagnostic mode may still use
-`physical_latest_down_start = authored target + Timing Margin` as its
-intentional physical bound.
-Controlled A/B runs may pass `--timing-margin-us 0..3000` in `100 µs` steps;
-the `timing-margin-sweep` scenario authors its Hold and Release Gap targets
-from that exact value and records the packet timestamps in every report.
-The physical propagation sweep uses `500`, `1000`, `2000`, and `5000` µs. The
-`focus-loss` scenario first commits a canonical sink Down/Up pair, waits for
-`startup_ready` and that
-pair's event evidence, then moves foreground to the validated project-owned
-probe with the coarse focus hint still true before a later different-slot Down.
-It observes the existing live pause state and requires the terminal final-gate
-counter afterward. Sink/probe logs prove controlled Windows delivery and
-wrong-window safety only; they do not prove game receipt, audio latency, or the
-internal QPC timestamp chain.
-
-Real `SendInput` cannot deterministically produce a partial or zero-progress
-return. Those transport fault seams remain qualified by the scripted
-test-support paths, which must be run alongside the physical matrix:
-
-`cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --lib --features test-support zero_progress`
-
-`cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --lib --features test-support partial_fault`
-
-`cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --lib --features test-support partial`
-
-`cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --lib --features test-support zero_progress`
-
-The `cleanup-full-release` scenario is the only acceptance scenario that claims
-fresh physical All-Up evidence. It authors one bounded Down chord across all 15
-logical slots, waits for all 15 sink KeyDown records after `startup_ready`, then
-requests normal `quit()` before the authored Up. Its pass evidence requires
-full-mask tracked cleanup (`attempted_mask = 0x7fff`, at least one attempt,
-successful release, no stuck mask, inconclusive verification, or transport
-anomaly) and exactly 15 matching sink KeyDown/KeyUp records. All non-cleanup
-scenarios require their authored/logical and transport evidence only; a zero-mask
-terminal release result is not a fresh physical All-Up probe.
-
-Every report also carries fixed-size production hold/release floor forensics:
-sample counts, minimum observed intervals, floor violations, same-key overlap
-forensics, anchor/unmatched-Up counts, and separate structural and
-timing anomaly totals. Floor-delay counts and maxima are reported independently
-from mutually exclusive missed-Down reasons.
-
-Authored logical preparation validates and consumes the selected packet's
-compact intents in one primary pass, freezing the commit proof and the batch
-source metadata from that same packet view; deferred Up ownership may perform
-the bounded source-batch resolution required to identify its original action.
-That resolution is part of preparation evidence and never occurs after the
-frozen product is handed to the player layer. Pending-release merging remains
-a separate bounded mask operation. Physical
-packet storage initializes only its `0..len` prefix. Borrowed packet views expose
-that initialized prefix and never expose the unused fixed-capacity tail; Mixed
-missed-Down recovery reuses the primary packet's canonical Up prefix instead of
-materializing a second payload.
-
-The authored commit token stores immediate and deferred Up identities in one
-bounded vector. `immediate_up_mask` and `deferred_up_mask` classify those
-entries during the single bounded commit pass, while only deferred entries
-use the source-action identity needed by the pending-release table. The
-active-generation ledger stores ownership identity, scan code, slot, source
-action, and the authored hold floor; dispatch start/completion timestamps remain
-transport observations rather than per-key hot-state fields.
-
-Test-support preparation counters are emitted at the coordinator operations
-that acquire the packet view, visit each intent, perform registry lookups,
-resolve deferred source batches, and construct the frozen commit. They are not
-derived afterward from slice lengths.
-
-Production planning has no adaptive dispatch-cost estimator and no lead
-subtraction. Authored timestamps are used as authored. Release deadlines
-include only the authored minimum-hold policy. Any remaining lead-shaped
-arguments are test-only
-compatibility seams; production coordinator APIs do not accept a dispatch lead
-and the publication adapter reports the historical applied-lead field as zero.
-
-The physical target is derived once from the playback epoch:
+The authored timing equations are:
 
 ```text
-physical_target_qpc = playback_epoch_qpc + effective_deadline_ticks
-```
-
-Waitable-timer guard and bounded spin are wake mechanics only. Neither is an
-applied dispatch lead and neither changes the coordinator deadline. The target
-is carried through the final gate and sender; it is not replaced by the wake
-sample or reconstructed after `SendInput`.
-
-Stale-Up compiler metadata with an empty packet is handled as coordinator
-metadata. It has no physical path, no sender boundary, and does not consume a
-startup or normal physical target. Physical packets are packetized from the
-canonical masks.
-
-## 3. Final physical sequence
-
-The Down/Mixed and Up-only paths share the same authoritative transport order.
-Down adds the target/focus checks. An eligible `require_focus=true` Down gets
-exactly one fresh synchronous foreground proof; Up-only and
-`require_focus=false` Down traffic perform zero fresh foreground queries.
-Up-only never uses the focus gate.
-
-```text
-frozen plan
-  -> prepare immutable packet before the target wait
-  -> one interruptible hybrid wait to the authored target
-  -> worker-owned bounded QPC spin across the target
-  -> initial command/control, target, and published-focus admission
-  -> exactly one fresh foreground proof for eligible require-focus Down
-  -> target-stamp recheck, published-focus recheck, and late control
-  -> final_policy_qpc evidence and cheap hard-stop admission
--> sender SetLastError(0), true pre_call_qpc sample, and strict check if enabled
-  -> one packetized SendInput call
-  -> completion QPC and transport-mask validation
-  -> coordinator ownership commit on clean success
-  -> terminal fail-closed cleanup on transport anomaly
-  -> essential scalar state commit
-  -> diagnostic-only bounded observation enqueue
-```
-
-The worker-owned target crossing happens before final policy admission. The
-worker's `final_policy_qpc` is the post-revalidation policy/lease evidence
-sample. For an eligible `require_focus=true` Down, final admission performs
-exactly one fresh synchronous foreground proof, then rechecks the target stamp,
-published focus, and late control. Up-only and `require_focus=false` Down
-traffic perform zero fresh foreground queries. The trusted prepared sender then
-resolves the fixed payload pointer and length, resets thread-local Win32 error
-state, and takes the true `pre_call_qpc` immediately before the syscall. Only
-the query-to-`SendInput` race remains. For normal prepared Down traffic, paired
-frames use the frozen authored hold-validity cutoff and unpaired frames have
-no finite cutoff; strict mode may additionally apply its physical latest-start
-bound.
-The sender performs no target wait or policy recheck after receiving the
-prepared packet.
-The transport reports `sendinput_completion_qpc`; production does not subtract
-a learned send cost from the target. In normal mode completion QPC is
-transport/telemetry evidence only and does not advance scheduling floors or
-alter authored targets. Strict/diagnostic physical-floor evidence remains
-available where that mode requires it.
-
-The primary sender-side timing evidence is the signed start residual:
-
-```text
-dispatch_start_error_ticks = pre_call_qpc - physical_target_qpc
-pre_call_to_completion = sendinput_completion_qpc - pre_call_qpc
-completion_error = sendinput_completion_qpc - physical_target_qpc  # diagnostic only
-```
-
-The start residual is benchmark/observability output only. It is never fed
-back into scheduling or used as adaptive compensation.
-
-Packet construction validates scan-code masks and sends Up entries before Down
-entries in one call. A zero, partial, skipped, mixed, or otherwise inconsistent
-transaction is handled fail-closed. Production never retries `SendInput` and
-never queues a release for a later transport attempt. Any transport anomaly
-forces full-instrument cleanup and termination.
-
-Cleanup verification keeps transport and physical evidence separate. A
-`VerifiedAllUp` result is possible only when the target HWND is still the
-foreground window, the physical probe observes no held instrument key, and the
-entire requested Up mask is confirmed by the transport. A zero- or partial-
-progress transport result combined with physical all-up is therefore
-inconclusive, never cleanup success. Focus loss also makes the physical probe
-inconclusive; it must not be interpreted as all keys being up.
-
-## Focus pause and recovery
-
-The supervisor's focus hint is a coarse wake/gate signal. The worker's outer
-focus-loss transition is a pause edge, not a cleanup edge:
-
-```text
-focus invalid
-  -> clear verified target and restore marker
-  -> increment focus_lost once on entry
-  -> enter focus pause and publish progress
-  -> perform no physical release or preflight while unfocused
-```
-
-This keeps an unfocused physical probe `Inconclusive` rather than treating it
-as evidence that all instrument keys are up. No Down can be admitted while the
-focus pause is active. At the precision boundary, an eligible
-`require_focus=true` Down performs exactly one fresh synchronous foreground
-proof, then rechecks the target stamp, published focus, and late control.
-Up-only and `require_focus=false` Down traffic perform zero fresh foreground
-queries. Only the query-to-`SendInput` race remains; focus restoration and
-resume still retain their separate lifecycle preflight.
-
-After focus is observed again, the worker waits for the configured restore
-grace and validates the current foreground/target identity. A manual pause
-must own exactly one verified safety suspension before it can be the sole
-remaining pause reason:
-
-- If manual pause was entered while focus pause was already active, manual
-  entry deferred physical release while the target was unfocused. Upon stable
-  focus restoration, the worker performs `suspend_live_input` exactly once,
-  clearing the deferred suspension marker while leaving manual pause active.
-  The manual-resume path later owns the physical preflight required before
-  playback continues.
-- If manual pause entered before focus loss and already performed verified
-  suspension, focus restoration does not repeat full-instrument cleanup.
-- Without an active manual pause, the worker performs the safety sequence below:
-
-```text
-load current target stamp
-  -> clear verified target
-  -> suspend_live_input
-  -> physical preflight
-  -> fresh foreground HWND and target-stamp checks
-  -> exit focus pause
-```
-
-Cleanup or preflight failure is terminal and fail-closed. If focus or target
-identity changes after cleanup, the worker clears the restore marker and stays
-paused for another attempt. A manual pause remains independent; restoring
-focus never clears it.
-
-When focus is required, the native desktop supervisor makes one minimal
-`ShowWindow(SW_RESTORE)` plus `SetForegroundWindow` attempt at playback
-startup, before the native worker starts. It refreshes the cached target and
-actual foreground state afterward and treats an OS refusal as an ordinary
-non-terminal outcome. After startup, focus polling only publishes observed
-state; it never reclaims foreground focus automatically. Explicit manual
-refocus remains the user-controlled retry path.
-
-## 4. Authored timestamp and minimum-hold model
-
-The native application materializes the fixed floor before worker startup:
-
-```text
-frame_us = ceil(1_000_000 / game_fps)
+frame_us           = ceil(1_000_000 / game_fps)
 frame_base_hold_us = ceil(hold_frames * frame_us)
-timing_margin_us = persisted_user_value
-effective_min_hold_us = frame_base_hold_us + timing_margin_us
+timing_margin_us   = persisted user value
+min_hold_us        = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
 ```
 
-Native admission checked tick arithmetic enforces before worker start:
+Timing Margin is authored headroom only. It is not added to completion floors,
+does not suppress a late authorized Down, and does not change an authored
+timestamp. Completion evidence remains sender-side evidence and does not claim
+game observation.
 
-```text
-authored_up >= authored_down + effective_min_hold
-next_same_key_down - previous_same_key_up >= min_release_gap_us
-```
+## Lifecycle and diagnostics
 
-The user margin is materialized once into the authored schedule. The release
-gap reserves one frame plus the exact same user margin; it is sender-side
-visibility policy, not evidence that the game sampled the Up transition. An
-invalid interval fails native admission before any musical SendInput. Authored
-targets remain immutable; runtime physical floors can delay a packet or expire
-its Down while preserving those targets. Recovery-only pending releases are
-stored in a fixed `[Option; 15]` per-key table with mask and generation
-ownership. There is no transport retry state.
+Focus loss pauses physical admission and retains existing fail-closed cleanup
+semantics. Pause, suspend, target-generation changes, and session reset clear
+future authorization and reset or invalidate floor evidence as required by the
+existing lifecycle state machine. Cleanup releases remain safety operations.
 
-The worker converts `frame_base_hold_us`, `frame_us`, and `timing_margin_us`
-once during admission to initialize a fixed-size, per-key
-`PhysicalTimingGuard` with independent Up hold and Down release floors:
+Production diagnostics use bounded worker-local scalars and fixed-size state.
+Strict/diagnostic observations use a bounded queue and cannot authorize,
+reorder, retry, or split input. Useful output includes authored target,
+physical floor delay, sender pre-call and completion timing, transport
+anomalies, final-gate rejections, and causal backlog misses.
 
-```text
-musical_up_not_before[key] = successful_down_completion[key] + frame_base_hold
-down_not_before[key] = successful_up_completion[key] + frame
-physical_latest_down_start = authored_down_target + timing_margin
-strict_sender_cutoff = physical_latest_down_start
-```
+These compatibility counters may remain in snapshots and UI DTOs:
 
-Normal prepared packets wait directly to their authored target and do not use
-completion-relative floors as scheduling authority. Strict/diagnostic packets
-may apply physical floors and classify `PhysicalWindowExpired`. The authored
-target is never moved. Actual completion QPC remains in `sky_player`; it does
-not enter `sky_dispatch_core`. Guard arithmetic is checked, and partial,
-uncertain, or post-send clock failures invalidate its evidence. Calibration
-recommends transport reserve plus a fixed `100 µs` guard, rounded up to the
-margin step; it never changes a prepared schedule or setting.
+- `final_sender_window_expirations`;
+- `prepared_normal_sender_expirations`;
+- `missed_physical_window_boundaries`;
+- `release_floor_infeasible_boundaries`.
 
-## 5. Wait and interrupt ordering
+They are deprecated, remain zero in production, and do not control execution.
+The retired latest-start field is zero or unavailable. There is no active
+`DownExpiredBeforeSend` or `PhysicalWindowExpired` runtime outcome.
 
-For a future physical plan, the worker uses one high-resolution waitable timer
-and event-interruptible hybrid wait to the absolute target computed from the
-authored target and relevant physical floors. If a Down floor already exceeds
-`physical_latest_down_start`, it waits to the authored target, consumes
-authorization, and records the miss there. Any required Up-prefix recovery
-then waits independently for its hold floor.
-The waiter sleeps while the target is farther away than the frozen spin
-threshold, then performs the bounded QPC spin until the target. There is no
-per-note `T - guard` admission wake and no second precision wait. A lease-only,
-command, focus, pause, or interrupt wake replans and cannot dispatch the old
-plan. The timer is first in the Windows multi-wait handle array so a
-simultaneous timer/event wake enters the QPC classification path. Before the
-physical target, an interrupt returns `Interrupted`; once QPC reaches the
-target, the waiter returns `Deadline`. Final command, target, focus, and lease
-admission remains authoritative after that result and may still reject
-`SendInput`.
+## Security and verification
 
-Production calibration runs once during worker startup: six bounded wake
-samples are used only when the full 20 ms probe budget plus the 2 ms startup
-readiness reserve fits before the startup readiness deadline. Each sample is
-also checked against that bounded probe deadline. The threshold is
-`clamp(max(p99, robust) + 50 µs, 250 µs, 1,000 µs)`; a skipped or failed probe
-uses the 1,000 µs fallback. The chosen value is frozen for the session.
-Calibration changes waiting cost only: it never changes an authored target and
-never introduces a dispatch lead.
+Gameplay input is restricted to Win32 `SendInput`. The repository does not
+use hooks, process memory, code injection, alternate input APIs, adaptive
+timeline rebasing, or transport retries.
 
-The final precision spin performs only its QPC wait-target comparison and
-`spin_loop`. Interrupt, lease, command, focus, and pause invalidation decisions
-are completed before that stage; no interrupt-generation polling or control
-branch is inserted into the final spin. The QPC deadline check remains
-authoritative and cannot be bypassed by an event. The sender independently
-checks the applicable cutoff with its true pre-call QPC sample: strict physical
-cutoff when strict mode is enabled, or the frozen paired prepared hold-validity
-cutoff for normal prepared Down traffic. An unpaired normal Down has no finite
-cutoff but is still gated by future authorization.
-Production admission requires the high-resolution waitable timer and event wait
-and terminates on startup or runtime wait failure; it does not degrade to sleep
-timing. `WaitBoundary::Due` carries the authoritative wake QPC into dispatch;
-the same sample is reused as target-crossing evidence for the final gate.
-Neither path reconstructs the physical target from wake time or enters a
-redundant physical wait.
-
-MMCSS Games/High and process power-throttling opt-out are scoped to the worker.
-TimeCritical is not the default and priority setup failure is reported rather
-than silently changing the timing contract.
-
-## 6. Startup and stale work
-
-Startup establishes the playback epoch and waits for the first physical target
-using the same target formula as steady state. There is no adaptive startup
-lead. It may run the bounded startup wake probe described above, but that probe
-only selects the frozen wait threshold. The first physical call still performs
-the complete final control/lease/target gate. Stale metadata may be committed
-before physical work, but it cannot run after the final target wait on the
-physical call stack.
-
-The worker may project a pre-epoch deadline for control-loop wake/replan
-bookkeeping, but it never calls `SendInput` before the authoritative physical
-QPC target/epoch gate. This projection distinction must not be used to create
-an early physical send.
-
-Every Down-bearing boundary, including the first preroll Down, requires an
-exact future authorization stamp containing the frozen authored packet
-identity, masks, and physical QPC target. The stamp survives waiter-entry
-latency and a same-boundary `Continue`/replan, but not a changed plan, target,
-epoch, pause, focus rebase, or completed/missed commit. A kernel wait result is
-not the musical proof.
-
-In normal prepared playback a causally authorized Down is sent once while its
-static paired hold-validity cutoff permits it. A missing future proof is
-`UnobservedBacklog`; crossing the paired sender cutoff is
-`DownExpiredBeforeSend`. Normal prepared recovery does not construct a
-`PhysicalWindowExpired` policy. A failed or uncertain safety Up remains
-terminal. Up-only safety releases bypass musical floors and are sent even when
-late. Missed Downs are never retried or emitted as a catch-up burst.
-
-## 7. Failure and publication boundaries
-
-Every QPC query used for a correctness decision is terminal on failure.
-Coordinator commit follows confirmed transport evidence; a typed
-`DownExpiredBeforeSend` result is handled as a missed authored frame only when
-no Down syscall occurred. Cleanup releases
-active/possibly-active keys and verifies the resulting state before successful
-completion. The ready boundary is published only after startup gates and the
-required physical ownership and cleanup state are complete.
-
-Production has no observer failure or queue-overflow path. Its fixed
-worker-local forensics block publishes an availability/version marker and
-bounded scalar evidence for physical hold/release floors, same-key overlap
-corruption,
-anchor overwrites, unmatched Ups, and a fixed anomaly ring. It adds no QPC
-sample, allocation, lock, formatting, or unbounded scan to the production send
-path. Diagnostic observer failure, telemetry overflow, or metric conversion
-failure cannot rewrite physical ownership. The worker terminates through the
-normal cleanup path and preserves the primary and secondary errors.
-
-The retired normal late-rescue scalars are not part of current telemetry. Raw
-target, wake, policy, pre-call, completion, transport, control, and strict miss
-evidence remains available; it does not claim game observation.
-
-The live snapshot projects authoritative worker counters and physical forensics.
-The full snapshot includes the last classified missed-Down sample, floor-delay
-QPC boundaries and masks, and production forensics version 3. The lightweight
-diagnostics projection carries miss reasons and floor-delay counts/maxima. The
-production report uses the same bounded worker scalar state; no observer queue
-owns physical floor anchors.
-
-Physical releases outside authored observations reset forensics anchors inline
-after confirmed recovery or safety release. A successful keyed recovery clears
-only its released slots; a global safety release clears every slot. These
-resets synchronize diagnostic state and never authorize, split, retry, or catch
-up a physical packet.
-
-## 8. Verification matrix
-
-- `sky_dispatch_core`: controlled-clock deadline, hold-floor, authored
-  ownership, stale/retrigger/mixed-packet, and soak tests.
-- `sky_dispatch_win32`: packet ordering, strict mask validation, QPC/wait,
-  focus, and `SendInput` seam tests.
-- `sky_player`: final-gate ordering, completion evidence, diagnostic observer queue
-  overflow, startup/stale handling, cleanup, and no-allocation dispatch tests.
-- Security audit: only the platform crate contains Win32 bindings and
-  `SendInput`; forbidden hook/injection/process-tampering mechanisms remain
-  absent.
+Verification covers compiler and validator pairing, native transport ordering,
+player final-gate behavior, completion floors, mixed-packet atomicity,
+no-allocation dispatch, static security checks, and the Windows receive-only
+acceptance matrix required by issue #379.

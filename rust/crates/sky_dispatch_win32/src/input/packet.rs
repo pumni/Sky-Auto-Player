@@ -967,7 +967,7 @@ pub fn send_prepared_physical_packet_once_with_start(
 }
 
 /// One trusted borrowed prepared-packet attempt using a caller-supplied start
-/// boundary with the Down latest-start check disabled.
+/// boundary.
 pub fn send_prepared_physical_packet_view_once_with_start(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
@@ -985,7 +985,7 @@ pub fn send_prepared_physical_packet_once(
     send_prepared_physical_packet_once_impl(prepared.as_view(), clock, None)
 }
 
-/// One trusted borrowed prepared-packet attempt with no Down latest-start check.
+/// One trusted borrowed prepared-packet attempt at the caller's final boundary.
 pub fn send_prepared_physical_packet_view_once(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,

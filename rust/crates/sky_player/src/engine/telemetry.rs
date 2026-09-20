@@ -28,6 +28,8 @@ pub struct RtTraceRecord {
     pub physical_not_before_qpc_ticks: u64,
     pub hold_floor_qpc_ticks: u64,
     pub release_floor_qpc_ticks: u64,
+    /// Deprecated compatibility field. Latest-start rejection was retired;
+    /// producers publish zero with unavailable status.
     pub latest_down_start_qpc_ticks: u64,
     pub pre_call_qpc_ticks: u64,
     pub sendinput_completion_qpc_ticks: u64,
@@ -67,6 +69,8 @@ pub struct RtTraceRecord {
     pub physical_not_before_qpc_available: bool,
     pub hold_floor_qpc_available: bool,
     pub release_floor_qpc_available: bool,
+    /// Deprecated compatibility availability bit for the retired latest-start
+    /// field; it remains false in current production output.
     pub latest_down_start_qpc_available: bool,
     pub pre_call_qpc_available: bool,
     pub sendinput_completion_qpc_available: bool,
@@ -125,6 +129,8 @@ pub(crate) struct TraceTiming {
     pub(crate) physical_not_before_qpc_ticks: Option<u64>,
     pub(crate) hold_floor_qpc_ticks: Option<u64>,
     pub(crate) release_floor_qpc_ticks: Option<u64>,
+    /// Deprecated compatibility field. Current producers always leave it
+    /// absent because physical timing is floor-only.
     pub(crate) latest_down_start_qpc_ticks: Option<u64>,
     pub(crate) hold_floor_mask: u16,
     pub(crate) release_floor_mask: u16,

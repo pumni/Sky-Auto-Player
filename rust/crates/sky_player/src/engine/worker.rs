@@ -16,8 +16,6 @@ mod health;
 pub(crate) mod health;
 mod orchestration;
 mod physical_timing_guard;
-#[cfg(test)]
-pub(crate) use physical_timing_guard::PhysicalTimingWindow;
 mod planning;
 mod prepared;
 mod startup;

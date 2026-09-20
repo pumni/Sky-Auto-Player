@@ -298,7 +298,7 @@ where
         }
     }
 
-    for open in open_by_slot.iter().flatten() {
+    if let Some(open) = open_by_slot.iter().flatten().next() {
         return Err(ScheduleTimingError::UnclosedGeneration {
             scan_code: open.scan_code,
             down_source_action_index: open.down_source_action_index,

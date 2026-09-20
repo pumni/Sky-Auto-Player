@@ -2336,7 +2336,7 @@ mod tests {
         ));
         let one_tick_late = late_target
             .checked_add_duration(DurationTicks::from_raw(1))
-            .expect("one tick beyond zero-margin latest start");
+            .expect("one tick beyond the authored target");
         assert_dispatched(late.dispatch_at_qpc_for_test(&late_plan, one_tick_late));
         assert_eq!(late_packets.lock().expect("packet capture").len(), 1);
         assert_eq!(late.local_metrics.final_sender_window_expirations, 0);

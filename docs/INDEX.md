@@ -68,5 +68,8 @@ Packaging, Windows timing acceptance, release, and benchmark scripts are special
   - [adr/ADR-0011-normal-playback-down-continuity.md](adr/ADR-0011-normal-playback-down-continuity.md)
   - [adr/ADR-0012-user-configurable-normal-down-continuity.md](adr/ADR-0012-user-configurable-normal-down-continuity.md)
   - [adr/ADR-0013-extended-normal-down-continuity-range.md](adr/ADR-0013-extended-normal-down-continuity-range.md)
+  - [adr/ADR-0014-deterministic-prepared-dispatch.md](adr/ADR-0014-deterministic-prepared-dispatch.md)
+  - [adr/ADR-0015-prepared-down-validity-and-causal-admission.md](adr/ADR-0015-prepared-down-validity-and-causal-admission.md)
+  - [adr/ADR-0016-causal-authorization-and-floor-only-physical-timing.md](adr/ADR-0016-causal-authorization-and-floor-only-physical-timing.md)
 - `docs/releases/` — Release-specific qualification and acceptance records.
 - Completed experiments, past migration records, raw measurement evidence, and historical performance baselines have been retired from the active documentation tree and remain preserved in Git history (`git log`).

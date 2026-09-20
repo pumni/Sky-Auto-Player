@@ -5049,7 +5049,8 @@ fn future_classification_then_waiter_entry_stall_keeps_exact_boundary_authorized
     // Keep the same frozen B plan. Model a stall before waiter entry so the
     // waiter returns Due { wait_result: None } for this already-overdue
     // target. Exact future authorization survives waiter-entry latency;
-    // physical floors and the authored latest-start window still decide admission.
+    // physical floors decide the execution boundary while authored identity
+    // remains unchanged.
     let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&replanned);
     assert!(matches!(step, super::worker::DispatchStep::Dispatched));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
