@@ -56,13 +56,13 @@
 }
 
 .track-row:hover {
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .track-row.is-selected {
-  border-left-color: var(--accent);
+  border-left-color: var(--selection-indicator);
   color: var(--text-primary);
-  background: var(--surface-selected);
+  background: var(--selection-bg);
 }
 
 .track-row.is-playing:not(.is-selected) {
@@ -160,7 +160,7 @@
 .track-like-button:hover,
 .track-like-button:focus-visible {
   color: var(--accent);
-  background: var(--surface-hover);
+  background: var(--control-hover);
   opacity: 1;
 }
 
@@ -217,6 +217,16 @@
     border-left-color: Highlight;
     background: Highlight;
     color: HighlightText;
+  }
+
+  .track-row.is-playing:not(.is-selected) {
+    border-left-color: Highlight;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .track-row.is-playing .track-cell-index {
+    color: Highlight;
   }
 
   .track-row:focus-visible,

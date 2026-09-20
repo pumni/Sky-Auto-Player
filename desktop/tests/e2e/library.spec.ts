@@ -1526,7 +1526,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expectFocusClearance(dialog.getByLabel('Tempo'));
   await expectFocusClearance(dialog.getByLabel('FPS'));
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await expectFocusClearance(dialog.getByLabel('Theme'));
+  await expectFocusClearance(dialog.getByLabel('Color palette'));
   await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
   await expectFocusClearance(dialog.getByLabel('Channel'));
   await expectFocusClearance(dialog.getByRole('button', { name: 'Check for updates' }));
@@ -1624,15 +1624,19 @@ test('Diagnostics utility separator follows pointer and keyboard direction', asy
   await expect(separator).toHaveAttribute('aria-valuenow', String(initial + 4));
 });
 
-test('all supported themes round-trip through the settings surface', async ({ page }) => {
+test('all supported palettes round-trip through the settings surface', async ({ page }) => {
   await page.goto('/');
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
   await settingsButton.click();
   await page.getByRole('button', { name: 'Appearance' }).click();
-  const theme = page.getByLabel('Theme');
+  const palette = page.getByLabel('Color palette');
   for (const id of ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
-    await theme.selectOption(id);
-    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+    await palette.selectOption(id);
+    await expect(page.locator('html')).toHaveAttribute('data-palette', id);
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+    await expect
+      .poll(() => page.locator('html').evaluate((element) => getComputedStyle(element).colorScheme))
+      .toContain('dark');
     await expectNoSeriousAccessibilityViolations(page);
   }
   await page.keyboard.press('Escape');

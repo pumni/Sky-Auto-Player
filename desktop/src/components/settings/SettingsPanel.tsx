@@ -1,7 +1,7 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { X } from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import type { Bootstrap, SettingsPatch, ThemeId } from '../../bridge/DesktopBridge';
+import type { Bootstrap, PaletteId, SettingsPatch } from '../../bridge/DesktopBridge';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
 import { TimingMarginControl } from './TimingMarginControl';
@@ -25,7 +25,7 @@ const categories: Array<{ id: SettingsCategory; label: string }> = [
   { id: 'about', label: 'About' },
 ];
 
-const themes: Array<{ id: ThemeId; label: string }> = [
+const palettes: Array<{ id: PaletteId; label: string }> = [
   { id: 'aurora', label: 'Aurora' },
   { id: 'minimalist', label: 'Minimalist' },
   { id: 'slate', label: 'Slate' },
@@ -210,14 +210,14 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
                 <section className="settings-section" aria-labelledby="appearance-settings-title">
                   <h3 id="appearance-settings-title">Appearance</h3>
                   <label>
-                    Theme
+                    Color palette
                     <select
-                      value={settings.theme}
-                      onChange={(event) => patch({ theme: event.target.value as ThemeId })}
+                      value={settings.palette}
+                      onChange={(event) => patch({ palette: event.target.value as PaletteId })}
                     >
-                      {themes.map((theme) => (
-                        <option key={theme.id} value={theme.id}>
-                          {theme.label}
+                      {palettes.map((palette) => (
+                        <option key={palette.id} value={palette.id}>
+                          {palette.label}
                         </option>
                       ))}
                     </select>

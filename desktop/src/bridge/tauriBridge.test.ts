@@ -30,7 +30,7 @@ describe('Tauri command bridge', () => {
       selectedSongId: null,
       songIds: [] as string[],
     } as const;
-    const patch = { theme: 'slate' as const };
+    const patch = { palette: 'slate' as const };
 
     await bridge.searchSongs(search);
     await bridge.getSongDetail(detail);

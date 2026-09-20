@@ -169,11 +169,11 @@
 
 .caption-button:hover {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .caption-button:active {
-  background: var(--surface-selected);
+  background: var(--control-pressed);
 }
 
 .caption-button:focus-visible {

@@ -71,7 +71,7 @@
 
 .player-like-button:hover,
 .player-like-button:focus-visible {
-  background: var(--surface-hover);
+  background: var(--control-hover);
 }
 
 .player-risk {
@@ -324,7 +324,7 @@
 }
 
 .player-message-danger {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .player-profile {
@@ -533,8 +533,8 @@
   min-width: 0;
   gap: var(--space-4);
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border-strong));
-  border-left: 3px solid var(--warning);
+  border: 1px solid var(--warning-border);
+  border-left: 3px solid var(--warning-border);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
   box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
@@ -548,14 +548,14 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-strong));
-  border-left-color: var(--danger);
+  border-color: var(--danger-border);
+  border-left-color: var(--danger-border);
 }
 
 .player-admission-recoverable_status,
 .player-admission-conflict {
-  border-color: color-mix(in srgb, var(--warning) 45%, var(--border-strong));
-  border-left-color: var(--warning);
+  border-color: var(--warning-border);
+  border-left-color: var(--warning-border);
 }
 
 .admission-copy {
@@ -571,7 +571,7 @@
 
 .admission-copy span {
   overflow: hidden;
-  color: var(--warning);
+  color: var(--warning-fg);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -583,7 +583,7 @@
 
 .player-admission-error .admission-copy span {
   overflow: visible;
-  color: var(--danger);
+  color: var(--danger-fg);
   line-height: 1.35;
   overflow-wrap: anywhere;
   text-overflow: clip;
@@ -593,6 +593,17 @@
 .player-admission-recoverable_status .admission-copy .player-message,
 .player-admission-conflict .admission-copy .player-message {
   color: var(--text-secondary);
+}
+
+@media (forced-colors: active) {
+  .auto-play-switch.is-on .auto-play-switch-track {
+    border-color: Highlight;
+    background: Highlight;
+  }
+
+  .auto-play-switch.is-on .auto-play-switch-track > span {
+    background: HighlightText;
+  }
 }
 
 .admission-recovery-actions {

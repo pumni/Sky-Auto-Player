@@ -38,7 +38,7 @@ body {
   height: 48px;
   margin-bottom: 8px;
   border-radius: var(--radius-region);
-  color: var(--accent-contrast);
+  color: var(--on-accent);
   background: var(--accent);
   font-size: 24px;
 }
