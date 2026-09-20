@@ -32,6 +32,17 @@ interface AppProps {
   bridge: DesktopBridge;
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable ||
+    target.closest('[contenteditable="true"]') !== null
+  );
+}
+
 export function App({ bridge }: AppProps) {
   const utilityTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -60,10 +71,14 @@ export function App({ bridge }: AppProps) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        (event.key === '/' || (event.key.toLowerCase() === 'f' && event.ctrlKey)) &&
-        !settingsOpen
-      ) {
+      const isFindShortcut = event.key.toLowerCase() === 'f' && event.ctrlKey;
+      const isSlashShortcut =
+        event.key === '/' &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !isEditableTarget(event.target);
+      if (!settingsOpen && (isFindShortcut || isSlashShortcut)) {
         event.preventDefault();
         searchInputRef.current?.focus();
       }
