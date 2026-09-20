@@ -1844,6 +1844,7 @@ fn run_up(
         samples.physical_dispatches += 1;
         record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
         drain_observations(&mut harness, &mut samples);
+        record_harness_metrics(&mut samples, &mut harness)?;
         samples
             .wall_time_us
             .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
@@ -1898,6 +1899,55 @@ fn run_mixed(
         samples.physical_dispatches += 1;
         record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
         drain_observations(&mut harness, &mut samples);
+        record_harness_metrics(&mut samples, &mut harness)?;
+        samples
+            .wall_time_us
+            .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+    }
+    Ok(samples)
+}
+
+fn run_dense_alternating(
+    event_count: usize,
+    mode: WaitMode,
+    benchmark_mode: BenchmarkMode,
+) -> Result<Samples, String> {
+    let mut samples = new_samples();
+    for _ in 0..iterations() {
+        let iteration_started = Instant::now();
+        let mut harness =
+            ProductionDispatchTestHarness::try_new_dense_alternating_with_gap_for_test(
+                event_count,
+                due_us(),
+            )?;
+        configure_focus_for_benchmark(&mut harness);
+        harness.enable_dispatch_ready_timing_for_benchmark();
+        harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
+        while harness.pop_observation().is_some() {}
+        if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+            harness.align_next_plan_to_benchmark_margin_for_test(0);
+        }
+        harness.reset_preparation_counts_for_test();
+        let mut plan = NextDispatchPlan::default();
+        let plan_started = Instant::now();
+        plan_projected(&mut harness, &mut plan);
+        record_preparation_sample(
+            &mut samples,
+            harness.preparation_counts(),
+            elapsed_ns(plan_started),
+        );
+        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
+        {
+            record_harness_metrics(&mut samples, &mut harness)?;
+            samples
+                .wall_time_us
+                .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+            continue;
+        }
+        samples.physical_dispatches += 1;
+        record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
+        drain_observations(&mut harness, &mut samples);
+        record_harness_metrics(&mut samples, &mut harness)?;
         samples
             .wall_time_us
             .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
@@ -2004,9 +2054,16 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
             ),
         );
     }
+    scenarios.insert(
+        "dense_alternating_14".to_string(),
+        summarize(
+            run_dense_alternating(14, mode, benchmark_mode)
+                .unwrap_or_else(|error| panic!("{error}")),
+        ),
+    );
     let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     serde_json::json!({
-        "scope": "Phase-A acceptance production dispatch/admission/commit path with a deterministic direct crossing and mock transport; waiter scheduling excluded",
+        "scope": "Phase-A acceptance production dispatch/admission/commit path with a deterministic direct crossing and mock transport; waiter scheduling excluded; includes dense alternating Up/Down boundaries",
         "waitable_timer_enabled": mode.waitable_timer_enabled,
         "event_wait_enabled": mode.event_wait_enabled,
         "adaptive_spin_enabled": mode.adaptive_spin_enabled,

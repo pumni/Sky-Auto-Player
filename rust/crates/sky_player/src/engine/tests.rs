@@ -3165,6 +3165,134 @@ fn prepared_down_final_foreground_proof_has_exact_query_scope() {
 }
 
 #[test]
+fn stale_published_focus_false_rejects_matching_foreground_before_fresh_query() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.config.focus.require_focus = true;
+    harness.runtime.musical_physical_commit_started = true;
+    harness.focus_active.store(false, Ordering::Release);
+    let calls = harness.configure_send_counter();
+    let mut stream = harness.build_prepared_stream_for_test();
+
+    let step =
+        harness.dispatch_prepared_current_at_lateness_authorized_for_test(&mut stream, 10_000);
+
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+    assert!(stream.current().is_some());
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(PauseReason::Focus)
+    );
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn fresh_focus_rejection_preserves_current_frame_and_miss_lifecycle_state() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.config.focus.require_focus = true;
+    harness.runtime.musical_physical_commit_started = true;
+    let calls = harness.configure_send_counter();
+    let mut stream = harness.build_prepared_stream_for_test();
+
+    let step =
+        harness.dispatch_prepared_current_at_lateness_authorized_for_test(&mut stream, 10_000);
+
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "fresh focus rejection sent input"
+    );
+    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert!(
+        stream.current().is_some(),
+        "fresh rejection consumed the frame"
+    );
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
+    assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
+    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 0);
+    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+    assert_eq!(harness.prepared_up_prefix_recovery_sends_for_test(), 0);
+    assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    assert_eq!(
+        harness
+            .resources
+            .coordinator
+            .generation_status_counts()
+            .get("dropped_expired")
+            .copied()
+            .unwrap_or_default(),
+        0
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.config.focus.require_focus = true;
+    harness.runtime.musical_physical_commit_started = true;
+    let calls = harness.configure_send_counter();
+    let mut stream = harness.build_prepared_stream_for_test();
+
+    let rejected =
+        harness.dispatch_prepared_current_at_lateness_authorized_for_test(&mut stream, 10_000);
+    assert!(matches!(rejected, super::worker::DispatchStep::Continue));
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(PauseReason::Focus)
+    );
+    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert!(stream.current().is_some());
+
+    // Complete the same pause/restore clock transition used by the normal
+    // lifecycle, then authorize the resumed target generation at the frozen
+    // frame again. The frame must be admitted, not converted into a miss.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    harness.focus_active.store(true, Ordering::Release);
+    let resumed_at = harness.resources.clock.now().expect("restore QPC");
+    harness
+        .resources
+        .playback
+        .exit_pause(PauseReason::Focus, resumed_at)
+        .expect("normal focus restore clock transition");
+    harness.progress_clock.publish(&harness.resources.playback);
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+
+    let admitted =
+        harness.dispatch_prepared_current_at_lateness_authorized_for_test(&mut stream, 0);
+    assert!(matches!(admitted, super::worker::DispatchStep::Dispatched));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.resources.coordinator.cursor, 1);
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
+    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 0);
+    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
 fn final_down_foreground_proof_rejects_invalid_target_without_query() {
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));

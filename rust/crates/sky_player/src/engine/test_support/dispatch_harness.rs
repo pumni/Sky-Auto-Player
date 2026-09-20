@@ -818,6 +818,56 @@ impl ProductionDispatchTestHarness {
         }
     }
 
+    /// Build a dense alternating suffix: each future boundary releases the
+    /// prior key while pressing the next key. The initial Down is committed
+    /// during setup so the measured boundary exercises the production
+    /// coordinator path used by the other Phase-A matrix scenarios.
+    pub fn try_new_dense_alternating_with_gap_for_test(
+        event_count: usize,
+        gap_us: u64,
+    ) -> Result<Self, String> {
+        assert!(
+            event_count.is_multiple_of(2) && (2..=14).contains(&event_count),
+            "dense alternating event count must be an even value in 2..=14"
+        );
+        let transition_count = event_count / 2;
+        let mut actions = Vec::with_capacity(event_count + 1);
+        actions.push(KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![PHYSICAL_INSTRUMENT_SCAN_CODES[0]].into(),
+            reason: "dense-alternating-seed-down".into(),
+        });
+        for transition in 0..transition_count {
+            let scheduled_us = (transition as u64 + 1).saturating_mul(gap_us);
+            actions.push(KeyActionInput {
+                source_action_index: (transition * 2 + 1) as u32,
+                kind: ActionKind::Up,
+                scheduled_us,
+                scan_codes: vec![PHYSICAL_INSTRUMENT_SCAN_CODES[transition]].into(),
+                reason: "dense-alternating-up".into(),
+            });
+            actions.push(KeyActionInput {
+                source_action_index: (transition * 2 + 2) as u32,
+                kind: ActionKind::Down,
+                scheduled_us,
+                scan_codes: vec![PHYSICAL_INSTRUMENT_SCAN_CODES[transition + 1]].into(),
+                reason: "dense-alternating-down".into(),
+            });
+        }
+        let mut harness = Self::create_harness(&actions);
+        harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
+        let plan = harness.plan_current_dispatch();
+        let step = harness.dispatch_at_plan_target_for_test(&plan);
+        match step {
+            DispatchStep::Dispatched => Ok(harness),
+            step => Err(format!(
+                "initial dense alternating benchmark step: {step:?}"
+            )),
+        }
+    }
+
     pub fn new_uponly_release() -> Self {
         Self::new_uponly_release_with_gap(100_000)
     }
