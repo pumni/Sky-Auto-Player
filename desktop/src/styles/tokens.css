@@ -5,15 +5,16 @@
   --surface-raised: #151e2b;
   --control-hover: #1a2533;
   --control-pressed: #223044;
-  --selection-bg: #1b2636;
+  --selection-bg: #152132;
   --selection-indicator: var(--accent);
   --border-subtle: #243145;
   --border-strong: #33445e;
+  --control-border: #617390;
   --text-primary: #e7edf6;
   --text-secondary: #b7c2d1;
   --text-tertiary: #8a98ad;
   --accent: #785ddd;
-  --accent-hover: #7d60e0;
+  --accent-hover: #825bdb;
   --on-accent: #ffffff;
   --focus-ring: #9b8cff;
   --success-fg: #56d69a;

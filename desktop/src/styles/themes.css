@@ -6,7 +6,7 @@ html[data-palette='aurora'] {
   --surface-raised: #151e2b;
   --control-hover: #1a2533;
   --control-pressed: #223044;
-  --selection-bg: #1b2636;
+  --selection-bg: #152132;
   --selection-indicator: var(--accent);
   --border-subtle: #243145;
   --border-strong: #33445e;
@@ -14,7 +14,8 @@ html[data-palette='aurora'] {
   --text-secondary: #b7c2d1;
   --text-tertiary: #8a98ad;
   --accent: #785ddd;
-  --accent-hover: #7d60e0;
+  --accent-hover: #825bdb;
+  --control-border: #617390;
   --on-accent: #ffffff;
   --focus-ring: #9b8cff;
 }
@@ -25,15 +26,16 @@ html[data-palette='minimalist'] {
   --surface-raised: #292d33;
   --control-hover: #333941;
   --control-pressed: #3b424b;
-  --selection-bg: #343a42;
+  --selection-bg: #2d343d;
   --selection-indicator: var(--accent);
   --border-subtle: #3d444d;
   --border-strong: #58616d;
   --text-primary: #f0f2f4;
   --text-secondary: #c9ced4;
   --text-tertiary: #9da5ae;
-  --accent: #a7b7cb;
+  --accent: #a0b8d5;
   --accent-hover: #c4d0df;
+  --control-border: #77818d;
   --on-accent: #17191d;
   --focus-ring: #e1e8f0;
 }
@@ -55,6 +57,7 @@ html[data-palette='slate'] {
   --accent-hover: #83b8e3;
   --on-accent: #10171d;
   --focus-ring: #a8dded;
+  --control-border: #6a8699;
 }
 html[data-palette='cyberpunk'] {
   --canvas: #130f1d;
@@ -66,7 +69,7 @@ html[data-palette='cyberpunk'] {
   --selection-bg: #3a274a;
   --selection-indicator: var(--accent);
   --border-subtle: #4b2d59;
-  --border-strong: #71416f;
+  --border-strong: #654872;
   --text-primary: #f7ecfb;
   --text-secondary: #dbc6e4;
   --text-tertiary: #b297bd;
@@ -74,6 +77,7 @@ html[data-palette='cyberpunk'] {
   --accent-hover: #ef78d4;
   --on-accent: #130f1d;
   --focus-ring: #f4a8e3;
+  --control-border: #976595;
 }
 html[data-palette='classic'] {
   --canvas: #171512;
@@ -82,7 +86,7 @@ html[data-palette='classic'] {
   --surface-raised: #2c261f;
   --control-hover: #393126;
   --control-pressed: #463b2d;
-  --selection-bg: #3a3126;
+  --selection-bg: #352c21;
   --selection-indicator: var(--accent);
   --border-subtle: #4b4033;
   --border-strong: #695845;
@@ -93,6 +97,7 @@ html[data-palette='classic'] {
   --accent-hover: #e0aa5b;
   --on-accent: #171512;
   --focus-ring: #e8c17a;
+  --control-border: #897864;
 }
 html[data-color-mode='dark'] {
   color-scheme: dark;
