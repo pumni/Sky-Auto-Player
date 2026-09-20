@@ -51,6 +51,14 @@ pub enum ScheduleTimingError {
     },
     #[error("schedule contains an invalid compiled batch range for packet {packet_index}")]
     InvalidBatchRange { packet_index: usize },
+    #[error(
+        "schedule ends with an open musical generation for scan code {scan_code}: down action {down_source_action_index} at {down_scheduled_us}us"
+    )]
+    UnclosedGeneration {
+        scan_code: u16,
+        down_source_action_index: u32,
+        down_scheduled_us: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -290,6 +298,14 @@ where
         }
     }
 
+    for open in open_by_slot.iter().flatten() {
+        return Err(ScheduleTimingError::UnclosedGeneration {
+            scan_code: open.scan_code,
+            down_source_action_index: open.down_source_action_index,
+            down_scheduled_us: open.down_scheduled_us,
+        });
+    }
+
     Ok(())
 }
 
@@ -451,10 +467,28 @@ mod tests {
 
     #[test]
     fn rejects_timestamp_overflow_before_walking_generations() {
-        let schedule = schedule(&[(ActionKind::Down, u64::MAX, 1)]);
+        let schedule = schedule(&[
+            (ActionKind::Down, u64::MAX - 1, 1),
+            (ActionKind::Up, u64::MAX, 1),
+        ]);
         assert_eq!(
             validate_min_hold_feasibility(&schedule, 1),
             Err(ScheduleTimingError::TimestampOverflow)
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_schedule_with_open_generation() {
+        let mut schedule = schedule(&[(ActionKind::Down, 100, 1), (ActionKind::Up, 200, 1)]);
+        schedule.packets.pop();
+
+        assert_eq!(
+            validate_min_hold_feasibility(&schedule, 0),
+            Err(ScheduleTimingError::UnclosedGeneration {
+                scan_code: 1,
+                down_source_action_index: 0,
+                down_scheduled_us: 100,
+            })
         );
     }
 }

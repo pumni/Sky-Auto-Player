@@ -58,6 +58,20 @@ fn sublead_authored_batches_keep_distinct_deadlines() {
                 scan_codes: vec![0x16].into(),
                 reason: "second".into(),
             },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: vec![0x15].into(),
+                reason: "first release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000,
+                scan_codes: vec![0x16].into(),
+                reason: "second release".into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -95,6 +109,20 @@ fn production_ticks_preserve_authored_deadlines_without_dispatch_lead() {
                 scheduled_us: 100,
                 scan_codes: vec![0x16].into(),
                 reason: "later sublead".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 200,
+                scan_codes: vec![0x15].into(),
+                reason: "startup release".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 300,
+                scan_codes: vec![0x16].into(),
+                reason: "later release".into(),
             },
         ],
         &[0x15, 0x16],
@@ -144,6 +172,12 @@ fn production_ticks_do_not_advance_authored_deadlines() {
                 scheduled_us: scheduled,
                 scan_codes: vec![0x15].into(),
                 reason: "boundary".into(),
+            }, KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: scheduled + 100,
+                scan_codes: vec![0x15].into(),
+                reason: "boundary release".into(),
             }],
             &[0x15],
         )
@@ -168,13 +202,22 @@ fn production_ticks_do_not_advance_authored_deadlines() {
 #[test]
 fn current_authored_packet_can_be_prepared_before_its_deadline() {
     let schedule = compile_runtime_intents(
-        &[KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 10_000,
-            scan_codes: vec![0x15].into(),
-            reason: "future".into(),
-        }],
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: vec![0x15].into(),
+                reason: "future".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 11_000,
+                scan_codes: vec![0x15].into(),
+                reason: "future release".into(),
+            },
+        ],
         &[0x15],
     )
     .expect("valid future schedule");
@@ -197,13 +240,22 @@ fn current_authored_packet_can_be_prepared_before_its_deadline() {
 #[test]
 fn one_pass_authored_packet_freezes_the_same_commit_identity() {
     let schedule = compile_runtime_intents(
-        &[KeyActionInput {
-            source_action_index: 7,
-            kind: ActionKind::Down,
-            scheduled_us: 10_000,
-            scan_codes: vec![0x15].into(),
-            reason: "one-pass".into(),
-        }],
+        &[
+            KeyActionInput {
+                source_action_index: 7,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: vec![0x15].into(),
+                reason: "one-pass".into(),
+            },
+            KeyActionInput {
+                source_action_index: 8,
+                kind: ActionKind::Up,
+                scheduled_us: 11_000,
+                scan_codes: vec![0x15].into(),
+                reason: "one-pass release".into(),
+            },
+        ],
         &[0x15],
     )
     .expect("valid schedule");
@@ -712,6 +764,13 @@ fn packet_commit_releases_before_disjoint_down_and_advances_once() {
                 scan_codes: vec![0x16].into(),
                 reason: "disjoint mixed down".into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: vec![0x16].into(),
+                reason: "disjoint mixed release".into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -846,6 +905,13 @@ fn stale_multi_up_packet_suppression_advances_atomically() {
                 scan_codes: vec![0x15].into(),
                 reason: "first-down".into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 200,
+                scan_codes: vec![0x15].into(),
+                reason: "first-release".into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -899,6 +965,13 @@ fn stale_and_physical_intents_share_one_concrete_packet_kind() {
                 scheduled_us: 100,
                 scan_codes: vec![0x17].into(),
                 reason: "physical-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 200,
+                scan_codes: vec![0x17].into(),
+                reason: "physical-release".into(),
             },
         ],
         &[0x15, 0x16, 0x17],
@@ -962,6 +1035,13 @@ fn owned_and_stale_up_with_down_is_mixed_with_physical_count_two() {
                 scheduled_us: 100,
                 scan_codes: vec![0x17].into(),
                 reason: "retrigger-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 200,
+                scan_codes: vec![0x17].into(),
+                reason: "retrigger-release".into(),
             },
         ],
         &[0x15, 0x16, 0x17],
@@ -1032,6 +1112,13 @@ fn authored_mixed_packet_keeps_its_authored_deadline() {
                 scheduled_us: 200,
                 scan_codes: vec![0x17].into(),
                 reason: "following".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 300,
+                scan_codes: vec![0x16, 0x17].into(),
+                reason: "following release".into(),
             },
         ],
         &[0x15, 0x16, 0x17],
@@ -1188,6 +1275,13 @@ fn authored_mixed_packet_deadline_is_not_shifted_by_dispatch_lead() {
                 scan_codes: vec![0x15].into(),
                 reason: "release".into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 200,
+                scan_codes: vec![0x16].into(),
+                reason: "retrigger release".into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -1243,6 +1337,13 @@ fn unrelated_deferred_release_does_not_move_authored_down_chord() {
                 scan_codes: vec![0x16, 0x17].into(),
                 reason: "independent chord".into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 500,
+                scan_codes: vec![0x16, 0x17].into(),
+                reason: "independent release".into(),
+            },
         ],
         &[0x15, 0x16, 0x17],
     )
@@ -1292,6 +1393,13 @@ fn late_down_completion_does_not_create_a_new_hold_deadline() {
                 scan_codes: vec![0x16].into(),
                 reason: "disjoint mixed down".into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 500,
+                scan_codes: vec![0x16].into(),
+                reason: "disjoint mixed release".into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -1339,6 +1447,13 @@ fn authored_up_only_frame_does_not_block_later_down() {
                 scheduled_us: 500,
                 scan_codes: vec![0x16].into(),
                 reason: "independent down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 600,
+                scan_codes: vec![0x16].into(),
+                reason: "independent release".into(),
             },
         ],
         &[0x15, 0x16],

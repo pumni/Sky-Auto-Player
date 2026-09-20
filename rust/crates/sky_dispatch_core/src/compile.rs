@@ -46,6 +46,14 @@ pub enum CompileError {
     #[error("generation identifier overflow")]
     GenerationOverflow,
     #[error(
+        "unclosed musical generation for scan code {scan_code}: down action {down_source_action_index} at {down_scheduled_us}us"
+    )]
+    UnclosedGeneration {
+        scan_code: u16,
+        down_source_action_index: u32,
+        down_scheduled_us: u64,
+    },
+    #[error(
         "overlapping same-key down actions on scan code {scan_code}: first down at index {first_down_action_index} (scheduled_us={first_scheduled_us}), second down at index {second_down_action_index} (scheduled_us={second_scheduled_us})"
     )]
     OverlappingSameKeyDown {
@@ -337,6 +345,19 @@ pub fn compile_runtime_intents(
         group_start = group_end;
     }
 
+    for (slot, open) in open_generation_by_slot.iter().enumerate() {
+        if let Some(open) = open {
+            let scan_code = key_registry
+                .scan_code_for(slot as KeySlot)
+                .expect("open generation slot must be present in the key registry");
+            return Err(CompileError::UnclosedGeneration {
+                scan_code,
+                down_source_action_index: open.down_action_index,
+                down_scheduled_us: open.down_scheduled_us,
+            });
+        }
+    }
+
     Ok(RuntimeSchedule {
         packets,
         batches,
@@ -413,6 +434,103 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unclosed_generation_at_eof() {
+        let error = compile_runtime_intents(
+            &[KeyActionInput {
+                source_action_index: 7,
+                kind: ActionKind::Down,
+                scheduled_us: 1234,
+                scan_codes: smallvec::smallvec![1],
+                reason: "open".into(),
+            }],
+            &[1],
+        )
+        .expect_err("an authored Down must have a matching Up");
+
+        assert_eq!(
+            error,
+            CompileError::UnclosedGeneration {
+                scan_code: 1,
+                down_source_action_index: 7,
+                down_scheduled_us: 1234,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_one_unclosed_generation_in_a_chord() {
+        let error = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![1, 2],
+                    reason: "chord".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 200,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "partial release".into(),
+                },
+            ],
+            &[1, 2],
+        )
+        .expect_err("every chord key must have an authored release");
+
+        assert_eq!(
+            error,
+            CompileError::UnclosedGeneration {
+                scan_code: 2,
+                down_source_action_index: 0,
+                down_scheduled_us: 100,
+            }
+        );
+    }
+
+    #[test]
+    fn accepts_exact_pair_and_complete_same_key_retrigger_pairs() {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "first down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 200,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "first up".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Down,
+                    scheduled_us: 300,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "second down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 400,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "second up".into(),
+                },
+            ],
+            &[1],
+        )
+        .expect("complete authored generations are valid");
+
+        assert_eq!(schedule.generation_count, 2);
+    }
+
+    #[test]
     fn multiple_same_timestamp_down_batches_are_rejected_as_non_atomic() {
         let actions = vec![
             KeyActionInput {
@@ -471,12 +589,19 @@ mod tests {
                     scan_codes: smallvec::smallvec![1],
                     reason: "release".into(),
                 },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 300,
+                    scan_codes: smallvec::smallvec![2],
+                    reason: "release".into(),
+                },
             ],
             &[1, 2],
         )
         .unwrap();
 
-        assert_eq!(schedule.packets.len(), 2);
+        assert_eq!(schedule.packets.len(), 3);
         assert_eq!(schedule.packets[0].packet_id, 0);
         assert_eq!(schedule.packets[1].packet_id, 1);
         let packet = schedule.view_packet_ticks(1, TimelineTicks::ZERO).unwrap();
@@ -595,6 +720,13 @@ mod tests {
                     scheduled_us: 100,
                     scan_codes: smallvec::smallvec![1],
                     reason: "new press".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 200,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "release".into(),
                 },
             ],
             &[1],
@@ -753,11 +885,25 @@ mod tests {
                     scan_codes: smallvec::smallvec![2, 3],
                     reason: "chord".into(),
                 },
+                KeyActionInput {
+                    source_action_index: 2,
+                    kind: ActionKind::Up,
+                    scheduled_us: 30,
+                    scan_codes: smallvec::smallvec![1],
+                    reason: "release".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 40,
+                    scan_codes: smallvec::smallvec![2, 3],
+                    reason: "release".into(),
+                },
             ],
             &[1, 2, 3],
         )
         .unwrap();
-        assert_eq!(schedule.intents.len(), 3);
+        assert_eq!(schedule.intents.len(), 6);
         assert_eq!(schedule.batches[0].intent_len, 1);
         assert_eq!(schedule.batches[1].intent_len, 2);
         assert!(std::mem::size_of::<CompiledBatch>() <= 32);
@@ -812,6 +958,13 @@ mod tests {
                 scheduled_us: 2000,
                 scan_codes: smallvec::smallvec![2],
                 reason: "down 2".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 3000,
+                scan_codes: smallvec::smallvec![1, 2],
+                reason: "release".into(),
             },
         ];
         let sched = compile_runtime_intents(&actions, &allowed).unwrap();
@@ -875,6 +1028,13 @@ mod tests {
                 scheduled_us: 2000,
                 scan_codes: smallvec::smallvec![1],
                 reason: "second down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 3000,
+                scan_codes: smallvec::smallvec![1],
+                reason: "second up".into(),
             },
         ];
         let sched = compile_runtime_intents(&actions, &allowed).unwrap();
