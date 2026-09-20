@@ -143,6 +143,13 @@ impl ProductionDispatchTestHarness {
                 scan_codes: vec![0x16].into(),
                 reason: "prepared-suspension-sentinel-j".into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 60_000,
+                scan_codes: vec![0x16].into(),
+                reason: "prepared-suspension-cleanup-j".into(),
+            },
         ])
     }
 
@@ -220,13 +227,22 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn new_prepared_unpaired_down_for_test() -> Self {
-        Self::create_harness(&[KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: vec![0x15, 0x16].into(),
-            reason: "prepared-unpaired-down".into(),
-        }])
+        Self::create_harness(&[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "prepared-unpaired-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15, 0x16].into(),
+                reason: "prepared-unpaired-down-cleanup".into(),
+            },
+        ])
     }
 
     /// Build two independent Down boundaries five milliseconds apart.  The
@@ -349,6 +365,13 @@ impl ProductionDispatchTestHarness {
                 scheduled_us: 1000,
                 scan_codes: vec![0x16].into(),
                 reason: "down2".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: vec![0x16].into(),
+                reason: "up2".into(),
             },
         ])
     }
@@ -549,13 +572,22 @@ impl ProductionDispatchTestHarness {
     /// a pending safety release after the Down has been committed.
     pub fn new_admissible_dynamic_pending_release() -> Self {
         Self::create_harness_with_min_hold(
-            &[KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 100_000,
-                scan_codes: vec![0x15].into(),
-                reason: "dynamic-pending-down".into(),
-            }],
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 100_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "dynamic-pending-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 200_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "dynamic-pending-up".into(),
+                },
+            ],
             0,
         )
     }
@@ -603,6 +635,13 @@ impl ProductionDispatchTestHarness {
                     scheduled_us: 220_000,
                     scan_codes: vec![0x16].into(),
                     reason: "equal-boundary-b-up".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 300_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "equal-boundary-a-up".into(),
                 },
             ],
             0,
@@ -725,6 +764,13 @@ impl ProductionDispatchTestHarness {
                     scan_codes: vec![0x16].into(),
                     reason: "coalesced-b-up".into(),
                 },
+                KeyActionInput {
+                    source_action_index: 3,
+                    kind: ActionKind::Up,
+                    scheduled_us: 40_000,
+                    scan_codes: vec![0x15].into(),
+                    reason: "coalesced-a-up".into(),
+                },
             ],
             1_000,
         )
@@ -753,8 +799,15 @@ impl ProductionDispatchTestHarness {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 1_000,
-                scan_codes: vec![0x15, 0x16].into(),
+                scan_codes: vec![0x16].into(),
                 reason: "mixed-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: vec![0x16].into(),
+                reason: "mixed-cleanup".into(),
             },
         ]);
         let plan = harness.plan_current_dispatch();
@@ -805,8 +858,15 @@ impl ProductionDispatchTestHarness {
             source_action_index: 2,
             kind: ActionKind::Down,
             scheduled_us: gap_us,
-            scan_codes: down_scan_codes.into(),
+            scan_codes: down_scan_codes.clone().into(),
             reason: "bench-down".into(),
+        });
+        actions.push(KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: gap_us.saturating_add(1_000),
+            scan_codes: down_scan_codes.into(),
+            reason: "bench-down-up".into(),
         });
         let mut harness = Self::create_harness(&actions);
         harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
@@ -1117,6 +1177,14 @@ impl ProductionDispatchTestHarness {
     pub fn set_strict_timing_for_test(&mut self, strict: bool) {
         self.config.timing.strict_timing = strict;
         self.timing.strict_timing = strict;
+    }
+
+    pub fn set_strict_down_completion_late_us_for_test(&mut self, us: u64) {
+        self.timing.strict_down_completion_late_ticks = self
+            .resources
+            .clock
+            .duration_from_us(us)
+            .expect("strict completion allowance conversion");
     }
 
     pub fn timing_margin_us_for_benchmark(&self) -> Result<u64, String> {
@@ -1628,7 +1696,6 @@ impl ProductionDispatchTestHarness {
                         None,
                         Some(sky_dispatch_win32::clock::QpcError::CounterUnavailable),
                     ),
-                    SendTransactionStatus::DownExpiredBeforeSend => (0, 0, 0, None, None),
                     SendTransactionStatus::PreparationRejected => (0, 0, 0, None, None),
                 };
             let outcome = SendTransactionOutcome {
@@ -1691,29 +1758,6 @@ impl ProductionDispatchTestHarness {
         packets
     }
 
-    pub fn configure_deadline_missed_packet_sender(&mut self) {
-        let clock = self.resources.clock;
-        self.resources.backend.set_packet_emitter(move |packet| {
-            let now = clock.now().expect("test QPC");
-            SendTransactionOutcome {
-                status: SendTransactionStatus::DownExpiredBeforeSend,
-                evidence: SendEvidence {
-                    requested_mask: packet.up_mask | packet.down_mask,
-                    confirmed_mask: 0,
-                    skipped_mask: 0,
-                    first_inserted: 0,
-                    attempts: 0,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(now),
-                    completed_ticks: None,
-                    timing_error: None,
-                },
-            }
-        });
-    }
     /// Run production `plan_next_dispatch` for the harness state.
     pub fn plan_current_dispatch(&mut self) -> NextDispatchPlan {
         self.align_epoch_to_selected_boundary_before_planning();
@@ -2779,20 +2823,11 @@ impl ProductionDispatchTestHarness {
         &mut self,
         prepared: &PreparedPhysicalPacket,
     ) -> (QpcTicks, SendTransactionOutcome) {
-        let packet = prepared.packet();
         let target = self.resources.clock.now().expect("benchmark sender QPC");
-        let latest_down_start_qpc = (packet.down_mask != 0).then(|| {
-            target
-                .checked_add_duration(self.timing.timing_margin_ticks)
-                .expect("benchmark Down latest-start")
-        });
-        let outcome = self.resources.backend.send_phase_a_benchmark_boundary(
-            prepared,
-            self.resources.clock,
-            target,
-            latest_down_start_qpc,
-            target,
-        );
+        let outcome = self
+            .resources
+            .backend
+            .send_prepared_physical_packet_with_start(prepared, target);
         (target, outcome)
     }
 

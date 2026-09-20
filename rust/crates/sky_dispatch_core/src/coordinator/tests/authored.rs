@@ -166,19 +166,22 @@ fn production_ticks_preserve_authored_deadlines_without_dispatch_lead() {
 fn production_ticks_do_not_advance_authored_deadlines() {
     for scheduled in [500, 499, 501] {
         let schedule = compile_runtime_intents(
-            &[KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: scheduled,
-                scan_codes: vec![0x15].into(),
-                reason: "boundary".into(),
-            }, KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: scheduled + 100,
-                scan_codes: vec![0x15].into(),
-                reason: "boundary release".into(),
-            }],
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: scheduled,
+                    scan_codes: vec![0x15].into(),
+                    reason: "boundary".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: scheduled + 100,
+                    scan_codes: vec![0x15].into(),
+                    reason: "boundary release".into(),
+                },
+            ],
             &[0x15],
         )
         .expect("valid schedule");

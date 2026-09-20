@@ -6,8 +6,8 @@ use super::observation::{
 use crate::engine::worker::timing::signed_timeline_delta_ticks;
 use crate::engine::{
     RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP,
-    TRACE_SEND_STATUS_DOWN_EXPIRED, TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector,
-    TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
+    TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
+    trace_outcome_code,
 };
 use sky_dispatch_core::time::TimelineTicks;
 
@@ -93,13 +93,12 @@ pub(super) fn drain_down_miss(
         ),
         DownMissTimingEvidence::Prepared {
             physical_target_qpc,
-            sender_cutoff_qpc,
         } => (
             physical_target_qpc,
             Some(physical_target_qpc),
             Some(physical_target_qpc),
             Some(physical_target_qpc),
-            sender_cutoff_qpc,
+            None,
             0,
             0,
         ),
@@ -127,10 +126,6 @@ pub(super) fn drain_down_miss(
         super::observation::DownMissKind::PhysicalWindowExpired => (
             "down_physical_window_expired",
             TRACE_SEND_STATUS_NOT_ATTEMPTED,
-        ),
-        super::observation::DownMissKind::DownExpiredBeforeSend => (
-            "down_final_sender_window_expired",
-            TRACE_SEND_STATUS_DOWN_EXPIRED,
         ),
     };
     if let Err(error) = telemetry.try_push(|| {
@@ -256,8 +251,7 @@ mod tests {
     use super::super::observation::DownMissKind;
     use super::*;
     use crate::engine::{
-        TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_SEND_STATUS_DOWN_EXPIRED,
-        TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryMode,
+        TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryMode,
     };
     use sky_dispatch_win32::clock::QpcTicks;
 
@@ -279,73 +273,6 @@ mod tests {
             hold_floor_mask,
             release_floor_mask,
         }
-    }
-
-    #[test]
-    fn cutoff_trace_preserves_mixed_same_key_boundary_and_zero_attempts() {
-        let observation = DownMissObservation {
-            source_action_index: 41,
-            compiled_packet_index: Some(37),
-            authored_ticks: TimelineTicks::from_raw(10),
-            effective_deadline_ticks: TimelineTicks::from_raw(12),
-            wake_ticks: TimelineTicks::from_raw(20),
-            timing_evidence: DownMissTimingEvidence::Physical(physical_window(
-                1_000,
-                1_005,
-                1_020,
-                1_020,
-                Some(1_010),
-                1,
-                2,
-            )),
-            observed_qpc: QpcTicks::from_raw(1_021),
-            up_mask: 0b0001,
-            down_mask: 0b0001,
-            kind: DownMissKind::DownExpiredBeforeSend,
-        };
-        let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 4);
-
-        drain_down_miss(&observation, &mut collector).expect("record cutoff miss");
-
-        let record = collector.output.records.front().expect("trace record");
-        assert_eq!(record.trace_record_index, 0);
-        assert_eq!(record.compiled_packet_index, 37);
-        assert!(record.compiled_packet_index_available);
-        assert_eq!(record.source_action_index, 41);
-        assert_eq!(record.event_index, 41);
-        assert_eq!(record.kind, TRACE_KIND_MIXED);
-        assert_eq!(
-            record.outcome,
-            trace_outcome_code("down_final_sender_window_expired")
-        );
-        assert_eq!(record.send_status, TRACE_SEND_STATUS_DOWN_EXPIRED);
-        assert_eq!(record.authored_target_qpc_ticks, 1_000);
-        assert!(record.authored_target_qpc_available);
-        assert_eq!(record.physical_not_before_qpc_ticks, 1_020);
-        assert!(record.physical_not_before_qpc_available);
-        assert_eq!(record.hold_floor_qpc_ticks, 1_005);
-        assert!(record.hold_floor_qpc_available);
-        assert_eq!(record.release_floor_qpc_ticks, 1_020);
-        assert!(record.release_floor_qpc_available);
-        assert_eq!(record.latest_down_start_qpc_ticks, 1_010);
-        assert!(record.latest_down_start_qpc_available);
-        assert_eq!(record.hold_floor_mask, 1);
-        assert_eq!(record.release_floor_mask, 2);
-        assert!(!record.pre_call_qpc_available);
-        assert!(!record.sendinput_completion_qpc_available);
-        assert_eq!(record.observation_qpc_ticks, 1_021);
-        assert!(record.observation_qpc_available);
-        assert_eq!(record.send_started_ticks, 0);
-        assert_eq!(record.up_mask, 1);
-        assert_eq!(record.down_mask, 1);
-        assert_eq!(record.dispatch_start_error_ticks, 21);
-        assert_eq!(record.requested_count, 1);
-        assert_eq!(record.sent_count, 0);
-        assert_eq!(record.skipped_count, 1);
-        assert_eq!(record.send_attempts, 0);
-        assert_eq!(collector.output.attempted, 1);
-        assert_eq!(collector.output.accepted, 1);
-        assert_eq!(collector.output.dropped, 0);
     }
 
     #[test]

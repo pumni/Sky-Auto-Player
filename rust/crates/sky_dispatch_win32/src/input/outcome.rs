@@ -71,7 +71,6 @@ pub enum SendTransactionStatus {
     ZeroProgress,
     PartialProgress,
     IntegrityLost,
-    DownExpiredBeforeSend,
     ClockFailureBeforeSend,
     ClockFailureAfterSend,
 }

@@ -2266,7 +2266,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_normal_observer_uses_static_sender_cutoff_evidence() {
+    fn prepared_normal_observer_has_no_sender_cutoff_evidence() {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_packet_capture();
@@ -2298,11 +2298,9 @@ mod tests {
             observation.physical_timing_window.packet_not_before_qpc,
             observation.physical_target_qpc
         );
-        assert!(
-            observation
-                .physical_timing_window
-                .latest_down_start_qpc
-                .is_some()
+        assert_eq!(
+            observation.physical_timing_window.latest_down_start_qpc,
+            None
         );
         assert_eq!(observation.physical_timing_window.hold_floor_mask, 0);
         assert_eq!(observation.physical_timing_window.release_floor_mask, 0);
@@ -2483,96 +2481,47 @@ mod tests {
     }
 
     #[test]
-    fn c1_strict_cutoff_remains_physical_latest_start() {
-        let mut allowed = ProductionDispatchTestHarness::new_down_only();
-        allowed.set_strict_timing_for_test(true);
-        allowed.timing.strict_down_completion_late_ticks = allowed
+    fn strict_late_authorized_down_is_sent() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        harness.set_strict_timing_for_test(true);
+        harness.timing.strict_down_completion_late_ticks = harness
             .resources
             .clock
             .duration_from_us(3_000)
             .expect("strict completion test allowance");
-        let packets = allowed.configure_packet_capture();
-        let plan = allowed.plan_current_dispatch();
+        let packets = harness.configure_packet_capture();
+        let plan = harness.plan_current_dispatch();
         let target = plan.physical_target_qpc().expect("Down target");
-        assert_no_work(allowed.dispatch_at_qpc_for_test(
+        assert_no_work(harness.dispatch_at_qpc_for_test(
             &plan,
             subtract_duration(target, DurationTicks::from_raw(1)),
         ));
-        assert_dispatched(allowed.dispatch_at_qpc_for_test(&plan, add_us(&allowed, target, 500)));
+        let late_now = add_us(&harness, target, 501);
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, late_now));
         assert_eq!(packets.lock().expect("packet capture").len(), 1);
-        assert_eq!(allowed.local_metrics.final_sender_window_expirations, 0);
-
-        let mut rejected = ProductionDispatchTestHarness::new_down_only();
-        rejected.set_strict_timing_for_test(true);
-        rejected.timing.strict_down_completion_late_ticks = rejected
-            .resources
-            .clock
-            .duration_from_us(3_000)
-            .expect("strict completion test allowance");
-        let packets = rejected.configure_packet_capture();
-        let plan = rejected.plan_current_dispatch();
-        let target = plan.physical_target_qpc().expect("Down target");
-        assert_no_work(rejected.dispatch_at_qpc_for_test(
-            &plan,
-            subtract_duration(target, DurationTicks::from_raw(1)),
-        ));
-        let physical_cutoff = add_us(&rejected, target, 500);
-        let one_tick_beyond = physical_cutoff
-            .checked_add_duration(DurationTicks::from_raw(1))
-            .expect("one tick beyond strict cutoff");
-        assert!(matches!(
-            rejected.dispatch_at_qpc_for_test(&plan, one_tick_beyond),
-            DispatchStep::TerminateStatic("down_final_sender_window_expired")
-        ));
-        assert!(packets.lock().expect("packet capture").is_empty());
-        assert_eq!(rejected.local_metrics.final_sender_window_expirations, 1);
+        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
-    fn strict_timing_retains_physical_latest_start_rejection() {
-        {
-            let mut rejected = ProductionDispatchTestHarness::new_down_only();
-            rejected.set_strict_timing_for_test(true);
-            rejected.timing.strict_down_completion_late_ticks = rejected
-                .resources
-                .clock
-                .duration_from_us(10_000)
-                .expect("strict completion test allowance");
-            let packets = rejected.configure_packet_capture();
-            let plan = rejected.plan_current_dispatch();
-            let target = plan.physical_target_qpc().expect("Down target");
-            assert_no_work(rejected.dispatch_at_qpc_for_test(
-                &plan,
-                subtract_duration(target, DurationTicks::from_raw(1)),
-            ));
-
-            let physical_cutoff = add_us(&rejected, target, 500);
-            let one_tick_beyond = physical_cutoff
-                .checked_add_duration(DurationTicks::from_raw(1))
-                .expect("one tick beyond strict cutoff");
-            assert!(matches!(
-                rejected.dispatch_at_qpc_for_test(&plan, one_tick_beyond),
-                DispatchStep::TerminateStatic("down_final_sender_window_expired")
-            ));
-            assert!(packets.lock().expect("packet capture").is_empty());
-            assert_eq!(rejected.local_metrics.final_sender_window_expirations, 1);
-
-            // In contrast, under normal timing the note is sent without a cutoff.
-            let mut normal = ProductionDispatchTestHarness::new_down_only();
-            let normal_packets = normal.configure_packet_capture();
-            let normal_plan = normal.plan_current_dispatch();
-            let normal_target = normal_plan.physical_target_qpc().expect("Down target");
-            assert_no_work(normal.dispatch_at_qpc_for_test(
-                &normal_plan,
-                subtract_duration(normal_target, DurationTicks::from_raw(1)),
-            ));
-            let late_now = add_us(&normal, normal_target, 1_000);
-            assert_dispatched(normal.dispatch_at_qpc_for_test(&normal_plan, late_now));
-            assert_eq!(
-                normal_packets.lock().expect("normal packet capture").len(),
-                1
-            );
-        }
+    fn strict_late_authorized_down_remains_atomic_at_large_lateness() {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        harness.set_strict_timing_for_test(true);
+        harness.timing.strict_down_completion_late_ticks = harness
+            .resources
+            .clock
+            .duration_from_us(60_000)
+            .expect("strict completion test allowance");
+        let packets = harness.configure_packet_capture();
+        let plan = harness.plan_current_dispatch();
+        let target = plan.physical_target_qpc().expect("Down target");
+        assert_no_work(harness.dispatch_at_qpc_for_test(
+            &plan,
+            subtract_duration(target, DurationTicks::from_raw(1)),
+        ));
+        let late_now = add_us(&harness, target, 50_000);
+        assert_dispatched(harness.dispatch_at_qpc_for_test(&plan, late_now));
+        assert_eq!(packets.lock().expect("packet capture").len(), 1);
+        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
@@ -2944,7 +2893,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_comparison_sends_authorized_late_note_ons_without_cutoff() {
+    fn sparse_comparison_sends_authorized_late_note_ons() {
         let offsets_in_extended_range = [2_800, 3_000, 3_500, 4_000, 4_500, 5_000];
 
         for &offset_us in &offsets_in_extended_range {

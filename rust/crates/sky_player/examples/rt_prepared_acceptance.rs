@@ -44,8 +44,8 @@ fn main() -> Result<(), String> {
     let acceptance_clean = prepared_physical_boundaries
         == successful_full_sends + intentional_non_send_or_missed
         && normal_backlog_count == 2
-        && normal_sender_expiry_count == 1
-        && up_prefix_recovery_sends == 2
+        && normal_sender_expiry_count == 0
+        && up_prefix_recovery_sends == 1
         && transport_anomaly_count == 0
         && timeline_rebase_count == 0;
 

@@ -98,7 +98,6 @@ pub(crate) const TRACE_SEND_STATUS_PREPARATION_REJECTED: u8 = 1;
 pub(crate) const TRACE_SEND_STATUS_ZERO_PROGRESS: u8 = 2;
 pub(crate) const TRACE_SEND_STATUS_PARTIAL_PROGRESS: u8 = 3;
 pub(crate) const TRACE_SEND_STATUS_INTEGRITY_LOST: u8 = 4;
-pub(crate) const TRACE_SEND_STATUS_DOWN_EXPIRED: u8 = 5;
 pub(crate) const TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND: u8 = 6;
 pub(crate) const TRACE_SEND_STATUS_CLOCK_FAILURE_AFTER_SEND: u8 = 7;
 pub(crate) const TRACE_SEND_STATUS_NOT_ATTEMPTED: u8 = 8;
@@ -110,7 +109,6 @@ pub(crate) const fn trace_send_status_code(status: SendTransactionStatus) -> u8 
         SendTransactionStatus::ZeroProgress => TRACE_SEND_STATUS_ZERO_PROGRESS,
         SendTransactionStatus::PartialProgress => TRACE_SEND_STATUS_PARTIAL_PROGRESS,
         SendTransactionStatus::IntegrityLost => TRACE_SEND_STATUS_INTEGRITY_LOST,
-        SendTransactionStatus::DownExpiredBeforeSend => TRACE_SEND_STATUS_DOWN_EXPIRED,
         SendTransactionStatus::ClockFailureBeforeSend => {
             TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND
         }

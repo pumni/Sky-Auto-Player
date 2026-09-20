@@ -79,16 +79,12 @@ pub struct BlockedUnfocusedObservation {
 pub enum DownMissKind {
     UnobservedBacklog,
     PhysicalWindowExpired,
-    DownExpiredBeforeSend,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DownMissTimingEvidence {
     Physical(PhysicalTimingWindow),
-    Prepared {
-        physical_target_qpc: QpcTicks,
-        sender_cutoff_qpc: Option<QpcTicks>,
-    },
+    Prepared { physical_target_qpc: QpcTicks },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -120,17 +116,6 @@ impl DownMissObservation {
 
     #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
-    pub fn physical_latest_down_start_qpc(&self) -> Option<QpcTicks> {
-        match self.timing_evidence {
-            DownMissTimingEvidence::Physical(window) => window.latest_down_start_qpc,
-            DownMissTimingEvidence::Prepared {
-                sender_cutoff_qpc, ..
-            } => sender_cutoff_qpc,
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn test_fixture(n: u64) -> Self {
         let authored_target_qpc = QpcTicks::from_raw(n);
         Self {
@@ -151,7 +136,7 @@ impl DownMissObservation {
             observed_qpc: authored_target_qpc,
             up_mask: 0,
             down_mask: 1,
-            kind: DownMissKind::DownExpiredBeforeSend,
+            kind: DownMissKind::UnobservedBacklog,
         }
     }
 }

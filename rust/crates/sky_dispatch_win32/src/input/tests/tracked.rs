@@ -64,17 +64,14 @@ fn prepared_success_emitter(
 }
 
 #[test]
-fn prepared_down_latest_start_exact_boundary_sends_once() {
+fn prepared_down_at_authored_boundary_sends_once() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1))
         .expect("valid prepared Down packet");
 
-    let outcome = state.send_prepared_physical_packet_with_start_and_cutoff(
-        &prepared,
-        crate::clock::QpcTicks::from_raw(100),
-        Some(crate::clock::QpcTicks::from_raw(100)),
-    );
+    let outcome = state
+        .send_prepared_physical_packet_with_start(&prepared, crate::clock::QpcTicks::from_raw(100));
 
     assert_eq!(outcome.status, SendTransactionStatus::Complete);
     assert_eq!(outcome.evidence.attempts, 1);
@@ -82,56 +79,44 @@ fn prepared_down_latest_start_exact_boundary_sends_once() {
 }
 
 #[test]
-fn prepared_down_latest_start_one_tick_late_never_calls_emitter() {
+fn prepared_down_one_tick_late_still_calls_emitter() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1))
         .expect("valid prepared Down packet");
 
-    let outcome = state.send_prepared_physical_packet_with_start_and_cutoff(
-        &prepared,
-        crate::clock::QpcTicks::from_raw(101),
-        Some(crate::clock::QpcTicks::from_raw(100)),
-    );
+    let outcome = state
+        .send_prepared_physical_packet_with_start(&prepared, crate::clock::QpcTicks::from_raw(101));
 
-    assert_eq!(outcome.status, SendTransactionStatus::DownExpiredBeforeSend);
-    assert_eq!(outcome.evidence.attempts, 0);
-    assert_eq!(calls.load(Ordering::Relaxed), 0);
-    assert_eq!(state.active_mask, 0);
+    assert_eq!(outcome.status, SendTransactionStatus::Complete);
+    assert_eq!(outcome.evidence.attempts, 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(state.active_mask, 1);
 }
 
 #[test]
-fn prepared_custom_emitter_checks_latest_start_before_invocation() {
+fn prepared_custom_emitter_records_sender_start_before_invocation() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let clock = crate::clock::QpcClock::initialize().expect("QPC clock");
-    let current = clock.now().expect("QPC sample");
-    let cutoff = crate::clock::QpcTicks::from_raw(current.as_u64() - 1);
-    let mut state = TrackedKeyState::with_qpc_clock(clock);
-    state.set_packet_emitter(prepared_success_emitter(calls.clone()));
+    let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1))
         .expect("valid prepared Down packet");
 
-    let outcome = state.send_prepared_physical_packet_with_cutoff(&prepared, Some(cutoff));
+    let outcome = state.send_prepared_physical_packet(&prepared);
 
-    assert_eq!(outcome.status, SendTransactionStatus::DownExpiredBeforeSend);
-    assert_eq!(outcome.evidence.attempts, 0);
-    assert!(outcome.evidence.started_ticks.is_some());
-    assert_eq!(calls.load(Ordering::Relaxed), 0);
-    assert_eq!(state.active_mask, 0);
+    assert_eq!(outcome.status, SendTransactionStatus::Complete);
+    assert_eq!(outcome.evidence.attempts, 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(state.active_mask, 1);
 }
 
 #[test]
-fn prepared_custom_emitter_keeps_up_only_exempt_from_down_latest_start() {
+fn prepared_custom_emitter_sends_up_only_packet() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let clock = crate::clock::QpcClock::initialize().expect("QPC clock");
-    let current = clock.now().expect("QPC sample");
-    let cutoff = crate::clock::QpcTicks::from_raw(current.as_u64() - 1);
-    let mut state = TrackedKeyState::with_qpc_clock(clock);
-    state.set_packet_emitter(prepared_success_emitter(calls.clone()));
+    let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(1, 0))
         .expect("valid prepared Up packet");
 
-    let outcome = state.send_prepared_physical_packet_with_cutoff(&prepared, Some(cutoff));
+    let outcome = state.send_prepared_physical_packet(&prepared);
 
     assert_eq!(outcome.status, SendTransactionStatus::Complete);
     assert_eq!(outcome.evidence.attempts, 1);
@@ -139,17 +124,14 @@ fn prepared_custom_emitter_keeps_up_only_exempt_from_down_latest_start() {
 }
 
 #[test]
-fn prepared_up_only_remains_release_eligible_past_down_latest_start() {
+fn prepared_up_only_remains_release_eligible_when_late() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut state = TrackedKeyState::with_packet_emitter(prepared_success_emitter(calls.clone()));
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(PhysicalPacket::new(1, 0))
         .expect("valid prepared Up packet");
 
-    let outcome = state.send_prepared_physical_packet_with_start_and_cutoff(
-        &prepared,
-        crate::clock::QpcTicks::from_raw(101),
-        None,
-    );
+    let outcome = state
+        .send_prepared_physical_packet_with_start(&prepared, crate::clock::QpcTicks::from_raw(101));
 
     assert_eq!(outcome.status, SendTransactionStatus::Complete);
     assert_eq!(calls.load(Ordering::Relaxed), 1);

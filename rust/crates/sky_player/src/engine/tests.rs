@@ -882,7 +882,7 @@ fn prepared_mixed_backlog_sends_only_the_canonical_up_prefix() {
 }
 
 #[test]
-fn prepared_mixed_sender_cutoff_sends_only_the_canonical_up_prefix() {
+fn prepared_mixed_unobserved_down_sends_only_the_canonical_up_prefix() {
     let mut harness = ProductionDispatchTestHarness::new_mixed_then_future_down();
     let packets = harness.configure_packet_capture();
     harness.prepare_prepared_stream_for_test();
@@ -899,17 +899,18 @@ fn prepared_mixed_sender_cutoff_sends_only_the_canonical_up_prefix() {
         *packets.lock().expect("packet capture"),
         vec![
             sky_dispatch_win32::input::PhysicalPacket::new(0, 0b001),
-            sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0),
+            sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0b010),
         ]
     );
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 1);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
 }
 
 #[test]
 fn prepared_mixed_up_prefix_transport_failure_is_fail_closed() {
     let mut harness = ProductionDispatchTestHarness::new_mixed();
-    harness.configure_deadline_missed_packet_sender();
+    let _ =
+        harness.configure_prepared_transport_outcome_for_test(SendTransactionStatus::ZeroProgress);
     harness.prepare_prepared_stream_for_test();
 
     assert!(matches!(
@@ -1065,11 +1066,11 @@ fn prepared_acceptance_counters_cover_backlog_prefix_and_sender_expiry() {
     assert_eq!(sender_expiry.prepared_normal_backlog_count_for_test(), 0);
     assert_eq!(
         sender_expiry.prepared_up_prefix_recovery_sends_for_test(),
-        1
+        0
     );
     assert_eq!(
         sender_expiry.prepared_normal_sender_expiry_count_for_test(),
-        1
+        0
     );
     assert_eq!(backlog.timeline_rebase_count_for_test(), 0);
     assert_eq!(sender_expiry.timeline_rebase_count_for_test(), 0);
@@ -1313,6 +1314,13 @@ fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
                 scheduled_us: 2_000_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "native-prepared-suspension-sentinel-j".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "native-prepared-suspension-sentinel-up".into(),
             },
         ],
         &[0x15, 0x16],
@@ -2104,17 +2112,26 @@ fn production_startup_matrix_preserves_first_physical_lead() {
 
     for scheduled_us in [0, 100, 499, 500, 501] {
         let schedule = compile_runtime_intents(
-            &[KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                // Keep the authored boundary well beyond worker startup and
-                // host timer quantization.  This is test isolation only; the
-                // authored target remains frozen and the worker never moves
-                // it after arm.
-                scheduled_us: scheduled_us + 100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "startup-matrix-down".into(),
-            }],
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    // Keep the authored boundary well beyond worker startup and
+                    // host timer quantization.  This is test isolation only; the
+                    // authored target remains frozen and the worker never moves
+                    // it after arm.
+                    scheduled_us: scheduled_us + 100_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "startup-matrix-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: scheduled_us + 101_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "startup-matrix-up".into(),
+                },
+            ],
             &[0x15],
         )
         .expect("valid startup matrix schedule");
@@ -3881,6 +3898,13 @@ fn focus_recovery_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "focus-recovery-sentinel".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 10_200_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "focus-recovery-sentinel-up".to_string().into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -4168,6 +4192,13 @@ fn focus_restore_after_grace_releases_and_resumes() {
                 scheduled_us: 10_000_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "focus-restore-sentinel".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 10_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "focus-restore-sentinel-up".to_string().into(),
             },
         ],
         &[0x15, 0x16],
@@ -4870,10 +4901,10 @@ fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
     assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
     assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
     let packets = harness.configure_packet_capture();
-    harness.advance_playback_time_us(1_000);
+    let cleanup = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.plan_current_dispatch(),
-        super::worker::NextDispatchPlan::NoWork
+        harness.dispatch_at_plan_target_for_test(&cleanup),
+        super::worker::DispatchStep::Dispatched
     ));
     assert!(harness.resources.coordinator.is_finished());
     assert!(packets.lock().expect("packet capture lock").is_empty());
@@ -4906,10 +4937,10 @@ fn focus_suspend_restore_cancels_pending_release_without_stale_up() {
     assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
     assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
     let packets = harness.configure_packet_capture();
-    harness.advance_playback_time_us(1_000);
+    let cleanup = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.plan_current_dispatch(),
-        super::worker::NextDispatchPlan::NoWork
+        harness.dispatch_at_plan_target_for_test(&cleanup),
+        super::worker::DispatchStep::Dispatched
     ));
     assert!(harness.resources.coordinator.is_finished());
     assert!(packets.lock().expect("packet capture lock").is_empty());
@@ -6135,6 +6166,13 @@ fn mixed_packet_partial_fault_stops_before_committing_retrigger() {
             scan_codes: smallvec::smallvec![0x16],
             reason: "disjoint-down".to_string().into(),
         },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 1_100_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "disjoint-up".to_string().into(),
+        },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid mixed packet schedule");
@@ -6338,6 +6376,13 @@ fn native_session_rejects_deterministically_infeasible_schedule_before_worker_st
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "short-hold-chord".to_string().into(),
         },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 200,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "short-hold-chord-up".to_string().into(),
+        },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid dynamic-infeasibility schedule");
@@ -6529,6 +6574,13 @@ fn native_release_gap_admission_rejects_one_microsecond_short() {
             scan_codes: smallvec::smallvec![0x15],
             reason: "down-b".to_string().into(),
         },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 16_867,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up-b".to_string().into(),
+        },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
         .expect("valid short release-gap schedule");
@@ -6569,6 +6621,13 @@ fn native_release_gap_admission_checks_qpc_tick_rounding() {
             scheduled_us: 200,
             scan_codes: smallvec::smallvec![0x15],
             reason: "down-b".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 300,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up-b".to_string().into(),
         },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
@@ -6666,11 +6725,8 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
 }
 
 #[test]
-fn strict_sender_deadline_miss_fails_closed() {
-    // Keep the first physical boundary well clear of worker startup. This
-    // test exercises the injected pre-call deadline miss on the second Down,
-    // not an incidental startup scheduling race at an authored zero target.
-    const TEST_AUTHORED_START_US: u64 = 5_000_000;
+fn strict_late_authorized_down_is_attempted_and_finishes() {
+    const TEST_AUTHORED_START_US: u64 = 50_000;
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -6703,29 +6759,17 @@ fn strict_sender_deadline_miss_fails_closed() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid physical-window recovery schedule");
-    let script = FaultInjectionScript {
-        entries: vec![(1, InjectedSendOutcome::DownExpiredBeforeSend)],
-        ..FaultInjectionScript::none()
-    };
     let mut options = test_session_options(
         schedule,
         2,
         BackendConfig::Mock {
             latency_base_us: 0,
             latency_per_key_us: 0,
-            fault_script: script,
+            fault_script: FaultInjectionScript::none(),
         },
     );
     options.profile = DispatchProfile::Production;
-    // Keep the injected sender deadline miss on the explicit strict path;
-    // normal playback no longer converts wake lateness into Down recovery.
     options.timing.strict_timing = true;
-    // This integration test verifies that the scripted strict sender deadline
-    // miss fails closed. Keep the real worker/QPC path, but give CI host
-    // preemption enough test-only margin that the real sender cutoff cannot
-    // consume the scripted packet index first. Exact cutoff behavior is
-    // covered by deterministic dispatch tests; the product default is supplied
-    // by the application/session policy, not this test-only override.
     set_test_timing_margin(&mut options, 20_000);
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
@@ -6733,19 +6777,19 @@ fn strict_sender_deadline_miss_fails_closed() {
     assert!(session.join(Duration::from_secs(8)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.outcome, Some("error".to_string()), "{snapshot:?}");
-    assert_eq!(snapshot.status, "error", "{snapshot:?}");
     assert_eq!(
-        snapshot.terminal_error,
-        Some("down_final_sender_window_expired".to_string()),
+        snapshot.outcome,
+        Some("finished".to_string()),
         "{snapshot:?}"
     );
+    assert_eq!(snapshot.status, "finished", "{snapshot:?}");
+    assert!(snapshot.terminal_error.is_none(), "{snapshot:?}");
     assert_eq!(snapshot.authored_keys_rejected, 0, "{snapshot:?}");
     assert_eq!(
         snapshot.missed_physical_window_boundaries, 0,
         "{snapshot:?}"
     );
-    assert_eq!(snapshot.final_sender_window_expirations, 1, "{snapshot:?}");
+    assert_eq!(snapshot.final_sender_window_expirations, 0, "{snapshot:?}");
     assert_eq!(snapshot.active_count, 0, "{snapshot:?}");
     assert_eq!(snapshot.possibly_active_count, 0, "{snapshot:?}");
     assert_eq!(snapshot.failed_release_count, 0, "{snapshot:?}");
@@ -7192,6 +7236,13 @@ fn late_first_event_does_not_move_second_event() {
                 scan_codes: smallvec::smallvec![0x17],
                 reason: "chord3".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 60_000,
+                scan_codes: smallvec::smallvec![0x15, 0x16, 0x17],
+                reason: "chord-cleanup".to_string().into(),
+            },
         ],
         &[0x15, 0x16, 0x17],
     )
@@ -7273,6 +7324,13 @@ fn authored_up_does_not_move_unrelated_future_authored_action() {
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "down B".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 40_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "up B".to_string().into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -7343,6 +7401,13 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
                 scheduled_us: 20_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "chord2".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 30_000,
+                scan_codes: smallvec::smallvec![0x15, 0x16],
+                reason: "chord2-up".to_string().into(),
             },
         ],
         &[0x15, 0x16],
@@ -7662,6 +7727,13 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "next-down".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 25_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "next-up".to_string().into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -7799,6 +7871,13 @@ fn focus_then_manual_then_unfocused_resume_suspends_before_manual_resume() {
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "next-down".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 22_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "next-up".to_string().into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -7915,6 +7994,13 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
                 scheduled_us: 25_000_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "lifecycle-sentinel".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 25_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "lifecycle-sentinel-up".to_string().into(),
             },
         ],
         &[0x15, 0x16],

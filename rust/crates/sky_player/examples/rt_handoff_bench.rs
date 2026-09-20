@@ -545,7 +545,6 @@ fn baseline_status_name(status: SendTransactionStatus) -> &'static str {
         SendTransactionStatus::ZeroProgress => "ZeroProgress",
         SendTransactionStatus::PartialProgress => "PartialProgress",
         SendTransactionStatus::IntegrityLost => "IntegrityLost",
-        SendTransactionStatus::DownExpiredBeforeSend => "DownExpiredBeforeSend",
         SendTransactionStatus::ClockFailureBeforeSend => "ClockFailureBeforeSend",
         SendTransactionStatus::ClockFailureAfterSend => "ClockFailureAfterSend",
     }
@@ -565,7 +564,6 @@ fn baseline_down_miss_name(kind: DownMissKind) -> &'static str {
     match kind {
         DownMissKind::UnobservedBacklog => "UnobservedBacklog",
         DownMissKind::PhysicalWindowExpired => "PhysicalWindowExpired",
-        DownMissKind::DownExpiredBeforeSend => "DownExpiredBeforeSend",
     }
 }
 
@@ -732,8 +730,7 @@ fn baseline_observation_timing(
             )
         }
         DispatchObservation::DownMiss(value) => {
-            let pre_call_qpc = matches!(value.kind, DownMissKind::DownExpiredBeforeSend)
-                .then_some(value.observed_qpc.as_u64());
+            let pre_call_qpc = None;
             let pre_call_minus_target_us = pre_call_qpc.map(|pre_call| {
                 signed_qpc_us(
                     qpc_clock,
@@ -1388,27 +1385,6 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 DownMissKind::PhysicalWindowExpired => {
                     samples.missed_down_physical_window_expired += 1;
                     "down_physical_window_expired"
-                }
-                DownMissKind::DownExpiredBeforeSend => {
-                    samples.missed_down_final_sender_window_expired += 1;
-                    let total_lateness_us = signed_qpc_us(
-                        qpc_clock,
-                        value.observed_qpc,
-                        value.physical_authored_target_qpc(),
-                    );
-                    samples.missed_pre_call_lateness_us.push(total_lateness_us);
-                    let Some(latest_down_start_qpc) = value.physical_latest_down_start_qpc() else {
-                        samples.record_observation_failure(
-                            "down_final_sender_window_expired_missing_latest_start",
-                        );
-                        return;
-                    };
-                    let excess_lateness_us =
-                        signed_qpc_us(qpc_clock, value.observed_qpc, latest_down_start_qpc);
-                    samples
-                        .missed_excess_beyond_latest_start_us
-                        .push(excess_lateness_us);
-                    "down_final_sender_window_expired"
                 }
             };
             // A recovered Down miss is a diagnostic companion to the

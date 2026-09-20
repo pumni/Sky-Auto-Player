@@ -1,6 +1,6 @@
 use super::super::super::{PlaybackClockState, QpcTicks};
 use super::super::physical_timing_guard::PhysicalTimingWindow;
-use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime, WorkerTimingState};
+use super::super::{WorkerConfig, WorkerMetricsLocal, WorkerRuntime};
 use super::observation::{
     DispatchObservation, DownMissKind, DownMissObservation, DownMissTimingEvidence,
 };
@@ -15,24 +15,6 @@ use sky_dispatch_win32::input::TrackedKeyState;
 pub(crate) enum DownMissReason {
     UnobservedBacklog,
     PhysicalWindowExpired,
-    DownExpiredBeforeSend,
-}
-
-pub(super) fn effective_down_sender_cutoff(
-    physical_timing_window: PhysicalTimingWindow,
-    timing: &WorkerTimingState,
-) -> Result<Option<QpcTicks>, &'static str> {
-    let Some(physical_latest) = physical_timing_window.latest_down_start_qpc else {
-        return Ok(None);
-    };
-    if timing.strict_timing {
-        return Ok(Some(physical_latest));
-    }
-    // Normal playback treats lateness as observational evidence.  The sender
-    // still records its authoritative pre-call QPC, but it must not turn a
-    // late wake into a scheduler-level Down miss.  Keep the physical latest
-    // start cutoff isolated to strict/diagnostic timing.
-    Ok(None)
 }
 
 pub(super) fn queue_down_miss_observation(
@@ -61,7 +43,6 @@ pub(super) fn queue_down_miss_observation(
             kind: match reason {
                 DownMissReason::UnobservedBacklog => DownMissKind::UnobservedBacklog,
                 DownMissReason::PhysicalWindowExpired => DownMissKind::PhysicalWindowExpired,
-                DownMissReason::DownExpiredBeforeSend => DownMissKind::DownExpiredBeforeSend,
             },
         }),
         &mut local_metrics.observer_dropped_samples,
@@ -81,7 +62,6 @@ fn record_last_missed_down_sample(
     local_metrics.last_missed_down_reason_code = match reason {
         DownMissReason::UnobservedBacklog => 1,
         DownMissReason::PhysicalWindowExpired => 2,
-        DownMissReason::DownExpiredBeforeSend => 3,
     };
     local_metrics.last_missed_down_source_action_index = source_action_index;
     local_metrics.last_missed_down_mask = down_mask;
@@ -119,11 +99,6 @@ pub(super) fn record_missed_down_classification(
         DownMissReason::PhysicalWindowExpired => {
             local_metrics.missed_physical_window_boundaries = local_metrics
                 .missed_physical_window_boundaries
-                .saturating_add(1);
-        }
-        DownMissReason::DownExpiredBeforeSend => {
-            local_metrics.final_sender_window_expirations = local_metrics
-                .final_sender_window_expirations
                 .saturating_add(1);
         }
     }
@@ -170,7 +145,6 @@ pub(crate) fn classify_normal_prepared_miss(
     observer: Option<&PendingObservationQueue>,
     wake_ticks: sky_dispatch_core::time::TimelineTicks,
     physical_target_qpc: QpcTicks,
-    sender_cutoff_qpc: Option<QpcTicks>,
     observed_qpc: QpcTicks,
     reason: DownMissReason,
 ) {
@@ -181,7 +155,6 @@ pub(crate) fn classify_normal_prepared_miss(
         wake_ticks,
         DownMissTimingEvidence::Prepared {
             physical_target_qpc,
-            sender_cutoff_qpc,
         },
         observed_qpc,
         reason,
@@ -198,11 +171,6 @@ pub(crate) fn classify_normal_prepared_miss(
         DownMissReason::UnobservedBacklog => {
             local_metrics.prepared_normal_backlog_boundaries = local_metrics
                 .prepared_normal_backlog_boundaries
-                .saturating_add(1);
-        }
-        DownMissReason::DownExpiredBeforeSend => {
-            local_metrics.prepared_normal_sender_expirations = local_metrics
-                .prepared_normal_sender_expirations
                 .saturating_add(1);
         }
         DownMissReason::PhysicalWindowExpired => {}
@@ -260,13 +228,10 @@ pub(crate) fn emit_prepared_up_prefix_if_needed(
         return Err("invalid_prepared_up_recovery_view");
     }
     #[cfg(any(test, feature = "test-support"))]
-    let result = backend.send_prepared_physical_packet_view_with_start_and_cutoff(
-        prepared_up_packet,
-        observed_qpc,
-        None,
-    );
+    let result =
+        backend.send_prepared_physical_packet_view_with_start(prepared_up_packet, observed_qpc);
     #[cfg(not(any(test, feature = "test-support")))]
-    let result = backend.send_prepared_physical_packet_view_with_cutoff(prepared_up_packet, None);
+    let result = backend.send_prepared_physical_packet_view(prepared_up_packet);
     Ok(result)
 }
 
@@ -411,7 +376,6 @@ pub(super) fn resolve_normal_prepared_deadline_miss(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: sky_dispatch_core::time::TimelineTicks,
     physical_target_qpc: QpcTicks,
-    sender_cutoff_qpc: Option<QpcTicks>,
     observed_qpc: QpcTicks,
     reason: DownMissReason,
     explicitly_cancelled_by_suspension: &[GenerationId],
@@ -423,7 +387,6 @@ pub(super) fn resolve_normal_prepared_deadline_miss(
         observer,
         effective_now_ticks,
         physical_target_qpc,
-        sender_cutoff_qpc,
         observed_qpc,
         reason,
     );
@@ -516,7 +479,6 @@ pub(super) fn recover_missed_down_boundary(
         return DispatchStep::TerminateStatic(match reason {
             DownMissReason::UnobservedBacklog => "down_unobserved_backlog",
             DownMissReason::PhysicalWindowExpired => "down_physical_window_expired",
-            DownMissReason::DownExpiredBeforeSend => "down_final_sender_window_expired",
         });
     }
     let up_mask = view.packet_masks.up_mask;
@@ -677,7 +639,6 @@ mod tests {
         for reason in [
             DownMissReason::UnobservedBacklog,
             DownMissReason::PhysicalWindowExpired,
-            DownMissReason::DownExpiredBeforeSend,
         ] {
             let mut metrics = WorkerMetricsLocal::default();
             record_missed_down_classification(
