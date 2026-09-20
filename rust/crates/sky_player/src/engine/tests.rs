@@ -3244,52 +3244,198 @@ fn fresh_focus_rejection_preserves_current_frame_and_miss_lifecycle_state() {
 #[test]
 fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::reset_foreground_query_count();
 
-    let mut harness = ProductionDispatchTestHarness::new_down_only();
-    harness.config.focus.require_focus = true;
-    harness.runtime.musical_physical_commit_started = true;
-    let calls = harness.configure_send_counter();
-    let mut stream = harness.build_prepared_stream_for_test();
-
-    let rejected =
-        harness.dispatch_prepared_current_at_lateness_authorized_for_test(&mut stream, 10_000);
-    assert!(matches!(rejected, super::worker::DispatchStep::Continue));
-    assert!(
-        harness
-            .resources
-            .playback
-            .has_pause_reason(PauseReason::Focus)
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "same-frame-restore-first".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "same-frame-restore-current".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "same-frame-restore-first-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 4_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "same-frame-restore-current-up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("same-frame restore schedule");
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let restore_reconcile_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    let mut options = test_session_options(
+        schedule,
+        2,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
     );
-    assert_eq!(harness.resources.coordinator.cursor, 0);
-    assert!(stream.current().is_some());
+    options.focus.require_focus = true;
+    // The production lifecycle remains intact; a zero test grace keeps the
+    // frozen current frame inside this deterministic proof's sender window.
+    options.focus.focus_restore_grace_us = 0;
+    options.restore_race_hook = Some({
+        let restore_reconcile_count = Arc::clone(&restore_reconcile_count);
+        Arc::new(move |_, _, _| {
+            restore_reconcile_count.fetch_add(1, Ordering::Release);
+        })
+    });
 
-    // Complete the same pause/restore clock transition used by the normal
-    // lifecycle, then authorize the resumed target generation at the frozen
-    // frame again. The frame must be admitted, not converted into a miss.
-    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
-    harness.focus_active.store(true, Ordering::Release);
-    let resumed_at = harness.resources.clock.now().expect("restore QPC");
-    harness
-        .resources
-        .playback
-        .exit_pause(PauseReason::Focus, resumed_at)
-        .expect("normal focus restore clock transition");
-    harness.progress_clock.publish(&harness.resources.playback);
-    sky_dispatch_win32::focus::reset_foreground_query_count();
+    let session = NativeDispatchSession::new(options).expect("same-frame session admission");
+    session.set_target_hwnd(123);
+    session.set_focus_hint(true);
+    start_with_test_wall_clock_slack(&session);
 
-    let admitted =
-        harness.dispatch_prepared_current_at_lateness_authorized_for_test(&mut stream, 0);
-    assert!(matches!(admitted, super::worker::DispatchStep::Dispatched));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(harness.resources.coordinator.cursor, 1);
-    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
-    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 0);
-    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
-    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
-    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    let first_deadline = Instant::now() + Duration::from_secs(3);
+    while send_call_count.load(Ordering::Acquire) < 1 {
+        let snapshot = session.snapshot_lite();
+        assert!(
+            !snapshot.is_finished,
+            "first Down finished early: {snapshot:?}"
+        );
+        assert!(Instant::now() < first_deadline, "first Down did not send");
+        session
+            .heartbeat()
+            .expect("heartbeat before same-frame loss");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    // Keep the published focus hint true. The next prepared frame is rejected
+    // only by the fresh foreground proof, which must leave the frozen cursor
+    // and normal miss/expiry counters untouched.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    let pause_deadline = Instant::now() + Duration::from_secs(3);
+    while !session.snapshot_lite().is_paused {
+        let snapshot = session.snapshot_lite();
+        assert!(
+            !snapshot.is_finished,
+            "fresh focus rejection terminated: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < pause_deadline,
+            "fresh focus rejection did not pause: snapshot={:?}",
+            session.snapshot(),
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat during fresh focus rejection");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let paused = session.snapshot();
+    assert!(
+        paused.is_paused,
+        "fresh focus rejection did not pause: {paused:?}"
+    );
+    assert_eq!(send_call_count.load(Ordering::Acquire), 1);
+    assert_eq!(
+        paused
+            .generation_status_counts
+            .get("dropped_expired")
+            .copied()
+            .unwrap_or_default(),
+        0
+    );
+    assert_eq!(paused.missed_unobserved_backlog_boundaries, 0);
+    assert_eq!(paused.final_sender_window_expirations, 0);
+
+    // The normal focus-restore path invalidates the old Down authorization,
+    // reconciles the still-current prepared frame, reacquires a fresh target
+    // proof, and only then exits the pause.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    session.set_focus_hint(true);
+    let restore_deadline = Instant::now() + Duration::from_secs(3);
+    while restore_reconcile_count.load(Ordering::Acquire) == 0 {
+        let snapshot = session.snapshot_lite();
+        assert!(
+            !snapshot.is_finished,
+            "focus restore terminated: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < restore_deadline,
+            "focus restore reconciliation did not run"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat during normal focus restore");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let send_deadline = Instant::now() + Duration::from_secs(3);
+    while send_call_count.load(Ordering::Acquire) < 2 {
+        let snapshot = session.snapshot_lite();
+        assert!(
+            !snapshot.is_finished,
+            "same current frame was not readmitted: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < send_deadline,
+            "same current prepared frame did not send"
+        );
+        session
+            .heartbeat()
+            .expect("heartbeat after normal focus restore");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(restore_reconcile_count.load(Ordering::Acquire), 1);
+    let restored = session.snapshot();
+    assert_eq!(
+        restored
+            .generation_status_counts
+            .get("dropped_expired")
+            .copied()
+            .unwrap_or_default(),
+        0
+    );
+    assert_eq!(restored.missed_unobserved_backlog_boundaries, 0);
+    assert_eq!(restored.final_sender_window_expirations, 0);
+    assert_eq!(restored.timeline_rebase_count, 0);
+
+    session.quit().expect("quit same-frame restore session");
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("same-frame worker join")
+    );
+    let telemetry: serde_json::Value = serde_json::from_str(
+        &session
+            .take_telemetry_json()
+            .expect("same-frame telemetry JSON"),
+    )
+    .expect("valid same-frame telemetry JSON");
+    let records = telemetry["records"]
+        .as_array()
+        .expect("same-frame records array");
+    for event_index in [0, 1] {
+        let record = records
+            .iter()
+            .find(|record| record["event_index"].as_u64() == Some(event_index))
+            .unwrap_or_else(|| panic!("missing same-frame event {event_index}"));
+        assert_eq!(record["sent_count"].as_u64(), Some(1));
+    }
 }
 
 #[test]

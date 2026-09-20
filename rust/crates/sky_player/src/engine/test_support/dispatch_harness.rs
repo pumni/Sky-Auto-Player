@@ -1087,6 +1087,13 @@ impl ProductionDispatchTestHarness {
         self.config.focus.require_focus = require_focus;
     }
 
+    /// Set the expected target sampled by a real-foreground benchmark. This
+    /// is setup-only; admission still performs its normal production checks.
+    pub fn set_target_hwnd_for_benchmark(&self, hwnd: isize) {
+        assert_ne!(hwnd, 0, "benchmark target HWND must be nonzero");
+        self.target_hwnd.store(hwnd, Ordering::Release);
+    }
+
     pub fn is_physically_feasible_for_test(
         &self,
         target: QpcTicks,
