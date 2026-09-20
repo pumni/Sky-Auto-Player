@@ -1843,7 +1843,8 @@ impl NativeDesktopRuntime {
                 timing_margin_max_us: sky_app_core::settings::MAX_TIMING_MARGIN_US,
                 timing_margin_step_us: sky_app_core::settings::TIMING_MARGIN_STEP_US,
             },
-            theme: settings_dto.theme.clone(),
+            palette: settings_dto.palette.clone(),
+            theme: settings_dto.palette.clone(),
             telemetry_enabled: settings_dto.telemetry_enabled,
             update_preferences: settings_dto.update_preferences.clone(),
             catalog_state,
@@ -1913,13 +1914,13 @@ impl NativeDesktopRuntime {
             );
         }
         let auto_play_only = patch.auto_play.is_some()
-            && patch.theme.is_none()
+            && patch.palette.is_none()
             && patch.telemetry_enabled.is_none()
             && patch.verbose_hud.is_none()
             && patch.playback_defaults.is_none()
             && patch.update_preferences.is_none();
         let core_patch = sky_app_core::settings::SettingsPatch {
-            theme: patch.theme,
+            palette: patch.palette,
             telemetry_enabled: patch.telemetry_enabled,
             verbose_hud: patch.verbose_hud,
             playback_defaults: patch.playback_defaults.map(|value| PlaybackDefaultsPatch {
@@ -3947,14 +3948,14 @@ fn settings_fingerprint(settings: &ApplicationSettings) -> Result<String, String
     // Python's settings fingerprint uses json.dumps with sorted keys and its
     // default separators (`, ` and `: `). Keep the flat payload explicit so
     // this cross-runtime identity cannot depend on Rust struct field order.
-    let theme = serde_json::to_string(&settings.theme).map_err(json_error)?;
+    let palette = serde_json::to_string(&settings.palette).map_err(json_error)?;
     let payload = format!(
-        "{{\"fps\": {}, \"hold\": {}, \"telemetry\": {}, \"tempo\": {}, \"theme\": {}, \"timing_margin_us\": {}}}",
+        "{{\"fps\": {}, \"hold\": {}, \"telemetry\": {}, \"tempo\": {}, \"palette\": {}, \"timing_margin_us\": {}}}",
         settings.playback_defaults.fps,
         settings.playback_defaults.hold_frames,
         settings.telemetry_enabled,
         settings.playback_defaults.tempo_scale,
-        theme,
+        palette,
         settings.playback_defaults.timing_margin_us,
     );
     let digest = Sha256::digest(payload.as_bytes());
@@ -6304,7 +6305,7 @@ fn settings_dto(
     timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
 ) -> SettingsDto {
     SettingsDto {
-        theme: settings.theme.clone(),
+        palette: settings.palette.clone(),
         ui_background_mode: settings.ui_background_mode.clone(),
         playback_defaults: playback_defaults(settings),
         auto_play: settings.playback_behavior.auto_play,
@@ -6361,7 +6362,8 @@ struct NativeUpdatePreferencesPatch {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct NativeSettingsPatch {
-    theme: Option<String>,
+    #[serde(alias = "theme")]
+    palette: Option<String>,
     telemetry_enabled: Option<bool>,
     verbose_hud: Option<bool>,
     playback_defaults: Option<NativePlaybackPatch>,
@@ -6382,7 +6384,7 @@ impl NativeUpdatePreferencesPatch {
 impl NativeSettingsPatch {
     fn into_public(self) -> SettingsPatch {
         SettingsPatch {
-            theme: self.theme,
+            palette: self.palette,
             telemetry_enabled: self.telemetry_enabled,
             verbose_hud: self.verbose_hud,
             playback_defaults: self
@@ -7593,8 +7595,9 @@ mod tests {
             .expect("bootstrap");
         assert!(value.get("app_version").is_some());
         assert!(value.get("Ok").is_none());
-        assert_eq!(value["settings"]["theme"], "aurora");
-        assert_eq!(value["settings"]["theme"], value["theme"]);
+        assert_eq!(value["settings"]["palette"], "aurora");
+        assert_eq!(value["settings"]["palette"], value["palette"]);
+        assert_eq!(value["theme"], "aurora");
         assert_eq!(runtime.install_root(), root.as_path());
         fs::write(
             root.join("config.json"),
@@ -7604,11 +7607,11 @@ mod tests {
         let cached_bootstrap = runtime
             .dispatch("app.bootstrap", Value::Object(Default::default()))
             .expect("cached bootstrap");
-        assert_eq!(cached_bootstrap["settings"]["theme"], "aurora");
+        assert_eq!(cached_bootstrap["settings"]["palette"], "aurora");
         let refreshed_settings = runtime
             .dispatch("settings.get", Value::Object(Default::default()))
             .expect("settings refresh");
-        assert_eq!(refreshed_settings["theme"], "slate");
+        assert_eq!(refreshed_settings["palette"], "slate");
         assert!(
             runtime
                 .dispatch("settings.get", Value::Object(Default::default()))
@@ -7643,7 +7646,7 @@ mod tests {
         let initial = runtime
             .dispatch("app.bootstrap", Value::Object(Default::default()))
             .expect("bootstrap");
-        assert_eq!(initial["settings"]["theme"], "aurora");
+        assert_eq!(initial["settings"]["palette"], "aurora");
 
         fs::write(
             root.join("config.json"),
@@ -7658,7 +7661,7 @@ mod tests {
         let cached = runtime
             .dispatch("app.bootstrap", Value::Object(Default::default()))
             .expect("cached bootstrap");
-        assert_eq!(cached["settings"]["theme"], "aurora");
+        assert_eq!(cached["settings"]["palette"], "aurora");
 
         runtime.shutdown();
         let _ = fs::remove_dir_all(root);
@@ -9724,7 +9727,7 @@ mod tests {
             settings_fingerprint(&settings).expect("settings fingerprint");
         assert_eq!(
             default_settings_fingerprint,
-            "c74d3a67e251808529cfa8b1b53626f81f0e6d233086a1b056e3a2eb746df7dd"
+            "70ad53c4560991aa6ed42009862ad945ec70f682a75a0a079af338e669d3e94c"
         );
         let mut auto_play_changed = settings.clone();
         auto_play_changed.playback_behavior.auto_play = false;
@@ -9959,7 +9962,7 @@ mod tests {
             .to_owned();
         runtime
             .patch_settings(crate::commands::SettingsPatch {
-                theme: None,
+                palette: None,
                 telemetry_enabled: None,
                 verbose_hud: None,
                 playback_defaults: Some(crate::commands::PlaybackPatch {
@@ -10045,7 +10048,7 @@ mod tests {
         let prepared_id = prepared["prepared_id"].as_str().expect("prepared ID");
         let updated = runtime
             .patch_settings(crate::commands::SettingsPatch {
-                theme: None,
+                palette: None,
                 telemetry_enabled: None,
                 verbose_hud: None,
                 playback_defaults: None,
@@ -10124,11 +10127,11 @@ mod tests {
             .dispatch(
                 "settings.patch",
                 serde_json::json!({
-                    "theme": "slate"
+                    "palette": "slate"
                 }),
             )
             .expect("patch settings");
-        assert_eq!(patch_result["theme"], "slate");
+        assert_eq!(patch_result["palette"], "slate");
         assert!(paths.settings_path().exists());
         assert!(!install_root.join("config.json").exists());
 
@@ -10259,7 +10262,7 @@ mod tests {
 
         let err1 = runtime
             .patch_settings(crate::commands::SettingsPatch {
-                theme: None,
+                palette: None,
                 telemetry_enabled: None,
                 verbose_hud: None,
                 playback_defaults: None,

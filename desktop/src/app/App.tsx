@@ -8,6 +8,7 @@ import { createDesktopStore } from '../state/store';
 import { createWindowControls } from '../platform/windowControls';
 import { usePackagedSmokeTest } from './usePackagedSmokeTest';
 import { recordStartupTelemetry } from '../bridge/startupTelemetry';
+import { applyAppearance } from '../appearance/applyAppearance';
 
 const SettingsPanel = lazy(() =>
   import('../components/settings/SettingsPanel').then(({ SettingsPanel: component }) => ({
@@ -54,7 +55,7 @@ export function App({ bridge }: AppProps) {
   }, [bootstrap, useStore]);
 
   useEffect(() => {
-    if (bootstrap) document.documentElement.dataset.theme = bootstrap.settings.theme;
+    if (bootstrap) applyAppearance(bootstrap.settings.palette);
   }, [bootstrap]);
 
   useEffect(() => {

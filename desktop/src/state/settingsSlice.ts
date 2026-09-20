@@ -1,5 +1,6 @@
 import type { DesktopBridge } from '../bridge/DesktopBridge';
 import type { DesktopStore } from './types';
+import { applyAppearance } from '../appearance/applyAppearance';
 
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
@@ -36,7 +37,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           }
           const autoPlayOnly =
             patch.autoPlay !== undefined &&
-            patch.theme === undefined &&
+            patch.palette === undefined &&
             patch.telemetryEnabled === undefined &&
             patch.verboseHud === undefined &&
             patch.playbackDefaults === undefined &&
@@ -54,7 +55,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
               transportOperation: cancelPreparing ? null : playback.transportOperation,
             },
           });
-          document.documentElement.dataset.theme = settings.theme;
+          applyAppearance(settings.palette);
           return settings;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

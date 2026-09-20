@@ -60,7 +60,7 @@ import type {
   UpdateSnapshotPayload,
 } from './generated';
 
-export type ThemeId = 'aurora' | 'minimalist' | 'slate' | 'cyberpunk' | 'classic';
+export type PaletteId = 'aurora' | 'minimalist' | 'slate' | 'cyberpunk' | 'classic';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
 export type NativeBuild = NativeBuildDto;
 export type PlaybackDefaults = PlaybackDefaultsDto;
@@ -97,6 +97,7 @@ export type Bootstrap = Omit<
   | 'settings'
   | 'playback_defaults'
   | 'timing_margin_recommendation'
+  | 'palette'
   | 'theme'
   | 'telemetry_enabled'
   | 'update_preferences'
@@ -120,8 +121,8 @@ export type LibrarySource = GeneratedLibrarySource;
 export type LibraryPlaylistSummary = LibraryPlaylistSummaryDto;
 export type LibraryNavigation = LibraryNavigationDto;
 export type LibraryPlaylistImportResult = LibraryPlaylistImportResultDto;
-export type Settings = Omit<SettingsDto, 'theme' | 'update_preferences'> & {
-  theme: ThemeId;
+export type Settings = Omit<SettingsDto, 'palette' | 'update_preferences'> & {
+  palette: PaletteId;
   update_preferences: UpdatePreferences;
 };
 export type PlaybackPatch = Partial<
@@ -135,14 +136,14 @@ export type PlaybackPatch = Partial<
 export type SettingsPatch = Partial<
   Omit<
     GeneratedSettingsPatch,
-    | 'theme'
+    | 'palette'
     | 'telemetryEnabled'
     | 'verboseHud'
     | 'playbackDefaults'
     | 'autoPlay'
     | 'updatePreferences'
   > & {
-    theme: ThemeId;
+    palette: PaletteId;
     telemetryEnabled: boolean;
     verboseHud: boolean;
     playbackDefaults: PlaybackPatch;

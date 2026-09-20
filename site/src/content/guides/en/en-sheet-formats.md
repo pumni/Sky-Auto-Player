@@ -74,5 +74,5 @@ Try adjusting the tempo multiplier or FPS in the per-song settings.
 
 ## Per-song configuration
 
-Sky Auto Player stores per-song settings (hold frame selection, tempo, FPS, theme) separately
+Sky Auto Player stores per-song settings (hold frame selection, tempo, FPS, color palette) separately
 from the sheet files. Changing a sheet file does not reset these settings.

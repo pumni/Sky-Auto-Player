@@ -32,7 +32,7 @@ describe('desktop application shell', () => {
     fireEvent.click(settingsButton);
     expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
-    expect(screen.getByLabelText('Theme')).toHaveValue('aurora');
+    expect(screen.getByLabelText('Color palette')).toHaveValue('aurora');
     fireEvent.click(screen.getByRole('button', { name: 'About' }));
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('3.5.0-mock');
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('Native ABI');

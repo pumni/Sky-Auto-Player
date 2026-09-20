@@ -1,28 +1,32 @@
-/* GUI themes are presentation tokens; they intentionally do not mirror TUI TCSS. */
-html[data-theme='aurora'] {
+/* GUI palettes are presentation tokens; they intentionally do not mirror TUI TCSS. */
+html[data-palette='aurora'] {
   --canvas: #0b1018;
   --surface-panel: #101722;
   --surface-secondary: #0d141e;
   --surface-raised: #151e2b;
-  --surface-hover: #1a2533;
-  --surface-selected: #1b2636;
+  --control-hover: #1a2533;
+  --control-pressed: #223044;
+  --selection-bg: #1b2636;
+  --selection-indicator: var(--accent);
   --border-subtle: #243145;
   --border-strong: #33445e;
   --text-primary: #e7edf6;
   --text-secondary: #b7c2d1;
   --text-tertiary: #8a98ad;
-  --accent: #7048d8;
-  --accent-hover: #815ee8;
-  --accent-contrast: #fff;
+  --accent: #785ddd;
+  --accent-hover: #7d60e0;
+  --on-accent: #ffffff;
   --focus-ring: #9b8cff;
 }
-html[data-theme='minimalist'] {
+html[data-palette='minimalist'] {
   --canvas: #17191d;
   --surface-panel: #202328;
   --surface-secondary: #1b1e22;
   --surface-raised: #292d33;
-  --surface-hover: #333941;
-  --surface-selected: #343a42;
+  --control-hover: #333941;
+  --control-pressed: #3b424b;
+  --selection-bg: #343a42;
+  --selection-indicator: var(--accent);
   --border-subtle: #3d444d;
   --border-strong: #58616d;
   --text-primary: #f0f2f4;
@@ -30,16 +34,18 @@ html[data-theme='minimalist'] {
   --text-tertiary: #9da5ae;
   --accent: #a7b7cb;
   --accent-hover: #c4d0df;
-  --accent-contrast: #17191d;
+  --on-accent: #17191d;
   --focus-ring: #e1e8f0;
 }
-html[data-theme='slate'] {
+html[data-palette='slate'] {
   --canvas: #10171d;
   --surface-panel: #17232c;
   --surface-secondary: #13202a;
   --surface-raised: #20313d;
-  --surface-hover: #2a3d4a;
-  --surface-selected: #2a3d4a;
+  --control-hover: #273946;
+  --control-pressed: #314754;
+  --selection-bg: #2a3d4a;
+  --selection-indicator: var(--accent);
   --border-subtle: #304755;
   --border-strong: #486274;
   --text-primary: #e6f0f5;
@@ -47,16 +53,18 @@ html[data-theme='slate'] {
   --text-tertiary: #8fa9b8;
   --accent: #6ca7d8;
   --accent-hover: #83b8e3;
-  --accent-contrast: #10171d;
+  --on-accent: #10171d;
   --focus-ring: #a8dded;
 }
-html[data-theme='cyberpunk'] {
+html[data-palette='cyberpunk'] {
   --canvas: #130f1d;
   --surface-panel: #1d1529;
   --surface-secondary: #191225;
   --surface-raised: #291c37;
-  --surface-hover: #352445;
-  --surface-selected: #3a274a;
+  --control-hover: #352445;
+  --control-pressed: #422d54;
+  --selection-bg: #3a274a;
+  --selection-indicator: var(--accent);
   --border-subtle: #4b2d59;
   --border-strong: #71416f;
   --text-primary: #f7ecfb;
@@ -64,16 +72,18 @@ html[data-theme='cyberpunk'] {
   --text-tertiary: #b297bd;
   --accent: #d95abf;
   --accent-hover: #ef78d4;
-  --accent-contrast: #130f1d;
+  --on-accent: #130f1d;
   --focus-ring: #f4a8e3;
 }
-html[data-theme='classic'] {
+html[data-palette='classic'] {
   --canvas: #171512;
   --surface-panel: #211d18;
   --surface-secondary: #1c1915;
   --surface-raised: #2c261f;
-  --surface-hover: #393126;
-  --surface-selected: #3a3126;
+  --control-hover: #393126;
+  --control-pressed: #463b2d;
+  --selection-bg: #3a3126;
+  --selection-indicator: var(--accent);
   --border-subtle: #4b4033;
   --border-strong: #695845;
   --text-primary: #f2eadc;
@@ -81,8 +91,11 @@ html[data-theme='classic'] {
   --text-tertiary: #a89882;
   --accent: #c99242;
   --accent-hover: #e0aa5b;
-  --accent-contrast: #171512;
+  --on-accent: #171512;
   --focus-ring: #e8c17a;
+}
+html[data-color-mode='dark'] {
+  color-scheme: dark;
 }
 @media (prefers-reduced-motion: reduce) {
   *,

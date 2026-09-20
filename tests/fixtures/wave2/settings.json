@@ -12,7 +12,7 @@
         }
       },
       "normalized_hold_frames": 1.5,
-      "migrated_schema_version": 8,
+      "migrated_schema_version": 9,
       "migrated_has_legacy_profile": false,
       "unknown_field_preserved": null
     },
@@ -35,7 +35,7 @@
           }
         }
       },
-      "normalized_theme": "slate",
+      "normalized_palette": "slate",
       "normalized_channel": "beta",
       "normalized_fps": 60
     },
@@ -44,7 +44,7 @@
         "name": "missing_file",
         "input": null,
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -84,7 +84,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.0
@@ -94,7 +95,7 @@
         "name": "malformed_json",
         "input": "{not valid json",
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -134,7 +135,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.0
@@ -144,7 +146,7 @@
         "name": "non_object_root",
         "input": "[1, 2, 3]",
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -184,7 +186,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.0
@@ -197,7 +200,7 @@
           "default_timing_profile": "balanced"
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -237,7 +240,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.0
@@ -255,7 +259,7 @@
           }
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.5,
@@ -295,7 +299,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.5
@@ -314,7 +319,7 @@
           }
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.25,
@@ -354,7 +359,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.25
@@ -372,7 +378,7 @@
           }
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.25,
@@ -412,7 +418,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.25
@@ -431,7 +438,7 @@
           }
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.5,
@@ -471,7 +478,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "game_fps": 120,
@@ -491,7 +499,7 @@
           }
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.25,
@@ -531,7 +539,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "game_fps": 90,
@@ -556,7 +565,7 @@
           "future_field": "preserve"
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -596,7 +605,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "future_field": "preserve",
@@ -638,7 +648,7 @@
           }
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -680,7 +690,8 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.0,
@@ -735,7 +746,7 @@
           }
         },
         "normalized": {
-          "theme": "slate",
+          "palette": "slate",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -775,11 +786,11 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "slate",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.0,
-          "theme": " SLATE ",
           "future_field": {
             "keep": [
               1,
@@ -809,7 +820,7 @@
           "update": null
         },
         "normalized": {
-          "theme": "aurora",
+          "palette": "aurora",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -849,13 +860,13 @@
           }
         },
         "migrated": {
-          "schema_version": 8,
+          "schema_version": 9,
+          "palette": "aurora",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.0,
           "default_tempo_scale": null,
           "game_fps": null,
-          "theme": null,
           "songs_dir": null,
           "sky_process_names": "not-a-list",
           "hotkeys": null,
@@ -865,7 +876,7 @@
     ]
   },
   "default_normalized": {
-    "theme": "aurora",
+    "palette": "aurora",
     "ui_background_mode": "transparent",
     "default_hold_frames": 1.0,
     "default_tempo_scale": 1.0,
@@ -896,7 +907,7 @@
     }
   },
   "valid_patch": {
-    "theme": "slate",
+    "palette": "slate",
     "ui_background_mode": "transparent",
     "default_hold_frames": 1.25,
     "default_timing_margin_us": 1200,
@@ -931,7 +942,7 @@
   "invalid_patch": {
     "error": "update_channel must be stable or beta",
     "state_after": {
-      "theme": "slate",
+      "palette": "slate",
       "ui_background_mode": "transparent",
       "default_hold_frames": 1.25,
     "default_timing_margin_us": 1200,
@@ -965,7 +976,7 @@
     }
   },
   "state_before_invalid": {
-    "theme": "slate",
+    "palette": "slate",
     "ui_background_mode": "transparent",
     "default_hold_frames": 1.25,
     "default_timing_margin_us": 1200,

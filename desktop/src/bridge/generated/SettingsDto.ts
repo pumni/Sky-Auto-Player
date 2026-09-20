@@ -3,4 +3,4 @@ import type { PlaybackDefaultsDto } from "./PlaybackDefaultsDto";
 import type { TimingMarginRecommendationDto } from "./TimingMarginRecommendationDto";
 import type { UpdatePreferencesDto } from "./UpdatePreferencesDto";
 
-export type SettingsDto = { theme: string, ui_background_mode: string, playback_defaults: PlaybackDefaultsDto, auto_play: boolean, timing_margin_recommendation: TimingMarginRecommendationDto, telemetry_enabled: boolean, verbose_hud: boolean, update_preferences: UpdatePreferencesDto, };
+export type SettingsDto = { palette: string, ui_background_mode: string, playback_defaults: PlaybackDefaultsDto, auto_play: boolean, timing_margin_recommendation: TimingMarginRecommendationDto, telemetry_enabled: boolean, verbose_hud: boolean, update_preferences: UpdatePreferencesDto, };

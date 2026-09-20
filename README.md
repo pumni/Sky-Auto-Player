@@ -70,7 +70,7 @@ Sky Auto Player doesn't replay a coarse macro timer. It schedules every note lik
 - ⚡ **Native Rust Dispatch Core** — Absolute QPC scheduling with MMCSS audio priority and zero GC/GIL pauses
 - 🎹 **Timing-first playback** — Contiguous chord batching, full hold preservation, and verified release gaps
 - 🖥️ **Modern Tauri desktop GUI** — Library search, Song Detail, Player Dock, Diagnostics, Settings, and Updates
-- 🎛️ **Per-song configuration** — Customizable hold profile, tempo multiplier, target FPS, and visual themes
+- 🎛️ **Per-song configuration** — Customizable hold profile, tempo multiplier, target FPS, and color palettes
 - 🛡️ **Fail-safe controls** — Real-time focus loss detection, auto-pause, and immediate all-up key release
 - 🔍 **Dry-run mode** — Preview playback rhythm in the HUD without sending keyboard input
 - ⌨️ **Desktop shortcuts** — `/` or `Ctrl+F` focuses search · `Esc` closes safe overlays · `q` does not quit the GUI

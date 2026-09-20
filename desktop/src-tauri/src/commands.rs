@@ -93,7 +93,8 @@ pub struct PlaybackPatch {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct SettingsPatch {
-    pub theme: Option<String>,
+    #[serde(alias = "theme")]
+    pub palette: Option<String>,
     pub telemetry_enabled: Option<bool>,
     pub verbose_hud: Option<bool>,
     pub playback_defaults: Option<PlaybackPatch>,
@@ -291,6 +292,9 @@ pub struct BootstrapDto {
     pub playback_defaults: PlaybackDefaultsDto,
     pub timing_margin_recommendation: TimingMarginRecommendationDto,
     pub option_sets: PlaybackOptionSetsDto,
+    /// Canonical flattened palette field for protocol-v1 clients.
+    pub palette: String,
+    /// Legacy/deprecated protocol-v1 compatibility alias for `palette`.
     pub theme: String,
     pub telemetry_enabled: bool,
     pub update_preferences: UpdatePreferencesDto,
@@ -442,7 +446,7 @@ pub struct PlaybackCommandAckDto {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SettingsDto {
-    pub theme: String,
+    pub palette: String,
     pub ui_background_mode: String,
     pub playback_defaults: PlaybackDefaultsDto,
     pub auto_play: bool,
@@ -1004,7 +1008,7 @@ pub struct ShutdownRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::PlaybackCommandAckDto;
+    use super::{PlaybackCommandAckDto, SettingsDto, SettingsPatch};
     use serde_json::json;
 
     #[test]
@@ -1028,5 +1032,49 @@ mod tests {
             "extra": true,
         }));
         assert!(unknown.is_err());
+    }
+
+    #[test]
+    fn settings_patch_accepts_legacy_theme_input_but_serializes_palette() {
+        let patch: SettingsPatch =
+            serde_json::from_value(json!({"theme": "slate"})).expect("legacy patch input");
+        assert_eq!(patch.palette.as_deref(), Some("slate"));
+        let serialized = serde_json::to_value(&patch).expect("serialize canonical patch");
+        assert_eq!(serialized["palette"], "slate");
+        assert!(serialized.get("theme").is_none());
+    }
+
+    #[test]
+    fn settings_dto_serializes_canonical_palette_field() {
+        let dto = SettingsDto {
+            palette: "classic".into(),
+            ui_background_mode: "transparent".into(),
+            playback_defaults: super::PlaybackDefaultsDto {
+                hold_frames: 1.0,
+                tempo_scale: 1.0,
+                fps: 60,
+                timing_margin_us: 500,
+                dry_run: false,
+            },
+            auto_play: true,
+            timing_margin_recommendation: super::TimingMarginRecommendationDto {
+                recommended_timing_margin_us: None,
+                qualified: false,
+                source: "test".into(),
+            },
+            telemetry_enabled: false,
+            verbose_hud: false,
+            update_preferences: super::UpdatePreferencesDto {
+                auto_check: true,
+                channel: super::UpdateChannel::Stable,
+                skip_version: String::new(),
+                check_interval_s: 86_400,
+                last_check_ts: 0,
+                last_error_ts: 0,
+            },
+        };
+        let serialized = serde_json::to_value(dto).expect("serialize settings DTO");
+        assert_eq!(serialized["palette"], "classic");
+        assert!(serialized.get("theme").is_none());
     }
 }

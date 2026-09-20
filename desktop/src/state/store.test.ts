@@ -100,7 +100,7 @@ describe('desktop store', () => {
 
     expect(getSettings).not.toHaveBeenCalled();
     expect(store.getState().settings).toMatchObject({
-      theme: 'aurora',
+      palette: 'aurora',
       auto_play: true,
       verbose_hud: false,
     });
@@ -210,8 +210,8 @@ describe('desktop store', () => {
     expect(store.getState().library.generation).toBe(2);
     expect(store.getState().library.resultTotal).toBe(500);
 
-    await act(async () => store.getState().patchSettings({ theme: 'slate', verboseHud: true }));
-    expect(store.getState().settings?.theme).toBe('slate');
+    await act(async () => store.getState().patchSettings({ palette: 'slate', verboseHud: true }));
+    expect(store.getState().settings?.palette).toBe('slate');
     expect(store.getState().settings?.verbose_hud).toBe(true);
   });
 
@@ -586,15 +586,15 @@ describe('desktop store', () => {
     };
     const store = createDesktopStore(bridge);
 
-    const first = store.getState().patchSettings({ theme: 'slate' });
+    const first = store.getState().patchSettings({ palette: 'slate' });
     const second = store.getState().patchSettings({ verboseHud: true });
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]).toEqual({ theme: 'slate' });
+    expect(calls[0]).toEqual({ palette: 'slate' });
 
     releaseFirst?.();
     await Promise.all([first, second]);
-    expect(calls).toEqual([{ theme: 'slate' }, { verboseHud: true }]);
-    expect(store.getState().settings?.theme).toBe('slate');
+    expect(calls).toEqual([{ palette: 'slate' }, { verboseHud: true }]);
+    expect(store.getState().settings?.palette).toBe('slate');
     expect(store.getState().settings?.verbose_hud).toBe(true);
   });
 

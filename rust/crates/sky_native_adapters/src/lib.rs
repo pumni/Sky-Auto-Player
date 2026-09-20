@@ -1145,7 +1145,12 @@ fn import_display_name(path: &Path, kind: ImportedSourceKind) -> String {
 
 fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
     let mut settings = ApplicationSettings::default();
-    settings.theme = raw_string(raw, "theme", &settings.theme);
+    let palette = raw
+        .get("palette")
+        .or_else(|| raw.get("theme"))
+        .map(python_string)
+        .unwrap_or_else(|| settings.palette.clone());
+    settings.palette = normalized_palette(&palette);
     settings.ui_background_mode =
         raw_string(raw, "ui_background_mode", &settings.ui_background_mode);
     settings.playback_defaults.hold_frames =
@@ -1204,6 +1209,11 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
 
 fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
     let mut migrated = raw.clone();
+    let palette = raw
+        .get("palette")
+        .or_else(|| raw.get("theme"))
+        .map(python_string)
+        .unwrap_or_else(|| "aurora".into());
     let fps = resolve_fps(
         raw.get("game_fps")
             .and_then(python_int)
@@ -1248,6 +1258,8 @@ fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
         "schema_version".into(),
         Value::from(sky_app_core::settings::SCHEMA_VERSION),
     );
+    migrated.insert("palette".into(), Value::from(normalized_palette(&palette)));
+    migrated.remove("theme");
     migrated.insert(
         "default_hold_frames".into(),
         Value::from(if raw.contains_key("default_hold_frames") {
@@ -1349,6 +1361,15 @@ fn raw_string(raw: &Map<String, Value>, key: &str, default: &str) -> String {
     raw.get(key)
         .map(python_string)
         .unwrap_or_else(|| default.into())
+}
+
+fn normalized_palette(value: &str) -> String {
+    let value = value.trim().to_ascii_lowercase();
+    if sky_app_core::settings::PALETTE_IDS.contains(&value.as_str()) {
+        value
+    } else {
+        "aurora".into()
+    }
 }
 
 fn raw_bool(raw: &Map<String, Value>, key: &str, default: bool) -> bool {
@@ -1517,7 +1538,8 @@ fn overlay_settings(raw: &mut Map<String, Value>, settings: &ApplicationSettings
         "schema_version".into(),
         Value::from(sky_app_core::settings::SCHEMA_VERSION),
     );
-    raw.insert("theme".into(), Value::from(settings.theme.clone()));
+    raw.insert("palette".into(), Value::from(settings.palette.clone()));
+    raw.remove("theme");
     raw.insert(
         "ui_background_mode".into(),
         Value::from(settings.ui_background_mode.clone()),
@@ -1676,6 +1698,84 @@ fn replace_file(temp: &Path, target: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use sky_app_core::settings::{PlaybackDefaultsPatch, SettingsPatch, SettingsService};
+
+    #[test]
+    fn settings_palette_migration_is_precedence_preserving_and_idempotent() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-palette-migration-{suffix}"));
+        let path = root.join("config.json");
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            &path,
+            br#"{
+                "schema_version": 8,
+                "theme": " SLATE ",
+                "future_root": {"preserve": true}
+            }"#,
+        )
+        .expect("seed v8 settings");
+
+        let store = JsonSettingsStore::new(&path);
+        let settings = store.load().expect("load v8 settings");
+        assert_eq!(settings.palette, "slate");
+        let migrated = serde_json::from_slice::<Value>(&fs::read(&path).expect("read migrated"))
+            .expect("valid migrated json");
+        assert_eq!(migrated["schema_version"], 9);
+        assert_eq!(migrated["palette"], "slate");
+        assert!(migrated.get("theme").is_none());
+        assert_eq!(migrated["future_root"]["preserve"], true);
+
+        let first_bytes = fs::read(&path).expect("read first migration");
+        let reloaded = store.load().expect("reload migrated settings");
+        assert_eq!(reloaded.palette, "slate");
+        assert_eq!(
+            fs::read(&path).expect("read idempotent migration"),
+            first_bytes
+        );
+
+        fs::write(
+            &path,
+            br#"{
+                "schema_version": 8,
+                "palette": " classic ",
+                "theme": "slate",
+                "future_root": 42
+            }"#,
+        )
+        .expect("seed precedence settings");
+        let precedence = store.load().expect("load precedence settings");
+        assert_eq!(precedence.palette, "classic");
+        let precedence_raw =
+            serde_json::from_slice::<Value>(&fs::read(&path).expect("read precedence"))
+                .expect("valid precedence json");
+        assert_eq!(precedence_raw["palette"], "classic");
+        assert!(precedence_raw.get("theme").is_none());
+        assert_eq!(precedence_raw["future_root"], 42);
+
+        fs::write(&path, br#"{"schema_version":8,"palette":"unknown"}"#)
+            .expect("seed invalid palette");
+        let invalid = store.load().expect("load invalid palette");
+        assert_eq!(invalid.palette, "aurora");
+        let invalid_raw = serde_json::from_slice::<Value>(&fs::read(&path).expect("read invalid"))
+            .expect("valid invalid-palette migration");
+        assert_eq!(invalid_raw["palette"], "aurora");
+
+        let mut service = SettingsService::load(store.clone()).expect("load canonical settings");
+        service
+            .patch(&SettingsPatch {
+                palette: Some("cyberpunk".into()),
+                ..Default::default()
+            })
+            .expect("patch palette");
+        let patched_raw = serde_json::from_slice::<Value>(&fs::read(&path).expect("read patched"))
+            .expect("valid patched json");
+        assert_eq!(patched_raw["palette"], "cyberpunk");
+        assert!(patched_raw.get("theme").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn settings_store_preserves_unknown_keys_and_writes_atomically() {
