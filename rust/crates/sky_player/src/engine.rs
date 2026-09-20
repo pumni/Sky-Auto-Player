@@ -21,6 +21,8 @@ pub use config::{
 };
 pub use session::{NativeDispatchSession, SystemPowerSnapshot};
 pub use shared::SystemPowerEndpoint;
+#[cfg(any(test, feature = "test-support"))]
+pub use shared::SystemPowerState;
 pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot};
 pub use telemetry::{
     NATIVE_TELEMETRY_SCHEMA_VERSION, NativeTelemetryOutput, NativeTelemetrySummary, RtTraceRecord,

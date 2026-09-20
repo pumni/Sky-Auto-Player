@@ -161,7 +161,7 @@ const SYSTEM_POWER_PENDING_MASK: u8 = SYSTEM_POWER_SUSPEND_PENDING | SYSTEM_POWE
 
 /// Lock-free notification state shared by the OS callback and playback worker.
 /// The callback only updates atomics and signals the already-owned interrupt.
-pub(crate) struct SystemPowerState {
+pub struct SystemPowerState {
     state: AtomicU8,
     active: AtomicBool,
     suspend_boundary_qpc: AtomicU64,

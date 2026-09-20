@@ -176,9 +176,9 @@ fn send_prepared_normal_precision_frame(
 ///
 /// All authored planning, packet construction, and pending-release policy has
 /// already completed before the waiter is entered. The healthy suffix below
-/// only performs atomic control/target gates and hands the immutable packet to
-/// the prepared sender; coordinator accounting is reached only after the
-/// sender returns.
+/// performs the bounded final control/target/focus admission and hands the
+/// immutable packet to the prepared sender; coordinator accounting is reached
+/// only after the sender returns.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_prepared_normal_frame(
     frame: &PreparedDispatchFrame,
@@ -258,6 +258,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
         skip_requested,
         panic_requested,
         desired_pause,
+        system_power,
     );
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.startup_ordering_hook.as_ref() {

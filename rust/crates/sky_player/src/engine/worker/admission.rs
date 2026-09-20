@@ -34,6 +34,7 @@ pub(crate) fn invoke_final_gate_race_hook(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
+    system_power: &super::super::SystemPowerState,
 ) {
     if let Some(hook) = hook {
         hook(
@@ -44,6 +45,7 @@ pub(crate) fn invoke_final_gate_race_hook(
             skip_requested,
             panic_requested,
             desired_pause,
+            system_power,
         );
     }
 }
@@ -175,12 +177,12 @@ pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalC
     FinalControlAdmission::Allowed
 }
 
-/// Atomic target/focus gate for Down-bearing traffic at the precision boundary.
+/// Final target/focus gate for Down-bearing traffic at the precision boundary.
 /// Control and lease decisions are intentionally kept in the shared control
 /// gate so an UpOnly/release send never acquires a focus dependency.  The
-/// supervisor's published focus hint is authoritative here: a foreground
-/// transition that has not reached that atomic state is the documented,
-/// bounded observer race and must not trigger a synchronous HWND query.
+/// published focus hint is a cheap early rejection; a Down that remains
+/// eligible then receives one fresh foreground proof before the final atomic
+/// revalidation.
 pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> DownAdmission {
     if !target_stamp_still_current(
         target.target_hwnd,
@@ -192,10 +194,20 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
     if !focus_matches(target.require_focus, target.focus_active) {
         return DownAdmission::FocusLost;
     }
+    if !focus_matches_hwnd(
+        target.require_focus,
+        target.focus_active,
+        target.expected.hwnd,
+    ) {
+        return DownAdmission::FocusLost;
+    }
     #[cfg(any(test, feature = "test-support"))]
-    if let (Some(hook), Some(control)) = (
+    if let (Some(hook), Some(control), Some(system_power)) = (
         target.post_focus_race_hook,
         target.post_focus_control_signals,
+        target
+            .post_focus_control_signals
+            .and_then(|signals| signals.system_power),
     ) {
         hook(
             target.focus_active,
@@ -205,6 +217,7 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
             control.skip_requested,
             control.panic_requested,
             control.desired_pause,
+            system_power,
         );
     }
     if !target_stamp_still_current(

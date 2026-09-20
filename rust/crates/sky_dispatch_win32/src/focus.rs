@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 #[cfg(feature = "test-support")]
 thread_local! {
     static FOREGROUND_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
+    static REAL_FOREGROUND_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
 }
 
 #[cfg(feature = "test-support")]
@@ -20,11 +21,37 @@ static TEST_FOREGROUND_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "test-support")]
 pub fn reset_foreground_query_count() {
     FOREGROUND_QUERY_COUNT.with(|count| count.set(0));
+    REAL_FOREGROUND_QUERY_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(feature = "test-support")]
 pub fn foreground_query_count() -> u64 {
     FOREGROUND_QUERY_COUNT.with(Cell::get)
+}
+
+#[cfg(feature = "test-support")]
+pub fn real_foreground_query_count() -> u64 {
+    REAL_FOREGROUND_QUERY_COUNT.with(Cell::get)
+}
+
+/// Sample the host's actual foreground window for benchmark setup. This seam
+/// deliberately ignores the test override and is called outside timed
+/// admission so the benchmark's target matches the real foreground window.
+#[cfg(feature = "test-support")]
+pub fn current_foreground_window_for_benchmark() -> Option<isize> {
+    #[cfg(windows)]
+    {
+        // SAFETY: GetForegroundWindow takes no pointers and the returned HWND
+        // is only copied as a numeric benchmark target.
+        let foreground =
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+        let hwnd = foreground as isize;
+        (hwnd != 0).then_some(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 /// Override the foreground HWND for cross-platform worker tests. Production
@@ -49,6 +76,8 @@ pub fn foreground_window_matches(target_hwnd: isize) -> bool {
         return false;
     }
     #[cfg(feature = "test-support")]
+    FOREGROUND_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    #[cfg(feature = "test-support")]
     {
         let overridden = TEST_FOREGROUND_HWND.load(Ordering::Acquire);
         if overridden != isize::MIN {
@@ -58,7 +87,7 @@ pub fn foreground_window_matches(target_hwnd: isize) -> bool {
     #[cfg(windows)]
     {
         #[cfg(feature = "test-support")]
-        FOREGROUND_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+        REAL_FOREGROUND_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         // SAFETY: GetForegroundWindow takes no pointers and returns a borrowed
         // window handle that this function only compares numerically.
         let foreground =

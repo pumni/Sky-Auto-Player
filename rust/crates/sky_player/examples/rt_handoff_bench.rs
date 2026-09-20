@@ -24,12 +24,15 @@ use sky_player::engine::dispatch_primitives::{
 };
 use std::collections::BTreeMap;
 use std::hint::black_box;
+use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 const DEFAULT_ITERATIONS: usize = 10_000;
 const DUE_US: u64 = 10_000;
 const SYNTHETIC_TRANSPORT_COMPLETION_US: u64 = 8;
+
+static REAL_FOREGROUND_BENCHMARK_TARGET: Mutex<Option<isize>> = Mutex::new(None);
 
 fn due_us() -> u64 {
     std::env::var("RT_HANDOFF_BENCH_DUE_US")
@@ -45,6 +48,70 @@ fn iterations() -> usize {
         .and_then(|value| value.parse().ok())
         .filter(|value: &usize| (1..=100_000).contains(value))
         .unwrap_or(DEFAULT_ITERATIONS)
+}
+
+fn require_focus_for_benchmark() -> bool {
+    matches!(
+        std::env::var("RT_HANDOFF_BENCH_REQUIRE_FOCUS").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+fn real_foreground_for_benchmark() -> bool {
+    matches!(
+        std::env::var("RT_HANDOFF_BENCH_REAL_FOREGROUND").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+fn selected_focus_scenario(name: &str) -> bool {
+    const SCENARIOS: [&str; 5] = [
+        "single_down_heavy",
+        "dense_alternating",
+        "15_key_chord",
+        "mixed",
+        "up_only_control",
+    ];
+    match std::env::var("RT_HANDOFF_BENCH_FOCUS_SCENARIO") {
+        Ok(selected) => {
+            assert!(
+                SCENARIOS.contains(&selected.as_str()),
+                "unknown RT_HANDOFF_BENCH_FOCUS_SCENARIO: {selected}"
+            );
+            selected == name
+        }
+        Err(std::env::VarError::NotPresent) => true,
+        Err(error) => panic!("invalid RT_HANDOFF_BENCH_FOCUS_SCENARIO: {error}"),
+    }
+}
+
+fn sample_real_foreground_target_for_benchmark() -> Result<isize, String> {
+    let hwnd = sky_dispatch_win32::focus::current_foreground_window_for_benchmark()
+        .ok_or_else(|| "real foreground benchmark has no nonzero current HWND".to_string())?;
+    *REAL_FOREGROUND_BENCHMARK_TARGET
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hwnd);
+    Ok(hwnd)
+}
+
+fn configure_focus_for_benchmark(
+    harness: &mut ProductionDispatchTestHarness,
+) -> Result<(), String> {
+    if require_focus_for_benchmark() {
+        harness.set_require_focus_for_benchmark(true);
+        if real_foreground_for_benchmark() {
+            let hwnd = REAL_FOREGROUND_BENCHMARK_TARGET
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .ok_or_else(|| {
+                    "real foreground benchmark target was not sampled before timed admission"
+                        .to_string()
+                })?;
+            harness.set_target_hwnd_for_benchmark(hwnd);
+        }
+    }
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    Ok(())
 }
 
 fn rust_version() -> String {
@@ -85,6 +152,7 @@ enum BenchmarkScope {
     PhaseAProductionMatrix,
     PhaseASparseGap,
     PhaseBB0,
+    RealForegroundFocus,
 }
 
 impl BenchmarkScope {
@@ -116,8 +184,9 @@ impl BenchmarkScope {
             "phase_a_production_matrix" => Ok(Self::PhaseAProductionMatrix),
             "phase_a_sparse_gap" => Ok(Self::PhaseASparseGap),
             "phase_b0" => Ok(Self::PhaseBB0),
+            "real_foreground_focus" => Ok(Self::RealForegroundFocus),
             value => Err(format!(
-                "scope must be full, baseline, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, or phase_b0, got {value:?}"
+                "scope must be full, baseline, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, or real_foreground_focus, got {value:?}"
             )),
         }
     }
@@ -131,6 +200,7 @@ impl BenchmarkScope {
             Self::PhaseAProductionMatrix => "phase_a_production_matrix",
             Self::PhaseASparseGap => "phase_a_sparse_gap",
             Self::PhaseBB0 => "phase_b0",
+            Self::RealForegroundFocus => "real_foreground_focus",
         }
     }
 }
@@ -226,6 +296,8 @@ struct Samples {
     missed_down_physical_window_expired: usize,
     missed_down_final_sender_window_expired: usize,
     transport_anomaly_count: usize,
+    foreground_query_count: Vec<u64>,
+    real_foreground_query_count: Vec<u64>,
     spin_time_us: Vec<u64>,
     wall_time_us: Vec<u64>,
 }
@@ -268,6 +340,8 @@ impl Samples {
             prepared_stream_build_us,
             missed_pre_call_lateness_us,
             missed_excess_beyond_latest_start_us,
+            foreground_query_count,
+            real_foreground_query_count,
             spin_time_us,
             wall_time_us,
         );
@@ -1525,6 +1599,12 @@ fn wait_and_dispatch_or_record(
             harness.dispatch_at_phase_a_production_boundary_for_test(plan)
         }
     };
+    samples
+        .foreground_query_count
+        .push(sky_dispatch_win32::focus::foreground_query_count());
+    samples
+        .real_foreground_query_count
+        .push(sky_dispatch_win32::focus::real_foreground_query_count());
     if matches!(step, DispatchStep::Dispatched) {
         Ok(Some(()))
     } else {
@@ -1673,6 +1753,7 @@ fn run_down_iteration(
 ) -> Result<(), String> {
     let iteration_started = Instant::now();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
+    configure_focus_for_benchmark(&mut harness)?;
     harness.enable_dispatch_ready_timing_for_benchmark();
     let alignment_margin_us = if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
         0
@@ -1715,12 +1796,19 @@ fn run_prepared_down_iteration(
 ) -> Result<(), String> {
     let iteration_started = Instant::now();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
+    configure_focus_for_benchmark(&mut harness)?;
     harness.enable_dispatch_ready_timing_for_benchmark();
     harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
     harness.prepare_prepared_stream_for_test();
     harness.reset_preparation_counts_for_test();
     harness.align_prepared_current_to_benchmark_margin_for_test(gap_us)?;
     let step = harness.wait_and_dispatch_prepared_current_for_test()?;
+    samples
+        .foreground_query_count
+        .push(sky_dispatch_win32::focus::foreground_query_count());
+    samples
+        .real_foreground_query_count
+        .push(sky_dispatch_win32::focus::real_foreground_query_count());
     if !matches!(step, DispatchStep::Dispatched) {
         samples.record_step_failure(&step);
         samples
@@ -1787,6 +1875,7 @@ fn run_up(
                 continue;
             }
         };
+        configure_focus_for_benchmark(&mut harness)?;
         harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
         while harness.pop_observation().is_some() {}
@@ -1819,6 +1908,7 @@ fn run_up(
         samples.physical_dispatches += 1;
         record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
         drain_observations(&mut harness, &mut samples);
+        record_harness_metrics(&mut samples, &mut harness)?;
         samples
             .wall_time_us
             .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
@@ -1847,6 +1937,7 @@ fn run_mixed(
                 continue;
             }
         };
+        configure_focus_for_benchmark(&mut harness)?;
         harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
         while harness.pop_observation().is_some() {}
@@ -1872,6 +1963,55 @@ fn run_mixed(
         samples.physical_dispatches += 1;
         record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
         drain_observations(&mut harness, &mut samples);
+        record_harness_metrics(&mut samples, &mut harness)?;
+        samples
+            .wall_time_us
+            .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+    }
+    Ok(samples)
+}
+
+fn run_dense_alternating(
+    event_count: usize,
+    mode: WaitMode,
+    benchmark_mode: BenchmarkMode,
+) -> Result<Samples, String> {
+    let mut samples = new_samples();
+    for _ in 0..iterations() {
+        let iteration_started = Instant::now();
+        let mut harness =
+            ProductionDispatchTestHarness::try_new_dense_alternating_with_gap_for_test(
+                event_count,
+                due_us(),
+            )?;
+        configure_focus_for_benchmark(&mut harness)?;
+        harness.enable_dispatch_ready_timing_for_benchmark();
+        harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
+        while harness.pop_observation().is_some() {}
+        if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+            harness.align_next_plan_to_benchmark_margin_for_test(0);
+        }
+        harness.reset_preparation_counts_for_test();
+        let mut plan = NextDispatchPlan::default();
+        let plan_started = Instant::now();
+        plan_projected(&mut harness, &mut plan);
+        record_preparation_sample(
+            &mut samples,
+            harness.preparation_counts(),
+            elapsed_ns(plan_started),
+        );
+        if wait_and_dispatch_or_record(&mut harness, &plan, benchmark_mode, &mut samples)?.is_none()
+        {
+            record_harness_metrics(&mut samples, &mut harness)?;
+            samples
+                .wall_time_us
+                .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
+            continue;
+        }
+        samples.physical_dispatches += 1;
+        record_wait_metrics(&mut samples, &harness, benchmark_mode)?;
+        drain_observations(&mut harness, &mut samples);
+        record_harness_metrics(&mut samples, &mut harness)?;
         samples
             .wall_time_us
             .push(u64::try_from(iteration_started.elapsed().as_micros()).unwrap_or(u64::MAX));
@@ -1978,9 +2118,16 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
             ),
         );
     }
+    scenarios.insert(
+        "dense_alternating_14".to_string(),
+        summarize(
+            run_dense_alternating(14, mode, benchmark_mode)
+                .unwrap_or_else(|error| panic!("{error}")),
+        ),
+    );
     let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     serde_json::json!({
-        "scope": "Phase-A acceptance production dispatch/admission/commit path with a deterministic direct crossing and mock transport; waiter scheduling excluded",
+        "scope": "Phase-A acceptance production dispatch/admission/commit path with a deterministic direct crossing and mock transport; waiter scheduling excluded; includes dense alternating Up/Down boundaries",
         "waitable_timer_enabled": mode.waitable_timer_enabled,
         "event_wait_enabled": mode.event_wait_enabled,
         "adaptive_spin_enabled": mode.adaptive_spin_enabled,
@@ -1996,6 +2143,86 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
         "process_cpu_duty_percent": cpu_duty_percent(cpu_started_us, cpu_finished_us, mode_started),
         "scenarios": scenarios,
         "iterations": iterations(),
+    })
+}
+
+fn real_foreground_focus_report() -> serde_json::Value {
+    let mode = build_wait_mode("production_calibrated", true, true, true);
+    let benchmark_mode = BenchmarkMode::RealWait;
+    let mode_started = Instant::now();
+    let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    let mut sampled_hwnds = serde_json::Map::new();
+    let mut scenarios = serde_json::Map::new();
+    if selected_focus_scenario("single_down_heavy") {
+        let sample_hwnd =
+            sample_real_foreground_target_for_benchmark().unwrap_or_else(|error| panic!("{error}"));
+        scenarios.insert(
+            "single_down_heavy".to_string(),
+            summarize(run_down(1, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}"))),
+        );
+        sampled_hwnds.insert("single_down_heavy".to_string(), json!(sample_hwnd));
+    }
+    if selected_focus_scenario("dense_alternating") {
+        let sample_hwnd =
+            sample_real_foreground_target_for_benchmark().unwrap_or_else(|error| panic!("{error}"));
+        scenarios.insert(
+            "dense_alternating".to_string(),
+            summarize(
+                run_dense_alternating(14, mode, benchmark_mode)
+                    .unwrap_or_else(|error| panic!("{error}")),
+            ),
+        );
+        sampled_hwnds.insert("dense_alternating".to_string(), json!(sample_hwnd));
+    }
+    if selected_focus_scenario("15_key_chord") {
+        let sample_hwnd =
+            sample_real_foreground_target_for_benchmark().unwrap_or_else(|error| panic!("{error}"));
+        scenarios.insert(
+            "15_key_chord".to_string(),
+            summarize(run_down(15, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}"))),
+        );
+        sampled_hwnds.insert("15_key_chord".to_string(), json!(sample_hwnd));
+    }
+    if selected_focus_scenario("mixed") {
+        let sample_hwnd =
+            sample_real_foreground_target_for_benchmark().unwrap_or_else(|error| panic!("{error}"));
+        scenarios.insert(
+            "mixed".to_string(),
+            summarize(
+                run_mixed(14, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}")),
+            ),
+        );
+        sampled_hwnds.insert("mixed".to_string(), json!(sample_hwnd));
+    }
+    if selected_focus_scenario("up_only_control") {
+        let sample_hwnd =
+            sample_real_foreground_target_for_benchmark().unwrap_or_else(|error| panic!("{error}"));
+        scenarios.insert(
+            "up_only_control".to_string(),
+            summarize(run_up(15, mode, benchmark_mode).unwrap_or_else(|error| panic!("{error}"))),
+        );
+        sampled_hwnds.insert("up_only_control".to_string(), json!(sample_hwnd));
+    }
+    let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
+    serde_json::json!({
+        "scope": "Focused optimized real HybridWaiter qualification; real foreground setup samples one nonzero HWND outside timed admission, require_focus remains enabled, and the head must report actual Win32 foreground queries",
+        "require_focus": true,
+        "real_foreground_mode": true,
+        "selected_focus_scenario": std::env::var("RT_HANDOFF_BENCH_FOCUS_SCENARIO").ok(),
+        "sampled_foreground_hwnds_by_scenario": sampled_hwnds,
+        "foreground_change_contract": "any foreground change that causes a healthy Down admission mismatch produces non_dispatches and fails acceptance_clean",
+        "waitable_timer_enabled": mode.waitable_timer_enabled,
+        "event_wait_enabled": mode.event_wait_enabled,
+        "adaptive_spin_enabled": mode.adaptive_spin_enabled,
+        "effective_spin_threshold_us": mode.effective_spin_threshold_us,
+        "startup_kernel_timer_wake_error_us": wake_error_json(mode.startup_wake_error),
+        "waiter_constructor": "HybridWaiter::production",
+        "transport": "deterministic mock transport; real waiter timing",
+        "process_cpu_time_us": cpu_finished_us.saturating_sub(cpu_started_us),
+        "process_cpu_duty_percent": cpu_duty_percent(cpu_started_us, cpu_finished_us, mode_started),
+        "iterations": iterations(),
+        "contention": std::env::var("RT_HANDOFF_BENCH_CONTENTION").unwrap_or_else(|_| "none_declared".to_string()),
+        "scenarios": scenarios,
     })
 }
 
@@ -2343,7 +2570,8 @@ fn baseline_report() -> serde_json::Value {
              quit_requested,
              _skip_requested,
              _panic_requested,
-             _desired_pause| {
+             _desired_pause,
+             _system_power| {
                 quit_requested.store(true, Ordering::Release);
             },
         );
@@ -2734,6 +2962,8 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
             samples.missed_excess_beyond_latest_start_us,
         ),
         "transport_anomaly_count": samples.transport_anomaly_count,
+        "foreground_query_count": unsigned_summary(samples.foreground_query_count),
+        "real_foreground_query_count": unsigned_summary(samples.real_foreground_query_count),
         "spin_time_us": unsigned_summary(samples.spin_time_us),
         "wall_time_us": unsigned_summary(samples.wall_time_us),
         "total_spin_time_us": total_spin_time_us,
@@ -2873,6 +3103,30 @@ fn main() {
     {
         panic!("phase_b0 requires real_wait benchmark mode");
     }
+    if matches!(benchmark_scope, BenchmarkScope::RealForegroundFocus)
+        && !matches!(benchmark_mode, BenchmarkMode::RealWait)
+    {
+        panic!("real_foreground_focus requires real_wait benchmark mode");
+    }
+    let require_focus = require_focus_for_benchmark();
+    let real_foreground_mode = real_foreground_for_benchmark();
+    if matches!(benchmark_scope, BenchmarkScope::RealForegroundFocus)
+        && (!require_focus || !real_foreground_mode)
+    {
+        panic!(
+            "real_foreground_focus requires RT_HANDOFF_BENCH_REQUIRE_FOCUS=1 and RT_HANDOFF_BENCH_REAL_FOREGROUND=1"
+        );
+    }
+    let sampled_foreground_hwnd = if require_focus && real_foreground_mode {
+        Some(
+            sample_real_foreground_target_for_benchmark().unwrap_or_else(|error| panic!("{error}")),
+        )
+    } else {
+        None
+    };
+    if require_focus && !real_foreground_mode {
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    }
     if matches!(benchmark_scope, BenchmarkScope::RealWaitCore)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
     {
@@ -2988,6 +3242,11 @@ fn main() {
         );
     } else if matches!(benchmark_scope, BenchmarkScope::PhaseBB0) {
         mode_reports.insert("phase_b0".to_string(), phase_b0_report());
+    } else if matches!(benchmark_scope, BenchmarkScope::RealForegroundFocus) {
+        mode_reports.insert(
+            "real_foreground_focus".to_string(),
+            real_foreground_focus_report(),
+        );
     } else {
         mode_reports.insert(
             "phase_a_sender_only".to_string(),
@@ -3047,17 +3306,26 @@ fn main() {
             (BenchmarkScope::PhaseASparseGap, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::PhaseBB0, BenchmarkMode::RealWait) => "Phase-B0 benchmark-only interleaved spin-threshold qualification through the production coordinator and real HybridWaiter with deterministic mock transport; no production wait policy or authored target is changed; not Raw Input or game-observed latency",
             (BenchmarkScope::PhaseBB0, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::RealForegroundFocus, BenchmarkMode::RealWait) => "Focused real HybridWaiter A/B with require_focus enabled on the exact prepared base and foreground-proof head; real foreground setup is outside timed admission and the head's foreground proof uses actual GetForegroundWindow; deterministic mock transport; not Raw Input or game-observed latency",
+            (BenchmarkScope::RealForegroundFocus, _) => "invalid benchmark scope/mode combination",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,
         "iterations": iterations(),
         "deadline_us": due_us(),
         "transport": "deterministic_mock",
+        "require_focus": require_focus,
+        "real_foreground_mode": real_foreground_mode,
+        "sampled_foreground_hwnd": sampled_foreground_hwnd,
+        "foreground_query_scope": "one fresh final query for eligible require-focus Down traffic; zero for UpOnly or require-focus=false traffic",
         "observation_enqueue_ab": observation_enqueue_ab,
         "modes": mode_reports,
         "elapsed_ms": started.elapsed().as_millis(),
     }))
     .expect("serialize benchmark output");
+    if require_focus && !real_foreground_mode {
+        sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    }
     if let Some(path) = std::env::args_os().nth(1) {
         std::fs::write(path, &output).expect("write benchmark output");
     }
