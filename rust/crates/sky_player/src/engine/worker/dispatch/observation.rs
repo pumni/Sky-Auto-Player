@@ -78,7 +78,6 @@ pub struct BlockedUnfocusedObservation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DownMissKind {
     UnobservedBacklog,
-    PhysicalWindowExpired,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -129,7 +128,6 @@ impl DownMissObservation {
                 musical_up_not_before_qpc: authored_target_qpc,
                 down_not_before_qpc: authored_target_qpc,
                 packet_not_before_qpc: authored_target_qpc,
-                latest_down_start_qpc: Some(authored_target_qpc),
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
             }),
@@ -208,7 +206,6 @@ impl DownObservation {
                 musical_up_not_before_qpc: authored_target_qpc,
                 down_not_before_qpc: authored_target_qpc,
                 packet_not_before_qpc: authored_target_qpc,
-                latest_down_start_qpc: Some(authored_target_qpc),
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
             },
@@ -486,10 +483,7 @@ pub(super) fn record_down_send_telemetry(
                         .down_not_before_qpc
                         .as_u64(),
                 ),
-                latest_down_start_qpc_ticks: observation
-                    .physical_timing_window
-                    .latest_down_start_qpc
-                    .map(|ticks| ticks.as_u64()),
+                latest_down_start_qpc_ticks: None,
                 hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
                 release_floor_mask: observation.physical_timing_window.release_floor_mask,
                 pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),

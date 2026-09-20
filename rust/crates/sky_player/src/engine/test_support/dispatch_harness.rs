@@ -58,10 +58,8 @@ pub struct PhysicalFloorEvidence {
     pub musical_up_not_before_qpc: QpcTicks,
     pub down_not_before_qpc: QpcTicks,
     pub packet_not_before_qpc: QpcTicks,
-    pub latest_down_start_qpc: Option<QpcTicks>,
     pub hold_floor_mask: u16,
     pub release_floor_mask: u16,
-    pub down_feasible: Option<bool>,
 }
 
 #[allow(dead_code)]
@@ -1071,7 +1069,6 @@ impl ProductionDispatchTestHarness {
         runtime.set_physical_timing_guard_for_test(
             qpc_clock.duration_from_us(10_000).expect("test base hold"),
             qpc_clock.duration_from_us(16_667).expect("test frame"),
-            timing.timing_margin_ticks,
         );
         Self {
             config: WorkerConfig::default(),
@@ -1165,13 +1162,10 @@ impl ProductionDispatchTestHarness {
             .physical_timing_guard
             .as_ref()
             .ok_or_else(|| "missing physical timing guard".to_string())?;
-        let window = if self.timing.strict_timing {
-            guard.query(target, up_mask, down_mask)
-        } else {
-            guard.authored_only_window(target, up_mask, down_mask)
-        }
-        .map_err(|e| format!("timing guard query failed: {e:?}"))?;
-        Ok(window.is_down_feasible())
+        guard
+            .query(target, up_mask, down_mask)
+            .map(|_| true)
+            .map_err(|e| format!("timing guard query failed: {e:?}"))
     }
 
     pub fn set_strict_timing_for_test(&mut self, strict: bool) {
@@ -1992,6 +1986,14 @@ impl ProductionDispatchTestHarness {
             hwnd: self.target_hwnd.load(Ordering::Acquire),
             generation: self.target_generation.load(Ordering::Acquire),
         });
+        let physical_timing_window = self
+            .runtime
+            .physical_timing_window_for_test(
+                physical_target_qpc,
+                frame.view.packet_masks.up_mask,
+                frame.view.packet_masks.down_mask,
+            )
+            .expect("prepared timing window");
         let step = dispatch_prepared_normal_frame(
             frame,
             &self.config,
@@ -2013,6 +2015,7 @@ impl ProductionDispatchTestHarness {
             Some(&self.observer),
             preflight_target,
             physical_target_qpc,
+            physical_timing_window,
             effective_now_ticks,
             wall_now,
             false,
@@ -2196,6 +2199,14 @@ impl ProductionDispatchTestHarness {
             .get_elapsed_allow_pre_epoch(dispatch_qpc, true)
             .map_err(|error| format!("prepared wait timeline: {error}"))?;
         self.effective_now_ticks = effective_now_ticks;
+        let physical_timing_window = self
+            .runtime
+            .physical_timing_window_for_test(
+                target_qpc,
+                frame.view.packet_masks.up_mask,
+                frame.view.packet_masks.down_mask,
+            )
+            .expect("prepared timing window");
         let step = dispatch_prepared_normal_frame(
             frame,
             &self.config,
@@ -2217,6 +2228,7 @@ impl ProductionDispatchTestHarness {
             Some(&self.observer),
             preflight_target,
             target_qpc,
+            physical_timing_window,
             effective_now_ticks,
             dispatch_qpc,
             false,
@@ -2307,6 +2319,14 @@ impl ProductionDispatchTestHarness {
                 .record_prepared_down_authorization(boundary, target.generation, true)
                 .expect("prepared test authorization");
         }
+        let physical_timing_window = self
+            .runtime
+            .physical_timing_window_for_test(
+                physical_target_qpc,
+                frame.view.packet_masks.up_mask,
+                frame.view.packet_masks.down_mask,
+            )
+            .expect("prepared timing window");
         let step = dispatch_prepared_normal_frame(
             frame,
             &self.config,
@@ -2328,6 +2348,7 @@ impl ProductionDispatchTestHarness {
             Some(&self.observer),
             preflight_target,
             physical_target_qpc,
+            physical_timing_window,
             effective_now_ticks,
             wall_now,
             false,
@@ -2415,9 +2436,8 @@ impl ProductionDispatchTestHarness {
         if !matches!(pre_wait_step, DispatchStep::NoWork) {
             return Ok(pre_wait_step);
         }
-        let physical_wait_target_qpc =
-            physical_wait_target_for_plan(plan, &self.runtime, self.timing.strict_timing)?
-                .or_else(|| plan.physical_target_qpc());
+        let physical_wait_target_qpc = physical_wait_target_for_plan(plan, &self.runtime)?
+            .or_else(|| plan.physical_target_qpc());
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
             deadline: WaitDeadline {
                 physical_target_qpc: physical_wait_target_qpc,
@@ -2678,7 +2698,7 @@ impl ProductionDispatchTestHarness {
         &self,
         plan: &NextDispatchPlan,
     ) -> Result<Option<QpcTicks>, String> {
-        physical_wait_target_for_plan(plan, &self.runtime, self.timing.strict_timing)
+        physical_wait_target_for_plan(plan, &self.runtime)
     }
 
     pub fn missed_physical_window_boundaries_for_test(&self) -> u64 {
@@ -2719,10 +2739,9 @@ impl ProductionDispatchTestHarness {
         let target = plan
             .physical_target_qpc()
             .expect("plan target required for synthetic boundary");
-        let wait_target =
-            physical_wait_target_for_plan(plan, &self.runtime, self.timing.strict_timing)
-                .expect("physical timing window")
-                .unwrap_or(target);
+        let wait_target = physical_wait_target_for_plan(plan, &self.runtime)
+            .expect("physical timing window")
+            .unwrap_or(target);
         let deadline = plan
             .deadline_ticks()
             .expect("plan deadline required for synthetic boundary");
@@ -2768,21 +2787,16 @@ impl ProductionDispatchTestHarness {
         let target = physical.physical_target_qpc;
         let packet = physical.authored_view.packet_masks;
         let guard = self.runtime.physical_timing_guard.as_ref()?;
-        let window = if self.timing.strict_timing {
-            guard.query(target, packet.up_mask, packet.down_mask)
-        } else {
-            guard.authored_only_window(target, packet.up_mask, packet.down_mask)
-        }
-        .expect("physical timing window evidence");
+        let window = guard
+            .query(target, packet.up_mask, packet.down_mask)
+            .expect("physical timing window evidence");
         Some(PhysicalFloorEvidence {
             authored_target_qpc: window.authored_target_qpc,
             musical_up_not_before_qpc: window.musical_up_not_before_qpc,
             down_not_before_qpc: window.down_not_before_qpc,
             packet_not_before_qpc: window.packet_not_before_qpc,
-            latest_down_start_qpc: window.latest_down_start_qpc,
             hold_floor_mask: window.hold_floor_mask,
             release_floor_mask: window.release_floor_mask,
-            down_feasible: (packet.down_mask != 0).then(|| window.is_down_feasible()),
         })
     }
 
@@ -2840,10 +2854,14 @@ impl ProductionDispatchTestHarness {
         plan: &NextDispatchPlan,
         completion_delay_us: u64,
     ) -> DispatchStep {
-        let target = plan
+        let authored_target = plan
             .physical_target_qpc()
             .expect("plan target required for Phase-A benchmark boundary");
-        let benchmark_now = target
+        let physical_wait_target = self
+            .physical_wait_target_for_test(plan)
+            .expect("Phase-A physical timing window")
+            .unwrap_or(authored_target);
+        let benchmark_now = physical_wait_target
             .checked_add_duration(DurationTicks::from_raw(1))
             .expect("Phase-A benchmark boundary arithmetic");
         let deadline = plan
@@ -2878,8 +2896,8 @@ impl ProductionDispatchTestHarness {
             }
         });
         self.runtime
-            .set_deadline_wait_evidence_for_test(Some(target), Some(target));
-        self.dispatch_plan_at(plan, deadline, benchmark_now, true, Some(target))
+            .set_deadline_wait_evidence_for_test(Some(authored_target), Some(authored_target));
+        self.dispatch_plan_at(plan, deadline, benchmark_now, true, Some(authored_target))
     }
 
     /// Invoke the coordinator dispatch boundary at a frozen crossing. The
@@ -3062,10 +3080,9 @@ impl ProductionDispatchTestHarness {
         let authored_overdue_now = target
             .checked_add_duration(DurationTicks::from_raw(1))
             .expect("overdue test target arithmetic");
-        let physical_wait_target =
-            physical_wait_target_for_plan(plan, &self.runtime, self.timing.strict_timing)
-                .expect("physical timing window")
-                .unwrap_or(target);
+        let physical_wait_target = physical_wait_target_for_plan(plan, &self.runtime)
+            .expect("physical timing window")
+            .unwrap_or(target);
         let overdue_now = core::cmp::max(authored_overdue_now, physical_wait_target);
         self.runtime.record_due_without_wait_for_test();
         self.dispatch_plan_at_with_sender_option(

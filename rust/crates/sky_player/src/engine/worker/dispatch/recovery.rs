@@ -14,7 +14,6 @@ use sky_dispatch_win32::input::TrackedKeyState;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DownMissReason {
     UnobservedBacklog,
-    PhysicalWindowExpired,
 }
 
 pub(super) fn queue_down_miss_observation(
@@ -24,7 +23,7 @@ pub(super) fn queue_down_miss_observation(
     wake_ticks: sky_dispatch_core::time::TimelineTicks,
     timing_evidence: DownMissTimingEvidence,
     observed_qpc: QpcTicks,
-    reason: DownMissReason,
+    _reason: DownMissReason,
 ) {
     let Some(observer) = observer else {
         return;
@@ -40,10 +39,7 @@ pub(super) fn queue_down_miss_observation(
             observed_qpc,
             up_mask: view.packet_masks.up_mask,
             down_mask: view.packet_masks.down_mask,
-            kind: match reason {
-                DownMissReason::UnobservedBacklog => DownMissKind::UnobservedBacklog,
-                DownMissReason::PhysicalWindowExpired => DownMissKind::PhysicalWindowExpired,
-            },
+            kind: DownMissKind::UnobservedBacklog,
         }),
         &mut local_metrics.observer_dropped_samples,
         &mut local_metrics.observer_queue_high_watermark,
@@ -56,13 +52,10 @@ fn record_last_missed_down_sample(
     down_mask: u16,
     physical_target_qpc: QpcTicks,
     observed_qpc: QpcTicks,
-    reason: DownMissReason,
+    _reason: DownMissReason,
 ) {
     local_metrics.last_missed_down_valid = true;
-    local_metrics.last_missed_down_reason_code = match reason {
-        DownMissReason::UnobservedBacklog => 1,
-        DownMissReason::PhysicalWindowExpired => 2,
-    };
+    local_metrics.last_missed_down_reason_code = 1;
     local_metrics.last_missed_down_source_action_index = source_action_index;
     local_metrics.last_missed_down_mask = down_mask;
     local_metrics.last_missed_down_lateness_ticks = observed_qpc
@@ -90,18 +83,9 @@ pub(super) fn record_missed_down_classification(
     local_metrics.missed_down_keys = local_metrics
         .missed_down_keys
         .saturating_add(u64::from(down_mask.count_ones()));
-    match reason {
-        DownMissReason::UnobservedBacklog => {
-            local_metrics.missed_unobserved_backlog_boundaries = local_metrics
-                .missed_unobserved_backlog_boundaries
-                .saturating_add(1);
-        }
-        DownMissReason::PhysicalWindowExpired => {
-            local_metrics.missed_physical_window_boundaries = local_metrics
-                .missed_physical_window_boundaries
-                .saturating_add(1);
-        }
-    }
+    local_metrics.missed_unobserved_backlog_boundaries = local_metrics
+        .missed_unobserved_backlog_boundaries
+        .saturating_add(1);
     if let Ok(lateness) = observed_qpc.checked_duration_since(physical_target_qpc) {
         local_metrics.max_missed_lateness_ticks = local_metrics
             .max_missed_lateness_ticks
@@ -127,7 +111,6 @@ pub(crate) fn classify_missed_down_boundary(
         observed_qpc,
         reason,
     );
-    record_release_floor_infeasibility(local_metrics, physical_timing_window, reason);
     record_missed_down_classification(
         local_metrics,
         view.batch_source_action_index,
@@ -167,14 +150,9 @@ pub(crate) fn classify_normal_prepared_miss(
         observed_qpc,
         reason,
     );
-    match reason {
-        DownMissReason::UnobservedBacklog => {
-            local_metrics.prepared_normal_backlog_boundaries = local_metrics
-                .prepared_normal_backlog_boundaries
-                .saturating_add(1);
-        }
-        DownMissReason::PhysicalWindowExpired => {}
-    }
+    local_metrics.prepared_normal_backlog_boundaries = local_metrics
+        .prepared_normal_backlog_boundaries
+        .saturating_add(1);
 }
 
 pub(crate) fn record_physical_floor_delays(
@@ -280,23 +258,6 @@ fn record_release_floor_delay(
             local_metrics.last_release_floor_not_before_qpc_ticks =
                 window.down_not_before_qpc.as_u64();
         }
-    }
-}
-
-fn record_release_floor_infeasibility(
-    local_metrics: &mut WorkerMetricsLocal,
-    window: PhysicalTimingWindow,
-    reason: DownMissReason,
-) {
-    if reason == DownMissReason::PhysicalWindowExpired
-        && window.release_floor_mask != 0
-        && window
-            .latest_down_start_qpc
-            .is_some_and(|latest| window.down_not_before_qpc > latest)
-    {
-        local_metrics.release_floor_infeasible_boundaries = local_metrics
-            .release_floor_infeasible_boundaries
-            .saturating_add(1);
     }
 }
 
@@ -476,10 +437,7 @@ pub(super) fn recover_missed_down_boundary(
         );
     }
     if config.timing.strict_timing {
-        return DispatchStep::TerminateStatic(match reason {
-            DownMissReason::UnobservedBacklog => "down_unobserved_backlog",
-            DownMissReason::PhysicalWindowExpired => "down_physical_window_expired",
-        });
+        return DispatchStep::TerminateStatic("down_unobserved_backlog");
     }
     let up_mask = view.packet_masks.up_mask;
     let (started_qpc, _completed_qpc) = if up_mask == 0 {
@@ -521,15 +479,12 @@ pub(super) fn recover_missed_down_boundary(
                 "missed Down Up-prefix recovery missing completion boundary",
             );
         };
-        if config.timing.strict_timing {
-            let Some(guard) = runtime.physical_timing_guard.as_mut() else {
-                return DispatchStep::TerminateStatic("physical timing guard is not initialized");
-            };
-            if let Err(error) = guard.observe_successful_packet(completed, up_mask, 0) {
-                return DispatchStep::Terminate(format!(
-                    "physical timing guard recovery update failed: {error:?}"
-                ));
-            }
+        if let Some(guard) = runtime.physical_timing_guard.as_mut()
+            && let Err(error) = guard.observe_successful_packet(completed, up_mask, 0)
+        {
+            return DispatchStep::Terminate(format!(
+                "physical timing guard recovery update failed: {error:?}"
+            ));
         }
         let full_transport_success = result.status
             == sky_dispatch_win32::input::SendTransactionStatus::Complete
@@ -567,7 +522,7 @@ pub(super) fn recover_missed_down_boundary(
 mod tests {
     use super::{
         DownMissReason, record_last_missed_down_sample, record_missed_down_classification,
-        record_physical_floor_delays, record_release_floor_infeasibility,
+        record_physical_floor_delays,
     };
     use crate::engine::telemetry::WorkerMetricsLocal;
     use crate::engine::worker::physical_timing_guard::PhysicalTimingWindow;
@@ -594,26 +549,6 @@ mod tests {
     }
 
     #[test]
-    fn last_missed_down_sample_records_physical_window_expiration() {
-        let mut metrics = WorkerMetricsLocal::default();
-
-        record_last_missed_down_sample(
-            &mut metrics,
-            7,
-            0b010,
-            QpcTicks::from_raw(10_000),
-            QpcTicks::from_raw(10_005),
-            DownMissReason::PhysicalWindowExpired,
-        );
-
-        assert!(metrics.last_missed_down_valid);
-        assert_eq!(metrics.last_missed_down_reason_code, 2);
-        assert_eq!(metrics.last_missed_down_source_action_index, 7);
-        assert_eq!(metrics.last_missed_down_mask, 0b010);
-        assert_eq!(metrics.last_missed_down_lateness_ticks, 5);
-    }
-
-    #[test]
     fn classified_miss_keeps_last_sample_and_counters_consistent() {
         let mut metrics = WorkerMetricsLocal::default();
 
@@ -623,23 +558,20 @@ mod tests {
             0b101,
             QpcTicks::from_raw(2_000),
             QpcTicks::from_raw(2_007),
-            DownMissReason::PhysicalWindowExpired,
+            DownMissReason::UnobservedBacklog,
         );
 
         assert!(metrics.last_missed_down_valid);
         assert_eq!(metrics.missed_down_boundaries, 1);
-        assert_eq!(metrics.missed_physical_window_boundaries, 1);
-        assert_eq!(metrics.missed_unobserved_backlog_boundaries, 0);
+        assert_eq!(metrics.missed_physical_window_boundaries, 0);
+        assert_eq!(metrics.missed_unobserved_backlog_boundaries, 1);
         assert_eq!(metrics.final_sender_window_expirations, 0);
         assert_eq!(metrics.last_missed_down_lateness_ticks, 7);
     }
 
     #[test]
     fn every_primary_miss_reason_is_mutually_exclusive_and_counts_once() {
-        for reason in [
-            DownMissReason::UnobservedBacklog,
-            DownMissReason::PhysicalWindowExpired,
-        ] {
+        for reason in [DownMissReason::UnobservedBacklog] {
             let mut metrics = WorkerMetricsLocal::default();
             record_missed_down_classification(
                 &mut metrics,
@@ -669,7 +601,6 @@ mod tests {
             musical_up_not_before_qpc: QpcTicks::from_raw(140),
             down_not_before_qpc: QpcTicks::from_raw(130),
             packet_not_before_qpc: QpcTicks::from_raw(140),
-            latest_down_start_qpc: Some(QpcTicks::from_raw(150)),
             hold_floor_mask: 1 << 2,
             release_floor_mask: 1 << 4,
         };
@@ -686,40 +617,5 @@ mod tests {
         assert_eq!(metrics.last_release_floor_delay_mask, 1 << 4);
         assert_eq!(metrics.last_release_floor_authored_target_qpc_ticks, 100);
         assert_eq!(metrics.last_release_floor_not_before_qpc_ticks, 130);
-    }
-
-    #[test]
-    fn release_floor_infeasibility_counts_only_when_that_floor_exceeds_latest_start() {
-        let mut metrics = WorkerMetricsLocal::default();
-        let mut window = PhysicalTimingWindow {
-            authored_target_qpc: QpcTicks::from_raw(100),
-            musical_up_not_before_qpc: QpcTicks::from_raw(100),
-            down_not_before_qpc: QpcTicks::from_raw(130),
-            packet_not_before_qpc: QpcTicks::from_raw(130),
-            latest_down_start_qpc: Some(QpcTicks::from_raw(120)),
-            hold_floor_mask: 0,
-            release_floor_mask: 1 << 4,
-        };
-        record_release_floor_infeasibility(
-            &mut metrics,
-            window,
-            DownMissReason::PhysicalWindowExpired,
-        );
-        window.latest_down_start_qpc = Some(QpcTicks::from_raw(140));
-        record_release_floor_infeasibility(
-            &mut metrics,
-            window,
-            DownMissReason::PhysicalWindowExpired,
-        );
-        window.latest_down_start_qpc = Some(QpcTicks::from_raw(120));
-        window.release_floor_mask = 0;
-        record_release_floor_infeasibility(
-            &mut metrics,
-            window,
-            DownMissReason::PhysicalWindowExpired,
-        );
-        record_release_floor_infeasibility(&mut metrics, window, DownMissReason::UnobservedBacklog);
-
-        assert_eq!(metrics.release_floor_infeasible_boundaries, 1);
     }
 }

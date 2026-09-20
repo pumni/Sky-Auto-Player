@@ -315,12 +315,10 @@ impl WorkerRuntime {
         &mut self,
         frame_base_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
-        timing_margin_ticks: DurationTicks,
     ) {
         self.physical_timing_guard = Some(physical_timing_guard::PhysicalTimingGuard::new(
             frame_base_hold_ticks,
             frame_ticks,
-            timing_margin_ticks,
         ));
     }
 

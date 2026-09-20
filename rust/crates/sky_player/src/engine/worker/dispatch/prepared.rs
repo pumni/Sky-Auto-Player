@@ -181,6 +181,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
     observer: Option<&PendingObservationQueue>,
     preflight_target: Option<TargetStamp>,
     physical_target_qpc: QpcTicks,
+    physical_timing_window: super::super::physical_timing_guard::PhysicalTimingWindow,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     focus_loss_fault: bool,
@@ -326,6 +327,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
         &mut resources.playback,
         effective_now_ticks,
         physical_target_qpc,
+        physical_timing_window,
         boundary_crossing_qpc,
         result,
         explicitly_cancelled_by_suspension,
@@ -408,7 +410,7 @@ pub(super) fn record_down_send_result(
         return DispatchStep::TerminateStatic("successful Down missing completion QPC");
     };
     if let Err(step) =
-        super::authored::observe_strict_completion(timing, runtime, completed_qpc, packet)
+        super::authored::observe_successful_completion(runtime, completed_qpc, packet)
     {
         return step;
     }
@@ -536,12 +538,10 @@ mod tests {
             precision_call < post_send,
             "normal precision suffix must precede post-send work"
         );
-        for forbidden in ["PhysicalTimingWindow", "physical_timing_guard"] {
-            assert!(
-                !outer.contains(forbidden),
-                "normal prepared dispatch/miss resolver contains dynamic timing policy {forbidden}"
-            );
-        }
+        assert!(
+            outer.contains("PhysicalTimingWindow"),
+            "normal prepared dispatch carries floor evidence into post-send accounting"
+        );
         for forbidden in [
             "plan_next_dispatch_projected",
             "prepare_current_authored_packet",

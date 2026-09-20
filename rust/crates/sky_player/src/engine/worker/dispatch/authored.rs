@@ -210,9 +210,6 @@ fn commit_down_send_outcome(
             effective_now_ticks,
             match down_admission {
                 DownBoundaryAdmission::UnobservedBacklog => DownMissReason::UnobservedBacklog,
-                DownBoundaryAdmission::PhysicalWindowExpired => {
-                    DownMissReason::PhysicalWindowExpired
-                }
                 DownBoundaryAdmission::Authorized => {
                     return DispatchStep::TerminateStatic("authorized Down classified as missed");
                 }
@@ -535,15 +532,11 @@ fn final_atomic_revalidation(
     false
 }
 
-pub(super) fn observe_strict_completion(
-    timing: &WorkerTimingState,
+pub(super) fn observe_successful_completion(
     runtime: &mut WorkerRuntime,
     completed_qpc: QpcTicks,
     packet: sky_dispatch_win32::input::PhysicalPacket,
 ) -> Result<(), DispatchStep> {
-    if !timing.strict_timing {
-        return Ok(());
-    }
     let Some(guard) = runtime.physical_timing_guard.as_mut() else {
         return Err(DispatchStep::TerminateStatic(
             "physical timing guard is not initialized",
@@ -633,13 +626,13 @@ pub(super) fn record_prepared_normal_send_outcome(
     clock_state: &mut PlaybackClockState,
     effective_now_ticks: TimelineTicks,
     physical_target_qpc: QpcTicks,
+    physical_timing_window: PhysicalTimingWindow,
     target_crossing_qpc: Option<QpcTicks>,
     result: SendTransactionOutcome,
     explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     debug_assert!(!timing.strict_timing);
-    let normal_observation_window = PhysicalTimingWindow::authored_only(physical_target_qpc);
     super::prepared::record_down_send_result(
         view,
         config,
@@ -653,7 +646,7 @@ pub(super) fn record_prepared_normal_send_outcome(
         clock_state,
         effective_now_ticks,
         physical_target_qpc,
-        normal_observation_window,
+        physical_timing_window,
         target_crossing_qpc,
         trace_kind_for_packet_kind(view.prepared_batch.packet_kind),
         None,

@@ -5664,7 +5664,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             physical_not_before_qpc_ticks: Some(105),
             hold_floor_qpc_ticks: Some(103),
             release_floor_qpc_ticks: Some(105),
-            latest_down_start_qpc_ticks: Some(110),
+            latest_down_start_qpc_ticks: None,
             hold_floor_mask: 1,
             release_floor_mask: 2,
             pre_call_qpc_ticks: Some(120),
@@ -5701,7 +5701,7 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert!(record.physical_not_before_qpc_available);
     assert_eq!(record.hold_floor_qpc_ticks, 103);
     assert_eq!(record.release_floor_qpc_ticks, 105);
-    assert_eq!(record.latest_down_start_qpc_ticks, 110);
+    assert_eq!(record.latest_down_start_qpc_ticks, 0);
     assert_eq!(record.hold_floor_mask, 1);
     assert_eq!(record.release_floor_mask, 2);
     assert_eq!(record.pre_call_qpc_ticks, 120);

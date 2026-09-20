@@ -563,7 +563,6 @@ fn baseline_dispatch_step_name(step: &DispatchStep) -> &'static str {
 fn baseline_down_miss_name(kind: DownMissKind) -> &'static str {
     match kind {
         DownMissKind::UnobservedBacklog => "UnobservedBacklog",
-        DownMissKind::PhysicalWindowExpired => "PhysicalWindowExpired",
     }
 }
 
@@ -903,10 +902,10 @@ fn baseline_floor_json(
         "musical_up_not_before_qpc": floor.musical_up_not_before_qpc.as_u64(),
         "down_not_before_qpc": floor.down_not_before_qpc.as_u64(),
         "packet_not_before_qpc": floor.packet_not_before_qpc.as_u64(),
-        "latest_down_start_qpc": floor.latest_down_start_qpc.map(QpcTicks::as_u64),
+        "latest_down_start_qpc": serde_json::Value::Null,
         "hold_floor_mask": floor.hold_floor_mask,
         "release_floor_mask": floor.release_floor_mask,
-        "down_feasible": floor.down_feasible,
+        "down_feasible": serde_json::Value::Null,
         "packet_not_before_after_authored_qpc": floor
             .packet_not_before_qpc
             .as_u64()
@@ -1381,10 +1380,6 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 DownMissKind::UnobservedBacklog => {
                     samples.missed_down_unobserved_backlog += 1;
                     "down_unobserved_backlog"
-                }
-                DownMissKind::PhysicalWindowExpired => {
-                    samples.missed_down_physical_window_expired += 1;
-                    "down_physical_window_expired"
                 }
             };
             // A recovered Down miss is a diagnostic companion to the

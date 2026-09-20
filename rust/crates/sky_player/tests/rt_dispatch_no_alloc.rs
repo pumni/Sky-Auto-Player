@@ -514,7 +514,7 @@ fn production_mixed_hard_path_no_alloc() {
 }
 
 /// A normal mixed packet remains allocation-free when completion evidence is
-/// present: authored-only timing sends it atomically without Up recovery.
+/// present: floor timing sends it atomically without Up recovery.
 #[test]
 fn production_normal_mixed_completion_floor_no_alloc() {
     let _lock = TEST_LOCK.lock();
@@ -553,7 +553,11 @@ fn production_normal_mixed_completion_floor_no_alloc() {
         harness.dispatch_at_qpc_for_test(&mixed, before_mixed_target),
         DispatchStep::NoWork
     ));
-    let classify_step = harness.dispatch_at_qpc_for_test(&mixed, mixed_target);
+    let physical_wait_target = harness
+        .physical_wait_target_for_test(&mixed)
+        .expect("mixed physical wait target")
+        .expect("mixed physical target");
+    let classify_step = harness.dispatch_at_qpc_for_test(&mixed, physical_wait_target);
     let allocs = disable_counting();
 
     assert_eq!(
