@@ -117,6 +117,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       details: { bySongId: new Map() },
       settings: null,
       settingsState: 'idle',
+      settingsError: null,
       settingsOpen: false,
       utility: {
         open: false,

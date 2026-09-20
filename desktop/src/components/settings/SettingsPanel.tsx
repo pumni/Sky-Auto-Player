@@ -35,6 +35,7 @@ const palettes: Array<{ id: PaletteId; label: string }> = [
 
 export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: SettingsPanelProps) {
   const settings = useStore((store: StoreState) => store.settings);
+  const settingsError = useStore((store: StoreState) => store.settingsError);
   const open = useStore((store: StoreState) => store.settingsOpen);
   const setOpen = useStore((store: StoreState) => store.setSettingsOpen);
   const patchSettings = useStore((store: StoreState) => store.patchSettings);
@@ -351,6 +352,11 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
               )}
             </div>
           </div>
+          {settingsError !== null && (
+            <p className="inline-error settings-save-error" role="alert">
+              Could not save settings. {settingsError}
+            </p>
+          )}
           <p className="settings-note settings-footer-note">
             Settings are validated and persisted by the native runtime.
           </p>
