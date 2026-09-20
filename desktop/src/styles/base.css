@@ -94,6 +94,12 @@ h3 {
 .button {
   padding: 0 14px;
 }
+.button:not(.button-primary):not(.button-danger):hover:not(:disabled) {
+  background: var(--control-hover);
+}
+.button:not(.button-primary):not(.button-danger):active:not(:disabled) {
+  background: var(--control-pressed);
+}
 .button-primary {
   border-color: var(--accent);
   background: var(--accent);
@@ -114,22 +120,29 @@ h3 {
   width: 34px;
   padding: 0;
 }
-.icon-button:hover {
+.icon-button:hover:not(:disabled) {
   background: var(--control-hover);
+}
+.icon-button:not(.button-primary):not(.button-danger):not(.player-secondary-action):not(
+    .player-tool-button
+  ):not(.player-like-button):not(.profile-summary-button):not(.library-more-button):not(
+    .library-add-button
+  ):not(.track-actions-button):not(.utility-close-button):active:not(:disabled) {
+  background: var(--control-pressed);
 }
 .update-indicator {
   display: inline-grid;
   place-items: center;
   min-height: 30px;
   padding: 0;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--accent) 22%, var(--surface-raised));
+  background: var(--surface-raised);
   font-size: 11px;
 }
 .update-indicator:hover {
-  background: color-mix(in srgb, var(--accent) 34%, var(--surface-raised));
+  background: var(--control-hover);
 }
 .update-actions {
   display: flex;

@@ -49,8 +49,14 @@
   transition: border-color 120ms ease;
 }
 
-.resizable-separator:hover span,
-.resizable-separator:focus-visible span,
+.resizable-separator:hover span {
+  border-color: var(--control-border);
+}
+
+.resizable-separator:focus-visible span {
+  border-color: var(--focus-ring);
+}
+
 .resizable-separator.is-dragging span {
   border-color: var(--accent);
 }
@@ -428,7 +434,7 @@ body.is-resizing * {
 .library-dialog-form input {
   min-height: 36px;
   padding-inline: 9px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-control);
   color: var(--text-primary);
   background: var(--surface-raised);
@@ -1097,6 +1103,14 @@ body.is-resizing * {
 }
 
 @media (forced-colors: active) {
+  .resizable-separator:focus-visible {
+    outline-color: Highlight;
+  }
+
+  .resizable-separator:focus-visible span {
+    border-left-color: Highlight;
+  }
+
   .library-nav-item.is-active,
   .library-nav-action-row.is-active,
   .settings-nav-item.is-active {

@@ -147,6 +147,10 @@
   background: var(--control-hover);
 }
 
+.settings-section .auto-play-switch:active:not(:disabled) {
+  background: var(--control-pressed);
+}
+
 .auto-play-switch-copy {
   display: grid;
   gap: 4px;
@@ -181,7 +185,7 @@
 .settings-section input:not([type='checkbox']) {
   min-height: 34px;
   padding: 0 8px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-control);
   color: var(--text-primary);
   background: var(--surface-raised);
