@@ -10,6 +10,8 @@ param(
   [string]$BridgeInstallerPath,
   [string]$BridgeSourceSha,
   [string]$BridgeVersion,
+  [string]$BridgePublisher,
+  [string]$BridgeIdentifier,
   [string]$BridgeSentinelId,
   [string]$BridgeSentinelSha256,
   [string]$EvidencePath,
@@ -22,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $candidateCargoPath = Join-Path $repoRoot 'desktop/src-tauri/Cargo.toml'
 $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
-$previousVersion = '4.0.0-alpha.1'
+$previousVersion = '4.1.3'
 $cargoSource = [IO.File]::ReadAllText($candidateCargoPath)
 $lockSource = [IO.File]::ReadAllText($lockPath)
 
@@ -68,7 +70,7 @@ if ((Convert-FixtureCargoVersion -Source $syntheticCargo -Version $previousVersi
 $invokeArgs = @{ FixtureTargetDir = $FixtureTargetDir }
 foreach ($name in @(
     'CandidateInstallerPath', 'CandidateSignaturePath', 'CandidateVersion', 'CandidatePublicKeyPath',
-    'BridgeRootPath', 'BridgeInstallerPath', 'BridgeSourceSha', 'BridgeVersion',
+    'BridgeRootPath', 'BridgeInstallerPath', 'BridgeSourceSha', 'BridgeVersion', 'BridgePublisher', 'BridgeIdentifier',
     'BridgeSentinelId', 'BridgeSentinelSha256')) {
   if ($PSBoundParameters.ContainsKey($name)) {
     $invokeArgs[$name] = Get-Variable -Name $name -ValueOnly
@@ -86,6 +88,8 @@ try {
     $PSBoundParameters.ContainsKey('BridgeInstallerPath') -or
     $PSBoundParameters.ContainsKey('BridgeSourceSha') -or
     $PSBoundParameters.ContainsKey('BridgeVersion') -or
+    $PSBoundParameters.ContainsKey('BridgePublisher') -or
+    $PSBoundParameters.ContainsKey('BridgeIdentifier') -or
     $PSBoundParameters.ContainsKey('BridgeSentinelId') -or
     $PSBoundParameters.ContainsKey('BridgeSentinelSha256')
   if (-not $providedBridge) {

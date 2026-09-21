@@ -162,6 +162,8 @@ jobs:
           $metadata = Get-Content -LiteralPath (Join-Path $bridgeRoot "bridge.json") -Raw | ConvertFrom-Json
           "SKY_BRIDGE_INSTALLER_SHA256=$($metadata.installer_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_VERSION=$($metadata.version)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_BRIDGE_PUBLISHER=$($metadata.publisher)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_BRIDGE_IDENTIFIER=$($metadata.identifier)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_SENTINEL_ID=$($metadata.sentinel_id)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_SENTINEL_SHA256=$($metadata.sentinel_content_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
@@ -173,6 +175,8 @@ jobs:
             -BridgeRoot $bridgeRoot `
             -SourceSha $env:SKY_CI_SOURCE_SHA `
             -Version $env:SKY_BRIDGE_VERSION `
+            -Publisher $env:SKY_BRIDGE_PUBLISHER `
+            -Identifier $env:SKY_BRIDGE_IDENTIFIER `
             -SentinelId $env:SKY_BRIDGE_SENTINEL_ID `
             -SentinelContentSha256 $env:SKY_BRIDGE_SENTINEL_SHA256
 
@@ -896,6 +900,8 @@ jobs:
             -BridgeRoot $bridgeRoot `
             -SourceSha "${{ github.event.pull_request.head.sha || github.sha }}" `
             -Version $metadata.version `
+            -Publisher $metadata.publisher `
+            -Identifier $metadata.identifier `
             -SentinelId $metadata.sentinel_id `
             -SentinelContentSha256 $metadata.sentinel_content_sha256
           if ($LASTEXITCODE -ne 0) { throw "Downloaded updater-bridge contract validation failed with exit code $LASTEXITCODE" }
@@ -904,6 +910,8 @@ jobs:
           "SKY_BRIDGE_INSTALLER=$installer" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_SOURCE_SHA=$($metadata.source_sha)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_VERSION=$($metadata.version)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_BRIDGE_PUBLISHER=$($metadata.publisher)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
+          "SKY_BRIDGE_IDENTIFIER=$($metadata.identifier)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_SENTINEL_ID=$($metadata.sentinel_id)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_SENTINEL_SHA256=$($metadata.sentinel_content_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
           "SKY_BRIDGE_INSTALLER_SHA256=$($metadata.installer_sha256)" | Add-Content $env:GITHUB_ENV -Encoding UTF8
@@ -969,6 +977,8 @@ jobs:
             -BridgeInstallerPath $env:SKY_BRIDGE_INSTALLER `
             -BridgeSourceSha $env:SKY_BRIDGE_SOURCE_SHA `
             -BridgeVersion $env:SKY_BRIDGE_VERSION `
+            -BridgePublisher $env:SKY_BRIDGE_PUBLISHER `
+            -BridgeIdentifier $env:SKY_BRIDGE_IDENTIFIER `
             -BridgeSentinelId $env:SKY_BRIDGE_SENTINEL_ID `
             -BridgeSentinelSha256 $env:SKY_BRIDGE_SENTINEL_SHA256
 

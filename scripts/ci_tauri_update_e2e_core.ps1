@@ -10,6 +10,8 @@ param(
   [string]$BridgeInstallerPath,
   [string]$BridgeSourceSha,
   [string]$BridgeVersion,
+  [string]$BridgePublisher,
+  [string]$BridgeIdentifier,
   [string]$BridgeSentinelId,
   [string]$BridgeSentinelSha256,
   [string]$EvidencePath,
@@ -21,6 +23,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $desktopRoot = Join-Path $repoRoot 'desktop'
+$tauriConfigPath = Join-Path $desktopRoot 'src-tauri/tauri.conf.json'
 . (Join-Path $PSScriptRoot 'v4_nsis_smoke_boundary.ps1')
 $smokeScope = $null
 $runnerTemp = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
@@ -66,6 +69,8 @@ $providedBridge = -not [string]::IsNullOrWhiteSpace($BridgeRootPath) -or
   -not [string]::IsNullOrWhiteSpace($BridgeInstallerPath) -or
   -not [string]::IsNullOrWhiteSpace($BridgeSourceSha) -or
   -not [string]::IsNullOrWhiteSpace($BridgeVersion) -or
+  -not [string]::IsNullOrWhiteSpace($BridgePublisher) -or
+  -not [string]::IsNullOrWhiteSpace($BridgeIdentifier) -or
   -not [string]::IsNullOrWhiteSpace($BridgeSentinelId) -or
   -not [string]::IsNullOrWhiteSpace($BridgeSentinelSha256)
 if ($providedBridge) {
@@ -73,6 +78,8 @@ if ($providedBridge) {
     [string]::IsNullOrWhiteSpace($BridgeInstallerPath) -or
     [string]::IsNullOrWhiteSpace($BridgeSourceSha) -or
     [string]::IsNullOrWhiteSpace($BridgeVersion) -or
+    [string]::IsNullOrWhiteSpace($BridgePublisher) -or
+    [string]::IsNullOrWhiteSpace($BridgeIdentifier) -or
     [string]::IsNullOrWhiteSpace($BridgeSentinelId) -or
     [string]::IsNullOrWhiteSpace($BridgeSentinelSha256)) {
     throw 'Provided-bridge updater qualification requires root, installer, source SHA, version, sentinel ID, and sentinel SHA'
@@ -105,6 +112,9 @@ if ($providedCandidate) {
   }
 }
 $candidateVersion = if ($providedCandidate) { $CandidateVersion } else { '4.0.0-alpha.2' }
+if ($providedCandidate -and $candidateVersion -cne '4.1.4') {
+  throw "Package migration qualification requires the exact candidate 4.1.4, received $candidateVersion"
+}
 
 function Get-HigherSemVer([string]$Version) {
   $match = [regex]::Match($Version, '^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
@@ -124,6 +134,7 @@ $httpEvidencePath = if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
 $manifestContract = [ordered]@{ status = 'not-checked' }
 $candidateContract = [ordered]@{ status = 'not-checked' }
 $preservationContract = [ordered]@{ status = 'not-checked' }
+$migrationContract = [ordered]@{ status = 'not-checked' }
 $fixtureStatus = 'FAIL'
 $port = 0
 $serverJob = $null
@@ -132,6 +143,15 @@ $candidateArchive = $null
 $candidateSignature = $null
 $candidateCargoPath = Join-Path $desktopRoot 'src-tauri/Cargo.toml'
 $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
+$tauriConfigSource = [IO.File]::ReadAllText($tauriConfigPath)
+$tauriConfig = $tauriConfigSource | ConvertFrom-Json
+$permanentIdentifier = 'io.github.pumni.skyautoplayer'
+$candidatePublisher = 'pumni'
+$previousBridgeVersion = if ([string]::IsNullOrWhiteSpace($BridgeVersion)) { '4.1.3' } else { $BridgeVersion }
+if ([string]$tauriConfig.identifier -cne $permanentIdentifier -or
+  [string]$tauriConfig.bundle.publisher -cne $candidatePublisher) {
+  throw 'Updater candidate source identity is not the exact 4.1.4 / pumni package contract'
+}
 $oldAppDataRoot = [Environment]::GetEnvironmentVariable('SKY_APP_DATA_ROOT', 'Process')
 $cargoSource = [IO.File]::ReadAllText($candidateCargoPath)
 $lockSource = [IO.File]::ReadAllText($lockPath)
@@ -180,6 +200,24 @@ $catalogCandidateEvidence = $null
 $catalogSourceRestoreStatus = if ($providedBridge) { 'PASS' } else { 'not-started' }
 $catalogSourceRestoreError = $null
 
+function Convert-FixturePublisher([string]$Source, [string]$Publisher) {
+  $pattern = [regex]::new('(?m)^(\s*"publisher"\s*:\s*")[^"]+("\s*,?\s*$)')
+  if ($pattern.Matches($Source).Count -ne 1) {
+    throw 'Updater fixture could not uniquely locate the Tauri bundle publisher'
+  }
+  $converted = $pattern.Replace($Source, ('${1}' + $Publisher + '${2}'), 1)
+  if ($Publisher -ceq 'github') {
+    $hookPattern = [regex]::new('(?m)^\s*"installerHooks"\s*:\s*"[^"]+",?\r?\n')
+    if ($hookPattern.Matches($converted).Count -ne 1) {
+      throw 'Historical bridge build could not uniquely locate the migration installer hook'
+    }
+    $converted = $hookPattern.Replace($converted, '', 1)
+    $commaPattern = [regex]::new('(?m)^(\s*"installMode"\s*:\s*"[^"]+"),\r?\n(\s*})')
+    $converted = $commaPattern.Replace($converted, ('${1}' + [Environment]::NewLine + '${2}'), 1)
+  }
+  return $converted
+}
+
 function Set-CatalogBridgeSentinel {
   $manifest = Get-Content -LiteralPath $catalogManifestPath -Raw | ConvertFrom-Json
   $entries = @($manifest.songs | Where-Object { [string]$_.id -eq $catalogSentinelId })
@@ -223,6 +261,71 @@ function Get-InstalledBuiltinEvidence {
     selected_content_sha256 = Get-ByteSha256 $songBytes
     selected_manifest_sha256 = [string]$entries[0].sha256
   }
+}
+
+function Get-V4MigrationRegistryValue {
+  param(
+    [Parameter(Mandatory = $true)] [string]$Path,
+    [Parameter(Mandatory = $true)] [string]$Name
+  )
+  $item = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
+  $property = $item.PSObject.Properties[$Name]
+  if ($null -eq $property) { return $null }
+  return [string]$property.Value
+}
+
+function Get-V4MigrationUninstallEvidence {
+  param([Parameter(Mandatory = $true)] [string]$ExpectedInstallRoot)
+
+  $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sky Auto Player'
+  if (-not (Test-Path -LiteralPath $uninstallKey)) {
+    throw "Migration package did not create the permanent uninstall identity: $uninstallKey"
+  }
+  $duplicateUninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\io.github.pumni.skyautoplayer'
+  if (Test-Path -LiteralPath $duplicateUninstallKey) {
+    throw "Migration package created a duplicate identifier uninstall identity: $duplicateUninstallKey"
+  }
+  $installLocation = Get-V4MigrationRegistryValue -Path $uninstallKey -Name 'InstallLocation'
+  $uninstallString = Get-V4MigrationRegistryValue -Path $uninstallKey -Name 'UninstallString'
+  $normalizedInstallLocation = $installLocation.Trim().Trim('"')
+  if ([string]::IsNullOrWhiteSpace($installLocation) -or
+    [IO.Path]::GetFullPath($normalizedInstallLocation).TrimEnd('\') -ine [IO.Path]::GetFullPath($ExpectedInstallRoot).TrimEnd('\')) {
+    throw "Migration uninstall identity points at an unexpected install root: $installLocation"
+  }
+  if ([string]::IsNullOrWhiteSpace($uninstallString) -or
+    $uninstallString -notmatch [regex]::Escape((Join-Path $ExpectedInstallRoot 'uninstall.exe'))) {
+    throw "Migration uninstall identity does not point at the installed uninstaller: $uninstallString"
+  }
+  return [ordered]@{
+    key = $uninstallKey
+    publisher = Get-V4MigrationRegistryValue -Path $uninstallKey -Name 'Publisher'
+    display_version = Get-V4MigrationRegistryValue -Path $uninstallKey -Name 'DisplayVersion'
+    install_location = $normalizedInstallLocation
+    uninstall_string = $uninstallString
+  }
+}
+
+function Assert-V4MigrationPublisherState {
+  param(
+    [Parameter(Mandatory = $true)] [string]$ExpectedPublisher,
+    [Parameter(Mandatory = $true)] [string]$ExpectedVersion,
+    [Parameter(Mandatory = $true)] [string]$ExpectedInstallRoot
+  )
+  $evidence = Get-V4MigrationUninstallEvidence -ExpectedInstallRoot $ExpectedInstallRoot
+  if ([string]$evidence.publisher -cne $ExpectedPublisher -or
+    [string]$evidence.display_version -cne $ExpectedVersion) {
+    throw "Migration uninstall identity has unexpected publisher/version: publisher=$($evidence.publisher); version=$($evidence.display_version); expected=$ExpectedPublisher/$ExpectedVersion"
+  }
+  $legacyPublisherKey = 'HKCU:\Software\github\Sky Auto Player'
+  if ($ExpectedPublisher -cne 'github' -and (Test-Path -LiteralPath $legacyPublisherKey)) {
+    $legacyItem = Get-Item -LiteralPath $legacyPublisherKey -ErrorAction Stop
+    $legacyDefault = $legacyItem.GetValue('', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if (-not [string]::IsNullOrWhiteSpace([string]$legacyDefault) -and
+      [IO.Path]::GetFullPath([string]$legacyDefault).TrimEnd('\') -ieq [IO.Path]::GetFullPath($ExpectedInstallRoot).TrimEnd('\')) {
+      throw "Migration left a historical publisher registry pointer at the new install root: $legacyPublisherKey"
+    }
+  }
+  return $evidence
 }
 
 function Invoke-LoopbackHttpBytes([string]$Uri) {
@@ -310,6 +413,7 @@ function Write-HttpEvidence([string]$Status) {
       manifest = $manifestContract
       candidate = $candidateContract
       preservation = $preservationContract
+      migration = $migrationContract
       requests = $requests
     }
     $parent = Split-Path -Parent $httpEvidencePath
@@ -473,6 +577,8 @@ try {
       -BridgeRoot $BridgeRootPath `
       -SourceSha $BridgeSourceSha `
       -Version $BridgeVersion `
+      -Publisher $BridgePublisher `
+      -Identifier $BridgeIdentifier `
       -SentinelId $BridgeSentinelId `
       -SentinelContentSha256 $BridgeSentinelSha256 `
       -RepositoryRoot $repoRoot
@@ -536,13 +642,15 @@ try {
     Copy-Item -LiteralPath $BridgeInstallerPath -Destination $previousInstallerCopy -Force
   } else {
     Set-CatalogBridgeSentinel
+    [IO.File]::WriteAllText($tauriConfigPath, (Convert-FixturePublisher -Source $tauriConfigSource -Publisher 'github'), [Text.UTF8Encoding]::new($false))
     Invoke-FixtureBuild $bridgeConfigPath $oldKeyPath $bridgeTargetRoot
-    $previousInstallers = @(Get-ChildItem -LiteralPath $bridgeBundleRoot -Filter '*4.0.0-alpha.1_x64-setup.exe' -File)
+    $previousInstallers = @(Get-ChildItem -LiteralPath $bridgeBundleRoot -Filter ("*$previousBridgeVersion*_x64-setup.exe") -File)
     if ($previousInstallers.Count -ne 1) {
       throw "Expected exactly one bridge-v4 installer, found $($previousInstallers.Count)"
     }
     Copy-Item -LiteralPath $previousInstallers[0].FullName -Destination $previousInstallerCopy -Force
     Restore-CanonicalBuiltinCatalog
+    [IO.File]::WriteAllText($tauriConfigPath, $tauriConfigSource, [Text.UTF8Encoding]::new($false))
   }
   if ($catalogSourceRestoreStatus -ne 'PASS') {
     throw 'Updater fixture did not restore the canonical source tree before building N+1'
@@ -738,12 +846,20 @@ try {
   Write-Host "Fixture HTTP candidate contract: PASS (status=200; content-type=application/octet-stream; content-length=$($candidateContract.http.content_length); body-sha256=$($candidateContract.http.body_sha256))"
 
   $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -ManageInstallRootCleanup:$false
+  $migrationIdentityPaths = @(
+    'HKCU:\Software\github\Sky Auto Player',
+    'HKCU:\Software\pumni\Sky Auto Player',
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sky Auto Player',
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\io.github.pumni.skyautoplayer'
+  )
   $installerRun = Start-Process -FilePath $previousInstallerCopy -ArgumentList @('/S', '/NS', "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
   if ($installerRun.ExitCode -ne 0) { throw "Bridge-v4 installer exited with $($installerRun.ExitCode)" }
-  $locationKey = 'HKCU:\Software\pumni\Sky Auto Player'
-  New-Item -Path $locationKey -Force -Value $installRoot | Out-Null
   $appPath = Join-Path $installRoot 'sky_desktop_shell.exe'
   if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed bridge app is missing: $appPath" }
+  $bridgeRegistryEvidence = Assert-V4MigrationPublisherState -ExpectedPublisher 'github' -ExpectedVersion $previousBridgeVersion -ExpectedInstallRoot $installRoot
+  if (-not (Test-Path -LiteralPath (Join-Path $installRoot 'uninstall.exe') -PathType Leaf)) {
+    throw 'Previous migration package did not install its uninstall executable in the bounded install root'
+  }
   $bridgeBuiltinRoot = Join-Path $installRoot 'builtin-songs'
   & cargo xtask builtin-catalog verify-installed --root $bridgeBuiltinRoot
   if ($LASTEXITCODE -ne 0) { throw "Bridge installed built-in catalog verification failed with exit code $LASTEXITCODE" }
@@ -809,6 +925,7 @@ try {
   if ($userSongShaAfter -ne $userSongShaBefore) {
     throw "Updater changed the user song bytes: before=$userSongShaBefore after=$userSongShaAfter"
   }
+  $candidateRegistryEvidence = Assert-V4MigrationPublisherState -ExpectedPublisher $candidatePublisher -ExpectedVersion $candidateVersion -ExpectedInstallRoot $installRoot
   $candidateBuiltinRoot = Join-Path $installRoot 'builtin-songs'
   & cargo xtask builtin-catalog verify-installed --root $candidateBuiltinRoot
   if ($LASTEXITCODE -ne 0) { throw "Candidate installed built-in catalog verification failed with exit code $LASTEXITCODE" }
@@ -851,6 +968,29 @@ try {
   }
   Write-Host "Updater N-to-N+1 resource replacement: PASS (user_sha256=$userSongShaAfter; built_in_manifest_sha256_before=$($catalogBridgeEvidence.manifest_sha256); built_in_manifest_sha256_after=$candidateBuiltinManifestSha; selected_id=$($catalogCandidateEvidence.selected_id); selected_content_sha256_before=$($catalogBridgeEvidence.selected_content_sha256); selected_content_sha256_after=$($catalogCandidateEvidence.selected_content_sha256); source_tree_restore=$catalogSourceRestoreStatus)"
   Write-Host "Updater N-to-N+1 preservation: PASS (user_sha256=$userSongShaAfter; built_in_count=$candidateBuiltinCount; built_in_manifest_sha256=$candidateBuiltinManifestSha)"
+
+  $migrationContract = [ordered]@{
+    status = 'PASS'
+    previous = [ordered]@{
+      version = $previousBridgeVersion
+      publisher = [string]$bridgeRegistryEvidence.publisher
+      identifier = $permanentIdentifier
+      install_root = [string]$bridgeRegistryEvidence.install_location
+      uninstall_identity = [string]$bridgeRegistryEvidence.key
+    }
+    candidate = [ordered]@{
+      version = $candidateVersion
+      publisher = [string]$candidateRegistryEvidence.publisher
+      identifier = $permanentIdentifier
+      install_root = [string]$candidateRegistryEvidence.install_location
+      uninstall_identity = [string]$candidateRegistryEvidence.key
+    }
+    install_root_preserved = ([IO.Path]::GetFullPath($bridgeRegistryEvidence.install_location).TrimEnd('\') -ieq [IO.Path]::GetFullPath($candidateRegistryEvidence.install_location).TrimEnd('\'))
+    uninstall_identity_preserved = ([string]$bridgeRegistryEvidence.key -ceq [string]$candidateRegistryEvidence.key)
+    app_data_preserved = ($userSongShaAfter -ceq $userSongShaBefore)
+    historical_publisher_registry = 'github -> pumni; stale github state absent'
+  }
+  Write-Host "Package publisher migration: PASS (previous=$previousBridgeVersion/github; candidate=$candidateVersion/$candidatePublisher; identifier=$permanentIdentifier; install_root_preserved=$($migrationContract.install_root_preserved); uninstall_identity_preserved=$($migrationContract.uninstall_identity_preserved); app_data_preserved=$($migrationContract.app_data_preserved))"
 
   if ([string]$candidateContract.http.body_sha256 -cne $candidateInstallerSha256) {
     throw "N-to-N+1 served candidate SHA differs from the candidate installer SHA: served=$($candidateContract.http.body_sha256) candidate=$candidateInstallerSha256"
@@ -900,12 +1040,43 @@ try {
     update_result = $cutoverResult
   }
   if ($providedCandidate) {
-    "Packaged Tauri updater draft qualification: PASS (preserved fixture bridge applied exact downloaded candidate $candidateVersion; N-to-N+1/old-root-rejection installer sha256=$candidateInstallerSha256; old-root manifest requests=$($negativeManifestRequests.Count); old-root candidate requests=$($negativeCandidateRequests.Count); synthetic higher version $cutoverVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
+    "Package migration + Tauri updater qualification: PASS (previous=$previousBridgeVersion/github; candidate=$candidateVersion/$candidatePublisher; identifier=$permanentIdentifier; install_root/uninstall_identity/app_data preserved; registry cleanup verified; N-to-N+1/old-root-rejection installer sha256=$candidateInstallerSha256; old-root manifest requests=$($negativeManifestRequests.Count); old-root candidate requests=$($negativeCandidateRequests.Count); built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   } else {
     "Packaged Tauri updater rotation: PASS (preserved fixture bridge applied new-root-only $candidateVersion; N-to-N+1/old-root-rejection installer sha256=$candidateInstallerSha256; old-root manifest requests=$($negativeManifestRequests.Count); old-root candidate requests=$($negativeCandidateRequests.Count); synthetic higher version $cutoverVersion; user data preserved across N-to-N+1; built-in count=$candidateBuiltinCount; safety phases=$($requiredPhases -join ', '))" |
       Add-Content $summaryPath -Encoding UTF8
   }
+
+  $uninstallerPath = Join-Path $installRoot 'uninstall.exe'
+  Invoke-V4NsisUninstaller -UninstallerPath $uninstallerPath | Out-Null
+  $uninstallDeadline = [DateTime]::UtcNow.AddSeconds(30)
+  while ([DateTime]::UtcNow -lt $uninstallDeadline -and (Test-Path -LiteralPath $installRoot)) {
+    Start-Sleep -Milliseconds 250
+  }
+  if (Test-Path -LiteralPath $installRoot) {
+    throw "Migration uninstaller left the bounded install root in place: $installRoot"
+  }
+  if (-not (Test-Path -LiteralPath $userSongPath -PathType Leaf)) {
+    throw 'Migration uninstaller removed application data owned by the user'
+  }
+  $postUninstallSongSha = Get-ByteSha256 ([IO.File]::ReadAllBytes($userSongPath))
+  if ($postUninstallSongSha -ne $userSongShaBefore) {
+    throw "Migration uninstaller changed application data bytes: before=$userSongShaBefore after=$postUninstallSongSha"
+  }
+  foreach ($identityPath in $migrationIdentityPaths) {
+    if (Test-Path -LiteralPath $identityPath) {
+      throw "Migration uninstaller left publisher or uninstall registry residue: $identityPath"
+    }
+  }
+  $migrationContract['uninstall'] = [ordered]@{
+    status = 'PASS'
+    install_root_removed = $true
+    app_data_preserved = ($postUninstallSongSha -ceq $userSongShaBefore)
+    registry_publisher_state_clean = $true
+    registry_scope_restore = 'deferred-to-finalizer'
+    user_song_sha256_after_uninstall = $postUninstallSongSha
+  }
+  Write-Host "Package migration uninstall: PASS (install_root_removed=true; app_data_preserved=true; registry_publisher_state_clean=true)"
   $fixtureStatus = 'PASS'
 } finally {
   $finalizerErrors = [System.Collections.Generic.List[string]]::new()
@@ -943,6 +1114,12 @@ try {
     [IO.File]::WriteAllText($lockPath, $lockSource, [Text.UTF8Encoding]::new($false))
   } catch {
     $finalizerErrors.Add("Failed to restore Cargo.lock: $($_.Exception.Message)")
+  }
+
+  try {
+    [IO.File]::WriteAllText($tauriConfigPath, $tauriConfigSource, [Text.UTF8Encoding]::new($false))
+  } catch {
+    $finalizerErrors.Add("Failed to restore tauri.conf.json: $($_.Exception.Message)")
   }
 
   # Step 3: Process environment restoration

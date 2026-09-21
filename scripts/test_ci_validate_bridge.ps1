@@ -16,14 +16,14 @@ try {
     New-Item -ItemType Directory -Path $bundle -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $bundle "Sky-Auto-Player_4.0.0-alpha.1_x64-setup.exe"), [byte[]](1, 2, 3, 4))
     & $validator -Mode Create -BundleDir $bundle -OutputRoot $output -SourceSha $sourceSha `
-        -Version "4.0.0-alpha.1" -SentinelId "catalog-sentinel" `
+        -Version "4.0.0-alpha.1" -Publisher "github" -Identifier "io.github.pumni.skyautoplayer" -SentinelId "catalog-sentinel" `
         -SentinelContentSha256 $sentinelSha -RepositoryRoot $root | Out-Null
     $files = @(Get-ChildItem -LiteralPath $output -File)
     if ($files.Count -ne 2 -or -not (Test-Path -LiteralPath (Join-Path $output "bridge.json"))) {
         throw "bridge Create self-test did not produce exactly bridge.json and one installer"
     }
     & $validator -Mode Validate -BridgeRoot $output -SourceSha $sourceSha `
-        -Version "4.0.0-alpha.1" -SentinelId "catalog-sentinel" `
+        -Version "4.0.0-alpha.1" -Publisher "github" -Identifier "io.github.pumni.skyautoplayer" -SentinelId "catalog-sentinel" `
         -SentinelContentSha256 $sentinelSha -RepositoryRoot $root | Out-Null
     [IO.File]::WriteAllText((Join-Path $output "leaked-private.key"), "PRIVATE KEY")
     try {
