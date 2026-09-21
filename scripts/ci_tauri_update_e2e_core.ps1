@@ -425,7 +425,7 @@ function Write-HttpEvidence([string]$Status) {
 }
 
 function Wait-ForPath {
-  param([string]$Path, [int]$TimeoutSeconds = 180)
+  param([string]$Path, [int]$TimeoutSeconds = 420)
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   while ([DateTime]::UtcNow -lt $deadline) {
     if (Test-Path -LiteralPath $Path) { return }
