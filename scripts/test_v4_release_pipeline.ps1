@@ -6,24 +6,18 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pipelinePath = Join-Path $PSScriptRoot "v4_release_pipeline.ps1"
-$topologyRehearsalPath = Join-Path $PSScriptRoot "test_v4_production_topology_rehearsal.ps1"
 $fixtureWrapperPath = Join-Path $PSScriptRoot "ci_tauri_update_e2e.ps1"
 $fixtureCorePath = Join-Path $PSScriptRoot "ci_tauri_update_e2e_core.ps1"
 $uploadHelperPath = Join-Path $PSScriptRoot "v4_release_asset_upload.ps1"
 $workflowPath = Join-Path $repoRoot ".github/workflows/release-v4.yml"
 $draftWorkflowPath = Join-Path $repoRoot ".github/workflows/rehearse-v4.yml"
-$draftCleanupPath = Join-Path $PSScriptRoot "cleanup_v4_draft_rehearsal.ps1"
-$externalStatePath = Join-Path $PSScriptRoot "v4_draft_rehearsal_external_state.ps1"
 $draftLookupPath = Join-Path $PSScriptRoot "v4_release_draft_lookup.ps1"
 $pipeline = Get-Content -LiteralPath $pipelinePath -Raw
-$topologyRehearsal = Get-Content -LiteralPath $topologyRehearsalPath -Raw
 $fixtureWrapper = Get-Content -LiteralPath $fixtureWrapperPath -Raw
 $fixtureCore = Get-Content -LiteralPath $fixtureCorePath -Raw
 $uploadHelper = Get-Content -LiteralPath $uploadHelperPath -Raw
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $draftWorkflow = Get-Content -LiteralPath $draftWorkflowPath -Raw
-$draftCleanup = Get-Content -LiteralPath $draftCleanupPath -Raw
-$externalState = Get-Content -LiteralPath $externalStatePath -Raw
 $draftLookup = Get-Content -LiteralPath $draftLookupPath -Raw
 $testHarness = Get-Content -LiteralPath $PSCommandPath -Raw
 $latestGuardPath = Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1"
@@ -37,9 +31,7 @@ foreach ($source in @(
     [pscustomobject]@{ Name = "metadata promotion"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "promote_v4_metadata.ps1") -Raw) },
     [pscustomobject]@{ Name = "asset upload"; Text = $uploadHelper },
     [pscustomobject]@{ Name = "GitHub Latest policy guard"; Text = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "ci_v4_release_latest_guard.ps1") -Raw) },
-    [pscustomobject]@{ Name = "controlled draft rehearsal workflow"; Text = $draftWorkflow },
-    [pscustomobject]@{ Name = "controlled draft cleanup"; Text = $draftCleanup },
-    [pscustomobject]@{ Name = "controlled draft external-state check"; Text = $externalState },
+    [pscustomobject]@{ Name = "production qualification workflow"; Text = $draftWorkflow },
     [pscustomobject]@{ Name = "release draft lookup"; Text = $draftLookup }
 )) {
     foreach ($forbidden in @(
@@ -78,55 +70,47 @@ if ($latestGuard.Contains('^v3\.')) {
 }
 
 foreach ($marker in @(
-    'name: V4 Controlled Same-Repository Draft Rehearsal',
+    'name: V4 Production Pre-Publication Qualification',
     'workflow_dispatch:',
     'group: v4-release-control-plane',
-    'draft-rehearsal-dispatch-boundary',
+    'qualification-dispatch-boundary',
     'runs-on: [self-hosted, windows, v4-release, single-tenant]',
     'environment: v4-production-release',
-    'contents: write',
-    'id-token: write',
-    'attestations: write',
-    'ref: ${{ inputs.source_sha }}',
+    'contents: read',
+    'ref: ${{ github.sha }}',
     'persist-credentials: false',
-    'ValidateRequest', 'ValidateRepository', 'BuildCandidate', 'CreateDraft',
-    'DownloadDraft', 'QualifyDownloaded', 'RecordAttestations',
-    'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6',
-    '--source-digest $env:GITHUB_SHA',
-    '-Mode Capture', '-Mode Verify',
-    'cleanup_v4_draft_rehearsal.ps1',
-    'v4_draft_rehearsal_external_state.ps1',
+    'V4_UPDATER_PRIVATE_KEY_PATH',
+    'verify_v4_release_runner.ps1',
+    'Run canonical production Preflight without publication',
+    'Run canonical production BuildCandidate and stop',
+    '-State Preflight', '-State BuildCandidate',
+    'release-context.json',
     'if: always()',
+    'cleanup_v4_release_state.ps1',
     'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
 )) {
     if (-not $draftWorkflow.Contains($marker)) {
-        Fail "controlled draft rehearsal workflow marker is missing: $marker"
+        Fail "production qualification workflow marker is missing: $marker"
     }
 }
-$draftStates = @(
-    '-State ValidateRequest', '-State ValidateRepository', '-State BuildCandidate',
-    '-State CreateDraft', '-State DownloadDraft', '-State QualifyDownloaded',
-    '-State RecordAttestations'
-)
-$previousDraftStatePosition = -1
-foreach ($stateMarker in $draftStates) {
-    $draftStatePosition = $draftWorkflow.IndexOf($stateMarker)
-    if ($draftStatePosition -lt 0 -or $draftStatePosition -lt $previousDraftStatePosition) {
-        Fail "controlled draft rehearsal states are missing or out of order: $stateMarker"
+$qualificationStates = @('-State Preflight', '-State BuildCandidate')
+$previousQualificationStatePosition = -1
+foreach ($stateMarker in $qualificationStates) {
+    $qualificationStatePosition = $draftWorkflow.IndexOf($stateMarker)
+    if ($qualificationStatePosition -lt 0 -or $qualificationStatePosition -lt $previousQualificationStatePosition) {
+        Fail "production qualification states are missing or out of order: $stateMarker"
     }
-    $previousDraftStatePosition = $draftStatePosition
+    $previousQualificationStatePosition = $qualificationStatePosition
 }
 foreach ($forbidden in @(
-    'PublishDraft', 'PromoteMetadata', 'FinalVerify',
-    'create-github-app-token', 'metadata-app-token',
-    'softprops/action-gh-release', 'gh release',
-    'actions/create-github-app-token',
+    '-State PublishRelease', '-State PromoteMetadata', '-State FinalVerify',
+    'create-github-app-token', 'metadata-app-token', 'actions/attest@',
+    'softprops/action-gh-release', 'gh release', 'contents: write',
     'updater_private_key_path:', 'inputs.updater_private_key_path',
-    'V4_RELEASE_AUTHORITY_TOKEN', 'V4_RELEASE_AUTHORITY_REPOSITORY',
-    'make_latest = $true'
+    'V4_RELEASE_AUTHORITY_TOKEN', 'V4_RELEASE_AUTHORITY_REPOSITORY'
 )) {
     if ($draftWorkflow.Contains($forbidden)) {
-        Fail "controlled draft rehearsal workflow contains forbidden marker: $forbidden"
+        Fail "production qualification workflow contains forbidden marker: $forbidden"
     }
 }
 
@@ -160,49 +144,6 @@ function Test-DraftLookupFallback {
 }
 
 Test-DraftLookupFallback
-
-foreach ($marker in @(
-    'RUNNER_TEMP', 'GITHUB_WORKSPACE', 'StateRoot must be a child of RUNNER_TEMP',
-    'source_sha', 'published_at', 'git/ref/tags', '--method', 'DELETE',
-    'remainingRelease', 'remainingTag', 'draft-cleanup-authorized.json',
-    'release-state.json', 'releases/$releaseId', 'v4_release_draft_lookup.ps1',
-    'Select-V4ReleaseByTag', '--paginate', '--slurp', 'releases?per_page=100',
-    'refusing to delete a published release', 'mismatched source',
-    'draft release could not be removed by release id'
-)) {
-    if (-not $draftCleanup.Contains($marker)) {
-        Fail "controlled draft cleanup marker is missing: $marker"
-    }
-}
-foreach ($forbidden in @('PublishDraft', 'PromoteMetadata', 'FinalVerify', 'Sky-Auto-Player-Releases', 'V4_RELEASE_AUTHORITY_')) {
-    if ($draftCleanup.Contains($forbidden)) {
-        Fail "controlled draft cleanup contains forbidden marker: $forbidden"
-    }
-}
-
-foreach ($marker in @(
-    'Capture', 'Verify',
-    'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json',
-    'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json',
-    'releases/latest', '^v[0-9]+\.[0-9]+\.[0-9]+$', 'AllowAutoRedirect', 'Headers.Authorization',
-    'StatusCode', 'sha256', 'external-state-before.json', 'external-state-after.json',
-    'GITHUB_REPOSITORY', 'target_release_absent', 'target_tag_absent',
-    'v4_release_draft_lookup.ps1', 'Select-V4ReleaseByTag', '--paginate',
-    '--slurp', 'releases?per_page=100'
-)) {
-    if (-not $externalState.Contains($marker)) {
-        Fail "controlled draft external-state marker is missing: $marker"
-    }
-}
-foreach ($forbidden in @('--method', 'POST', 'PATCH', 'PUT', 'DELETE', 'gh release', 'Sky-Auto-Player-Releases', 'V4_RELEASE_AUTHORITY_')) {
-    if ($externalState.Contains($forbidden)) {
-        Fail "controlled draft external-state check contains forbidden mutation marker: $forbidden"
-    }
-}
-if (-not $externalState.Contains('System.Net.Http.HttpMethod]::Get') -or
-    $externalState.Contains('Headers.Authorization =')) {
-    Fail "raw metadata endpoint check must be an explicit unauthenticated GET"
-}
 
 function Test-StrictModeEmptyFreshUserSongs {
     Set-StrictMode -Version Latest
@@ -276,23 +217,6 @@ foreach ($marker in @(
     if (-not $fixtureCore.Contains($marker)) {
         Fail "updater fixture topology marker is missing: $marker"
     }
-}
-foreach ($marker in @(
-    'candidate-bundle',
-    'candidate-evidence',
-    'cargo xtask sbom verify',
-    'cargo xtask verify-tauri-bundle',
-    'V4 production-topology rehearsal: PASS'
-)) {
-    if (-not $topologyRehearsal.Contains($marker)) {
-        Fail "production-topology rehearsal marker is missing: $marker"
-    }
-}
-if ($topologyRehearsal.Contains('QualifyDownloaded')) {
-    Fail "production-topology rehearsal must not reference retired QualifyDownloaded state"
-}
-if ($topologyRehearsal.Contains('4.1.1')) {
-    Fail "production-topology rehearsal must resolve the current package version dynamically"
 }
 if (-not $pipeline.Contains("FixtureTargetDir")) {
     Fail "production qualification must pass an explicit fixture target directory"
@@ -443,6 +367,8 @@ if (([regex]::Matches($pipeline, "orchestrate_v4_production_release\.ps1")).Coun
 foreach ($marker in @(
     'Preflight', 'BuildCandidate', 'PublishRelease',
     'PromoteMetadata', 'FinalVerify', 'unsigned-zero-budget',
+    'release-context.json', 'Write-V4ReleaseContext', 'Import-V4ReleaseContext',
+    'Remove-V4StaleMatchingDraft', 'V4 unpublished draft cleanup',
     'metadata promotion is forbidden before immutable publication',
     'release-metadata branch is not initialized',
     'Assert-MetadataBranchReadiness', 'metadataBootstrapContract',
@@ -455,7 +381,7 @@ foreach ($marker in @(
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json',
     'raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json',
     'AllowAutoRedirect', 'Headers.Authorization', 'ReadAsByteArrayAsync',
-    'repository already contains published release/tag', 'unpublished draft reuse',
+    'repository already contains published release/tag', 'V4 unpublished draft cleanup',
     'published tags are immutable', 'git/refs/tags/$Tag',
     'GitHub''s successful DELETE endpoints return an empty body',
     'Get-FileHash', 'verify-signature', 'sbom', 'verify-tauri-bundle',
@@ -491,7 +417,7 @@ foreach ($marker in @(
     if (-not $pipeline.Contains($marker)) { Fail "pipeline marker is missing: $marker" }
 }
 if ($pipeline.Contains('repos/$repository/immutable-releases')) {
-    Fail "ValidateRepository must not call the administration-only immutable-releases endpoint"
+    Fail "repository policy validation must not call the administration-only immutable-releases endpoint"
 }
 $pipelineSelfTestOutput = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $pipelinePath -State SelfTest 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0 -or $pipelineSelfTestOutput -notmatch 'immutable=false rejected; immutable=true accepted') {
@@ -556,12 +482,13 @@ if (-not $promoteMetadataBody.Contains('Get-StateAssetPath') -or
 }
 foreach ($workflowSource in @(
     [pscustomobject]@{ Name = 'production release workflow'; Text = $workflow },
-    [pscustomobject]@{ Name = 'controlled rehearsal workflow'; Text = $draftWorkflow }
+    [pscustomobject]@{ Name = 'production qualification workflow'; Text = $draftWorkflow }
 )) {
     if ($workflowSource.Text -match 'sbom-path:\s+\$\{\{ runner\.temp \}\}[^\r\n]*\\downloaded\\SBOM\.spdx\.json') {
         Fail "$($workflowSource.Name) still attests an SBOM from downloaded/"
     }
-    if (-not $workflowSource.Text.Contains('candidate-evidence\SBOM.spdx.json')) {
+    if ($workflowSource.Name -eq 'production release workflow' -and
+        -not $workflowSource.Text.Contains('candidate-evidence\SBOM.spdx.json')) {
         Fail "$($workflowSource.Name) does not attest the frozen candidate SBOM"
     }
 }
@@ -660,7 +587,7 @@ foreach ($forbiddenPublicReleaseNotesPattern in @(
 Write-Host "V4 public release notes contract: PASS (no internal gate state or obsolete topology wording)"
 $validNotesProbe = Invoke-ReleaseNotesValidation $validNotesPath
 if ($validNotesProbe.ExitCode -ne 0 -or $validNotesProbe.Output -notmatch "V4 release identity: PASS") {
-    Fail "canonical release notes were rejected by ValidateRequest. Diagnostics:`n$($validNotesProbe.Output)"
+    Fail "canonical release notes were rejected by the identity probe. Diagnostics:`n$($validNotesProbe.Output)"
 }
 $wrongNotes = Get-ChildItem -LiteralPath (Join-Path $repoRoot "docs/releases") -Filter "v4.0.0-rc.*.md" |
     Where-Object { $_.Name -ne "v$packageVersion.md" } |
@@ -668,7 +595,7 @@ $wrongNotes = Get-ChildItem -LiteralPath (Join-Path $repoRoot "docs/releases") -
 if ($null -eq $wrongNotes) { Fail "release notes probe requires an existing mismatched v4 notes file" }
 $wrongNotesProbe = Invoke-ReleaseNotesValidation $wrongNotes.FullName
 if ($wrongNotesProbe.ExitCode -eq 0) {
-    Fail "ValidateRequest accepted release notes for a different version"
+    Fail "identity probe accepted release notes for a different version"
 }
 
 foreach ($brokerFile in @(
@@ -692,12 +619,9 @@ foreach ($marker in @(
     'actions/upload-artifact@',
     'GH_TOKEN: ${{ github.token }}',
     'ref: ${{ github.sha }}',
-    'Derive exact release identity from checked-out source',
-    'V4_RELEASE_SOURCE_SHA=$sourceSha',
-    'V4_RELEASE_VERSION=$version',
-    'V4_RELEASE_CHANNEL=$channel',
-    'V4_RELEASE_TAG=$tag',
-    'V4_RELEASE_NOTES_PATH=$notesPath',
+    'Require exact-head production qualification',
+    'actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA',
+    'V4 Production Pre-Publication Qualification',
     'persist-credentials: false',
     'actions/attest@',
     '--source-digest $env:GITHUB_SHA',
@@ -739,15 +663,13 @@ foreach ($marker in @(
 }
 foreach ($marker in @(
     'candidate-manifest.json',
+    'release-context.json',
     'candidate-evidence\*.json',
-    'downloaded-manifest.json',
-    'downloaded-authenticode-verification.json',
     'fixture-http-evidence.json',
-    'post-draft-qualification.json',
     'defender-evidence.json',
-    'release-state.json'
+    'preflight-evidence.json'
 )) {
-    if (-not $draftWorkflow.Contains($marker)) { Fail "rehearsal bounded evidence retention marker is missing: $marker" }
+    if (-not $draftWorkflow.Contains($marker)) { Fail "qualification bounded evidence retention marker is missing: $marker" }
 }
 if ($workflow.Contains('inputs:') -or $workflow.Contains('inputs.')) {
     Fail "production release workflow must not expose semantic workflow_dispatch inputs"
@@ -1158,7 +1080,7 @@ function Test-SafeReleaseAssetNameContract {
         Fail "pipeline must enforce uploaded.name -eq releaseName exact response match"
     }
 
-    # 4. Unsafe name fails before CreateDraft
+    # 4. Unsafe name fails before PublishRelease
     foreach ($unsafe in @(
         "", "   ", "path/separator", "path\separator", ".leadingdot", "-leadinghyphen",
         ".", "..", "invalid*char", "invalid?char", "invalid:char", "invalid|char"
@@ -1174,9 +1096,9 @@ function Test-SafeReleaseAssetNameContract {
         }
     }
 
-    # 5. Release-name collision fails before CreateDraft
+    # 5. Release-name collision fails before PublishRelease
     if ($pipeline -notmatch 'release asset name collision detected') {
-        Fail "pipeline must contain release asset name collision check before CreateDraft"
+        Fail "pipeline must contain release asset name collision check before PublishRelease"
     }
 
     # 6. Downloaded safe-name asset qualifies against source-name evidence without byte mutation
@@ -2665,6 +2587,23 @@ function New-V4SimplifiedTestFixture {
     }
     $manifestPath = Join-Path $stateRoot "candidate-manifest.json"
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $context = [ordered]@{
+        schema_version = 1
+        repository = "pumni/Sky-Auto-Player"
+        version = $Version
+        channel = $Channel
+        tag = "v$Version"
+        release_notes_path = "docs/releases/v$Version.md"
+        source_sha = $SourceSha.ToLowerInvariant()
+        workflow_sha = $SourceSha.ToLowerInvariant()
+        run_id = "35292682626"
+        created_at = "2026-09-19T00:00:00Z"
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $stateRoot "release-context.json"),
+        (($context | ConvertTo-Json -Depth 10) + "`n"),
+        [Text.UTF8Encoding]::new($false)
+    )
 
     return [pscustomobject]@{
         TestDir = $testDir
@@ -2918,6 +2857,10 @@ function Invoke-TestPublishReleaseTransaction([pscustomobject]$Fixture, [V4Simpl
     $Ctx.SignatureName = $Fixture.SignatureName
     $Ctx.InstallerSha = $Fixture.InstallerSha
     $Ctx.SignatureSha = $Fixture.SignatureSha
+    $contextPath = Join-Path $Fixture.StateRoot "release-context.json"
+    $context = Get-Content -LiteralPath $contextPath -Raw | ConvertFrom-Json
+    $context.run_id = $Ctx.RunId
+    [IO.File]::WriteAllText($contextPath, (($context | ConvertTo-Json -Depth 10) + "`n"), [Text.UTF8Encoding]::new($false))
 
     $apiHandler = New-V4MockGitHubApiHandler $Ctx
     $uploadHandler = New-V4MockAssetUploadHandler $Ctx
@@ -3261,11 +3204,15 @@ function Test-MetadataPromotionFailureAfterPublicationReleaseIntact {
 }
 
 # -------------------------------------------------------------------------
-# Test 30: Process failure immediately after draft creation (assert preflight cleans stale draft)
+# Test 30: Process failure immediately after draft creation (preflight observes; publication cleans)
 # -------------------------------------------------------------------------
 function Test-ProcessFailureAfterDraftCreationPreflightCleansStaleDraft {
     $fixture = New-V4SimplifiedTestFixture
     try {
+        $contextPath = Join-Path $fixture.StateRoot "release-context.json"
+        $context = Get-Content -LiteralPath $contextPath -Raw | ConvertFrom-Json
+        $context.run_id = "new-run"
+        [IO.File]::WriteAllText($contextPath, (($context | ConvertTo-Json -Depth 10) + "`n"), [Text.UTF8Encoding]::new($false))
         $ctx = [V4SimplifiedMockContext]::new()
         $ctx.SourceSha = $fixture.SourceSha
         $ctx.InstallerName = $fixture.InstallerName
@@ -3299,12 +3246,16 @@ function Test-ProcessFailureAfterDraftCreationPreflightCleansStaleDraft {
                 -StateRoot $fixture.StateRoot `
                 -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($fixture.Version).md") `
                 -RunId "new-run"
+            if ($ctx.DeletedReleases.Count -ne 0) {
+                Fail "preflight must not clean a stale draft"
+            }
+            Remove-V4StaleMatchingDraft -Repository "pumni/Sky-Auto-Player" | Out-Null
         }
 
         if (-not $ctx.DeletedReleases.Contains([int64]42)) {
-            Fail "preflight did not clean stale draft matching transaction marker"
+            Fail "PublishRelease stale-draft reconciliation did not clean matching draft"
         }
-        Write-Host "V4 test (30/32): process failure after draft creation cleaned up by preflight: PASS"
+        Write-Host "V4 test (30/32): preflight is read-only and publication owns stale-draft cleanup: PASS"
     } finally {
         if (Test-Path -LiteralPath $fixture.TestDir) { Remove-Item -LiteralPath $fixture.TestDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -3316,6 +3267,10 @@ function Test-ProcessFailureAfterDraftCreationPreflightCleansStaleDraft {
 function Test-ProcessFailureAfterPublicationPreflightAndDoctorRefuse {
     $fixture = New-V4SimplifiedTestFixture
     try {
+        $contextPath = Join-Path $fixture.StateRoot "release-context.json"
+        $context = Get-Content -LiteralPath $contextPath -Raw | ConvertFrom-Json
+        $context.run_id = "subsequent-run"
+        [IO.File]::WriteAllText($contextPath, (($context | ConvertTo-Json -Depth 10) + "`n"), [Text.UTF8Encoding]::new($false))
         $ctx = [V4SimplifiedMockContext]::new()
         $ctx.SourceSha = $fixture.SourceSha
         $ctx.InstallerName = $fixture.InstallerName

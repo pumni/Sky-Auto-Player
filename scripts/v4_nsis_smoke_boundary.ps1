@@ -67,6 +67,28 @@ function Protect-V4NsisRegistryState {
     return $snapshots
 }
 
+function Remove-V4NsisMonitoredRegistryState {
+    <#
+    .SYNOPSIS
+    Removes the explicitly monitored product and uninstall keys before a
+    fresh-install smoke. The caller owns the exact snapshot for restoration.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$Snapshots
+    )
+
+    foreach ($keyPath in $Snapshots.Keys) {
+        if (Test-Path -LiteralPath $keyPath) {
+            Remove-Item -LiteralPath $keyPath -Recurse -Force -ErrorAction Stop
+        }
+        if (Test-Path -LiteralPath $keyPath) {
+            throw "Fresh-install registry neutralization left monitored key '$keyPath' present."
+        }
+    }
+}
+
 function Test-V4RegistryValueEqual {
     param($Value1, $Value2, [Microsoft.Win32.RegistryValueKind]$Kind)
 
@@ -332,10 +354,20 @@ function Enter-V4NsisSmokeScope {
         [string]$AppDataRoot = $null,
         [switch]$ManageInstallRootCleanup = $true,
         [switch]$ManageAppDataCleanup = $true,
-        [System.Collections.IList]$RegistryTargets = $null
+        [System.Collections.IList]$RegistryTargets = $null,
+        [ValidateSet('FreshInstall', 'PreserveExistingState')]
+        [string]$RegistryStateMode = 'PreserveExistingState'
     )
 
     $snapshots = Protect-V4NsisRegistryState -Targets $RegistryTargets
+    if ($RegistryStateMode -eq 'FreshInstall') {
+        try {
+            Remove-V4NsisMonitoredRegistryState -Snapshots $snapshots
+        } catch {
+            try { Restore-V4NsisRegistryState -Snapshots $snapshots } catch {}
+            throw
+        }
+    }
     $previousAppDataRoot = [Environment]::GetEnvironmentVariable('SKY_APP_DATA_ROOT', 'Process')
 
     $createdAppData = $false
@@ -352,6 +384,7 @@ function Enter-V4NsisSmokeScope {
 
     return [PSCustomObject]@{
         RegistrySnapshots        = $snapshots
+        RegistryStateMode        = $RegistryStateMode
         PreviousAppDataRoot      = $previousAppDataRoot
         AppDataRoot              = $resolvedAppDataRoot
         CreatedAppData           = $createdAppData

@@ -430,7 +430,7 @@ try {
         $installRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-smoke-" + [guid]::NewGuid().ToString("N"))
         $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
         $uninstaller = Join-Path $installRoot "uninstall.exe"
-        $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
+        $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -RegistryStateMode FreshInstall
         try {
             Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot | Out-Null
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed executable missing: $appPath" }

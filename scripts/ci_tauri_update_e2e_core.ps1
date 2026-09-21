@@ -845,7 +845,7 @@ try {
   Write-Host "Fixture HTTP manifest contract: PASS (status=200; content-type=application/json; content-length=$($manifestHttp.content_length); body-sha256=$($manifestHttp.body_sha256))"
   Write-Host "Fixture HTTP candidate contract: PASS (status=200; content-type=application/octet-stream; content-length=$($candidateContract.http.content_length); body-sha256=$($candidateContract.http.body_sha256))"
 
-  $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -ManageInstallRootCleanup:$false
+  $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -ManageInstallRootCleanup:$false -RegistryStateMode PreserveExistingState
   $migrationIdentityPaths = @(
     'HKCU:\Software\github\Sky Auto Player',
     'HKCU:\Software\pumni\Sky Auto Player',

@@ -42,6 +42,26 @@ Assert-True (-not (Test-Path -LiteralPath $testCustomKey1)) "Absent registry key
 Assert-True (-not (Test-Path -LiteralPath $testCustomParent1)) "Parent manufacturer key was left behind after success"
 Write-Host "    PASS"
 
+# Test 1b: FreshInstall neutralizes pre-existing monitored state before entry
+Write-Host "  Test 1b: Fresh-install mode starts without historical registry state..."
+$freshKey = "HKCU:\Software\__test_sky_fresh_mode\Sky Auto Player"
+$freshParent = "HKCU:\Software\__test_sky_fresh_mode"
+if (Test-Path -LiteralPath $freshParent) {
+    Remove-Item -LiteralPath $freshParent -Recurse -Force
+}
+New-Item -Path $freshKey -Force -Value "C:\historical\install" | Out-Null
+$freshTargets = @([ordered]@{ Key = $freshKey; Parent = $freshParent })
+$freshScope = Enter-V4NsisSmokeScope -RegistryTargets $freshTargets -RegistryStateMode FreshInstall
+try {
+    Assert-True (-not (Test-Path -LiteralPath $freshKey)) "Fresh-install mode left historical registry state before installer execution"
+    New-Item -Path $freshKey -Force -Value "C:\fresh\install" | Out-Null
+} finally {
+    Exit-V4NsisSmokeScope -Scope $freshScope
+}
+Assert-Equal (Get-Item -LiteralPath $freshKey).GetValue('') "C:\historical\install" "Fresh-install mode restored the historical registry snapshot"
+Remove-Item -LiteralPath $freshParent -Recurse -Force
+Write-Host "    PASS"
+
 # Test 2: Absent registry key remains absent after injected failure
 Write-Host "  Test 2: Absent registry key remains absent after injected failure..."
 $testCustomKey = "HKCU:\Software\__test_sky_isolated_manu\Sky Auto Player"

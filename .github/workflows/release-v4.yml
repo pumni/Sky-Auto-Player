@@ -33,6 +33,24 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main" || { echo "release must be dispatched from refs/heads/main" >&2; exit 1; }
           test "$EXPECTED_DEFAULT_BRANCH" = "main" || { echo "canonical repository default branch must be main" >&2; exit 1; }
 
+      - name: Require exact-head production qualification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_WORKFLOW: .github/workflows/rehearse-v4.yml
+        run: |
+          set -euo pipefail
+          qualified_run="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA&per_page=100" \
+            --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == env.GITHUB_SHA and .name == "V4 Production Pre-Publication Qualification") | .id' | head -n 1)"
+          test -n "$qualified_run" || {
+            echo "no successful exact-head production qualification exists for $GITHUB_SHA" >&2
+            exit 1
+          }
+          echo "accepted exact-head production qualification run $qualified_run for $GITHUB_SHA"
+
   release:
     name: V4 production release state machine
     needs: release-dispatch-boundary
@@ -45,8 +63,6 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    env:
-      V4_RELEASE_WORKFLOW_SHA: ${{ github.sha }}
 
     steps:
       - name: Initialize release state root
@@ -62,29 +78,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Derive exact release identity from checked-out source
-        run: |
-          $sourceSha = $env:GITHUB_SHA
-          if ($sourceSha -notmatch '^[0-9a-fA-F]{40}$') { throw "GITHUB_SHA is not an exact commit SHA" }
-          $cargo = Get-Content -LiteralPath "desktop/src-tauri/Cargo.toml" -Raw
-          if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw "Cargo package version is missing" }
-          $version = $Matches[1]
-          if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
-            throw "Cargo package version is not canonical v4 SemVer without build metadata"
-          }
-          $channel = if ($version.Contains("-")) { "beta" } else { "stable" }
-          $tag = "v$version"
-          $notesPath = "docs/releases/v$version.md"
-          if (-not (Test-Path -LiteralPath $notesPath -PathType Leaf)) { throw "release notes are missing: $notesPath" }
-          @(
-            "V4_RELEASE_SOURCE_SHA=$sourceSha",
-            "V4_RELEASE_VERSION=$version",
-            "V4_RELEASE_CHANNEL=$channel",
-            "V4_RELEASE_TAG=$tag",
-            "V4_RELEASE_NOTES_PATH=$notesPath"
-          ) | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
-          Write-Host "Derived v4 release identity: version=$version channel=$channel tag=$tag source=$sourceSha notes=$notesPath"
-
       - name: Verify isolated production runner boundary
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/verify_v4_release_runner.ps1 `
@@ -97,28 +90,14 @@ jobs:
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
             -State Preflight `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
-            -RunId $env:GITHUB_RUN_ID
+            -StateRoot $env:V4_RELEASE_STATE_ROOT
 
       - name: Build and qualify the single production candidate
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
             -State BuildCandidate `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
             -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
-            -RunId $env:GITHUB_RUN_ID
+            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
 
       - name: Preserve bounded qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -184,14 +163,7 @@ jobs:
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
             -State PublishRelease `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
-            -RunId $env:GITHUB_RUN_ID
+            -StateRoot $env:V4_RELEASE_STATE_ROOT
 
       - name: Promote release metadata only after immutable publication
         env:
@@ -199,13 +171,7 @@ jobs:
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
             -State PromoteMetadata `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
+            -StateRoot $env:V4_RELEASE_STATE_ROOT
 
       - name: Re-fetch and verify final public release and metadata
         env:
@@ -213,13 +179,7 @@ jobs:
         run: |
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/v4_release_pipeline.ps1 `
             -State FinalVerify `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
+            -StateRoot $env:V4_RELEASE_STATE_ROOT
 
       - name: Clean runner-local release state
         if: always()

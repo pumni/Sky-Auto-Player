@@ -50,6 +50,7 @@ $authenticodeEvidenceName = "TAURI_AUTHENTICODE_EVIDENCE.json"
 $installedAuthenticodeEvidenceName = "INSTALLED_AUTHENTICODE_EVIDENCE.json"
 $summaryName = "TAURI_ARTIFACT_SUMMARY.json"
 $sbomName = "SBOM.spdx.json"
+$releaseContextName = "release-context.json"
 
 . (Join-Path $PSScriptRoot "v4_release_asset_upload.ps1")
 . (Join-Path $PSScriptRoot "v4_qualification_evidence.ps1")
@@ -96,6 +97,152 @@ function Write-JsonFile([string]$Path, [object]$Value) {
 function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "Required state file is missing: $Path" }
     return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+}
+
+function Get-CheckedOutSourceSha {
+    $head = (& git rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
+    if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-f]{40}$') {
+        Fail "checked-out HEAD is not an exact commit SHA"
+    }
+    return $head
+}
+
+function Get-SourceReleaseIdentity {
+    $cargoPath = Join-Path $repoRoot "desktop/src-tauri/Cargo.toml"
+    $cargo = Get-Content -LiteralPath $cargoPath -Raw
+    if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+        Fail "Cargo package version is missing"
+    }
+    $version = $Matches[1]
+    if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
+        Fail "Cargo package version is not canonical v4 SemVer without build metadata"
+    }
+    $channel = if ($version.Contains("-")) { "beta" } else { "stable" }
+    $tag = "v$version"
+    $notesPath = "docs/releases/v$version.md"
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $notesPath) -PathType Leaf)) {
+        Fail "release notes are missing: $notesPath"
+    }
+    [ordered]@{
+        version = $version
+        channel = $channel
+        tag = $tag
+        release_notes_path = $notesPath
+        source_sha = Get-CheckedOutSourceSha
+    }
+}
+
+function Get-ReleaseContextPath {
+    return Join-Path (Get-EffectiveStateRoot) $releaseContextName
+}
+
+function Assert-ReleaseContextShape([object]$Context) {
+    if ($null -eq $Context) { Fail "release context is empty" }
+    foreach ($property in @("repository", "version", "channel", "tag", "release_notes_path", "source_sha", "workflow_sha", "run_id")) {
+        if ($null -eq $Context.PSObject.Properties[$property] -or
+            [string]::IsNullOrWhiteSpace([string]$Context.$property)) {
+            Fail "release context is missing required property: $property"
+        }
+    }
+    if ([int]$Context.schema_version -ne 1) { Fail "release context schema version is unsupported" }
+    if ([string]$Context.repository -ne $canonicalRepository) { Fail "release context repository is not canonical" }
+    if ([string]$Context.channel -notin @("stable", "beta")) { Fail "release context channel is invalid" }
+    if ([string]$Context.source_sha -notmatch '^[0-9a-fA-F]{40}$' -or
+        [string]$Context.workflow_sha -notmatch '^[0-9a-fA-F]{40}$') {
+        Fail "release context source/workflow SHA must be exact 40-character commit SHAs"
+    }
+    if ([string]$Context.tag -ne "v$([string]$Context.version)") {
+        Fail "release context tag does not match version"
+    }
+    if ([string]$Context.release_notes_path -ne "docs/releases/v$([string]$Context.version).md") {
+        Fail "release context release-notes path does not match version"
+    }
+}
+
+function Set-ReleaseContextVariables([object]$Context) {
+    Assert-ReleaseContextShape $Context
+    $currentHead = Get-CheckedOutSourceSha
+    if ([string]$Context.source_sha.ToLowerInvariant() -ne $currentHead) {
+        Fail "release context source SHA does not match checked-out HEAD"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA) -and
+        $env:GITHUB_SHA -notmatch '^[0-9a-fA-F]{40}$') {
+        Fail "GITHUB_SHA is not an exact commit SHA"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA) -and
+        [string]$Context.workflow_sha -ne $env:GITHUB_SHA) {
+        Fail "release context workflow SHA does not match GITHUB_SHA"
+    }
+    $notesPath = Join-Path $repoRoot ([string]$Context.release_notes_path)
+    if (-not (Test-Path -LiteralPath $notesPath -PathType Leaf)) {
+        Fail "release context release notes are missing: $($Context.release_notes_path)"
+    }
+    $script:Version = [string]$Context.version
+    $script:Channel = [string]$Context.channel
+    $script:Tag = [string]$Context.tag
+    $script:SourceSha = [string]$Context.source_sha
+    $script:WorkflowSha = [string]$Context.workflow_sha
+    $script:ReleaseNotesPath = $notesPath
+    $script:RunId = [string]$Context.run_id
+    return $Context
+}
+
+function Import-V4ReleaseContext {
+    $context = Read-JsonFile (Get-ReleaseContextPath)
+    foreach ($property in @(
+        @{ Name = "Version"; Value = $Version; Context = $context.version },
+        @{ Name = "Channel"; Value = $Channel; Context = $context.channel },
+        @{ Name = "Tag"; Value = $Tag; Context = $context.tag },
+        @{ Name = "SourceSha"; Value = $SourceSha; Context = $context.source_sha },
+        @{ Name = "WorkflowSha"; Value = $WorkflowSha; Context = $context.workflow_sha },
+        @{ Name = "RunId"; Value = $RunId; Context = $context.run_id }
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$property.Value) -and
+            [string]$property.Value -ne [string]$property.Context) {
+            Fail "downstream CLI identity argument -$($property.Name) does not match release-context.json"
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseNotesPath) -and
+        [IO.Path]::GetFullPath($ReleaseNotesPath) -ne [IO.Path]::GetFullPath((Join-Path $repoRoot ([string]$context.release_notes_path)))) {
+        Fail "downstream CLI identity argument -ReleaseNotesPath does not match release-context.json"
+    }
+    return Set-ReleaseContextVariables $context
+}
+
+function Write-V4ReleaseContext {
+    param([Parameter(Mandatory = $true)] [object]$Identity)
+
+    $workflowSha = if (-not [string]::IsNullOrWhiteSpace($WorkflowSha)) { $WorkflowSha } elseif (-not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA)) { $env:GITHUB_SHA } else { $Identity.source_sha }
+    if ($workflowSha -notmatch '^[0-9a-fA-F]{40}$') { Fail "workflow provenance SHA is not exact" }
+    if ($workflowSha.ToLowerInvariant() -ne $Identity.source_sha.ToLowerInvariant()) {
+        Fail "workflow provenance SHA differs from checked-out source SHA"
+    }
+    $run = if (-not [string]::IsNullOrWhiteSpace($RunId)) { $RunId } elseif (-not [string]::IsNullOrWhiteSpace($env:GITHUB_RUN_ID)) { $env:GITHUB_RUN_ID } else { "manual" }
+    $candidate = [ordered]@{
+        schema_version = 1
+        repository = Get-CanonicalRepository
+        version = $Identity.version
+        channel = $Identity.channel
+        tag = $Identity.tag
+        release_notes_path = $Identity.release_notes_path
+        source_sha = $Identity.source_sha.ToLowerInvariant()
+        workflow_sha = $workflowSha.ToLowerInvariant()
+        run_id = [string]$run
+        created_at = Get-CanonicalUtcTimestamp
+    }
+    $path = Get-ReleaseContextPath
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        $existing = Read-JsonFile $path
+        Assert-ReleaseContextShape $existing
+        foreach ($property in @("repository", "version", "channel", "tag", "release_notes_path", "source_sha", "workflow_sha", "run_id")) {
+            if ([string]$existing.$property -ne [string]$candidate[$property]) {
+                Fail "existing release context differs from the derived immutable identity: $property"
+            }
+        }
+        return Set-ReleaseContextVariables $existing
+    }
+    Write-JsonFile $path $candidate
+    return Set-ReleaseContextVariables ([pscustomobject]$candidate)
 }
 
 function Get-V4ReleaseMakeLatestValue([string]$ReleaseChannel) {
@@ -263,33 +410,38 @@ function Invoke-DraftSelfCleanup {
 }
 
 function Assert-RequestIdentity {
-    if ([string]::IsNullOrWhiteSpace($Version)) { Fail "version is required" }
-    if ([string]::IsNullOrWhiteSpace($Channel)) { Fail "channel is required" }
-    if ([string]::IsNullOrWhiteSpace($Tag)) { Fail "tag is required" }
-    if ([string]::IsNullOrWhiteSpace($SourceSha) -or $SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
-        Fail "source_sha must be an exact 40-character commit SHA"
-    }
-
-    $currentHead = (& git rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
-    if ($LASTEXITCODE -ne 0 -or $currentHead -ne $SourceSha.ToLowerInvariant()) {
-        Fail "checked-out HEAD does not equal the requested source SHA"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($WorkflowSha) -and
-        $WorkflowSha -notmatch '^[0-9a-fA-F]{40}$') {
-        Fail "workflow SHA must be an exact commit SHA"
+    $identity = Get-SourceReleaseIdentity
+    foreach ($property in @("version", "channel", "tag", "source_sha")) {
+        $requested = switch ($property) {
+            "version" { $Version }
+            "channel" { $Channel }
+            "tag" { $Tag }
+            "source_sha" { $SourceSha }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($requested) -and
+            [string]$requested -ne [string]$identity[$property]) {
+            Fail "requested $property does not match the checked-out source identity"
+        }
     }
     if (-not [string]::IsNullOrWhiteSpace($WorkflowSha) -and
-        $WorkflowSha.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) {
-        Fail "source SHA differs from the workflow SHA used for OIDC provenance"
+        ($WorkflowSha -notmatch '^[0-9a-fA-F]{40}$' -or
+         $WorkflowSha.ToLowerInvariant() -ne $identity.source_sha.ToLowerInvariant())) {
+        Fail "workflow SHA must match the exact checked-out source SHA"
     }
-
+    $script:Version = [string]$identity.version
+    $script:Channel = [string]$identity.channel
+    $script:Tag = [string]$identity.tag
+    $script:SourceSha = [string]$identity.source_sha
+    $script:WorkflowSha = if (-not [string]::IsNullOrWhiteSpace($WorkflowSha)) { $WorkflowSha } elseif (-not [string]::IsNullOrWhiteSpace($env:GITHUB_SHA)) { $env:GITHUB_SHA } else { $identity.source_sha }
+    $script:ReleaseNotesPath = if (-not [string]::IsNullOrWhiteSpace($ReleaseNotesPath)) { $ReleaseNotesPath } else { Join-Path $repoRoot ([string]$identity.release_notes_path) }
     $versionLog = Join-Path (Get-EffectiveStateRoot) "version-check.log"
-    & cargo xtask version check --version $Version --channel $Channel --tag $Tag *> $versionLog
+    & cargo xtask version check --version $identity.version --channel $identity.channel --tag $identity.tag *> $versionLog
     if ($LASTEXITCODE -ne 0) {
         $detail = if (Test-Path -LiteralPath $versionLog) { (Get-Content -LiteralPath $versionLog -Raw).Trim() } else { "" }
         Fail "canonical cargo xtask version/channel/tag validation failed: $detail"
     }
-    Write-Host "V4 release identity: PASS (version=$Version, channel=$Channel, source=$($SourceSha.ToLowerInvariant()))"
+    Write-Host "V4 release identity: PASS (version=$($identity.version), channel=$($identity.channel), source=$($identity.source_sha))"
+    return $identity
 }
 
 function Assert-ReleaseNotes {
@@ -1102,9 +1254,37 @@ function Invoke-PrePublicationMetadataQualification([object]$Manifest, [object[]
 # Pipeline Operations
 # ==============================================================================
 
+function Remove-V4StaleMatchingDraft {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Repository
+    )
+
+    $collection = Get-ReleaseCollection $Repository
+    $existingDraft = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection $collection -Tag $Tag
+    if ($null -eq $existingDraft) { return $false }
+    if (-not [bool]$existingDraft.draft) {
+        Fail "repository already contains published release/tag $Tag; published tags are immutable"
+    }
+    $targetCommitish = if ($null -ne $existingDraft.PSObject.Properties['target_commitish']) { [string]$existingDraft.target_commitish } else { "" }
+    $body = if ($null -ne $existingDraft.PSObject.Properties['body']) { [string]$existingDraft.body } else { "" }
+    $marker = Get-V4TransactionMarker $body
+    if ($targetCommitish.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant() -or
+        -not (Test-V4TransactionMarkerMatch -Marker $marker -ExpectedRepo $Repository -ExpectedRunId "" -ExpectedSha $SourceSha -ExpectedVersion $Version -ExpectedTag $Tag)) {
+        Fail "repository contains conflicting draft release for ${Tag}: existing draft source does not match the requested source or transaction"
+    }
+
+    $staleId = [int64]$existingDraft.id
+    Write-Host "V4 unpublished draft cleanup: removing matching stale draft $staleId for $Tag"
+    Invoke-GitHubApi -Arguments @("api", "--method", "DELETE", "repos/$Repository/releases/$staleId") -AllowNotFound | Out-Null
+    $remaining = Invoke-GitHubApi -Arguments @("api", "repos/$Repository/releases/$staleId") -AllowNotFound
+    if ($null -ne $remaining) { Fail "draft release could not be removed by release id" }
+    return $true
+}
+
 function Invoke-Preflight {
     Assert-RawMetadataRetryConfiguration
-    Assert-RequestIdentity
+    $identity = Assert-RequestIdentity
+    Write-V4ReleaseContext $identity | Out-Null
     Assert-ReleaseNotes
     $repository = Get-CanonicalRepository
     Assert-RepositoryReleasePolicy
@@ -1123,6 +1303,8 @@ function Invoke-Preflight {
 
     $collection = Get-ReleaseCollection $repository
     $existingDraft = Select-V4ReleaseByTag -DirectRelease $null -ReleaseCollection $collection -Tag $Tag
+    $staleDraft = $false
+    $staleDraftId = $null
     if ($null -ne $existingDraft) {
         if (-not [bool]$existingDraft.draft) {
             Fail "repository already contains published release/tag $Tag; published tags are immutable"
@@ -1135,10 +1317,9 @@ function Invoke-Preflight {
         if ($targetCommitish.ToLowerInvariant() -eq $SourceSha.ToLowerInvariant() -and
             (Test-V4TransactionMarkerMatch -Marker $marker -ExpectedRepo $repository -ExpectedRunId "" -ExpectedSha $SourceSha -ExpectedVersion $Version -ExpectedTag $Tag)) {
             $staleId = [int64]$existingDraft.id
-            Write-Host "V4 unpublished draft reuse: recognized stale draft $staleId for $Tag from source $SourceSha; cleaning up"
-            Invoke-GitHubApi -Arguments @("api", "--method", "DELETE", "repos/$repository/releases/$staleId") -AllowNotFound | Out-Null
-            $remaining = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/$staleId") -AllowNotFound
-            if ($null -ne $remaining) { Fail "draft release could not be removed by release id" }
+            $staleDraft = $true
+            $staleDraftId = $staleId
+            Write-Host "V4 unpublished draft: recognized matching stale draft $staleId for $Tag; publication will reconcile it"
         } else {
             Fail "repository contains conflicting draft release for ${Tag}: existing draft source does not match the requested source or transaction"
         }
@@ -1149,6 +1330,9 @@ function Invoke-Preflight {
         channel = $Channel
         tag = $Tag
         source_sha = $SourceSha.ToLowerInvariant()
+        release_context = $releaseContextName
+        stale_matching_draft = $staleDraft
+        stale_matching_draft_id = $staleDraftId
         preflight_status = "PASS"
         timestamp = Get-CanonicalUtcTimestamp
     })
@@ -1156,7 +1340,6 @@ function Invoke-Preflight {
 }
 
 function Invoke-BuildCandidate {
-    Assert-RequestIdentity
     if ([string]::IsNullOrWhiteSpace($UpdaterPrivateKeyPath)) { Fail "updater private key path is required" }
     $keyPath = (Resolve-Path -LiteralPath $UpdaterPrivateKeyPath -ErrorAction Stop).Path
     $repoPrefix = $repoRoot.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
@@ -1167,6 +1350,8 @@ function Invoke-BuildCandidate {
         -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
         Fail "ambient updater key or password environment is forbidden"
     }
+
+    Import-V4ReleaseContext | Out-Null
 
     . (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1")
 
@@ -1267,7 +1452,7 @@ function Invoke-BuildCandidate {
     $installRoot = Join-Path $root ("install-" + [guid]::NewGuid().ToString("N"))
     $app = Join-Path $installRoot "sky_desktop_shell.exe"
     $uninstaller = Join-Path $installRoot "uninstall.exe"
-    $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
+    $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -RegistryStateMode FreshInstall
     try {
         New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
         $install = Start-Process -FilePath $frozenInstaller -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru
@@ -1351,6 +1536,7 @@ function Invoke-BuildCandidate {
 }
 
 function Invoke-PublishRelease {
+    Import-V4ReleaseContext | Out-Null
     Assert-RawMetadataRetryConfiguration
     $root = Get-EffectiveStateRoot
     $manifestPath = Join-Path $root "candidate-manifest.json"
@@ -1390,6 +1576,10 @@ function Invoke-PublishRelease {
     $marker = Format-V4TransactionMarker -Repository $repository -RunId $effectiveRunId -SourceSha $SourceSha -Version $Version -Tag $Tag
     $rawNotes = (Get-Content -LiteralPath $notesPath -Raw).Trim()
     $body = $rawNotes + "`n`n" + $marker
+
+    # Reconcile a matching unpublished draft at the first publication mutation
+    # boundary. Preflight only classified this state and never mutated GitHub.
+    Remove-V4StaleMatchingDraft -Repository $repository | Out-Null
 
     # 1. Create Release Draft
     # Display name = $Tag (name = v4.1.1, tag = v4.1.1)
@@ -1594,6 +1784,7 @@ function Invoke-PublishRelease {
 }
 
 function Invoke-PromoteMetadata {
+    Import-V4ReleaseContext | Out-Null
     $root = Get-EffectiveStateRoot
     $repository = Get-CanonicalRepository
     $publishedRelease = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag")
@@ -1667,6 +1858,7 @@ function Invoke-PromoteMetadata {
 }
 
 function Invoke-FinalVerify {
+    Import-V4ReleaseContext | Out-Null
     $repository = Get-CanonicalRepository
     $release = Invoke-GitHubApi -Arguments @("api", "repos/$repository/releases/tags/$Tag")
     if ($null -eq $release -or [bool]$release.draft -or [string]::IsNullOrWhiteSpace([string]$release.published_at)) {

@@ -26,6 +26,7 @@ function New-TransactionFixture([string]$Version, [string]$Channel, [string]$Fau
     $signatureName = $signatureSource.Replace(" ", ".")
     $installerBytes = New-Bytes "installer-$Version-$Fault"
     $signatureBytes = New-Bytes "c2lnbmF0dXJlLWZpeHR1cmU="
+    $sourceSha = (& git -C $repoRoot rev-parse HEAD).Trim().ToLowerInvariant()
     $installerPath = Join-Path $inputRoot $installerSource
     $signaturePath = Join-Path $inputRoot $signatureSource
     [IO.File]::WriteAllBytes($installerPath, $installerBytes)
@@ -47,14 +48,31 @@ function New-TransactionFixture([string]$Version, [string]$Channel, [string]$Fau
     Copy-Item $installerPath (Join-Path $bundle $installerSource)
     Copy-Item $signaturePath (Join-Path $bundle $signatureSource)
     $manifest = [ordered]@{
-        schema_version = 1; source_sha = ("c" * 40); version = $Version; channel = $Channel; tag = "v$Version"
+        schema_version = 1; source_sha = $sourceSha; version = $Version; channel = $Channel; tag = "v$Version"
         qualification_assets = $records; public_assets = $records
     }
     $manifestPath = Join-Path $stateRoot "candidate-manifest.json"
     [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 20) + "`n"), [Text.UTF8Encoding]::new($false))
+    $context = [ordered]@{
+        schema_version = 1
+        repository = "pumni/Sky-Auto-Player"
+        version = $Version
+        channel = $Channel
+        tag = "v$Version"
+        release_notes_path = "docs/releases/v$Version.md"
+        source_sha = $sourceSha
+        workflow_sha = $sourceSha
+        run_id = "mock-run"
+        created_at = "2026-09-19T00:00:00Z"
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $stateRoot "release-context.json"),
+        (($context | ConvertTo-Json -Depth 20) + "`n"),
+        [Text.UTF8Encoding]::new($false)
+    )
     return [pscustomobject]@{
         Root = $root; StateRoot = $stateRoot; Version = $Version; Channel = $Channel; Tag = "v$Version"
-        SourceSha = ("c" * 40); InstallerName = $installerName; SignatureName = $signatureName
+        SourceSha = $sourceSha; InstallerName = $installerName; SignatureName = $signatureName
         InstallerBytes = $installerBytes; SignatureBytes = $signatureBytes; ManifestPath = $manifestPath
     }
 }
@@ -232,9 +250,7 @@ function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channe
             $script:RawMetadataHandler = New-TransactionRawHandler $ctx
             $script:RawMetadataSleepHandler = { param($Seconds) }
             . $pipelinePath `
-                -State PublishRelease -Version $fixture.Version -Channel $fixture.Channel -Tag $fixture.Tag `
-                -SourceSha $fixture.SourceSha -WorkflowSha $fixture.SourceSha -StateRoot $fixture.StateRoot `
-                -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($fixture.Version).md") -RunId "mock-run" `
+                -State PublishRelease -StateRoot $fixture.StateRoot `
                 -RawMetadataRetryBudgetSeconds 1 -RawMetadataRetryIntervalSeconds 0 -NoDispatch
             Invoke-PublishRelease
             if (Test-Path -LiteralPath (Join-Path $fixture.StateRoot "release-state.json")) { Fail "release-state.json was created after PublishRelease" }
