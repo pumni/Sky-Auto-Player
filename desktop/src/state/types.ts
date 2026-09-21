@@ -121,6 +121,7 @@ export interface DesktopStore {
   details: { bySongId: Map<string, DetailEntry> };
   settings: Settings | null;
   settingsState: LoadState;
+  settingsError: string | null;
   settingsOpen: boolean;
   utility: {
     open: boolean;

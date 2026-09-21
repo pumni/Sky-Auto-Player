@@ -203,8 +203,11 @@ async function startSelectedSong(page: Page) {
 test('mock desktop vertical slice can search and inspect a song', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
-  await page.getByLabel('Search library').fill('Moonlit');
+  const search = page.getByLabel('Search library');
+  await search.focus();
+  await search.fill('Moonlit');
   await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
+  await expect(search).toBeFocused();
   await page.getByRole('row', { name: /Moonlit Village/ }).click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByText('Low timing risk')).toBeVisible();
@@ -237,6 +240,26 @@ test('All Songs clears search while retaining the catalog count', async ({ page 
   await expect(page.getByLabel('Search library')).toHaveValue('');
   await expect(page.getByText('500 songs')).toBeVisible();
   await expect(navigatorItem).toContainText('500');
+});
+
+test('keeps slash local to the New Playlist name field', async ({ page }) => {
+  await page.goto('/');
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  const nameInput = createDialog.getByLabel('Playlist name');
+  await nameInput.focus();
+  await nameInput.pressSequentially('A/B');
+  await expect(nameInput).toHaveValue('A/B');
+  await expect(nameInput).toBeFocused();
+
+  await createDialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(createDialog).toBeHidden();
+
+  const search = page.getByLabel('Search library');
+  await page.keyboard.press('/');
+  await expect(search).toBeFocused();
 });
 
 test('Liked Songs is a real source with Player Bar save behavior', async ({ page }) => {
