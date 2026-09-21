@@ -2,13 +2,9 @@
 ; The stable uninstall identity owns the install root. Do not let a publisher
 ; namespace change select a stale or default root during an update.
 !macro NSIS_HOOK_PREINSTALL
-  ; Prefer an explicit /D root when supplied. Otherwise recover the current
-  ; root from the stable uninstall identity; this also survives a child
-  ; installer process that cannot see the caller's HKCU registry view.
-  IfFileExists "$INSTDIR\sky_desktop_shell.exe" sap_migration_explicit_root sap_migration_read_registry
-  sap_migration_explicit_root:
-    Goto sap_migration_done
-  sap_migration_read_registry:
+  ; On migration, the stable uninstall identity is authoritative. This avoids
+  ; the updater's default root in /UPDATE mode; a first install has no value
+  ; here and keeps the bundle-generated default.
   ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sky Auto Player" "InstallLocation"
   ${If} $R0 != ""
     StrCpy $R1 $R0 1
@@ -20,7 +16,6 @@
     sap_migration_apply_root:
       StrCpy $INSTDIR $R0
   ${EndIf}
-  sap_migration_done:
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
