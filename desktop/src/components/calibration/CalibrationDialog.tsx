@@ -37,7 +37,7 @@ export function CalibrationDialog({ settingsTriggerRef, useStore }: CalibrationD
             </div>
             {!running && (
               <button
-                className="icon-button"
+                className="icon-button icon-button-boxed"
                 type="button"
                 aria-label="Close calibration"
                 onClick={close}

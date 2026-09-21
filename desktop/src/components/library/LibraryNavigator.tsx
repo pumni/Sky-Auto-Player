@@ -51,7 +51,7 @@ export function LibraryNavigator({
             <LibraryAddMenu triggerRef={addTriggerRef} onNewPlaylist={() => setCreateOpen(true)} />
           )}
           <button
-            className="icon-button library-collapse-button"
+            className="icon-button icon-button-boxed library-collapse-button"
             type="button"
             aria-label={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
             title={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}

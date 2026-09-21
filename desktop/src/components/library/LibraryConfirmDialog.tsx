@@ -34,7 +34,7 @@ export function LibraryConfirmDialog({
               <h2>{title}</h2>
             </div>
             <button
-              className="icon-button"
+              className="icon-button icon-button-boxed"
               type="button"
               aria-label="Close confirmation dialog"
               onClick={() => onOpenChange(false)}

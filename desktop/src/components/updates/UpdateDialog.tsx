@@ -81,7 +81,7 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
               <h2>Update</h2>
             </div>
             <button
-              className="icon-button"
+              className="icon-button icon-button-boxed"
               type="button"
               aria-label="Close update"
               disabled={busy}

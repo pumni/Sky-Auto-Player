@@ -1,24 +1,4 @@
 /* GUI palettes are presentation tokens; they intentionally do not mirror TUI TCSS. */
-html[data-palette='aurora'] {
-  --canvas: #0b1018;
-  --surface-panel: #101722;
-  --surface-secondary: #0d141e;
-  --surface-raised: #151e2b;
-  --control-hover: #1a2533;
-  --control-pressed: #223044;
-  --selection-bg: #152132;
-  --selection-indicator: var(--accent);
-  --border-subtle: #243145;
-  --border-strong: #33445e;
-  --text-primary: #e7edf6;
-  --text-secondary: #b7c2d1;
-  --text-tertiary: #8a98ad;
-  --accent: #785ddd;
-  --accent-hover: #825bdb;
-  --control-border: #617390;
-  --on-accent: #ffffff;
-  --focus-ring: #9b8cff;
-}
 html[data-palette='minimalist'] {
   --canvas: #17191d;
   --surface-panel: #202328;
