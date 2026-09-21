@@ -723,6 +723,14 @@ impl<R: Runtime> UpdateService<R> {
             .map_err(|error| format!("update metadata endpoint rejected: {error}"))?
             .on_before_exit(self.install_safety_hook())
             .restart_after_install(true);
+        #[cfg(feature = "tauri-update-fixture")]
+        let builder = {
+            // The fixture qualifies the official installer transaction itself
+            // and launches the installed candidate from the harness. Disabling
+            // the plugin's automatic restart keeps the qualification bounded
+            // on headless Windows runners while production retains restart.
+            builder.restart_after_install(false)
+        };
         #[cfg(windows)]
         let builder = builder.installer_arg(updater_install_root_arg()?);
         #[cfg(feature = "tauri-update-fixture")]

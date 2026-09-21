@@ -892,14 +892,40 @@ try {
   }
   [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $appDataRoot, 'Process')
 
-  $appProcess = Start-Process -FilePath $appPath -ArgumentList (@(
+  $bridgeProcess = Start-Process -FilePath $appPath -ArgumentList (@(
     '--selftest-desktop-update',
     '--selftest-update-marker', $markerPath,
     '--selftest-update-expected-version-file', $expectedVersionPath,
     '--selftest-update-safety-marker', $safetyPath
   ) + $fixtureRuntimeArguments) -WindowStyle Hidden -PassThru
-  $smokeScope.TrackedProcesses.Add($appProcess)
-  Wait-Process -Id $appProcess.Id -Timeout 180
+  $smokeScope.TrackedProcesses.Add($bridgeProcess)
+  Wait-Process -Id $bridgeProcess.Id -Timeout 180
+
+  # Fixture mode disables only the updater plugin's automatic restart. Wait
+  # for the official NSIS transaction to finish, then launch the exact
+  # installed candidate so the same packaged binary still proves the update
+  # handoff without depending on a headless runner's restart behavior.
+  $candidateRegistryEvidence = $null
+  $candidateInstallDeadline = [DateTime]::UtcNow.AddSeconds(180)
+  while ([DateTime]::UtcNow -lt $candidateInstallDeadline) {
+    try {
+      $candidateRegistryEvidence = Assert-V4MigrationPublisherState -ExpectedPublisher $candidatePublisher -ExpectedVersion $candidateVersion -ExpectedInstallRoot $installRoot
+      break
+    } catch {
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  if ($null -eq $candidateRegistryEvidence) {
+    throw 'Timed out waiting for the official updater installer to publish candidate migration state'
+  }
+  $candidateProcess = Start-Process -FilePath $appPath -ArgumentList (@(
+    '--selftest-desktop-update',
+    '--selftest-update-marker', $markerPath,
+    '--selftest-update-expected-version-file', $expectedVersionPath,
+    '--selftest-update-safety-marker', $safetyPath
+  ) + $fixtureRuntimeArguments) -WindowStyle Hidden -PassThru
+  $smokeScope.TrackedProcesses.Add($candidateProcess)
+  Wait-Process -Id $candidateProcess.Id -Timeout 180
   Wait-ForPath -Path $markerPath
   $completion = ([IO.File]::ReadAllText($markerPath)).Trim()
   if ($completion -ne "update-complete:$candidateVersion") {
