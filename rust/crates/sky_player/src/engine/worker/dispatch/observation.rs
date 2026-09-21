@@ -78,17 +78,12 @@ pub struct BlockedUnfocusedObservation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DownMissKind {
     UnobservedBacklog,
-    PhysicalWindowExpired,
-    DownExpiredBeforeSend,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DownMissTimingEvidence {
     Physical(PhysicalTimingWindow),
-    Prepared {
-        physical_target_qpc: QpcTicks,
-        sender_cutoff_qpc: Option<QpcTicks>,
-    },
+    Prepared { physical_target_qpc: QpcTicks },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -120,17 +115,6 @@ impl DownMissObservation {
 
     #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
-    pub fn physical_latest_down_start_qpc(&self) -> Option<QpcTicks> {
-        match self.timing_evidence {
-            DownMissTimingEvidence::Physical(window) => window.latest_down_start_qpc,
-            DownMissTimingEvidence::Prepared {
-                sender_cutoff_qpc, ..
-            } => sender_cutoff_qpc,
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
     pub fn test_fixture(n: u64) -> Self {
         let authored_target_qpc = QpcTicks::from_raw(n);
         Self {
@@ -144,14 +128,13 @@ impl DownMissObservation {
                 musical_up_not_before_qpc: authored_target_qpc,
                 down_not_before_qpc: authored_target_qpc,
                 packet_not_before_qpc: authored_target_qpc,
-                latest_down_start_qpc: Some(authored_target_qpc),
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
             }),
             observed_qpc: authored_target_qpc,
             up_mask: 0,
             down_mask: 1,
-            kind: DownMissKind::DownExpiredBeforeSend,
+            kind: DownMissKind::UnobservedBacklog,
         }
     }
 }
@@ -223,7 +206,6 @@ impl DownObservation {
                 musical_up_not_before_qpc: authored_target_qpc,
                 down_not_before_qpc: authored_target_qpc,
                 packet_not_before_qpc: authored_target_qpc,
-                latest_down_start_qpc: Some(authored_target_qpc),
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
             },
@@ -501,10 +483,6 @@ pub(super) fn record_down_send_telemetry(
                         .down_not_before_qpc
                         .as_u64(),
                 ),
-                latest_down_start_qpc_ticks: observation
-                    .physical_timing_window
-                    .latest_down_start_qpc
-                    .map(|ticks| ticks.as_u64()),
                 hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
                 release_floor_mask: observation.physical_timing_window.release_floor_mask,
                 pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
@@ -592,7 +570,6 @@ pub(super) fn record_release_telemetry(
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
                 release_floor_qpc_ticks: None,
-                latest_down_start_qpc_ticks: None,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
                 pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),

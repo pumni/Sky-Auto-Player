@@ -19,6 +19,7 @@ use super::{
     supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
     wake_lateness_ticks,
 };
+use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::TimelineTicks;
@@ -31,6 +32,11 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const TEST_WALL_CLOCK_PREROLL_US: u64 = 500_000;
+
+fn issue_379_materialized_policy() -> MaterializedTimingPolicy {
+    MaterializedTimingPolicy::from_user_margin(60, 1.0, 500)
+        .expect("issue #379 materialized timing policy")
+}
 
 fn test_session_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
@@ -882,7 +888,7 @@ fn prepared_mixed_backlog_sends_only_the_canonical_up_prefix() {
 }
 
 #[test]
-fn prepared_mixed_sender_cutoff_sends_only_the_canonical_up_prefix() {
+fn prepared_mixed_unobserved_down_sends_only_the_canonical_up_prefix() {
     let mut harness = ProductionDispatchTestHarness::new_mixed_then_future_down();
     let packets = harness.configure_packet_capture();
     harness.prepare_prepared_stream_for_test();
@@ -899,17 +905,18 @@ fn prepared_mixed_sender_cutoff_sends_only_the_canonical_up_prefix() {
         *packets.lock().expect("packet capture"),
         vec![
             sky_dispatch_win32::input::PhysicalPacket::new(0, 0b001),
-            sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0),
+            sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0b010),
         ]
     );
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 1);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
 }
 
 #[test]
 fn prepared_mixed_up_prefix_transport_failure_is_fail_closed() {
     let mut harness = ProductionDispatchTestHarness::new_mixed();
-    harness.configure_deadline_missed_packet_sender();
+    let _ =
+        harness.configure_prepared_transport_outcome_for_test(SendTransactionStatus::ZeroProgress);
     harness.prepare_prepared_stream_for_test();
 
     assert!(matches!(
@@ -1065,11 +1072,11 @@ fn prepared_acceptance_counters_cover_backlog_prefix_and_sender_expiry() {
     assert_eq!(sender_expiry.prepared_normal_backlog_count_for_test(), 0);
     assert_eq!(
         sender_expiry.prepared_up_prefix_recovery_sends_for_test(),
-        1
+        0
     );
     assert_eq!(
         sender_expiry.prepared_normal_sender_expiry_count_for_test(),
-        1
+        0
     );
     assert_eq!(backlog.timeline_rebase_count_for_test(), 0);
     assert_eq!(sender_expiry.timeline_rebase_count_for_test(), 0);
@@ -1124,6 +1131,204 @@ fn prepared_future_authorization_before_stall_later_unseen_backlog_future() {
         ]
     );
     assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+}
+
+#[test]
+fn materialized_zero_slack_authorized_down_lateness_matrix() {
+    let policy = issue_379_materialized_policy();
+    assert_eq!(policy.frame_us, 16_667);
+    assert_eq!(policy.frame_base_hold_us, 16_667);
+    assert_eq!(policy.timing_margin_us, 500);
+    assert_eq!(policy.min_hold_us, 17_167);
+    assert_eq!(policy.min_release_gap_us, 17_167);
+
+    for (label, lateness_us) in [
+        ("one QPC tick", None),
+        ("100 us", Some(100)),
+        ("500 us", Some(500)),
+        ("2,000 us", Some(2_000)),
+        ("20,000 us", Some(20_000)),
+        ("100,000 us", Some(100_000)),
+    ] {
+        let mut harness = ProductionDispatchTestHarness::new_prepared_zero_slack_down_up_for_test(
+            policy.min_hold_us,
+        );
+        let (packets, evidence) =
+            harness.configure_prepared_packet_capture_with_evidence_for_test();
+        harness.prepare_prepared_stream_for_test();
+        let authored_offsets = harness.prepared_frame_offsets_for_test();
+        assert_eq!(authored_offsets.len(), 2, "{label}: paired Down/Up frames");
+        let expected_hold_ticks = harness
+            .qpc_duration_from_us_for_test(policy.min_hold_us)
+            .unwrap_or_else(|error| panic!("{label}: hold conversion: {error}"));
+        assert_eq!(
+            authored_offsets[1] - authored_offsets[0],
+            expected_hold_ticks.as_u64(),
+            "{label}: authored Up - authored Down must equal policy.min_hold_us"
+        );
+        harness
+            .align_prepared_current_to_benchmark_margin_for_test(10_000)
+            .expect("future authored boundary alignment");
+        let initial_epoch = harness.playback_epoch_qpc_for_test();
+
+        let authored_target = harness
+            .prepared_current_target_qpc_for_test()
+            .expect("prepared authored target");
+        let now = harness
+            .qpc_now_for_test()
+            .expect("prepared authorization QPC");
+        assert!(
+            authored_target > now,
+            "{label}: boundary A must be future before authorization"
+        );
+        harness
+            .authorize_prepared_current_for_test()
+            .unwrap_or_else(|error| panic!("{label}: authorize boundary A: {error}"));
+        assert_eq!(
+            harness.playback_epoch_qpc_for_test(),
+            initial_epoch,
+            "{label}: authorization must not rebase playback"
+        );
+
+        let lateness = lateness_us.map_or(DurationTicks::from_raw(1), |us| {
+            harness
+                .qpc_duration_from_us_for_test(us)
+                .unwrap_or_else(|error| panic!("{label}: lateness conversion: {error}"))
+        });
+        assert!(matches!(
+            harness.dispatch_prepared_current_after_authorized_stall_ticks_for_test(lateness),
+            super::worker::DispatchStep::Dispatched
+        ));
+        assert_eq!(
+            harness.playback_epoch_qpc_for_test(),
+            initial_epoch,
+            "{label}: late authorized Down must not rebase playback"
+        );
+        assert_eq!(
+            *packets.lock().expect("boundary A packet capture"),
+            vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b0001)],
+            "{label}: authorized late boundary A must emit one physical Down"
+        );
+        {
+            let captured = evidence.lock().expect("boundary A transport evidence");
+            assert_eq!(captured.len(), 1, "{label}: boundary A transport count");
+            assert_eq!(
+                captured[0].requested_mask, 0b0001,
+                "{label}: boundary A mask"
+            );
+            assert_eq!(captured[0].attempts, 1, "{label}: boundary A send attempts");
+        }
+
+        assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+        assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+        assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    }
+}
+
+#[test]
+fn late_authorized_down_does_not_catch_up_unseen_boundaries() {
+    let policy = issue_379_materialized_policy();
+    let mut harness =
+        ProductionDispatchTestHarness::new_prepared_materialized_causality_sequence_for_test(
+            policy.min_hold_us,
+        );
+    let (packets, evidence) = harness.configure_prepared_packet_capture_with_evidence_for_test();
+    harness.prepare_prepared_stream_for_test();
+    harness
+        .align_prepared_current_to_benchmark_margin_for_test(10_000)
+        .expect("future authored boundary alignment");
+    let initial_epoch = harness.playback_epoch_qpc_for_test();
+    let authored_target = harness
+        .prepared_current_target_qpc_for_test()
+        .expect("prepared authored target");
+    assert!(authored_target > harness.qpc_now_for_test().expect("authorization QPC"));
+    harness
+        .authorize_prepared_current_for_test()
+        .expect("authorize boundary A before stall");
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+
+    let lateness = harness
+        .qpc_duration_from_us_for_test(100_000)
+        .expect("100 ms lateness conversion");
+    assert!(matches!(
+        harness.dispatch_prepared_current_after_authorized_stall_ticks_for_test(lateness),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+    assert_eq!(
+        *packets.lock().expect("boundary A packet capture"),
+        vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b0001)]
+    );
+
+    let backlog_wall_now = authored_target
+        .checked_add_duration(lateness)
+        .expect("backlog wall QPC arithmetic");
+    for boundary in ["B", "C"] {
+        assert!(matches!(
+            harness.dispatch_prepared_current_at_synthetic_wall_qpc_for_test(backlog_wall_now),
+            super::worker::DispatchStep::Dispatched
+        ));
+        assert_eq!(
+            harness.playback_epoch_qpc_for_test(),
+            initial_epoch,
+            "overdue {boundary} must not rebase playback"
+        );
+    }
+    assert_eq!(harness.prepared_normal_backlog_count_for_test(), 2);
+    assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 2);
+    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
+    assert_eq!(
+        evidence.lock().expect("backlog transport evidence").len(),
+        1
+    );
+    while harness.pending_observation_count() != 0 {
+        harness
+            .drain_observer()
+            .expect("drain causal backlog observation");
+    }
+    let backlog_records = harness
+        .telemetry_records_for_test()
+        .into_iter()
+        .filter(|record| record.outcome == trace_outcome_code("down_unobserved_backlog"))
+        .collect::<Vec<_>>();
+    assert_eq!(backlog_records.len(), 2);
+    assert!(backlog_records.iter().all(|record| {
+        record.down_mask != 0 && record.send_attempts == 0 && record.sent_count == 0
+    }));
+
+    let later_target = harness
+        .prepared_current_target_qpc_for_test()
+        .expect("later D target");
+    assert!(
+        later_target > harness.qpc_now_for_test().expect("later D QPC"),
+        "D must remain naturally future after B/C classification"
+    );
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+    harness
+        .authorize_prepared_current_for_test()
+        .expect("authorize naturally future D");
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+    assert!(matches!(
+        harness.dispatch_prepared_current_after_authorized_stall_ticks_for_test(
+            DurationTicks::from_raw(1)
+        ),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
+    assert_eq!(
+        *packets.lock().expect("causal packet capture"),
+        vec![
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b0001),
+            sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1000),
+        ]
+    );
+    let captured = evidence.lock().expect("causal transport evidence");
+    assert_eq!(captured.len(), 2);
+    assert!(captured.iter().all(|entry| entry.attempts == 1));
+    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
+    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
 }
 
@@ -1313,6 +1518,13 @@ fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
                 scheduled_us: 2_000_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "native-prepared-suspension-sentinel-j".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "native-prepared-suspension-sentinel-up".into(),
             },
         ],
         &[0x15, 0x16],
@@ -2104,17 +2316,26 @@ fn production_startup_matrix_preserves_first_physical_lead() {
 
     for scheduled_us in [0, 100, 499, 500, 501] {
         let schedule = compile_runtime_intents(
-            &[KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                // Keep the authored boundary well beyond worker startup and
-                // host timer quantization.  This is test isolation only; the
-                // authored target remains frozen and the worker never moves
-                // it after arm.
-                scheduled_us: scheduled_us + 100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "startup-matrix-down".into(),
-            }],
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    // Keep the authored boundary well beyond worker startup and
+                    // host timer quantization.  This is test isolation only; the
+                    // authored target remains frozen and the worker never moves
+                    // it after arm.
+                    scheduled_us: scheduled_us + 100_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "startup-matrix-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: scheduled_us + 101_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "startup-matrix-up".into(),
+                },
+            ],
             &[0x15],
         )
         .expect("valid startup matrix schedule");
@@ -2833,8 +3054,6 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
                 hold_floor_qpc_available: false,
                 release_floor_qpc_ticks: 0,
                 release_floor_qpc_available: false,
-                latest_down_start_qpc_ticks: 0,
-                latest_down_start_qpc_available: false,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
                 pre_call_qpc_ticks: 0,
@@ -3881,6 +4100,13 @@ fn focus_recovery_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "focus-recovery-sentinel".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 10_200_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "focus-recovery-sentinel-up".to_string().into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -4168,6 +4394,13 @@ fn focus_restore_after_grace_releases_and_resumes() {
                 scheduled_us: 10_000_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "focus-restore-sentinel".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 10_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "focus-restore-sentinel-up".to_string().into(),
             },
         ],
         &[0x15, 0x16],
@@ -4870,10 +5103,10 @@ fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
     assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
     assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
     let packets = harness.configure_packet_capture();
-    harness.advance_playback_time_us(1_000);
+    let cleanup = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.plan_current_dispatch(),
-        super::worker::NextDispatchPlan::NoWork
+        harness.dispatch_at_plan_target_for_test(&cleanup),
+        super::worker::DispatchStep::Dispatched
     ));
     assert!(harness.resources.coordinator.is_finished());
     assert!(packets.lock().expect("packet capture lock").is_empty());
@@ -4906,10 +5139,10 @@ fn focus_suspend_restore_cancels_pending_release_without_stale_up() {
     assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
     assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
     let packets = harness.configure_packet_capture();
-    harness.advance_playback_time_us(1_000);
+    let cleanup = harness.plan_current_dispatch();
     assert!(matches!(
-        harness.plan_current_dispatch(),
-        super::worker::NextDispatchPlan::NoWork
+        harness.dispatch_at_plan_target_for_test(&cleanup),
+        super::worker::DispatchStep::Dispatched
     ));
     assert!(harness.resources.coordinator.is_finished());
     assert!(packets.lock().expect("packet capture lock").is_empty());
@@ -5018,7 +5251,8 @@ fn future_classification_then_waiter_entry_stall_keeps_exact_boundary_authorized
     // Keep the same frozen B plan. Model a stall before waiter entry so the
     // waiter returns Due { wait_result: None } for this already-overdue
     // target. Exact future authorization survives waiter-entry latency;
-    // physical floors and the authored latest-start window still decide admission.
+    // physical floors decide the execution boundary while authored identity
+    // remains unchanged.
     let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&replanned);
     assert!(matches!(step, super::worker::DispatchStep::Dispatched));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -5633,7 +5867,6 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
             physical_not_before_qpc_ticks: Some(105),
             hold_floor_qpc_ticks: Some(103),
             release_floor_qpc_ticks: Some(105),
-            latest_down_start_qpc_ticks: Some(110),
             hold_floor_mask: 1,
             release_floor_mask: 2,
             pre_call_qpc_ticks: Some(120),
@@ -5670,7 +5903,6 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert!(record.physical_not_before_qpc_available);
     assert_eq!(record.hold_floor_qpc_ticks, 103);
     assert_eq!(record.release_floor_qpc_ticks, 105);
-    assert_eq!(record.latest_down_start_qpc_ticks, 110);
     assert_eq!(record.hold_floor_mask, 1);
     assert_eq!(record.release_floor_mask, 2);
     assert_eq!(record.pre_call_qpc_ticks, 120);
@@ -5711,7 +5943,6 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
             release_floor_qpc_ticks: None,
-            latest_down_start_qpc_ticks: None,
             hold_floor_mask: 0,
             release_floor_mask: 0,
             pre_call_qpc_ticks: None,
@@ -5764,7 +5995,6 @@ fn native_summary_ignores_non_backend_trace() {
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
             release_floor_qpc_ticks: None,
-            latest_down_start_qpc_ticks: None,
             hold_floor_mask: 0,
             release_floor_mask: 0,
             pre_call_qpc_ticks: None,
@@ -6135,6 +6365,13 @@ fn mixed_packet_partial_fault_stops_before_committing_retrigger() {
             scan_codes: smallvec::smallvec![0x16],
             reason: "disjoint-down".to_string().into(),
         },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 1_100_000,
+            scan_codes: smallvec::smallvec![0x16],
+            reason: "disjoint-up".to_string().into(),
+        },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid mixed packet schedule");
@@ -6338,6 +6575,13 @@ fn native_session_rejects_deterministically_infeasible_schedule_before_worker_st
             scan_codes: smallvec::smallvec![0x15, 0x16],
             reason: "short-hold-chord".to_string().into(),
         },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 200,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+            reason: "short-hold-chord-up".to_string().into(),
+        },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid dynamic-infeasibility schedule");
@@ -6529,6 +6773,13 @@ fn native_release_gap_admission_rejects_one_microsecond_short() {
             scan_codes: smallvec::smallvec![0x15],
             reason: "down-b".to_string().into(),
         },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 16_867,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up-b".to_string().into(),
+        },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
         .expect("valid short release-gap schedule");
@@ -6569,6 +6820,13 @@ fn native_release_gap_admission_checks_qpc_tick_rounding() {
             scheduled_us: 200,
             scan_codes: smallvec::smallvec![0x15],
             reason: "down-b".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 300,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up-b".to_string().into(),
         },
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
@@ -6666,11 +6924,8 @@ fn completion_latency_does_not_create_hold_failure_after_release_gap() {
 }
 
 #[test]
-fn strict_sender_deadline_miss_fails_closed() {
-    // Keep the first physical boundary well clear of worker startup. This
-    // test exercises the injected pre-call deadline miss on the second Down,
-    // not an incidental startup scheduling race at an authored zero target.
-    const TEST_AUTHORED_START_US: u64 = 5_000_000;
+fn strict_late_authorized_down_is_attempted_and_finishes() {
+    const TEST_AUTHORED_START_US: u64 = 50_000;
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -6703,29 +6958,17 @@ fn strict_sender_deadline_miss_fails_closed() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid physical-window recovery schedule");
-    let script = FaultInjectionScript {
-        entries: vec![(1, InjectedSendOutcome::DownExpiredBeforeSend)],
-        ..FaultInjectionScript::none()
-    };
     let mut options = test_session_options(
         schedule,
         2,
         BackendConfig::Mock {
             latency_base_us: 0,
             latency_per_key_us: 0,
-            fault_script: script,
+            fault_script: FaultInjectionScript::none(),
         },
     );
     options.profile = DispatchProfile::Production;
-    // Keep the injected sender deadline miss on the explicit strict path;
-    // normal playback no longer converts wake lateness into Down recovery.
     options.timing.strict_timing = true;
-    // This integration test verifies that the scripted strict sender deadline
-    // miss fails closed. Keep the real worker/QPC path, but give CI host
-    // preemption enough test-only margin that the real sender cutoff cannot
-    // consume the scripted packet index first. Exact cutoff behavior is
-    // covered by deterministic dispatch tests; the product default is supplied
-    // by the application/session policy, not this test-only override.
     set_test_timing_margin(&mut options, 20_000);
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
@@ -6733,19 +6976,19 @@ fn strict_sender_deadline_miss_fails_closed() {
     assert!(session.join(Duration::from_secs(8)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.outcome, Some("error".to_string()), "{snapshot:?}");
-    assert_eq!(snapshot.status, "error", "{snapshot:?}");
     assert_eq!(
-        snapshot.terminal_error,
-        Some("down_final_sender_window_expired".to_string()),
+        snapshot.outcome,
+        Some("finished".to_string()),
         "{snapshot:?}"
     );
+    assert_eq!(snapshot.status, "finished", "{snapshot:?}");
+    assert!(snapshot.terminal_error.is_none(), "{snapshot:?}");
     assert_eq!(snapshot.authored_keys_rejected, 0, "{snapshot:?}");
     assert_eq!(
         snapshot.missed_physical_window_boundaries, 0,
         "{snapshot:?}"
     );
-    assert_eq!(snapshot.final_sender_window_expirations, 1, "{snapshot:?}");
+    assert_eq!(snapshot.final_sender_window_expirations, 0, "{snapshot:?}");
     assert_eq!(snapshot.active_count, 0, "{snapshot:?}");
     assert_eq!(snapshot.possibly_active_count, 0, "{snapshot:?}");
     assert_eq!(snapshot.failed_release_count, 0, "{snapshot:?}");
@@ -7192,6 +7435,13 @@ fn late_first_event_does_not_move_second_event() {
                 scan_codes: smallvec::smallvec![0x17],
                 reason: "chord3".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 60_000,
+                scan_codes: smallvec::smallvec![0x15, 0x16, 0x17],
+                reason: "chord-cleanup".to_string().into(),
+            },
         ],
         &[0x15, 0x16, 0x17],
     )
@@ -7273,6 +7523,13 @@ fn authored_up_does_not_move_unrelated_future_authored_action() {
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "down B".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 40_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "up B".to_string().into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -7343,6 +7600,13 @@ fn zero_lateness_preserves_exact_authored_timestamps() {
                 scheduled_us: 20_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "chord2".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 30_000,
+                scan_codes: smallvec::smallvec![0x15, 0x16],
+                reason: "chord2-up".to_string().into(),
             },
         ],
         &[0x15, 0x16],
@@ -7662,6 +7926,13 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "next-down".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 25_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "next-up".to_string().into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -7799,6 +8070,13 @@ fn focus_then_manual_then_unfocused_resume_suspends_before_manual_resume() {
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "next-down".to_string().into(),
             },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 22_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "next-up".to_string().into(),
+            },
         ],
         &[0x15, 0x16],
     )
@@ -7915,6 +8193,13 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
                 scheduled_us: 25_000_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "lifecycle-sentinel".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 25_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "lifecycle-sentinel-up".to_string().into(),
             },
         ],
         &[0x15, 0x16],

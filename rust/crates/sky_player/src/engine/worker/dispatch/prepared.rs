@@ -1,6 +1,5 @@
 //! Normal prepared-frame precision envelope.
 
-use super::super::prepared::PreparedDownHoldLimit;
 use super::super::{
     DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
     PreparedDispatchFrame, QpcClock, RuntimeDispatchCoordinator, TargetStamp, TrackedKeyState,
@@ -47,27 +46,6 @@ fn prepared_down_boundary(
     }
 }
 
-#[inline]
-pub(super) fn prepared_down_sender_cutoff(
-    frame: &PreparedDispatchFrame,
-    physical_target_qpc: QpcTicks,
-) -> Result<Option<QpcTicks>, &'static str> {
-    // A paired Down's cutoff is the static authored hold-validity boundary:
-    // target + (authored Up - authored Down - effective_min_hold).  It is not
-    // PhysicalTimingWindow/PhysicalTimingGuard policy and is never extended
-    // to compensate for scheduler lateness.
-    let Some(policy) = frame.down_policy else {
-        return Ok(None);
-    };
-    match policy.hold_limit {
-        PreparedDownHoldLimit::NoPairedRelease => Ok(None),
-        PreparedDownHoldLimit::HoldSlack(slack) => physical_target_qpc
-            .checked_add_duration(slack)
-            .map(Some)
-            .map_err(|_| "prepared Down sender cutoff arithmetic overflow"),
-    }
-}
-
 /// The complete normal precision suffix.  The payload has already been
 /// materialized by the startup-owned stream.  This helper owns only the final
 /// atomic gates and the one prepared sender transaction; all coordinator,
@@ -87,7 +65,6 @@ fn send_prepared_normal_precision_frame(
     supervisor_expired: &AtomicBool,
     system_power: &SystemPowerState,
     down_authorized: bool,
-    sender_cutoff_qpc: Option<QpcTicks>,
     preflight_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))] post_focus_race_hook: Option<
         &crate::engine::config::FinalGateRaceHook,
@@ -167,7 +144,6 @@ fn send_prepared_normal_precision_frame(
     // sender before its authoritative pre-call QPC boundary.
     let result = backend.send_prepared_physical_packet_at_final_boundary(
         &frame.view.prepared_packet,
-        sender_cutoff_qpc,
         #[cfg(any(test, feature = "test-support"))]
         test_now_ticks,
         #[cfg(not(any(test, feature = "test-support")))]
@@ -205,6 +181,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
     observer: Option<&PendingObservationQueue>,
     preflight_target: Option<TargetStamp>,
     physical_target_qpc: QpcTicks,
+    physical_timing_window: super::super::physical_timing_guard::PhysicalTimingWindow,
     effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     focus_loss_fault: bool,
@@ -222,10 +199,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
         runtime.prepared_down_is_authorized(boundary, target_generation)
     } else {
         true
-    };
-    let sender_cutoff_qpc = match prepared_down_sender_cutoff(frame, physical_target_qpc) {
-        Ok(cutoff) => cutoff,
-        Err(error) => return DispatchStep::TerminateStatic(error),
     };
     // Keep this cheap outer read for the distinct preroll/focus-pause path.
     // The precision helper still performs the authoritative final atomic
@@ -281,7 +254,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
         supervisor_expired,
         system_power,
         down_authorized,
-        sender_cutoff_qpc,
         preflight_target,
         #[cfg(any(test, feature = "test-support"))]
         runtime.final_gate_post_focus_race_hook.as_ref(),
@@ -331,7 +303,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
                 &mut resources.playback,
                 effective_now_ticks,
                 physical_target_qpc,
-                sender_cutoff_qpc,
                 now_ticks,
                 DownMissReason::UnobservedBacklog,
                 explicitly_cancelled_by_suspension,
@@ -356,7 +327,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
         &mut resources.playback,
         effective_now_ticks,
         physical_target_qpc,
-        sender_cutoff_qpc,
+        physical_timing_window,
         boundary_crossing_qpc,
         result,
         explicitly_cancelled_by_suspension,
@@ -416,34 +387,6 @@ pub(super) fn record_down_send_result(
         result.status,
         sky_dispatch_win32::input::SendTransactionStatus::IntegrityLost
     );
-    if matches!(
-        result.status,
-        sky_dispatch_win32::input::SendTransactionStatus::DownExpiredBeforeSend
-    ) && view.packet_masks.down_mask != 0
-        && timing.strict_timing
-    {
-        let Some(observed_qpc) = result.evidence.started_ticks else {
-            return DispatchStep::TerminateStatic(
-                "DownExpiredBeforeSend missing authoritative start boundary",
-            );
-        };
-        return super::recovery::recover_missed_down_boundary(
-            view,
-            config,
-            runtime,
-            local_metrics,
-            backend,
-            coordinator,
-            clock_state,
-            physical_timing_window,
-            observed_qpc,
-            effective_now_ticks,
-            DownMissReason::DownExpiredBeforeSend,
-            false,
-            explicitly_cancelled_by_suspension,
-            observer,
-        );
-    }
     if result_chord_integrity_lost {
         runtime.chord_integrity_lost = runtime.chord_integrity_lost.saturating_add(1);
         local_metrics.chord_integrity_lost = local_metrics.chord_integrity_lost.saturating_add(1);
@@ -467,7 +410,7 @@ pub(super) fn record_down_send_result(
         return DispatchStep::TerminateStatic("successful Down missing completion QPC");
     };
     if let Err(step) =
-        super::authored::observe_strict_completion(timing, runtime, completed_qpc, packet)
+        super::authored::observe_successful_completion(runtime, completed_qpc, packet)
     {
         return step;
     }
@@ -595,12 +538,10 @@ mod tests {
             precision_call < post_send,
             "normal precision suffix must precede post-send work"
         );
-        for forbidden in ["PhysicalTimingWindow", "physical_timing_guard"] {
-            assert!(
-                !outer.contains(forbidden),
-                "normal prepared dispatch/miss resolver contains dynamic timing policy {forbidden}"
-            );
-        }
+        assert!(
+            outer.contains("PhysicalTimingWindow"),
+            "normal prepared dispatch carries floor evidence into post-send accounting"
+        );
         for forbidden in [
             "plan_next_dispatch_projected",
             "prepare_current_authored_packet",
@@ -653,8 +594,6 @@ mod tests {
             );
         }
         assert!(helper.contains("backend.send_prepared_physical_packet_at_final_boundary("));
-        assert!(helper.contains("sender_cutoff_qpc"));
-        assert!(!helper.contains("_without_cutoff"));
 
         let tracked = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -664,18 +603,11 @@ mod tests {
             .split("pub fn send_prepared_physical_packet_at_final_boundary")
             .nth(1)
             .expect("tracked final prepared sender")
-            .split("pub fn send_prepared_physical_packet_view_with_cutoff")
+            .split("pub(crate) fn apply_packet_outcome")
             .next()
             .expect("tracked final sender body");
-        assert!(final_sender.contains("send_prepared_physical_packet_with_cutoff"));
+        assert!(final_sender.contains("send_prepared_physical_packet(prepared)"));
         assert!(!final_sender.contains("RuntimeDispatchCoordinator"));
-
-        let normal_sender = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../sky_dispatch_win32/src/input/tracked/packet_send_without_cutoff.rs"
-        ));
-        assert!(normal_sender.contains("self.send_prepared_physical_packet(prepared)"));
-        assert!(!normal_sender.contains("with_cutoff"));
 
         let packet = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),

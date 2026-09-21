@@ -87,13 +87,12 @@ impl DownBoundaryState {
 pub(crate) enum DownBoundaryAdmission {
     Authorized,
     UnobservedBacklog,
-    PhysicalWindowExpired,
 }
 
 impl DownBoundaryAdmission {
     #[inline]
     pub(crate) const fn is_missed(self) -> bool {
-        matches!(self, Self::UnobservedBacklog | Self::PhysicalWindowExpired)
+        matches!(self, Self::UnobservedBacklog)
     }
 }
 

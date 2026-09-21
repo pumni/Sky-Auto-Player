@@ -3134,11 +3134,10 @@ mod platform {
             let prepared = crate::input::PreparedPhysicalPacket::try_new(packet)
                 .map_err(|_| CalibrationError::PolyphonyTooLarge(scan_codes.len()))?;
             self.wait_to_precision_boundary(physical_target_qpc)?;
-            let outcome = crate::input::send_prepared_physical_packet_once_at_target_with_cutoff(
+            let outcome = crate::input::send_prepared_physical_packet_once_at_target(
                 &prepared,
                 self.qpc_clock,
                 physical_target_qpc,
-                None,
             );
             let evidence = outcome.evidence;
             let started = evidence
@@ -6427,7 +6426,7 @@ mod tests {
             .find("self.wait_to_precision_boundary(physical_target_qpc)")
             .expect("precision handoff");
         let send = sender
-            .find("send_prepared_physical_packet_once_at_target_with_cutoff")
+            .find("send_prepared_physical_packet_once_at_target")
             .expect("fused calibration sender");
         assert!(prepare < handoff && handoff < send);
 

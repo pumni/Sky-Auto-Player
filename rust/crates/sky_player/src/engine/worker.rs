@@ -16,8 +16,6 @@ mod health;
 pub(crate) mod health;
 mod orchestration;
 mod physical_timing_guard;
-#[cfg(test)]
-pub(crate) use physical_timing_guard::PhysicalTimingWindow;
 mod planning;
 mod prepared;
 mod startup;
@@ -89,8 +87,6 @@ pub(crate) use planning::plan_next_dispatch;
 #[cfg(test)]
 pub(crate) use planning::plan_structure_is_valid;
 pub(crate) use planning::{PlanningInput, plan_next_dispatch_projected};
-#[cfg(test)]
-pub(crate) use prepared::PreparedDownHoldLimit;
 pub(crate) use prepared::{PreparedDispatchEntry, PreparedDispatchFrame, PreparedDispatchStream};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use sky_dispatch_win32::wait::WaitResult;
@@ -317,12 +313,10 @@ impl WorkerRuntime {
         &mut self,
         frame_base_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
-        timing_margin_ticks: DurationTicks,
     ) {
         self.physical_timing_guard = Some(physical_timing_guard::PhysicalTimingGuard::new(
             frame_base_hold_ticks,
             frame_ticks,
-            timing_margin_ticks,
         ));
     }
 

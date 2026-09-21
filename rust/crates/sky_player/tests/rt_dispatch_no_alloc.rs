@@ -514,7 +514,7 @@ fn production_mixed_hard_path_no_alloc() {
 }
 
 /// A normal mixed packet remains allocation-free when completion evidence is
-/// present: authored-only timing sends it atomically without Up recovery.
+/// present: floor timing sends it atomically without Up recovery.
 #[test]
 fn production_normal_mixed_completion_floor_no_alloc() {
     let _lock = TEST_LOCK.lock();
@@ -553,7 +553,11 @@ fn production_normal_mixed_completion_floor_no_alloc() {
         harness.dispatch_at_qpc_for_test(&mixed, before_mixed_target),
         DispatchStep::NoWork
     ));
-    let classify_step = harness.dispatch_at_qpc_for_test(&mixed, mixed_target);
+    let physical_wait_target = harness
+        .physical_wait_target_for_test(&mixed)
+        .expect("mixed physical wait target")
+        .expect("mixed physical target");
+    let classify_step = harness.dispatch_at_qpc_for_test(&mixed, physical_wait_target);
     let allocs = disable_counting();
 
     assert_eq!(
@@ -622,7 +626,7 @@ fn production_deadline_handoff_up_no_alloc() {
 #[test]
 fn production_fifteen_key_down_chord_no_alloc() {
     let _lock = TEST_LOCK.lock();
-    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(15, 0);
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(15, 1);
     harness.align_next_plan_to_future_for_test(100_000);
 
     enable_counting();
@@ -786,10 +790,11 @@ fn production_mixed_missed_down_recovery_no_alloc() {
 }
 
 #[test]
-fn production_strict_expired_before_send_rejection_no_alloc() {
+fn production_strict_late_authorized_down_send_no_alloc() {
     let _lock = TEST_LOCK.lock();
     let mut harness = ProductionDispatchTestHarness::new_two_down_boundaries();
     harness.set_strict_timing_for_test(true);
+    harness.set_strict_down_completion_late_us_for_test(1_000_000);
     let first = harness.plan_current_dispatch();
     assert!(matches!(
         harness.dispatch_at_plan_target_for_test(&first),
@@ -800,23 +805,24 @@ fn production_strict_expired_before_send_rejection_no_alloc() {
         harness.dispatch_due_from_plan_for_test(&future),
         DispatchStep::NoWork
     ));
-    harness.configure_deadline_missed_packet_sender();
+    harness.configure_packet_capture();
+
+    let target = harness
+        .physical_target_qpc_for_test(&future)
+        .expect("strict future Down target");
+    let late_now = target
+        .checked_add_duration(DurationTicks::from_raw(1))
+        .expect("strict late Down boundary");
 
     enable_counting();
-    let step = harness.dispatch_same_frozen_plan_after_due_without_wait_for_test(&future);
+    let step = harness.dispatch_at_qpc_for_test(&future, late_now);
     let allocs = disable_counting();
 
     assert_eq!(
         allocs, 0,
-        "expired-before-send recovery allocated {allocs} time(s)"
+        "late strict Down dispatch allocated {allocs} time(s)"
     );
-    assert!(
-        matches!(
-            step,
-            DispatchStep::TerminateStatic("down_final_sender_window_expired")
-        ),
-        "step={step:?}"
-    );
+    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
 }
 
 #[test]
@@ -832,7 +838,7 @@ fn production_normal_late_down_dispatch_no_alloc() {
     let target = harness
         .physical_target_qpc_for_test(&plan)
         .expect("physical target");
-    // Target pre-call time is beyond physical_latest_down_start. Normal sender
+    // Target pre-call time is beyond the authored physical target. Normal sender
     // admission must still dispatch without a lateness-only cutoff.
     let late_offset_us = timing_margin_us + 1_000;
     let late_now = target

@@ -20,29 +20,8 @@ pub(crate) struct PhysicalTimingWindow {
     pub(crate) musical_up_not_before_qpc: QpcTicks,
     pub(crate) down_not_before_qpc: QpcTicks,
     pub(crate) packet_not_before_qpc: QpcTicks,
-    pub(crate) latest_down_start_qpc: Option<QpcTicks>,
     pub(crate) hold_floor_mask: u16,
     pub(crate) release_floor_mask: u16,
-}
-
-impl PhysicalTimingWindow {
-    pub(crate) const fn authored_only(authored_target_qpc: QpcTicks) -> Self {
-        Self {
-            authored_target_qpc,
-            musical_up_not_before_qpc: authored_target_qpc,
-            down_not_before_qpc: authored_target_qpc,
-            packet_not_before_qpc: authored_target_qpc,
-            latest_down_start_qpc: None,
-            hold_floor_mask: 0,
-            release_floor_mask: 0,
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn is_down_feasible(&self) -> bool {
-        self.latest_down_start_qpc
-            .is_some_and(|latest| self.packet_not_before_qpc <= latest)
-    }
 }
 
 /// Errors that make a physical timing query or observation unusable.
@@ -64,7 +43,6 @@ pub(crate) struct PhysicalTimingGuard {
     down_not_before_qpc: [Option<QpcTicks>; MAX_KEYS],
     frame_base_hold_ticks: DurationTicks,
     frame_ticks: DurationTicks,
-    timing_margin_ticks: DurationTicks,
     valid: bool,
 }
 
@@ -72,14 +50,12 @@ impl PhysicalTimingGuard {
     pub(super) const fn new(
         frame_base_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
-        timing_margin_ticks: DurationTicks,
     ) -> Self {
         Self {
             musical_up_not_before_qpc: [None; MAX_KEYS],
             down_not_before_qpc: [None; MAX_KEYS],
             frame_base_hold_ticks,
             frame_ticks,
-            timing_margin_ticks,
             valid: true,
         }
     }
@@ -177,49 +153,14 @@ impl PhysicalTimingGuard {
         let (down_not_before_qpc, release_floor_mask) =
             Self::floor_for_mask(authored_target_qpc, down_mask, &self.down_not_before_qpc);
         let packet_not_before_qpc = core::cmp::max(musical_up_not_before_qpc, down_not_before_qpc);
-        let latest_down_start_qpc = if down_mask == 0 {
-            None
-        } else {
-            Some(
-                authored_target_qpc
-                    .checked_add_duration(self.timing_margin_ticks)
-                    .map_err(|_| PhysicalTimingGuardError::ArithmeticOverflow)?,
-            )
-        };
 
         Ok(PhysicalTimingWindow {
             authored_target_qpc,
             musical_up_not_before_qpc,
             down_not_before_qpc,
             packet_not_before_qpc,
-            latest_down_start_qpc,
             hold_floor_mask,
             release_floor_mask,
-        })
-    }
-
-    /// Derive the normal-mode window from the immutable authored target only.
-    /// Completion evidence remains available to telemetry, but it is not
-    /// scheduling authority for a later packet.
-    pub(crate) fn authored_only_window(
-        &self,
-        authored_target_qpc: QpcTicks,
-        up_mask: u16,
-        down_mask: u16,
-    ) -> Result<PhysicalTimingWindow, PhysicalTimingGuardError> {
-        self.ensure_valid()?;
-        Self::validate_packet_masks(up_mask, down_mask)?;
-        if up_mask == 0 && down_mask == 0 {
-            return Err(PhysicalTimingGuardError::InvalidPacketMasks);
-        }
-        Ok(PhysicalTimingWindow {
-            authored_target_qpc,
-            musical_up_not_before_qpc: authored_target_qpc,
-            down_not_before_qpc: authored_target_qpc,
-            packet_not_before_qpc: authored_target_qpc,
-            latest_down_start_qpc: None,
-            hold_floor_mask: 0,
-            release_floor_mask: 0,
         })
     }
 
@@ -271,17 +212,14 @@ mod tests {
 
     const HOLD_TICKS: DurationTicks = DurationTicks::from_raw(30);
     const FRAME_TICKS: DurationTicks = DurationTicks::from_raw(12);
-    const MARGIN_TICKS: DurationTicks = DurationTicks::from_raw(5);
-
     fn guard() -> PhysicalTimingGuard {
-        PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS, MARGIN_TICKS)
+        PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS)
     }
 
     fn production_guard() -> PhysicalTimingGuard {
         PhysicalTimingGuard::new(
             DurationTicks::from_raw(10_000),
             DurationTicks::from_raw(16_667),
-            DurationTicks::from_raw(500),
         )
     }
 
@@ -291,6 +229,64 @@ mod tests {
 
     fn bit(slot: usize) -> u16 {
         1_u16 << slot
+    }
+
+    #[test]
+    fn default_policy_floor_headroom_is_applied_once_without_rebasing() {
+        let key = bit(0);
+        let frame = DurationTicks::from_raw(16_667);
+        let authored_minimum_hold = DurationTicks::from_raw(17_167);
+
+        let mut case_a = PhysicalTimingGuard::new(frame, frame);
+        case_a
+            .observe_successful_packet(qpc(100_300), 0, key)
+            .unwrap();
+        let authored_down = qpc(100_000);
+        let authored_up = qpc(117_167);
+        let window_a = case_a.query(authored_up, key, 0).unwrap();
+        let physical_up_floor = qpc(116_967);
+        assert_eq!(
+            qpc(100_300)
+                .checked_add_duration(frame)
+                .expect("case A physical Up floor"),
+            physical_up_floor,
+            "physical Up floor is completion + frame_base_hold"
+        );
+        assert_eq!(window_a.musical_up_not_before_qpc, authored_up);
+        assert_eq!(window_a.packet_not_before_qpc, authored_up);
+        assert_eq!(
+            authored_up.as_u64() - authored_down.as_u64(),
+            authored_minimum_hold.as_u64()
+        );
+
+        let mut case_b = PhysicalTimingGuard::new(frame, frame);
+        case_b
+            .observe_successful_packet(qpc(100_800), 0, key)
+            .unwrap();
+        let window_b = case_b.query(authored_up, key, 0).unwrap();
+        assert_eq!(window_b.musical_up_not_before_qpc, qpc(117_467));
+        assert_eq!(window_b.packet_not_before_qpc, qpc(117_467));
+        assert_eq!(
+            window_b.packet_not_before_qpc.as_u64() - authored_up.as_u64(),
+            300
+        );
+
+        let up_completion = qpc(117_467);
+        let mut case_c = PhysicalTimingGuard::new(frame, frame);
+        case_c
+            .observe_successful_packet(up_completion, key, 0)
+            .unwrap();
+        let next_down_authored = qpc(117_500);
+        let window_c = case_c.query(next_down_authored, 0, key).unwrap();
+        assert_eq!(window_c.down_not_before_qpc, qpc(134_134));
+        assert_eq!(
+            window_c.down_not_before_qpc.as_u64() - up_completion.as_u64(),
+            frame.as_u64()
+        );
+        assert_ne!(
+            window_c.down_not_before_qpc.as_u64() - up_completion.as_u64(),
+            authored_minimum_hold.as_u64()
+        );
     }
 
     #[test]
@@ -312,7 +308,6 @@ mod tests {
         let next_down_target = qpc(140_000);
         let next_down_window = guard.query(next_down_target, 0, key).unwrap();
         assert_eq!(next_down_window.down_not_before_qpc, next_down_target);
-        assert_eq!(next_down_window.latest_down_start_qpc, Some(qpc(140_500)));
     }
 
     #[test]
@@ -353,17 +348,13 @@ mod tests {
             let next_down_target = qpc(next_down_target_us);
             let next_down_window = guard.query(next_down_target, 0, key).unwrap();
             assert_eq!(next_down_window.down_not_before_qpc, next_down_target);
-            assert_eq!(
-                next_down_window.latest_down_start_qpc,
-                Some(qpc(next_down_target_us + 500))
-            );
             assert_eq!(next_down_window.authored_target_qpc, next_down_target);
             down_target_us = next_down_target_us;
         }
 
-        let infeasible_target_us = down_target_us - 501;
-        let infeasible = guard.query(qpc(infeasible_target_us), 0, key).unwrap();
-        assert!(infeasible.packet_not_before_qpc > infeasible.latest_down_start_qpc.unwrap());
+        let delayed_target = qpc(down_target_us - 501);
+        let delayed = guard.query(delayed_target, 0, key).unwrap();
+        assert_eq!(delayed.packet_not_before_qpc, qpc(down_target_us));
     }
 
     #[test]
@@ -381,12 +372,10 @@ mod tests {
         assert_eq!(window.musical_up_not_before_qpc, qpc(110_000));
         assert_eq!(window.down_not_before_qpc, qpc(109_000));
         assert_eq!(window.packet_not_before_qpc, qpc(110_000));
-        assert_eq!(window.latest_down_start_qpc, Some(qpc(109_500)));
-        assert!(window.packet_not_before_qpc > window.latest_down_start_qpc.unwrap());
     }
 
     #[test]
-    fn fresh_guard_uses_authored_target_and_margin_only() {
+    fn fresh_guard_uses_authored_target_without_extra_margin() {
         let window = guard().query(qpc(100), bit(0), bit(1)).unwrap();
         assert_eq!(
             window,
@@ -395,7 +384,6 @@ mod tests {
                 musical_up_not_before_qpc: qpc(100),
                 down_not_before_qpc: qpc(100),
                 packet_not_before_qpc: qpc(100),
-                latest_down_start_qpc: Some(qpc(105)),
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
             }
@@ -403,24 +391,18 @@ mod tests {
     }
 
     #[test]
-    fn authored_only_window_ignores_completion_floors() {
+    fn query_includes_completion_floors_for_every_packet() {
         let mut guard = guard();
         guard
             .observe_successful_packet(qpc(100), 0, bit(0))
             .unwrap();
-        guard
-            .observe_successful_packet(qpc(120), bit(0), 0)
-            .unwrap();
 
-        let window = guard
-            .authored_only_window(qpc(110), bit(0), bit(1))
-            .unwrap();
+        let window = guard.query(qpc(110), bit(0), bit(1)).unwrap();
         assert_eq!(window.authored_target_qpc, qpc(110));
-        assert_eq!(window.musical_up_not_before_qpc, qpc(110));
+        assert_eq!(window.musical_up_not_before_qpc, qpc(130));
         assert_eq!(window.down_not_before_qpc, qpc(110));
-        assert_eq!(window.packet_not_before_qpc, qpc(110));
-        assert_eq!(window.latest_down_start_qpc, None);
-        assert_eq!(window.hold_floor_mask, 0);
+        assert_eq!(window.packet_not_before_qpc, qpc(130));
+        assert_eq!(window.hold_floor_mask, bit(0));
         assert_eq!(window.release_floor_mask, 0);
     }
 
@@ -435,7 +417,6 @@ mod tests {
         assert_eq!(window.musical_up_not_before_qpc, qpc(130));
         assert_eq!(window.packet_not_before_qpc, qpc(130));
         assert_eq!(window.hold_floor_mask, bit(2));
-        assert_eq!(window.latest_down_start_qpc, None);
     }
 
     #[test]
@@ -449,7 +430,6 @@ mod tests {
         assert_eq!(window.down_not_before_qpc, qpc(112));
         assert_eq!(window.packet_not_before_qpc, qpc(112));
         assert_eq!(window.release_floor_mask, bit(3));
-        assert_eq!(window.latest_down_start_qpc, Some(qpc(110)));
     }
 
     #[test]
@@ -465,12 +445,10 @@ mod tests {
         assert_eq!(window.packet_not_before_qpc, qpc(130));
         assert_eq!(window.hold_floor_mask, bit(1));
         assert_eq!(window.release_floor_mask, bit(0));
-        assert_eq!(window.latest_down_start_qpc, Some(qpc(110)));
 
         let up_recovery = guard.query(qpc(105), bit(1), 0).unwrap();
         assert_eq!(up_recovery.packet_not_before_qpc, qpc(130));
         assert_eq!(up_recovery.down_not_before_qpc, qpc(105));
-        assert_eq!(up_recovery.latest_down_start_qpc, None);
     }
 
     #[test]
@@ -559,10 +537,10 @@ mod tests {
     }
 
     #[test]
-    fn zero_margin_keeps_the_down_start_window_at_the_authored_target() {
-        let guard = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS, DurationTicks::ZERO);
+    fn down_floor_starts_at_the_authored_target_when_unconstrained() {
+        let guard = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS);
         let window = guard.query(qpc(42), 0, bit(0)).unwrap();
-        assert_eq!(window.latest_down_start_qpc, Some(qpc(42)));
+        assert_eq!(window.down_not_before_qpc, qpc(42));
     }
 
     #[test]
@@ -629,18 +607,21 @@ mod tests {
     }
 
     #[test]
-    fn query_overflow_fails_closed_without_corrupting_sender_evidence() {
+    fn query_at_qpc_max_does_not_add_a_cutoff_margin() {
         let guard = guard();
         assert_eq!(
-            guard.query(qpc(u64::MAX - 1), 0, bit(0)),
-            Err(PhysicalTimingGuardError::ArithmeticOverflow)
+            guard
+                .query(qpc(u64::MAX - 1), 0, bit(0))
+                .unwrap()
+                .packet_not_before_qpc,
+            qpc(u64::MAX - 1)
         );
         assert_eq!(
             guard
                 .query(qpc(10), 0, bit(0))
                 .unwrap()
-                .latest_down_start_qpc,
-            Some(qpc(15))
+                .packet_not_before_qpc,
+            qpc(10)
         );
     }
 }

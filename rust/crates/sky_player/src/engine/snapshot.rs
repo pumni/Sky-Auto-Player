@@ -94,12 +94,15 @@ pub struct EngineSnapshot {
     pub missed_down_boundaries: u64,
     pub missed_down_keys: u64,
     pub missed_unobserved_backlog_boundaries: u64,
+    /// Deprecated compatibility counter; always zero in current production.
     pub missed_physical_window_boundaries: u64,
     pub final_gate_control_rejections: u64,
     pub final_gate_target_changes: u64,
     pub final_gate_focus_losses: u64,
     pub final_gate_lease_expirations: u64,
+    /// Deprecated compatibility counter; always zero in current production.
     pub final_sender_window_expirations: u64,
+    /// Deprecated compatibility counter; always zero in current production.
     pub release_floor_infeasible_boundaries: u64,
     pub hold_floor_delay_boundaries: u64,
     pub max_hold_floor_delay_us: u64,
@@ -281,12 +284,15 @@ pub struct EngineProgressSnapshot {
     pub missed_down_boundaries: u64,
     pub missed_down_keys: u64,
     pub missed_unobserved_backlog_boundaries: u64,
+    /// Deprecated compatibility counter; always zero in current production.
     pub missed_physical_window_boundaries: u64,
     pub final_gate_control_rejections: u64,
     pub final_gate_target_changes: u64,
     pub final_gate_focus_losses: u64,
     pub final_gate_lease_expirations: u64,
+    /// Deprecated compatibility counter; always zero in current production.
     pub final_sender_window_expirations: u64,
+    /// Deprecated compatibility counter; always zero in current production.
     pub release_floor_infeasible_boundaries: u64,
     pub hold_floor_delay_boundaries: u64,
     pub max_hold_floor_delay_us: u64,

@@ -16,29 +16,6 @@ use super::TrackedKeyState;
 use crate::clock::QpcTicks;
 use smallvec::SmallVec;
 
-pub(crate) fn deadline_missed_before_send_outcome(
-    packet: PhysicalPacket,
-    started_ticks: QpcTicks,
-) -> SendTransactionOutcome {
-    SendTransactionOutcome {
-        status: SendTransactionStatus::DownExpiredBeforeSend,
-        evidence: SendEvidence {
-            requested_mask: packet.up_mask | packet.down_mask,
-            confirmed_mask: 0,
-            skipped_mask: 0,
-            first_inserted: 0,
-            attempts: 0,
-            zero_progress_retries: 0,
-            retry_reason: PacketRetryReason::None,
-            first_win32_error: None,
-            last_win32_error: None,
-            started_ticks: Some(started_ticks),
-            completed_ticks: None,
-            timing_error: None,
-        },
-    }
-}
-
 #[cfg(any(test, feature = "test-support"))]
 pub(super) fn clock_failure_before_send_outcome(
     packet: PhysicalPacket,
@@ -64,6 +41,69 @@ pub(super) fn clock_failure_before_send_outcome(
 }
 
 impl TrackedKeyState {
+    pub fn send_prepared_physical_packet_view(
+        &mut self,
+        prepared: PreparedPacketView<'_>,
+    ) -> SendTransactionOutcome {
+        let packet = prepared.packet();
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(emitter) = self.custom_packet_emitter.as_ref() {
+            let started_ticks = if let Some(clock) = self.qpc_clock {
+                match clock.now() {
+                    Ok(ticks) => Some(ticks),
+                    Err(error) => {
+                        self.timing_error = Some(error);
+                        return self.apply_packet_outcome(
+                            packet,
+                            clock_failure_before_send_outcome(packet, error),
+                        );
+                    }
+                }
+            } else {
+                None
+            };
+            let mut outcome = emitter(packet);
+            if let Some(started_ticks) = started_ticks {
+                outcome.evidence.started_ticks = Some(started_ticks);
+                if outcome
+                    .evidence
+                    .completed_ticks
+                    .is_some_and(|completed| completed < started_ticks)
+                {
+                    outcome.evidence.completed_ticks = Some(started_ticks);
+                }
+            }
+            return self.apply_packet_outcome(packet, outcome);
+        }
+
+        let Some(clock) = self.qpc_clock else {
+            self.last_error = Some("packet sender has no QPC clock".to_string());
+            return self.apply_packet_outcome(
+                packet,
+                SendTransactionOutcome {
+                    status: SendTransactionStatus::ZeroProgress,
+                    evidence: SendEvidence {
+                        requested_mask: packet.up_mask | packet.down_mask,
+                        confirmed_mask: 0,
+                        skipped_mask: 0,
+                        first_inserted: 0,
+                        attempts: 0,
+                        zero_progress_retries: 0,
+                        retry_reason: PacketRetryReason::None,
+                        first_win32_error: None,
+                        last_win32_error: None,
+                        started_ticks: None,
+                        completed_ticks: None,
+                        timing_error: None,
+                    },
+                },
+            );
+        };
+        let outcome =
+            super::super::packet::send_prepared_physical_packet_view_once(prepared, clock);
+        self.apply_packet_outcome(packet, outcome)
+    }
+
     fn do_emit_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(ref emitter) = self.custom_emitter {
@@ -227,7 +267,6 @@ impl TrackedKeyState {
             }
             SendTransactionStatus::PreparationRejected
             | SendTransactionStatus::ZeroProgress
-            | SendTransactionStatus::DownExpiredBeforeSend
             | SendTransactionStatus::ClockFailureBeforeSend => {
                 self.possibly_active_mask &= !to_send_mask;
             }
@@ -385,43 +424,15 @@ impl TrackedKeyState {
         prepared: &PreparedPhysicalPacket,
         started_ticks: QpcTicks,
     ) -> SendTransactionOutcome {
-        self.send_prepared_physical_packet_with_start_and_cutoff(prepared, started_ticks, None)
+        self.send_prepared_physical_packet_view_with_start(prepared.as_view(), started_ticks)
     }
 
-    /// Send a prepared packet with a caller-controlled authoritative start
-    /// timestamp and the same pre-syscall Down latest-start check as production.
-    pub fn send_prepared_physical_packet_with_start_and_cutoff(
-        &mut self,
-        prepared: &PreparedPhysicalPacket,
-        started_ticks: QpcTicks,
-        latest_down_start_qpc: Option<QpcTicks>,
-    ) -> SendTransactionOutcome {
-        self.send_prepared_physical_packet_view_with_start_and_cutoff(
-            prepared.as_view(),
-            started_ticks,
-            latest_down_start_qpc,
-        )
-    }
-
-    /// Send a prepared borrowed-view packet with a caller-controlled
-    /// authoritative start timestamp and the same pre-syscall Down latest-start check.
-    pub fn send_prepared_physical_packet_view_with_start_and_cutoff(
+    pub fn send_prepared_physical_packet_view_with_start(
         &mut self,
         prepared: PreparedPacketView<'_>,
         started_ticks: QpcTicks,
-        latest_down_start_qpc: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
-        if super::super::packet::down_latest_start_expired(
-            packet.down_mask,
-            started_ticks,
-            latest_down_start_qpc,
-        ) {
-            return self.apply_packet_outcome(
-                packet,
-                deadline_missed_before_send_outcome(packet, started_ticks),
-            );
-        }
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
@@ -459,11 +470,10 @@ impl TrackedKeyState {
                         },
                     );
                 };
-                super::super::packet::send_prepared_physical_packet_view_once_with_start_and_cutoff(
+                super::super::packet::send_prepared_physical_packet_view_once_with_start(
                     prepared,
                     clock,
                     started_ticks,
-                    latest_down_start_qpc,
                 )
             }
             #[cfg(not(any(test, feature = "test-support")))]
@@ -491,11 +501,10 @@ impl TrackedKeyState {
                         },
                     );
                 };
-                super::super::packet::send_prepared_physical_packet_view_once_with_start_and_cutoff(
+                super::super::packet::send_prepared_physical_packet_view_once_with_start(
                     prepared,
                     clock,
                     started_ticks,
-                    latest_down_start_qpc,
                 )
             }
         };
@@ -512,20 +521,7 @@ impl TrackedKeyState {
         &mut self,
         prepared: &PreparedPhysicalPacket,
     ) -> SendTransactionOutcome {
-        self.send_prepared_physical_packet_view_without_cutoff(prepared.as_view())
-    }
-
-    /// Send a trusted prepared packet and enforce an optional Down-only
-    /// latest-start boundary against the sender's authoritative pre-call QPC sample.
-    pub fn send_prepared_physical_packet_with_cutoff(
-        &mut self,
-        prepared: &PreparedPhysicalPacket,
-        latest_down_start_qpc: Option<QpcTicks>,
-    ) -> SendTransactionOutcome {
-        self.send_prepared_physical_packet_view_with_cutoff(
-            prepared.as_view(),
-            latest_down_start_qpc,
-        )
+        self.send_prepared_physical_packet_view(prepared.as_view())
     }
 
     /// Final authored boundary sender. Production always samples the true
@@ -534,157 +530,15 @@ impl TrackedKeyState {
     pub fn send_prepared_physical_packet_at_final_boundary(
         &mut self,
         prepared: &PreparedPhysicalPacket,
-        latest_down_start_qpc: Option<QpcTicks>,
         test_started_ticks: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(test_started_ticks) = test_started_ticks {
-            return self.send_prepared_physical_packet_with_start_and_cutoff(
-                prepared,
-                test_started_ticks,
-                latest_down_start_qpc,
-            );
+            return self.send_prepared_physical_packet_with_start(prepared, test_started_ticks);
         }
         #[cfg(not(any(test, feature = "test-support")))]
         let _ = test_started_ticks;
-        self.send_prepared_physical_packet_with_cutoff(prepared, latest_down_start_qpc)
-    }
-
-    /// Send a trusted borrowed prepared packet and enforce an optional
-    /// Down-only latest-start boundary against the sender's authoritative QPC sample.
-    pub fn send_prepared_physical_packet_view_with_cutoff(
-        &mut self,
-        prepared: PreparedPacketView<'_>,
-        latest_down_start_qpc: Option<QpcTicks>,
-    ) -> SendTransactionOutcome {
-        let packet = prepared.packet();
-        #[cfg(any(test, feature = "test-support"))]
-        let outcome = if self.custom_packet_emitter.is_some() {
-            let started_ticks = if let Some(clock) = self.qpc_clock {
-                match clock.now() {
-                    Ok(ticks) => Some(ticks),
-                    Err(error) => {
-                        self.timing_error = Some(error);
-                        return self.apply_packet_outcome(
-                            packet,
-                            clock_failure_before_send_outcome(packet, error),
-                        );
-                    }
-                }
-            } else if latest_down_start_qpc.is_some() {
-                return self.apply_packet_outcome(
-                    packet,
-                    SendTransactionOutcome {
-                        status: SendTransactionStatus::ClockFailureBeforeSend,
-                        evidence: SendEvidence {
-                            requested_mask: packet.up_mask | packet.down_mask,
-                            confirmed_mask: 0,
-                            skipped_mask: 0,
-                            first_inserted: 0,
-                            attempts: 0,
-                            zero_progress_retries: 0,
-                            retry_reason: PacketRetryReason::None,
-                            first_win32_error: None,
-                            last_win32_error: None,
-                            started_ticks: None,
-                            completed_ticks: None,
-                            timing_error: None,
-                        },
-                    },
-                );
-            } else {
-                None
-            };
-            if let Some(started_ticks) = started_ticks
-                && super::super::packet::down_latest_start_expired(
-                    packet.down_mask,
-                    started_ticks,
-                    latest_down_start_qpc,
-                )
-            {
-                return self.apply_packet_outcome(
-                    packet,
-                    deadline_missed_before_send_outcome(packet, started_ticks),
-                );
-            }
-            let emitter = self
-                .custom_packet_emitter
-                .as_ref()
-                .expect("packet emitter checked above");
-            let mut outcome = emitter(packet);
-            if let Some(started_ticks) = started_ticks {
-                outcome.evidence.started_ticks = Some(started_ticks);
-                if outcome
-                    .evidence
-                    .completed_ticks
-                    .is_some_and(|completed| completed < started_ticks)
-                {
-                    outcome.evidence.completed_ticks = Some(started_ticks);
-                }
-            }
-            outcome
-        } else {
-            let Some(clock) = self.qpc_clock else {
-                self.last_error = Some("packet sender has no QPC clock".to_string());
-                return self.apply_packet_outcome(
-                    packet,
-                    SendTransactionOutcome {
-                        status: SendTransactionStatus::ZeroProgress,
-                        evidence: SendEvidence {
-                            requested_mask: packet.up_mask | packet.down_mask,
-                            confirmed_mask: 0,
-                            skipped_mask: 0,
-                            first_inserted: 0,
-                            attempts: 0,
-                            zero_progress_retries: 0,
-                            retry_reason: PacketRetryReason::None,
-                            first_win32_error: None,
-                            last_win32_error: None,
-                            started_ticks: None,
-                            completed_ticks: None,
-                            timing_error: None,
-                        },
-                    },
-                );
-            };
-            super::super::packet::send_prepared_physical_packet_view_once_with_cutoff(
-                prepared,
-                clock,
-                latest_down_start_qpc,
-            )
-        };
-        #[cfg(not(any(test, feature = "test-support")))]
-        let outcome = {
-            let Some(clock) = self.qpc_clock else {
-                self.last_error = Some("packet sender has no QPC clock".to_string());
-                return self.apply_packet_outcome(
-                    packet,
-                    SendTransactionOutcome {
-                        status: SendTransactionStatus::ZeroProgress,
-                        evidence: SendEvidence {
-                            requested_mask: packet.up_mask | packet.down_mask,
-                            confirmed_mask: 0,
-                            skipped_mask: 0,
-                            first_inserted: 0,
-                            attempts: 0,
-                            zero_progress_retries: 0,
-                            retry_reason: PacketRetryReason::None,
-                            first_win32_error: None,
-                            last_win32_error: None,
-                            started_ticks: None,
-                            completed_ticks: None,
-                            timing_error: None,
-                        },
-                    },
-                );
-            };
-            super::super::packet::send_prepared_physical_packet_view_once_with_cutoff(
-                prepared,
-                clock,
-                latest_down_start_qpc,
-            )
-        };
-        self.apply_packet_outcome(packet, outcome)
+        self.send_prepared_physical_packet(prepared)
     }
 
     pub(crate) fn apply_packet_outcome(
@@ -757,13 +611,6 @@ impl TrackedKeyState {
                     "physical packet QPC failure ({:?})",
                     outcome.status
                 ));
-            }
-            SendTransactionStatus::DownExpiredBeforeSend => {
-                // This is a typed no-syscall timing result, not a transport
-                // rejection. The worker owns Production missed-Down recovery
-                // and records the boundary there. Keep backend rejection
-                // health clean because SendInput was never called.
-                self.last_error = None;
             }
         }
         if packet.up_mask != 0 && !outcome.is_success() {

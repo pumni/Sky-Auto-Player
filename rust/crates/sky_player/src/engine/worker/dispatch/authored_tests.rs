@@ -1,4 +1,3 @@
-use super::super::recovery::effective_down_sender_cutoff;
 use super::super::{PhysicalCommit, RecoveryDescriptor};
 use super::*;
 use sky_dispatch_core::coordinator::{PreparedAuthoredCommit, PreparedBatch};
@@ -127,7 +126,7 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .nth(1)
         .expect("authored sender handoff");
     assert!(sender.contains("send_prepared_physical_packet_at_final_boundary"));
-    assert!(!sender.contains("send_prepared_physical_packet_at_target_with_cutoff"));
+    assert!(!sender.contains("latest_start"));
 }
 
 #[test]
@@ -170,48 +169,12 @@ fn anchored_target_math_supports_explicit_offset() {
 }
 
 #[test]
-fn c2_normal_sender_cutoff_is_disabled_and_strict_cutoff_is_unchanged() {
-    let target = QpcTicks::from_raw(10_000);
-    let mut timing = WorkerTimingState::create_test_timing();
-    timing.strict_timing = false;
-
-    for margin in [0, 500, 1_000, 2_000, 3_000] {
-        let latest = target
-            .checked_add_duration(DurationTicks::from_raw(margin))
-            .expect("physical latest start");
-        let window = PhysicalTimingWindow {
-            authored_target_qpc: target,
-            musical_up_not_before_qpc: target,
-            down_not_before_qpc: target,
-            packet_not_before_qpc: target,
-            latest_down_start_qpc: Some(latest),
-            hold_floor_mask: 0,
-            release_floor_mask: 0,
-        };
-        assert_eq!(
-            effective_down_sender_cutoff(window, &timing).expect("normal cutoff"),
-            None,
-            "normal Down sender admission must not use a lateness cutoff"
-        );
-    }
-
-    timing.strict_timing = true;
-    let latest = target
-        .checked_add_duration(DurationTicks::from_raw(500))
-        .expect("strict physical latest start");
-    let window = PhysicalTimingWindow {
-        authored_target_qpc: target,
-        musical_up_not_before_qpc: target,
-        down_not_before_qpc: target,
-        packet_not_before_qpc: target,
-        latest_down_start_qpc: Some(latest),
-        hold_floor_mask: 0,
-        release_floor_mask: 0,
-    };
-    assert_eq!(
-        effective_down_sender_cutoff(window, &timing)
-            .expect("strict C1 cutoff")
-            .expect("strict Down cutoff"),
-        latest
-    );
+fn authored_sender_handoff_uses_one_canonical_prepared_sender() {
+    let source = include_str!("authored.rs");
+    let sender = source
+        .split("fn record_down_send_outcome")
+        .nth(1)
+        .expect("authored sender handoff");
+    assert!(sender.contains("send_prepared_physical_packet_at_final_boundary"));
+    assert!(!sender.contains("latest_start"));
 }

@@ -291,10 +291,7 @@ struct Samples {
     hot_wait_count: usize,
     cold_wait_count: usize,
     missed_pre_call_lateness_us: Vec<i64>,
-    missed_excess_beyond_latest_start_us: Vec<i64>,
     missed_down_unobserved_backlog: usize,
-    missed_down_physical_window_expired: usize,
-    missed_down_final_sender_window_expired: usize,
     transport_anomaly_count: usize,
     foreground_query_count: Vec<u64>,
     real_foreground_query_count: Vec<u64>,
@@ -339,7 +336,6 @@ impl Samples {
             alignment_to_wait_entry_us,
             prepared_stream_build_us,
             missed_pre_call_lateness_us,
-            missed_excess_beyond_latest_start_us,
             foreground_query_count,
             real_foreground_query_count,
             spin_time_us,
@@ -368,12 +364,6 @@ impl Samples {
         self.missed_down_unobserved_backlog = self
             .missed_down_unobserved_backlog
             .saturating_add(other.missed_down_unobserved_backlog);
-        self.missed_down_physical_window_expired = self
-            .missed_down_physical_window_expired
-            .saturating_add(other.missed_down_physical_window_expired);
-        self.missed_down_final_sender_window_expired = self
-            .missed_down_final_sender_window_expired
-            .saturating_add(other.missed_down_final_sender_window_expired);
         self.transport_anomaly_count = self
             .transport_anomaly_count
             .saturating_add(other.transport_anomaly_count);
@@ -394,10 +384,7 @@ impl Samples {
     fn record_step_failure(&mut self, step: &DispatchStep) {
         let reason = match step {
             DispatchStep::TerminateStatic(reason)
-                if matches!(
-                    *reason,
-                    "down_physical_window_expired" | "down_unobserved_backlog"
-                ) =>
+                if matches!(*reason, "down_unobserved_backlog") =>
             {
                 self.deadline_missed_count += 1;
                 *reason
@@ -545,7 +532,6 @@ fn baseline_status_name(status: SendTransactionStatus) -> &'static str {
         SendTransactionStatus::ZeroProgress => "ZeroProgress",
         SendTransactionStatus::PartialProgress => "PartialProgress",
         SendTransactionStatus::IntegrityLost => "IntegrityLost",
-        SendTransactionStatus::DownExpiredBeforeSend => "DownExpiredBeforeSend",
         SendTransactionStatus::ClockFailureBeforeSend => "ClockFailureBeforeSend",
         SendTransactionStatus::ClockFailureAfterSend => "ClockFailureAfterSend",
     }
@@ -564,8 +550,6 @@ fn baseline_dispatch_step_name(step: &DispatchStep) -> &'static str {
 fn baseline_down_miss_name(kind: DownMissKind) -> &'static str {
     match kind {
         DownMissKind::UnobservedBacklog => "UnobservedBacklog",
-        DownMissKind::PhysicalWindowExpired => "PhysicalWindowExpired",
-        DownMissKind::DownExpiredBeforeSend => "DownExpiredBeforeSend",
     }
 }
 
@@ -732,8 +716,7 @@ fn baseline_observation_timing(
             )
         }
         DispatchObservation::DownMiss(value) => {
-            let pre_call_qpc = matches!(value.kind, DownMissKind::DownExpiredBeforeSend)
-                .then_some(value.observed_qpc.as_u64());
+            let pre_call_qpc = None;
             let pre_call_minus_target_us = pre_call_qpc.map(|pre_call| {
                 signed_qpc_us(
                     qpc_clock,
@@ -906,10 +889,8 @@ fn baseline_floor_json(
         "musical_up_not_before_qpc": floor.musical_up_not_before_qpc.as_u64(),
         "down_not_before_qpc": floor.down_not_before_qpc.as_u64(),
         "packet_not_before_qpc": floor.packet_not_before_qpc.as_u64(),
-        "latest_down_start_qpc": floor.latest_down_start_qpc.map(QpcTicks::as_u64),
         "hold_floor_mask": floor.hold_floor_mask,
         "release_floor_mask": floor.release_floor_mask,
-        "down_feasible": floor.down_feasible,
         "packet_not_before_after_authored_qpc": floor
             .packet_not_before_qpc
             .as_u64()
@@ -977,7 +958,7 @@ fn baseline_completion_floor_variant(
             "non_send"
         },
         "packet_n_plus_one_packet_count": n1_packet_count,
-        "physical_window_expired_boundaries": harness
+        "missed_physical_window_boundaries": harness
             .missed_physical_window_boundaries_for_test(),
     })
 }
@@ -1052,21 +1033,21 @@ fn baseline_completion_floor_report(evidence: &mut BaselineEvidence) -> serde_js
         "delayed_completion": delayed_report,
         "delayed_completion_does_not_move_later_scheduling": delayed_does_not_move_later_scheduling,
         "control_has_no_downstream_floor_pressure": control_is_not_pressured,
-        "completion_feedback_physical_window_expired": control_report[
-            "physical_window_expired_boundaries"
+        "completion_feedback_missed_physical_boundaries": control_report[
+            "missed_physical_window_boundaries"
         ]
         .as_u64()
         .unwrap_or(0)
             != 0
-            || delayed_report["physical_window_expired_boundaries"]
+            || delayed_report["missed_physical_window_boundaries"]
                 .as_u64()
                 .unwrap_or(0)
                 != 0,
         "acceptance_clean": delayed_does_not_move_later_scheduling
             && completion_qpc_differs
             && control_is_not_pressured
-            && control_report["physical_window_expired_boundaries"] == json!(0)
-            && delayed_report["physical_window_expired_boundaries"] == json!(0),
+            && control_report["missed_physical_window_boundaries"] == json!(0)
+            && delayed_report["missed_physical_window_boundaries"] == json!(0),
         "policy_changed": true,
     })
 }
@@ -1384,31 +1365,6 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 DownMissKind::UnobservedBacklog => {
                     samples.missed_down_unobserved_backlog += 1;
                     "down_unobserved_backlog"
-                }
-                DownMissKind::PhysicalWindowExpired => {
-                    samples.missed_down_physical_window_expired += 1;
-                    "down_physical_window_expired"
-                }
-                DownMissKind::DownExpiredBeforeSend => {
-                    samples.missed_down_final_sender_window_expired += 1;
-                    let total_lateness_us = signed_qpc_us(
-                        qpc_clock,
-                        value.observed_qpc,
-                        value.physical_authored_target_qpc(),
-                    );
-                    samples.missed_pre_call_lateness_us.push(total_lateness_us);
-                    let Some(latest_down_start_qpc) = value.physical_latest_down_start_qpc() else {
-                        samples.record_observation_failure(
-                            "down_final_sender_window_expired_missing_latest_start",
-                        );
-                        return;
-                    };
-                    let excess_lateness_us =
-                        signed_qpc_us(qpc_clock, value.observed_qpc, latest_down_start_qpc);
-                    samples
-                        .missed_excess_beyond_latest_start_us
-                        .push(excess_lateness_us);
-                    "down_final_sender_window_expired"
                 }
             };
             // A recovered Down miss is a diagnostic companion to the
@@ -2954,13 +2910,8 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         },
         "missed_down": {
             "unobserved_backlog": samples.missed_down_unobserved_backlog,
-            "physical_window_expired": samples.missed_down_physical_window_expired,
-            "final_sender_window_expired": samples.missed_down_final_sender_window_expired,
         },
         "missed_pre_call_lateness_us": signed_summary(samples.missed_pre_call_lateness_us),
-        "missed_excess_beyond_latest_start_us": signed_summary(
-            samples.missed_excess_beyond_latest_start_us,
-        ),
         "transport_anomaly_count": samples.transport_anomaly_count,
         "foreground_query_count": unsigned_summary(samples.foreground_query_count),
         "real_foreground_query_count": unsigned_summary(samples.real_foreground_query_count),

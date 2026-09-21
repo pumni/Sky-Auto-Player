@@ -3281,6 +3281,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "sky_app_core",
  "sky_dispatch_core",
  "sky_dispatch_win32",
  "smallvec",

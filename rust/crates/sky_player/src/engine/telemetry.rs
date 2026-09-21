@@ -28,7 +28,6 @@ pub struct RtTraceRecord {
     pub physical_not_before_qpc_ticks: u64,
     pub hold_floor_qpc_ticks: u64,
     pub release_floor_qpc_ticks: u64,
-    pub latest_down_start_qpc_ticks: u64,
     pub pre_call_qpc_ticks: u64,
     pub sendinput_completion_qpc_ticks: u64,
     pub observation_qpc_ticks: u64,
@@ -67,7 +66,6 @@ pub struct RtTraceRecord {
     pub physical_not_before_qpc_available: bool,
     pub hold_floor_qpc_available: bool,
     pub release_floor_qpc_available: bool,
-    pub latest_down_start_qpc_available: bool,
     pub pre_call_qpc_available: bool,
     pub sendinput_completion_qpc_available: bool,
     pub observation_qpc_available: bool,
@@ -83,7 +81,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 16;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 17;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -98,7 +96,6 @@ pub(crate) const TRACE_SEND_STATUS_PREPARATION_REJECTED: u8 = 1;
 pub(crate) const TRACE_SEND_STATUS_ZERO_PROGRESS: u8 = 2;
 pub(crate) const TRACE_SEND_STATUS_PARTIAL_PROGRESS: u8 = 3;
 pub(crate) const TRACE_SEND_STATUS_INTEGRITY_LOST: u8 = 4;
-pub(crate) const TRACE_SEND_STATUS_DOWN_EXPIRED: u8 = 5;
 pub(crate) const TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND: u8 = 6;
 pub(crate) const TRACE_SEND_STATUS_CLOCK_FAILURE_AFTER_SEND: u8 = 7;
 pub(crate) const TRACE_SEND_STATUS_NOT_ATTEMPTED: u8 = 8;
@@ -110,7 +107,6 @@ pub(crate) const fn trace_send_status_code(status: SendTransactionStatus) -> u8 
         SendTransactionStatus::ZeroProgress => TRACE_SEND_STATUS_ZERO_PROGRESS,
         SendTransactionStatus::PartialProgress => TRACE_SEND_STATUS_PARTIAL_PROGRESS,
         SendTransactionStatus::IntegrityLost => TRACE_SEND_STATUS_INTEGRITY_LOST,
-        SendTransactionStatus::DownExpiredBeforeSend => TRACE_SEND_STATUS_DOWN_EXPIRED,
         SendTransactionStatus::ClockFailureBeforeSend => {
             TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND
         }
@@ -127,7 +123,6 @@ pub(crate) struct TraceTiming {
     pub(crate) physical_not_before_qpc_ticks: Option<u64>,
     pub(crate) hold_floor_qpc_ticks: Option<u64>,
     pub(crate) release_floor_qpc_ticks: Option<u64>,
-    pub(crate) latest_down_start_qpc_ticks: Option<u64>,
     pub(crate) hold_floor_mask: u16,
     pub(crate) release_floor_mask: u16,
     pub(crate) pre_call_qpc_ticks: Option<u64>,
@@ -220,8 +215,6 @@ impl RtTraceRecord {
             hold_floor_qpc_available: timing.hold_floor_qpc_ticks.is_some(),
             release_floor_qpc_ticks: timing.release_floor_qpc_ticks.unwrap_or_default(),
             release_floor_qpc_available: timing.release_floor_qpc_ticks.is_some(),
-            latest_down_start_qpc_ticks: timing.latest_down_start_qpc_ticks.unwrap_or_default(),
-            latest_down_start_qpc_available: timing.latest_down_start_qpc_ticks.is_some(),
             hold_floor_mask: timing.hold_floor_mask,
             release_floor_mask: timing.release_floor_mask,
             pre_call_qpc_ticks: timing.pre_call_qpc_ticks.unwrap_or_default(),
@@ -263,9 +256,7 @@ pub(crate) fn trace_outcome_code(outcome: &str) -> u8 {
         "strict_completion_slo_exceeded" => 6,
         "chord_integrity_lost" => 7,
         "aborted" => 8,
-        "down_final_sender_window_expired" => 9,
         "down_unobserved_backlog" => 10,
-        "down_physical_window_expired" => 11,
         _ => 255,
     }
 }
@@ -506,7 +497,6 @@ mod tests {
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
                 release_floor_qpc_ticks: None,
-                latest_down_start_qpc_ticks: None,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
                 pre_call_qpc_ticks: None,

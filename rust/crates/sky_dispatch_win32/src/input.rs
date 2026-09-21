@@ -23,14 +23,9 @@ pub(crate) use packet::PreparedTaggedCalibrationPacket;
 pub use packet::{
     MAX_PACKET_EVENTS, PreparedPacketView, PreparedPhysicalPacket,
     send_physical_packet_once_with_clock, send_prepared_physical_packet_once,
-    send_prepared_physical_packet_once_at_target_with_cutoff,
-    send_prepared_physical_packet_once_with_cutoff, send_prepared_physical_packet_once_with_start,
-    send_prepared_physical_packet_once_with_start_and_cutoff,
-    send_prepared_physical_packet_view_once,
-    send_prepared_physical_packet_view_once_at_target_with_cutoff,
-    send_prepared_physical_packet_view_once_with_cutoff,
+    send_prepared_physical_packet_once_at_target, send_prepared_physical_packet_once_with_start,
+    send_prepared_physical_packet_view_once, send_prepared_physical_packet_view_once_at_target,
     send_prepared_physical_packet_view_once_with_start,
-    send_prepared_physical_packet_view_once_with_start_and_cutoff,
 };
 pub use physical::is_scan_code_physically_down;
 pub use profile::{
