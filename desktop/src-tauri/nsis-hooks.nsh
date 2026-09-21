@@ -15,6 +15,10 @@
       StrCpy $R0 $R0 $R2 1
     sap_migration_apply_root:
       StrCpy $INSTDIR $R0
+      ; The Tauri template calls SetOutPath before this hook. Re-apply it so
+      ; the payload is copied to the preserved migration root, not the
+      ; bundle-generated default root.
+      SetOutPath $INSTDIR
   ${EndIf}
 !macroend
 

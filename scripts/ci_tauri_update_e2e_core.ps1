@@ -906,18 +906,31 @@ try {
   # installed candidate so the same packaged binary still proves the update
   # handoff without depending on a headless runner's restart behavior.
   $candidateRegistryEvidence = $null
+  $candidateAppSha256 = $null
+  $candidateInstallReady = $false
+  $lastCandidateInstallStateError = $null
   $candidateInstallDeadline = [DateTime]::UtcNow.AddSeconds(180)
   while ([DateTime]::UtcNow -lt $candidateInstallDeadline) {
     try {
       $candidateRegistryEvidence = Assert-V4MigrationPublisherState -ExpectedPublisher $candidatePublisher -ExpectedVersion $candidateVersion -ExpectedInstallRoot $installRoot
+      if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
+        throw "Installed candidate app is missing: $appPath"
+      }
+      $candidateAppSha256 = Get-ByteSha256 ([IO.File]::ReadAllBytes($appPath))
+      if ($candidateAppSha256 -ceq $bridgeAppSha256) {
+        throw "Installed app still matches the bridge binary: $candidateAppSha256"
+      }
+      $candidateInstallReady = $true
       break
     } catch {
+      $lastCandidateInstallStateError = $_.Exception.Message
       Start-Sleep -Milliseconds 250
     }
   }
-  if ($null -eq $candidateRegistryEvidence) {
-    throw 'Timed out waiting for the official updater installer to publish candidate migration state'
+  if (-not $candidateInstallReady) {
+    throw "Timed out waiting for the official updater installer to publish candidate migration state and replace the installed executable: $lastCandidateInstallStateError"
   }
+  Write-Host "Updater candidate install barrier: PASS (registry=$candidatePublisher/$candidateVersion; app_sha256=$candidateAppSha256; bridge_app_sha256=$bridgeAppSha256)"
   $candidateProcess = Start-Process -FilePath $appPath -ArgumentList (@(
     '--selftest-desktop-update',
     '--selftest-update-marker', $markerPath,
@@ -925,8 +938,15 @@ try {
     '--selftest-update-safety-marker', $safetyPath
   ) + $fixtureRuntimeArguments) -WindowStyle Hidden -PassThru
   $smokeScope.TrackedProcesses.Add($candidateProcess)
-  Wait-Process -Id $candidateProcess.Id -Timeout 180
-  Wait-ForPath -Path $markerPath
+  $completedCandidateProcess = Wait-Process -Id $candidateProcess.Id -Timeout 180 -ErrorAction SilentlyContinue
+  if ($null -eq $completedCandidateProcess) {
+    throw "Candidate executable did not exit within 180 seconds: $appPath"
+  }
+  $candidateProcess.Refresh()
+  if ($candidateProcess.ExitCode -ne 0) {
+    throw "Candidate executable exited with code $($candidateProcess.ExitCode): $appPath"
+  }
+  Wait-ForPath -Path $markerPath -TimeoutSeconds 10
   $completion = ([IO.File]::ReadAllText($markerPath)).Trim()
   if ($completion -ne "update-complete:$candidateVersion") {
     throw "Bridge client did not apply the new-root candidate: $completion"
