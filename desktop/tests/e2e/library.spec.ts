@@ -850,7 +850,7 @@ test('Now Playing does not pull a browsed search context back to the playback co
 
   await page.getByLabel('Search library').fill('Song');
   const list = page.locator('.track-table');
-  await expect(page.getByText(/songs$/)).toBeVisible();
+  await expect(page.locator('.track-browser-count')).toHaveText('488 songs');
   await list.evaluate((element) => {
     element.scrollTop = 2800;
     element.dispatchEvent(new Event('scroll'));
