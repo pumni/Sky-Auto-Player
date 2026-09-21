@@ -52,6 +52,26 @@ const FIXTURE_PORT_ARG: &str = "--selftest-update-fixture-port";
 #[cfg(feature = "tauri-update-fixture")]
 const FIXTURE_PUBLIC_KEY_ARG: &str = "--selftest-update-fixture-public-key";
 
+#[cfg(windows)]
+fn updater_install_root_arg() -> Result<String, String> {
+    let executable = std::env::current_exe().map_err(|error| {
+        format!("could not resolve the current executable for updater install root: {error}")
+    })?;
+    let root = executable
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "current executable has no install root".to_owned())?;
+    let root = root.to_string_lossy();
+    if root.contains('"') {
+        return Err("current updater install root contains an unsupported quote".to_owned());
+    }
+    Ok(if root.contains(' ') || root.contains('\t') {
+        format!(r#"/D="{root}""#)
+    } else {
+        format!("/D={root}")
+    })
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct NativeUpdateCandidate {
     pub version: String,
@@ -703,6 +723,8 @@ impl<R: Runtime> UpdateService<R> {
             .map_err(|error| format!("update metadata endpoint rejected: {error}"))?
             .on_before_exit(self.install_safety_hook())
             .restart_after_install(true);
+        #[cfg(windows)]
+        let builder = builder.installer_arg(updater_install_root_arg()?);
         #[cfg(feature = "tauri-update-fixture")]
         let builder = builder.no_proxy();
         tauri::async_runtime::block_on(builder.build().map_err(|error| error.to_string())?.check())
