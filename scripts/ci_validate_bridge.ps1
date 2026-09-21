@@ -10,6 +10,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$SourceSha,
     [string]$Version,
+    [string]$Publisher,
+    [string]$Identifier,
     [string]$SentinelId,
     [string]$SentinelContentSha256,
     [string]$RepositoryRoot = (Get-Location).Path
@@ -73,6 +75,8 @@ function Read-BridgeContract {
         [Parameter(Mandatory = $true)] [string]$Root,
         [Parameter(Mandatory = $true)] [string]$ExpectedSourceSha,
         [string]$ExpectedVersion,
+        [string]$ExpectedPublisher,
+        [string]$ExpectedIdentifier,
         [string]$ExpectedSentinelId,
         [string]$ExpectedSentinelContentSha256
     )
@@ -96,7 +100,7 @@ function Read-BridgeContract {
         Fail "bridge.json is not valid JSON: $($_.Exception.Message)"
     }
     $requiredFields = @(
-        "schema_version", "source_sha", "version", "installer", "installer_sha256",
+        "schema_version", "source_sha", "version", "publisher", "identifier", "installer", "installer_sha256",
         "sentinel_id", "sentinel_content_sha256"
     )
     $observedFields = @($metadata.PSObject.Properties.Name)
@@ -115,6 +119,18 @@ function Read-BridgeContract {
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and [string]$metadata.version -cne $ExpectedVersion) {
         Fail "bridge version does not match the producer/consumer binding"
+    }
+    if ([string]$metadata.publisher -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$') {
+        Fail "bridge publisher is not a bounded package publisher: $($metadata.publisher)"
+    }
+    if ([string]$metadata.identifier -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+        Fail "bridge identifier is not a bounded package identifier: $($metadata.identifier)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedPublisher) -and [string]$metadata.publisher -cne $ExpectedPublisher) {
+        Fail "bridge publisher does not match the producer/consumer binding"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedIdentifier) -and [string]$metadata.identifier -cne $ExpectedIdentifier) {
+        Fail "bridge identifier does not match the producer/consumer binding"
     }
     Assert-SafeFileName ([string]$metadata.installer) "installer"
     if ([string]$metadata.installer -notmatch '-setup\.exe$') {
@@ -155,6 +171,8 @@ function Read-BridgeContract {
         InstallerPath = $installerPath
         SourceSha = ([string]$metadata.source_sha).ToLowerInvariant()
         Version = [string]$metadata.version
+        Publisher = [string]$metadata.publisher
+        Identifier = [string]$metadata.identifier
         InstallerSha256 = $installerSha
         SentinelId = [string]$metadata.sentinel_id
         SentinelContentSha256 = ([string]$metadata.sentinel_content_sha256).ToLowerInvariant()
@@ -163,12 +181,15 @@ function Read-BridgeContract {
 
 function New-BridgeContract {
     if ([string]::IsNullOrWhiteSpace($BundleDir) -or [string]::IsNullOrWhiteSpace($OutputRoot) -or
-        [string]::IsNullOrWhiteSpace($Version) -or [string]::IsNullOrWhiteSpace($SentinelId) -or
+        [string]::IsNullOrWhiteSpace($Version) -or [string]::IsNullOrWhiteSpace($Publisher) -or
+        [string]::IsNullOrWhiteSpace($Identifier) -or [string]::IsNullOrWhiteSpace($SentinelId) -or
         [string]::IsNullOrWhiteSpace($SentinelContentSha256)) {
-        Fail "Create mode requires BundleDir, OutputRoot, Version, SentinelId, and SentinelContentSha256"
+        Fail "Create mode requires BundleDir, OutputRoot, Version, Publisher, Identifier, SentinelId, and SentinelContentSha256"
     }
     $sourceSha = Assert-CommitSha $SourceSha "source SHA"
     if ($Version -notmatch $semVerPattern) { Fail "bridge version is not canonical SemVer: $Version" }
+    if ($Publisher -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$') { Fail "bridge publisher is not bounded: $Publisher" }
+    if ($Identifier -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') { Fail "bridge identifier is not bounded: $Identifier" }
     Assert-Sentinel $SentinelId "sentinel ID"
     if ($SentinelContentSha256 -notmatch $shaPattern) { Fail "sentinel content SHA is not a SHA-256 digest" }
     $bundlePath = (Resolve-Path -LiteralPath $BundleDir -ErrorAction Stop).Path
@@ -183,6 +204,8 @@ function New-BridgeContract {
         schema_version = 1
         source_sha = $sourceSha
         version = $Version
+        publisher = $Publisher
+        identifier = $Identifier
         installer = $installer.Name
         installer_sha256 = Get-Sha256 (Join-Path $OutputRoot $installer.Name)
         sentinel_id = $SentinelId
@@ -192,14 +215,14 @@ function New-BridgeContract {
         (Join-Path $OutputRoot "bridge.json"),
         ($metadata | ConvertTo-Json -Compress),
         [Text.UTF8Encoding]::new($false))
-    return Read-BridgeContract $OutputRoot $sourceSha $Version $SentinelId $SentinelContentSha256
+    return Read-BridgeContract $OutputRoot $sourceSha $Version $Publisher $Identifier $SentinelId $SentinelContentSha256
 }
 
 if ($Mode -eq "Create") {
     $contract = New-BridgeContract
 } else {
     if ([string]::IsNullOrWhiteSpace($BridgeRoot)) { Fail "Validate mode requires BridgeRoot" }
-    $contract = Read-BridgeContract $BridgeRoot $SourceSha $Version $SentinelId $SentinelContentSha256
+    $contract = Read-BridgeContract $BridgeRoot $SourceSha $Version $Publisher $Identifier $SentinelId $SentinelContentSha256
 }
 
-Write-Output "CI updater-bridge contract: PASS (source=$($contract.SourceSha); version=$($contract.Version); installer=$($contract.InstallerSha256); sentinel=$($contract.SentinelId); sentinel_sha256=$($contract.SentinelContentSha256))"
+Write-Output "CI updater-bridge contract: PASS (source=$($contract.SourceSha); version=$($contract.Version); publisher=$($contract.Publisher); identifier=$($contract.Identifier); installer=$($contract.InstallerSha256); sentinel=$($contract.SentinelId); sentinel_sha256=$($contract.SentinelContentSha256))"

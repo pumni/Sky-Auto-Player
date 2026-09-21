@@ -704,6 +704,16 @@ impl<R: Runtime> UpdateService<R> {
             .on_before_exit(self.install_safety_hook())
             .restart_after_install(true);
         #[cfg(feature = "tauri-update-fixture")]
+        let builder = {
+            // The fixture qualifies the official installer transaction itself
+            // and launches the installed candidate from the harness. Disabling
+            // the plugin's automatic restart keeps the qualification bounded
+            // on headless Windows runners while production retains restart.
+            builder.restart_after_install(false)
+        };
+        #[cfg(feature = "tauri-update-fixture")]
+        let builder = builder.installer_args(["/S", "/NS"]);
+        #[cfg(feature = "tauri-update-fixture")]
         let builder = builder.no_proxy();
         tauri::async_runtime::block_on(builder.build().map_err(|error| error.to_string())?.check())
             .map_err(|error| format!("update check failed: {error}"))

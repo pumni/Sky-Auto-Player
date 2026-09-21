@@ -6,17 +6,22 @@ param(
     [string]$TargetRoot,
     [Parameter(Mandatory = $true)]
     [string]$SourceSha,
+    [string]$BridgeVersion = "4.1.3",
+    [string]$BridgePublisher = "github",
     [string]$RepositoryRoot = (Get-Location).Path
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$bridgeVersion = "4.0.0-alpha.1"
+$bridgeVersion = $BridgeVersion
+$bridgePublisher = $BridgePublisher
+$bridgeIdentifier = "io.github.pumni.skyautoplayer"
 $repoRoot = (Resolve-Path -LiteralPath $RepositoryRoot -ErrorAction Stop).Path
 $desktopRoot = Join-Path $repoRoot "desktop"
 $cargoPath = Join-Path $desktopRoot "src-tauri/Cargo.toml"
 $lockPath = Join-Path $repoRoot "rust/Cargo.lock"
+$tauriConfigPath = Join-Path $desktopRoot "src-tauri/tauri.conf.json"
 $catalogManifestPath = Join-Path $repoRoot "builtin-songs/manifest.json"
 $runnerTemp = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
     throw "RUNNER_TEMP is required for the disposable bridge build"
@@ -66,6 +71,24 @@ function Convert-FixtureLockVersion([string]$Source) {
     return $pattern.Replace($Source, ('${1}' + $bridgeVersion + '${2}'), 1)
 }
 
+function Convert-FixturePublisher([string]$Source) {
+    $pattern = [regex]::new('(?m)^(\s*"publisher"\s*:\s*")[^"]+("\s*,?\s*$)')
+    if ($pattern.Matches($Source).Count -ne 1) {
+        throw "Bridge build could not uniquely locate the Tauri bundle publisher"
+    }
+    $converted = $pattern.Replace($Source, ('${1}' + $bridgePublisher + '${2}'), 1)
+    if ($bridgePublisher -ceq 'github') {
+        $hookPattern = [regex]::new('(?m)^\s*"installerHooks"\s*:\s*"[^"]+",?\r?\n')
+        if ($hookPattern.Matches($converted).Count -ne 1) {
+            throw "Historical bridge build could not uniquely locate the migration installer hook"
+        }
+        $converted = $hookPattern.Replace($converted, '', 1)
+        $commaPattern = [regex]::new('(?m)^(\s*"installMode"\s*:\s*"[^"]+"),\r?\n(\s*})')
+        $converted = $commaPattern.Replace($converted, ('${1}' + [Environment]::NewLine + '${2}'), 1)
+    }
+    return $converted
+}
+
 function Set-CatalogSentinel {
     param(
         [Parameter(Mandatory = $true)] [string]$SentinelId,
@@ -101,6 +124,11 @@ function Write-BridgeBuildConfig([string]$Path, [string]$BuildPublicKey) {
 $sourceSha = Assert-SourceSha $SourceSha
 $cargoSource = [IO.File]::ReadAllBytes($cargoPath)
 $lockSource = [IO.File]::ReadAllBytes($lockPath)
+$tauriConfigSource = [IO.File]::ReadAllBytes($tauriConfigPath)
+$tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
+if ([string]$tauriConfig.identifier -cne $bridgeIdentifier) {
+    throw "Bridge build identifier does not match the permanent v4 identity: $($tauriConfig.identifier)"
+}
 $manifestSource = [IO.File]::ReadAllBytes($catalogManifestPath)
 $manifest = Get-Content -LiteralPath $catalogManifestPath -Raw | ConvertFrom-Json
 $sentinel = @($manifest.songs | Where-Object { [string]$_.path -like "sheets/*.json" }) | Select-Object -First 1
@@ -126,6 +154,7 @@ $oldAuthenticodeMode = [Environment]::GetEnvironmentVariable("SKY_AUTHENTICODE_M
 try {
     [IO.File]::WriteAllBytes($cargoPath, [Text.Encoding]::UTF8.GetBytes((Convert-FixtureCargoVersion ([Text.Encoding]::UTF8.GetString($cargoSource)))))
     [IO.File]::WriteAllBytes($lockPath, [Text.Encoding]::UTF8.GetBytes((Convert-FixtureLockVersion ([Text.Encoding]::UTF8.GetString($lockSource)))))
+    [IO.File]::WriteAllBytes($tauriConfigPath, [Text.Encoding]::UTF8.GetBytes((Convert-FixturePublisher ([Text.Encoding]::UTF8.GetString($tauriConfigSource)))))
     Set-CatalogSentinel -SentinelId $sentinelId -SentinelRelativePath $sentinelRelativePath -SentinelBytes $sentinelBytes -SentinelSha256 $sentinelSha256
 
     Push-Location $desktopRoot
@@ -169,6 +198,8 @@ try {
         -OutputRoot $contractPath `
         -SourceSha $sourceSha `
         -Version $bridgeVersion `
+        -Publisher $bridgePublisher `
+        -Identifier $bridgeIdentifier `
         -SentinelId $sentinelId `
         -SentinelContentSha256 $sentinelSha256 `
         -RepositoryRoot $repoRoot
@@ -177,14 +208,16 @@ try {
     }
     Remove-Item -LiteralPath $outputPath -Recurse -Force
     Move-Item -LiteralPath $contractPath -Destination $outputPath
-    Write-Host "Updater bridge producer: PASS (source=$sourceSha; version=$bridgeVersion; sentinel=$sentinelId; sentinel_sha256=$sentinelSha256)"
+    Write-Host "Updater bridge producer: PASS (source=$sourceSha; version=$bridgeVersion; publisher=$bridgePublisher; identifier=$bridgeIdentifier; sentinel=$sentinelId; sentinel_sha256=$sentinelSha256)"
 } finally {
     [IO.File]::WriteAllBytes($cargoPath, $cargoSource)
     [IO.File]::WriteAllBytes($lockPath, $lockSource)
+    [IO.File]::WriteAllBytes($tauriConfigPath, $tauriConfigSource)
     [IO.File]::WriteAllBytes($catalogManifestPath, $manifestSource)
     [IO.File]::WriteAllBytes($sentinelPath, $songSource)
     if ((Get-BytesSha256 ([IO.File]::ReadAllBytes($cargoPath))) -ne (Get-BytesSha256 $cargoSource) -or
         (Get-BytesSha256 ([IO.File]::ReadAllBytes($lockPath))) -ne (Get-BytesSha256 $lockSource) -or
+        (Get-BytesSha256 ([IO.File]::ReadAllBytes($tauriConfigPath))) -ne (Get-BytesSha256 $tauriConfigSource) -or
         (Get-BytesSha256 ([IO.File]::ReadAllBytes($catalogManifestPath))) -ne (Get-BytesSha256 $manifestSource) -or
         (Get-BytesSha256 ([IO.File]::ReadAllBytes($sentinelPath))) -ne (Get-BytesSha256 $songSource)) {
         throw "Bridge producer failed to restore tracked source bytes exactly"

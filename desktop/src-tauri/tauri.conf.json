@@ -37,6 +37,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "pumni",
     "icon": ["icons/icon.ico"],
     "resources": {
       "../../songs/*": "builtin-songs/sheets",
@@ -47,7 +48,8 @@
     "windows": {
       "signCommand": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/sign_v4_authenticode.ps1 %1",
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "nsis-hooks.nsh"
       }
     }
   },
