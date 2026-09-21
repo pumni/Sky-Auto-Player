@@ -938,11 +938,14 @@ try {
     '--selftest-update-safety-marker', $safetyPath
   ) + $fixtureRuntimeArguments) -WindowStyle Hidden -PassThru
   $smokeScope.TrackedProcesses.Add($candidateProcess)
-  $completedCandidateProcess = Wait-Process -Id $candidateProcess.Id -Timeout 180 -ErrorAction SilentlyContinue
-  if ($null -eq $completedCandidateProcess) {
+  $candidateProcess.Refresh()
+  if (-not $candidateProcess.HasExited) {
+    Wait-Process -Id $candidateProcess.Id -Timeout 180 -ErrorAction SilentlyContinue | Out-Null
+    $candidateProcess.Refresh()
+  }
+  if (-not $candidateProcess.HasExited) {
     throw "Candidate executable did not exit within 180 seconds: $appPath"
   }
-  $candidateProcess.Refresh()
   if ($candidateProcess.ExitCode -ne 0) {
     throw "Candidate executable exited with code $($candidateProcess.ExitCode): $appPath"
   }
