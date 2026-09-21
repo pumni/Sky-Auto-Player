@@ -731,6 +731,8 @@ impl<R: Runtime> UpdateService<R> {
             // on headless Windows runners while production retains restart.
             builder.restart_after_install(false)
         };
+        #[cfg(feature = "tauri-update-fixture")]
+        let builder = builder.installer_args(["/S", "/NS"]);
         #[cfg(windows)]
         let builder = builder.installer_arg(updater_install_root_arg()?);
         #[cfg(feature = "tauri-update-fixture")]
