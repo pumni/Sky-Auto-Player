@@ -2,9 +2,9 @@
 ; The stable uninstall identity owns the install root. Do not let a publisher
 ; namespace change select a stale or default root during an update.
 !macro NSIS_HOOK_PREINSTALL
-  ; The updater supplies /D with the current executable's root. Prefer it when
-  ; it names an existing installation; this also survives a child installer
-  ; process that cannot see the caller's HKCU registry view.
+  ; Prefer an explicit /D root when supplied. Otherwise recover the current
+  ; root from the stable uninstall identity; this also survives a child
+  ; installer process that cannot see the caller's HKCU registry view.
   IfFileExists "$INSTDIR\sky_desktop_shell.exe" sap_migration_explicit_root sap_migration_read_registry
   sap_migration_explicit_root:
     Goto sap_migration_done
