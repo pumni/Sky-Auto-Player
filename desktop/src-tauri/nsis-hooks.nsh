@@ -7,19 +7,20 @@
   ; process that cannot see the caller's HKCU registry view.
   IfFileExists "$INSTDIR\sky_desktop_shell.exe" sap_migration_explicit_root sap_migration_read_registry
   sap_migration_explicit_root:
-    Goto sap_migration_root_checked
+    Goto sap_migration_done
   sap_migration_read_registry:
   ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sky Auto Player" "InstallLocation"
   ${If} $R0 != ""
     StrCpy $R1 $R0 1
-    StrCmp $R1 $\" sap_migration_strip_quotes sap_migration_root_checked
+    StrCmp $R1 $\" sap_migration_strip_quotes sap_migration_apply_root
     sap_migration_strip_quotes:
       StrLen $R2 $R0
       IntOp $R2 $R2 - 2
       StrCpy $R0 $R0 $R2 1
-    sap_migration_root_checked:
-    StrCpy $INSTDIR $R0
+    sap_migration_apply_root:
+      StrCpy $INSTDIR $R0
   ${EndIf}
+  sap_migration_done:
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
