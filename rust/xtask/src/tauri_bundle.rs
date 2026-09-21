@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 const CONFIG_PATH: &str = "desktop/src-tauri/tauri.conf.json";
 const V4_IDENTIFIER: &str = "io.github.pumni.skyautoplayer";
+const V4_BUNDLE_PUBLISHER: &str = "pumni";
 const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
@@ -73,6 +74,9 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
     }
 
     let bundle = object(config, "bundle")?;
+    if bundle.get("publisher").and_then(Value::as_str) != Some(V4_BUNDLE_PUBLISHER) {
+        return Err("Tauri bundle publisher does not match the v4 package contract".into());
+    }
     if !bool_field(bundle, "active")? {
         return Err("Tauri bundling must be enabled for the v4 package".into());
     }
@@ -539,6 +543,7 @@ mod tests {
             "build": {},
             "bundle": {
                 "active": true,
+                "publisher": V4_BUNDLE_PUBLISHER,
                 "targets": [NSIS_TARGET],
                 "createUpdaterArtifacts": true,
                 "resources": {
@@ -573,6 +578,27 @@ mod tests {
         let mut config = valid_config();
         config["version"] = json!("4.0.0-alpha.1");
         assert!(validate_config_value(&config, "4.0.0-alpha.1").is_err());
+    }
+
+    #[test]
+    fn config_contract_requires_the_exact_bundle_publisher() {
+        assert!(validate_config_value(&valid_config(), "4.0.0-alpha.1").is_ok());
+
+        let mut missing = valid_config();
+        missing["bundle"]
+            .as_object_mut()
+            .expect("valid bundle object")
+            .remove("publisher");
+        assert!(validate_config_value(&missing, "4.0.0-alpha.1").is_err());
+
+        for publisher in ["github", "Sky Auto Player Team"] {
+            let mut wrong = valid_config();
+            wrong["bundle"]["publisher"] = json!(publisher);
+            assert!(
+                validate_config_value(&wrong, "4.0.0-alpha.1").is_err(),
+                "{publisher}"
+            );
+        }
     }
 
     #[test]

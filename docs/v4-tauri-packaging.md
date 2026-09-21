@@ -15,6 +15,8 @@ policy, but it does not block this project's release.
 
 ## Canonical package contract
 
+- Package metadata publisher: `pumni` (Tauri bundle metadata only; it does not
+  create an Authenticode signer identity)
 - Application identifier: `io.github.pumni.skyautoplayer`
 - Version source: `desktop/src-tauri/Cargo.toml`
 - Windows target: NSIS only

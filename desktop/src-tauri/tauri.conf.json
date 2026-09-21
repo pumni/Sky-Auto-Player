@@ -37,6 +37,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "pumni",
     "icon": ["icons/icon.ico"],
     "resources": {
       "../../songs/*": "builtin-songs/sheets",
