@@ -406,6 +406,9 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   await page.goto('/');
   await selectPalette(page, 'cyberpunk');
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
+  await expect
+    .poll(() => page.evaluate(() => window.matchMedia('(forced-colors: active)').matches))
+    .toBe(true);
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   const selectedRow = page.locator('.track-row.is-selected');
   const systemColor = async (
@@ -423,33 +426,38 @@ test('forced colors retain system-state mappings and no palette leakage', async 
       },
       { property, value },
     );
-  await expect(styleValue(selectedRow, 'backgroundColor')).resolves.toBe(
-    await systemColor('backgroundColor', 'Highlight'),
-  );
-  await expect(styleValue(selectedRow, 'color')).resolves.toBe(
-    await systemColor('color', 'HighlightText'),
-  );
+  const expectSystemColor = async (
+    locator: Locator,
+    property: 'color' | 'backgroundColor' | 'borderLeftColor' | 'outlineColor',
+    value: string,
+  ) => {
+    const expected = await systemColor(property, value);
+    await expect
+      .poll(() => styleValue(locator, property), {
+        message: `wait for forced-colors ${property}=${value} to apply`,
+        timeout: 2_000,
+      })
+      .toBe(expected);
+  };
+  await expectSystemColor(selectedRow, 'backgroundColor', 'Highlight');
+  await expectSystemColor(selectedRow, 'color', 'HighlightText');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Playback', exact: true }).click();
   const activeSettingsNav = settings.getByRole('button', { name: 'Playback', exact: true });
   await expect(activeSettingsNav).toHaveClass(/is-active/);
-  await expect(styleValue(activeSettingsNav, 'backgroundColor')).resolves.toBe(
-    await systemColor('backgroundColor', 'Highlight'),
-  );
+  await expectSystemColor(activeSettingsNav, 'backgroundColor', 'Highlight');
   const autoPlay = settings.getByRole('switch', { name: 'Auto Play' });
-  await expect(
-    styleValue(autoPlay.locator('.auto-play-switch-track'), 'backgroundColor'),
-  ).resolves.toBe(await systemColor('backgroundColor', 'Highlight'));
+  await expectSystemColor(
+    autoPlay.locator('.auto-play-switch-track'),
+    'backgroundColor',
+    'Highlight',
+  );
   await settings.getByRole('button', { name: 'Close settings' }).click();
 
   const separator = page.getByRole('separator', { name: 'Resize library navigator' });
   await focusSeparatorWithKeyboard(page, separator);
-  await expect(styleValue(separator, 'outlineColor')).resolves.toBe(
-    await systemColor('outlineColor', 'Highlight'),
-  );
-  await expect(styleValue(separator.locator('span'), 'borderLeftColor')).resolves.toBe(
-    await systemColor('borderLeftColor', 'Highlight'),
-  );
+  await expectSystemColor(separator, 'outlineColor', 'Highlight');
+  await expectSystemColor(separator.locator('span'), 'borderLeftColor', 'Highlight');
 });
