@@ -88,18 +88,51 @@ pub struct PlaybackPatch {
     pub fps: Option<u16>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
 pub struct SettingsPatch {
-    #[serde(alias = "theme")]
     pub palette: Option<String>,
     pub telemetry_enabled: Option<bool>,
     pub verbose_hud: Option<bool>,
     pub playback_defaults: Option<PlaybackPatch>,
     pub auto_play: Option<bool>,
     pub update_preferences: Option<UpdatePreferencesPatch>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+struct SettingsPatchWire {
+    #[serde(alias = "theme")]
+    palette: Option<String>,
+    telemetry_enabled: Option<bool>,
+    verbose_hud: Option<bool>,
+    playback_defaults: Option<PlaybackPatch>,
+    auto_play: Option<bool>,
+    update_preferences: Option<UpdatePreferencesPatch>,
+}
+
+impl From<SettingsPatchWire> for SettingsPatch {
+    fn from(value: SettingsPatchWire) -> Self {
+        Self {
+            palette: value.palette,
+            telemetry_enabled: value.telemetry_enabled,
+            verbose_hud: value.verbose_hud,
+            playback_defaults: value.playback_defaults,
+            auto_play: value.auto_play,
+            update_preferences: value.update_preferences,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SettingsPatch {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        SettingsPatchWire::deserialize(deserializer).map(Into::into)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1042,6 +1075,43 @@ mod tests {
         let serialized = serde_json::to_value(&patch).expect("serialize canonical patch");
         assert_eq!(serialized["palette"], "slate");
         assert!(serialized.get("theme").is_none());
+    }
+
+    #[test]
+    fn settings_patch_accepts_canonical_palette_input() {
+        let patch: SettingsPatch =
+            serde_json::from_value(json!({"palette": "classic"})).expect("canonical patch input");
+        assert_eq!(patch.palette.as_deref(), Some("classic"));
+    }
+
+    #[test]
+    fn settings_patch_rejects_unknown_fields() {
+        let unknown = serde_json::from_value::<SettingsPatch>(json!({
+            "palette": "aurora",
+            "unexpected": true,
+        }));
+        assert!(unknown.is_err());
+    }
+
+    #[test]
+    fn settings_patch_rejects_ambiguous_palette_and_theme_input() {
+        let duplicate = serde_json::from_value::<SettingsPatch>(json!({
+            "palette": "classic",
+            "theme": "slate",
+        }));
+        assert!(duplicate.is_err());
+    }
+
+    #[test]
+    fn settings_patch_accepts_empty_and_partial_input() {
+        let empty: SettingsPatch = serde_json::from_value(json!({})).expect("empty patch input");
+        assert_eq!(empty.palette, None);
+        assert_eq!(empty.telemetry_enabled, None);
+
+        let partial: SettingsPatch =
+            serde_json::from_value(json!({"verboseHud": true})).expect("partial patch input");
+        assert_eq!(partial.palette, None);
+        assert_eq!(partial.verbose_hud, Some(true));
     }
 
     #[test]
