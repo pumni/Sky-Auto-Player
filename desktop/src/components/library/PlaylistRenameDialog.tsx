@@ -51,7 +51,7 @@ export function PlaylistRenameDialog({
               <h2>Rename playlist</h2>
             </div>
             <button
-              className="icon-button"
+              className="icon-button icon-button-boxed"
               type="button"
               aria-label="Close rename dialog"
               onClick={() => onOpenChange(false)}

@@ -123,11 +123,7 @@ h3 {
 .icon-button:hover:not(:disabled) {
   background: var(--control-hover);
 }
-.icon-button:not(.button-primary):not(.button-danger):not(.player-secondary-action):not(
-    .player-tool-button
-  ):not(.player-like-button):not(.profile-summary-button):not(.library-more-button):not(
-    .library-add-button
-  ):not(.track-actions-button):not(.utility-close-button):active:not(:disabled) {
+.icon-button.icon-button-boxed:active:not(:disabled) {
   background: var(--control-pressed);
 }
 .update-indicator {

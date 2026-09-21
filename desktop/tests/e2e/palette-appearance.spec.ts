@@ -4,6 +4,26 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 const palettes = ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
 type Palette = (typeof palettes)[number];
 
+const auroraTokenNames = [
+  '--canvas',
+  '--surface-panel',
+  '--surface-raised',
+  '--control-hover',
+  '--control-pressed',
+  '--selection-bg',
+  '--selection-indicator',
+  '--border-subtle',
+  '--border-strong',
+  '--control-border',
+  '--text-primary',
+  '--text-secondary',
+  '--text-tertiary',
+  '--accent',
+  '--accent-hover',
+  '--on-accent',
+  '--focus-ring',
+] as const;
+
 const expected = {
   aurora: {
     controlBorder: '#617390',
@@ -263,19 +283,16 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     expect(contrastRatio(colors.focusRing, colors.canvas)).toBeGreaterThanOrEqual(3);
   }
 
+  await selectPalette(page, 'aurora');
+  const auroraTokens = await Promise.all(auroraTokenNames.map((name) => token(page, name)));
+
   await page.locator('html').evaluate((root) => root.removeAttribute('data-palette'));
   await expect(page.locator('html')).not.toHaveAttribute('data-palette');
-  const aurora = expected.aurora;
-  for (const [name, value] of Object.entries({
-    '--selection-bg': aurora.selectionBg,
-    '--accent-hover': aurora.accentHover,
-    '--control-border': aurora.controlBorder,
-    '--accent': aurora.accent,
-    '--on-accent': aurora.onAccent,
-    '--focus-ring': aurora.focusRing,
-  })) {
-    await expect.poll(() => token(page, name)).toBe(value);
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+  for (const [index, name] of auroraTokenNames.entries()) {
+    await expect.poll(() => token(page, name)).toBe(auroraTokens[index]);
   }
+  await selectPalette(page, 'aurora');
 });
 
 test('semantic consumers and interaction states use the locked hierarchy', async ({ page }) => {
@@ -284,6 +301,17 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await page.goto('/');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await selectPalette(page, 'aurora');
+  const transparentBackground = await page.evaluate(() => {
+    const probe = document.createElement('span');
+    probe.style.backgroundColor = 'transparent';
+    document.body.append(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return color;
+  });
+
+  const openSettings = page.getByRole('button', { name: 'Open settings' });
+  await pressAndReadBackground(page, openSettings, transparentBackground);
 
   await assertBorderUsesToken(page, page.locator('.global-search'), '--control-border');
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
@@ -351,7 +379,9 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await pressAndReadBackground(page, autoPlay, await resolvedTokenColor(page, '--control-pressed'));
   await closeSettings.click();
 
-  await page.getByRole('button', { name: 'Configure playback profile' }).click();
+  const profileTrigger = page.getByRole('button', { name: 'Configure playback profile' });
+  await pressAndReadBackground(page, profileTrigger, transparentBackground);
+  await profileTrigger.click();
   const profile = page.getByRole('dialog', { name: 'Playback profile' });
   const profilePopover = page.locator('.profile-popover');
   await assertBorderUsesToken(
@@ -371,7 +401,31 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await assertBackgroundUsesToken(page, page.locator('.update-indicator-dot'), '--accent');
 
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+  const collapseNavigator = navigator.getByRole('button', { name: 'Collapse library navigator' });
+  await pressAndReadBackground(
+    page,
+    collapseNavigator,
+    await resolvedTokenColor(page, '--control-pressed'),
+  );
+  await collapseNavigator.click();
+  const expandNavigator = navigator.getByRole('button', { name: 'Expand library navigator' });
+  await expandNavigator.hover();
+  await pressAndReadBackground(
+    page,
+    expandNavigator,
+    await resolvedTokenColor(page, '--control-pressed'),
+  );
+  await expandNavigator.click();
+
+  const createPlaylist = navigator.getByRole('button', { name: 'Create playlist' });
+  await createPlaylist.hover();
+  await assertBackgroundUsesToken(page, createPlaylist, '--control-hover');
+  await pressAndReadBackground(
+    page,
+    createPlaylist,
+    await resolvedTokenColor(page, '--control-hover'),
+  );
+  await createPlaylist.click();
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
   const createDialogSurface = page.locator('.library-dialog').filter({ has: createDialog });
   await assertBorderUsesToken(page, createDialog.getByLabel('Playlist name'), '--control-border');

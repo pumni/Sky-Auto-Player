@@ -82,7 +82,7 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
               <h2 id="settings-title">Settings</h2>
             </div>
             <button
-              className="icon-button"
+              className="icon-button icon-button-boxed"
               type="button"
               onClick={() => setOpen(false)}
               aria-label="Close settings"
