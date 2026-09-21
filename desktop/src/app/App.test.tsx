@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import { App } from './App';
@@ -81,6 +81,30 @@ describe('desktop application shell', () => {
     fireEvent.keyDown(window, { key: '/' });
 
     expect(document.activeElement).toBe(search);
+  });
+
+  it('does not prevent slash input in an editable control', async () => {
+    render(<App bridge={createMockBridge()} />);
+    const search = await screen.findByRole('searchbox');
+    search.focus();
+
+    const event = createEvent.keyDown(search, { key: '/' });
+    search.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(search);
+  });
+
+  it('filters library rows from global search input', async () => {
+    render(<App bridge={createMockBridge()} />);
+    const search = await screen.findByRole('searchbox');
+
+    fireEvent.change(search, { target: { value: 'Moonlit' } });
+
+    await waitFor(() =>
+      expect(screen.getByRole('row', { name: /Moonlit Village/ })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('row', { name: /Aurora Landing/ })).toBeNull();
   });
 
   it('loads and selects a keyboard destination on an unloaded virtualized page', async () => {

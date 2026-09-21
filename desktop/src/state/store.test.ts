@@ -602,17 +602,32 @@ describe('desktop store', () => {
     const bridge = createMockBridge();
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
-    bridge.patchSettings = async () => {
-      throw new Error('settings IPC failed');
+    const originalPatch = bridge.patchSettings;
+    const calls: SettingsPatch[] = [];
+    bridge.patchSettings = async (patch) => {
+      calls.push(patch);
+      if (calls.length === 1) throw new Error('settings IPC failed');
+      return originalPatch(patch);
     };
+    const priorSettings = store.getState().settings;
 
     const authoritative = await store
       .getState()
       .patchSettings({ playbackDefaults: { timingMarginUs: 900 } });
 
     expect(authoritative).toBeNull();
-    expect(store.getState().settings?.playback_defaults.timing_margin_us).toBe(500);
-    expect(store.getState().settingsState).toBe('fatal');
+    expect(store.getState().settings).toEqual(priorSettings);
+    expect(store.getState().settingsState).toBe('ready');
+    expect(store.getState().settingsError).toContain('settings IPC failed');
+    expect(store.getState().fatal).toBeNull();
+
+    const recovered = await store.getState().patchSettings({ palette: 'slate' });
+
+    expect(calls).toEqual([{ playbackDefaults: { timingMarginUs: 900 } }, { palette: 'slate' }]);
+    expect(recovered?.palette).toBe('slate');
+    expect(store.getState().settings?.palette).toBe('slate');
+    expect(store.getState().settingsError).toBeNull();
+    expect(store.getState().settingsState).toBe('ready');
   });
 
   it('detaches a prepared plan when the selected song changes', async () => {

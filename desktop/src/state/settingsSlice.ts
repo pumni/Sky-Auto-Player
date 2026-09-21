@@ -28,7 +28,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
   return {
     async patchSettings(patch) {
       const mutation = settingsMutationTail.then(async () => {
-        set({ settingsState: 'loading' });
+        set({ settingsState: 'loading', settingsError: null });
         try {
           const settings = await bridge.patchSettings(patch);
           const playback = get().playback;
@@ -47,6 +47,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           set({
             settings,
             settingsState: 'ready',
+            settingsError: null,
             playback: {
               ...playback,
               prepared: autoPlayOnly ? playback.prepared : null,
@@ -59,7 +60,7 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           return settings;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          set({ settingsState: 'fatal', fatal: message });
+          set({ settingsState: 'ready', settingsError: message });
           return null;
         }
       });
