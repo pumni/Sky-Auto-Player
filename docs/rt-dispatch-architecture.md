@@ -10,8 +10,8 @@ physical keyboard input through the Windows `SendInput` boundary.
 hold/release validation, and causal schedule identity. It has no Win32 or QPC
 sender implementation.
 
-`sky_player` owns worker orchestration, prepared packet selection, exact future
-authorization, physical waits, final admission, completion evidence, and
+`sky_player` owns worker orchestration, prepared packet selection, final
+lifecycle/focus/control admission, physical waits, completion evidence, and
 per-key physical floors. `sky_native_adapters` owns OS and process-facing
 adapters. `sky_dispatch_win32` owns packet materialization and the one
 `SendInput` transaction. No other crate may simulate gameplay input.
@@ -40,20 +40,20 @@ The physical packet contains canonical Up entries before Down entries. A mixed
 packet remains one transaction and is never split. The authored target is
 derived once from the playback epoch and the immutable schedule timestamp.
 
-## Causal authorization
+## Current Down admission
 
-Every Down-bearing prepared boundary has an exact identity: authored target,
-packet masks, source/generation identity, and target generation. The worker
-records authorization only when that exact authored target is strictly in the
-future. Waiting to a later physical floor does not change the identity used by
-authorization.
+For a live current normal Down, the exact authored target, packet identity,
+target HWND/generation, and no-previous-attempt state are carried into final
+admission. If lifecycle, focus, control, suspend, supervisor/lease, target,
+and preflight gates pass, the boundary makes exactly one transport attempt.
+Strictly-future observation is not a prerequisite, and scheduler lateness
+alone is not a drop criterion.
 
-Once authorized, waiter or scheduler lateness does not revoke the boundary.
 Pause, focus or epoch reset, target-generation changes, suspend, and consumed
-or completed boundaries invalidate it. An overdue boundary that was never
-authorized is `UnobservedBacklog`, performs zero Down `SendInput` attempts, and
-is dropped. Later overdue boundaries are not caught up; the next future
-boundary can authorize normally.
+or completed boundaries still invalidate stale prepared work. A late current
+Down is not `UnobservedBacklog` merely because it was not observed strictly in
+the future. Partial, ambiguous, or clock-uncertain transport is terminal and
+is never retried.
 
 ## Physical floors and waiting
 
@@ -61,15 +61,17 @@ After a complete successful musical packet with trustworthy sender completion
 QPC, the guard updates only the affected keys:
 
 ```text
-musical_up_not_before[key] = Down completion + frame_base_hold
+musical_up_not_before[key] = Down completion + effective_min_hold
 down_not_before[key]        = Up completion + frame_us
 packet_not_before           = max(authored_target, relevant floors)
 ```
 
-The guard is floor-only. It has no Timing Margin, latest start, sender cutoff,
-or lateness rejection. The normal and strict/diagnostic completion paths share
-the same update helper. Transport failures do not create completion evidence.
-Lifecycle reset and invalidation clear stale floors.
+`effective_min_hold = frame_base_hold + timing_margin` is materialized at boot
+and passed into the guard; the guard does not recompute the sum. The guard is
+floor-only. It has no latest start, sender cutoff, or lateness rejection. The
+normal and strict/diagnostic completion paths share the same update helper.
+Transport failures do not create completion evidence. Lifecycle reset and
+invalidation clear stale floors.
 
 For a physical plan the loop queries the guard before waiting. It waits to
 `packet_not_before_qpc`; metadata-only work waits to its authored target. Causal
@@ -115,23 +117,39 @@ min_hold_us        = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
 ```
 
-Timing Margin is authored headroom only. It is not added to completion floors,
-does not suppress a late authorized Down, and does not change an authored
-timestamp. Completion evidence remains sender-side evidence and does not claim
-game observation.
+Timing Margin is materialized once. It contributes to authored `min_hold`,
+authored `min_release_gap`, and the physical musical-Up floor through
+`effective_min_hold`; it is not added a second time. It does not suppress a
+late current Down, act as a lateness cutoff, become a latest-start deadline, or
+change an authored timestamp. Completion evidence remains sender-side evidence
+and does not claim game observation. `SendInput` success is sender/Windows
+injection evidence only.
 
 ## Lifecycle and diagnostics
 
 Focus loss pauses physical admission and retains existing fail-closed cleanup
 semantics. Pause, suspend, target-generation changes, and session reset clear
-future authorization and reset or invalidate floor evidence as required by the
+stale prepared work and reset or invalidate floor evidence as required by the
 existing lifecycle state machine. Cleanup releases remain safety operations.
+
+Musical generation accounting and physical cleanup obligations are separate.
+Only a matching musical Up produces a normal generation `Released` transition;
+safety/cleanup Ups may be idempotent and may make the raw physical Up count
+larger than the musical Down count. The cleanup contract is:
+
+```text
+release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask
+```
+
+Partial, ambiguous, or clock-uncertain Downs retain conservative obligations
+and are not replayed.
 
 Production diagnostics use bounded worker-local scalars and fixed-size state.
 Strict/diagnostic observations use a bounded queue and cannot authorize,
 reorder, retry, or split input. Useful output includes authored target,
 physical floor delay, sender pre-call and completion timing, transport
-anomalies, final-gate rejections, and causal backlog misses.
+anomalies, final-gate rejections, late Down attempts, missing expected Down
+count, generation accounting, and final release obligation state.
 
 These compatibility counters may remain in snapshots and UI DTOs:
 
@@ -154,4 +172,4 @@ timeline rebasing, or transport retries.
 Verification covers compiler and validator pairing, native transport ordering,
 player final-gate behavior, completion floors, mixed-packet atomicity,
 no-allocation dispatch, static security checks, and the Windows receive-only
-acceptance matrix required by issue #379.
+acceptance matrix required by issue #412.

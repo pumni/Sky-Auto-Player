@@ -23,9 +23,11 @@ at one timestamp, and hold or release intervals below the materialized floors.
 Stale unmatched Up metadata remains non-musical. Safety and cleanup releases
 do not belong to this ledger.
 
-Timing Margin is applied once to authored hold and release spacing. It is
-authored headroom and is not a runtime sender cutoff or a second physical
-floor. Authored timestamps remain immutable for the whole session.
+Timing Margin is materialized once. It contributes to authored `min_hold`,
+authored `min_release_gap`, and the physical musical-Up floor through
+`effective_min_hold`. It is not added a second time, is not a lateness cutoff,
+and is not a latest-start deadline. Authored timestamps remain immutable for
+the whole session.
 
 At 60 FPS with a 500 µs margin:
 
@@ -35,16 +37,18 @@ At 60 FPS with a 500 µs margin:
 | 1.25 frames | 20,834 µs | 21,334 µs | 17,167 µs |
 | 1.5 frames | 25,001 µs | 25,501 µs | 17,167 µs |
 
-## Causal authorization
+## Current Down continuity
 
-A prepared Down-bearing boundary is eligible only after the exact boundary,
-packet identity, and target generation were observed while its authored target
-was strictly in the future. Lateness after that observation does not revoke
-authorization. Lifecycle and identity changes still clear it.
+A live normal current Down with no previous transport attempt is eligible when
+the final lifecycle, focus, control, target, supervisor/lease, suspend, and
+preflight gates pass. Strictly-future observation is not a prerequisite, and
+scheduler lateness alone is not a drop criterion. The eligible boundary has
+exactly one transport attempt. Partial, ambiguous, or clock-uncertain Down
+transport is terminal and is never replayed.
 
-An overdue Down without the proof is `UnobservedBacklog` and performs zero Down
-`SendInput` attempts. Unseen overdue boundaries are dropped; the next future
-boundary is authorized normally. This preserves no catch-up burst behavior.
+Lifecycle and identity changes still invalidate stale prepared work. A late
+current Down is not `UnobservedBacklog` solely because the scheduler was late;
+there is no catch-up scheduler and no authored timeline rebase.
 
 ## Physical floors
 
@@ -52,24 +56,25 @@ boundary is authorized normally. This preserves no catch-up burst behavior.
 sender completions:
 
 ```text
-musical_up_not_before = successful Down completion + frame_base_hold
+musical_up_not_before = successful Down completion + effective_min_hold
 down_not_before       = successful Up completion + frame_us
 packet_not_before     = max(authored target, relevant floors)
 ```
 
-The guard contains no Timing Margin, latest-start boundary, or physical
-feasibility rejection. Normal and strict/diagnostic successful musical sends
-use the same completion update. A failed or ambiguous transport result does
-not synthesize a floor and follows fail-closed cleanup.
+`effective_min_hold = frame_base_hold + timing_margin` is materialized at boot
+and passed into `PhysicalTimingGuard`; the guard does not recompute it. The
+guard contains no latest-start boundary or physical feasibility rejection.
+Normal and strict/diagnostic successful musical sends use the same completion
+update. A failed or ambiguous transport result does not synthesize a floor and
+follows fail-closed cleanup.
 
 The resulting cases are:
 
-1. A Down completing 300 µs after its target has an Up floor at target plus
-   `frame_base_hold`; an authored Up at target plus the authored 17,167 µs
-   remains unchanged.
-2. A Down completing 800 µs late delays that Up only by the excess required
-   by `frame_base_hold`.
-3. An authorized Down remains one send attempt even after large scheduler
+1. At 60 FPS with a 500 µs margin, a Down completing at `D` has an Up floor at
+   `D + 17,167 µs` for a one-frame hold.
+2. A Down completing late still derives its Up floor from the actual completion
+   plus the materialized effective minimum hold.
+3. A normal current Down remains one send attempt even after large scheduler
    lateness; its matching Up waits for the actual Down completion floor.
 4. A successful Up completion delays the next same-key Down until completion
    plus one frame.
@@ -96,10 +101,22 @@ The compatibility counters
 `missed_physical_window_boundaries`, and
 `release_floor_infeasible_boundaries` may remain in public snapshots. They are
 deprecated, stay zero in production, and have no dispatch meaning. The retired
-latest-start compatibility field is zero or unavailable. Active Down lateness
-has one control classification: causal `UnobservedBacklog`.
+latest-start compatibility field is zero or unavailable. Scheduler lateness is
+not, by itself, a causal `UnobservedBacklog` classification.
 
 The physical path uses one prepared `SendInput` packet. It validates masks,
 places Up entries before Down entries, performs final control/focus/target
 checks, and makes exactly one transport attempt. Partial or uncertain Down
 transport is terminal and invokes existing fail-closed cleanup.
+
+Musical generation Down-to-Up accounting is separate from safety/cleanup
+physical Ups. Safety cleanup can send idempotent Ups without producing a
+musical `Released` generation, so physical Up counts need not equal musical
+Down counts. Cleanup evidence uses:
+
+```text
+release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask
+```
+
+`SendInput` success is sender/Windows injection evidence only and does not
+prove that the game sampled the key.

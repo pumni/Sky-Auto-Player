@@ -1,4 +1,5 @@
 use super::{ACCEPTANCE_HOLD_FRAMES, ACCEPTANCE_FRAME_US, Scenario, ScenarioPlan, Verdict, action};
+use sky_dispatch_core::coordinator::GenerationAccounting;
 use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_player::adapter_support::compile_runtime_intents;
@@ -9,6 +10,48 @@ use std::time::{Duration, Instant};
 
 pub(super) const RELEASE_GAP_STRESS_CYCLES: usize = 513;
 pub(super) const RELEASE_GAP_STRESS_MIN_SAMPLES: u64 = 512;
+
+pub(super) fn healthy_generation_qualification(
+    scenario: Scenario,
+    accounting: GenerationAccounting,
+) -> (Verdict, &'static str) {
+    if !matches!(
+        scenario,
+        Scenario::CanonicalSingle
+            | Scenario::CanonicalChord
+            | Scenario::CanonicalMaxChord
+            | Scenario::Hold
+            | Scenario::LongSingleSequence
+            | Scenario::DenseAlternating
+            | Scenario::ChordSweep
+            | Scenario::NearMinimumRetrigger
+            | Scenario::RapidRetrigger
+            | Scenario::ReleaseGapStress
+            | Scenario::MixedUpDown
+            | Scenario::W4Noncanonical
+            | Scenario::TimingMarginSweep
+    ) {
+        return (
+            Verdict::Pass,
+            "lifecycle/fault scenario reports authoritative generation accounting without natural-completion gating",
+        );
+    }
+    if accounting.total != accounting.activated
+        || accounting.activated != accounting.released
+        || accounting.scheduled != 0
+        || accounting.active != 0
+        || accounting.dropped_conflict != 0
+        || accounting.dropped_backend != 0
+        || accounting.dropped_expired != 0
+        || accounting.cancelled != 0
+    {
+        return (
+            Verdict::Fail,
+            "healthy native acceptance violated authoritative generation accounting",
+        );
+    }
+    (Verdict::Pass, "authoritative generation accounting is clean")
+}
 
 pub(super) fn scenario_plan(timing_margin_us: u64) -> Result<ScenarioPlan, String> {
     let hold_us = ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + timing_margin_us;
@@ -40,12 +83,12 @@ pub(super) fn production_visibility_qualification(
     release_samples: u64,
     release_floor_violations: u64,
 ) -> (Verdict, &'static str) {
-    // Completion-relative floor observations are retained as raw normal-mode
-    // forensics.  They are not a shipping authority after Phase 3 made
-    // completion telemetry-only for normal prepared playback.  The values
-    // are intentionally consumed here so the report/test contract cannot
-    // accidentally stop collecting them.
-    let _diagnostic_floor_violations = hold_floor_violations.saturating_add(release_floor_violations);
+    if hold_floor_violations > 0 || release_floor_violations > 0 {
+        return (
+            Verdict::Fail,
+            "physical hold or one-frame release floor violation",
+        );
+    }
     if scenario == Scenario::ReleaseGapStress
         && (hold_samples < RELEASE_GAP_STRESS_MIN_SAMPLES
             || release_samples < RELEASE_GAP_STRESS_MIN_SAMPLES)

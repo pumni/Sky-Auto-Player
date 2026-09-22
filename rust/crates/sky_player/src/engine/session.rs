@@ -7,7 +7,7 @@ use super::worker::Worker;
 use super::*;
 use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_timing_constants};
 use crate::engine::{EnginePollSnapshot, EnginePollStatus};
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_core::coordinator::GenerationAccounting;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
@@ -963,9 +963,9 @@ impl NativeDispatchSession {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
     #[allow(dead_code)]
-    pub(crate) fn generation_accounting_for_test(&self) -> GenerationAccounting {
+    pub fn generation_accounting_for_test(&self) -> GenerationAccounting {
         *self.shared.publication.metrics.generation_accounting.lock()
     }
 
@@ -1211,6 +1211,14 @@ impl NativeDispatchSession {
                 .generation_status_counts
                 .lock()
                 .clone(),
+            #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
+            generation_accounting: self.generation_accounting_for_test(),
+            final_release_obligation_mask: self
+                .shared
+                .publication
+                .metrics
+                .terminal_release_obligation_mask
+                .load(Ordering::Acquire) as u16,
             abort_counts_by_reason: self
                 .shared
                 .publication

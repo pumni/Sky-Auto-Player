@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 use sky_player::engine::EngineSnapshot;
 
 pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
+    let accounting = snapshot.generation_accounting;
     let stuck_keys = snapshot
         .release_outcome
         .as_ref()
@@ -47,6 +48,16 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "final_policy_to_pre_call_max_us": snapshot.final_policy_to_pre_call_max_us,
         "wake_to_send_max_us": snapshot.wake_to_send_max_us,
         "sendinput_duration_max_us": snapshot.sendinput_duration_max_us,
+        "generation_total": accounting.total,
+        "generation_activated": accounting.activated,
+        "generation_released": accounting.released,
+        "generation_scheduled": accounting.scheduled,
+        "generation_active": accounting.active,
+        "generation_dropped_conflict": accounting.dropped_conflict,
+        "generation_dropped_backend": accounting.dropped_backend,
+        "generation_dropped_expired": accounting.dropped_expired,
+        "generation_cancelled": accounting.cancelled,
+        "final_release_obligation_mask": snapshot.final_release_obligation_mask,
         "pre_call_lt_250us": snapshot.pre_call_lt_250us,
         "pre_call_250_500us": snapshot.pre_call_250_500us,
         "pre_call_500_750us": snapshot.pre_call_500_750us,

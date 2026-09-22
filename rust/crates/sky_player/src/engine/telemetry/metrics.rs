@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_core::coordinator::GenerationAccounting;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcClock;
@@ -480,10 +480,11 @@ pub(crate) struct SharedMetrics {
     pub(crate) terminal_error: Mutex<Option<String>>,
     pub(crate) secondary_errors: Mutex<Vec<String>>,
     pub(crate) generation_status_counts: Mutex<HashMap<String, u64>>,
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
     pub(crate) generation_accounting: Mutex<GenerationAccounting>,
     pub(crate) abort_counts_by_reason: Mutex<HashMap<String, u64>>,
     pub(crate) terminal_release_outcome: Mutex<Option<ReleaseAllOutcome>>,
+    pub(crate) terminal_release_obligation_mask: AtomicU32,
     #[cfg(test)]
     pub(crate) publish_count: AtomicU64,
 }

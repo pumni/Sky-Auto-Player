@@ -9,13 +9,14 @@ use super::{
     SINK_KIND, SINK_TITLE, Scenario, Verdict, acceptance_min_hold_us,
     acceptance_min_release_gap_us, cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
-    production_visibility_qualification,
+    healthy_generation_qualification, production_visibility_qualification,
     production_options, reconcile_events, scenario_plan,
     validate_event_stream, validate_ready_record, w4_profile_spec, wait_for_sink_events_with,
 };
 use super::release_gap_stress::{
     strict_physical_forensics_qualification, RELEASE_GAP_STRESS_MIN_SAMPLES,
 };
+use sky_dispatch_core::coordinator::GenerationAccounting;
 
 fn base_arguments(scenario: &str) -> Vec<String> {
     [
@@ -441,6 +442,7 @@ fn preterminal_cleanup_verdict_precedence_is_fail_closed() {
         active_count: 0,
         possibly_active_count: 0,
         failed_release_count: 0,
+        release_obligation_mask: 0,
         release_failed: false,
         stuck_mask: 0,
         verification_inconclusive: false,
@@ -638,14 +640,44 @@ fn release_gap_stress_authors_hundreds_of_exact_hold_and_gap_pairs() {
 }
 
 #[test]
-fn normal_floor_forensics_are_preserved_without_becoming_shipping_authority() {
+fn native_acceptance_rejects_floor_violations() {
     assert_eq!(
         production_visibility_qualification(Scenario::TimingMarginSweep, 4, 0, 1, 1).0,
-        Verdict::Pass
+        Verdict::Fail
     );
     assert_eq!(
         production_visibility_qualification(Scenario::TimingMarginSweep, 4, 1, 1, 0).0,
+        Verdict::Fail
+    );
+}
+
+#[test]
+fn native_acceptance_uses_authoritative_activation_accounting() {
+    let pre_activation_cancelled = GenerationAccounting {
+        total: 1,
+        cancelled: 1,
+        ..GenerationAccounting::default()
+    };
+    assert_eq!(
+        healthy_generation_qualification(Scenario::CanonicalSingle, pre_activation_cancelled).0,
+        Verdict::Fail,
+        "a pre-activation cancellation cannot be counted as activation"
+    );
+
+    let clean = GenerationAccounting {
+        total: 1,
+        activated: 1,
+        released: 1,
+        ..GenerationAccounting::default()
+    };
+    assert_eq!(
+        healthy_generation_qualification(Scenario::CanonicalSingle, clean).0,
         Verdict::Pass
+    );
+    assert_eq!(
+        healthy_generation_qualification(Scenario::StopCleanup, pre_activation_cancelled).0,
+        Verdict::Pass,
+        "lifecycle evidence reports cancellation without applying natural-completion gating"
     );
 }
 
@@ -674,6 +706,7 @@ fn unrelated_shipping_invariants_remain_fail_closed() {
         active_count: 0,
         possibly_active_count: 0,
         failed_release_count: 0,
+        release_obligation_mask: 0,
         release_failed: false,
         stuck_mask: 0,
         verification_inconclusive: false,

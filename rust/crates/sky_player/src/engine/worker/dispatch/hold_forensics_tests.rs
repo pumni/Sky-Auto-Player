@@ -59,7 +59,7 @@ fn exact_hold_and_release_floors_are_measured_from_sender_completion() {
         &mut metrics,
     );
 
-    assert_eq!(metrics.production_forensics_version, 3);
+    assert_eq!(metrics.production_forensics_version, 4);
     assert_eq!(metrics.production_hold_pair_samples, 1);
     assert_eq!(
         metrics.production_min_hold_start_after_down_completion_ticks,
@@ -73,6 +73,41 @@ fn exact_hold_and_release_floors_are_measured_from_sender_completion() {
     );
     assert_eq!(metrics.production_release_floor_violation_count, 0);
     assert_eq!(metrics.production_forensics_anomaly_count, 0);
+}
+
+#[test]
+fn effective_min_hold_includes_timing_margin_once_in_hold_oracle() {
+    let mut forensics = ProductionHoldForensics::default();
+    // 20 ticks base hold plus a 5-tick timing margin is materialized as 25
+    // before the forensics boundary, exactly as it is for the production guard.
+    forensics.set_frame_policies(DurationTicks::from_raw(25), DurationTicks::from_raw(10));
+    let mut metrics = WorkerMetricsLocal::default();
+
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(0, 1),
+        100,
+        101,
+        105,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+    observe(
+        &mut forensics,
+        PhysicalPacket::new(1, 0),
+        125,
+        130,
+        135,
+        SendTransactionStatus::Complete,
+        &mut metrics,
+    );
+
+    assert_eq!(metrics.production_hold_floor_ticks, 25);
+    assert_eq!(
+        metrics.production_min_hold_start_after_down_completion_ticks,
+        25
+    );
+    assert_eq!(metrics.production_hold_floor_violation_count, 0);
 }
 
 #[test]

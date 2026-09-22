@@ -1,6 +1,9 @@
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::collections::HashMap;
 
+#[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
+use sky_dispatch_core::coordinator::GenerationAccounting;
+
 /// Lifecycle values for the allocation-free supervisor poll path.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -232,6 +235,9 @@ pub struct EngineSnapshot {
     pub secondary_errors: Vec<String>,
     pub generation_count: u64,
     pub generation_status_counts: HashMap<String, u64>,
+    #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
+    pub generation_accounting: GenerationAccounting,
+    pub final_release_obligation_mask: u16,
     pub abort_counts_by_reason: HashMap<String, u64>,
     pub release_outcome: Option<ReleaseAllOutcome>,
     pub startup_ready: bool,

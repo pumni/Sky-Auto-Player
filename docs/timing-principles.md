@@ -36,36 +36,38 @@ unmatched Up metadata can remain representable, but it does not become a
 musical physical Up. Safety, focus-loss, and cleanup releases are outside the
 musical generation ledger.
 
-Timing Margin is authored headroom. It is applied once during materialization
-and validation. It is never used as a runtime cutoff and is never added again
-to the physical completion floors.
+Timing Margin is materialized once. It contributes to authored `min_hold`,
+authored `min_release_gap`, and the physical musical-Up floor through
+`effective_min_hold`. It is not added a second time, is not a lateness cutoff,
+and is not a latest-start deadline.
 
-## Causal authorization and physical floors
+## Current Down continuity and physical floors
 
-Every Down-bearing prepared boundary carries an exact identity containing its
-authored target, packet masks, and target generation. The boundary becomes
-authorized only when that exact authored target is observed strictly in the
-future. Once authorized, waiter or scheduler lateness does not revoke it.
+A live normal current Down with no previous transport attempt is admitted when
+the final lifecycle, focus, control, target, supervisor/lease, suspend, and
+preflight gates pass. It does not require a strictly-future observation, and
+scheduler lateness alone is not a drop criterion. Each such boundary makes
+exactly one transport send attempt. A partial, ambiguous, or clock-uncertain
+transport result is terminal and is never retried.
 
-Pause, focus or epoch reset, target-generation changes, suspend, and consumed
-or completed boundaries still invalidate the authorization.
-
-An overdue boundary without that proof is `UnobservedBacklog`. It performs zero
-Down `SendInput` attempts. Later unseen overdue boundaries are dropped without
-catch-up, while the next future boundary can authorize normally.
+Lifecycle and identity changes still invalidate stale prepared work and floor
+evidence. `UnobservedBacklog` is not the normal classification for a late
+current Down; it must not be produced merely because the scheduler was late.
 
 After a complete successful musical packet with trustworthy sender completion
 QPC, the fixed-size `PhysicalTimingGuard` records only per-key not-before
 floors:
 
 ```text
-musical_up_not_before[key] = successful_down_completion[key] + frame_base_hold
+musical_up_not_before[key] = successful_down_completion[key] + effective_min_hold
 down_not_before[key]        = successful_up_completion[key] + frame
 physical_wait_target       = max(authored_target, relevant floors)
 ```
 
-The guard has no Timing Margin, latest start, or feasibility rejection. A
-normal and a strict/diagnostic successful completion use the same update path.
+where `effective_min_hold = frame_base_hold + timing_margin` is materialized
+at boot and passed to the guard. The guard does not recompute that sum. It has
+no latest start or feasibility rejection. A normal and a strict/diagnostic
+successful completion use the same update path.
 An authorized Down delayed by a floor is still sent once when the non-time
 final gates pass. A matching Up waits for the Down completion floor, and the
 next same-key Down waits for the Up completion floor. A mixed packet waits for
@@ -83,8 +85,9 @@ The physical path is ordered as follows:
 2. Derive the authored QPC target. For physical entries, query the guard and
    wait to `packet_not_before_qpc`; metadata-only entries use the authored
    target.
-3. Compare causal authorization with the authored target, never with the
-   later physical floor.
+3. Classify and record authored-target lateness for evidence only; do not use
+   lateness as a current-Down existence gate, including after applying a
+   physical floor.
 4. Run command, target, focus, and lease admission. Eligible
    `require_focus=true` Down traffic receives one fresh foreground proof,
    followed by target, published-focus, and late-control rechecks.
@@ -110,7 +113,17 @@ Production keeps bounded scalar sender and floor evidence. Strict/diagnostic
 mode may enqueue a fixed-capacity observation, but observer state cannot
 authorize, reorder, retry, or split physical input. Useful evidence includes
 authored target, physical floors, sender pre-call and completion QPC, transport
-anomalies, final-gate rejections, floor delays, and causal backlog misses.
+anomalies, final-gate rejections, floor delays, late Down attempts, missing
+expected Down count, generation accounting, and final release obligations.
+
+Musical generation accounting is separate from safety cleanup. A safety or
+cleanup Up can be emitted idempotently without creating a musical `Released`
+generation, so raw physical Up count can exceed musical Down count. The
+authoritative cleanup evidence is:
+
+```text
+release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask
+```
 
 The following public counters may remain for schema compatibility:
 
@@ -134,4 +147,5 @@ are permitted.
 Relevant verification includes the paired-generation compiler and validator
 tests, sender and player suites, the no-allocation dispatch test, static
 security checks, and the Windows receive-only acceptance matrix recorded in
-issue #379.
+issue #412. `SendInput` success is sender/Windows injection evidence only; it
+does not prove that Sky sampled the transition.
