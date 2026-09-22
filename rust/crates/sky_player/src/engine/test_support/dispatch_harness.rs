@@ -1570,6 +1570,40 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.release_obligation_mask()
     }
 
+    /// Exercise the production command-control owner used by the worker loop.
+    /// The wrapper only supplies test-owned scratch diagnostics.
+    pub fn process_command_control_for_test(&mut self) -> bool {
+        let mut last_published_error = None;
+        super::super::worker::process_command_control_for_test(
+            self.resources.clock,
+            &mut self.resources.backend,
+            &mut self.resources.coordinator,
+            &mut self.runtime.force_full_cleanup,
+            &mut self.runtime.terminal_error,
+            &self.quit_requested,
+            &self.skip_requested,
+            &self.panic_requested,
+            &self.supervisor_expired,
+            &self.target_hwnd,
+            &mut self.local_metrics,
+            &self.metrics,
+            &mut last_published_error,
+        )
+    }
+
+    /// Exercise the dispatch-loop's shared resumable lifecycle transition
+    /// owner used by manual pause, focus restoration, and target changes.
+    pub fn apply_resumable_lifecycle_transition_for_test(&mut self) -> Result<(), String> {
+        super::super::worker::apply_resumable_lifecycle_transition_for_test(
+            &mut self.resources.backend,
+            &mut self.resources.coordinator,
+            &mut self.runtime,
+            Ok(self.effective_now_ticks),
+            self.target_hwnd.load(Ordering::Acquire),
+            self.prepared_stream_for_test.as_mut(),
+        )
+    }
+
     /// Exercise the same verified-release/cancel seam used by manual pause
     /// and focus suspension.  The harness keeps this call explicit so tests
     /// cannot accidentally replace the production cleanup path with a direct
@@ -1588,6 +1622,34 @@ impl ProductionDispatchTestHarness {
             stream.reconcile_resumable_suspension(&cancelled)?;
         }
         Ok(cancelled)
+    }
+
+    pub(crate) fn finalize_worker_for_test(
+        self,
+        worker_panicked: bool,
+        force_full_cleanup: bool,
+        cleanup_observation: &mut super::super::worker::FinalizeTestObservation,
+    ) -> u8 {
+        let ProductionDispatchTestHarness {
+            resources,
+            target_hwnd,
+            quit_requested,
+            skip_requested,
+            metrics,
+            progress_clock,
+            ..
+        } = self;
+        super::super::worker::finalize_worker_for_test(
+            resources,
+            &target_hwnd,
+            &skip_requested,
+            &quit_requested,
+            &metrics,
+            &progress_clock,
+            worker_panicked,
+            force_full_cleanup,
+            cleanup_observation,
+        )
     }
 
     pub fn apply_system_suspend_for_test(&mut self, now_ticks: QpcTicks) -> Result<(), String> {

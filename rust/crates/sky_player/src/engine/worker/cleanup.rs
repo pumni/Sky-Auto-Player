@@ -63,6 +63,19 @@ pub(super) struct FinalizeInput<'a> {
     pub(super) signals: FinalizeSignals<'a>,
     pub(super) publication: FinalizePublication<'a>,
     pub(super) timing: FinalizeTiming,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) cleanup_observation: Option<&'a mut FinalizeTestObservation>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Default)]
+pub(crate) struct FinalizeTestObservation {
+    pub(crate) release_obligation_mask: u16,
+    pub(crate) active_mask: u16,
+    pub(crate) possibly_active_mask: u16,
+    pub(crate) failed_release_mask: u16,
+    pub(crate) attempted_mask: u16,
+    pub(crate) generation_accounting: sky_dispatch_core::coordinator::GenerationAccounting,
 }
 
 pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
@@ -72,6 +85,8 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         signals,
         publication,
         timing,
+        #[cfg(any(test, feature = "test-support"))]
+        cleanup_observation,
     } = context;
     let FinalizeResources {
         mut backend,
@@ -165,6 +180,18 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             &mut secondary_errors,
             "terminal backend cleanup panicked".to_string(),
         );
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(observation) = cleanup_observation {
+        observation.release_obligation_mask = backend.release_obligation_mask();
+        observation.active_mask = backend.active_mask;
+        observation.possibly_active_mask = backend.possibly_active_mask;
+        observation.failed_release_mask = backend.failed_release_mask;
+        observation.attempted_mask = cleanup_result
+            .as_ref()
+            .ok()
+            .map_or(0, |outcome| outcome.attempted_mask);
     }
 
     if terminal_error.is_none()

@@ -79,6 +79,8 @@ impl Worker<'_> {
                 start_thread_cpu_us: timing.start_thread_cpu_us,
                 start_process_cpu_us: timing.start_process_cpu_us,
             },
+            #[cfg(any(test, feature = "test-support"))]
+            cleanup_observation: None,
         })
     }
 }

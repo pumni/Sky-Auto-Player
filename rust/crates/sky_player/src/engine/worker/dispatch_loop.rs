@@ -452,6 +452,26 @@ fn suspend_live_input_and_reconcile_prepared(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_resumable_lifecycle_transition_for_test(
+    backend: &mut sky_dispatch_win32::input::TrackedKeyState,
+    coordinator: &mut sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
+    runtime: &mut super::WorkerRuntime,
+    effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
+    target_hwnd: isize,
+    prepared_stream: Option<&mut PreparedDispatchStream>,
+) -> Result<(), String> {
+    suspend_live_input_and_reconcile_prepared(
+        backend,
+        coordinator,
+        runtime,
+        effective_now_ticks,
+        target_hwnd,
+        prepared_stream,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_system_suspend_transition(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
