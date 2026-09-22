@@ -167,6 +167,11 @@ impl GenerationCounters {
             .checked_add(self.cancelled)
     }
 
+    pub fn terminal_total(&self) -> u64 {
+        self.terminal_total_checked()
+            .expect("terminal generation counters must remain checked")
+    }
+
     fn increment(&mut self, status: GenerationStatus) -> Result<(), CoordinatorInvariantError> {
         let counter = match status {
             GenerationStatus::Released => &mut self.released,
