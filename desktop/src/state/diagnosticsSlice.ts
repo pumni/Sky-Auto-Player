@@ -1,5 +1,6 @@
 import type { CalibrationStart, DesktopBridge } from '../bridge/DesktopBridge';
 import type { CalibrationUiState, DesktopStore, UtilityView } from './types';
+import { updateWorkbenchPreferences } from './workbenchPreferences';
 
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
 
@@ -59,6 +60,7 @@ export function createDiagnosticsSlice(context: DiagnosticsSliceContext): Diagno
 
     openUtility(view) {
       set({ utility: { open: true, activeView: view } });
+      updateWorkbenchPreferences({ utilityOpen: true });
       if (view === 'diagnostics' && !get().diagnostics.enabled) {
         void get().setDiagnosticsEnabled(true);
       } else if (view === 'details' && get().diagnostics.enabled) {
@@ -69,6 +71,7 @@ export function createDiagnosticsSlice(context: DiagnosticsSliceContext): Diagno
     closeUtility() {
       const activeView = get().utility.activeView;
       set({ utility: { ...get().utility, open: false } });
+      updateWorkbenchPreferences({ utilityOpen: false });
       if (activeView === 'diagnostics' && get().diagnostics.enabled) {
         void get().setDiagnosticsEnabled(false);
       }

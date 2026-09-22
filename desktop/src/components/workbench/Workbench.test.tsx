@@ -6,13 +6,15 @@ import {
   DEFAULT_NAVIGATOR_WIDTH,
   COMPACT_NAVIGATOR_WIDTH,
   getNavigatorWidthMax,
-  LEGACY_WORKBENCH_V3_STORAGE_KEY,
   LEGACY_WORKBENCH_STORAGE_KEY,
+  LEGACY_WORKBENCH_V4_STORAGE_KEY,
+  LEGACY_WORKBENCH_V3_STORAGE_KEY,
   LEGACY_WORKBENCH_V1_STORAGE_KEY,
   loadWorkbenchLayout,
   MIN_NAVIGATOR_WIDTH,
   getUtilityWidthMax,
   solveWorkbenchGeometry,
+  updateWorkbenchPreferences,
   WORKBENCH_STORAGE_KEY,
   useWorkbenchLayout,
 } from './useWorkbenchLayout';
@@ -136,25 +138,46 @@ describe('workbench layout persistence', () => {
     window.localStorage.clear();
   });
 
-  it('loads valid v4 values and clamps them to current bounds', () => {
+  it('loads valid v5 values and clamps widths to current bounds', () => {
     window.localStorage.setItem(
       WORKBENCH_STORAGE_KEY,
+      JSON.stringify({
+        version: 5,
+        navigatorPreference: 'collapsed',
+        expandedNavigatorWidth: 640,
+        utilityWidth: 490,
+        utilityOpen: true,
+      }),
+    );
+    expect(loadWorkbenchLayout()).toEqual({
+      version: 5,
+      navigatorPreference: 'collapsed',
+      expandedNavigatorWidth: 340,
+      utilityWidth: 440,
+      utilityOpen: true,
+    });
+  });
+
+  it('soft-migrates valid v4 geometry and defaults utility open to false', () => {
+    window.localStorage.setItem(
+      LEGACY_WORKBENCH_V4_STORAGE_KEY,
       JSON.stringify({
         version: 4,
         navigatorPreference: 'expanded',
         expandedNavigatorWidth: 640,
-        utilityWidth: 490,
+        utilityWidth: 340,
       }),
     );
     expect(loadWorkbenchLayout()).toEqual({
-      version: 4,
+      version: 5,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 340,
-      utilityWidth: 440,
+      utilityWidth: 340,
+      utilityOpen: false,
     });
   });
 
-  it('soft-migrates valid v3 geometry without persisting presentation state', () => {
+  it('soft-migrates valid v3 geometry and defaults utility open to false', () => {
     window.localStorage.setItem(
       LEGACY_WORKBENCH_V3_STORAGE_KEY,
       JSON.stringify({
@@ -165,41 +188,92 @@ describe('workbench layout persistence', () => {
       }),
     );
     expect(loadWorkbenchLayout()).toEqual({
-      version: 4,
+      version: 5,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 340,
       utilityWidth: 340,
+      utilityOpen: false,
     });
   });
 
-  it('soft-migrates valid v2 geometry without persisting presentation state', () => {
+  it('soft-migrates valid v2 geometry and defaults utility open to false', () => {
     window.localStorage.setItem(
       LEGACY_WORKBENCH_STORAGE_KEY,
       JSON.stringify({ version: 2, navigatorWidth: 280, utilityWidth: 490 }),
     );
     expect(loadWorkbenchLayout()).toEqual({
-      version: 4,
+      version: 5,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 280,
       utilityWidth: 440,
+      utilityOpen: false,
     });
   });
 
-  it('soft-migrates v1 library geometry', () => {
+  it('soft-migrates v1 geometry and ignores historical utility open state', () => {
     window.localStorage.setItem(
       LEGACY_WORKBENCH_V1_STORAGE_KEY,
       JSON.stringify({ version: 1, libraryWidth: 280, utilityWidth: 490, utilityOpen: true }),
     );
-    expect(loadWorkbenchLayout().expandedNavigatorWidth).toBe(280);
+    expect(loadWorkbenchLayout()).toEqual({
+      version: 5,
+      navigatorPreference: 'expanded',
+      expandedNavigatorWidth: 280,
+      utilityWidth: 440,
+      utilityOpen: false,
+    });
   });
 
   it('falls back to defaults for malformed or wrong-version values', () => {
     window.localStorage.setItem(WORKBENCH_STORAGE_KEY, '{not json');
     expect(loadWorkbenchLayout().expandedNavigatorWidth).toBe(DEFAULT_NAVIGATOR_WIDTH);
+    window.localStorage.clear();
     window.localStorage.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify({ version: 3 }));
-    window.localStorage.removeItem(LEGACY_WORKBENCH_STORAGE_KEY);
     expect(loadWorkbenchLayout().expandedNavigatorWidth).toBe(DEFAULT_NAVIGATOR_WIDTH);
     expect(loadWorkbenchLayout().utilityWidth).toBe(320);
+    expect(loadWorkbenchLayout().utilityOpen).toBe(false);
+  });
+
+  it('preserves an already persisted utility-open preference during a width update', () => {
+    window.localStorage.setItem(
+      WORKBENCH_STORAGE_KEY,
+      JSON.stringify({
+        version: 5,
+        navigatorPreference: 'expanded',
+        expandedNavigatorWidth: 300,
+        utilityWidth: 320,
+        utilityOpen: true,
+      }),
+    );
+
+    expect(updateWorkbenchPreferences({ utilityWidth: 400 })).toEqual({
+      version: 5,
+      navigatorPreference: 'expanded',
+      expandedNavigatorWidth: 300,
+      utilityWidth: 400,
+      utilityOpen: true,
+    });
+  });
+
+  it('preserves persisted geometry during a utility-open update', () => {
+    window.localStorage.setItem(
+      WORKBENCH_STORAGE_KEY,
+      JSON.stringify({
+        version: 5,
+        navigatorPreference: 'collapsed',
+        expandedNavigatorWidth: 310,
+        utilityWidth: 390,
+        utilityOpen: false,
+      }),
+    );
+
+    expect(updateWorkbenchPreferences({ utilityOpen: true })).toEqual({
+      version: 5,
+      navigatorPreference: 'collapsed',
+      expandedNavigatorWidth: 310,
+      utilityWidth: 390,
+      utilityOpen: true,
+    });
   });
 
   it('accounts for padding, separators, and the minimum track browser width', () => {

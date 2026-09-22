@@ -7,6 +7,7 @@ describe('desktop application shell', () => {
   afterEach(() => {
     delete (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__;
     cleanup();
+    window.localStorage.clear();
   });
 
   it('renders the navigator, track browser, utility details, and settings', async () => {

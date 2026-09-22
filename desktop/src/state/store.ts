@@ -9,6 +9,7 @@ import { createPlaybackSlice } from './playbackSlice';
 import { MAX_DIAGNOSTIC_EVENTS, MAX_DIAGNOSTIC_SAMPLES } from './types';
 import type { CalibrationUiState, DesktopStore, DiagnosticsEventLine } from './types';
 import type { LibrarySlice } from './librarySlice';
+import { loadWorkbenchPreferences } from './workbenchPreferences';
 
 export {
   createShuffleTraversal,
@@ -51,6 +52,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
   let detailRequestToken = 0;
   let diagnosticsEventSeq = 0;
   let cancelStaleAutoAdvanceHandoff = (_state: DesktopStore): void => undefined;
+  const workbenchPreferences = loadWorkbenchPreferences();
   const store = create<DesktopStore>((set, get) => {
     let loadPage: LibrarySlice['loadPage'] = async () => {
       throw new Error('Library slice is not initialized.');
@@ -120,7 +122,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       settingsError: null,
       settingsOpen: false,
       utility: {
-        open: false,
+        open: workbenchPreferences.utilityOpen,
         activeView: 'details',
       },
       diagnostics: {
