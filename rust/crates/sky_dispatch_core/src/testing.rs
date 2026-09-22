@@ -7,6 +7,18 @@ use std::rc::Rc;
 use crate::coordinator::*;
 use crate::model::*;
 
+#[cfg(any(test, feature = "test-support"))]
+pub fn assert_clean_generation_completion(accounting: GenerationAccounting) {
+    assert_eq!(accounting.total, accounting.activated);
+    assert_eq!(accounting.activated, accounting.released);
+    assert_eq!(accounting.scheduled, 0);
+    assert_eq!(accounting.active, 0);
+    assert_eq!(accounting.dropped_conflict, 0);
+    assert_eq!(accounting.dropped_backend, 0);
+    assert_eq!(accounting.dropped_expired, 0);
+    assert_eq!(accounting.cancelled, 0);
+}
+
 #[derive(Debug, Clone)]
 pub struct FakeClock {
     now: Rc<RefCell<u64>>,

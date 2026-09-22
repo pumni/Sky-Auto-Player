@@ -15,7 +15,7 @@ impl RuntimeDispatchCoordinator {
         expected: GenerationStatus,
         next: GenerationStatus,
     ) -> Result<(), CoordinatorError> {
-        let Some(state) = self.generation_states.get_mut(generation_id as usize) else {
+        let Some(actual) = self.generation_states.get(generation_id as usize).copied() else {
             return Err(CoordinatorError::Invariant(
                 CoordinatorInvariantError::UnknownGeneration {
                     generation_id,
@@ -23,12 +23,12 @@ impl RuntimeDispatchCoordinator {
                 },
             ));
         };
-        if *state != expected {
+        if actual != expected {
             return Err(CoordinatorError::Invariant(
                 CoordinatorInvariantError::UnexpectedTransition {
                     generation_id,
                     expected,
-                    actual: *state,
+                    actual,
                     next,
                 },
             ));
@@ -42,10 +42,23 @@ impl RuntimeDispatchCoordinator {
                 },
             ));
         }
-        *state = next;
-        if next.is_terminal() {
-            self.counters.increment(next);
+        if matches!(
+            (expected, next),
+            (GenerationStatus::Scheduled, GenerationStatus::Active)
+        ) {
+            self.activated_generation_count = self
+                .activated_generation_count
+                .checked_add(1)
+                .ok_or_else(|| {
+                    CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(
+                        "activated generation counter overflow".to_string(),
+                    ))
+                })?;
         }
+        if next.is_terminal() {
+            self.counters.increment(next)?;
+        }
+        self.generation_states[generation_id as usize] = next;
         Ok(())
     }
 

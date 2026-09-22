@@ -159,25 +159,49 @@ pub struct GenerationCounters {
 
 impl GenerationCounters {
     /// Sum of all terminal buckets.
-    pub fn terminal_total(&self) -> u64 {
+    fn terminal_total_checked(&self) -> Option<u64> {
         self.released
-            + self.dropped_conflict
-            + self.dropped_backend
-            + self.dropped_expired
-            + self.cancelled
+            .checked_add(self.dropped_conflict)?
+            .checked_add(self.dropped_backend)?
+            .checked_add(self.dropped_expired)?
+            .checked_add(self.cancelled)
     }
 
-    fn increment(&mut self, status: GenerationStatus) {
-        match status {
-            GenerationStatus::Released => self.released += 1,
-            GenerationStatus::DroppedConflict => self.dropped_conflict += 1,
-            GenerationStatus::DroppedBackend => self.dropped_backend += 1,
-            GenerationStatus::DroppedExpired => self.dropped_expired += 1,
-            GenerationStatus::Cancelled => self.cancelled += 1,
-            // Non-terminal states are not tracked here; they are derived from masks.
-            GenerationStatus::Scheduled | GenerationStatus::Active => {}
-        }
+    pub fn terminal_total(&self) -> u64 {
+        self.terminal_total_checked()
+            .expect("terminal generation counters must remain checked")
     }
+
+    fn increment(&mut self, status: GenerationStatus) -> Result<(), CoordinatorInvariantError> {
+        let counter = match status {
+            GenerationStatus::Released => &mut self.released,
+            GenerationStatus::DroppedConflict => &mut self.dropped_conflict,
+            GenerationStatus::DroppedBackend => &mut self.dropped_backend,
+            GenerationStatus::DroppedExpired => &mut self.dropped_expired,
+            GenerationStatus::Cancelled => &mut self.cancelled,
+            // Non-terminal states are not tracked here; they are derived from masks.
+            GenerationStatus::Scheduled | GenerationStatus::Active => return Ok(()),
+        };
+        *counter = counter.checked_add(1).ok_or_else(|| {
+            CoordinatorInvariantError::Accounting(format!("{status:?} generation counter overflow"))
+        })?;
+        Ok(())
+    }
+}
+
+/// Allocation-free generation lifecycle accounting derived from the
+/// compiler-owned generation ledger and coordinator masks/counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationAccounting {
+    pub total: u64,
+    pub activated: u64,
+    pub scheduled: u64,
+    pub active: u64,
+    pub released: u64,
+    pub dropped_conflict: u64,
+    pub dropped_backend: u64,
+    pub dropped_expired: u64,
+    pub cancelled: u64,
 }
 
 pub const ALL_GENERATION_STATUSES: [GenerationStatus; 7] = [
@@ -334,6 +358,7 @@ pub struct RuntimeDispatchCoordinator {
     /// This eliminates the `HashMap<GenerationId, GenerationStatus>` from the
     /// hot dispatch path.
     counters: GenerationCounters,
+    activated_generation_count: u64,
     generation_states: Box<[GenerationStatus]>,
     generation_count: u64,
     up_intent_locations: Box<[Option<(usize, usize)>]>,
@@ -440,6 +465,7 @@ impl RuntimeDispatchCoordinator {
             active_mask: 0,
             blocked_mask: 0,
             counters: GenerationCounters::default(),
+            activated_generation_count: 0,
             generation_states,
             generation_count,
             up_intent_locations: up_intent_locations.into_boxed_slice(),

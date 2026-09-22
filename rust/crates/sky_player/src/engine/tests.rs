@@ -1763,6 +1763,9 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
     assert_eq!(snapshot.generation_status_counts["dropped_expired"], 0);
     assert_eq!(snapshot.generation_status_counts["dropped_backend"], 0);
     assert_eq!(snapshot.generation_status_counts["dropped_conflict"], 0);
+    sky_dispatch_core::testing::assert_clean_generation_completion(
+        session.generation_accounting_for_test(),
+    );
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.failed_release_count, 0);

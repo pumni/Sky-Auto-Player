@@ -1,6 +1,6 @@
 use super::{
-    ALL_GENERATION_STATUSES, CoordinatorError, CoordinatorInvariantError, GenerationStatus,
-    RuntimeDispatchCoordinator,
+    ALL_GENERATION_STATUSES, CoordinatorError, CoordinatorInvariantError, GenerationAccounting,
+    GenerationStatus, RuntimeDispatchCoordinator,
 };
 use crate::model::*;
 use smallvec::SmallVec;
@@ -37,18 +37,49 @@ impl RuntimeDispatchCoordinator {
             )));
         }
 
-        let mut active = 0u64;
-        let mut terminal = 0u64;
-        for state in &self.generation_states {
-            match state {
-                GenerationStatus::Active => active += 1,
-                GenerationStatus::Released
-                | GenerationStatus::DroppedConflict
-                | GenerationStatus::DroppedBackend
-                | GenerationStatus::DroppedExpired
-                | GenerationStatus::Cancelled => terminal += 1,
-                GenerationStatus::Scheduled => {}
-            }
+        let scheduled = self
+            .generation_states
+            .iter()
+            .filter(|state| **state == GenerationStatus::Scheduled)
+            .count() as u64;
+        let active = self
+            .generation_states
+            .iter()
+            .filter(|state| **state == GenerationStatus::Active)
+            .count() as u64;
+        let terminal = self
+            .generation_states
+            .iter()
+            .filter(|state| state.is_terminal())
+            .count() as u64;
+        let counted_terminal = self.counters.terminal_total_checked().ok_or_else(|| {
+            CoordinatorInvariantError::Accounting("terminal counter overflow".to_string())
+        })?;
+        if self.activated_generation_count > self.generation_count {
+            return Err(CoordinatorInvariantError::Accounting(
+                "activated generation count exceeds total generation count".to_string(),
+            ));
+        }
+        if self.counters.released > self.activated_generation_count {
+            return Err(CoordinatorInvariantError::Accounting(
+                "released generation count exceeds activated generation count".to_string(),
+            ));
+        }
+        if active > self.activated_generation_count {
+            return Err(CoordinatorInvariantError::Accounting(
+                "active generation count exceeds activated generation count".to_string(),
+            ));
+        }
+        let released_plus_active = self.counters.released.checked_add(active).ok_or_else(|| {
+            CoordinatorInvariantError::Accounting(
+                "released plus active generation count overflow".to_string(),
+            )
+        })?;
+        if released_plus_active > self.activated_generation_count {
+            return Err(CoordinatorInvariantError::Accounting(
+                "released plus active generation count exceeds activated generation count"
+                    .to_string(),
+            ));
         }
         if active != u64::from(self.active_mask.count_ones()) {
             return Err(CoordinatorInvariantError::Accounting(format!(
@@ -56,10 +87,23 @@ impl RuntimeDispatchCoordinator {
                 self.active_mask.count_ones()
             )));
         }
-        if terminal != self.counters.terminal_total() {
+        if terminal != counted_terminal {
             return Err(CoordinatorInvariantError::Accounting(format!(
-                "terminal ledger count {terminal} != counters {}",
-                self.counters.terminal_total()
+                "terminal ledger count {terminal} != counters {counted_terminal}"
+            )));
+        }
+        let accounted = scheduled
+            .checked_add(active)
+            .and_then(|count| count.checked_add(terminal))
+            .ok_or_else(|| {
+                CoordinatorInvariantError::Accounting(
+                    "scheduled, active, and terminal generation count overflow".to_string(),
+                )
+            })?;
+        if accounted != self.generation_count {
+            return Err(CoordinatorInvariantError::Accounting(format!(
+                "scheduled + active + terminal {accounted} != generation count {}",
+                self.generation_count
             )));
         }
         for slot in 0..MAX_KEYS {
@@ -106,6 +150,32 @@ impl RuntimeDispatchCoordinator {
             }
         }
         Ok(())
+    }
+
+    /// Return compact generation accounting without allocating or rebuilding
+    /// a second lifecycle ledger.
+    pub fn generation_accounting(&self) -> GenerationAccounting {
+        let terminal = self
+            .counters
+            .terminal_total_checked()
+            .expect("coordinator terminal counters must remain checked");
+        let active = u64::from(self.active_mask.count_ones());
+        let scheduled = self
+            .generation_count
+            .checked_sub(active)
+            .and_then(|count| count.checked_sub(terminal))
+            .expect("coordinator generation accounting must remain valid");
+        GenerationAccounting {
+            total: self.generation_count,
+            activated: self.activated_generation_count,
+            scheduled,
+            active,
+            released: self.counters.released,
+            dropped_conflict: self.counters.dropped_conflict,
+            dropped_backend: self.counters.dropped_backend,
+            dropped_expired: self.counters.dropped_expired,
+            cancelled: self.counters.cancelled,
+        }
     }
 
     /// Verify the stronger state required after terminal backend cleanup.
