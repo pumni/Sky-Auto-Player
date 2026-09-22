@@ -6,6 +6,17 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pipelinePath = Join-Path $PSScriptRoot "v4_release_pipeline.ps1"
+
+# CI pull_request jobs expose a merge SHA through GITHUB_SHA, while these mocked
+# states must model production's exact checked-out source SHA. Keep the test
+# environment aligned with the fixture's checked-out HEAD without weakening the
+# production validation in v4_release_pipeline.ps1.
+$fixtureGithubSha = (& git rev-parse HEAD 2>$null).Trim()
+if ($fixtureGithubSha -notmatch '^[0-9a-fA-F]{40}$') {
+    throw "release pipeline fixture could not resolve an exact checked-out HEAD SHA"
+}
+$env:GITHUB_SHA = $fixtureGithubSha
+
 $fixtureWrapperPath = Join-Path $PSScriptRoot "ci_tauri_update_e2e.ps1"
 $fixtureCorePath = Join-Path $PSScriptRoot "ci_tauri_update_e2e_core.ps1"
 $uploadHelperPath = Join-Path $PSScriptRoot "v4_release_asset_upload.ps1"
