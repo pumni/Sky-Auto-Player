@@ -2530,7 +2530,9 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         .count()
         != 1
         || validate
-            .matches("pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache")
+            .matches(
+                "pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache",
+            )
             .count()
             != 1
         || validate.contains("Fail fast on Rust validation dependencies")
@@ -2626,7 +2628,8 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     }
     if status.contains("DESKTOP_E2E_REQUIRED") {
         return Err(
-            "required aggregate gate must not project the unused DESKTOP_E2E_REQUIRED variable".into(),
+            "required aggregate gate must not project the unused DESKTOP_E2E_REQUIRED variable"
+                .into(),
         );
     }
     if status.contains("deploy_pages") {
@@ -2699,8 +2702,12 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     }
     let site_action = fs::read_to_string(root.join(".github/actions/site-validate/action.yml"))?;
     if site_action.matches("run: bun run sync:version").count() != 1
-        || site_action.lines().any(|line| line.trim() == "run: bun run check")
-        || site_action.lines().any(|line| line.trim() == "run: bun run build")
+        || site_action
+            .lines()
+            .any(|line| line.trim() == "run: bun run check")
+        || site_action
+            .lines()
+            .any(|line| line.trim() == "run: bun run build")
     {
         return Err(
             "CI site validation must synchronize the site version exactly once and use CI-only scripts".into(),
