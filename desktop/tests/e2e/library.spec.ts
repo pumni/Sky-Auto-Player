@@ -1,6 +1,12 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => window.localStorage.clear());
+  await page.reload();
+});
+
 async function expectNoSeriousAccessibilityViolations(page: Page) {
   const results = await new AxeBuilder({ page }).analyze();
   expect(
@@ -480,6 +486,8 @@ test('desktop workbench fits the supported viewport matrix', async ({ page }) =>
   ]) {
     await page.setViewportSize(viewport);
     await page.goto('/');
+    await page.evaluate(() => window.localStorage.clear());
+    await page.reload();
     await expect(page.locator('.app-titlebar')).toBeVisible();
     await expect(page.getByRole('grid', { name: 'Songs' })).toBeVisible();
     await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();

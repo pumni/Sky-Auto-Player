@@ -1,5 +1,5 @@
 import { act, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import type { SearchRequest, SettingsPatch, UiEvent } from '../bridge/DesktopBridge';
 import {
@@ -14,6 +14,9 @@ import {
   type PlaybackContext,
   selectSelectedDetail,
 } from './store';
+import { WORKBENCH_STORAGE_KEY } from './workbenchPreferences';
+
+afterEach(() => window.localStorage.clear());
 
 function rowAt(store: ReturnType<typeof createDesktopStore>, index: number) {
   return selectRowAtIndex(store.getState().library, index);
@@ -2624,6 +2627,43 @@ describe('desktop store', () => {
     await waitFor(() => expect(store.getState().diagnostics.enabled).toBe(false));
     store.getState().closeUtility();
     expect(store.getState().utility.open).toBe(false);
+  });
+
+  it('restores utility open state on Details and persists only the open state', async () => {
+    window.localStorage.setItem(
+      WORKBENCH_STORAGE_KEY,
+      JSON.stringify({
+        version: 5,
+        navigatorPreference: 'expanded',
+        expandedNavigatorWidth: 300,
+        utilityWidth: 360,
+        utilityOpen: true,
+      }),
+    );
+    const store = createDesktopStore(createMockBridge());
+    expect(store.getState().utility).toEqual({ open: true, activeView: 'details' });
+    expect(store.getState().diagnostics.enabled).toBe(false);
+
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    store.getState().openUtility('details');
+    expect(JSON.parse(window.localStorage.getItem(WORKBENCH_STORAGE_KEY)!)).toMatchObject({
+      utilityOpen: true,
+    });
+    store.getState().closeUtility();
+    expect(JSON.parse(window.localStorage.getItem(WORKBENCH_STORAGE_KEY)!)).toMatchObject({
+      utilityOpen: false,
+    });
+    store.getState().toggleUtility();
+    expect(store.getState().utility.open).toBe(true);
+    expect(setItem).toHaveBeenCalledTimes(3);
+
+    store.getState().setUtilityView('diagnostics');
+    await waitFor(() => expect(store.getState().diagnostics.enabled).toBe(true));
+    expect(setItem).toHaveBeenCalledTimes(3);
+
+    const freshStore = createDesktopStore(createMockBridge());
+    expect(freshStore.getState().utility).toEqual({ open: true, activeView: 'details' });
+    expect(freshStore.getState().diagnostics.enabled).toBe(false);
   });
 
   it('bounds diagnostic event text by UTF-8 bytes', async () => {

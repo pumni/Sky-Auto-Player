@@ -41,6 +41,7 @@ tauri = { version = "=2.11.5", default-features = false, features = [] }
 tauri-plugin-dialog = "=2.7.3"
 tauri-plugin-process = "=2.3.1"
 tauri-plugin-updater = "=2.11.0"
+tauri-plugin-window-state = "=2.4.1"
 sky_dispatch_win32 = { path = "../../rust/crates/sky_dispatch_win32" }
 sky_player = { path = "../../rust/crates/sky_player" }
 sha2 = "0.11"
