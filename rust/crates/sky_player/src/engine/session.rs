@@ -1211,6 +1211,12 @@ impl NativeDispatchSession {
                 .generation_status_counts
                 .lock()
                 .clone(),
+            final_release_obligation_mask: self
+                .shared
+                .publication
+                .metrics
+                .terminal_release_obligation_mask
+                .load(Ordering::Acquire) as u16,
             abort_counts_by_reason: self
                 .shared
                 .publication

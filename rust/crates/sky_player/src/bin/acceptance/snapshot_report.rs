@@ -2,6 +2,35 @@ use serde_json::{Value, json};
 use sky_player::engine::EngineSnapshot;
 
 pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
+    let generation_status = &snapshot.generation_status_counts;
+    let generation_released = generation_status.get("released").copied().unwrap_or_default();
+    let generation_active = generation_status.get("active").copied().unwrap_or_default();
+    let generation_scheduled = generation_status
+        .get("scheduled")
+        .copied()
+        .unwrap_or_default();
+    let generation_dropped_conflict = generation_status
+        .get("dropped_conflict")
+        .copied()
+        .unwrap_or_default();
+    let generation_dropped_backend = generation_status
+        .get("dropped_backend")
+        .copied()
+        .unwrap_or_default();
+    let generation_dropped_expired = generation_status
+        .get("dropped_expired")
+        .copied()
+        .unwrap_or_default();
+    let generation_cancelled = generation_status
+        .get("cancelled")
+        .copied()
+        .unwrap_or_default();
+    let generation_activated = generation_released
+        + generation_active
+        + generation_dropped_conflict
+        + generation_dropped_backend
+        + generation_dropped_expired
+        + generation_cancelled;
     let stuck_keys = snapshot
         .release_outcome
         .as_ref()
@@ -47,6 +76,16 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "final_policy_to_pre_call_max_us": snapshot.final_policy_to_pre_call_max_us,
         "wake_to_send_max_us": snapshot.wake_to_send_max_us,
         "sendinput_duration_max_us": snapshot.sendinput_duration_max_us,
+        "generation_total": snapshot.generation_count,
+        "generation_activated": generation_activated,
+        "generation_released": generation_released,
+        "generation_scheduled": generation_scheduled,
+        "generation_active": generation_active,
+        "generation_dropped_conflict": generation_dropped_conflict,
+        "generation_dropped_backend": generation_dropped_backend,
+        "generation_dropped_expired": generation_dropped_expired,
+        "generation_cancelled": generation_cancelled,
+        "final_release_obligation_mask": snapshot.final_release_obligation_mask,
         "pre_call_lt_250us": snapshot.pre_call_lt_250us,
         "pre_call_250_500us": snapshot.pre_call_250_500us,
         "pre_call_500_750us": snapshot.pre_call_500_750us,

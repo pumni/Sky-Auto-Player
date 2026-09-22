@@ -181,6 +181,10 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             "terminal backend cleanup panicked".to_string(),
         );
     }
+    metrics.terminal_release_obligation_mask.store(
+        u32::from(backend.release_obligation_mask()),
+        Ordering::Release,
+    );
 
     #[cfg(any(test, feature = "test-support"))]
     if let Some(observation) = cleanup_observation {

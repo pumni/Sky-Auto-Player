@@ -484,6 +484,7 @@ pub(crate) struct SharedMetrics {
     pub(crate) generation_accounting: Mutex<GenerationAccounting>,
     pub(crate) abort_counts_by_reason: Mutex<HashMap<String, u64>>,
     pub(crate) terminal_release_outcome: Mutex<Option<ReleaseAllOutcome>>,
+    pub(crate) terminal_release_obligation_mask: AtomicU32,
     #[cfg(test)]
     pub(crate) publish_count: AtomicU64,
 }

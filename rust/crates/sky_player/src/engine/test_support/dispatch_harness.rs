@@ -27,7 +27,7 @@ use crate::engine::worker::{
 };
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{
-    CoordinatorError, RuntimeDispatchCoordinator, physical_packet_kind,
+    CoordinatorError, GenerationAccounting, RuntimeDispatchCoordinator, physical_packet_kind,
 };
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
@@ -1568,6 +1568,10 @@ impl ProductionDispatchTestHarness {
 
     pub fn release_obligation_mask_for_test(&self) -> u16 {
         self.resources.backend.release_obligation_mask()
+    }
+
+    pub fn generation_accounting_for_test(&self) -> GenerationAccounting {
+        self.resources.coordinator.generation_accounting()
     }
 
     /// Exercise the production command-control owner used by the worker loop.

@@ -232,6 +232,7 @@ pub struct EngineSnapshot {
     pub secondary_errors: Vec<String>,
     pub generation_count: u64,
     pub generation_status_counts: HashMap<String, u64>,
+    pub final_release_obligation_mask: u16,
     pub abort_counts_by_reason: HashMap<String, u64>,
     pub release_outcome: Option<ReleaseAllOutcome>,
     pub startup_ready: bool,
