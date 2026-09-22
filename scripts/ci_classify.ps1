@@ -95,7 +95,7 @@ function Get-ClassificationForPaths([string[]]$RawPaths) {
         }
 
         if ($path.StartsWith("docs/releases/", [StringComparison]::Ordinal)) {
-            Add-Lane $classification "release_required"
+            $staticOnlyPaths.Add($path)
             continue
         }
 
