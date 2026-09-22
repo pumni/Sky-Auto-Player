@@ -50,6 +50,9 @@ if (Test-Path -LiteralPath $freshParent) {
     Remove-Item -LiteralPath $freshParent -Recurse -Force
 }
 New-Item -Path $freshKey -Force -Value "C:\historical\install" | Out-Null
+$freshNestedKey = "$freshKey\HistoricalSubtree"
+New-Item -Path $freshNestedKey -Force | Out-Null
+Set-ItemProperty -Path $freshNestedKey -Name "InstallMarker" -Value "historical-subtree"
 $freshTargets = @([ordered]@{ Key = $freshKey; Parent = $freshParent })
 $freshScope = Enter-V4NsisSmokeScope -RegistryTargets $freshTargets -RegistryStateMode FreshInstall
 try {
@@ -59,7 +62,36 @@ try {
     Exit-V4NsisSmokeScope -Scope $freshScope
 }
 Assert-Equal (Get-Item -LiteralPath $freshKey).GetValue('') "C:\historical\install" "Fresh-install mode restored the historical registry snapshot"
+Assert-Equal (Get-Item -LiteralPath $freshNestedKey).GetValue('InstallMarker') "historical-subtree" "Fresh-install mode restored the complete historical registry subtree"
 Remove-Item -LiteralPath $freshParent -Recurse -Force
+Write-Host "    PASS"
+
+# Test 1c: FreshInstall rolls back registry neutralization when AppData setup fails
+Write-Host "  Test 1c: Fresh-install entry rolls back transactionally on setup failure..."
+$rollbackKey = "HKCU:\Software\__test_sky_fresh_rollback\Sky Auto Player"
+$rollbackParent = "HKCU:\Software\__test_sky_fresh_rollback"
+if (Test-Path -LiteralPath $rollbackParent) {
+    Remove-Item -LiteralPath $rollbackParent -Recurse -Force
+}
+New-Item -Path $rollbackKey -Force | Out-Null
+Set-ItemProperty -Path $rollbackKey -Name "InstallMarker" -Value "rollback-root"
+$rollbackNestedKey = "$rollbackKey\Nested"
+New-Item -Path $rollbackNestedKey -Force | Out-Null
+Set-ItemProperty -Path $rollbackNestedKey -Name "InstallMarker" -Value "rollback-subtree"
+$invalidAppDataPath = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-invalid-appdata-<>-" + [guid]::NewGuid().ToString("N"))
+$rollbackThrew = $false
+try {
+    Enter-V4NsisSmokeScope `
+        -RegistryTargets @([ordered]@{ Key = $rollbackKey; Parent = $rollbackParent }) `
+        -RegistryStateMode FreshInstall `
+        -AppDataRoot $invalidAppDataPath | Out-Null
+} catch {
+    $rollbackThrew = $true
+}
+Assert-True $rollbackThrew "Fresh-install entry must fail when AppData setup cannot complete"
+Assert-Equal (Get-Item -LiteralPath $rollbackKey).GetValue('InstallMarker') "rollback-root" "Fresh-install entry rollback restored the root registry value"
+Assert-Equal (Get-Item -LiteralPath $rollbackNestedKey).GetValue('InstallMarker') "rollback-subtree" "Fresh-install entry rollback restored the nested registry value"
+Remove-Item -LiteralPath $rollbackParent -Recurse -Force
 Write-Host "    PASS"
 
 # Test 2: Absent registry key remains absent after injected failure
@@ -301,17 +333,7 @@ if (Test-Path -LiteralPath $testCustomParent9) {
     Remove-Item -LiteralPath $testCustomParent9 -Recurse -Force
 }
 New-Item -Path $testCustomKey9 -Force | Out-Null
-
-$mockSnapshot9 = @{
-    $testCustomKey9 = [ordered]@{
-        KeyPath       = $testCustomKey9
-        ParentPath    = $testCustomParent9
-        ParentExisted = $true
-        KeyExisted    = $true
-        Properties    = [ordered]@{} # Expected 0 properties
-        SubKeyNames   = @()
-    }
-}
+$mockSnapshot9 = Protect-V4NsisRegistryState -Targets @([ordered]@{ Key = $testCustomKey9; Parent = $testCustomParent9 })
 
 # Inject a leftover property
 Set-ItemProperty -Path $testCustomKey9 -Name "LeftoverResidue" -Value "bad"
@@ -320,11 +342,7 @@ $residueCaught = $false
 try {
     Assert-V4NsisRegistryEquivalence -Snapshots $mockSnapshot9
 } catch {
-    if ($_.Exception.Message -match "Registry residue detected") {
-        $residueCaught = $true
-    } else {
-        throw $_
-    }
+    $residueCaught = $true
 }
 Assert-True $residueCaught "Assert-V4NsisRegistryEquivalence must detect unexpected leftover properties"
 

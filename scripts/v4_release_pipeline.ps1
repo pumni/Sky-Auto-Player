@@ -161,6 +161,19 @@ function Assert-ReleaseContextShape([object]$Context) {
 
 function Set-ReleaseContextVariables([object]$Context) {
     Assert-ReleaseContextShape $Context
+    $sourceIdentity = Get-SourceReleaseIdentity
+    foreach ($property in @("version", "channel", "tag", "release_notes_path", "source_sha")) {
+        $contextValue = [string]$Context.$property
+        $sourceValue = [string]$sourceIdentity[$property]
+        $matches = if ($property -eq "source_sha") {
+            $contextValue.ToLowerInvariant() -eq $sourceValue.ToLowerInvariant()
+        } else {
+            $contextValue -ceq $sourceValue
+        }
+        if (-not $matches) {
+            Fail "release context $property does not match the checked-out source identity"
+        }
+    }
     $currentHead = Get-CheckedOutSourceSha
     if ([string]$Context.source_sha.ToLowerInvariant() -ne $currentHead) {
         Fail "release context source SHA does not match checked-out HEAD"
@@ -206,7 +219,19 @@ function Import-V4ReleaseContext {
         [IO.Path]::GetFullPath($ReleaseNotesPath) -ne [IO.Path]::GetFullPath((Join-Path $repoRoot ([string]$context.release_notes_path)))) {
         Fail "downstream CLI identity argument -ReleaseNotesPath does not match release-context.json"
     }
-    return Set-ReleaseContextVariables $context
+    $resolved = Set-ReleaseContextVariables $context
+    foreach ($entry in @{
+        Version = $resolved.version
+        Channel = $resolved.channel
+        Tag = $resolved.tag
+        SourceSha = $resolved.source_sha
+        WorkflowSha = $resolved.workflow_sha
+        ReleaseNotesPath = $resolved.release_notes_path
+        RunId = $resolved.run_id
+    }.GetEnumerator()) {
+        Set-Variable -Name $entry.Key -Value ([string]$entry.Value) -Scope 1
+    }
+    return $resolved
 }
 
 function Write-V4ReleaseContext {
@@ -1544,11 +1569,13 @@ function Invoke-PublishRelease {
         Fail "candidate manifest is missing: $manifestPath"
     }
     $manifest = Read-JsonFile $manifestPath
-    if ([string]$manifest.source_sha.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant() -or
-        [string]$manifest.version -ne $Version -or
-        [string]$manifest.channel -ne $Channel -or
-        [string]$manifest.tag -ne $Tag) {
-        Fail "candidate manifest does not match requested release identity"
+    $manifestMismatches = @()
+    if ([string]$manifest.source_sha.ToLowerInvariant() -ne $SourceSha.ToLowerInvariant()) { $manifestMismatches += "source_sha" }
+    if ([string]$manifest.version -ne $Version) { $manifestMismatches += "version" }
+    if ([string]$manifest.channel -ne $Channel) { $manifestMismatches += "channel" }
+    if ([string]$manifest.tag -ne $Tag) { $manifestMismatches += "tag" }
+    if ($manifestMismatches.Count -gt 0) {
+        Fail "candidate manifest does not match requested release identity: $($manifestMismatches -join ', '); requested source=$SourceSha version=$Version channel=$Channel tag=$Tag; manifest source=$($manifest.source_sha) version=$($manifest.version) channel=$($manifest.channel) tag=$($manifest.tag)"
     }
 
     $publicRecords = @(Get-PublicReleaseRecordsFromManifest $manifest)

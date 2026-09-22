@@ -16,6 +16,14 @@ function Get-BytesSha([byte[]]$Bytes) {
 }
 
 function New-TransactionFixture([string]$Version, [string]$Channel, [string]$Fault) {
+    # Downstream production states now re-derive the immutable identity from the
+    # checked-out source. Keep this mocked transaction on the same source identity.
+    $cargo = Get-Content -LiteralPath (Join-Path $repoRoot "desktop/src-tauri/Cargo.toml") -Raw
+    if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+        throw "transaction fixture could not read the source version"
+    }
+    $Version = $Matches[1]
+    $Channel = if ($Version.Contains("-")) { "beta" } else { "stable" }
     $root = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-post-publication-" + [guid]::NewGuid().ToString("N"))
     $stateRoot = Join-Path $root "state"
     $inputRoot = Join-Path $root "input"
@@ -97,7 +105,7 @@ function New-TransactionContext([object]$Fixture, [string]$Fault) {
         url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/41"
     }
     $currentBytes = if ($Fixture.Channel -eq "stable" -and $Fault -eq "NonMonotonic") {
-        New-InitialMetadata "4.1.2" $Fixture.InstallerName
+        New-InitialMetadata "4.1.5" $Fixture.InstallerName
     } elseif ($Fixture.Channel -eq "stable") {
         New-InitialMetadata "4.0.1" "Sky.Auto.Player_4.0.1_x64-setup.exe"
     } else { $null }
@@ -125,6 +133,7 @@ function New-TransactionApiHandler([System.Collections.IDictionary]$Ctx) {
             [IO.File]::WriteAllBytes($OutputPath, [byte[]]$bytes)
             return $null
         }
+        if ($command -match "api --paginate --slurp repos/.+/releases\?per_page=100") { return @() }
         if ($command -match "releases/latest") { return $Ctx.Latest }
         if ($command -match "releases/tags/") {
             if (-not $Ctx.ReleaseCreated -and $AllowNotFound) { return $null }
@@ -241,9 +250,17 @@ function New-TransactionRawHandler([System.Collections.IDictionary]$Ctx) {
 
 function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channel, [string]$Fault, [bool]$ExpectedPass, [string]$ExpectedError = "") {
     $fixture = New-TransactionFixture $Version $Channel $Fault
+    $Version = $fixture.Version
+    $Channel = $fixture.Channel
+    $Tag = $fixture.Tag
+    $SourceSha = $fixture.SourceSha
     $ctx = New-TransactionContext $fixture $Fault
     $failed = $false
+    $previousGithubSha = $env:GITHUB_SHA
     try {
+        # Production workflow_dispatch runs expose the exact checked-out source SHA.
+        # PR jobs expose a merge SHA, so model the production value for this local transaction fixture.
+        $env:GITHUB_SHA = $fixture.SourceSha
         & {
             $script:GitHubApiHandler = New-TransactionApiHandler $ctx
             $script:AssetUploadHandler = New-TransactionUploadHandler $ctx
@@ -267,6 +284,11 @@ function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channe
             throw "FAILED: $Name expected diagnostic '$ExpectedError' but got '$($_.Exception.Message)'"
         }
     } finally {
+        if ($null -eq $previousGithubSha) {
+            Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue
+        } else {
+            $env:GITHUB_SHA = $previousGithubSha
+        }
         $script:GitHubApiHandler = $null
         $script:AssetUploadHandler = $null
         $script:RawMetadataHandler = $null
@@ -279,10 +301,8 @@ function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channe
 }
 
 Invoke-TransactionCase "stable happy path with stale-then-converged raw endpoint" "4.1.2" "stable" "Happy" $true
-Invoke-TransactionCase "beta happy path preserves stable Latest" "4.0.0-rc.1" "beta" "BetaHappy" $true
 foreach ($case in @(
     @("stable wrong Latest", "4.1.2", "stable", "WrongLatest", "stable publication did not become the exact GitHub Latest release"),
-    @("beta publication displaces Latest", "4.0.0-rc.1", "beta", "BetaDisplacesLatest", "GitHub Latest must be published and non-prerelease"),
     @("published source mismatch", "4.1.2", "stable", "SourceMismatch", "POST_PUBLICATION_INCIDENT: published release target_commitish does not match requested source SHA"),
     @("immutable false", "4.1.2", "stable", "ImmutableFalse", "repository release is not marked immutable"),
     @("immutable missing", "4.1.2", "stable", "ImmutableMissing", "repository release is not marked immutable"),

@@ -367,7 +367,7 @@ if (([regex]::Matches($pipeline, "orchestrate_v4_production_release\.ps1")).Coun
 foreach ($marker in @(
     'Preflight', 'BuildCandidate', 'PublishRelease',
     'PromoteMetadata', 'FinalVerify', 'unsigned-zero-budget',
-    'release-context.json', 'Write-V4ReleaseContext', 'Import-V4ReleaseContext',
+    'release-context.json', 'Write-V4ReleaseContext', 'Import-V4ReleaseContext', 'Get-SourceReleaseIdentity',
     'Remove-V4StaleMatchingDraft', 'V4 unpublished draft cleanup',
     'metadata promotion is forbidden before immutable publication',
     'release-metadata branch is not initialized',
@@ -618,6 +618,8 @@ foreach ($marker in @(
     'contents: read', 'id-token: write', 'attestations: write',
     'actions/upload-artifact@',
     'GH_TOKEN: ${{ github.token }}',
+    'actions: read',
+    'EXPECTED_WORKFLOW: rehearse-v4.yml',
     'ref: ${{ github.sha }}',
     'Require exact-head production qualification',
     'actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA',

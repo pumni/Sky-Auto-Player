@@ -20,6 +20,52 @@ function Get-V4NsisMonitoredRegistryKeys {
     )
 }
 
+function Convert-V4NsisRegistryItemPath([object]$RegistryItem) {
+    $hivePrefix = 'HKEY_CURRENT_USER\'
+    $registryName = [string]$RegistryItem.Name
+    if (-not $registryName.StartsWith($hivePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Cannot snapshot registry item outside HKCU: $registryName"
+    }
+    return 'HKCU:\' + $registryName.Substring($hivePrefix.Length)
+}
+
+function Get-V4NsisRegistryProperties([object]$RegistryItem) {
+    $properties = [ordered]@{}
+    foreach ($propName in $RegistryItem.GetValueNames()) {
+        $properties[$propName] = [ordered]@{
+            Value = $RegistryItem.GetValue($propName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            Kind  = $RegistryItem.GetValueKind($propName)
+        }
+    }
+    return $properties
+}
+
+function Get-V4NsisRegistrySubtreeSnapshot([string]$KeyPath) {
+    if (-not (Test-Path -LiteralPath $KeyPath)) {
+        return [ordered]@{}
+    }
+
+    $rootItem = Get-Item -LiteralPath $KeyPath -ErrorAction Stop
+    $items = @($rootItem) + @(Get-ChildItem -LiteralPath $KeyPath -Force -Recurse -ErrorAction Stop)
+    $subtree = [ordered]@{}
+    $rootPrefix = $KeyPath.TrimEnd('\', '/') + '\'
+    foreach ($item in $items) {
+        $itemPath = Convert-V4NsisRegistryItemPath $item
+        if (-not $itemPath.Equals($KeyPath, [StringComparison]::OrdinalIgnoreCase) -and
+            -not $itemPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Registry subtree enumeration escaped monitored key '$KeyPath': $itemPath"
+        }
+        $subtree[$itemPath] = [ordered]@{
+            Path       = $itemPath
+            Properties = Get-V4NsisRegistryProperties $item
+        }
+    }
+    if (-not $subtree.Contains($KeyPath)) {
+        throw "Registry subtree snapshot is missing its monitored root '$KeyPath'"
+    }
+    return $subtree
+}
+
 function Protect-V4NsisRegistryState {
     <#
     .SYNOPSIS
@@ -40,19 +86,10 @@ function Protect-V4NsisRegistryState {
         $parentExisted = Test-Path -LiteralPath $parentPath
         $keyExisted = Test-Path -LiteralPath $keyPath
 
-        $properties = [ordered]@{}
-        $subKeyNames = @()
-
-        if ($keyExisted) {
-            $regItem = Get-Item -LiteralPath $keyPath
-            foreach ($propName in $regItem.GetValueNames()) {
-                $properties[$propName] = [ordered]@{
-                    Value = $regItem.GetValue($propName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-                    Kind  = $regItem.GetValueKind($propName)
-                }
-            }
-            $subKeyNames = @($regItem.GetSubKeyNames())
-        }
+        $subtree = Get-V4NsisRegistrySubtreeSnapshot $keyPath
+        $rootSnapshot = if ($keyExisted) { $subtree[$keyPath] } else { $null }
+        $properties = if ($null -ne $rootSnapshot) { $rootSnapshot.Properties } else { [ordered]@{} }
+        $subKeyNames = if ($keyExisted) { @((Get-Item -LiteralPath $keyPath).GetSubKeyNames()) } else { @() }
 
         $snapshots[$keyPath] = [ordered]@{
             KeyPath        = $keyPath
@@ -61,6 +98,7 @@ function Protect-V4NsisRegistryState {
             KeyExisted     = $keyExisted
             Properties     = $properties
             SubKeyNames    = $subKeyNames
+            Subtree        = $subtree
         }
     }
 
@@ -80,6 +118,11 @@ function Remove-V4NsisMonitoredRegistryState {
     )
 
     foreach ($keyPath in $Snapshots.Keys) {
+        $snapshot = $Snapshots[$keyPath]
+        if ($snapshot.KeyExisted -and
+            (-not $snapshot.Contains('Subtree') -or $snapshot.Subtree.Count -eq 0)) {
+            throw "Fresh-install registry neutralization cannot restore monitored subtree '$keyPath' from a complete snapshot."
+        }
         if (Test-Path -LiteralPath $keyPath) {
             Remove-Item -LiteralPath $keyPath -Recurse -Force -ErrorAction Stop
         }
@@ -143,6 +186,11 @@ function Assert-V4NsisRegistryEquivalence {
                 throw "Registry restoration failed: key '$keyPath' existed prior to smoke test but is missing after restoration."
             }
 
+            if ($snapshot.Contains('Subtree')) {
+                Assert-V4NsisRegistrySubtreeEquivalence -KeyPath $keyPath -Snapshot $snapshot
+                continue
+            }
+
             $regItem = Get-Item -LiteralPath $keyPath
             $currentNames = @($regItem.GetValueNames())
             $snapshotProps = $snapshot.Properties
@@ -192,6 +240,116 @@ function Assert-V4NsisRegistryEquivalence {
     }
 }
 
+function Assert-V4NsisRegistrySubtreeEquivalence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)] [string]$KeyPath,
+        [Parameter(Mandatory = $true)] [System.Collections.IDictionary]$Snapshot
+    )
+
+    $expected = $Snapshot.Subtree
+    $current = Get-V4NsisRegistrySubtreeSnapshot $KeyPath
+    if ($current.Count -ne $expected.Count) {
+        throw "Registry subtree residue detected in '$KeyPath': expected $($expected.Count) keys, found $($current.Count)."
+    }
+    foreach ($currentPath in $current.Keys) {
+        if (-not $expected.Contains($currentPath)) {
+            throw "Registry subtree residue detected: unexpected key '$currentPath' under '$KeyPath'."
+        }
+    }
+    foreach ($expectedPath in $expected.Keys) {
+        if (-not $current.Contains($expectedPath)) {
+            throw "Registry restoration failed: expected subtree key '$expectedPath' is missing."
+        }
+        $expectedProperties = $expected[$expectedPath].Properties
+        $actualItem = Get-Item -LiteralPath $expectedPath -ErrorAction Stop
+        $actualNames = @($actualItem.GetValueNames())
+        if ($actualNames.Count -ne $expectedProperties.Count) {
+            throw "Registry subtree residue detected in '$expectedPath': expected $($expectedProperties.Count) values, found $($actualNames.Count)."
+        }
+        foreach ($name in $actualNames) {
+            if (-not $expectedProperties.Contains($name)) {
+                $displayName = if ($name -eq '') { '(Default)' } else { "'$name'" }
+                throw "Registry subtree residue detected in '$expectedPath': unexpected value $displayName found after restoration."
+            }
+        }
+        foreach ($name in $expectedProperties.Keys) {
+            $expectedValue = $expectedProperties[$name]
+            $actualKind = $actualItem.GetValueKind($name)
+            $expectedKind = [Microsoft.Win32.RegistryValueKind]$expectedValue.Kind
+            if ($actualKind -ne $expectedKind) {
+                throw "Registry restoration kind mismatch in '$expectedPath' for value '$name': expected $expectedKind, got $actualKind."
+            }
+            $actualValue = $actualItem.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            if (-not (Test-V4RegistryValueEqual -Value1 $actualValue -Value2 $expectedValue.Value -Kind $actualKind)) {
+                throw "Registry restoration content mismatch in '$expectedPath' for value '$name'."
+            }
+        }
+    }
+}
+
+function Restore-V4NsisRegistrySubtree {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)] [string]$KeyPath,
+        [Parameter(Mandatory = $true)] [System.Collections.IDictionary]$Snapshot
+    )
+
+    if (-not $Snapshot.KeyExisted) {
+        if (Test-Path -LiteralPath $KeyPath) {
+            Remove-Item -LiteralPath $KeyPath -Recurse -Force -ErrorAction Stop
+        }
+        if (-not $Snapshot.ParentExisted -and ($Snapshot.ParentPath -ne 'HKCU:\Software') -and
+            (Test-Path -LiteralPath $Snapshot.ParentPath)) {
+            $parentItem = Get-Item -LiteralPath $Snapshot.ParentPath -ErrorAction SilentlyContinue
+            if ($null -ne $parentItem -and $parentItem.SubKeyCount -eq 0 -and $parentItem.ValueCount -eq 0) {
+                Remove-Item -LiteralPath $Snapshot.ParentPath -Force -ErrorAction Stop
+            }
+        }
+        return
+    }
+
+    $expected = $Snapshot.Subtree
+    if ($null -eq $expected -or $expected.Count -eq 0) {
+        throw "Cannot restore monitored subtree '$KeyPath' without a complete snapshot."
+    }
+    $current = Get-V4NsisRegistrySubtreeSnapshot $KeyPath
+    foreach ($currentPath in @($current.Keys | Sort-Object Length -Descending)) {
+        if (-not $expected.Contains($currentPath)) {
+            Remove-Item -LiteralPath $currentPath -Recurse -Force -ErrorAction Stop
+        }
+    }
+    foreach ($expectedPath in @($expected.Keys | Sort-Object Length)) {
+        if (-not (Test-Path -LiteralPath $expectedPath)) {
+            New-Item -Path $expectedPath -Force -ErrorAction Stop | Out-Null
+        }
+        $subPath = $expectedPath.Substring('HKCU:\'.Length)
+        $writable = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subPath, $true)
+        if ($null -eq $writable) {
+            throw "Failed to open registry key '$expectedPath' for writable restoration."
+        }
+        try {
+            $actualItem = Get-Item -LiteralPath $expectedPath -ErrorAction Stop
+            $expectedProperties = $expected[$expectedPath].Properties
+            foreach ($currentName in @($actualItem.GetValueNames())) {
+                if (-not $expectedProperties.Contains($currentName)) {
+                    $writable.DeleteValue($currentName, $false)
+                }
+            }
+            foreach ($propName in $expectedProperties.Keys) {
+                $propRecord = $expectedProperties[$propName]
+                $writable.SetValue(
+                    $propName,
+                    $propRecord.Value,
+                    [Microsoft.Win32.RegistryValueKind]$propRecord.Kind
+                )
+            }
+        } finally {
+            $writable.Close()
+        }
+    }
+}
+
 function Restore-V4NsisRegistryState {
     <#
     .SYNOPSIS
@@ -223,6 +381,8 @@ function Restore-V4NsisRegistryState {
                     Remove-Item -LiteralPath $parentPath -Force -ErrorAction Stop
                 }
             }
+        } elseif ($snapshot.Contains('Subtree')) {
+            Restore-V4NsisRegistrySubtree -KeyPath $keyPath -Snapshot $snapshot
         } else {
             # Key was present before test: ensure it exists and has exact properties
             if (-not (Test-Path -LiteralPath $keyPath)) {
@@ -360,14 +520,6 @@ function Enter-V4NsisSmokeScope {
     )
 
     $snapshots = Protect-V4NsisRegistryState -Targets $RegistryTargets
-    if ($RegistryStateMode -eq 'FreshInstall') {
-        try {
-            Remove-V4NsisMonitoredRegistryState -Snapshots $snapshots
-        } catch {
-            try { Restore-V4NsisRegistryState -Snapshots $snapshots } catch {}
-            throw
-        }
-    }
     $previousAppDataRoot = [Environment]::GetEnvironmentVariable('SKY_APP_DATA_ROOT', 'Process')
 
     $createdAppData = $false
@@ -377,8 +529,41 @@ function Enter-V4NsisSmokeScope {
         $createdAppData = $true
     }
 
-    New-Item -ItemType Directory -Path $resolvedAppDataRoot -Force | Out-Null
-    [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $resolvedAppDataRoot, 'Process')
+    try {
+        if ($RegistryStateMode -eq 'FreshInstall') {
+            Remove-V4NsisMonitoredRegistryState -Snapshots $snapshots
+        }
+        New-Item -ItemType Directory -Path $resolvedAppDataRoot -Force -ErrorAction Stop | Out-Null
+        [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $resolvedAppDataRoot, 'Process')
+    } catch {
+        $entryError = $_.Exception
+        $rollbackErrors = [System.Collections.Generic.List[string]]::new()
+        try {
+            Restore-V4NsisRegistryState -Snapshots $snapshots
+        } catch {
+            $rollbackErrors.Add("registry rollback failed: $($_.Exception.Message)")
+        }
+        try {
+            if ($null -eq $previousAppDataRoot) {
+                Remove-Item Env:SKY_APP_DATA_ROOT -ErrorAction SilentlyContinue
+            } else {
+                [Environment]::SetEnvironmentVariable('SKY_APP_DATA_ROOT', $previousAppDataRoot, 'Process')
+            }
+        } catch {
+            $rollbackErrors.Add("SKY_APP_DATA_ROOT rollback failed: $($_.Exception.Message)")
+        }
+        try {
+            if ($createdAppData -and (Test-Path -LiteralPath $resolvedAppDataRoot)) {
+                Remove-V4DirectoryWithRetry -Path $resolvedAppDataRoot
+            }
+        } catch {
+            $rollbackErrors.Add("AppData rollback failed: $($_.Exception.Message)")
+        }
+        if ($rollbackErrors.Count -gt 0) {
+            throw "Enter-V4NsisSmokeScope failed and rollback was incomplete: $($rollbackErrors -join '; '); original error: $($entryError.Message)"
+        }
+        throw $entryError
+    }
 
     $initialErrorCount = if ($null -ne $global:Error) { $global:Error.Count } else { 0 }
 
