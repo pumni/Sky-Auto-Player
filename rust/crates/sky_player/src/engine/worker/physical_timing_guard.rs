@@ -41,20 +41,20 @@ pub(crate) enum PhysicalTimingGuardError {
 pub(crate) struct PhysicalTimingGuard {
     musical_up_not_before_qpc: [Option<QpcTicks>; MAX_KEYS],
     down_not_before_qpc: [Option<QpcTicks>; MAX_KEYS],
-    frame_base_hold_ticks: DurationTicks,
+    effective_min_hold_ticks: DurationTicks,
     frame_ticks: DurationTicks,
     valid: bool,
 }
 
 impl PhysicalTimingGuard {
     pub(super) const fn new(
-        frame_base_hold_ticks: DurationTicks,
+        effective_min_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
     ) -> Self {
         Self {
             musical_up_not_before_qpc: [None; MAX_KEYS],
             down_not_before_qpc: [None; MAX_KEYS],
-            frame_base_hold_ticks,
+            effective_min_hold_ticks,
             frame_ticks,
             valid: true,
         }
@@ -100,7 +100,7 @@ impl PhysicalTimingGuard {
             None
         };
         let new_up_floor = if down_mask != 0 {
-            match completed_qpc.checked_add_duration(self.frame_base_hold_ticks) {
+            match completed_qpc.checked_add_duration(self.effective_min_hold_ticks) {
                 Ok(floor) => Some(floor),
                 Err(_) => {
                     self.invalidate();
@@ -232,47 +232,47 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_floor_headroom_is_applied_once_without_rebasing() {
+    fn effective_min_hold_floor_is_applied_once_without_rebasing() {
         let key = bit(0);
         let frame = DurationTicks::from_raw(16_667);
         let authored_minimum_hold = DurationTicks::from_raw(17_167);
 
-        let mut case_a = PhysicalTimingGuard::new(frame, frame);
+        let mut case_a = PhysicalTimingGuard::new(authored_minimum_hold, frame);
         case_a
             .observe_successful_packet(qpc(100_300), 0, key)
             .unwrap();
         let authored_down = qpc(100_000);
         let authored_up = qpc(117_167);
         let window_a = case_a.query(authored_up, key, 0).unwrap();
-        let physical_up_floor = qpc(116_967);
+        let physical_up_floor = qpc(117_467);
         assert_eq!(
             qpc(100_300)
-                .checked_add_duration(frame)
+                .checked_add_duration(authored_minimum_hold)
                 .expect("case A physical Up floor"),
             physical_up_floor,
-            "physical Up floor is completion + frame_base_hold"
+            "physical Up floor is completion + effective_min_hold"
         );
-        assert_eq!(window_a.musical_up_not_before_qpc, authored_up);
-        assert_eq!(window_a.packet_not_before_qpc, authored_up);
+        assert_eq!(window_a.musical_up_not_before_qpc, physical_up_floor);
+        assert_eq!(window_a.packet_not_before_qpc, physical_up_floor);
         assert_eq!(
             authored_up.as_u64() - authored_down.as_u64(),
             authored_minimum_hold.as_u64()
         );
 
-        let mut case_b = PhysicalTimingGuard::new(frame, frame);
+        let mut case_b = PhysicalTimingGuard::new(authored_minimum_hold, frame);
         case_b
             .observe_successful_packet(qpc(100_800), 0, key)
             .unwrap();
         let window_b = case_b.query(authored_up, key, 0).unwrap();
-        assert_eq!(window_b.musical_up_not_before_qpc, qpc(117_467));
-        assert_eq!(window_b.packet_not_before_qpc, qpc(117_467));
+        assert_eq!(window_b.musical_up_not_before_qpc, qpc(117_967));
+        assert_eq!(window_b.packet_not_before_qpc, qpc(117_967));
         assert_eq!(
             window_b.packet_not_before_qpc.as_u64() - authored_up.as_u64(),
-            300
+            800
         );
 
         let up_completion = qpc(117_467);
-        let mut case_c = PhysicalTimingGuard::new(frame, frame);
+        let mut case_c = PhysicalTimingGuard::new(authored_minimum_hold, frame);
         case_c
             .observe_successful_packet(up_completion, key, 0)
             .unwrap();

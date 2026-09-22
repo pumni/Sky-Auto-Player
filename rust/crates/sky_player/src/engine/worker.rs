@@ -307,11 +307,11 @@ impl WorkerRuntime {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_physical_timing_guard_for_test(
         &mut self,
-        frame_base_hold_ticks: DurationTicks,
+        effective_min_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
     ) {
         self.physical_timing_guard = Some(physical_timing_guard::PhysicalTimingGuard::new(
-            frame_base_hold_ticks,
+            effective_min_hold_ticks,
             frame_ticks,
         ));
     }
