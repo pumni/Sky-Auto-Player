@@ -32,6 +32,7 @@ jobs:
     outputs:
       rust_required: ${{ steps.classify.outputs.rust_required }}
       desktop_required: ${{ steps.classify.outputs.desktop_required }}
+      desktop_native_required: ${{ steps.classify.outputs.desktop_native_required }}
       desktop_e2e_required: ${{ steps.classify.outputs.desktop_e2e_required }}
       package_required: ${{ steps.classify.outputs.package_required }}
       updater_required: ${{ steps.classify.outputs.updater_required }}
@@ -540,7 +541,7 @@ jobs:
   validate:
     name: Windows compatibility and unit tests
     needs: changes
-    if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_required == 'true'
+    if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_native_required == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -563,11 +564,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Rust — install pinned stable toolchain
-        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_required == 'true'
+        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_native_required == 'true'
         run: rustup toolchain install 1.98.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
 
       - name: Rust — verify pinned stable toolchain
-        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_required == 'true'
+        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_native_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.1
         run: |
@@ -601,11 +602,11 @@ jobs:
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
 
       - name: Fail fast on native desktop validation dependencies
-        if: needs.changes.outputs.desktop_required == 'true'
+        if: needs.changes.outputs.desktop_native_required == 'true'
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
 
       - name: Repository verification — native desktop
-        if: needs.changes.outputs.desktop_required == 'true'
+        if: needs.changes.outputs.desktop_native_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.1
         run: cargo xtask check desktop-native
@@ -1302,6 +1303,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           RUST_REQUIRED: ${{ needs.changes.outputs.rust_required }}
           DESKTOP_REQUIRED: ${{ needs.changes.outputs.desktop_required }}
+          DESKTOP_NATIVE_REQUIRED: ${{ needs.changes.outputs.desktop_native_required }}
           DESKTOP_E2E_REQUIRED: ${{ needs.changes.outputs.desktop_e2e_required }}
           PACKAGE_REQUIRED: ${{ needs.changes.outputs.package_required }}
           UPDATER_REQUIRED: ${{ needs.changes.outputs.updater_required }}
@@ -1342,7 +1344,7 @@ jobs:
           else
             [[ "$SUPPLY_CHAIN_RESULT" == "skipped" ]]
           fi
-          if [[ "$RUST_REQUIRED" == "true" || "$DESKTOP_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
+          if [[ "$RUST_REQUIRED" == "true" || "$DESKTOP_NATIVE_REQUIRED" == "true" ]]; then [[ "$VALIDATE_RESULT" == "success" ]]; else [[ "$VALIDATE_RESULT" == "skipped" ]]; fi
           if [[ "$DESKTOP_WEB_REQUIRED" == "true" ]]; then [[ "$DESKTOP_WEB_RESULT" == "success" ]]; else [[ "$DESKTOP_WEB_RESULT" == "skipped" ]]; fi
           if [[ "$CANDIDATE_REQUIRED" == "true" ]]; then [[ "$CANDIDATE_RESULT" == "success" ]]; else [[ "$CANDIDATE_RESULT" == "skipped" ]]; fi
           if [[ "$UPDATER_BRIDGE_REQUIRED" == "true" ]]; then [[ "$UPDATER_BRIDGE_RESULT" == "success" ]]; else [[ "$UPDATER_BRIDGE_RESULT" == "skipped" ]]; fi

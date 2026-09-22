@@ -17,6 +17,7 @@ $ErrorActionPreference = "Stop"
 $outputNames = @(
     "rust_required",
     "desktop_required",
+    "desktop_native_required",
     "desktop_e2e_required",
     "package_required",
     "updater_required",
@@ -137,30 +138,30 @@ function Get-ClassificationForPaths([string[]]$RawPaths) {
 
         if ($path -eq "desktop/src-tauri/Cargo.toml") {
             Add-Lanes $classification @(
-                "rust_required", "desktop_required", "package_required",
+                "rust_required", "desktop_required", "desktop_native_required", "package_required",
                 "updater_required", "release_required", "supply_chain_required", "site_required"
             )
             continue
         }
         if ($path -eq "desktop/src-tauri/src/native_update.rs") {
-            Add-Lanes $classification @("rust_required", "desktop_required", "updater_required")
+            Add-Lanes $classification @("rust_required", "desktop_required", "desktop_native_required", "updater_required")
             continue
         }
         if ($path -eq "desktop/src-tauri/src/main.rs" -or
             $path -eq "desktop/src-tauri/src/lib.rs") {
-            Add-Lanes $classification @("rust_required", "desktop_required", "package_required")
+            Add-Lanes $classification @("rust_required", "desktop_required", "desktop_native_required", "package_required")
             continue
         }
         if ($path -eq "desktop/src-tauri/build.rs") {
-            Add-Lanes $classification @("rust_required", "desktop_required", "package_required", "updater_required")
+            Add-Lanes $classification @("rust_required", "desktop_required", "desktop_native_required", "package_required", "updater_required")
             continue
         }
         if ($path -eq "desktop/src-tauri/tauri.conf.json") {
-            Add-Lanes $classification @("desktop_required", "package_required", "updater_required")
+            Add-Lanes $classification @("desktop_required", "desktop_native_required", "package_required", "updater_required")
             continue
         }
         if ($path.StartsWith("desktop/src-tauri/capabilities/", [StringComparison]::Ordinal)) {
-            Add-Lanes $classification @("desktop_required", "package_required")
+            Add-Lanes $classification @("desktop_required", "desktop_native_required", "package_required")
             continue
         }
         if ($path.StartsWith("desktop/src-tauri/icons/", [StringComparison]::Ordinal)) {
@@ -168,7 +169,7 @@ function Get-ClassificationForPaths([string[]]$RawPaths) {
             continue
         }
         if ($path.StartsWith("desktop/src-tauri/src/", [StringComparison]::Ordinal)) {
-            Add-Lanes $classification @("rust_required", "desktop_required")
+            Add-Lanes $classification @("rust_required", "desktop_required", "desktop_native_required")
             continue
         }
         if ($path -eq "desktop/package.json" -or $path -eq "desktop/bun.lock") {
@@ -192,11 +193,11 @@ function Get-ClassificationForPaths([string[]]$RawPaths) {
             continue
         }
         if ($path -eq "rust/rust-toolchain.toml") {
-            Add-Lanes $classification @("rust_required", "desktop_required", "package_required", "updater_required", "release_required")
+            Add-Lanes $classification @("rust_required", "desktop_required", "desktop_native_required", "package_required", "updater_required", "release_required")
             continue
         }
         if ($path.StartsWith(".cargo/", [StringComparison]::Ordinal)) {
-            Add-Lanes $classification @("rust_required", "desktop_required", "package_required", "updater_required", "release_required")
+            Add-Lanes $classification @("rust_required", "desktop_required", "desktop_native_required", "package_required", "updater_required", "release_required")
             continue
         }
         if ($path.StartsWith("rust/crates/", [StringComparison]::Ordinal)) {
@@ -257,7 +258,7 @@ function Get-ClassificationForPaths([string[]]$RawPaths) {
             continue
         }
         if ($path.StartsWith("scripts/", [StringComparison]::Ordinal)) {
-            Add-Lanes $classification @("rust_required", "desktop_required")
+            Add-Lanes $classification @("rust_required", "desktop_required", "desktop_native_required")
             continue
         }
 
