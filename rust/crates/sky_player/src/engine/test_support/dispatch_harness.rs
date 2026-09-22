@@ -7,7 +7,7 @@
 
 use crate::engine::SystemPowerState;
 use crate::engine::config::{DispatchProfile, WorkerConfig};
-use crate::engine::shared::SharedProgressClock;
+use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState};
 use crate::engine::telemetry::{
     RtTraceRecord, SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
@@ -76,10 +76,9 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) quit_requested: AtomicBool,
     pub(crate) skip_requested: AtomicBool,
     pub(crate) panic_requested: AtomicBool,
-    pub(crate) supervisor_expired: AtomicBool,
+    pub(crate) supervisor_expired: SupervisorLeaseState,
     pub(crate) desired_pause: AtomicBool,
     pub(super) system_power: SystemPowerState,
-    pub(crate) supervisor_heartbeat_ticks: AtomicU64,
     pub(crate) metrics: SharedMetrics,
     pub(crate) progress_clock: SharedProgressClock,
     pub(crate) observer: PendingObservationQueue,
@@ -1156,10 +1155,9 @@ impl ProductionDispatchTestHarness {
             quit_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
             panic_requested: AtomicBool::new(false),
-            supervisor_expired: AtomicBool::new(false),
+            supervisor_expired: SupervisorLeaseState::new(QpcTicks::from_raw(1)),
             desired_pause: AtomicBool::new(false),
             system_power: SystemPowerState::default(),
-            supervisor_heartbeat_ticks: AtomicU64::new(0),
             metrics: SharedMetrics::default(),
             progress_clock,
             observer: PendingObservationQueue::default(),
@@ -1716,14 +1714,13 @@ impl ProductionDispatchTestHarness {
                 target_hwnd: &self.target_hwnd,
                 target_generation: &self.target_generation,
                 lease_timeout_ticks,
-                supervisor_heartbeat_ticks: &self.supervisor_heartbeat_ticks,
+                supervisor_lease: &self.supervisor_expired,
             },
         )
     }
 
     pub fn set_supervisor_heartbeat_for_test(&self, ticks: QpcTicks) {
-        self.supervisor_heartbeat_ticks
-            .store(ticks.as_u64(), Ordering::Release);
+        self.supervisor_expired.reset(ticks);
     }
 
     /// Number of full-instrument cleanup operations performed by terminal

@@ -3554,7 +3554,6 @@ impl SenderTraceState {
 }
 
 const DIAGNOSTICS_INTERVAL: Duration = Duration::from_millis(100);
-const SUPERVISOR_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Default)]
 struct DiagnosticsPublicationState {
@@ -3696,8 +3695,6 @@ struct NativeActivePlayback {
     stop_requested: AtomicBool,
     skip_requested: AtomicBool,
     done: AtomicBool,
-    heartbeat_stop: AtomicBool,
-    heartbeat_thread: Mutex<Option<thread::JoinHandle<()>>>,
     sequence: AtomicU64,
 }
 
@@ -4472,8 +4469,6 @@ impl NativePlaybackService {
                     stop_requested: AtomicBool::new(false),
                     skip_requested: AtomicBool::new(false),
                     done: AtomicBool::new(false),
-                    heartbeat_stop: AtomicBool::new(true),
-                    heartbeat_thread: Mutex::new(None),
                     sequence: AtomicU64::new(0),
                 });
                 let _ = publish_playback_state(
@@ -4540,8 +4535,6 @@ impl NativePlaybackService {
             stop_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
             done: AtomicBool::new(false),
-            heartbeat_stop: AtomicBool::new(false),
-            heartbeat_thread: Mutex::new(None),
             sequence: AtomicU64::new(0),
         });
         if let Some(player) = &active.player {
@@ -4603,56 +4596,6 @@ impl NativePlaybackService {
             }
             return Err(error);
         }
-        if let Err(error) = spawn_supervisor_heartbeat(&active) {
-            stop_supervisor_heartbeat(&active);
-            if active.physical
-                && let Ok(mut trace_state) = self.sender_trace_state.lock()
-            {
-                trace_state.finish_physical_session(
-                    &active.session_id,
-                    &active.song_id,
-                    &active.title,
-                    &active.plan_fingerprint,
-                    None,
-                );
-            }
-            if let Some(player) = &active.player {
-                let _ = player.panic_release();
-                let _ = player.quit();
-                let _ = player.join(Duration::from_secs(5));
-            }
-            let mut last_event_state = PlaybackEventState::Starting;
-            match publish_terminal_poll_state(
-                &events,
-                &active,
-                &mut last_event_state,
-                EnginePollStatus::Error,
-            ) {
-                Ok(publication) => {
-                    let _ = publish_retirement_barrier(
-                        &events,
-                        &self.active,
-                        &self.last_terminal,
-                        &active,
-                        &publication,
-                    );
-                }
-                Err(_) => {
-                    let _ = release_terminal_ownership(
-                        &self.active,
-                        &self.last_terminal,
-                        &active,
-                        None,
-                    );
-                }
-            }
-            if let Ok(mut prepared) = self.prepared.lock() {
-                prepared.push_back((request.prepared_id, record));
-            }
-            return Err(format!(
-                "failed to start native playback heartbeat: {error}"
-            ));
-        }
         let service = Arc::new(self.clone_handle());
         let active_for_thread = active.clone();
         let events_for_thread = events.clone();
@@ -4660,7 +4603,6 @@ impl NativePlaybackService {
             .name("sky-native-playback-supervisor".into())
             .spawn(move || service.monitor(active_for_thread, events_for_thread));
         if let Err(error) = spawn_result {
-            stop_supervisor_heartbeat(&active);
             if active.physical
                 && let Ok(mut trace_state) = self.sender_trace_state.lock()
             {
@@ -4823,7 +4765,6 @@ impl NativePlaybackService {
         let mut terminal_publication = None;
         loop {
             if active.stop_requested.load(Ordering::Acquire) {
-                stop_supervisor_heartbeat(&active);
                 if let Some(player) = &active.player {
                     let _ = player.quit();
                     let _ = player.join(Duration::from_secs(5));
@@ -4931,9 +4872,11 @@ impl NativePlaybackService {
                 }
                 last_snapshot = Instant::now();
             }
+            if let Some(player) = &active.player {
+                let _ = player.publish_supervisor_progress();
+            }
             thread::sleep(Duration::from_millis(20));
         }
-        stop_supervisor_heartbeat(&active);
         if let Some(player) = &active.player
             && !matches!(player.join(Duration::from_secs(5)), Ok(true))
         {
@@ -5303,63 +5246,6 @@ fn sender_trace_export_json(
         },
         "telemetry": telemetry,
     }))
-}
-
-fn supervisor_heartbeat_loop<F>(
-    stop: &AtomicBool,
-    done: &AtomicBool,
-    interval: Duration,
-    mut heartbeat: F,
-) where
-    F: FnMut(),
-{
-    while !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
-        heartbeat();
-        thread::sleep(interval);
-    }
-}
-
-fn spawn_supervisor_heartbeat(active: &Arc<NativeActivePlayback>) -> Result<(), String> {
-    let Some(player) = active.player.clone() else {
-        return Ok(());
-    };
-    let heartbeat_active = Arc::clone(active);
-    let handle = thread::Builder::new()
-        .name("sky-native-playback-heartbeat".into())
-        .spawn(move || {
-            supervisor_heartbeat_loop(
-                &heartbeat_active.heartbeat_stop,
-                &heartbeat_active.done,
-                SUPERVISOR_HEARTBEAT_INTERVAL,
-                || {
-                    let _ = player.heartbeat();
-                },
-            );
-        })
-        .map_err(|error| format!("could not spawn supervisor heartbeat: {error}"))?;
-    match active.heartbeat_thread.lock() {
-        Ok(mut slot) => {
-            *slot = Some(handle);
-            Ok(())
-        }
-        Err(_) => {
-            active.heartbeat_stop.store(true, Ordering::Release);
-            let _ = handle.join();
-            Err("supervisor heartbeat state lock poisoned".into())
-        }
-    }
-}
-
-fn stop_supervisor_heartbeat(active: &NativeActivePlayback) {
-    active.heartbeat_stop.store(true, Ordering::Release);
-    let handle = active
-        .heartbeat_thread
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take());
-    if let Some(handle) = handle {
-        let _ = handle.join();
-    }
 }
 
 fn playback_event_state(status: EnginePollStatus) -> PlaybackEventState {
@@ -5750,7 +5636,6 @@ fn diagnostics_backend_status(
 
 fn cleanup_failed_event_delivery(active: &NativeActivePlayback) {
     active.stop_requested.store(true, Ordering::Release);
-    stop_supervisor_heartbeat(active);
     let _ = set_playback_state(active, PlaybackSessionState::Failed);
     if let Some(player) = &active.player {
         let _ = player.panic_release();
@@ -6083,7 +5968,6 @@ fn release_terminal_ownership(
         .lock()
         .map_err(|_| "native playback control lock poisoned".to_string())?
         .take();
-    active.heartbeat_stop.store(true, Ordering::Release);
     active
         .activity_lease
         .lock()
@@ -6118,7 +6002,6 @@ fn retire_pre_activation_failure(
         .lock()
         .map_err(|_| "native playback control lock poisoned".to_string())?
         .take();
-    active.heartbeat_stop.store(true, Ordering::Release);
     active
         .activity_lease
         .lock()
@@ -6659,8 +6542,8 @@ mod tests {
         recommended_calibrated_timing_margin_us, release_terminal_ownership,
         remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
         safe_calibration_evidence, sender_sample_summary, sender_trace_export_json,
-        settings_fingerprint, supervisor_heartbeat_loop, target_integrity_startup_failure,
-        timing_margin_recommendation, validate_playback_start_request,
+        settings_fingerprint, target_integrity_startup_failure, timing_margin_recommendation,
+        validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
@@ -6681,7 +6564,7 @@ mod tests {
     };
     use std::fs;
     use std::path::Path;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -6787,8 +6670,6 @@ mod tests {
             stop_requested: std::sync::atomic::AtomicBool::new(false),
             skip_requested: std::sync::atomic::AtomicBool::new(false),
             done: std::sync::atomic::AtomicBool::new(false),
-            heartbeat_stop: std::sync::atomic::AtomicBool::new(true),
-            heartbeat_thread: Mutex::new(None),
             sequence: std::sync::atomic::AtomicU64::new(0),
         })
     }
@@ -10227,44 +10108,54 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_heartbeat_progresses_while_ui_publication_is_stalled() {
-        let stop = Arc::new(AtomicBool::new(false));
-        let done = Arc::new(AtomicBool::new(false));
-        let heartbeats = Arc::new(AtomicU64::new(0));
-        let publication_started = Arc::new(std::sync::Barrier::new(2));
-        let publication_release = Arc::new(std::sync::Barrier::new(2));
+    fn native_supervisor_progress_belongs_to_completed_monitor_iterations() {
+        let source = include_str!("native_runtime.rs");
+        let independent_thread_name = ["sky-native-playback", "heartbeat"].join("-");
+        let heartbeat_spawner = ["spawn_supervisor_", "heartbeat"].concat();
+        assert!(!source.contains(&independent_thread_name));
+        assert!(!source.contains(&heartbeat_spawner));
 
-        let ui_started = Arc::clone(&publication_started);
-        let ui_release = Arc::clone(&publication_release);
-        let ui = thread::spawn(move || {
-            ui_started.wait();
-            ui_release.wait();
-        });
-        publication_started.wait();
+        let monitor = source
+            .split(&concat!(
+                "fn monitor(&self, active: Arc<NativeActivePlayback>, events: Arc<Mutex<NativeEventHub>>) ",
+                "{"
+            ))
+            .nth(1)
+            .expect("native playback monitor")
+            .split("\n    }\n}\n\nstruct NativePlaybackServiceHandle")
+            .next()
+            .expect("monitor implementation body");
+        let stop = monitor
+            .find("if active.stop_requested.load(Ordering::Acquire)")
+            .expect("stop branch");
+        let terminal = monitor
+            .find("if is_terminal_status(status)")
+            .expect("terminal branch");
+        let poll = monitor.find("player.poll_state()").expect("engine poll");
+        let diagnostics = monitor
+            .find("publish_diagnostics_snapshot_for_active")
+            .expect("supervision publication");
+        let progress = monitor
+            .find("player.publish_supervisor_progress()")
+            .expect("progress publication");
+        let sleep = monitor
+            .find("thread::sleep(Duration::from_millis(20))")
+            .expect("normal monitor sleep");
 
-        let heartbeat_stop = Arc::clone(&stop);
-        let heartbeat_done = Arc::clone(&done);
-        let heartbeat_count = Arc::clone(&heartbeats);
-        let heartbeat = thread::spawn(move || {
-            supervisor_heartbeat_loop(
-                &heartbeat_stop,
-                &heartbeat_done,
-                Duration::from_millis(5),
-                || {
-                    heartbeat_count.fetch_add(1, Ordering::Relaxed);
-                },
-            );
-        });
-
-        let deadline = Instant::now() + Duration::from_millis(200);
-        while heartbeats.load(Ordering::Relaxed) < 3 && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(5));
-        }
-        assert!(heartbeats.load(Ordering::Relaxed) >= 3);
-        publication_release.wait();
-        ui.join().expect("UI publication seam");
-        stop.store(true, Ordering::Release);
-        heartbeat.join().expect("heartbeat seam");
+        assert!(stop < progress, "stop exits before publishing progress");
+        assert!(poll < progress, "progress follows engine polling");
+        assert!(
+            terminal < progress,
+            "terminal poll exits before publishing progress"
+        );
+        assert!(
+            diagnostics < progress,
+            "progress follows completed supervision work"
+        );
+        assert!(
+            progress < sleep,
+            "progress is published before the normal poll delay"
+        );
     }
 
     #[test]

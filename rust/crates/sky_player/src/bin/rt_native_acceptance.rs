@@ -623,6 +623,7 @@ fn run_windows(args: RunArgs) -> i32 {
         inconclusive!(&error, json!({}));
     }
     let mut final_probe = targets.probe.clone();
+    let mut independent_helper_probe: Option<release_gap_stress::IndependentHelperLivenessProbe> = None;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
         if !wait_for_startup_ready(&session) {
@@ -698,6 +699,21 @@ fn run_windows(args: RunArgs) -> i32 {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
     } else if args.scenario == Scenario::TargetHwndChange {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
+    } else if args.scenario == Scenario::SupervisorLeaseExpiry {
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before supervisor-progress proof", json!({})); }
+        // Seed one completed supervisor iteration, then stop publishing actual
+        // monitor progress. Keep an unrelated legacy-helper liveness probe
+        // running so its activity cannot be mistaken for lease authority.
+        session.publish_supervisor_progress().expect("seed supervisor monitor progress");
+        independent_helper_probe = match release_gap_stress::IndependentHelperLivenessProbe::start() {
+            Ok(probe) => Some(probe),
+            Err(error) => {
+                let _ = session.quit();
+                let _ = session.join(Duration::from_secs(5));
+                inconclusive!(&format!("could not start independent helper liveness probe: {error}"), snapshot_json(&session.snapshot()));
+            }
+        };
+        false
     } else if args.scenario == Scenario::StopCleanup {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before stop proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.quit() { inconclusive!(&error, json!({})); }; stop_requested = true; false
     } else if args.scenario == Scenario::SkipCleanup {
@@ -706,6 +722,9 @@ fn run_windows(args: RunArgs) -> i32 {
         false
     };
     let joined = session.join(Duration::from_secs(if args.scenario == Scenario::ReleaseGapStress { 60 } else { 10 })).unwrap_or(false);
+    let independent_helper_liveness_ticks = independent_helper_probe
+        .map(release_gap_stress::IndependentHelperLivenessProbe::stop_and_read)
+        .unwrap_or(0);
     let snapshot = session.snapshot();
     if !joined { inconclusive!("production session did not join within the bounded timeout", snapshot_json(&snapshot)); }
     let sink_drain_mode = DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: plan.allow_unpaired_cleanup_ups };
@@ -752,6 +771,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("sink_drain_deadline_ms".to_string(), json!(DRAIN_DEADLINE_MS));
         object.insert("sink_drain_quiet_ms".to_string(), json!(DRAIN_QUIET_MS));
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
+        object.insert("independent_helper_liveness_ticks".to_string(), json!(independent_helper_liveness_ticks));
         object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
         object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         let power = session.system_power_snapshot();
@@ -800,10 +820,11 @@ fn run_windows(args: RunArgs) -> i32 {
             || snapshot.timeline_rebase_count != 0
             || sink_events.iter().any(|event| event.kind == "key_press")
             || sink_events.len() != MAX_KEYS
+            || independent_helper_liveness_ticks == 0
         {
-            return write_report(&args, Verdict::Fail, "supervisor lease expiry did not fail closed before the musical target", details);
+            return write_report(&args, Verdict::Fail, "supervisor lease expiry did not fail closed after monitor progress stopped while the independent helper remained alive", details);
         }
-        return write_report(&args, Verdict::Pass, "watchdog interrupted the long musical wait before any physical send", details);
+        return write_report(&args, Verdict::Pass, "watchdog expired after monitor progress stopped while the independent helper remained alive", details);
     }
     if args.scenario == Scenario::RapidRetrigger { let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let expected = [("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
     if args.scenario == Scenario::MixedUpDown { let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0]; let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", second)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }

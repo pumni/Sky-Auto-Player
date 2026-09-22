@@ -125,7 +125,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     pub(crate) physical_timing_window: super::physical_timing_guard::PhysicalTimingWindow,
     pub(crate) down_admission: DownBoundaryAdmission,
     pub(crate) focus_loss_fault: bool,
-    pub(crate) supervisor_expired: &'a std::sync::atomic::AtomicBool,
+    pub(crate) supervisor_expired: &'a crate::engine::shared::SupervisorLeaseState,
     /// QPC sample returned by the direct target wait. When present, the
     /// final admission gate reuses it instead of entering a second wait.
     pub(crate) boundary_crossing_qpc: Option<QpcTicks>,

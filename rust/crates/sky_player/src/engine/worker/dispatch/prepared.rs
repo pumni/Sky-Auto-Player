@@ -9,7 +9,7 @@ use super::super::{
 };
 use super::authored::record_prepared_normal_send_outcome;
 use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue};
-use crate::engine::shared::{SharedProgressClock, SystemPowerState};
+use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState, SystemPowerState};
 use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionOutcome;
@@ -44,7 +44,7 @@ fn send_prepared_normal_precision_frame(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
-    supervisor_expired: &AtomicBool,
+    supervisor_expired: &SupervisorLeaseState,
     system_power: &SystemPowerState,
     preflight_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))] post_focus_race_hook: Option<
@@ -152,7 +152,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     desired_pause: &AtomicBool,
-    supervisor_expired: &AtomicBool,
+    supervisor_expired: &SupervisorLeaseState,
     system_power: &SystemPowerState,
     progress_clock: &SharedProgressClock,
     observer: Option<&PendingObservationQueue>,

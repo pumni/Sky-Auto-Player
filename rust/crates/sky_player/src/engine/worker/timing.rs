@@ -1,32 +1,19 @@
+use crate::engine::shared::SupervisorLeaseState;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
 #[cfg(test)]
 use sky_dispatch_win32::clock::qpc_us_to_ticks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
 use sky_dispatch_win32::wait::{WaitFailure, WakeErrorStats};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) fn supervisor_lease_expired(
     now_ticks: QpcTicks,
     timeout_ticks: DurationTicks,
-    heartbeat_ticks: &AtomicU64,
+    lease: &SupervisorLeaseState,
 ) -> Result<bool, QpcError> {
     if timeout_ticks == DurationTicks::ZERO {
         return Ok(false);
     }
-    let heartbeat = heartbeat_ticks.load(Ordering::Acquire);
-    if heartbeat == 0 {
-        return Ok(false);
-    }
-    // The supervisor may publish a heartbeat after the worker sampled `now`.
-    // A heartbeat at or beyond that sample is fresh, not a QPC underflow or
-    // counter-corruption signal.
-    if heartbeat >= now_ticks.as_u64() {
-        return Ok(false);
-    }
-    let elapsed = now_ticks
-        .checked_duration_since(QpcTicks::from_raw(heartbeat))
-        .map_err(|_| QpcError::CounterUnavailable)?;
-    Ok(elapsed > timeout_ticks)
+    Ok(lease.check_expired(now_ticks, timeout_ticks))
 }
 
 pub(crate) fn signed_delta(lhs: u64, rhs: u64) -> i64 {

@@ -147,10 +147,134 @@ pub(super) struct SessionCommands {
     pub(super) quit_requested: AtomicBool,
     pub(super) skip_requested: AtomicBool,
     pub(super) panic_requested: AtomicBool,
-    pub(super) supervisor_expired: AtomicBool,
+    pub(super) supervisor_expired: SupervisorLeaseState,
     pub(super) focus_active: AtomicBool,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) command_timing: CommandTimingState,
+}
+
+/// One atomic decision shared by supervisor progress, the watchdog, and the
+/// final musical-Down control gate. The high bit permanently latches expiry;
+/// QPC's nonnegative signed-counter range leaves that bit available, and the
+/// remaining bits retain the last accepted progress stamp.
+pub(crate) struct SupervisorLeaseState {
+    state: AtomicU64,
+}
+
+impl SupervisorLeaseState {
+    const EXPIRED_BIT: u64 = 1 << 63;
+    const TICKS_MASK: u64 = !Self::EXPIRED_BIT;
+
+    pub(crate) fn new(initial_progress: QpcTicks) -> Self {
+        let ticks = initial_progress.as_u64();
+        Self {
+            state: AtomicU64::new(if ticks & Self::EXPIRED_BIT == 0 {
+                ticks
+            } else {
+                ticks | Self::EXPIRED_BIT
+            }),
+        }
+    }
+
+    pub(crate) fn reset(&self, progress: QpcTicks) {
+        let ticks = progress.as_u64();
+        self.state.store(
+            if ticks & Self::EXPIRED_BIT == 0 {
+                ticks
+            } else {
+                ticks | Self::EXPIRED_BIT
+            },
+            Ordering::Release,
+        );
+    }
+
+    pub(crate) fn is_expired(&self) -> bool {
+        self.state.load(Ordering::Acquire) & Self::EXPIRED_BIT != 0
+    }
+
+    pub(crate) fn last_progress_ticks(&self) -> u64 {
+        self.state.load(Ordering::Acquire) & Self::TICKS_MASK
+    }
+
+    pub(crate) fn latch_expired(&self) {
+        self.state.fetch_or(Self::EXPIRED_BIT, Ordering::AcqRel);
+    }
+
+    pub(crate) fn check_expired(&self, now: QpcTicks, timeout: DurationTicks) -> bool {
+        if timeout == DurationTicks::ZERO {
+            return false;
+        }
+        let now = now.as_u64();
+        if now & Self::EXPIRED_BIT != 0 {
+            self.latch_expired();
+            return true;
+        }
+        loop {
+            let state = self.state.load(Ordering::Acquire);
+            if state & Self::EXPIRED_BIT != 0 {
+                return true;
+            }
+            let previous = state & Self::TICKS_MASK;
+            if previous == 0 || now < previous || now - previous <= timeout.as_u64() {
+                return false;
+            }
+            if self
+                .state
+                .compare_exchange(
+                    state,
+                    state | Self::EXPIRED_BIT,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    pub(crate) fn publish_progress(&self, now: QpcTicks, timeout: DurationTicks) -> bool {
+        if timeout == DurationTicks::ZERO {
+            return !self.is_expired();
+        }
+        let now = now.as_u64();
+        if now & Self::EXPIRED_BIT != 0 {
+            self.latch_expired();
+            return false;
+        }
+        loop {
+            let state = self.state.load(Ordering::Acquire);
+            if state & Self::EXPIRED_BIT != 0 {
+                return false;
+            }
+            let previous = state & Self::TICKS_MASK;
+            if previous != 0 && now >= previous && now - previous > timeout.as_u64() {
+                if self
+                    .state
+                    .compare_exchange(
+                        state,
+                        state | Self::EXPIRED_BIT,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    return false;
+                }
+                continue;
+            }
+            if now < previous {
+                return true;
+            }
+            if self
+                .state
+                .compare_exchange(state, now, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
 }
 
 pub(super) const SYSTEM_POWER_OS_SUSPENDED: u8 = 1 << 0;
@@ -378,7 +502,6 @@ pub(super) struct SessionPublication {
     pub(super) progress_clock: SharedProgressClock,
     pub(super) telemetry_output: Mutex<Option<NativeTelemetryOutput>>,
     pub(super) priority_acquired: Mutex<String>,
-    pub(super) supervisor_heartbeat_ticks: AtomicU64,
     pub(super) startup_requested_ticks: AtomicU64,
     pub(super) epoch_qpc: AtomicU64,
     pub(super) pre_roll_us: AtomicU64,

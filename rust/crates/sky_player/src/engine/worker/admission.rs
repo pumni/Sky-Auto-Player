@@ -1,7 +1,7 @@
 use super::super::{PlaybackClockState, QpcClock};
 use super::dispatch::DispatchStep;
 use super::{TrackedKeyState, focus_gate_matches};
-use crate::engine::shared::SharedProgressClock;
+use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState};
 use crate::engine::telemetry::{
     TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP, WorkerMetricsLocal,
 };
@@ -137,7 +137,7 @@ pub(crate) struct FinalControlSignals<'a> {
     pub(crate) skip_requested: &'a AtomicBool,
     pub(crate) panic_requested: &'a AtomicBool,
     pub(crate) desired_pause: &'a AtomicBool,
-    pub(crate) supervisor_expired: &'a AtomicBool,
+    pub(crate) supervisor_expired: &'a SupervisorLeaseState,
     pub(crate) system_power: Option<&'a super::super::shared::SystemPowerState>,
 }
 
@@ -154,9 +154,7 @@ pub(crate) struct FinalTargetSignals<'a> {
 }
 
 pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalControlAdmission {
-    if signals.supervisor_expired.load(Ordering::Acquire)
-        || signals.panic_requested.load(Ordering::Acquire)
-    {
+    if signals.supervisor_expired.is_expired() || signals.panic_requested.load(Ordering::Acquire) {
         return FinalControlAdmission::PanicRequested;
     }
     if signals.quit_requested.load(Ordering::Acquire) {
