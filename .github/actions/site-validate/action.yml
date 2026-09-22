@@ -1,6 +1,6 @@
 name: Site validate
 description: >
-  Install site dependencies with Bun and run check, lint, format, build,
+  Install site dependencies with Bun, synchronize the version once, and run check, lint, format, build,
   dist verify, and Playwright e2e/accessibility tests under site/.
 
 runs:
@@ -16,10 +16,15 @@ runs:
       working-directory: site
       run: bun install --frozen-lockfile
 
+    - name: Sync site application version
+      shell: bash
+      working-directory: site
+      run: bun run sync:version
+
     - name: Type and Astro checks
       shell: bash
       working-directory: site
-      run: bun run check
+      run: bun run check:ci
 
     - name: Lint
       shell: bash
@@ -34,7 +39,7 @@ runs:
     - name: Build static site
       shell: bash
       working-directory: site
-      run: bun run build
+      run: bun run build:ci
 
     - name: Verify required output
       shell: bash
