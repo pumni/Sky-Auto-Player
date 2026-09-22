@@ -7,6 +7,8 @@ use super::worker::Worker;
 use super::*;
 use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_timing_constants};
 use crate::engine::{EnginePollSnapshot, EnginePollStatus};
+#[cfg(any(test, feature = "test-support"))]
+use sky_dispatch_core::coordinator::GenerationAccounting;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::Duration;
@@ -959,6 +961,12 @@ impl NativeDispatchSession {
             recovered_zero_progress_retries: local.recovered_zero_progress_retries,
             recovered_partial_up_retries: local.recovered_partial_up_retries,
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
+    pub(crate) fn generation_accounting_for_test(&self) -> GenerationAccounting {
+        *self.shared.publication.metrics.generation_accounting.lock()
     }
 
     pub fn snapshot(&self) -> EngineSnapshot {
