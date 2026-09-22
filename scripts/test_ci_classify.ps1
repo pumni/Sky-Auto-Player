@@ -33,7 +33,7 @@ function Invoke-Classification([string[]]$Paths, [switch]$Full, [string]$Name) {
         [void]($result[$parts[0]] = $parts[1])
     }
     $expectedNames = @(
-        "rust_required", "desktop_required", "desktop_e2e_required", "package_required",
+        "rust_required", "desktop_required", "desktop_native_required", "desktop_e2e_required", "package_required",
         "updater_required", "release_required", "supply_chain_required", "site_required",
         "classification_reason"
     )
@@ -64,7 +64,7 @@ try {
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
     $falseLanes = @{
-        rust_required = "false"; desktop_required = "false"; desktop_e2e_required = "false";
+        rust_required = "false"; desktop_required = "false"; desktop_native_required = "false"; desktop_e2e_required = "false";
         package_required = "false"; updater_required = "false"; release_required = "false";
         supply_chain_required = "false"; site_required = "false"
     }
@@ -75,19 +75,22 @@ try {
     Assert-ReasonContains "static-only-with-site-reason" @(".config/rust_architecture_allowlist.json", "site/src/pages/index.astro") "static-only"
     Assert-Result "release-notes" (@{ release_required = "true" }) @("docs/releases/v4.0.2.md")
     Assert-Result "site" (@{ site_required = "true" }) @("site/src/pages/index.astro")
-    Assert-Result "desktop-frontend" (@{ desktop_required = "true"; desktop_e2e_required = "true"; package_required = "false" }) @("desktop/src/App.tsx")
-    Assert-Result "desktop-bridge" (@{ desktop_required = "true"; desktop_e2e_required = "true"; package_required = "false" }) @("desktop/src/bridge/tauriBridge.ts")
-    Assert-Result "desktop-commands" (@{ rust_required = "true"; desktop_required = "true"; package_required = "false" }) @("desktop/src-tauri/src/commands.rs")
-    Assert-Result "native-runtime" (@{ rust_required = "true"; desktop_required = "true"; updater_required = "false"; package_required = "false" }) @("desktop/src-tauri/src/native_runtime.rs")
-    Assert-Result "native-update" (@{ rust_required = "true"; desktop_required = "true"; updater_required = "true"; package_required = "false" }) @("desktop/src-tauri/src/native_update.rs")
-    Assert-Result "main" (@{ rust_required = "true"; desktop_required = "true"; package_required = "true"; updater_required = "false" }) @("desktop/src-tauri/src/main.rs")
-    Assert-Result "lib" (@{ rust_required = "true"; desktop_required = "true"; package_required = "true"; updater_required = "false" }) @("desktop/src-tauri/src/lib.rs")
-    Assert-Result "tauri-config" (@{ desktop_required = "true"; package_required = "true"; updater_required = "true"; rust_required = "false" }) @("desktop/src-tauri/tauri.conf.json")
-    Assert-Result "icon" (@{ package_required = "true"; desktop_required = "false" }) @("desktop/src-tauri/icons/icon.ico")
+    Assert-Result "desktop-frontend" (@{ desktop_required = "true"; desktop_e2e_required = "true"; desktop_native_required = "false"; package_required = "false" }) @("desktop/src/App.tsx")
+    Assert-Result "desktop-e2e" (@{ desktop_required = "true"; desktop_e2e_required = "true"; desktop_native_required = "false"; package_required = "false" }) @("desktop/tests/e2e/library.spec.ts")
+    Assert-Result "desktop-bridge" (@{ desktop_required = "true"; desktop_e2e_required = "true"; desktop_native_required = "false"; package_required = "false" }) @("desktop/src/bridge/tauriBridge.ts")
+    Assert-Result "desktop-commands" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; package_required = "false" }) @("desktop/src-tauri/src/commands.rs")
+    Assert-Result "native-runtime" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; updater_required = "false"; package_required = "false" }) @("desktop/src-tauri/src/native_runtime.rs")
+    Assert-Result "native-update" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; updater_required = "true"; package_required = "false" }) @("desktop/src-tauri/src/native_update.rs")
+    Assert-Result "main" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; package_required = "true"; updater_required = "false" }) @("desktop/src-tauri/src/main.rs")
+    Assert-Result "lib" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; package_required = "true"; updater_required = "false" }) @("desktop/src-tauri/src/lib.rs")
+    Assert-Result "tauri-config" (@{ desktop_required = "true"; desktop_native_required = "true"; package_required = "true"; updater_required = "true"; rust_required = "false" }) @("desktop/src-tauri/tauri.conf.json")
+    Assert-Result "icon" (@{ package_required = "true"; desktop_required = "false"; desktop_native_required = "false" }) @("desktop/src-tauri/icons/icon.ico")
     Assert-Result "songs" (@{ package_required = "true"; desktop_required = "false" }) @("songs/foo.json")
     Assert-Result "builtin-songs" (@{ package_required = "true"; desktop_required = "false" }) @("builtin-songs/manifest.json")
-    Assert-Result "rust-source" (@{ rust_required = "true"; desktop_required = "false"; package_required = "false" }) @("rust/crates/sky_player/src/lib.rs")
+    Assert-Result "rust-source" (@{ rust_required = "true"; desktop_required = "false"; desktop_native_required = "false"; package_required = "false" }) @("rust/crates/sky_player/src/lib.rs")
     Assert-Result "rust-manifest" (@{ rust_required = "true"; supply_chain_required = "true"; package_required = "false" }) @("rust/crates/sky_player/Cargo.toml")
+    Assert-Result "rust-toolchain" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true" }) @("rust/rust-toolchain.toml")
+    Assert-Result "generic-script" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true" }) @("scripts/generic_helper.ps1")
     Assert-Result "desktop-package" (@{ desktop_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; supply_chain_required = "true" }) @("desktop/package.json")
     Assert-Result "cargo-lock" (@{ rust_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true" }) @("rust/Cargo.lock")
     Assert-Result "updater-script" (@{ updater_required = "true"; rust_required = "false"; package_required = "false" }) @("scripts/ci_tauri_update_e2e_core.ps1")
@@ -97,11 +100,11 @@ try {
     Assert-Result "pages-workflow" (@{ site_required = "true"; release_required = "false" }) @(".github/workflows/pages.yml")
     Assert-Result "release-workflow" (@{ release_required = "true"; site_required = "false" }) @(".github/workflows/release-v4.yml")
     Assert-Result "rehearsal-workflow" (@{ release_required = "true"; site_required = "false" }) @(".github/workflows/rehearse-v4.yml")
-    Assert-Result "ci-workflow" (@{ rust_required = "true"; desktop_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @(".github/workflows/ci.yml")
-    Assert-Result "classifier" (@{ rust_required = "true"; desktop_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @("scripts/ci_classify.ps1")
-    Assert-Result "unknown-workflow" (@{ rust_required = "true"; desktop_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @(".github/workflows/unknown.yml")
+    Assert-Result "ci-workflow" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @(".github/workflows/ci.yml")
+    Assert-Result "classifier" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @("scripts/ci_classify.ps1")
+    Assert-Result "unknown-workflow" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @(".github/workflows/unknown.yml")
     $full = Invoke-Classification @() -Full -Name "manual-full"
-    foreach ($name in @("rust_required", "desktop_required", "desktop_e2e_required", "package_required", "updater_required", "release_required", "supply_chain_required", "site_required")) {
+    foreach ($name in @("rust_required", "desktop_required", "desktop_native_required", "desktop_e2e_required", "package_required", "updater_required", "release_required", "supply_chain_required", "site_required")) {
         if ($full.Item($name) -ne "true") { Fail "manual-full did not request full validation" }
     }
 

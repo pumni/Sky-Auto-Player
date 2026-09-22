@@ -2254,6 +2254,7 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     for output in [
         "rust_required",
         "desktop_required",
+        "desktop_native_required",
         "desktop_e2e_required",
         "package_required",
         "updater_required",
