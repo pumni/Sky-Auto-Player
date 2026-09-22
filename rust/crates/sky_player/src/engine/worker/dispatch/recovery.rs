@@ -121,40 +121,6 @@ pub(crate) fn classify_missed_down_boundary(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn classify_normal_prepared_miss(
-    view: &AuthoredBatchView,
-    local_metrics: &mut WorkerMetricsLocal,
-    observer: Option<&PendingObservationQueue>,
-    wake_ticks: sky_dispatch_core::time::TimelineTicks,
-    physical_target_qpc: QpcTicks,
-    observed_qpc: QpcTicks,
-    reason: DownMissReason,
-) {
-    queue_down_miss_observation(
-        view,
-        local_metrics,
-        observer,
-        wake_ticks,
-        DownMissTimingEvidence::Prepared {
-            physical_target_qpc,
-        },
-        observed_qpc,
-        reason,
-    );
-    record_missed_down_classification(
-        local_metrics,
-        view.batch_source_action_index,
-        view.packet_masks.down_mask,
-        physical_target_qpc,
-        observed_qpc,
-        reason,
-    );
-    local_metrics.prepared_normal_backlog_boundaries = local_metrics
-        .prepared_normal_backlog_boundaries
-        .saturating_add(1);
-}
-
 pub(crate) fn record_physical_floor_delays(
     local_metrics: &mut WorkerMetricsLocal,
     window: PhysicalTimingWindow,
@@ -322,90 +288,6 @@ pub(crate) fn commit_missed_down_boundary(
         return DispatchStep::Terminate(format!("coordinator missed Down commit failure: {error}"));
     }
     DispatchStep::Dispatched
-}
-
-/// Resolve a prepared-normal deadline miss without entering dynamic timing
-/// window or physical guard policy. Only the bounded immutable Up prefix and
-/// the shared frozen deadline-miss commit are reused here.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn resolve_normal_prepared_deadline_miss(
-    view: &AuthoredBatchView,
-    runtime: &mut WorkerRuntime,
-    local_metrics: &mut WorkerMetricsLocal,
-    backend: &mut TrackedKeyState,
-    coordinator: &mut RuntimeDispatchCoordinator,
-    clock_state: &mut PlaybackClockState,
-    effective_now_ticks: sky_dispatch_core::time::TimelineTicks,
-    physical_target_qpc: QpcTicks,
-    observed_qpc: QpcTicks,
-    reason: DownMissReason,
-    explicitly_cancelled_by_suspension: &[GenerationId],
-    observer: Option<&PendingObservationQueue>,
-) -> DispatchStep {
-    classify_normal_prepared_miss(
-        view,
-        local_metrics,
-        observer,
-        effective_now_ticks,
-        physical_target_qpc,
-        observed_qpc,
-        reason,
-    );
-
-    let up_mask = view.packet_masks.up_mask;
-    let started_qpc = if up_mask == 0 {
-        observed_qpc
-    } else {
-        let result = match emit_prepared_up_prefix_if_needed(view, backend, observed_qpc) {
-            Ok(result) => result,
-            Err(error) => return DispatchStep::TerminateStatic(error),
-        };
-        if backend.timing_error.take().is_some() {
-            return DispatchStep::TerminateStatic("QPC failure during prepared Down Up recovery");
-        }
-        if !result.is_success()
-            || result.evidence.confirmed_mask != up_mask
-            || result.evidence.skipped_mask != 0
-        {
-            return DispatchStep::TerminateStatic(
-                "prepared Down Up-prefix recovery transport failure",
-            );
-        }
-        let Some(started_qpc) = result.evidence.started_ticks else {
-            return DispatchStep::TerminateStatic("prepared Down safety Up missing start boundary");
-        };
-        let Some(completed_qpc) = result.evidence.completed_ticks else {
-            return DispatchStep::TerminateStatic(
-                "prepared Down Up-prefix recovery missing completion boundary",
-            );
-        };
-        runtime.production_forensics.observe_recovery_up(
-            up_mask,
-            view.batch_source_action_index,
-            physical_target_qpc,
-            started_qpc,
-            completed_qpc,
-            true,
-            local_metrics,
-        );
-        local_metrics.prepared_up_prefix_recovery_sends = local_metrics
-            .prepared_up_prefix_recovery_sends
-            .saturating_add(1);
-        started_qpc
-    };
-
-    let step = commit_missed_down_boundary(
-        view,
-        coordinator,
-        clock_state,
-        runtime,
-        started_qpc,
-        explicitly_cancelled_by_suspension,
-    );
-    if matches!(step, DispatchStep::Dispatched) {
-        backend.last_error = None;
-    }
-    step
 }
 
 #[allow(clippy::too_many_arguments)]

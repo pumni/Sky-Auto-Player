@@ -49,8 +49,8 @@ pub(crate) use dispatch::drain_one_observer;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 pub(super) use dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryState, PendingUpRecovery,
-    PhysicalBoundaryStamp, PreparedDownAuthorization, dispatch_authored_packet,
-    dispatch_prepared_normal_frame, dispatch_stale_packet,
+    PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_prepared_normal_frame,
+    dispatch_stale_packet,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_system_suspend_transition;
@@ -285,10 +285,6 @@ pub(crate) struct WorkerRuntime {
     /// Musical Down admission state. Up-only safety sends never mutate this
     /// state; authorization is tied to the exact frozen authored boundary.
     pub(crate) down_boundary_state: DownBoundaryState,
-    /// Prepared-normal future observation. This is deliberately separate from
-    /// the dynamic/strict Down admission state and is inert until a later
-    /// phase consumes it for send/drop decisions.
-    pub(crate) prepared_down_authorization: Option<PreparedDownAuthorization>,
     /// A missed mixed boundary whose prepared Up-prefix remains pending until
     /// its physical hold floor. This does not authorize its discarded Down.
     pub(crate) pending_up_recovery: Option<PendingUpRecovery>,
@@ -375,62 +371,9 @@ impl WorkerRuntime {
         self.down_boundary_state.authorization() == Some(boundary)
     }
 
-    /// Record prepared-normal future authorization only after the caller has
-    /// completed target preflight/revalidation and sampled QPC afterward.
-    ///
-    /// A different exact boundary must never silently replace an outstanding
-    /// authorization. A generation change for the same boundary clears the
-    /// old record unless the caller proves the replacement is still future.
-    #[inline]
-    pub(crate) fn record_prepared_down_authorization(
-        &mut self,
-        boundary: PhysicalBoundaryStamp,
-        target_generation: u64,
-        target_is_future: bool,
-    ) -> Result<(), &'static str> {
-        let candidate = PreparedDownAuthorization {
-            boundary,
-            target_generation,
-        };
-        match self.prepared_down_authorization {
-            None => {
-                if target_is_future {
-                    self.prepared_down_authorization = Some(candidate);
-                }
-                Ok(())
-            }
-            Some(existing) if existing == candidate => Ok(()),
-            Some(existing) if existing.boundary == boundary => {
-                self.prepared_down_authorization = target_is_future.then_some(candidate);
-                Ok(())
-            }
-            Some(_) => Err("prepared Down authorization cannot overwrite a different boundary"),
-        }
-    }
-
-    #[allow(dead_code)]
-    #[inline]
-    pub(crate) fn prepared_down_is_authorized(
-        &self,
-        boundary: PhysicalBoundaryStamp,
-        target_generation: u64,
-    ) -> bool {
-        self.prepared_down_authorization
-            == Some(PreparedDownAuthorization {
-                boundary,
-                target_generation,
-            })
-    }
-
-    #[inline]
-    pub(crate) fn invalidate_prepared_down_authorization(&mut self) {
-        self.prepared_down_authorization = None;
-    }
-
     #[inline]
     pub(crate) fn invalidate_down_authorization(&mut self) {
         self.down_boundary_state = DownBoundaryState::AwaitingFuture;
-        self.invalidate_prepared_down_authorization();
     }
 
     pub(crate) fn reset_wait_state_after_system_suspend(&mut self) {
@@ -442,8 +385,8 @@ impl WorkerRuntime {
 
     /// Model `WaitBoundary::Due { wait_result: None }` after a future plan
     /// was classified but before the waiter could block. The timing observer
-    /// evidence is cleared; exact Down authorization is intentionally kept in
-    /// both authorization records.
+    /// evidence is cleared; strict Down authorization remains owned by the
+    /// authored dispatch state.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn record_due_without_wait_for_test(&mut self) {
         self.last_dispatch_deadline_wake_qpc = None;
@@ -725,52 +668,5 @@ mod observer_profile_tests {
             DownBoundaryState::AwaitingFuture
         );
         assert!(!runtime.authorize_down_boundary(stamp));
-    }
-
-    #[test]
-    fn prepared_authorization_is_exact_and_fail_closed() {
-        let mut runtime = WorkerRuntime::create_test_runtime(None);
-        let stamp = boundary(7);
-
-        runtime
-            .record_prepared_down_authorization(stamp, 11, true)
-            .expect("first future prepared authorization");
-        assert!(runtime.prepared_down_is_authorized(stamp, 11));
-
-        runtime
-            .record_prepared_down_authorization(stamp, 11, false)
-            .expect("same boundary replan retains authorization");
-        assert!(runtime.prepared_down_is_authorized(stamp, 11));
-
-        let other_boundary = boundary(8);
-        assert_eq!(
-            runtime.record_prepared_down_authorization(other_boundary, 11, true),
-            Err("prepared Down authorization cannot overwrite a different boundary")
-        );
-        assert!(runtime.prepared_down_is_authorized(stamp, 11));
-
-        runtime
-            .record_prepared_down_authorization(stamp, 12, false)
-            .expect("generation change without future proof clears old authorization");
-        assert!(runtime.prepared_down_authorization.is_none());
-        runtime
-            .record_prepared_down_authorization(stamp, 12, true)
-            .expect("generation change with fresh future proof replaces authorization");
-        assert!(runtime.prepared_down_is_authorized(stamp, 12));
-    }
-
-    #[test]
-    fn prepared_authorization_invalidation_is_separate_but_lifecycle_centralized() {
-        let mut runtime = WorkerRuntime::create_test_runtime(None);
-        let stamp = boundary(7);
-        runtime
-            .record_prepared_down_authorization(stamp, 11, true)
-            .expect("prepared authorization");
-        runtime.invalidate_down_authorization();
-        assert!(runtime.prepared_down_authorization.is_none());
-        assert_eq!(
-            runtime.down_boundary_state,
-            DownBoundaryState::AwaitingFuture
-        );
     }
 }

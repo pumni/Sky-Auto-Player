@@ -112,7 +112,7 @@ fn prepared_stream_contains_only_materialized_physical_boundaries() {
 }
 
 #[test]
-fn authorized_late_prepared_down_still_has_one_transport_attempt() {
+fn late_prepared_down_still_has_one_transport_attempt() {
     let stream = build_stream(
         &[
             action(0, ActionKind::Down, 0, &[0x15]),

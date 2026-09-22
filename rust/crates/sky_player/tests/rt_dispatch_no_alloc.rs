@@ -885,8 +885,7 @@ fn production_prepared_normal_frame_no_alloc() {
     harness.prepare_prepared_stream_for_test();
 
     enable_counting();
-    let step =
-        harness.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(1_000);
+    let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(1_000);
     let allocs = disable_counting();
 
     assert_eq!(

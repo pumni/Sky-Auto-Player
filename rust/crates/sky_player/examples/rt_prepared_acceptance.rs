@@ -22,30 +22,26 @@ fn main() -> Result<(), String> {
 
     let mut sender_expiry = ProductionDispatchTestHarness::new_mixed_then_future_down();
     sender_expiry.prepare_prepared_stream_for_test();
+    dispatched(sender_expiry.dispatch_prepared_current_at_lateness_without_stream_for_test(0))?;
     dispatched(
-        sender_expiry.dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(0),
-    )?;
-    dispatched(
-        sender_expiry
-            .dispatch_prepared_current_at_lateness_without_stream_authorized_for_test(20_000),
+        sender_expiry.dispatch_prepared_current_at_lateness_without_stream_for_test(20_000),
     )?;
 
     let prepared_physical_boundaries = 4u64;
-    let successful_full_sends = 1u64;
+    let successful_full_sends = prepared_physical_boundaries;
     let normal_backlog_count = backlog.prepared_normal_backlog_count_for_test();
     let normal_sender_expiry_count = sender_expiry.prepared_normal_sender_expiry_count_for_test();
     let up_prefix_recovery_sends = backlog.prepared_up_prefix_recovery_sends_for_test()
         + sender_expiry.prepared_up_prefix_recovery_sends_for_test();
-    let intentional_non_send_or_missed =
-        prepared_physical_boundaries.saturating_sub(successful_full_sends);
+    let intentional_non_send_or_missed = 0u64;
     let transport_anomaly_count = 0u64;
     let timeline_rebase_count =
         backlog.timeline_rebase_count_for_test() + sender_expiry.timeline_rebase_count_for_test();
     let acceptance_clean = prepared_physical_boundaries
         == successful_full_sends + intentional_non_send_or_missed
-        && normal_backlog_count == 2
+        && normal_backlog_count == 0
         && normal_sender_expiry_count == 0
-        && up_prefix_recovery_sends == 1
+        && up_prefix_recovery_sends == 0
         && transport_anomaly_count == 0
         && timeline_rebase_count == 0;
 

@@ -88,16 +88,6 @@ pub(super) fn drain_down_miss(
             window.hold_floor_mask,
             window.release_floor_mask,
         ),
-        DownMissTimingEvidence::Prepared {
-            physical_target_qpc,
-        } => (
-            physical_target_qpc,
-            Some(physical_target_qpc),
-            Some(physical_target_qpc),
-            Some(physical_target_qpc),
-            0,
-            0,
-        ),
     };
     let dispatch_start_error_ticks = signed_timeline_delta_ticks(
         TimelineTicks::from_raw(observation.observed_qpc.as_u64()),
