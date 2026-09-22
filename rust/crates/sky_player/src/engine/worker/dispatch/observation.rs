@@ -83,7 +83,6 @@ pub enum DownMissKind {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DownMissTimingEvidence {
     Physical(PhysicalTimingWindow),
-    Prepared { physical_target_qpc: QpcTicks },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -106,10 +105,6 @@ impl DownMissObservation {
     pub fn physical_authored_target_qpc(&self) -> QpcTicks {
         match self.timing_evidence {
             DownMissTimingEvidence::Physical(window) => window.authored_target_qpc,
-            DownMissTimingEvidence::Prepared {
-                physical_target_qpc,
-                ..
-            } => physical_target_qpc,
         }
     }
 

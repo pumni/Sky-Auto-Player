@@ -13,10 +13,7 @@ use super::{
     record_wait_failure, supervisor_lease_expired, suspend_live_input, target_stamp_still_current,
     wait_for_next_boundary,
 };
-use super::{
-    PreparedDispatchEntry, PreparedDispatchFrame, PreparedDispatchStream,
-    dispatch_prepared_normal_frame,
-};
+use super::{PreparedDispatchEntry, PreparedDispatchStream, dispatch_prepared_normal_frame};
 use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -58,39 +55,6 @@ fn physical_boundary_stamp(
         down_mask: physical.authored_view.packet_masks.down_mask,
         physical_target_qpc,
     })
-}
-
-#[inline]
-fn prepared_physical_boundary_stamp(
-    frame: &PreparedDispatchFrame,
-    physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
-) -> Option<PhysicalBoundaryStamp> {
-    (frame.view.packet_masks.down_mask != 0).then_some(PhysicalBoundaryStamp {
-        first_batch_index: frame.view.prepared_batch.index,
-        packet_index: frame.view.prepared_batch.packet_index,
-        packet_batch_count: frame.view.prepared_batch.packet_batch_count,
-        source_action_index: frame.view.batch_source_action_index,
-        up_mask: frame.view.packet_masks.up_mask,
-        down_mask: frame.view.packet_masks.down_mask,
-        physical_target_qpc,
-    })
-}
-
-#[inline]
-fn record_prepared_future_authorization(
-    runtime: &mut super::WorkerRuntime,
-    frame: &PreparedDispatchFrame,
-    physical_target_qpc: sky_dispatch_win32::clock::QpcTicks,
-    authorization_now_qpc: sky_dispatch_win32::clock::QpcTicks,
-    target_generation: u64,
-) -> Result<(), &'static str> {
-    let boundary = prepared_physical_boundary_stamp(frame, physical_target_qpc)
-        .ok_or("prepared future authorization requires a Down-bearing frame")?;
-    runtime.record_prepared_down_authorization(
-        boundary,
-        target_generation,
-        physical_target_qpc > authorization_now_qpc,
-    )
 }
 
 pub(crate) fn physical_wait_target_for_plan(
@@ -1227,27 +1191,6 @@ pub(super) fn dispatch(
                             core.runtime.invalidate_down_authorization();
                             continue;
                         }
-                        let authorization_now_qpc = match qpc_clock.now() {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                core.runtime.force_full_cleanup = true;
-                                core.runtime.terminal_error = Some(format!(
-                                    "QPC prepared authorization sample failed: {error:?}"
-                                ));
-                                break;
-                            }
-                        };
-                        if let Err(error) = record_prepared_future_authorization(
-                            &mut core.runtime,
-                            frame,
-                            authored_target_qpc,
-                            authorization_now_qpc,
-                            target.generation,
-                        ) {
-                            core.runtime.force_full_cleanup = true;
-                            core.runtime.terminal_error = Some(error.to_string());
-                            break;
-                        }
                         Some(target)
                     }
                 } else {
@@ -1447,7 +1390,6 @@ pub(super) fn dispatch(
                         core.runtime.terminal_error = Some(error.to_string());
                         break;
                     }
-                    core.runtime.invalidate_prepared_down_authorization();
                     if metrics.live_diagnostics_enabled.load(Ordering::Relaxed) {
                         publish_backend_counters(&resources.backend, &mut core.metrics);
                         publish_live_metrics_after_dispatch(
@@ -1857,14 +1799,13 @@ fn prepared_stream_requires_terminal(
 mod tests {
     use super::{
         physical_target_qpc_for_work, physical_wait_target_for_plan,
-        prepared_physical_boundary_stamp, prepared_stream_requires_terminal,
-        publish_live_metrics_after_dispatch, record_prepared_future_authorization,
+        prepared_stream_requires_terminal, publish_live_metrics_after_dispatch,
     };
     use crate::engine::shared::{SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING};
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
     use crate::engine::worker::{
-        DownBoundaryState, PhysicalBoundaryStamp, PreparedDispatchEntry, WorkerRuntime,
+        DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime,
         dispatch::{DispatchObservation, DispatchStep},
     };
     use sky_dispatch_core::clock::PauseReason;
@@ -1965,154 +1906,22 @@ mod tests {
     }
 
     #[test]
-    fn prepared_future_authorization_requires_a_post_preflight_future_sample() {
-        let harness = ProductionDispatchTestHarness::new_down_only();
-        let stream = harness.build_prepared_stream_for_test();
-        let Some(PreparedDispatchEntry::Physical(frame)) = stream.current() else {
-            panic!("expected prepared Down frame");
-        };
-
-        let mut future = WorkerRuntime::default();
-        record_prepared_future_authorization(
-            &mut future,
-            frame,
-            QpcTicks::from_raw(1_000),
-            QpcTicks::from_raw(999),
-            7,
-        )
-        .expect("future prepared Down authorization");
-        let boundary = prepared_physical_boundary_stamp(frame, QpcTicks::from_raw(1_000))
-            .expect("prepared Down boundary stamp");
-        assert!(future.prepared_down_is_authorized(boundary, 7));
-
-        let mut equal = WorkerRuntime::default();
-        record_prepared_future_authorization(
-            &mut equal,
-            frame,
-            QpcTicks::from_raw(1_000),
-            QpcTicks::from_raw(1_000),
-            7,
-        )
-        .expect("equality is a non-authorizing sample");
-        assert!(equal.prepared_down_authorization.is_none());
-
-        let mut overdue = WorkerRuntime::default();
-        record_prepared_future_authorization(
-            &mut overdue,
-            frame,
-            QpcTicks::from_raw(1_000),
-            QpcTicks::from_raw(1_001),
-            7,
-        )
-        .expect("post-target sample is a non-authorizing sample");
-        assert!(overdue.prepared_down_authorization.is_none());
-    }
-
-    #[test]
-    fn prepared_authorization_excludes_up_only_and_survives_spurious_replan() {
-        let up_harness = ProductionDispatchTestHarness::new_uponly_release();
-        let up_stream = up_harness.build_prepared_stream_for_test();
-        let Some(up_frame) = up_stream.entries().iter().find_map(|entry| match entry {
-            PreparedDispatchEntry::Physical(frame) if frame.view.packet_masks.down_mask == 0 => {
-                Some(frame.as_ref())
-            }
-            _ => None,
-        }) else {
-            panic!("expected prepared UpOnly frame");
-        };
-        assert!(prepared_physical_boundary_stamp(up_frame, QpcTicks::from_raw(1_000)).is_none());
-
-        let down_harness = ProductionDispatchTestHarness::new_down_only();
-        let down_stream = down_harness.build_prepared_stream_for_test();
-        let Some(PreparedDispatchEntry::Physical(down_frame)) = down_stream.current() else {
-            panic!("expected prepared Down frame");
-        };
-        let boundary = prepared_physical_boundary_stamp(down_frame, QpcTicks::from_raw(1_000))
-            .expect("prepared Down boundary stamp");
-        let mut runtime = WorkerRuntime::default();
-        runtime
-            .record_prepared_down_authorization(boundary, 7, true)
-            .expect("prepared authorization");
-        runtime.record_due_without_wait_for_test();
-        assert!(runtime.prepared_down_is_authorized(boundary, 7));
-    }
-
-    #[test]
-    fn prepared_generation_change_requires_fresh_future_proof() {
-        let harness = ProductionDispatchTestHarness::new_down_only();
-        let stream = harness.build_prepared_stream_for_test();
-        let Some(PreparedDispatchEntry::Physical(frame)) = stream.current() else {
-            panic!("expected prepared Down frame");
-        };
-        let boundary = prepared_physical_boundary_stamp(frame, QpcTicks::from_raw(1_000))
-            .expect("prepared Down boundary stamp");
-        let mut runtime = WorkerRuntime::default();
-        runtime
-            .record_prepared_down_authorization(boundary, 7, true)
-            .expect("prepared authorization");
-        runtime
-            .record_prepared_down_authorization(boundary, 8, false)
-            .expect("generation change clears old authorization");
-        assert!(runtime.prepared_down_authorization.is_none());
-        runtime
-            .record_prepared_down_authorization(boundary, 8, true)
-            .expect("fresh future proof authorizes new generation");
-        assert!(runtime.prepared_down_is_authorized(boundary, 8));
-        assert!(!runtime.prepared_down_is_authorized(boundary, 7));
-    }
-
-    #[test]
-    fn focus_and_manual_suspension_invalidate_prepared_authorization() {
-        let mut focus_harness = ProductionDispatchTestHarness::new_down_only();
-        let focus_boundary = PhysicalBoundaryStamp {
-            first_batch_index: 0,
-            packet_index: 0,
-            packet_batch_count: 1,
-            source_action_index: 0,
-            up_mask: 0,
-            down_mask: 1,
-            physical_target_qpc: QpcTicks::from_raw(1_000),
-        };
-        focus_harness
-            .runtime
-            .record_prepared_down_authorization(focus_boundary, 0, true)
-            .expect("focus authorization");
-        crate::engine::worker::enter_focus_pause(
-            &mut focus_harness.resources.playback,
-            &mut focus_harness.runtime,
-            QpcTicks::from_raw(10),
-            &focus_harness.progress_clock,
-        )
-        .expect("focus pause");
-        assert!(focus_harness.runtime.prepared_down_authorization.is_none());
-
-        let mut manual_harness = ProductionDispatchTestHarness::new_down_only();
-        manual_harness
-            .runtime
-            .record_prepared_down_authorization(focus_boundary, 0, true)
-            .expect("manual pause authorization");
-        manual_harness
-            .suspend_live_input_for_test()
-            .expect("manual pause suspension");
-        assert!(manual_harness.runtime.prepared_down_authorization.is_none());
-    }
-
-    #[test]
-    fn normal_prepared_source_boundaries_keep_authorization_ownership_split() {
+    fn normal_prepared_source_has_no_future_authorization_gate() {
         let loop_source = include_str!("dispatch_loop.rs");
         let loop_production = loop_source
             .split_once("#[cfg(test)]")
             .map(|(production, _)| production)
             .expect("dispatch loop production source");
         assert!(!loop_production.contains("prepared_down_is_authorized"));
-        assert!(loop_production.contains("invalidate_prepared_down_authorization"));
+        assert!(!loop_production.contains("record_prepared_future_authorization"));
         let prepared_source = include_str!("dispatch/prepared.rs");
         let prepared_production = prepared_source
             .split_once("#[cfg(test)]")
             .map(|(production, _)| production)
             .expect("prepared dispatch production source");
         assert!(!prepared_production.contains("PreparedDownAuthorization"));
-        assert!(prepared_production.contains("prepared_down_is_authorized"));
+        assert!(!prepared_production.contains("prepared_down_is_authorized"));
+        assert!(!prepared_production.contains("UnobservedBacklog"));
     }
 
     #[test]
@@ -2989,7 +2798,7 @@ mod tests {
     }
 
     #[test]
-    fn system_suspend_invalidates_future_down_and_resume_requires_fresh_authorization() {
+    fn system_suspend_invalidates_future_down_and_resume_requires_fresh_observation() {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         let packets = harness.configure_packet_capture();
         let down = harness.plan_current_dispatch();
@@ -3000,22 +2809,6 @@ mod tests {
             harness.runtime.down_boundary_state,
             DownBoundaryState::FutureAuthorized(_)
         ));
-        harness
-            .runtime
-            .record_prepared_down_authorization(
-                PhysicalBoundaryStamp {
-                    first_batch_index: 0,
-                    packet_index: 0,
-                    packet_batch_count: 1,
-                    source_action_index: 0,
-                    up_mask: 0,
-                    down_mask: 1,
-                    physical_target_qpc: target,
-                },
-                0,
-                true,
-            )
-            .expect("prepared authorization before suspend");
         assert!(harness.notify_system_power_for_test(true));
         assert_eq!(
             harness.take_system_power_pending_for_test(),
@@ -3031,7 +2824,6 @@ mod tests {
             harness.runtime.down_boundary_state,
             DownBoundaryState::AwaitingFuture
         );
-        assert!(harness.runtime.prepared_down_authorization.is_none());
         assert!(harness.system_power_down_blocked_for_test());
         assert!(packets.lock().expect("packet capture").is_empty());
         assert_no_work(harness.dispatch_at_qpc_for_test(&down, target));

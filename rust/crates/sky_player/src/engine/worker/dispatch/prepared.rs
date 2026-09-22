@@ -8,13 +8,12 @@ use super::super::{
     handle_final_focus_loss, record_final_gate_rejection, record_sendinput_pre_call_lateness,
 };
 use super::authored::record_prepared_normal_send_outcome;
-use super::recovery::DownMissReason;
-use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalBoundaryStamp};
+use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::{SharedProgressClock, SystemPowerState};
 use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionOutcome;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreparedNormalAdmission {
@@ -26,24 +25,7 @@ enum PreparedNormalAdmission {
 
 enum PreparedNormalPrecisionResult {
     Rejected(PreparedNormalAdmission),
-    UnobservedBacklog,
     Sent(sky_dispatch_win32::input::SendTransactionOutcome),
-}
-
-#[inline]
-fn prepared_down_boundary(
-    frame: &PreparedDispatchFrame,
-    physical_target_qpc: QpcTicks,
-) -> PhysicalBoundaryStamp {
-    PhysicalBoundaryStamp {
-        first_batch_index: frame.view.prepared_batch.index,
-        packet_index: frame.view.prepared_batch.packet_index,
-        packet_batch_count: frame.view.prepared_batch.packet_batch_count,
-        source_action_index: frame.view.batch_source_action_index,
-        up_mask: frame.view.packet_masks.up_mask,
-        down_mask: frame.view.packet_masks.down_mask,
-        physical_target_qpc,
-    }
 }
 
 /// The complete normal precision suffix.  The payload has already been
@@ -64,7 +46,6 @@ fn send_prepared_normal_precision_frame(
     desired_pause: &AtomicBool,
     supervisor_expired: &AtomicBool,
     system_power: &SystemPowerState,
-    down_authorized: bool,
     preflight_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))] post_focus_race_hook: Option<
         &crate::engine::config::FinalGateRaceHook,
@@ -136,10 +117,6 @@ fn send_prepared_normal_precision_frame(
         ));
     }
 
-    if has_down_events && !down_authorized {
-        return Ok(PreparedNormalPrecisionResult::UnobservedBacklog);
-    }
-
     // The prepared payload and Win32 call metadata are fully resolved by the
     // sender before its authoritative pre-call QPC boundary.
     let result = backend.send_prepared_physical_packet_at_final_boundary(
@@ -193,13 +170,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
     let _ = now_ticks;
     let view = &frame.view;
     let has_down_events = view.packet_masks.down_mask != 0;
-    let down_authorized = if has_down_events {
-        let boundary = prepared_down_boundary(frame, physical_target_qpc);
-        let target_generation = target_generation.load(Ordering::Acquire);
-        runtime.prepared_down_is_authorized(boundary, target_generation)
-    } else {
-        true
-    };
     // Keep this cheap outer read for the distinct preroll/focus-pause path.
     // The precision helper still performs the authoritative final atomic
     // admission; removing this read would merge the preroll fault path with
@@ -253,7 +223,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
         desired_pause,
         supervisor_expired,
         system_power,
-        down_authorized,
         preflight_target,
         #[cfg(any(test, feature = "test-support"))]
         runtime.final_gate_post_focus_race_hook.as_ref(),
@@ -292,27 +261,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
             record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Control);
             return DispatchStep::Continue;
         }
-        PreparedNormalPrecisionResult::UnobservedBacklog => {
-            runtime.invalidate_prepared_down_authorization();
-            return super::recovery::resolve_normal_prepared_deadline_miss(
-                view,
-                runtime,
-                local_metrics,
-                &mut resources.backend,
-                &mut resources.coordinator,
-                &mut resources.playback,
-                effective_now_ticks,
-                physical_target_qpc,
-                now_ticks,
-                DownMissReason::UnobservedBacklog,
-                explicitly_cancelled_by_suspension,
-                observer,
-            );
-        }
     };
-    if has_down_events {
-        runtime.invalidate_prepared_down_authorization();
-    }
     debug_assert_eq!(view.prepared_packet.packet(), view.packet_masks);
     record_prepared_normal_send_outcome(
         view,
@@ -463,19 +412,6 @@ mod tests {
     #[test]
     fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
         let source = include_str!("prepared.rs");
-        let miss_resolver = include_str!("recovery.rs")
-            .split("pub(super) fn resolve_normal_prepared_deadline_miss")
-            .nth(1)
-            .expect("normal prepared miss resolver")
-            .split("pub(super) fn recover_missed_down_boundary")
-            .next()
-            .expect("normal prepared miss resolver body");
-        for forbidden in ["PhysicalTimingWindow", "physical_timing_guard"] {
-            assert!(
-                !miss_resolver.contains(forbidden),
-                "normal prepared miss resolver contains dynamic timing policy {forbidden}"
-            );
-        }
         let outer = source
             .split("pub(crate) fn dispatch_prepared_normal_frame")
             .nth(1)
