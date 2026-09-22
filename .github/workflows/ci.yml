@@ -676,7 +676,7 @@ jobs:
       - name: Run production-bundle browser smoke
         if: needs.changes.outputs.desktop_e2e_required == 'true'
         working-directory: desktop
-        run: bun run test:e2e:bundle
+        run: bun run test:e2e:bundle:existing
 
       - name: Report CI timing
         if: always()
