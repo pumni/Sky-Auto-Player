@@ -621,11 +621,58 @@ fn workflow_job_blocks(source: &str) -> Vec<(String, String)> {
 }
 
 fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result<(), String> {
-    let release_contract = workflow_job_blocks(source)
-        .into_iter()
+    let jobs = workflow_job_blocks(source);
+    let static_job = jobs
+        .iter()
+        .find(|(job_id, _)| job_id == "static")
+        .map(|(_, block)| block)
+        .ok_or_else(|| "CI is missing the static job block".to_owned())?;
+    let release_contract = jobs
+        .iter()
         .find(|(job_id, _)| job_id == "release_contract")
         .map(|(_, block)| block)
         .ok_or_else(|| "CI is missing the release_contract job block".to_owned())?;
+    let status = jobs
+        .iter()
+        .find(|(job_id, _)| job_id == "status")
+        .map(|(_, block)| block)
+        .ok_or_else(|| "CI is missing the status job block".to_owned())?;
+    const FULL_STATIC_CHECK: &str = "cargo xtask check static --skip-supply-chain";
+    if static_job.matches(FULL_STATIC_CHECK).count() != 1 {
+        return Err(
+            "static job must contain exactly one full static verification invocation".to_owned(),
+        );
+    }
+    if release_contract.contains(FULL_STATIC_CHECK) {
+        return Err("release_contract must not repeat the full static verification".to_owned());
+    }
+    if !release_contract
+        .lines()
+        .any(|line| line.trim() == "needs: changes")
+    {
+        return Err("release_contract must remain directly parallel with static".to_owned());
+    }
+    if release_contract.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("needs:") && trimmed.contains("static")
+    }) {
+        return Err("release_contract must not depend on static".to_owned());
+    }
+    for marker in [
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]",
+        "STATIC_RESULT: ${{ needs.static.result }}",
+        "RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}",
+        r#"if [[ "$STATIC_REQUIRED" == "true" ]]; then"#,
+        r#"[[ "$STATIC_RESULT" == "success" ]]"#,
+        r#"if [[ "$RELEASE_REQUIRED" == "true" ]]; then"#,
+        r#"[[ "$RELEASE_CONTRACT_RESULT" == "success" ]]"#,
+    ] {
+        if !status.contains(marker) {
+            return Err(format!(
+                "status gate is missing its independent static/release assertion: {marker}"
+            ));
+        }
+    }
     for marker in [
         "name: Run V4 release Latest guard behavioral test",
         "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_v4_release_latest_guard.ps1",
@@ -5022,17 +5069,52 @@ jobs:
     fn release_contract_ci_wiring_requires_both_behavioral_regressions() {
         let source = r#"
 jobs:
+  static:
+    needs: changes
+    steps:
+      - run: cargo xtask check static --skip-supply-chain
   release_contract:
     name: V4 release contract acceptance
+    needs: changes
     steps:
       - name: Run V4 release Latest guard behavioral test
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_v4_release_latest_guard.ps1
       - name: Run V4 post-publication transaction behavioral test
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_post_publication_transaction.ps1
   status:
-    needs: release_contract
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site]
+    env:
+      STATIC_RESULT: ${{ needs.static.result }}
+      RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
+    run: |
+      if [[ "$STATIC_REQUIRED" == "true" ]]; then
+        [[ "$STATIC_RESULT" == "success" ]]
+      fi
+      if [[ "$RELEASE_REQUIRED" == "true" ]]; then
+        [[ "$RELEASE_CONTRACT_RESULT" == "success" ]]
+      fi
 "#;
         assert!(v4_release_contract_ci_wiring(source).is_ok());
+        let without_static_check = source.replace(
+            "cargo xtask check static --skip-supply-chain",
+            "cargo xtask check static",
+        );
+        assert!(v4_release_contract_ci_wiring(&without_static_check).is_err());
+        let duplicated_release_check = source.replace(
+            "      - name: Run V4 release Latest guard behavioral test",
+            "      - run: cargo xtask check static --skip-supply-chain\n      - name: Run V4 release Latest guard behavioral test",
+        );
+        assert!(v4_release_contract_ci_wiring(&duplicated_release_check).is_err());
+        let serialized_release_contract = source.replace(
+            "    needs: changes\n    steps:\n      - name: Run V4 release Latest guard behavioral test",
+            "    needs: static\n    steps:\n      - name: Run V4 release Latest guard behavioral test",
+        );
+        assert!(v4_release_contract_ci_wiring(&serialized_release_contract).is_err());
+        let without_static_status_assertion = source.replace(
+            "STATIC_RESULT: ${{ needs.static.result }}",
+            "STATIC_RESULT: ${{ needs.other.result }}",
+        );
+        assert!(v4_release_contract_ci_wiring(&without_static_status_assertion).is_err());
         for marker in [
             "scripts/test_ci_v4_release_latest_guard.ps1",
             "scripts/test_v4_post_publication_transaction.ps1",
