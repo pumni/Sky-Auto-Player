@@ -8,9 +8,7 @@ use super::{ReleaseScope, TrackedKeyState, release_retry_sleep};
 impl TrackedKeyState {
     pub fn release_scope(&mut self, scope: ReleaseScope, target_hwnd: isize) -> ReleaseAllOutcome {
         let requested_mask = match scope {
-            ReleaseScope::Tracked => {
-                self.active_mask | self.possibly_active_mask | self.failed_release_mask
-            }
+            ReleaseScope::Tracked => self.release_obligation_mask(),
             ReleaseScope::FullInstrument => FULL_INSTRUMENT_MASK,
         };
 

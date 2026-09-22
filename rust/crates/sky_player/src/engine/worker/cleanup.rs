@@ -317,10 +317,7 @@ pub(crate) fn release_state_verified(
     backend: &TrackedKeyState,
     outcome: &ReleaseAllOutcome,
 ) -> bool {
-    release_outcome_verified(outcome)
-        && backend.active_mask == 0
-        && backend.possibly_active_mask == 0
-        && backend.failed_release_mask == 0
+    release_outcome_verified(outcome) && backend.release_obligation_mask() == 0
 }
 
 pub(crate) fn clean_completion_proven(
@@ -338,9 +335,7 @@ pub(crate) fn clean_completion_proven(
         && counts.get("dropped_backend").copied().unwrap_or_default() == 0
         && counts.get("dropped_conflict").copied().unwrap_or_default() == 0
         && counts.get("cancelled").copied().unwrap_or_default() == 0
-        && backend.active_mask == 0
-        && backend.possibly_active_mask == 0
-        && backend.failed_release_mask == 0
+        && backend.release_obligation_mask() == 0
         && backend.keys_dropped == 0
         && backend.chord_split_events == 0
         && backend.sendinput_partial_events == 0

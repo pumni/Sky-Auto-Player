@@ -507,6 +507,16 @@ fn physical_inconclusive_preserves_only_unconfirmed_subset() {
 }
 
 #[test]
+fn release_obligation_mask_unions_all_conservative_sources() {
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 0x0001;
+    state.possibly_active_mask = 0x0002;
+    state.failed_release_mask = 0x0004;
+
+    assert_eq!(state.release_obligation_mask(), 0x0007);
+}
+
+#[test]
 fn verified_all_up_clears_all_tracking_masks() {
     let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
         requested: codes.len() as u8,

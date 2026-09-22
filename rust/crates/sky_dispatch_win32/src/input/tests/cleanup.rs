@@ -112,10 +112,7 @@ fn up_send_failure_leaves_requested_release_unconfirmed() {
 
     let up_outcome = state.key_up(&[0x15]);
     assert_ne!(up_outcome.status, SendTransactionStatus::Complete);
-    assert_ne!(
-        (state.active_mask | state.failed_release_mask) & (1 << 0),
-        0
-    );
+    assert_ne!(state.release_obligation_mask() & (1 << 0), 0);
 }
 
 #[test]
