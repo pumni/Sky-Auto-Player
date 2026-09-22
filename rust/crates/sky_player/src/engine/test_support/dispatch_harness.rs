@@ -1052,6 +1052,16 @@ impl ProductionDispatchTestHarness {
             .duration_from_us(min_hold_us)
             .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
             .expect("test min-hold conversion");
+        // Generic fixtures pass zero to disable coordinator hold validation;
+        // the worker still uses the materialized default effective hold.
+        let effective_min_hold_ticks = if min_hold_us == 0 {
+            qpc_clock
+                .duration_from_us(WorkerConfig::default().timing.min_hold_us)
+                .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+                .expect("test effective min-hold conversion")
+        } else {
+            min_hold_ticks
+        };
         let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
             schedule,
             min_hold_us,
@@ -1130,7 +1140,7 @@ impl ProductionDispatchTestHarness {
             generation: 0,
         }));
         runtime.set_physical_timing_guard_for_test(
-            qpc_clock.duration_from_us(10_000).expect("test base hold"),
+            effective_min_hold_ticks,
             qpc_clock.duration_from_us(16_667).expect("test frame"),
         );
         Self {

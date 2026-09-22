@@ -257,7 +257,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         }
     };
     core.runtime.physical_timing_guard = Some(
-        super::physical_timing_guard::PhysicalTimingGuard::new(frame_base_hold_ticks, frame_ticks),
+        super::physical_timing_guard::PhysicalTimingGuard::new(min_hold_ticks, frame_ticks),
     );
     let strict_down_completion_late_ticks =
         match qpc_clock.duration_from_us(config.timing.strict_down_completion_late_us) {
