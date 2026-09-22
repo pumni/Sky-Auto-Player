@@ -73,7 +73,12 @@ try {
     Assert-ReasonContains "static-only-with-readme" @(".config/rust_architecture_allowlist.json", "README.md") "static-only"
     Assert-Result "static-only-with-site" (@{ site_required = "true" }) @(".config/rust_architecture_allowlist.json", "site/src/pages/index.astro")
     Assert-ReasonContains "static-only-with-site-reason" @(".config/rust_architecture_allowlist.json", "site/src/pages/index.astro") "static-only"
-    Assert-Result "release-notes" (@{ release_required = "true" }) @("docs/releases/v4.0.2.md")
+    Assert-Result "release-notes" $falseLanes @("docs/releases/v4.0.2.md")
+    Assert-ReasonContains "release-notes-static-only" @("docs/releases/v4.0.2.md") "static-only"
+    Assert-Result "release-notes-plus-frontend" (@{ desktop_required = "true"; desktop_e2e_required = "true"; desktop_native_required = "false"; package_required = "false"; release_required = "false" }) @("docs/releases/v4.0.2.md", "desktop/src/App.tsx")
+    Assert-ReasonContains "release-notes-plus-frontend-reason" @("docs/releases/v4.0.2.md", "desktop/src/App.tsx") "static-only"
+    Assert-Result "release-notes-plus-release-script" (@{ release_required = "true"; rust_required = "false"; desktop_required = "false"; desktop_native_required = "false"; package_required = "false"; updater_required = "false"; supply_chain_required = "false"; site_required = "false" }) @("docs/releases/v4.0.2.md", "scripts/v4_release_pipeline.ps1")
+    Assert-Result "release-notes-plus-release-workflow" (@{ release_required = "true"; rust_required = "false"; desktop_required = "false"; desktop_native_required = "false"; package_required = "false"; updater_required = "false"; supply_chain_required = "false"; site_required = "false" }) @("docs/releases/v4.0.2.md", ".github/workflows/release-v4.yml")
     Assert-Result "site" (@{ site_required = "true" }) @("site/src/pages/index.astro")
     Assert-Result "desktop-frontend" (@{ desktop_required = "true"; desktop_e2e_required = "true"; desktop_native_required = "false"; package_required = "false" }) @("desktop/src/App.tsx")
     Assert-Result "desktop-e2e" (@{ desktop_required = "true"; desktop_e2e_required = "true"; desktop_native_required = "false"; package_required = "false" }) @("desktop/tests/e2e/library.spec.ts")
@@ -103,6 +108,7 @@ try {
     Assert-Result "ci-workflow" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @(".github/workflows/ci.yml")
     Assert-Result "classifier" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @("scripts/ci_classify.ps1")
     Assert-Result "unknown-workflow" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @(".github/workflows/unknown.yml")
+    Assert-Result "unknown-path" (@{ rust_required = "true"; desktop_required = "true"; desktop_native_required = "true"; desktop_e2e_required = "true"; package_required = "true"; updater_required = "true"; release_required = "true"; supply_chain_required = "true"; site_required = "true" }) @("unclassified/unknown.txt")
     $full = Invoke-Classification @() -Full -Name "manual-full"
     foreach ($name in @("rust_required", "desktop_required", "desktop_native_required", "desktop_e2e_required", "package_required", "updater_required", "release_required", "supply_chain_required", "site_required")) {
         if ($full.Item($name) -ne "true") { Fail "manual-full did not request full validation" }
