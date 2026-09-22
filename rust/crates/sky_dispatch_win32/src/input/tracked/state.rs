@@ -42,6 +42,11 @@ impl TrackedKeyState {
         Self::default()
     }
 
+    /// Return every key mask that still carries a release obligation.
+    pub fn release_obligation_mask(&self) -> u16 {
+        self.active_mask | self.possibly_active_mask | self.failed_release_mask
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_emitter<F>(emitter: F) -> Self
     where

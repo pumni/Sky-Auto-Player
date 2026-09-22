@@ -31,6 +31,8 @@ pub(crate) use admission::{
     handle_final_focus_loss, load_target_stamp, record_final_gate_rejection,
     target_stamp_still_current, trace_kind_for_packet_kind,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use cleanup::FinalizeTestObservation;
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
     FinalizeTiming, finalize_worker,
@@ -52,6 +54,8 @@ pub(super) use dispatch::{
     PhysicalBoundaryStamp, dispatch_authored_packet, dispatch_prepared_normal_frame,
     dispatch_stale_packet,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::apply_resumable_lifecycle_transition_for_test;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_system_suspend_transition;
 #[cfg(any(test, feature = "test-support"))]
@@ -116,9 +120,123 @@ use super::*;
 #[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_core::coordinator::AuthoredPreparationEvidence;
 use sky_dispatch_core::model::RuntimeSchedule;
+#[cfg(any(test, feature = "test-support"))]
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn process_command_control_for_test(
+    qpc_clock: QpcClock,
+    backend: &mut TrackedKeyState,
+    coordinator: &mut RuntimeDispatchCoordinator,
+    force_full_cleanup: &mut bool,
+    terminal_error: &mut Option<String>,
+    quit_requested: &AtomicBool,
+    skip_requested: &AtomicBool,
+    panic_requested: &AtomicBool,
+    supervisor_expired: &AtomicBool,
+    target_hwnd: &AtomicIsize,
+    local_metrics: &mut WorkerMetricsLocal,
+    metrics: &SharedMetrics,
+    last_published_error: &mut Option<String>,
+) -> bool {
+    let mut secondary_errors = Vec::new();
+    let mut abort_counts = HashMap::new();
+    matches!(
+        process_command_control(CommandControlInput {
+            clock: CommandControlClock { qpc_clock },
+            signals: CommandControlSignals {
+                quit_requested,
+                skip_requested,
+                panic_requested,
+                supervisor_expired,
+                target_hwnd,
+            },
+            runtime: CommandControlRuntime {
+                backend,
+                coordinator,
+                force_full_cleanup,
+                terminal_error,
+                secondary_errors: &mut secondary_errors,
+                abort_counts: &mut abort_counts,
+            },
+            metrics: CommandControlMetrics {
+                local_metrics,
+                metrics,
+                last_published_error,
+            },
+        }),
+        CommandControl::Exit
+    )
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn finalize_worker_for_test(
+    resources: WorkerResources,
+    target_hwnd: &AtomicIsize,
+    skip_requested: &AtomicBool,
+    quit_requested: &AtomicBool,
+    metrics: &SharedMetrics,
+    progress_clock: &super::shared::SharedProgressClock,
+    worker_panicked: bool,
+    force_full_cleanup: bool,
+    cleanup_observation: &mut cleanup::FinalizeTestObservation,
+) -> u8 {
+    let telemetry_output = parking_lot::Mutex::new(None);
+    let priority_acquired = parking_lot::Mutex::new(String::new());
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        finalize_worker(FinalizeInput {
+            resources: FinalizeResources {
+                backend: resources.backend,
+                coordinator: resources.coordinator,
+                telemetry: resources.telemetry,
+                playback: resources.playback,
+                qpc_clock: resources.clock,
+                scheduling: resources.scheduling,
+                observer: None,
+            },
+            state: FinalizeState {
+                worker_result: if worker_panicked {
+                    Err(Box::new("test worker panic"))
+                } else {
+                    Ok(())
+                },
+                local_metrics: WorkerMetricsLocal::default(),
+                abort_counts: HashMap::new(),
+                force_full_cleanup,
+                terminal_error: None,
+                secondary_errors: Vec::new(),
+                last_published_error: None,
+            },
+            signals: FinalizeSignals {
+                target_hwnd,
+                skip_requested,
+                quit_requested,
+            },
+            publication: FinalizePublication {
+                metrics,
+                telemetry_output: &telemetry_output,
+                priority_acquired: &priority_acquired,
+                progress_clock,
+            },
+            timing: FinalizeTiming {
+                start_wall_time_us: 0,
+                start_thread_cpu_us: 0,
+                start_process_cpu_us: 0,
+            },
+            cleanup_observation: Some(cleanup_observation),
+        })
+    }));
+    cleanup_observation.generation_accounting = *metrics.generation_accounting.lock();
+    match result {
+        Ok(outcome) => outcome,
+        Err(payload) => resume_unwind(payload),
+    }
+}
 
 /// Test-only accounting for the immutable preparation boundary.
 ///

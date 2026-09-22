@@ -1510,6 +1510,272 @@ fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
 }
 
 #[test]
+fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pairing() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    for path in [
+        "stop",
+        "quit",
+        "skip",
+        "manual_pause_cleanup",
+        "focus_loss",
+        "target_hwnd_generation_change",
+        "system_suspend",
+        "supervisor_expiry",
+        "panic_hard_stop",
+        "terminal_cleanup",
+        "worker_panic_cleanup",
+    ] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_packet_capture();
+        harness.align_next_plan_to_future_for_test(500_000);
+        let plan = harness.plan_current_dispatch();
+        assert!(matches!(
+            harness.dispatch_at_plan_target_for_test(&plan),
+            super::worker::DispatchStep::Dispatched
+        ));
+
+        assert_eq!(
+            *packets.lock().expect("lifecycle packet capture"),
+            vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+            "{path}: successful musical Down"
+        );
+        let before = harness.resources.coordinator.generation_accounting();
+        assert_eq!(before.activated, 1, "{path}: activated before cleanup");
+        assert_eq!(before.active, 1, "{path}: active before cleanup");
+        assert_eq!(before.released, 0, "{path}: released before cleanup");
+        assert_ne!(
+            harness.release_obligation_mask_for_test(),
+            0,
+            "{path}: successful Down must carry a release obligation"
+        );
+
+        match path {
+            // There is no distinct runtime stop command: stop aliases quit's
+            // command-exit and terminal-finalization path.
+            "stop" | "quit" => {
+                harness.quit_requested.store(true, Ordering::Release);
+                assert!(
+                    harness.process_command_control_for_test(),
+                    "{path}: command-exit owner"
+                );
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                harness.finalize_worker_for_test(false, false, &mut observation);
+                assert_eq!(
+                    observation.attempted_mask, 0b1,
+                    "{path}: tracked scope mask"
+                );
+                assert_eq!(observation.release_obligation_mask, 0, "{path}: obligation");
+                assert_eq!(observation.active_mask, 0, "{path}: active backend");
+                assert_eq!(
+                    observation.possibly_active_mask, 0,
+                    "{path}: uncertain backend"
+                );
+                assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
+                assert_eq!(observation.generation_accounting.activated, 1);
+                assert_eq!(observation.generation_accounting.released, 0);
+                assert_eq!(observation.generation_accounting.active, 0);
+                assert_eq!(observation.generation_accounting.cancelled, 1);
+                assert_eq!(
+                    *packets
+                        .lock()
+                        .expect("lifecycle packet capture after cleanup"),
+                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+                    "{path}: musical Down replay"
+                );
+                continue;
+            }
+            "skip" => {
+                harness.skip_requested.store(true, Ordering::Release);
+                assert!(
+                    harness.process_command_control_for_test(),
+                    "{path}: command-exit owner"
+                );
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                harness.finalize_worker_for_test(false, false, &mut observation);
+                assert_eq!(
+                    observation.attempted_mask, 0b1,
+                    "{path}: tracked scope mask"
+                );
+                assert_eq!(observation.release_obligation_mask, 0, "{path}: obligation");
+                assert_eq!(observation.active_mask, 0, "{path}: active backend");
+                assert_eq!(
+                    observation.possibly_active_mask, 0,
+                    "{path}: uncertain backend"
+                );
+                assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
+                assert_eq!(observation.generation_accounting.activated, 1);
+                assert_eq!(observation.generation_accounting.released, 0);
+                assert_eq!(observation.generation_accounting.active, 0);
+                assert_eq!(observation.generation_accounting.cancelled, 1);
+                assert_eq!(
+                    *packets
+                        .lock()
+                        .expect("lifecycle packet capture after cleanup"),
+                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+                    "{path}: musical Down replay"
+                );
+                continue;
+            }
+            "manual_pause_cleanup" => {
+                harness.desired_pause.store(true, Ordering::Release);
+                harness
+                    .apply_resumable_lifecycle_transition_for_test()
+                    .expect("manual pause dispatch-loop cleanup seam");
+            }
+            "focus_loss" => {
+                harness.focus_active.store(false, Ordering::Release);
+                let focus_ticks = harness.resources.clock.now().expect("focus QPC");
+                super::worker::enter_focus_pause(
+                    &mut harness.resources.playback,
+                    &mut harness.runtime,
+                    focus_ticks,
+                    &harness.progress_clock,
+                )
+                .expect("focus-loss dispatch-loop transition");
+                harness
+                    .apply_resumable_lifecycle_transition_for_test()
+                    .expect("focus restoration dispatch-loop cleanup seam");
+            }
+            "target_hwnd_generation_change" => {
+                harness.target_hwnd.store(2, Ordering::Release);
+                harness.target_generation.store(1, Ordering::Release);
+                harness
+                    .apply_resumable_lifecycle_transition_for_test()
+                    .expect("target-change dispatch-loop cleanup seam");
+            }
+            "system_suspend" => {
+                assert!(harness.notify_system_power_for_test(true));
+                let suspend_qpc = harness.resources.clock.now().expect("suspend QPC");
+                harness
+                    .apply_system_suspend_for_test(suspend_qpc)
+                    .expect("system suspend cleanup");
+            }
+            "supervisor_expiry" => {
+                harness.supervisor_expired.store(true, Ordering::Release);
+                assert!(
+                    harness.process_command_control_for_test(),
+                    "{path}: process_command_control hard-stop owner"
+                );
+                assert_eq!(
+                    harness.full_instrument_release_calls(),
+                    1,
+                    "{path}: hard-stop must use FullInstrument scope"
+                );
+            }
+            "panic_hard_stop" => {
+                harness.panic_requested.store(true, Ordering::Release);
+                assert!(
+                    harness.process_command_control_for_test(),
+                    "{path}: process_command_control hard-stop owner"
+                );
+                assert_eq!(
+                    harness.full_instrument_release_calls(),
+                    1,
+                    "{path}: hard-stop must use FullInstrument scope"
+                );
+            }
+            "terminal_cleanup" => {
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                harness.finalize_worker_for_test(false, false, &mut observation);
+                assert_eq!(
+                    observation.attempted_mask, 0b1,
+                    "{path}: tracked scope mask"
+                );
+                assert_eq!(observation.release_obligation_mask, 0, "{path}: obligation");
+                assert_eq!(observation.active_mask, 0, "{path}: active backend");
+                assert_eq!(
+                    observation.possibly_active_mask, 0,
+                    "{path}: uncertain backend"
+                );
+                assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
+                assert_eq!(observation.generation_accounting.activated, 1);
+                assert_eq!(observation.generation_accounting.released, 0);
+                assert_eq!(observation.generation_accounting.active, 0);
+                assert_eq!(observation.generation_accounting.cancelled, 1);
+                assert_eq!(
+                    *packets
+                        .lock()
+                        .expect("lifecycle packet capture after cleanup"),
+                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+                    "{path}: musical Down replay"
+                );
+                continue;
+            }
+            "worker_panic_cleanup" => {
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    harness.finalize_worker_for_test(true, false, &mut observation);
+                }));
+                assert!(panic_result.is_err(), "{path}: worker panic must propagate");
+                assert_eq!(
+                    observation.attempted_mask,
+                    sky_dispatch_win32::input::FULL_INSTRUMENT_MASK,
+                    "{path}: worker panic must use FullInstrument scope: {observation:?}"
+                );
+                assert_eq!(observation.release_obligation_mask, 0, "{path}: obligation");
+                assert_eq!(observation.active_mask, 0, "{path}: active backend");
+                assert_eq!(
+                    observation.possibly_active_mask, 0,
+                    "{path}: uncertain backend"
+                );
+                assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
+                assert_eq!(observation.generation_accounting.activated, 1);
+                assert_eq!(observation.generation_accounting.released, 0);
+                assert_eq!(observation.generation_accounting.active, 0);
+                assert_eq!(observation.generation_accounting.cancelled, 1);
+                assert_eq!(
+                    *packets
+                        .lock()
+                        .expect("lifecycle packet capture after cleanup"),
+                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+                    "{path}: musical Down replay"
+                );
+                continue;
+            }
+            _ => unreachable!("lifecycle matrix path is explicit above"),
+        }
+
+        assert_eq!(
+            harness.full_instrument_release_calls(),
+            1,
+            "{path}: resumable lifecycle cleanup scope"
+        );
+        assert_eq!(
+            harness.release_obligation_mask_for_test(),
+            0,
+            "{path}: verified cleanup must clear every obligation"
+        );
+        assert_eq!(
+            harness.backend_active_mask(),
+            0,
+            "{path}: stuck active backend"
+        );
+        assert_eq!(
+            harness.backend_possibly_active_mask(),
+            0,
+            "{path}: stuck uncertain backend"
+        );
+        assert_eq!(
+            *packets
+                .lock()
+                .expect("lifecycle packet capture after cleanup"),
+            vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+            "{path}: musical Down replay"
+        );
+
+        let after = harness.resources.coordinator.generation_accounting();
+        assert_eq!(after.activated, 1, "{path}: activation accounting");
+        assert_eq!(after.active, 0, "{path}: active accounting after cleanup");
+        assert_eq!(
+            after.released, 0,
+            "{path}: safety Up became musical Released"
+        );
+        assert_eq!(after.cancelled, 1, "{path}: cancellation accounting");
+    }
+}
+
+#[test]
 fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(
         &[
@@ -1911,6 +2177,11 @@ fn normal_prepared_zero_progress_is_fail_closed_without_cursor_advance() {
     assert_eq!(harness.resources.coordinator.cursor, 0);
     assert_eq!(harness.backend_active_mask(), 0);
     assert_eq!(harness.backend_possibly_active_mask(), 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(
+        harness.resources.coordinator.generation_accounting().active,
+        0
+    );
 }
 
 #[test]
