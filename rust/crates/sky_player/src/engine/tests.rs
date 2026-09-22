@@ -1231,6 +1231,21 @@ fn prepared_normal_down_lateness_matrix_keeps_one_transport_attempt() {
             assert_eq!(captured[0].attempts, 1, "{label}: boundary A send attempts");
         }
 
+        let accounting = harness.resources.coordinator.generation_accounting();
+        assert_eq!(accounting.activated, 1, "{label}: activated");
+        assert_eq!(accounting.active, 1, "{label}: active");
+        assert_eq!(accounting.released, 0, "{label}: released");
+        assert_eq!(accounting.dropped_expired, 0, "{label}: dropped_expired");
+        assert_eq!(
+            harness.prepared_normal_backlog_count_for_test(),
+            0,
+            "{label}: prepared normal backlog"
+        );
+        assert_eq!(
+            harness.missed_unobserved_backlog_boundaries_for_test(),
+            0,
+            "{label}: unobserved backlog"
+        );
         assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
         assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
