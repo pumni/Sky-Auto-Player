@@ -1566,6 +1566,10 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.possibly_active_mask
     }
 
+    pub fn release_obligation_mask_for_test(&self) -> u16 {
+        self.resources.backend.release_obligation_mask()
+    }
+
     /// Exercise the same verified-release/cancel seam used by manual pause
     /// and focus suspension.  The harness keeps this call explicit so tests
     /// cannot accidentally replace the production cleanup path with a direct

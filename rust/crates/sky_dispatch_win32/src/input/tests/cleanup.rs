@@ -52,6 +52,43 @@ fn partial_inserted_without_rollback_is_integrity_lost() {
 }
 
 #[test]
+fn tracked_partial_down_keeps_uncertain_keys_until_verified_cleanup() {
+    let calls = Arc::new(Mutex::new(0usize));
+    let calls_for_emitter = Arc::clone(&calls);
+    let mut state = TrackedKeyState::with_emitter(move |codes, key_up| {
+        *calls_for_emitter.lock().expect("partial call count") += 1;
+        if key_up {
+            test_send_result(codes.len() as u8, codes.len() as u8, 0)
+        } else {
+            test_send_result(codes.len() as u8, 1, 5)
+        }
+    });
+
+    let outcome = state.key_down(&[0x15, 0x16]);
+    assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+    assert_eq!(*calls.lock().expect("partial call count"), 1);
+    let obligation = state.release_obligation_mask();
+    assert_ne!(obligation, 0);
+    assert_eq!(obligation & 0b11, 0b11);
+
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
+    let cleanup = state.release_scope(ReleaseScope::Tracked, 0);
+    assert_eq!(cleanup.attempted_mask & obligation, obligation);
+    assert!(cleanup.released_successfully);
+    assert_eq!(state.release_obligation_mask(), 0);
+}
+
+#[test]
+fn release_obligation_mask_unions_all_conservative_sources() {
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 0x0001;
+    state.possibly_active_mask = 0x0002;
+    state.failed_release_mask = 0x0004;
+
+    assert_eq!(state.release_obligation_mask(), 0x0007);
+}
+
+#[test]
 fn full_inserted_with_win32_error_is_integrity_lost() {
     let outcome = emit_down_with(&[0x15, 0x16], |codes, _| {
         let len = codes.len() as u8;
@@ -125,8 +162,7 @@ fn up_send_success_clears_requested_release() {
     assert_eq!(down_outcome.status, SendTransactionStatus::Complete);
     let up_outcome = state.key_up(&[0x15]);
     assert_eq!(up_outcome.status, SendTransactionStatus::Complete);
-    assert_eq!(state.active_mask, 0);
-    assert_eq!(state.failed_release_mask, 0);
+    assert_eq!(state.release_obligation_mask(), 0);
 }
 
 #[test]
@@ -139,6 +175,7 @@ fn cleanup_fsm_executes_tracked_then_verifies_physical_all_up() {
     assert!(outcome.released_successfully);
     assert_eq!(state.active_mask, 0);
     assert_eq!(state.failed_release_mask, 0);
+    assert_eq!(state.release_obligation_mask(), 0);
 }
 
 #[test]

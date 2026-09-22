@@ -275,19 +275,24 @@ fn zero_progress_note_on_counts_rejection_without_counting_a_split() {
     assert_eq!(state.sendinput_partial_events, 0);
     assert_eq!(state.sendinput_zero_progress_failures, 1);
     assert_eq!(state.chord_split_events, 0);
+    assert_eq!(state.active_mask, 0);
+    assert_eq!(state.release_obligation_mask(), 0);
 }
 
 #[test]
 fn post_send_clock_failure_keeps_down_keys_uncertain_for_cleanup() {
     let mut state = TrackedKeyState::with_emitter(|codes, key_up| {
-        assert!(!key_up);
-        PlatformSendResult {
-            requested: codes.len() as u8,
-            inserted: codes.len() as u8,
-            started_ticks: QpcTicks::ZERO,
-            completed_ticks: None,
-            win32_error: 0,
-            timing_error: Some(QpcError::CounterUnavailable),
+        if key_up {
+            test_send_result(codes.len() as u8, codes.len() as u8, 0)
+        } else {
+            PlatformSendResult {
+                requested: codes.len() as u8,
+                inserted: codes.len() as u8,
+                started_ticks: QpcTicks::ZERO,
+                completed_ticks: None,
+                win32_error: 0,
+                timing_error: Some(QpcError::CounterUnavailable),
+            }
         }
     });
 
@@ -296,11 +301,14 @@ fn post_send_clock_failure_keeps_down_keys_uncertain_for_cleanup() {
     assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
     assert_eq!(state.active_mask & 0b11, 0);
     assert_eq!(state.possibly_active_mask & 0b11, 0b11);
-    assert_eq!(
-        state.active_mask | state.possibly_active_mask | state.failed_release_mask,
-        0b11,
-        "cleanup must see every key whose post-send state is uncertain"
-    );
+    let obligation = state.release_obligation_mask();
+    assert_eq!(obligation, 0b11);
+    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
+
+    let cleanup = state.release_scope(ReleaseScope::Tracked, 0);
+    assert_eq!(cleanup.attempted_mask & obligation, obligation);
+    assert!(cleanup.released_successfully);
+    assert_eq!(state.release_obligation_mask(), 0);
 }
 
 #[test]
@@ -321,6 +329,7 @@ fn tracked_note_on_uses_one_send_attempt_without_retry() {
     assert_eq!(outcome.evidence.zero_progress_retries, 0);
     assert_eq!(state.sendinput_zero_progress_failures, 1);
     assert_eq!(state.chord_split_events, 0);
+    assert_eq!(state.release_obligation_mask(), 0);
 }
 
 #[test]
@@ -507,16 +516,6 @@ fn physical_inconclusive_preserves_only_unconfirmed_subset() {
 }
 
 #[test]
-fn release_obligation_mask_unions_all_conservative_sources() {
-    let mut state = TrackedKeyState::new();
-    state.active_mask = 0x0001;
-    state.possibly_active_mask = 0x0002;
-    state.failed_release_mask = 0x0004;
-
-    assert_eq!(state.release_obligation_mask(), 0x0007);
-}
-
-#[test]
 fn verified_all_up_clears_all_tracking_masks() {
     let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
         requested: codes.len() as u8,
@@ -538,6 +537,7 @@ fn verified_all_up_clears_all_tracking_masks() {
     assert_eq!(state.active_mask, 0);
     assert_eq!(state.possibly_active_mask, 0);
     assert_eq!(state.failed_release_mask, 0);
+    assert_eq!(state.release_obligation_mask(), 0);
     assert!(state.last_error.is_none());
 }
 
