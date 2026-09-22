@@ -2525,6 +2525,55 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     {
         return Err("Windows validation must contain native-only desktop ownership".into());
     }
+    if validate
+        .matches("name: Fail fast on Windows validation dependencies")
+        .count()
+        != 1
+        || validate
+            .matches("pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache")
+            .count()
+            != 1
+        || validate.contains("Fail fast on Rust validation dependencies")
+        || validate.contains("Fail fast on native desktop validation dependencies")
+    {
+        return Err(
+            "Windows validation must consolidate its shared dependency check exactly once".into(),
+        );
+    }
+    let rust_cache_position = validate
+        .find("name: Rust cache")
+        .ok_or("Windows validation is missing its Rust cache step")?;
+    let dependency_check_position = validate
+        .find("name: Fail fast on Windows validation dependencies")
+        .ok_or("Windows validation is missing its shared dependency check")?;
+    let first_repository_check_position = validate
+        .find("name: Repository verification — Rust")
+        .ok_or("Windows validation is missing its first repository verification step")?;
+    if rust_cache_position >= dependency_check_position
+        || dependency_check_position >= first_repository_check_position
+    {
+        return Err(
+            "Windows validation dependency check must follow setup/cache and precede repository verification".into(),
+        );
+    }
+    if validate.contains(
+        "        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_native_required == 'true'",
+    ) {
+        return Err(
+            "Windows validation toolchain setup must not repeat the job-level predicate".into(),
+        );
+    }
+    for marker in [
+        "      - name: Repository verification — Rust\n        if: needs.changes.outputs.rust_required == 'true'",
+        "      - name: Repository verification — native desktop\n        if: needs.changes.outputs.desktop_native_required == 'true'",
+    ] {
+        if !validate.contains(marker) {
+            return Err(format!(
+                "Windows validation lost its lane-specific repository predicate: {marker}"
+            )
+            .into());
+        }
+    }
     let desktop_web_end = ci
         .find("\n  site:\n")
         .ok_or("CI is missing the site job boundary")?;
@@ -2574,6 +2623,11 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
             )
             .into());
         }
+    }
+    if status.contains("DESKTOP_E2E_REQUIRED") {
+        return Err(
+            "required aggregate gate must not project the unused DESKTOP_E2E_REQUIRED variable".into(),
+        );
     }
     if status.contains("deploy_pages") {
         return Err("required CI status gate must not depend on deploy_pages".into());
@@ -2641,6 +2695,74 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     ] {
         if deploy.contains(forbidden) {
             return Err(format!("CI Pages deployment job must not contain: {forbidden}").into());
+        }
+    }
+    let site_action = fs::read_to_string(root.join(".github/actions/site-validate/action.yml"))?;
+    if site_action.matches("run: bun run sync:version").count() != 1
+        || site_action.lines().any(|line| line.trim() == "run: bun run check")
+        || site_action.lines().any(|line| line.trim() == "run: bun run build")
+    {
+        return Err(
+            "CI site validation must synchronize the site version exactly once and use CI-only scripts".into(),
+        );
+    }
+    let action_steps = [
+        "name: Install dependencies",
+        "name: Sync site application version",
+        "name: Type and Astro checks",
+        "name: Lint",
+        "name: Formatting",
+        "name: Build static site",
+        "name: Verify required output",
+        "name: Verify SEO contracts",
+        "name: Install Playwright Chromium",
+        "name: Run Functional E2E and accessibility tests",
+    ];
+    let mut previous_position = None;
+    for step in action_steps {
+        let position = site_action
+            .find(step)
+            .ok_or_else(|| format!("site validation action is missing its step: {step}"))?;
+        if previous_position.is_some_and(|previous| previous >= position) {
+            return Err("site validation action steps are out of order".into());
+        }
+        previous_position = Some(position);
+    }
+    let site_package = fs::read_to_string(root.join("site/package.json"))?;
+    for marker in [
+        "\"precheck\": \"bun run sync:version\"",
+        "\"check\": \"astro check\"",
+        "\"check:ci\": \"astro check\"",
+        "\"prebuild\": \"bun run sync:version\"",
+        "\"build\": \"astro build\"",
+        "\"build:ci\": \"astro build\"",
+    ] {
+        if !site_package.contains(marker) {
+            return Err(format!(
+                "site package scripts must preserve local self-contained commands and CI-only variants: {marker}"
+            )
+            .into());
+        }
+    }
+    let topology = fs::read_to_string(root.join("docs/ci-validation-topology.md"))?;
+    for marker in [
+        "# CI validation topology",
+        "## Triggers",
+        "## Classifier outputs",
+        "## Representative path matrix",
+        "## Build-once boundaries",
+        "## Deliberate non-deduplication",
+        "## Safe classifier extension procedure",
+        "docs/releases/**",
+        "site/dist",
+        "workflow_dispatch",
+        "Unknown paths",
+    ] {
+        if !topology.contains(marker) {
+            return Err(format!(
+                "CI validation topology documentation is missing its marker: {marker}"
+            )
+            .into());
         }
     }
     let xtask_checks = fs::read_to_string(root.join("rust/xtask/src/checks.rs"))?;
@@ -3091,6 +3213,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
+
     for forbidden in [
         "Cert:\\CurrentUser",
         "TrustedPublisher",

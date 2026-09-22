@@ -561,11 +561,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Rust — install pinned stable toolchain
-        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_native_required == 'true'
         run: rustup toolchain install 1.98.1 --profile minimal --target x86_64-pc-windows-msvc --component rustfmt --component clippy
 
       - name: Rust — verify pinned stable toolchain
-        if: needs.changes.outputs.rust_required == 'true' || needs.changes.outputs.desktop_native_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.1
         run: |
@@ -588,19 +586,14 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.event_name != 'pull_request' }}
 
+      - name: Fail fast on Windows validation dependencies
+        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
+
       - name: Repository verification — Rust
         if: needs.changes.outputs.rust_required == 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.98.1
         run: cargo xtask check rust
-
-      - name: Fail fast on Rust validation dependencies
-        if: needs.changes.outputs.rust_required == 'true'
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
-
-      - name: Fail fast on native desktop validation dependencies
-        if: needs.changes.outputs.desktop_native_required == 'true'
-        run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
 
       - name: Repository verification — native desktop
         if: needs.changes.outputs.desktop_native_required == 'true'
@@ -1306,7 +1299,6 @@ jobs:
           RUST_REQUIRED: ${{ needs.changes.outputs.rust_required }}
           DESKTOP_REQUIRED: ${{ needs.changes.outputs.desktop_required }}
           DESKTOP_NATIVE_REQUIRED: ${{ needs.changes.outputs.desktop_native_required }}
-          DESKTOP_E2E_REQUIRED: ${{ needs.changes.outputs.desktop_e2e_required }}
           PACKAGE_REQUIRED: ${{ needs.changes.outputs.package_required }}
           UPDATER_REQUIRED: ${{ needs.changes.outputs.updater_required }}
           RELEASE_REQUIRED: ${{ needs.changes.outputs.release_required }}
