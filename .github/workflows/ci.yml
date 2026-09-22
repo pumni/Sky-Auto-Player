@@ -1284,6 +1284,11 @@ jobs:
       - name: Validate site
         uses: ./.github/actions/site-validate
 
+      - name: Upload validated Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site/dist
+
   status:
     name: Sky Auto Player — required CI gate
     if: always()
@@ -1370,3 +1375,30 @@ jobs:
               echo "- Elapsed seconds: \`$elapsed\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  deploy_pages:
+    name: Deploy validated website
+    needs: [changes, site, status]
+    if: >
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.site_required == 'true' &&
+      needs.site.result == 'success' &&
+      needs.status.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -1709,10 +1709,14 @@ fn packaged_ci_contract_source(source: &str) -> Result<()> {
 
 fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     let normalized = source.replace("\r\n", "\n");
-    if normalized.matches("actions/attest@").count() != 0
-        || normalized.contains("id-token: write")
-        || normalized.contains("attestations: write")
-        || normalized.contains("artifact-metadata: write")
+    let ordinary_ci = normalized
+        .split("  deploy_pages:")
+        .next()
+        .unwrap_or(normalized.as_str());
+    if ordinary_ci.matches("actions/attest@").count() != 0
+        || ordinary_ci.contains("id-token: write")
+        || ordinary_ci.contains("attestations: write")
+        || ordinary_ci.contains("artifact-metadata: write")
     {
         return Err("ordinary CI must not create or verify GitHub attestations or request attestation permissions".into());
     }
@@ -2498,7 +2502,13 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     let status_start = ci
         .find("\n  status:\n")
         .ok_or("CI is missing the required aggregate gate")?;
-    let status = &ci[status_start..];
+    let deploy_start = ci
+        .find("\n  deploy_pages:\n")
+        .ok_or("CI is missing the deploy_pages job")?;
+    if desktop_web_end >= status_start || status_start >= deploy_start {
+        return Err("CI site validation, status, and Pages deployment must remain ordered".into());
+    }
+    let status = &ci[status_start..deploy_start];
     for marker in [
         "UPDATER_BRIDGE_REQUIRED",
         "UPDATER_BRIDGE_RESULT",
@@ -2516,6 +2526,74 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
                 "required aggregate gate is missing its fail-closed marker: {marker}"
             )
             .into());
+        }
+    }
+    if status.contains("deploy_pages") {
+        return Err("required CI status gate must not depend on deploy_pages".into());
+    }
+    let site = &ci[desktop_web_end..status_start];
+    for marker in [
+        "name: Website validation",
+        "uses: ./.github/actions/site-validate",
+        "name: Upload validated Pages artifact",
+        "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
+        "path: site/dist",
+    ] {
+        if !site.contains(marker) {
+            return Err(
+                format!("CI site artifact contract is missing its marker: {marker}").into(),
+            );
+        }
+    }
+    for forbidden in [
+        "pages: write",
+        "id-token: write",
+        "oven-sh/setup-bun",
+        "bun install",
+        "bun run build",
+        "actions/download-artifact@",
+    ] {
+        if site.contains(forbidden) {
+            return Err(
+                format!("CI site validation job contains deploy-only work: {forbidden}").into(),
+            );
+        }
+    }
+    let deploy = &ci[deploy_start..];
+    for marker in [
+        "name: Deploy validated website",
+        "needs: [changes, site, status]",
+        "always() &&",
+        "github.event_name == 'push'",
+        "github.ref == 'refs/heads/main'",
+        "needs.changes.outputs.site_required == 'true'",
+        "needs.site.result == 'success'",
+        "needs.status.result == 'success'",
+        "contents: read",
+        "pages: write",
+        "id-token: write",
+        "name: github-pages",
+        "url: ${{ steps.deployment.outputs.page_url }}",
+        "actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d",
+        "id: deployment",
+        "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
+    ] {
+        if !deploy.contains(marker) {
+            return Err(
+                format!("CI Pages deployment contract is missing its marker: {marker}").into(),
+            );
+        }
+    }
+    for forbidden in [
+        "actions/checkout@",
+        "oven-sh/setup-bun",
+        "bun install",
+        "bun run build",
+        "site-validate",
+        "actions/download-artifact@",
+    ] {
+        if deploy.contains(forbidden) {
+            return Err(format!("CI Pages deployment job must not contain: {forbidden}").into());
         }
     }
     let xtask_checks = fs::read_to_string(root.join("rust/xtask/src/checks.rs"))?;
@@ -2549,6 +2627,11 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         if !pages.contains(marker) {
             return Err(format!("Pages deploy contract is missing its marker: {marker}").into());
         }
+    }
+    if !workflow_declares_only_dispatch(&pages) {
+        return Err(
+            "Pages recovery workflow must retain workflow_dispatch as its only trigger".into(),
+        );
     }
     if pages.contains("./.github/actions/site-validate") || pages.contains("test:functional") {
         return Err("Pages deploy workflow must not repeat the full site validation suite".into());
@@ -2744,7 +2827,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
     crate::updater_trust::inventory_public_trust_roots(root)?;
 
     let ci_path = root.join(".github/workflows/ci.yml");
-    let ci = fs::read_to_string(&ci_path)?;
+    let ci = fs::read_to_string(&ci_path)?.replace("\r\n", "\n");
     for marker in [
         "scripts/setup_v4_test_signing.ps1",
         "scripts/verify_v4_authenticode.ps1",
@@ -2768,9 +2851,10 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
         }
     }
-    if ci.contains("actions/attest@")
-        || ci.contains("id-token: write")
-        || ci.contains("attestations: write")
+    let ordinary_ci = ci.split("  deploy_pages:").next().unwrap_or(ci.as_str());
+    if ordinary_ci.contains("actions/attest@")
+        || ordinary_ci.contains("id-token: write")
+        || ordinary_ci.contains("attestations: write")
     {
         return Err(
             "ordinary CI must not retain artifact attestation creation or permissions".into(),
