@@ -2540,7 +2540,9 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "path: site/dist",
     ] {
         if !site.contains(marker) {
-            return Err(format!("CI site artifact contract is missing its marker: {marker}").into());
+            return Err(
+                format!("CI site artifact contract is missing its marker: {marker}").into(),
+            );
         }
     }
     for forbidden in [
@@ -2552,7 +2554,9 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "actions/download-artifact@",
     ] {
         if site.contains(forbidden) {
-            return Err(format!("CI site validation job contains deploy-only work: {forbidden}").into());
+            return Err(
+                format!("CI site validation job contains deploy-only work: {forbidden}").into(),
+            );
         }
     }
     let deploy = &ci[deploy_start..];
@@ -2575,7 +2579,9 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
     ] {
         if !deploy.contains(marker) {
-            return Err(format!("CI Pages deployment contract is missing its marker: {marker}").into());
+            return Err(
+                format!("CI Pages deployment contract is missing its marker: {marker}").into(),
+            );
         }
     }
     for forbidden in [
@@ -2623,7 +2629,9 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         }
     }
     if !workflow_declares_only_dispatch(&pages) {
-        return Err("Pages recovery workflow must retain workflow_dispatch as its only trigger".into());
+        return Err(
+            "Pages recovery workflow must retain workflow_dispatch as its only trigger".into(),
+        );
     }
     if pages.contains("./.github/actions/site-validate") || pages.contains("test:functional") {
         return Err("Pages deploy workflow must not repeat the full site validation suite".into());
@@ -2843,10 +2851,7 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
             return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
         }
     }
-    let ordinary_ci = ci
-        .split("  deploy_pages:")
-        .next()
-        .unwrap_or(ci.as_str());
+    let ordinary_ci = ci.split("  deploy_pages:").next().unwrap_or(ci.as_str());
     if ordinary_ci.contains("actions/attest@")
         || ordinary_ci.contains("id-token: write")
         || ordinary_ci.contains("attestations: write")
