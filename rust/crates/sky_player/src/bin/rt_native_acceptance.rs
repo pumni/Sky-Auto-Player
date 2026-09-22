@@ -5,7 +5,7 @@ mod acceptance {
 #[path = "release_gap_stress.rs"] mod release_gap_stress;
 #[path = "snapshot_report.rs"] mod snapshot_report;
 #[path = "scenarios.rs"] mod scenarios;
-use release_gap_stress::{attach_sink_window_provenance, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
+use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
 use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, production_options, scenario_plan};
 #[cfg(test)]
 pub(super) use scenarios::w4_profile_spec;
@@ -769,7 +769,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_target_preflight_failure = args.scenario == Scenario::TargetHwndChange && target_change_preflight_error(&snapshot);
     let target_cleanup_exception = target_change_cleanup_exception(&snapshot);
     let expected_supervisor_expiry = args.scenario == Scenario::SupervisorLeaseExpiry && supervisor_expiry_cleanup_exception(&snapshot);
-    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || snapshot.sendinput_partial_events != 0 || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry)
+    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || snapshot.final_release_obligation_mask != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || snapshot.sendinput_partial_events != 0 || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry)
     {
         return write_report(
             &args,
@@ -824,6 +824,13 @@ fn run_windows(args: RunArgs) -> i32 {
         plan.allow_unpaired_cleanup_ups,
     ) {
         return write_report(&args, Verdict::Fail, &error, details);
+    }
+    let (generation_verdict, generation_reason) = healthy_generation_qualification(
+        args.scenario,
+        snapshot.generation_accounting,
+    );
+    if generation_verdict != Verdict::Pass {
+        return write_report(&args, generation_verdict, generation_reason, details);
     }
     let (visibility_verdict, visibility_reason) = production_visibility_qualification(
         args.scenario,

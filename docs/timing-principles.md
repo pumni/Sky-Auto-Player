@@ -36,9 +36,10 @@ unmatched Up metadata can remain representable, but it does not become a
 musical physical Up. Safety, focus-loss, and cleanup releases are outside the
 musical generation ledger.
 
-Timing Margin is authored headroom. It is applied once during materialization
-and validation. It is never used as a runtime cutoff and is never added again
-to the physical completion floors.
+Timing Margin is materialized once. It contributes to authored `min_hold`,
+authored `min_release_gap`, and the physical musical-Up floor through
+`effective_min_hold`. It is not added a second time, is not a lateness cutoff,
+and is not a latest-start deadline.
 
 ## Current Down continuity and physical floors
 
@@ -84,8 +85,9 @@ The physical path is ordered as follows:
 2. Derive the authored QPC target. For physical entries, query the guard and
    wait to `packet_not_before_qpc`; metadata-only entries use the authored
    target.
-3. Compare causal authorization with the authored target, never with the
-   later physical floor.
+3. Classify and record authored-target lateness for evidence only; do not use
+   lateness as a current-Down existence gate, including after applying a
+   physical floor.
 4. Run command, target, focus, and lease admission. Eligible
    `require_focus=true` Down traffic receives one fresh foreground proof,
    followed by target, published-focus, and late-control rechecks.

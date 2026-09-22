@@ -272,7 +272,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     *metrics.terminal_error.lock() = terminal_error.clone();
     *metrics.secondary_errors.lock() = secondary_errors;
     *metrics.generation_status_counts.lock() = coordinator.generation_status_counts();
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
     {
         *metrics.generation_accounting.lock() = coordinator.generation_accounting();
     }

@@ -9,7 +9,7 @@ const MAX_KEYS: usize = sky_dispatch_core::model::MAX_KEYS;
 /// Fixed-size sender evidence owned by the worker itself. It deliberately
 /// consumes the timestamps already returned by the trusted sender: it does
 /// not sample QPC, allocate, lock, format, or walk the schedule.
-pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 3;
+pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 4;
 const PRODUCTION_ANOMALY_CAPACITY: usize = 32;
 
 #[derive(Clone, Copy, Default)]
@@ -53,17 +53,17 @@ pub(crate) struct ProductionHoldForensics {
     unmatched_up_count: u64,
     structural_anomaly_count: u64,
     timing_diagnostic_count: u64,
-    frame_base_hold_ticks: u64,
+    effective_min_hold_ticks: u64,
     frame_ticks: u64,
 }
 
 impl ProductionHoldForensics {
     pub(crate) fn set_frame_policies(
         &mut self,
-        frame_base_hold_ticks: DurationTicks,
+        effective_min_hold_ticks: DurationTicks,
         frame_ticks: DurationTicks,
     ) {
-        self.frame_base_hold_ticks = frame_base_hold_ticks.as_u64();
+        self.effective_min_hold_ticks = effective_min_hold_ticks.as_u64();
         self.frame_ticks = frame_ticks.as_u64();
     }
 
@@ -202,7 +202,7 @@ impl ProductionHoldForensics {
                     self.min_hold_start_after_down_completion_ticks
                         .min(hold_start_ticks)
                 };
-                if hold_start.is_none() || hold_start_ticks < self.frame_base_hold_ticks {
+                if hold_start.is_none() || hold_start_ticks < self.effective_min_hold_ticks {
                     self.hold_floor_violation_count =
                         self.hold_floor_violation_count.saturating_add(1);
                     self.record_anomaly(
@@ -366,7 +366,7 @@ impl ProductionHoldForensics {
         metrics.production_min_down_start_after_up_completion_ticks =
             self.min_down_start_after_up_completion_ticks;
         metrics.production_release_floor_violation_count = self.release_floor_violation_count;
-        metrics.production_hold_floor_ticks = self.frame_base_hold_ticks;
+        metrics.production_hold_floor_ticks = self.effective_min_hold_ticks;
         metrics.production_release_floor_ticks = self.frame_ticks;
         metrics.production_same_key_overlap_forensics_count = self.same_key_overlap_forensics_count;
         metrics.production_anchor_overwrite_count = self.anchor_overwrite_count;

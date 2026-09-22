@@ -117,11 +117,13 @@ min_hold_us        = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
 ```
 
-Timing Margin is authored headroom only. It is not added to completion floors,
-does not suppress a late current Down, and does not change an authored
-timestamp. Completion evidence remains sender-side evidence and does not claim
-game observation. `SendInput` success is sender/Windows injection evidence
-only.
+Timing Margin is materialized once. It contributes to authored `min_hold`,
+authored `min_release_gap`, and the physical musical-Up floor through
+`effective_min_hold`; it is not added a second time. It does not suppress a
+late current Down, act as a lateness cutoff, become a latest-start deadline, or
+change an authored timestamp. Completion evidence remains sender-side evidence
+and does not claim game observation. `SendInput` success is sender/Windows
+injection evidence only.
 
 ## Lifecycle and diagnostics
 

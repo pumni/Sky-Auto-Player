@@ -23,9 +23,11 @@ at one timestamp, and hold or release intervals below the materialized floors.
 Stale unmatched Up metadata remains non-musical. Safety and cleanup releases
 do not belong to this ledger.
 
-Timing Margin is applied once to authored hold and release spacing. It is
-authored headroom and is not a runtime sender cutoff or a second physical
-floor. Authored timestamps remain immutable for the whole session.
+Timing Margin is materialized once. It contributes to authored `min_hold`,
+authored `min_release_gap`, and the physical musical-Up floor through
+`effective_min_hold`. It is not added a second time, is not a lateness cutoff,
+and is not a latest-start deadline. Authored timestamps remain immutable for
+the whole session.
 
 At 60 FPS with a 500 µs margin:
 
