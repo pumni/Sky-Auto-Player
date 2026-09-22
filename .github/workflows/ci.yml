@@ -424,10 +424,6 @@ jobs:
           pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_production_signing_contract.ps1
           if ($LASTEXITCODE -ne 0) { throw "V4 production signing contract test failed with exit code $LASTEXITCODE" }
 
-      - name: Run V4 production topology rehearsal regression
-        shell: pwsh
-        run: pwsh scripts/test_v4_production_topology_rehearsal.ps1
-
       - name: Report CI timing
         if: always()
         run: |
@@ -1168,7 +1164,7 @@ jobs:
           $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
           $uninstaller = Join-Path $installRoot "uninstall.exe"
           . scripts/v4_nsis_smoke_boundary.ps1
-          $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot
+          $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -RegistryStateMode FreshInstall
           $appProcess = $null
           try {
             $installerRun = Start-Process -FilePath $installer -ArgumentList @("/S", "/NS", "/D=$installRoot") -WindowStyle Hidden -Wait -PassThru

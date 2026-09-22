@@ -50,18 +50,17 @@ is strictly monotonic by SemVer. Bootstrap does not fabricate `latest.json` file
 The same-repository production pipeline is draft-first and builds the exact source SHA once:
 
 ```text
-ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDraft
-  -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
-  -> PublishDraft -> Assert-ImmutableRelease -> Latest policy guard
-  -> PromoteMetadata -> FinalVerify
+Preflight -> BuildCandidate -> PublishRelease -> PromoteMetadata -> FinalVerify
 ```
 
-`ValidateRepository` checks the canonical repository, `main`, and metadata-branch readiness before
-`CreateDraft`. Stable publication uses the canonical repository `GITHUB_TOKEN` with
+`Preflight` derives and freezes the release identity in the bounded `release-context.json` state
+artifact, checks the canonical repository, `main`, and metadata-branch readiness, and remains
+externally read-only. `PublishRelease` owns matching stale-draft cleanup and publication. Stable
+publication uses the canonical repository `GITHUB_TOKEN` with
 `make_latest="true"`; beta publication uses `make_latest="false"`. The read-only Latest policy
-guard runs after publication and immutable verification, and before minting the metadata App
-token. Metadata promotion occurs only after that guard. `FinalVerify` checks the public release
-and the exact unauthenticated raw metadata endpoint used by the client.
+guard runs inside the publication transaction before minting the metadata App token. Metadata
+promotion occurs only after that guard. `FinalVerify` checks the public release and the exact
+unauthenticated raw metadata endpoint used by the client.
 
 ## Security properties retained
 

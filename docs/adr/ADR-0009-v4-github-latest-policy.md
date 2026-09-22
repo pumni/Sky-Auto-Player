@@ -32,7 +32,7 @@ publication PATCH that turns the qualified draft into a published release.
 `draft` remains a JSON boolean. The release workflow keeps the following fail-closed order:
 
 ```text
-PublishDraft
+PublishRelease
   -> Assert-ImmutableRelease
   -> channel-aware Latest policy guard
   -> mint release-metadata GitHub App token

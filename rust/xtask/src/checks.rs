@@ -342,8 +342,6 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "scripts/ci_tauri_update_e2e_core.ps1",
     "scripts/verify_v4_release_runner.ps1",
     "scripts/cleanup_v4_release_state.ps1",
-    "scripts/cleanup_v4_draft_rehearsal.ps1",
-    "scripts/v4_draft_rehearsal_external_state.ps1",
     "scripts/v4_release_draft_lookup.ps1",
     ".github/workflows/release-v4.yml",
     ".github/workflows/rehearse-v4.yml",
@@ -576,7 +574,7 @@ const RELEASE_RUNNER_LABEL_MARKER: &str =
 fn approved_release_runner_job(relative: &str) -> Option<&'static str> {
     match relative {
         ".github/workflows/release-v4.yml" => Some("release"),
-        ".github/workflows/rehearse-v4.yml" => Some("draft-rehearsal"),
+        ".github/workflows/rehearse-v4.yml" => Some("qualification"),
         _ => None,
     }
 }
@@ -675,88 +673,115 @@ fn workflow_step_blocks(source: &str) -> Vec<(String, String)> {
 const V4_RELEASE_STATE_INVOCATION_REQUIREMENTS: &[(&str, &[&str])] = &[
     (
         "Preflight release request and repository readiness",
-        &[
-            "-State Preflight",
-            "-Version $env:V4_RELEASE_VERSION",
-            "-Channel $env:V4_RELEASE_CHANNEL",
-            "-Tag $env:V4_RELEASE_TAG",
-            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
-            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
-            "-StateRoot $env:V4_RELEASE_STATE_ROOT",
-            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
-            "-RunId $env:GITHUB_RUN_ID",
-        ],
+        &["-State Preflight", "-StateRoot $env:V4_RELEASE_STATE_ROOT"],
     ),
     (
         "Build and qualify the single production candidate",
         &[
             "-State BuildCandidate",
-            "-Version $env:V4_RELEASE_VERSION",
-            "-Channel $env:V4_RELEASE_CHANNEL",
-            "-Tag $env:V4_RELEASE_TAG",
-            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
-            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
             "-StateRoot $env:V4_RELEASE_STATE_ROOT",
             "-UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH",
-            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
-            "-RunId $env:GITHUB_RUN_ID",
         ],
     ),
     (
         "Publish the qualified candidate immutably",
         &[
             "-State PublishRelease",
-            "-Version $env:V4_RELEASE_VERSION",
-            "-Channel $env:V4_RELEASE_CHANNEL",
-            "-Tag $env:V4_RELEASE_TAG",
-            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
-            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
             "-StateRoot $env:V4_RELEASE_STATE_ROOT",
-            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
-            "-RunId $env:GITHUB_RUN_ID",
         ],
     ),
     (
         "Promote release metadata only after immutable publication",
         &[
             "-State PromoteMetadata",
-            "-Version $env:V4_RELEASE_VERSION",
-            "-Channel $env:V4_RELEASE_CHANNEL",
-            "-Tag $env:V4_RELEASE_TAG",
-            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
-            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
             "-StateRoot $env:V4_RELEASE_STATE_ROOT",
-            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
         ],
     ),
     (
         "Re-fetch and verify final public release and metadata",
         &[
             "-State FinalVerify",
-            "-Version $env:V4_RELEASE_VERSION",
-            "-Channel $env:V4_RELEASE_CHANNEL",
-            "-Tag $env:V4_RELEASE_TAG",
-            "-SourceSha $env:V4_RELEASE_SOURCE_SHA",
-            "-WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA",
             "-StateRoot $env:V4_RELEASE_STATE_ROOT",
-            "-ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH",
         ],
     ),
 ];
 
-fn validate_v4_release_state_invocations(workflow: &str) -> std::result::Result<(), String> {
-    let release_job = workflow_job_blocks(workflow)
-        .into_iter()
-        .find(|(job_id, _)| job_id == "release")
-        .map(|(_, block)| block)
-        .ok_or_else(|| "v4 release workflow is missing the release job block".to_owned())?;
-    let steps = workflow_step_blocks(&release_job);
-    for &(step_name, required_arguments) in V4_RELEASE_STATE_INVOCATION_REQUIREMENTS {
+fn pipeline_validate_set_states(pipeline: &str) -> std::result::Result<BTreeSet<String>, String> {
+    let start = pipeline
+        .find("[ValidateSet(")
+        .ok_or_else(|| "release pipeline is missing its State ValidateSet".to_owned())?;
+    let end = pipeline[start..]
+        .find(")]")
+        .map(|offset| start + offset)
+        .ok_or_else(|| "release pipeline State ValidateSet is unterminated".to_owned())?;
+    let states = pipeline[start..end]
+        .split('"')
+        .enumerate()
+        .filter_map(|(index, value)| (index % 2 == 1).then_some(value.to_owned()))
+        .collect::<BTreeSet<_>>();
+    if states.is_empty() {
+        return Err("release pipeline State ValidateSet is empty".to_owned());
+    }
+    Ok(states)
+}
+
+fn workflow_state_invocations(workflow: &str) -> Vec<String> {
+    workflow
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("-State "))
+        .map(|state| state.trim().trim_end_matches('`').trim().to_owned())
+        .collect()
+}
+
+fn validate_v4_release_state_invocations(
+    workflow: &str,
+    pipeline: &str,
+) -> std::result::Result<(), String> {
+    let accepted_states = pipeline_validate_set_states(pipeline)?;
+    for state in workflow_state_invocations(workflow) {
+        if !accepted_states.contains(&state) {
+            return Err(format!(
+                "approved release workflow invokes state `{state}` not accepted by v4_release_pipeline.ps1"
+            ));
+        }
+    }
+    let jobs = workflow_job_blocks(workflow);
+    let qualification_requirements: &[(&str, &[&str])] = &[
+        (
+            "Run canonical production Preflight without publication",
+            &["-State Preflight", "-StateRoot $env:V4_RELEASE_STATE_ROOT"],
+        ),
+        (
+            "Run canonical production BuildCandidate and stop",
+            &[
+                "-State BuildCandidate",
+                "-StateRoot $env:V4_RELEASE_STATE_ROOT",
+                "-UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH",
+            ],
+        ),
+    ];
+    let (job_id, job_block, requirements) =
+        if let Some((_, block)) = jobs.iter().find(|(job_id, _)| job_id == "release") {
+            (
+                "release",
+                block.as_str(),
+                V4_RELEASE_STATE_INVOCATION_REQUIREMENTS,
+            )
+        } else if let Some((_, block)) = jobs.iter().find(|(job_id, _)| job_id == "qualification") {
+            ("qualification", block.as_str(), qualification_requirements)
+        } else {
+            return Err(
+                "approved release workflow is missing its release or qualification job block"
+                    .to_owned(),
+            );
+        };
+    let steps = workflow_step_blocks(job_block);
+    for &(step_name, required_arguments) in requirements {
         let step = steps
             .iter()
             .find(|(name, _)| name == step_name)
             .map(|(_, block)| block.as_str())
-            .ok_or_else(|| format!("v4 release workflow is missing state step `{step_name}`"))?;
+            .ok_or_else(|| format!("v4 {job_id} workflow is missing state step `{step_name}`"))?;
         for &required_argument in required_arguments {
             if !step.contains(required_argument) {
                 return Err(format!(
@@ -1132,15 +1157,14 @@ fn v4_release_pipeline_contract_source(
         "id-token: write",
         "attestations: write",
         "contents: write",
+        "actions: read",
         "GH_TOKEN: ${{ github.token }}",
+        "EXPECTED_WORKFLOW: rehearse-v4.yml",
         "ref: ${{ github.sha }}",
-        "Derive exact release identity from checked-out source",
-        "V4_RELEASE_SOURCE_SHA=$sourceSha",
-        "V4_RELEASE_VERSION=$version",
-        "V4_RELEASE_CHANNEL=$channel",
-        "V4_RELEASE_TAG=$tag",
-        "V4_RELEASE_NOTES_PATH=$notesPath",
         "release-dispatch-boundary",
+        "Require exact-head production qualification",
+        "actions/workflows/$EXPECTED_WORKFLOW/runs?event=workflow_dispatch&status=completed&head_sha=$GITHUB_SHA",
+        "V4 Production Pre-Publication Qualification",
         "github.event.repository.default_branch",
         "refs/heads/main",
         "environment: v4-production-release",
@@ -1174,6 +1198,11 @@ fn v4_release_pipeline_contract_source(
             "production release workflow must not expose semantic workflow_dispatch inputs".into(),
         );
     }
+    if workflow.contains("EXPECTED_WORKFLOW: .github/workflows/") {
+        return Err(
+            "exact-head qualification must pass the workflow file name, not its path".into(),
+        );
+    }
     let workflow_states = [
         "-State Preflight",
         "-State BuildCandidate",
@@ -1191,7 +1220,7 @@ fn v4_release_pipeline_contract_source(
         }
         previous = position;
     }
-    validate_v4_release_state_invocations(&workflow)
+    validate_v4_release_state_invocations(&workflow, pipeline)
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     println!("[xtask] v4 release workflow state CLI invocation contract: PASS");
     for forbidden in [
@@ -1288,7 +1317,7 @@ fn v4_release_pipeline_contract_source(
         "metadataBootstrapContract",
         "release-metadata readiness",
         "repository already contains published release/tag",
-        "unpublished draft reuse",
+        "V4 unpublished draft cleanup",
         "published tags are immutable",
         "git/refs/tags/$Tag",
         "GitHub's successful DELETE endpoints return an empty body",
@@ -1371,9 +1400,31 @@ fn v4_release_pipeline_contract_source(
             );
         }
     }
+    let preflight_position = pipeline
+        .find("function Invoke-Preflight")
+        .ok_or("v4 release coordinator is missing Preflight")?;
+    let build_position = pipeline
+        .find("function Invoke-BuildCandidate")
+        .ok_or("v4 release coordinator is missing BuildCandidate")?;
+    let preflight_block = &pipeline[preflight_position..build_position];
+    if preflight_block.contains("--method")
+        || preflight_block.contains("DELETE")
+        || preflight_block.contains("Invoke-DraftSelfCleanup")
+    {
+        return Err("Preflight must be externally read-only and must not delete drafts".into());
+    }
+    let publish_position = pipeline
+        .find("function Invoke-PublishRelease")
+        .ok_or("v4 release coordinator is missing PublishRelease")?;
+    if pipeline[publish_position..]
+        .find("Remove-V4StaleMatchingDraft")
+        .is_none()
+    {
+        return Err("PublishRelease must own stale matching-draft cleanup".into());
+    }
     if pipeline.contains("repos/$repository/immutable-releases") {
         return Err(
-            "ValidateRepository must not call the administration-only immutable-releases endpoint"
+            "repository policy validation must not call the administration-only immutable-releases endpoint"
                 .into(),
         );
     }
@@ -1391,6 +1442,13 @@ fn v4_release_pipeline_contract_source(
         "Test-V4TransactionMarkerMatch",
         "Invoke-DraftSelfCleanup",
         "candidate-manifest.json",
+        "release-context.json",
+        "Write-V4ReleaseContext",
+        "Import-V4ReleaseContext",
+        "Get-SourceReleaseIdentity",
+        "Remove-V4StaleMatchingDraft",
+        "stale_matching_draft",
+        "V4 unpublished draft cleanup",
     ] {
         if !pipeline.contains(marker) {
             return Err(
@@ -1458,206 +1516,66 @@ fn v4_release_pipeline_contract_source(
     Ok(())
 }
 
-fn v4_draft_rehearsal_contract_source(
-    workflow: &str,
-    cleanup: &str,
-    external_state: &str,
-) -> Result<()> {
+fn v4_production_qualification_contract_source(workflow: &str, pipeline: &str) -> Result<()> {
     let workflow = workflow.replace("\r\n", "\n");
     for marker in [
-        "name: V4 Controlled Same-Repository Draft Rehearsal",
+        "name: V4 Production Pre-Publication Qualification",
         "workflow_dispatch:",
-        "group: v4-release-control-plane",
-        "contents: read",
-        "contents: write",
-        "id-token: write",
-        "attestations: write",
-        "draft-rehearsal-dispatch-boundary",
+        "qualification-dispatch-boundary",
         "github.event.repository.default_branch",
         "refs/heads/main",
         "runs-on: [self-hosted, windows, v4-release, single-tenant]",
         "environment: v4-production-release",
-        "ref: ${{ inputs.source_sha }}",
+        "ref: ${{ github.sha }}",
         "persist-credentials: false",
         "V4_UPDATER_PRIVATE_KEY_PATH",
         "verify_v4_release_runner.ps1",
+        "-State Preflight",
+        "-State BuildCandidate",
+        "release-context.json",
         "cleanup_v4_release_state.ps1",
-        "Create exact candidate draft in canonical repository",
-        "Re-download exact draft assets from canonical repository",
-        "Qualify exact re-downloaded candidate bytes",
-        "Record verified exact-byte attestations",
-        "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-        "--source-digest $env:GITHUB_SHA",
-        "-Mode Capture",
-        "-Mode Verify",
-        "cleanup_v4_draft_rehearsal.ps1",
-        "v4_draft_rehearsal_external_state.ps1",
         "if: always()",
     ] {
         if !workflow.contains(marker) {
             return Err(format!(
-                "controlled draft rehearsal workflow is missing its required marker: {marker}"
+                "production qualification workflow is missing its required marker: {marker}"
             )
             .into());
         }
     }
     if !workflow_declares_only_dispatch(&workflow) {
         return Err(
-            "controlled draft rehearsal must whitelist workflow_dispatch as its only trigger"
-                .into(),
+            "production qualification must whitelist workflow_dispatch as its only trigger".into(),
         );
     }
-
-    let workflow_states = [
-        "-State ValidateRequest",
-        "-State ValidateRepository",
-        "-State BuildCandidate",
-        "-State CreateDraft",
-        "-State DownloadDraft",
-        "-State QualifyDownloaded",
-        "-State RecordAttestations",
-    ];
-    let mut previous = 0;
-    for marker in workflow_states {
-        let position = workflow.find(marker).ok_or_else(|| {
-            format!("controlled draft rehearsal is missing state marker: {marker}")
-        })?;
-        if position < previous {
-            return Err("controlled draft rehearsal states are not ordered fail-closed".into());
-        }
-        previous = position;
+    let states = workflow_state_invocations(&workflow);
+    if states != ["Preflight", "BuildCandidate"] {
+        return Err(format!(
+            "production qualification must invoke exactly Preflight -> BuildCandidate, got {states:?}"
+        )
+        .into());
     }
-
+    validate_v4_release_state_invocations(&workflow, pipeline)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     for forbidden in [
-        "PublishDraft",
-        "PromoteMetadata",
-        "FinalVerify",
+        "-State PublishRelease",
+        "-State PromoteMetadata",
+        "-State FinalVerify",
+        "actions/attest@",
         "create-github-app-token",
         "metadata-app-token",
-        "softprops/action-gh-release",
+        "contents: write",
         "gh release",
-        "actions/create-github-app-token",
+        "softprops/action-gh-release",
         "updater_private_key_path:",
         "inputs.updater_private_key_path",
-        "make_latest = $true",
-        "V4_RELEASE_AUTHORITY_TOKEN",
-        "V4_RELEASE_AUTHORITY_REPOSITORY",
     ] {
         if workflow.contains(forbidden) {
             return Err(format!(
-                "controlled draft rehearsal contains a forbidden publication or trust-boundary marker: {forbidden}"
+                "production qualification contains a forbidden publication or legacy marker: {forbidden}"
             )
             .into());
         }
-    }
-    if workflow.matches("GH_TOKEN: ${{ github.token }}").count() < 1 {
-        return Err(
-            "controlled draft rehearsal must use the repository GITHUB_TOKEN for GitHub operations"
-                .into(),
-        );
-    }
-
-    let cleanup = cleanup.replace("\r\n", "\n");
-    for marker in [
-        "RUNNER_TEMP",
-        "GITHUB_WORKSPACE",
-        "StateRoot must be a child of RUNNER_TEMP",
-        "source_sha",
-        "draft",
-        "published_at",
-        "body",
-        "git/ref/tags",
-        "--method",
-        "DELETE",
-        "remainingRelease",
-        "remainingTag",
-        "draft-cleanup-authorized.json",
-        "release-state.json",
-        "releases/$releaseId",
-        "v4_release_draft_lookup.ps1",
-        "Select-V4ReleaseByTag",
-        "--paginate",
-        "--slurp",
-        "releases?per_page=100",
-        "draft release could not be removed by release id",
-        "refusing to delete a published release",
-        "mismatched source",
-    ] {
-        if !cleanup.contains(marker) {
-            return Err(format!(
-                "controlled draft rehearsal cleanup is missing its fail-closed marker: {marker}"
-            )
-            .into());
-        }
-    }
-    for forbidden in [
-        "PublishDraft",
-        "PromoteMetadata",
-        "FinalVerify",
-        "Sky-Auto-Player-Releases",
-        "V4_RELEASE_AUTHORITY_",
-    ] {
-        if cleanup.contains(forbidden) {
-            return Err(format!(
-                "controlled draft rehearsal cleanup contains a forbidden marker: {forbidden}"
-            )
-            .into());
-        }
-    }
-
-    let external_state = external_state.replace("\r\n", "\n");
-    for marker in [
-        "Capture",
-        "Verify",
-        "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json",
-        "raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json",
-        "releases/latest",
-        "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
-        "AllowAutoRedirect",
-        "Headers.Authorization",
-        "StatusCode",
-        "sha256",
-        "external-state-before.json",
-        "external-state-after.json",
-        "GITHUB_REPOSITORY",
-        "target_release_absent",
-        "target_tag_absent",
-        "v4_release_draft_lookup.ps1",
-        "Select-V4ReleaseByTag",
-        "--paginate",
-        "--slurp",
-        "releases?per_page=100",
-    ] {
-        if !external_state.contains(marker) {
-            return Err(format!(
-                "controlled draft rehearsal external-state check is missing its marker: {marker}"
-            )
-            .into());
-        }
-    }
-    for forbidden in [
-        "--method",
-        "POST",
-        "PATCH",
-        "PUT",
-        "DELETE",
-        "gh release",
-        "Sky-Auto-Player-Releases",
-        "V4_RELEASE_AUTHORITY_",
-    ] {
-        if external_state.contains(forbidden) {
-            return Err(format!(
-                "controlled draft rehearsal external-state check contains a mutation marker: {forbidden}"
-            )
-            .into());
-        }
-    }
-    if !external_state.contains("System.Net.Http.HttpMethod]::Get") {
-        return Err("raw metadata verification must use an explicit unauthenticated GET".into());
-    }
-    if external_state.contains("Headers.Authorization =") {
-        return Err("raw metadata verification must not assign an Authorization header".into());
     }
     Ok(())
 }
@@ -1667,13 +1585,9 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     let draft_workflow_path = root.join(".github/workflows/rehearse-v4.yml");
     let pipeline_path = root.join("scripts/v4_release_pipeline.ps1");
     let regression_path = root.join("scripts/test_v4_release_pipeline.ps1");
-    let draft_cleanup_path = root.join("scripts/cleanup_v4_draft_rehearsal.ps1");
-    let external_state_path = root.join("scripts/v4_draft_rehearsal_external_state.ps1");
     let pipeline = fs::read_to_string(&pipeline_path)?;
     let regression = fs::read_to_string(&regression_path)?;
     let draft_workflow = fs::read_to_string(&draft_workflow_path)?;
-    let draft_cleanup = fs::read_to_string(&draft_cleanup_path)?;
-    let external_state = fs::read_to_string(&external_state_path)?;
     v4_release_pipeline_contract_source(
         &fs::read_to_string(&workflow_path)?,
         &pipeline,
@@ -1682,9 +1596,9 @@ fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> {
         format!("v4 release pipeline contract: {error}").into()
     })?;
-    v4_draft_rehearsal_contract_source(&draft_workflow, &draft_cleanup, &external_state).map_err(
+    v4_production_qualification_contract_source(&draft_workflow, &pipeline).map_err(
         |error| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("controlled draft rehearsal contract: {error}").into()
+            format!("production qualification contract: {error}").into()
         },
     )?;
     for script_name in [
@@ -4797,7 +4711,7 @@ jobs:
 
         let missing = documentation.replace(
             "`.github/workflows/rehearse-v4.yml`",
-            "`draft-rehearsal-workflow-omitted.yml`",
+            "`qualification-workflow-omitted.yml`",
         );
         assert!(
             release_runner_documentation_contract_source(&missing).is_err(),
@@ -4815,27 +4729,24 @@ jobs:
     }
 
     #[test]
-    fn controlled_draft_rehearsal_contract_rejects_publication_and_weak_runner_regressions() {
+    fn production_qualification_contract_rejects_publication_and_weak_runner_regressions() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let workflow = fs::read_to_string(root.join(".github/workflows/rehearse-v4.yml"))
-            .expect("controlled draft rehearsal workflow fixture must exist");
-        let cleanup = fs::read_to_string(root.join("scripts/cleanup_v4_draft_rehearsal.ps1"))
-            .expect("controlled draft cleanup fixture must exist");
-        let external =
-            fs::read_to_string(root.join("scripts/v4_draft_rehearsal_external_state.ps1"))
-                .expect("external state fixture must exist");
+            .expect("production qualification workflow fixture must exist");
+        let pipeline = fs::read_to_string(root.join("scripts/v4_release_pipeline.ps1"))
+            .expect("release pipeline fixture must exist");
 
-        v4_draft_rehearsal_contract_source(&workflow, &cleanup, &external)
-            .expect("controlled draft rehearsal contract should pass its repository fixture");
+        v4_production_qualification_contract_source(&workflow, &pipeline)
+            .expect("production qualification contract should pass its repository fixture");
 
         let publication_regression = workflow.replace(
-            "-State RecordAttestations",
-            "-State RecordAttestations\n            -State PublishDraft",
+            "-State BuildCandidate",
+            "-State BuildCandidate\n            -State PublishRelease",
         );
         assert!(
-            v4_draft_rehearsal_contract_source(&publication_regression, &cleanup, &external)
+            v4_production_qualification_contract_source(&publication_regression, &pipeline)
                 .is_err(),
-            "draft rehearsal must reject a publication state"
+            "production qualification must reject a publication state"
         );
 
         let weak_runner = workflow.replace(
@@ -4844,7 +4755,7 @@ jobs:
         );
         let error =
             validate_release_runner_workflow(".github/workflows/rehearse-v4.yml", &weak_runner)
-                .expect_err("draft rehearsal must retain the exact signing runner labels");
+                .expect_err("production qualification must retain the exact signing runner labels");
         assert!(
             error
                 .to_string()
@@ -4853,181 +4764,50 @@ jobs:
     }
 
     #[test]
-    fn v4_release_pipeline_contract_requires_draft_download_and_publish_order() {
-        let workflow = r#"
-name: V4 Release Pipeline
-on:
-  workflow_dispatch:
-permissions:
-  contents: read
-concurrency:
-  group: v4-release-control-plane
-jobs:
-  release:
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    runs-on: [self-hosted, windows, v4-release, single-tenant]
-    ref: ${{ github.sha }}
-    Derive exact release identity from checked-out source
-    V4_RELEASE_SOURCE_SHA=$sourceSha
-    V4_RELEASE_VERSION=$version
-    V4_RELEASE_CHANNEL=$channel
-    V4_RELEASE_TAG=$tag
-    V4_RELEASE_NOTES_PATH=$notesPath
-    release-dispatch-boundary
-    github.event.repository.default_branch
-    refs/heads/main
-    environment: v4-production-release
-    steps:
-      - name: Preflight release request and repository readiness
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pwsh -File scripts/v4_release_pipeline.ps1 `
-            -State Preflight `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
-            -RunId $env:GITHUB_RUN_ID
-      - name: Build and qualify the single production candidate
-        run: |
-          pwsh -File scripts/v4_release_pipeline.ps1 `
-            -State BuildCandidate `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
-            -RunId $env:GITHUB_RUN_ID
-      - name: Mint release-metadata GitHub App token before publication
-        id: metadata-app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}
-          private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-      - name: Probe release-metadata App access before publication
-        env:
-          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
-        run: scripts/probe_v4_metadata_app_access.ps1
-      - name: Publish the qualified candidate immutably
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pwsh -File scripts/v4_release_pipeline.ps1 `
-            -State PublishRelease `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH `
-            -RunId $env:GITHUB_RUN_ID
-      - name: Promote release metadata only after immutable publication
-        env:
-          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}
-        run: |
-          pwsh -File scripts/v4_release_pipeline.ps1 `
-            -State PromoteMetadata `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
-      - name: Re-fetch and verify final public release and metadata
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pwsh -File scripts/v4_release_pipeline.ps1 `
-            -State FinalVerify `
-            -Version $env:V4_RELEASE_VERSION `
-            -Channel $env:V4_RELEASE_CHANNEL `
-            -Tag $env:V4_RELEASE_TAG `
-            -SourceSha $env:V4_RELEASE_SOURCE_SHA `
-            -WorkflowSha $env:V4_RELEASE_WORKFLOW_SHA `
-            -StateRoot $env:V4_RELEASE_STATE_ROOT `
-            -ReleaseNotesPath $env:V4_RELEASE_NOTES_PATH
-    Verify isolated production runner boundary
-    verify_v4_release_runner.ps1
-    cleanup_v4_release_state.ps1
-    V4_UPDATER_PRIVATE_KEY_PATH
-    -UpdaterPrivateKeyPath $env:V4_UPDATER_PRIVATE_KEY_PATH
-    persist-credentials: false
-    GH_TOKEN: ${{ github.token }}
-    actions/attest@v4
-    actions/upload-artifact@v7
-    --source-digest $env:GITHUB_SHA
-    GH_TOKEN: ${{ github.token }}
-"#;
-        let pipeline = r#"
-Preflight BuildCandidate PublishRelease PromoteMetadata FinalVerify canonical repository main is not initialized refs/heads/main release-metadata branch is not initialized Assert-MetadataBranchReadiness metadataBootstrapContract release-metadata readiness upload_url immutable-releases Assert-ImmutableRelease scripts/ci_tauri_update_e2e.ps1 CandidateInstallerPath CandidateSignaturePath CandidatePublicKeyPath export-public-key Start-MpScan scan_performed selftest-update-active-playback scan_v4_defender_exact.ps1 v4_updater_credential_broker.ps1 v4_release_draft_lookup.ps1 Select-V4ReleaseByTag --paginate --slurp releases?per_page=100 existing draft source does not match the requested source draft release could not be removed by release id Get-V4ReleaseMakeLatestValue Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseDraftMakeLatestValue make_latest = Get-V4ReleaseMakeLatestValue $Channel draft false; stable publish true; beta publish false target_commitish = $SourceSha.ToLowerInvariant() branch = "release-metadata" validate-monotonic Write-RepositoryContentFile Invoke-PrePublicationMetadataQualification New-ExpectedV4Metadata Assert-ExactFileBytes Assert-ExactPublishedPublicAssetRecords Assert-RawMetadataConverges Assert-RawMetadataRetryConfiguration RawMetadataRetryBudgetSeconds raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json AllowAutoRedirect Headers.Authorization ReadAsByteArrayAsync GITHUB_REPOSITORY Invoke-GitHubApi v4_release_asset_upload.ps1 Format-V4TransactionMarker Get-V4TransactionMarker Test-V4TransactionMarkerMatch Invoke-DraftSelfCleanup candidate-manifest.json v4_release_latest_policy.ps1 Get-RemoteLatestRelease Assert-V4GitHubLatestPolicy
-function Invoke-BuildCandidate {
-  & pwsh -File orchestrate_v4_production_release.ps1
-}
-function Invoke-CreateDraft { draft = $true; refs/heads/main; repository already contains published release/tag; unpublished draft reuse; published tags are immutable; git/refs/tags/$Tag; Get-V4ReleaseDraftMakeLatestValue; make_latest = Get-V4ReleaseDraftMakeLatestValue; draft payload make_latest false; GitHub's successful DELETE endpoints return an empty body }
-function Invoke-DownloadDraft { downloaded; Get-FileHash; unsigned-zero-budget }
-function Invoke-QualifyDownloaded { verify-signature; verify-tauri-bundle; current-user; active-playback-install-rejected; previous-v4-to-exact-downloaded-candidate-update; cargo xtask builtin-catalog verify-installed; SKY_BUILTIN_CATALOG_FRESH_SELFTEST; installed-built-in-catalog-exact-manifest-file-set-sha-parseability; manifest_validated; file_set_exact; sha256_verified; songs_parseable; fresh-appdata-built-in-user-composition; freshUserSongs = @(; Get-ChildItem -LiteralPath $freshSongsRoot -File -Recurse -ErrorAction SilentlyContinue; previousAppDataRoot; previousFreshSelfTest; if ($null -eq $previousAppDataRoot); Remove-Item Env:SKY_APP_DATA_ROOT; if ($null -eq $previousFreshSelfTest); Remove-Item Env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST; selftest-update-active-playback; v4_release_latest_policy.ps1; promote_v4_metadata.ps1; release-metadata; published_at; Start-MpScan; scan_performed }
-function Invoke-RecordAttestations { GH_TOKEN }
-function Invoke-PublishRelease {
-  make_latest = Get-V4ReleaseDraftMakeLatestValue
-  make_latest = (Get-V4ReleaseMakeLatestValue $Channel)
-  Assert-ImmutableRelease $published
-}
-function Invoke-PublishDraft { draft = $false; Get-V4ReleaseMakeLatestValue; make_latest = Get-V4ReleaseMakeLatestValue $Channel; draft false; stable publish true; beta publish false; Assert-ImmutableRelease $published; repository release is not marked immutable }
-function Invoke-PromoteMetadata { metadata promotion is forbidden before immutable publication; branch = "release-metadata"; GITHUB_REPOSITORY; Invoke-GitHubApi }
-function Invoke-FinalVerify { FinalVerify }
-"#;
-        let regression = r#"
-function Test-StrictModeEmptyFreshUserSongs { Set-StrictMode -Version Latest; freshUserSongs = @(); $freshUserSongs.Count -ne 0 }
-function Test-DraftLookupFallback { by-tag-404; paginated releases collection; duplicate releases use the requested tag }
-class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$UploadedThroughReleaseUrl = $false; [bool]$ExactDownloadedBytes = $false; [bool]$immutable = $false; candidate rebuilt; promotion before immutable publication; BuildCount -ne 1; UploadedThroughReleaseUrl; ExactDownloadedBytes; immutable }
-"#;
-        let pipeline_contract = v4_release_pipeline_contract_source(workflow, pipeline, regression);
-        assert!(pipeline_contract.is_ok(), "{pipeline_contract:?}");
+    fn v4_release_pipeline_contract_requires_single_path_order() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let workflow = fs::read_to_string(root.join(".github/workflows/release-v4.yml"))
+            .expect("production release workflow fixture must exist");
+        let pipeline = fs::read_to_string(root.join("scripts/v4_release_pipeline.ps1"))
+            .expect("release pipeline fixture must exist");
+        let regression = fs::read_to_string(root.join("scripts/test_v4_release_pipeline.ps1"))
+            .expect("release pipeline regression fixture must exist");
+
+        v4_release_pipeline_contract_source(&workflow, &pipeline, &regression)
+            .expect("release pipeline contract should pass its repository fixture");
 
         let reordered = workflow.replacen("-State Preflight `", "-State BuildCandidate `", 1);
-        assert!(v4_release_pipeline_contract_source(&reordered, pipeline, regression).is_err());
+        assert!(v4_release_pipeline_contract_source(&reordered, &pipeline, &regression).is_err());
+
         let duplicated_build = pipeline.replace(
             "function Invoke-PublishRelease",
             "orchestrate_v4_production_release.ps1\nfunction Invoke-PublishRelease",
         );
         assert!(
-            v4_release_pipeline_contract_source(workflow, &duplicated_build, regression).is_err()
+            v4_release_pipeline_contract_source(&workflow, &duplicated_build, &regression).is_err()
         );
+
         let missing_builtin_qualification =
-            pipeline.replace("cargo xtask builtin-catalog verify-installed; ", "");
+            pipeline.replace("cargo xtask builtin-catalog verify-installed", "");
         assert!(
             v4_release_pipeline_contract_source(
-                workflow,
+                &workflow,
                 &missing_builtin_qualification,
-                regression
+                &regression,
             )
             .is_err(),
             "production qualification must retain installed built-in catalog verification"
         );
+
         let missing_empty_directory_regression = regression.replace(
             "Test-StrictModeEmptyFreshUserSongs",
             "Test-MissingRegression",
         );
         assert!(
             v4_release_pipeline_contract_source(
-                workflow,
-                pipeline,
-                &missing_empty_directory_regression
+                &workflow,
+                &pipeline,
+                &missing_empty_directory_regression,
             )
             .is_err(),
             "production qualification must retain the executable StrictMode empty-directory regression"
@@ -5116,7 +4896,9 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source = fs::read_to_string(root.join(".github/workflows/release-v4.yml"))
             .expect("production release workflow fixture must exist");
-        validate_v4_release_state_invocations(&source)
+        let pipeline = fs::read_to_string(root.join("scripts/v4_release_pipeline.ps1"))
+            .expect("release pipeline fixture must exist");
+        validate_v4_release_state_invocations(&source, &pipeline)
             .expect("production release workflow must satisfy every state CLI requirement");
 
         let remove_from_step = |source: &str, step_name: &str, argument: &str| {
@@ -5141,7 +4923,7 @@ class MockReleaseApi { [int]$BuildCount = 0; [string]$UploadUrl = ''; [bool]$Upl
         for &(step_name, required_arguments) in V4_RELEASE_STATE_INVOCATION_REQUIREMENTS {
             for &required_argument in required_arguments {
                 let missing = remove_from_step(&source, step_name, required_argument);
-                let error = validate_v4_release_state_invocations(&missing)
+                let error = validate_v4_release_state_invocations(&missing, &pipeline)
                     .expect_err("missing state CLI arguments must fail the static contract");
                 assert!(
                     error.contains(required_argument),

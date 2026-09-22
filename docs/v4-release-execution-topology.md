@@ -147,14 +147,14 @@ The labels `self-hosted, windows, v4-release, single-tenant` identify the produc
 runner boundary. The exact approved workflow/job allowlist is:
 
 - `.github/workflows/release-v4.yml` — job `release`, the official immutable publication path.
-- `.github/workflows/rehearse-v4.yml` — job `draft-rehearsal`, controlled draft rehearsal only.
+- `.github/workflows/rehearse-v4.yml` — job `qualification`, production pre-publication qualification only.
 
 Both workflows are `workflow_dispatch` only, require the canonical repository's
 `refs/heads/main` dispatch context, and are protected by the `v4-production-release` environment.
-The draft rehearsal may create and delete only its own matching unpublished draft/tag, may create
-and verify OIDC attestations for the exact downloaded candidate, and must never publish a release
-or promote `release-metadata`. It uses the same exact runner labels and source-bound checkout as
-the official path; it is not an official publication or metadata-promotion path.
+The qualification workflow runs the same production `Preflight` and `BuildCandidate` states on the
+dedicated runner and stops before any GitHub Release, tag, metadata, or attestation mutation. It
+uses the same exact runner labels and source-bound checkout as the official path; it is the
+pre-publication production qualification path, not a second release state machine.
 Pull-request, fork, push, and general CI workflows must remain on ordinary hosted or non-release
 runners.
 
@@ -328,10 +328,15 @@ requires the checked-out commit and workflow SHA to equal the exact source SHA,
 then executes these fail-closed states:
 
 ```text
-ValidateRequest -> ValidateAuthority -> BuildCandidate -> CreateDraft
-  -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
-  -> PublishDraft -> PromoteMetadata -> FinalVerify
+Preflight -> BuildCandidate -> PublishRelease -> PromoteMetadata -> FinalVerify
 ```
+
+`Preflight` derives the package version, channel, tag, release notes, checked-out source SHA,
+workflow provenance SHA, and run identity once into the bounded `release-context.json` state
+artifact. Every downstream state loads and validates that context; YAML does not restate release
+identity arguments. `Preflight` observes collisions and classifies a matching stale draft but is
+externally read-only. `PublishRelease` owns stale-draft cleanup immediately before creating the
+new draft and retains the strict transaction-marker checks.
 
 Only `BuildCandidate` calls
 `scripts/orchestrate_v4_production_release.ps1`, exactly once. `BuildCandidate`
@@ -341,62 +346,36 @@ into process-scoped `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, passing no plaintext p
 CLI arguments, and automatically deletes the session credential in its `finally` block.
 The candidate manifest is the only asset upload authority. It contains a complete
 `qualification_assets` set and an explicit `public_assets` projection. The latter is fail-closed
-to exactly the normalized installer and updater signature names; `CreateDraft` uploads only this
-two-record projection. The following states download the public draft assets again and compare
+to exactly the normalized installer and updater signature names; `PublishRelease` uploads only
+this two-record projection. The candidate is qualified before publication with
 names, sizes, and SHA-256 digests before running
 the Authenticode `unsigned-zero-budget`, Tauri updater signature, SPDX SBOM,
 exact-bundle, current-user install/launch/uninstall, GUI/input-safety, and
 active-playback rejection checks. The packaged official Tauri updater fixture
-runs at this post-download boundary: a throwaway previous-v4 bridge consumes
-the exact downloaded installer and `.sig`, while the production candidate is
-never rebuilt. Qualification JSON, Authenticode evidence, artifact summaries, and the SBOM are
-copied into the isolated release state root after `BuildCandidate`, checked against their frozen
-manifest hashes, and retained through bounded GitHub Actions artifacts/attestations. They are not
-uploaded to the GitHub Release. The packaged candidate also proves that update admission is
-rejected while playback is active.
+runs in the same candidate qualification path: a throwaway previous-v4 bridge consumes the exact
+candidate installer and `.sig`, while the production candidate is never rebuilt. Qualification
+JSON, Authenticode evidence, artifact summaries, and the SBOM are copied into the isolated release
+state root after `BuildCandidate`, checked against their frozen manifest hashes, and retained
+through bounded workflow artifacts. They are not uploaded to the GitHub Release. The packaged
+candidate also proves that update admission is rejected while playback is active.
 
-The controlled same-repository draft rehearsal may exercise the GitHub draft
-boundary without publishing it. The manual workflow
+The production pre-publication qualification workflow
 `.github/workflows/rehearse-v4.yml` uses the same exact source binding, protected
 environment, dedicated runner, and concurrency group as the official release workflow.
-It executes `ValidateRequest -> ValidateRepository -> BuildCandidate -> CreateDraft
--> DownloadDraft -> QualifyDownloaded -> RecordAttestations`, then deletes only the
-matching unpublished draft/tag. Its OIDC and SPDX attestations are verified against the
-exact downloaded bytes before `RecordAttestations`; `PublishDraft`, metadata promotion,
-and final public-release verification are intentionally unreachable in this workflow.
-The rehearsal snapshots and compares the current GitHub Latest identity plus both public
-`release-metadata` channel endpoints before and after cleanup. It does not publish or promote
-anything, so it remains valid both before and after the one-time `v4.0.1` Latest operation.
+It executes only `Preflight -> BuildCandidate` and then stops. It cannot create, edit, or delete a
+GitHub Release or tag, mutate `release-metadata`, mint the metadata App token, publish, promote, or
+run final verification. There is no alternate rehearsal state machine and no second builder.
 
-The exact production qualification topology remains a local, bounded harness rather than a
-second permanent workflow:
-
-```powershell
-pwsh scripts/test_v4_production_topology_rehearsal.ps1 -CandidateStateRoot $candidateStateRoot -StateRoot (Join-Path $env:RUNNER_TEMP "sky-v4-production-topology-rehearsal") -Version $version -Channel $channel -Tag "v$version" -SourceSha $sourceSha -WorkflowSha $sourceSha
-```
-
-The rehearsal stages the already-qualified candidate bytes under the same
-`downloaded` state layout and invokes
-`v4_release_pipeline.ps1 -State QualifyDownloaded` with the production
-identity parameters. Its throwaway updater bridge builds into a separate
-`FixtureTargetDir\dist\bundle\nsis`; it never searches for a downloaded
-candidate inside that build output.
-
-The same post-download qualification invokes a bounded Windows Defender
+The candidate qualification invokes a bounded Windows Defender
 custom scan against the exact downloaded installer and records the artifact
 name, size, SHA-256, scan result, and Defender status. This is a mandatory
 production gate: missing Defender cmdlets, disabled protection, scan failure,
 or a detection fails closed; no `unavailable` result is promotable.
 
-Attestation happens on those downloaded bytes with GitHub OIDC and is verified
-against the source repository, this workflow, the exact workflow SHA, and the
-candidate subjects. Publication changes only the draft flag. Metadata promotion
-is unreachable until publication returns a non-draft release, and final
-verification re-fetches both public assets and the selected stable/beta
-metadata path. An unpublished draft that fails qualification may be deleted
-and recreated with the same version after the candidate is fixed. Published
-assets, release tags, and metadata remain immutable; fixes then require a new
-SemVer/RC.
+Publication changes only the draft flag after the candidate has passed all pre-publication gates.
+Metadata promotion is unreachable until publication returns a non-draft release, and final
+verification re-fetches both public assets and the selected stable/beta metadata path. Published
+assets, release tags, and metadata remain immutable; fixes then require a new SemVer/RC.
 
 `FinalVerify` compares the complete published asset-name set, not just required members. It fails
 for a missing installer or signature, any third asset, an alias/non-canonical name, or a size and
@@ -405,7 +384,7 @@ and attestation surfaces; it is not a second public release download surface.
 
 The production preflight validates the canonical `pumni/Sky-Auto-Player` repository,
 the requested `main` source, immutable-release policy, and readiness of the
-`release-metadata` branch before `CreateDraft`. Bootstrap is a separately reviewed
+`release-metadata` branch before `PublishRelease`. Bootstrap is a separately reviewed
 owner/maintainer operation and never creates fabricated channel files. The production
 workflow uses the same-repository `GITHUB_TOKEN` with job-scoped write permissions;
 there is no cross-repository release token. Metadata promotion is a post-publication

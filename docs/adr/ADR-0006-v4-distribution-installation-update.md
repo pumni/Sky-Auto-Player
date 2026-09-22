@@ -221,24 +221,18 @@ The production implementation is the dedicated manual workflow
 single-tenant Windows release runner. Its explicit states are:
 
 ```text
-ValidateRequest -> ValidateAuthority -> BuildCandidate -> CreateDraft
-  -> DownloadDraft -> QualifyDownloaded -> RecordAttestations
-  -> PublishDraft -> PromoteMetadata -> FinalVerify
+Preflight -> BuildCandidate -> PublishRelease -> PromoteMetadata -> FinalVerify
 ```
 
-`BuildCandidate` is the only state allowed to invoke the production
-orchestrator, and it invokes it exactly once. The authority preflight requires
-an existing `main` branch; first-history/bootstrap work is a separate reviewed
-operation and is never created by a release transaction. The workflow uses a
-bounded `V4_RELEASE_AUTHORITY_TOKEN` only for the dedicated authority API.
-Source-repository `GITHUB_TOKEN`/OIDC permissions are reserved for source-bound
-attestations. A failed or reused authority tag, a draft-asset byte mismatch, a
-post-draft qualification failure, or an unavailable publication/metadata
-precondition stops the transaction; the existing tag and candidate assets are
-never moved or replaced.
+`Preflight` derives one immutable `release-context.json` from the checked-out source and is
+externally read-only. It classifies, but does not delete, matching stale drafts. `BuildCandidate`
+is the only state allowed to invoke the production orchestrator, and it invokes it exactly once.
+`PublishRelease` owns stale-draft cleanup, creates the draft, verifies exact assets, and performs
+the irreversible publication transition. A failed or conflicting tag, draft-asset byte mismatch,
+post-build qualification failure, or unavailable publication/metadata precondition stops the
+transaction; published tags and candidate assets are never moved or replaced.
 
-Draft assets are posted only to the release-specific GitHub `upload_url`, and
-the authority preflight requires repository immutable releases to be enabled.
+Draft assets are posted only to the release-specific GitHub `upload_url`.
 Publication must return `immutable=true`; final verification checks the same
 property before metadata promotion. The post-draft Windows matrix consumes
 the downloaded installer and signature directly, including the packaged

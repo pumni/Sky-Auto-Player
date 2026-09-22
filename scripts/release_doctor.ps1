@@ -512,7 +512,7 @@ POST-PUBLICATION RECOVERY CONTRACT:
 
     if ($localAttested -and $localQualified) {
         $classification = $null
-        $assessment = "Draft release exists on GitHub and candidate bytes are qualified and attested. Ready for PublishDraft."
+        $assessment = "Draft release exists on GitHub and candidate bytes are qualified. Ready for PublishRelease."
         $recoveryGuidance = "Proceed with immutable publication."
     } else {
         $classification = "RECOVERABLE_PRE_PUBLICATION_FAILURE"
@@ -531,7 +531,7 @@ POST-PUBLICATION RECOVERY CONTRACT:
     if ($localReady) {
         $classification = $null
         $assessment = "Candidate build is ready locally; draft release has not yet been created on GitHub."
-        $recoveryGuidance = "Ready for CreateDraft."
+        $recoveryGuidance = "Ready for PublishRelease."
     } else {
         $classification = "NOT_READY"
         $assessment = "Release request has not yet reached candidate build stage."

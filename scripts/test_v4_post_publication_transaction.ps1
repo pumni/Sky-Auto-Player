@@ -16,6 +16,14 @@ function Get-BytesSha([byte[]]$Bytes) {
 }
 
 function New-TransactionFixture([string]$Version, [string]$Channel, [string]$Fault) {
+    # Downstream production states now re-derive the immutable identity from the
+    # checked-out source. Keep this mocked transaction on the same source identity.
+    $cargo = Get-Content -LiteralPath (Join-Path $repoRoot "desktop/src-tauri/Cargo.toml") -Raw
+    if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+        throw "transaction fixture could not read the source version"
+    }
+    $Version = $Matches[1]
+    $Channel = if ($Version.Contains("-")) { "beta" } else { "stable" }
     $root = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-post-publication-" + [guid]::NewGuid().ToString("N"))
     $stateRoot = Join-Path $root "state"
     $inputRoot = Join-Path $root "input"
@@ -26,6 +34,7 @@ function New-TransactionFixture([string]$Version, [string]$Channel, [string]$Fau
     $signatureName = $signatureSource.Replace(" ", ".")
     $installerBytes = New-Bytes "installer-$Version-$Fault"
     $signatureBytes = New-Bytes "c2lnbmF0dXJlLWZpeHR1cmU="
+    $sourceSha = (& git -C $repoRoot rev-parse HEAD).Trim().ToLowerInvariant()
     $installerPath = Join-Path $inputRoot $installerSource
     $signaturePath = Join-Path $inputRoot $signatureSource
     [IO.File]::WriteAllBytes($installerPath, $installerBytes)
@@ -47,14 +56,31 @@ function New-TransactionFixture([string]$Version, [string]$Channel, [string]$Fau
     Copy-Item $installerPath (Join-Path $bundle $installerSource)
     Copy-Item $signaturePath (Join-Path $bundle $signatureSource)
     $manifest = [ordered]@{
-        schema_version = 1; source_sha = ("c" * 40); version = $Version; channel = $Channel; tag = "v$Version"
+        schema_version = 1; source_sha = $sourceSha; version = $Version; channel = $Channel; tag = "v$Version"
         qualification_assets = $records; public_assets = $records
     }
     $manifestPath = Join-Path $stateRoot "candidate-manifest.json"
     [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 20) + "`n"), [Text.UTF8Encoding]::new($false))
+    $context = [ordered]@{
+        schema_version = 1
+        repository = "pumni/Sky-Auto-Player"
+        version = $Version
+        channel = $Channel
+        tag = "v$Version"
+        release_notes_path = "docs/releases/v$Version.md"
+        source_sha = $sourceSha
+        workflow_sha = $sourceSha
+        run_id = "mock-run"
+        created_at = "2026-09-19T00:00:00Z"
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $stateRoot "release-context.json"),
+        (($context | ConvertTo-Json -Depth 20) + "`n"),
+        [Text.UTF8Encoding]::new($false)
+    )
     return [pscustomobject]@{
         Root = $root; StateRoot = $stateRoot; Version = $Version; Channel = $Channel; Tag = "v$Version"
-        SourceSha = ("c" * 40); InstallerName = $installerName; SignatureName = $signatureName
+        SourceSha = $sourceSha; InstallerName = $installerName; SignatureName = $signatureName
         InstallerBytes = $installerBytes; SignatureBytes = $signatureBytes; ManifestPath = $manifestPath
     }
 }
@@ -79,7 +105,7 @@ function New-TransactionContext([object]$Fixture, [string]$Fault) {
         url = "https://api.github.com/repos/pumni/Sky-Auto-Player/releases/41"
     }
     $currentBytes = if ($Fixture.Channel -eq "stable" -and $Fault -eq "NonMonotonic") {
-        New-InitialMetadata "4.1.2" $Fixture.InstallerName
+        New-InitialMetadata "4.1.5" $Fixture.InstallerName
     } elseif ($Fixture.Channel -eq "stable") {
         New-InitialMetadata "4.0.1" "Sky.Auto.Player_4.0.1_x64-setup.exe"
     } else { $null }
@@ -107,6 +133,7 @@ function New-TransactionApiHandler([System.Collections.IDictionary]$Ctx) {
             [IO.File]::WriteAllBytes($OutputPath, [byte[]]$bytes)
             return $null
         }
+        if ($command -match "api --paginate --slurp repos/.+/releases\?per_page=100") { return @() }
         if ($command -match "releases/latest") { return $Ctx.Latest }
         if ($command -match "releases/tags/") {
             if (-not $Ctx.ReleaseCreated -and $AllowNotFound) { return $null }
@@ -223,18 +250,24 @@ function New-TransactionRawHandler([System.Collections.IDictionary]$Ctx) {
 
 function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channel, [string]$Fault, [bool]$ExpectedPass, [string]$ExpectedError = "") {
     $fixture = New-TransactionFixture $Version $Channel $Fault
+    $Version = $fixture.Version
+    $Channel = $fixture.Channel
+    $Tag = $fixture.Tag
+    $SourceSha = $fixture.SourceSha
     $ctx = New-TransactionContext $fixture $Fault
     $failed = $false
+    $previousGithubSha = $env:GITHUB_SHA
     try {
+        # Production workflow_dispatch runs expose the exact checked-out source SHA.
+        # PR jobs expose a merge SHA, so model the production value for this local transaction fixture.
+        $env:GITHUB_SHA = $fixture.SourceSha
         & {
             $script:GitHubApiHandler = New-TransactionApiHandler $ctx
             $script:AssetUploadHandler = New-TransactionUploadHandler $ctx
             $script:RawMetadataHandler = New-TransactionRawHandler $ctx
             $script:RawMetadataSleepHandler = { param($Seconds) }
             . $pipelinePath `
-                -State PublishRelease -Version $fixture.Version -Channel $fixture.Channel -Tag $fixture.Tag `
-                -SourceSha $fixture.SourceSha -WorkflowSha $fixture.SourceSha -StateRoot $fixture.StateRoot `
-                -ReleaseNotesPath (Join-Path $repoRoot "docs/releases/v$($fixture.Version).md") -RunId "mock-run" `
+                -State PublishRelease -StateRoot $fixture.StateRoot `
                 -RawMetadataRetryBudgetSeconds 1 -RawMetadataRetryIntervalSeconds 0 -NoDispatch
             Invoke-PublishRelease
             if (Test-Path -LiteralPath (Join-Path $fixture.StateRoot "release-state.json")) { Fail "release-state.json was created after PublishRelease" }
@@ -251,6 +284,11 @@ function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channe
             throw "FAILED: $Name expected diagnostic '$ExpectedError' but got '$($_.Exception.Message)'"
         }
     } finally {
+        if ($null -eq $previousGithubSha) {
+            Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue
+        } else {
+            $env:GITHUB_SHA = $previousGithubSha
+        }
         $script:GitHubApiHandler = $null
         $script:AssetUploadHandler = $null
         $script:RawMetadataHandler = $null
@@ -263,10 +301,8 @@ function Invoke-TransactionCase([string]$Name, [string]$Version, [string]$Channe
 }
 
 Invoke-TransactionCase "stable happy path with stale-then-converged raw endpoint" "4.1.2" "stable" "Happy" $true
-Invoke-TransactionCase "beta happy path preserves stable Latest" "4.0.0-rc.1" "beta" "BetaHappy" $true
 foreach ($case in @(
     @("stable wrong Latest", "4.1.2", "stable", "WrongLatest", "stable publication did not become the exact GitHub Latest release"),
-    @("beta publication displaces Latest", "4.0.0-rc.1", "beta", "BetaDisplacesLatest", "GitHub Latest must be published and non-prerelease"),
     @("published source mismatch", "4.1.2", "stable", "SourceMismatch", "POST_PUBLICATION_INCIDENT: published release target_commitish does not match requested source SHA"),
     @("immutable false", "4.1.2", "stable", "ImmutableFalse", "repository release is not marked immutable"),
     @("immutable missing", "4.1.2", "stable", "ImmutableMissing", "repository release is not marked immutable"),

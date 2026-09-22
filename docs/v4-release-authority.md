@@ -107,26 +107,23 @@ protected `v4-production-release` environment on the dedicated signing runner, a
 canonical repository token for same-repository release operations. Its transaction is:
 
 ```text
-Preflight -> BuildCandidate -> Attest -> PublishRelease
-  -> Snapshot GitHub Latest -> Verify GitHub Latest policy
-  -> PromoteMetadata -> FinalVerify
+Preflight -> BuildCandidate -> PublishRelease -> PromoteMetadata -> FinalVerify
 ```
 
 The ordering is security-critical:
 
-1. **Preflight**: Validates the canonical repository, `main` source ref, and `release-metadata` branch
-   readiness before any build or publication attempt. Enforces collision checks: if a published
-   release or tag already exists, preflight fails closed. If a stale unpublished draft release exists
-   with a matching transaction marker (`<!-- v4-release-tx: {...} -->`), preflight cleans it up.
-   Pre-publication GitHub Latest baseline identity is captured.
+1. **Preflight**: Derives the release identity once from the checked-out source into the bounded
+   `release-context.json` state artifact, then validates the canonical repository, `main` source ref,
+   and `release-metadata` branch readiness. It is externally read-only: collision state and any
+   matching stale draft are observed and classified, but not mutated.
 2. **BuildCandidate**: Builds the exact source SHA once and completes full qualification against the
    local candidate bundle (unsigned-zero-budget Authenticode, Tauri updater signature verification,
    SPDX SBOM, exact bundle verification, previous-v4 E2E fixture, Defender exact scan, catalog
    verification, and active-playback update rejection). Freezes `candidate-manifest.json` with SHA-256
    digests and file sizes.
-3. **Attest**: Records GitHub Actions OIDC attestations bound to the exact candidate binary, signature,
-   and SBOM, and verifies attestation claims against the repository and signer workflow.
-4. **PublishRelease**: Executes a single cohesive publication transaction boundary:
+3. **PublishRelease**: Executes a single cohesive publication transaction boundary:
+   - Reconciles and deletes only a matching unpublished stale draft immediately before creating the
+     new draft; mismatched or published releases fail closed.
    - Creates a draft in the official repository (`name = $Tag`, `draft = true`, `make_latest = "false"`)
      embedding a hidden machine-readable transaction marker (`<!-- v4-release-tx: {...} -->`).
    - If draft POST times out, reconciles via tag lookup and transaction marker match.
@@ -137,12 +134,9 @@ The ordering is security-critical:
    - Reconciles publication status strictly via exact `release_id` GET.
    - Fail-closed draft self-cleanup: on any failure prior to the irreversible publication PATCH,
      the transaction immediately deletes the remote draft release.
-5. **Snapshot GitHub Latest & Verify GitHub Latest policy**: Verifies channel policy before minting the
-   metadata App token; stable must be the exact new release and beta must leave the captured stable
-   Latest unchanged.
-6. **PromoteMetadata**: Mints scoped App token, generates, validates, and promotes only the selected
+4. **PromoteMetadata**: Mints scoped App token, generates, validates, and promotes only the selected
    stable/beta metadata file after the guard.
-7. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
+5. **FinalVerify**: Re-fetches the public release and verifies the exact unauthenticated
    `raw.githubusercontent.com` endpoint used by the client.
 
 Published release assets and tags are never repaired in place. A failed unpublished draft is
