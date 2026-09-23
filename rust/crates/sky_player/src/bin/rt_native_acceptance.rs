@@ -700,11 +700,11 @@ fn run_windows(args: RunArgs) -> i32 {
     } else if args.scenario == Scenario::TargetHwndChange {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
     } else if args.scenario == Scenario::SupervisorLeaseExpiry {
-        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before supervisor-progress proof", json!({})); }
-        // Seed one completed supervisor iteration, then stop publishing actual
-        // monitor progress. Keep an unrelated legacy-helper liveness probe
-        // running so its activity cannot be mistaken for lease authority.
-        session.publish_supervisor_progress().expect("seed supervisor monitor progress");
+        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before supervisor-lease proof", json!({})); }
+        // This native case isolates the session lease/watchdog. It seeds a
+        // session-level progress point directly; the desktop monitor runtime
+        // is exercised by the tauri-test regression instead.
+        session.publish_supervisor_progress().expect("seed session supervisor progress");
         independent_helper_probe = match release_gap_stress::IndependentHelperLivenessProbe::start() {
             Ok(probe) => Some(probe),
             Err(error) => {
@@ -760,6 +760,9 @@ fn run_windows(args: RunArgs) -> i32 {
     };
     let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, expected_down.len() + expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
+        if args.scenario == Scenario::SupervisorLeaseExpiry {
+            object.insert("supervisor_progress".to_string(), json!({"source":"direct_native_session_seed","desktop_monitor_exercised":false}));
+        }
         object.insert(
             "focus_probe_event_count".to_string(),
             json!(probe_events.len()),
@@ -822,9 +825,9 @@ fn run_windows(args: RunArgs) -> i32 {
             || sink_events.len() != MAX_KEYS
             || independent_helper_liveness_ticks == 0
         {
-            return write_report(&args, Verdict::Fail, "supervisor lease expiry did not fail closed after monitor progress stopped while the independent helper remained alive", details);
+            return write_report(&args, Verdict::Fail, "session supervisor lease did not fail closed after session progress stopped while the unrelated helper remained alive", details);
         }
-        return write_report(&args, Verdict::Pass, "watchdog expired after monitor progress stopped while the independent helper remained alive", details);
+        return write_report(&args, Verdict::Pass, "session watchdog expired after session progress stopped while the unrelated helper remained alive", details);
     }
     if args.scenario == Scenario::RapidRetrigger { let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let expected = [("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
     if args.scenario == Scenario::MixedUpDown { let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0]; let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", second)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }

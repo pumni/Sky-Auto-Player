@@ -188,7 +188,7 @@ pub(super) fn start_heartbeat(session: Arc<NativeDispatchSession>) -> Result<(),
         .spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(60);
             while !heartbeat_session.snapshot().is_finished && Instant::now() < deadline {
-                let _ = heartbeat_session.heartbeat();
+                let _ = heartbeat_session.publish_supervisor_progress();
                 std::thread::sleep(Duration::from_millis(250));
             }
         });

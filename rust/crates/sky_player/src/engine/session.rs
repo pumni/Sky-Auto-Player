@@ -704,10 +704,6 @@ impl NativeDispatchSession {
         Ok(())
     }
 
-    pub fn heartbeat(&self) -> Result<(), String> {
-        self.publish_supervisor_progress()
-    }
-
     pub fn set_live_diagnostics_enabled(&self, enabled: bool) {
         let metrics = &self.shared.publication.metrics;
         if enabled {
