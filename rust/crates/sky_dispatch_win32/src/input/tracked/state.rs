@@ -15,6 +15,7 @@ impl fmt::Debug for TrackedKeyState {
             .field("active_mask", &self.active_mask)
             .field("possibly_active_mask", &self.possibly_active_mask)
             .field("failed_release_mask", &self.failed_release_mask)
+            .field("in_flight_mask", &self.in_flight_mask)
             .field("last_error", &self.last_error)
             .field("keys_dropped", &self.keys_dropped)
             .field("chord_split_events", &self.chord_split_events)
@@ -44,7 +45,22 @@ impl TrackedKeyState {
 
     /// Return every key mask that still carries a release obligation.
     pub fn release_obligation_mask(&self) -> u16 {
-        self.active_mask | self.possibly_active_mask | self.failed_release_mask
+        self.active_mask
+            | self.possibly_active_mask
+            | self.failed_release_mask
+            | self.in_flight_mask
+    }
+
+    #[cfg(test)]
+    pub(super) fn panic_if_prepared_send_at(&self, point: super::PreparedSendPanicPoint) {
+        if self.prepared_send_panic_point == Some(point) {
+            panic!("test hook: prepared sender panic at {point:?}");
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_prepared_packet_ambiguity_mask(&mut self, mask: u16) {
+        self.prepared_packet_ambiguity_mask = Some(mask);
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -143,6 +159,11 @@ impl TrackedKeyState {
         flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) {
         self.force_preflight_failure = Some(flag);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_force_preflight_user_held_mask(&mut self, mask: u16) {
+        self.force_preflight_user_held_mask = Some(mask);
     }
 
     pub fn with_qpc_clock(clock: QpcClock) -> Self {

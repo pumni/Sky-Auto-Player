@@ -84,8 +84,9 @@ fn release_obligation_mask_unions_all_conservative_sources() {
     state.active_mask = 0x0001;
     state.possibly_active_mask = 0x0002;
     state.failed_release_mask = 0x0004;
+    state.in_flight_mask = 0x0008;
 
-    assert_eq!(state.release_obligation_mask(), 0x0007);
+    assert_eq!(state.release_obligation_mask(), 0x000f);
 }
 
 #[test]
@@ -253,4 +254,5 @@ fn cleanup_transport_anomaly_and_partial_transport_fail_closed_even_if_probe_is_
     assert!(outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_keys(), vec![0x15, 0x16]);
     assert!(outcome.transport_anomaly);
+    assert_eq!(state.release_obligation_mask(), 0x0003);
 }

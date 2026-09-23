@@ -180,6 +180,10 @@ pub struct NativeSessionOptions {
     #[cfg(any(test, feature = "test-support"))]
     pub timer_lifecycle_context:
         Option<sky_dispatch_win32::timer::test_support::TimerLifecycleContext>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub prepared_packet_ambiguity_mask: Option<u16>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub preflight_user_held_mask: Option<u16>,
 }
 
 pub(crate) struct AdmittedNativeSessionOptions {
@@ -228,6 +232,10 @@ pub(crate) struct WorkerConfig {
     pub(super) wait: WaitOptions,
     pub(super) telemetry: TelemetryOptions,
     pub(super) priority: PriorityOptions,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) prepared_packet_ambiguity_mask: Option<u16>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) preflight_user_held_mask: Option<u16>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -268,6 +276,8 @@ impl Default for WorkerConfig {
             priority: PriorityOptions {
                 mode: PriorityMode::Off,
             },
+            prepared_packet_ambiguity_mask: None,
+            preflight_user_held_mask: None,
         }
     }
 }

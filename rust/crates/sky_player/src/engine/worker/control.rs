@@ -30,7 +30,6 @@ pub(super) struct CommandControlSignals<'a> {
 pub(super) struct CommandControlRuntime<'a> {
     pub(super) backend: &'a mut TrackedKeyState,
     pub(super) coordinator: &'a mut RuntimeDispatchCoordinator,
-    pub(super) force_full_cleanup: &'a mut bool,
     pub(super) terminal_error: &'a mut Option<String>,
     pub(super) secondary_errors: &'a mut Vec<String>,
     pub(super) abort_counts: &'a mut HashMap<&'static str, u64>,
@@ -91,7 +90,6 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
     let CommandControlRuntime {
         backend,
         coordinator,
-        force_full_cleanup,
         terminal_error,
         secondary_errors,
         abort_counts,
@@ -108,8 +106,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
     let panic_hard_stop_consumed = consume_panic_request_if_pending(panic_requested, command_exit);
     let panic_requested = supervisor_expired_before || panic_hard_stop_consumed;
     if panic_requested {
-        let panic_release =
-            backend.release_all_full_instrument(target_hwnd.load(Ordering::Acquire));
+        let panic_release = backend.release_all(target_hwnd.load(Ordering::Acquire));
         if !release_state_verified(backend, &panic_release) {
             record_termination_error(
                 terminal_error,
@@ -120,12 +117,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
                 ),
             );
         }
-        cancel_coordinator_or_terminal(
-            coordinator,
-            force_full_cleanup,
-            terminal_error,
-            secondary_errors,
-        );
+        cancel_coordinator_or_terminal(coordinator, terminal_error, secondary_errors);
         *abort_counts.entry("panic").or_insert(0) += 1;
         publish_backend_metrics(backend, local_metrics, metrics, last_published_error);
         let metrics_us = qpc_clock.now().and_then(|ticks| {
@@ -136,7 +128,6 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
         match metrics_us {
             Ok(value) => try_publish_metrics(local_metrics, metrics, qpc_clock, value, true),
             Err(error) => {
-                *force_full_cleanup = true;
                 *terminal_error = Some(format!("QPC runtime failure: {error:?}"));
                 return CommandControl::Exit;
             }

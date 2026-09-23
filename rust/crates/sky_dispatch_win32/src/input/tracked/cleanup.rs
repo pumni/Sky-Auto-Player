@@ -76,6 +76,7 @@ impl TrackedKeyState {
             self.active_mask &= !resolved_this_transition;
             self.possibly_active_mask &= !resolved_this_transition;
             self.failed_release_mask &= !resolved_this_transition;
+            self.in_flight_mask &= !resolved_this_transition;
 
             match reconciled {
                 ReconciledRelease::VerifiedAllUp => {

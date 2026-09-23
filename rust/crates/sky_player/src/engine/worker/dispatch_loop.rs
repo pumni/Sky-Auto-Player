@@ -632,7 +632,6 @@ pub(super) fn dispatch(
             }) {
                 Ok(value) => value,
                 Err(error) => {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(format!("QPC runtime failure: {error:?}"));
                     break;
                 }
@@ -645,7 +644,6 @@ pub(super) fn dispatch(
             match qpc_clock.now() {
                 Ok(value) => value,
                 Err(error) => {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(format!("QPC runtime failure: {error:?}"));
                     break;
                 }
@@ -683,7 +681,6 @@ pub(super) fn dispatch(
                 runtime: CommandControlRuntime {
                     backend: &mut resources.backend,
                     coordinator: &mut resources.coordinator,
-                    force_full_cleanup: &mut core.runtime.force_full_cleanup,
                     terminal_error: &mut core.runtime.terminal_error,
                     secondary_errors: &mut core.errors.secondary,
                     abort_counts: &mut core.errors.abort_counts,
@@ -714,7 +711,6 @@ pub(super) fn dispatch(
                     target_hwnd.load(Ordering::Acquire),
                     prepared_stream.as_mut(),
                 ) {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error =
                         Some(format!("system suspend safety release failed: {error}"));
                     break;
@@ -726,7 +722,6 @@ pub(super) fn dispatch(
                 focus_ok,
                 core.runtime.musical_physical_commit_started,
             ) {
-                core.runtime.force_full_cleanup = true;
                 core.runtime.terminal_error = Some("focus_lost_during_preroll".to_string());
                 break;
             }
@@ -736,7 +731,6 @@ pub(super) fn dispatch(
                 let observed_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("QPC pause observation failed: {error:?}"));
                         break;
@@ -749,7 +743,6 @@ pub(super) fn dispatch(
                 manual_pause,
                 core.runtime.musical_physical_commit_started,
             ) {
-                core.runtime.force_full_cleanup = true;
                 core.runtime.terminal_error = Some("manual_pause_during_preroll".to_string());
                 break;
             }
@@ -763,7 +756,6 @@ pub(super) fn dispatch(
                 ) {
                     Ok(entered) => entered,
                     Err(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(error);
                         break;
                     }
@@ -798,7 +790,6 @@ pub(super) fn dispatch(
                 let focus_grace_elapsed = match now_ticks.checked_duration_since(restored_at) {
                     Ok(elapsed) => elapsed,
                     Err(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("focus grace clock failure: {error}"));
                         break;
@@ -842,7 +833,6 @@ pub(super) fn dispatch(
                             prepared_stream.as_mut(),
                         ) {
                             core.runtime.verified_target = None;
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error =
                                 Some(format!("focus restoration failed: {error}"));
                             break;
@@ -857,7 +847,6 @@ pub(super) fn dispatch(
                             &mut core.runtime.verified_target,
                         ) {
                             core.runtime.verified_target = None;
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(format!(
                                 "instrument key preflight failed during focus restoration; release the 15 instrument keys before playback: {error}"
                             ));
@@ -880,7 +869,6 @@ pub(super) fn dispatch(
                             prepared_stream.as_mut(),
                         ) {
                             core.runtime.verified_target = None;
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error =
                                 Some(format!("focus restoration failed: {error}"));
                             break;
@@ -915,7 +903,6 @@ pub(super) fn dispatch(
                         .exit_pause(PauseReason::Focus, resumed_ticks)
                     {
                         core.runtime.verified_target = None;
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("playback clock failure: {error}"));
                         break;
@@ -963,7 +950,6 @@ pub(super) fn dispatch(
                         target_hwnd.load(Ordering::Acquire),
                         prepared_stream.as_mut(),
                     ) {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("manual pause suspension failed: {error}"));
                         break;
@@ -997,7 +983,6 @@ pub(super) fn dispatch(
                     .playback
                     .enter_pause(PauseReason::Manual, now_ticks)
                 {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                     break;
                 }
@@ -1023,7 +1008,6 @@ pub(super) fn dispatch(
                             target_hwnd.load(Ordering::Acquire),
                             prepared_stream.as_mut(),
                         ) {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error =
                                 Some(format!("manual resume deferred suspension failed: {error}"));
                             break;
@@ -1040,7 +1024,6 @@ pub(super) fn dispatch(
                         &mut core.runtime.verified_target,
                     ) {
                         core.runtime.verified_target = None;
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(format!(
                             "instrument key preflight failed on manual resume; release the 15 instrument keys before playback: {error}"
                         ));
@@ -1064,7 +1047,6 @@ pub(super) fn dispatch(
                         .exit_pause(PauseReason::Manual, resumed_ticks)
                     {
                         core.runtime.verified_target = None;
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("playback clock failure: {error}"));
                         break;
@@ -1096,7 +1078,6 @@ pub(super) fn dispatch(
                     supervisor_lease,
                 },
             ) {
-                core.runtime.force_full_cleanup = true;
                 core.runtime.terminal_error = Some(error);
                 break;
             }
@@ -1108,7 +1089,6 @@ pub(super) fn dispatch(
                 let acknowledged_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("QPC pause acknowledgment failed: {error:?}"));
                         break;
@@ -1123,7 +1103,6 @@ pub(super) fn dispatch(
                 let pause_target = match now_ticks.checked_add_duration(timing.paused_poll_ticks) {
                     Ok(target) => target,
                     Err(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("pause deadline arithmetic failure: {error}"));
                         break;
@@ -1142,7 +1121,6 @@ pub(super) fn dispatch(
                     record_wait_failure(
                         failure,
                         &mut core.metrics,
-                        &mut core.runtime.force_full_cleanup,
                         &mut core.runtime.terminal_error,
                     );
                     break;
@@ -1169,7 +1147,6 @@ pub(super) fn dispatch(
                     match normal_prepared_target_qpc(resources.playback.epoch, offset_ticks) {
                         Ok(target) => target,
                         Err(error) => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(error);
                             break;
                         }
@@ -1179,7 +1156,6 @@ pub(super) fn dispatch(
                     let frame = match prepared_stream.as_ref().and_then(|stream| stream.current()) {
                         Some(PreparedDispatchEntry::Physical(frame)) => frame,
                         _ => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(
                                 "prepared physical cursor changed before preflight".to_string(),
                             );
@@ -1197,7 +1173,6 @@ pub(super) fn dispatch(
                             &mut core.runtime.verified_target,
                         ) {
                             core.runtime.verified_target = None;
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(format!(
                                 "instrument key preflight failed before prepared wait; release the 15 instrument keys before playback: {error}"
                             ));
@@ -1217,7 +1192,6 @@ pub(super) fn dispatch(
                     let frame = match prepared_stream.as_ref().and_then(|stream| stream.current()) {
                         Some(PreparedDispatchEntry::Physical(frame)) => frame,
                         _ => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(
                                 "prepared physical cursor changed before timing query".to_string(),
                             );
@@ -1231,7 +1205,6 @@ pub(super) fn dispatch(
                     ) {
                         Ok(window) => window,
                         Err(error) => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(error);
                             break;
                         }
@@ -1264,7 +1237,6 @@ pub(super) fn dispatch(
                         },
                         mutable: WaitMutable {
                             local_metrics: &mut core.metrics,
-                            force_full_cleanup: &mut core.runtime.force_full_cleanup,
                             terminal_error: &mut core.runtime.terminal_error,
                         },
                     }) {
@@ -1326,7 +1298,6 @@ pub(super) fn dispatch(
                 {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(format!(
                             "playback clock failure at prepared boundary: {error}"
                         ));
@@ -1340,7 +1311,6 @@ pub(super) fn dispatch(
                     let commit = match stream.current() {
                         Some(PreparedDispatchEntry::Metadata { commit, .. }) => commit,
                         _ => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error =
                                 Some("prepared metadata cursor changed before commit".to_string());
                             break;
@@ -1363,7 +1333,6 @@ pub(super) fn dispatch(
                         .as_ref()
                         .expect("prepared stream is present");
                     let Some(PreparedDispatchEntry::Physical(frame)) = stream.current() else {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some("prepared physical cursor changed before dispatch".to_string());
                         break;
@@ -1403,7 +1372,6 @@ pub(super) fn dispatch(
                     if let Some(stream) = prepared_stream.as_mut()
                         && let Err(error) = stream.advance()
                     {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(error.to_string());
                         break;
                     }
@@ -1420,18 +1388,15 @@ pub(super) fn dispatch(
                 match step {
                     super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
                     super::DispatchStep::NoWork => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some("prepared frame did not complete its dispatch step".to_string());
                         break;
                     }
                     super::DispatchStep::Terminate(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(error);
                         break;
                     }
                     super::DispatchStep::TerminateStatic(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(error.to_string());
                         break;
                     }
@@ -1442,7 +1407,6 @@ pub(super) fn dispatch(
                 prepared_stream.as_ref(),
                 resources.coordinator.is_finished(),
             ) {
-                core.runtime.force_full_cleanup = true;
                 core.runtime.terminal_error = Some(
                     "prepared stream exhausted before coordinator finished; dynamic planner fallback is forbidden"
                         .to_string(),
@@ -1459,7 +1423,6 @@ pub(super) fn dispatch(
                         match stale_metadata_effective_now(&resources.playback, now_ticks) {
                             Ok(ticks) => ticks,
                             Err(error) => {
-                                core.runtime.force_full_cleanup = true;
                                 core.runtime.terminal_error = Some(format!(
                                     "stale metadata clock projection failure: {error}"
                                 ));
@@ -1482,17 +1445,14 @@ pub(super) fn dispatch(
                             continue;
                         }
                         super::DispatchStep::Terminate(error) => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(error);
                             break;
                         }
                         super::DispatchStep::TerminateStatic(error) => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some((*error).to_string());
                             break;
                         }
                         super::DispatchStep::Continue | super::DispatchStep::NoWork => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(
                                 "stale packet did not complete its metadata commit".to_string(),
                             );
@@ -1502,7 +1462,6 @@ pub(super) fn dispatch(
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(format!(
                         "coordinator stale-packet preparation failure: {error}"
                     ));
@@ -1519,7 +1478,6 @@ pub(super) fn dispatch(
                 {
                     Ok(ticks) => ticks,
                     Err(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some(format!("playback clock failure: {error}"));
                         break;
@@ -1550,7 +1508,6 @@ pub(super) fn dispatch(
             ) {
                 Ok(()) => {}
                 Err(error) => {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(format!("planning failure: {error}"));
                     break;
                 }
@@ -1565,12 +1522,10 @@ pub(super) fn dispatch(
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(super::DispatchStep::Terminate(error)) => {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(error);
                     break;
                 }
                 Err(step) => {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(format!(
                         "unexpected preflight preparation outcome: {step:?}"
                     ));
@@ -1616,12 +1571,10 @@ pub(super) fn dispatch(
                 super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
                 super::DispatchStep::NoWork => {}
                 super::DispatchStep::Terminate(err) => {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(err);
                     break;
                 }
                 super::DispatchStep::TerminateStatic(err) => {
-                    core.runtime.force_full_cleanup = true;
                     core.runtime.terminal_error = Some(err.to_string());
                     break;
                 }
@@ -1632,7 +1585,6 @@ pub(super) fn dispatch(
                 match physical_wait_target_for_plan(&dispatch_plan, &core.runtime) {
                     Ok(target) => target,
                     Err(error) => {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error = Some(error);
                         break;
                     }
@@ -1665,7 +1617,6 @@ pub(super) fn dispatch(
                 },
                 mutable: WaitMutable {
                     local_metrics: &mut core.metrics,
-                    force_full_cleanup: &mut core.runtime.force_full_cleanup,
                     terminal_error: &mut core.runtime.terminal_error,
                 },
             }) {
@@ -1679,7 +1630,6 @@ pub(super) fn dispatch(
                     // attribution is resolved from the selected work below.
                     let _wait_boundary_target_qpc = target_qpc;
                     let Some(wait_deadline_ticks) = deadline_ticks else {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some("wait returned a result without a dispatch deadline".to_string());
                         break;
@@ -1708,7 +1658,6 @@ pub(super) fn dispatch(
                     {
                         Ok(ticks) => ticks,
                         Err(error) => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(format!(
                                 "playback clock failure after deadline wake: {error}"
                             ));
@@ -1757,12 +1706,10 @@ pub(super) fn dispatch(
                     }
                     match authored_step {
                         super::DispatchStep::Terminate(error) => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(error);
                             break;
                         }
                         super::DispatchStep::TerminateStatic(error) => {
-                            core.runtime.force_full_cleanup = true;
                             core.runtime.terminal_error = Some(error.to_string());
                             break;
                         }
@@ -1778,7 +1725,6 @@ pub(super) fn dispatch(
                 } => {
                     core.runtime.future_physical_wait_target_qpc = None;
                     let Some(wait_deadline_ticks) = deadline_ticks else {
-                        core.runtime.force_full_cleanup = true;
                         core.runtime.terminal_error =
                             Some("replan wait result without a dispatch deadline".to_string());
                         break;
@@ -2836,7 +2782,7 @@ mod tests {
         harness
             .apply_system_suspend_for_test(suspend_qpc)
             .expect("suspend safety release and pause");
-        assert_eq!(harness.full_instrument_release_calls(), 1);
+        assert_eq!(harness.full_instrument_release_calls(), 0);
         assert_eq!(
             harness.runtime.down_boundary_state,
             DownBoundaryState::AwaitingFuture

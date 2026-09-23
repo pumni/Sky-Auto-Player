@@ -83,6 +83,8 @@ fn test_session_options(
         restore_race_hook: None,
         focus_pause_hook: None,
         timer_lifecycle_context: None,
+        prepared_packet_ambiguity_mask: None,
+        preflight_user_held_mask: None,
     }
 }
 
@@ -1615,6 +1617,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
     ] {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         let packets = harness.configure_packet_capture();
+        harness.resources.backend.custom_emitter = None;
         harness.align_next_plan_to_future_for_test(500_000);
         let plan = harness.plan_current_dispatch();
         assert!(matches!(
@@ -1647,7 +1650,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: command-exit owner"
                 );
                 let mut observation = super::worker::FinalizeTestObservation::default();
-                harness.finalize_worker_for_test(false, false, &mut observation);
+                harness.finalize_worker_for_test(false, &mut observation);
                 assert_eq!(
                     observation.attempted_mask, 0b1,
                     "{path}: tracked scope mask"
@@ -1659,6 +1662,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: uncertain backend"
                 );
                 assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
+                assert_eq!(observation.in_flight_mask, 0, "{path}: in-flight residue");
                 assert_eq!(observation.generation_accounting.activated, 1);
                 assert_eq!(observation.generation_accounting.released, 0);
                 assert_eq!(observation.generation_accounting.active, 0);
@@ -1667,8 +1671,11 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     *packets
                         .lock()
                         .expect("lifecycle packet capture after cleanup"),
-                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
-                    "{path}: musical Down replay"
+                    vec![
+                        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1),
+                        sky_dispatch_win32::input::PhysicalPacket::new(0b1, 0),
+                    ],
+                    "{path}: one authored Down and one ownership-scoped safety Up"
                 );
                 continue;
             }
@@ -1679,7 +1686,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: command-exit owner"
                 );
                 let mut observation = super::worker::FinalizeTestObservation::default();
-                harness.finalize_worker_for_test(false, false, &mut observation);
+                harness.finalize_worker_for_test(false, &mut observation);
                 assert_eq!(
                     observation.attempted_mask, 0b1,
                     "{path}: tracked scope mask"
@@ -1691,6 +1698,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: uncertain backend"
                 );
                 assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
+                assert_eq!(observation.in_flight_mask, 0, "{path}: in-flight residue");
                 assert_eq!(observation.generation_accounting.activated, 1);
                 assert_eq!(observation.generation_accounting.released, 0);
                 assert_eq!(observation.generation_accounting.active, 0);
@@ -1699,8 +1707,11 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     *packets
                         .lock()
                         .expect("lifecycle packet capture after cleanup"),
-                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
-                    "{path}: musical Down replay"
+                    vec![
+                        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1),
+                        sky_dispatch_win32::input::PhysicalPacket::new(0b1, 0),
+                    ],
+                    "{path}: one authored Down and one ownership-scoped safety Up"
                 );
                 continue;
             }
@@ -1746,8 +1757,8 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                 );
                 assert_eq!(
                     harness.full_instrument_release_calls(),
-                    1,
-                    "{path}: hard-stop must use FullInstrument scope"
+                    0,
+                    "{path}: supervisor expiry must use tracked ownership"
                 );
             }
             "panic_hard_stop" => {
@@ -1758,13 +1769,13 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                 );
                 assert_eq!(
                     harness.full_instrument_release_calls(),
-                    1,
-                    "{path}: hard-stop must use FullInstrument scope"
+                    0,
+                    "{path}: panic hard-stop must use tracked ownership"
                 );
             }
             "terminal_cleanup" => {
                 let mut observation = super::worker::FinalizeTestObservation::default();
-                harness.finalize_worker_for_test(false, false, &mut observation);
+                harness.finalize_worker_for_test(false, &mut observation);
                 assert_eq!(
                     observation.attempted_mask, 0b1,
                     "{path}: tracked scope mask"
@@ -1776,6 +1787,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: uncertain backend"
                 );
                 assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
+                assert_eq!(observation.in_flight_mask, 0, "{path}: in-flight residue");
                 assert_eq!(observation.generation_accounting.activated, 1);
                 assert_eq!(observation.generation_accounting.released, 0);
                 assert_eq!(observation.generation_accounting.active, 0);
@@ -1784,21 +1796,23 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     *packets
                         .lock()
                         .expect("lifecycle packet capture after cleanup"),
-                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
-                    "{path}: musical Down replay"
+                    vec![
+                        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1),
+                        sky_dispatch_win32::input::PhysicalPacket::new(0b1, 0),
+                    ],
+                    "{path}: one authored Down and one ownership-scoped safety Up"
                 );
                 continue;
             }
             "worker_panic_cleanup" => {
                 let mut observation = super::worker::FinalizeTestObservation::default();
                 let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    harness.finalize_worker_for_test(true, false, &mut observation);
+                    harness.finalize_worker_for_test(true, &mut observation);
                 }));
                 assert!(panic_result.is_err(), "{path}: worker panic must propagate");
                 assert_eq!(
-                    observation.attempted_mask,
-                    sky_dispatch_win32::input::FULL_INSTRUMENT_MASK,
-                    "{path}: worker panic must use FullInstrument scope: {observation:?}"
+                    observation.attempted_mask, 0b1,
+                    "{path}: worker panic must release only tracked ownership: {observation:?}"
                 );
                 assert_eq!(observation.release_obligation_mask, 0, "{path}: obligation");
                 assert_eq!(observation.active_mask, 0, "{path}: active backend");
@@ -1807,6 +1821,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: uncertain backend"
                 );
                 assert_eq!(observation.failed_release_mask, 0, "{path}: failed release");
+                assert_eq!(observation.in_flight_mask, 0, "{path}: in-flight residue");
                 assert_eq!(observation.generation_accounting.activated, 1);
                 assert_eq!(observation.generation_accounting.released, 0);
                 assert_eq!(observation.generation_accounting.active, 0);
@@ -1815,8 +1830,11 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     *packets
                         .lock()
                         .expect("lifecycle packet capture after cleanup"),
-                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
-                    "{path}: musical Down replay"
+                    vec![
+                        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1),
+                        sky_dispatch_win32::input::PhysicalPacket::new(0b1, 0),
+                    ],
+                    "{path}: one authored Down and one ownership-scoped safety Up"
                 );
                 continue;
             }
@@ -1825,8 +1843,8 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
 
         assert_eq!(
             harness.full_instrument_release_calls(),
-            1,
-            "{path}: resumable lifecycle cleanup scope"
+            0,
+            "{path}: resumable lifecycle cleanup must use tracked ownership"
         );
         assert_eq!(
             harness.release_obligation_mask_for_test(),
@@ -1847,8 +1865,11 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
             *packets
                 .lock()
                 .expect("lifecycle packet capture after cleanup"),
-            vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
-            "{path}: musical Down replay"
+            vec![
+                sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1),
+                sky_dispatch_win32::input::PhysicalPacket::new(0b1, 0),
+            ],
+            "{path}: one authored Down and one ownership-scoped safety Up"
         );
 
         let after = harness.resources.coordinator.generation_accounting();
@@ -1859,6 +1880,86 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
             "{path}: safety Up became musical Released"
         );
         assert_eq!(after.cancelled, 1, "{path}: cancellation accounting");
+    }
+}
+
+#[test]
+fn empty_ownership_lifecycle_cleanup_emits_no_transport() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::input::PhysicalPacket;
+
+    for path in [
+        "manual_pause",
+        "system_suspend",
+        "supervisor_expiry",
+        "panic_hard_stop",
+        "worker_panic_finalize",
+        "quit_before_down",
+        "skip_before_down",
+    ] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_packet_capture();
+        harness.resources.backend.custom_emitter = None;
+        let full_release_count = Arc::new(AtomicU64::new(0));
+        harness
+            .resources
+            .backend
+            .set_full_instrument_release_counter(Arc::clone(&full_release_count));
+        assert_eq!(harness.release_obligation_mask_for_test(), 0, "{path}");
+
+        match path {
+            "manual_pause" => {
+                harness
+                    .suspend_live_input_for_test()
+                    .expect("manual pause cleanup");
+            }
+            "system_suspend" => {
+                assert!(harness.notify_system_power_for_test(true));
+                let suspend_qpc = harness.resources.clock.now().expect("suspend QPC");
+                harness
+                    .apply_system_suspend_for_test(suspend_qpc)
+                    .expect("system suspend cleanup");
+            }
+            "supervisor_expiry" => {
+                harness.supervisor_expired.latch_expired();
+                assert!(harness.process_command_control_for_test());
+            }
+            "panic_hard_stop" => {
+                harness.panic_requested.store(true, Ordering::Release);
+                assert!(harness.process_command_control_for_test());
+            }
+            "worker_panic_finalize" => {
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    harness.finalize_worker_for_test(true, &mut observation);
+                }));
+                assert!(result.is_err(), "worker panic must propagate");
+            }
+            "quit_before_down" => {
+                harness.quit_requested.store(true, Ordering::Release);
+                assert!(harness.process_command_control_for_test());
+                harness.finalize_worker_for_test(
+                    false,
+                    &mut super::worker::FinalizeTestObservation::default(),
+                );
+            }
+            "skip_before_down" => {
+                harness.skip_requested.store(true, Ordering::Release);
+                assert!(harness.process_command_control_for_test());
+                harness.finalize_worker_for_test(
+                    false,
+                    &mut super::worker::FinalizeTestObservation::default(),
+                );
+            }
+            _ => unreachable!("the lifecycle case list is explicit"),
+        }
+
+        assert_eq!(
+            *packets.lock().expect("empty ownership packet capture"),
+            Vec::<PhysicalPacket>::new(),
+            "{path}: empty ownership must not emit a safety Up"
+        );
+        assert_eq!(full_release_count.load(Ordering::SeqCst), 0, "{path}");
     }
 }
 
@@ -1938,7 +2039,7 @@ fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
 
     let pause_generation = session.pause_with_timing_token().expect("pause request");
     let _pause_timing = wait_for_pause_ack(&session, pause_generation);
-    let paused_snapshot = wait_for_clean_suspension(&session, &full_release_calls);
+    let paused_snapshot = wait_for_clean_suspension(&session);
     assert!(paused_snapshot.is_paused);
     assert_eq!(paused_snapshot.active_count, 0);
     assert_eq!(paused_snapshot.possibly_active_count, 0);
@@ -2080,7 +2181,7 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
 
     let pause_generation = session.pause_with_timing_token().expect("pause request");
     let _pause_timing = wait_for_pause_ack(&session, pause_generation);
-    let paused_snapshot = wait_for_clean_suspension(&session, &full_release_calls);
+    let paused_snapshot = wait_for_clean_suspension(&session);
     assert!(paused_snapshot.is_paused);
     assert_eq!(paused_snapshot.active_count, 0);
     assert_eq!(paused_snapshot.possibly_active_count, 0);
@@ -2151,7 +2252,9 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
     assert!(release.released_successfully);
     assert_eq!(release.stuck_mask, 0);
     assert!(!release.verification_inconclusive);
-    assert!(full_release_calls.load(Ordering::Acquire) >= 1);
+    assert_eq!(release.attempted_mask, 0);
+    assert_eq!(release.attempts, 0);
+    assert_eq!(full_release_calls.load(Ordering::Acquire), 0);
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
@@ -3050,16 +3153,19 @@ fn native_telemetry_does_not_block_dispatch() {
 
 #[test]
 fn startup_failure_does_not_publish_ready_boundary() {
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let full_release_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.wait_failure = true;
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_calls));
     let session = NativeDispatchSession::new(test_session_options(
         startup_boundary_schedule(),
         1,
         BackendConfig::Mock {
             latency_base_us: 0,
             latency_per_key_us: 0,
-            fault_script: FaultInjectionScript {
-                wait_failure: true,
-                ..FaultInjectionScript::none()
-            },
+            fault_script,
         },
     ))
     .expect("test session admission");
@@ -3067,6 +3173,8 @@ fn startup_failure_does_not_publish_ready_boundary() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
     assert!(!session.snapshot().startup_ready);
     assert_eq!(session.snapshot().startup_latency_us, None);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(full_release_calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -4577,16 +4685,13 @@ fn wait_for_pause_ack(session: &NativeDispatchSession, generation: u64) -> Comma
     }
 }
 
-fn wait_for_clean_suspension(
-    session: &NativeDispatchSession,
-    full_release_count: &AtomicU64,
-) -> super::EngineProgressSnapshot {
+fn wait_for_clean_suspension(session: &NativeDispatchSession) -> super::EngineProgressSnapshot {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let snapshot = session.snapshot_lite();
-        if full_release_count.load(Ordering::Acquire) >= 1
-            && snapshot.active_count == 0
+        if snapshot.active_count == 0
             && snapshot.possibly_active_count == 0
+            && snapshot.failed_release_count == 0
         {
             return snapshot;
         }
@@ -4865,7 +4970,7 @@ fn focus_restore_after_grace_releases_and_resumes() {
     );
     assert!(!snapshot.has_terminal_error);
     assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
-    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     session.quit().expect("quit restored session");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
@@ -4990,7 +5095,7 @@ fn focus_bounce_resets_restore_grace_without_cleanup() {
         !snapshot.is_paused,
         "second restore grace did not resume playback: {snapshot:?}"
     );
-    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
     assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
 
     session.quit().expect("quit bounced session");
@@ -5025,7 +5130,7 @@ fn focus_restore_cleanup_verification_failure_is_terminal() {
     assert!(snapshot.terminal_error.as_deref().is_some_and(|error| {
         error.starts_with("focus restoration failed: release verification failed:")
     }));
-    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 }
@@ -5058,8 +5163,67 @@ fn focus_restore_preflight_failure_is_terminal() {
     assert!(snapshot.terminal_error.as_deref().is_some_and(|error| {
         error.starts_with("instrument key preflight failed during focus restoration;")
     }));
-    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn preroll_preflight_rejection_emits_no_unowned_cleanup() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let force_preflight_failure = Arc::new(AtomicBool::new(true));
+    let full_release_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.force_preflight_failure = Some(force_preflight_failure);
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    let session = start_focus_recovery_session(fault_script, None);
+
+    let snapshot = wait_for_focus_finish(&session);
+    assert_eq!(snapshot.keys_inserted_before_failure, 0);
+    let last_error = session.snapshot().last_error;
+    assert!(
+        last_error.as_deref().is_some_and(|error| {
+            error.starts_with("instrument key preflight failed during preroll;")
+        }),
+        "unexpected preroll result: {last_error:?}; snapshot={:?}; release_count={}",
+        session.snapshot(),
+        full_release_count.load(Ordering::SeqCst)
+    );
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn user_held_preroll_preflight_emits_no_unowned_cleanup() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let full_release_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.preflight_user_held_mask = Some(0b10);
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_calls));
+    let session = start_focus_recovery_session(fault_script, None);
+
+    let snapshot = wait_for_focus_finish(&session);
+    assert_eq!(snapshot.keys_inserted_before_failure, 0);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(full_release_calls.load(Ordering::SeqCst), 0);
+    assert!(
+        session
+            .snapshot()
+            .last_error
+            .as_deref()
+            .is_some_and(|error| {
+                error.starts_with("instrument key preflight failed during preroll;")
+                    && error.contains("physically held before playback")
+            })
+    );
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 }
 
@@ -5122,7 +5286,7 @@ fn focus_restore_race_after_validation_does_not_resume() {
         session.snapshot()
     );
     assert_eq!(snapshot.terminal_error, None);
-    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     session.quit().expect("quit raced session");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
@@ -5173,7 +5337,7 @@ fn manual_and_focus_pauses_compose_without_auto_resume() {
         snapshot.is_paused,
         "manual pause was cleared by focus restore: {snapshot:?}"
     );
-    assert_eq!(full_release_count.load(Ordering::SeqCst), 1);
+    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     session.resume().expect("manual resume");
     let resume_deadline = Instant::now() + Duration::from_secs(1);
@@ -8393,11 +8557,11 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
 
-    let snap = wait_for_clean_suspension(&session, &full_release_count);
+    let snap = wait_for_clean_suspension(&session);
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
-        1,
-        "exactly one full-instrument suspension occurred"
+        0,
+        "suspension uses tracked ownership"
     );
     assert!(snap.is_paused, "session remains paused due to manual pause");
     assert_eq!(snap.active_count, 0, "active keys clean after suspension");
@@ -8414,8 +8578,8 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     );
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
-        1,
-        "no duplicate suspension"
+        0,
+        "no full-instrument sweep during pause"
     );
 
     // Resume manual pause
@@ -8435,8 +8599,8 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     assert!(!post_snap.has_terminal_error);
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
-        1,
-        "no duplicate release on manual resume"
+        0,
+        "no full-instrument sweep on manual resume"
     );
 
     session.quit().expect("quit");
@@ -8558,8 +8722,8 @@ fn focus_then_manual_then_unfocused_resume_suspends_before_manual_resume() {
     assert!(!snap.is_paused, "session resumed after focus restored");
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
-        1,
-        "exactly one verified suspension occurred"
+        0,
+        "focus restore uses tracked ownership"
     );
     assert!(!snap.has_terminal_error);
 
@@ -8657,8 +8821,8 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
     );
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
-        1,
-        "manual pause performed one suspension"
+        0,
+        "manual pause uses tracked ownership"
     );
     assert_eq!(session.snapshot_lite().active_count, 0);
 
@@ -8670,8 +8834,8 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
     assert!(focus_snapshot.is_running);
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
-        1,
-        "no suspension while unfocused"
+        0,
+        "no full-instrument sweep while unfocused"
     );
 
     // 3. Restore focus
@@ -8688,8 +8852,8 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
 
     assert_eq!(
         full_release_count.load(Ordering::SeqCst),
-        1,
-        "no duplicate suspension on focus restore"
+        0,
+        "no full-instrument sweep on focus restore"
     );
     assert!(session.snapshot_lite().is_paused, "still manual paused");
 

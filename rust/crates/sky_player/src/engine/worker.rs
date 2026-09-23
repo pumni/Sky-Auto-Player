@@ -132,7 +132,6 @@ pub(crate) fn process_command_control_for_test(
     qpc_clock: QpcClock,
     backend: &mut TrackedKeyState,
     coordinator: &mut RuntimeDispatchCoordinator,
-    force_full_cleanup: &mut bool,
     terminal_error: &mut Option<String>,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
@@ -158,7 +157,6 @@ pub(crate) fn process_command_control_for_test(
             runtime: CommandControlRuntime {
                 backend,
                 coordinator,
-                force_full_cleanup,
                 terminal_error,
                 secondary_errors: &mut secondary_errors,
                 abort_counts: &mut abort_counts,
@@ -183,7 +181,6 @@ pub(crate) fn finalize_worker_for_test(
     metrics: &SharedMetrics,
     progress_clock: &super::shared::SharedProgressClock,
     worker_panicked: bool,
-    force_full_cleanup: bool,
     cleanup_observation: &mut cleanup::FinalizeTestObservation,
 ) -> u8 {
     let telemetry_output = parking_lot::Mutex::new(None);
@@ -207,7 +204,6 @@ pub(crate) fn finalize_worker_for_test(
                 },
                 local_metrics: WorkerMetricsLocal::default(),
                 abort_counts: HashMap::new(),
-                force_full_cleanup,
                 terminal_error: None,
                 secondary_errors: Vec::new(),
                 last_published_error: None,
@@ -408,7 +404,6 @@ pub(crate) struct WorkerRuntime {
     pub(crate) pending_up_recovery: Option<PendingUpRecovery>,
     future_physical_wait_target_qpc: Option<QpcTicks>,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
-    pub(crate) force_full_cleanup: bool,
     pub(crate) terminal_error: Option<String>,
     focus_loss_fault_injected: bool,
     pub(crate) manual_pause_suspension_pending: bool,
@@ -693,6 +688,10 @@ impl<'a> Worker<'a> {
                     focus_pause_hook,
                     #[cfg(any(test, feature = "test-support"))]
                         timer_lifecycle_context: _,
+                    #[cfg(any(test, feature = "test-support"))]
+                    prepared_packet_ambiguity_mask,
+                    #[cfg(any(test, feature = "test-support"))]
+                    preflight_user_held_mask,
                     instrument_key_profile: _,
                 },
             instrument_key_profile,
@@ -716,6 +715,10 @@ impl<'a> Worker<'a> {
                 wait,
                 telemetry,
                 priority,
+                #[cfg(any(test, feature = "test-support"))]
+                prepared_packet_ambiguity_mask,
+                #[cfg(any(test, feature = "test-support"))]
+                preflight_user_held_mask,
             },
             shared,
             epoch_qpc,

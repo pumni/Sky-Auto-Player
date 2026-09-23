@@ -148,12 +148,20 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             TrackedKeyState::with_qpc_clock_and_profile(qpc_clock, instrument_key_profile)
         }
     };
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(mask) = worker.config.prepared_packet_ambiguity_mask {
+        backend.set_prepared_packet_ambiguity_mask(mask);
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(mask) = worker.config.preflight_user_held_mask {
+        backend.set_force_preflight_user_held_mask(mask);
+    }
     let target_hwnd = &shared.target.target_hwnd;
     let priority_acquired = &shared.publication.priority_acquired;
     let admission_failure =
         |backend: &mut TrackedKeyState, metrics: &SharedMetrics, primary_error: String| {
             let verification_hwnd = target_hwnd.load(Ordering::Acquire);
-            let cleanup = backend.release_all_full_instrument(verification_hwnd);
+            let cleanup = backend.release_all(verification_hwnd);
             let message = if release_state_verified(backend, &cleanup) {
                 primary_error
             } else {
@@ -639,11 +647,9 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 .map(|error| format!("QPC counter unavailable: {error:?}"))
         });
     if let Some(error) = qpc_admission_error {
-        core.runtime.force_full_cleanup = true;
         core.runtime.terminal_error = Some(error);
     }
     if wait_fault {
-        core.runtime.force_full_cleanup = true;
         core.runtime.terminal_error = Some("wait failure injected".to_string());
     }
 
@@ -690,13 +696,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         let readiness_now = match qpc_clock.now() {
             Ok(now) => now,
             Err(error) => {
-                core.runtime.force_full_cleanup = true;
                 core.runtime.terminal_error = Some(format!("QPC readiness failure: {error:?}"));
                 worker.epoch_qpc
             }
         };
         if readiness_now > startup_deadline_ticks {
-            core.runtime.force_full_cleanup = true;
             core.runtime.terminal_error = Some("startup_deadline_missed".to_string());
         }
     }
@@ -735,7 +739,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                     .store(true, Ordering::Release);
             }
             Err(error) => {
-                core.runtime.force_full_cleanup = true;
                 core.runtime.terminal_error =
                     Some(format!("QPC startup-ready publication failed: {error:?}"));
             }

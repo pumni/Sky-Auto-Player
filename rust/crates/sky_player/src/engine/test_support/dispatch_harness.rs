@@ -1580,7 +1580,6 @@ impl ProductionDispatchTestHarness {
             self.resources.clock,
             &mut self.resources.backend,
             &mut self.resources.coordinator,
-            &mut self.runtime.force_full_cleanup,
             &mut self.runtime.terminal_error,
             &self.quit_requested,
             &self.skip_requested,
@@ -1629,7 +1628,6 @@ impl ProductionDispatchTestHarness {
     pub(crate) fn finalize_worker_for_test(
         self,
         worker_panicked: bool,
-        force_full_cleanup: bool,
         cleanup_observation: &mut super::super::worker::FinalizeTestObservation,
     ) -> u8 {
         let ProductionDispatchTestHarness {
@@ -1649,7 +1647,6 @@ impl ProductionDispatchTestHarness {
             &metrics,
             &progress_clock,
             worker_panicked,
-            force_full_cleanup,
             cleanup_observation,
         )
     }
@@ -2381,7 +2378,6 @@ impl ProductionDispatchTestHarness {
             },
             mutable: WaitMutable {
                 local_metrics: &mut self.local_metrics,
-                force_full_cleanup: &mut self.runtime.force_full_cleanup,
                 terminal_error: &mut self.runtime.terminal_error,
             },
         });
@@ -2659,7 +2655,6 @@ impl ProductionDispatchTestHarness {
             },
             mutable: WaitMutable {
                 local_metrics: &mut self.local_metrics,
-                force_full_cleanup: &mut self.runtime.force_full_cleanup,
                 terminal_error: &mut self.runtime.terminal_error,
             },
         });

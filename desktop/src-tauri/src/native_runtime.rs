@@ -4754,6 +4754,10 @@ impl NativePlaybackService {
                 focus_pause_hook: None,
                 #[cfg(feature = "tauri-test")]
                 timer_lifecycle_context: None,
+                #[cfg(feature = "tauri-test")]
+                prepared_packet_ambiguity_mask: None,
+                #[cfg(feature = "tauri-test")]
+                preflight_user_held_mask: None,
             },
             system_power_endpoint()?,
         )?);
@@ -6657,6 +6661,8 @@ mod tests {
                     restore_race_hook: None,
                     focus_pause_hook: None,
                     timer_lifecycle_context: None,
+                    prepared_packet_ambiguity_mask: None,
+                    preflight_user_held_mask: None,
                 },
                 super::system_power_endpoint().expect("system power endpoint"),
             )

@@ -111,6 +111,8 @@ pub(super) fn scenario_plan(timing_margin_us: u64) -> Result<ScenarioPlan, Strin
         expected_down_slots: vec![0; RELEASE_GAP_STRESS_CYCLES],
         expected_up_slots: vec![0; RELEASE_GAP_STRESS_CYCLES],
         allow_unpaired_cleanup_ups: false,
+        expected_authored_up_slots: vec![0; RELEASE_GAP_STRESS_CYCLES],
+        expected_safety_up_slots: Vec::new(),
     })
 }
 

@@ -79,6 +79,7 @@ pub struct TrackedKeyState {
     pub active_mask: u16,
     pub possibly_active_mask: u16,
     pub failed_release_mask: u16,
+    pub in_flight_mask: u16,
     pub last_error: Option<String>,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
@@ -102,5 +103,19 @@ pub struct TrackedKeyState {
     pub(crate) full_instrument_release_counter: Option<Arc<AtomicU64>>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) force_preflight_failure: Option<Arc<AtomicBool>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) force_preflight_user_held_mask: Option<u16>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) prepared_packet_ambiguity_mask: Option<u16>,
+    #[cfg(test)]
+    pub(crate) prepared_send_panic_point: Option<PreparedSendPanicPoint>,
     qpc_clock: Option<crate::clock::QpcClock>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreparedSendPanicPoint {
+    BeforeSenderAuthority,
+    AfterSenderReturn,
+    AfterStateCommit,
 }
