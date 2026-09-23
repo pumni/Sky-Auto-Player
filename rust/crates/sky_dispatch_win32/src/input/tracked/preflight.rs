@@ -13,6 +13,14 @@ impl TrackedKeyState {
         target_hwnd: isize,
     ) -> Result<(), PhysicalKeyPreflightError> {
         #[cfg(any(test, feature = "test-support"))]
+        if let Some(held_mask) = self.force_preflight_user_held_mask {
+            return Err(PhysicalKeyPreflightError::UserHeld(
+                self.instrument_key_profile
+                    .scan_codes_from_mask(held_mask)
+                    .into_vec(),
+            ));
+        }
+        #[cfg(any(test, feature = "test-support"))]
         if self
             .force_preflight_failure
             .as_ref()

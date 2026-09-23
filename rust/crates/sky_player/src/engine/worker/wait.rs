@@ -45,7 +45,6 @@ pub(crate) struct WaitSignals<'a> {
 
 pub(crate) struct WaitMutable<'a> {
     pub(crate) local_metrics: &'a mut WorkerMetricsLocal,
-    pub(crate) force_full_cleanup: &'a mut bool,
     pub(crate) terminal_error: &'a mut Option<String>,
 }
 
@@ -58,7 +57,6 @@ pub(crate) struct WaitBoundaryInput<'a> {
 pub(crate) fn record_wait_failure(
     failure: WaitFailure,
     local_metrics: &mut WorkerMetricsLocal,
-    force_full_cleanup: &mut bool,
     terminal_error: &mut Option<String>,
 ) {
     if matches!(failure, WaitFailure::Clock) {
@@ -66,7 +64,6 @@ pub(crate) fn record_wait_failure(
     } else {
         local_metrics.wait_backend_failures = local_metrics.wait_backend_failures.saturating_add(1);
     }
-    *force_full_cleanup = true;
     *terminal_error = Some(wait_failure_message(failure));
 }
 
@@ -85,7 +82,6 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     let WaitSignals { waiter, interrupt } = signals;
     let WaitMutable {
         local_metrics,
-        force_full_cleanup,
         terminal_error,
     } = mutable;
 
@@ -97,7 +93,6 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     let target_sample_ticks = match qpc_clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
-            *force_full_cleanup = true;
             *terminal_error = Some(format!("QPC failure before dispatch wait: {error:?}"));
             return WaitBoundary::Exit;
         }
@@ -113,7 +108,6 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
     let planned_wait_ticks = match target_qpc.checked_duration_since(target_sample_ticks) {
         Ok(ticks) => ticks,
         Err(error) => {
-            *force_full_cleanup = true;
             *terminal_error = Some(format!("QPC planned wait arithmetic failure: {error:?}"));
             return WaitBoundary::Exit;
         }
@@ -135,7 +129,7 @@ pub(crate) fn wait_for_next_boundary(context: WaitBoundaryInput<'_>) -> WaitBoun
             }
         }
         WaitOutcome::Failed(failure) => {
-            record_wait_failure(failure, local_metrics, force_full_cleanup, terminal_error);
+            record_wait_failure(failure, local_metrics, terminal_error);
             WaitBoundary::Exit
         }
         WaitOutcome::Interrupted => {
@@ -204,17 +198,10 @@ mod tests {
 
         for (failure, is_clock_failure) in failures {
             let mut local_metrics = WorkerMetricsLocal::default();
-            let mut force_full_cleanup = false;
             let mut terminal_error = None;
 
-            record_wait_failure(
-                failure,
-                &mut local_metrics,
-                &mut force_full_cleanup,
-                &mut terminal_error,
-            );
+            record_wait_failure(failure, &mut local_metrics, &mut terminal_error);
 
-            assert!(force_full_cleanup);
             assert!(terminal_error.is_some());
             assert_eq!(
                 local_metrics.wait_clock_failures,
@@ -240,7 +227,6 @@ mod tests {
         let waiter = HybridWaiter::new();
         let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
         let mut local_metrics = WorkerMetricsLocal::default();
-        let mut force_full_cleanup = false;
         let mut terminal_error = None;
 
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
@@ -259,13 +245,11 @@ mod tests {
             },
             mutable: WaitMutable {
                 local_metrics: &mut local_metrics,
-                force_full_cleanup: &mut force_full_cleanup,
                 terminal_error: &mut terminal_error,
             },
         });
 
         assert!(matches!(boundary, WaitBoundary::Due { .. }));
-        assert!(!force_full_cleanup);
         assert!(terminal_error.is_none());
     }
 
@@ -287,7 +271,6 @@ mod tests {
             assert!(signal_power.notify(true, &signal_event));
         });
         let mut local_metrics = WorkerMetricsLocal::default();
-        let mut force_full_cleanup = false;
         let mut terminal_error = None;
 
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
@@ -306,7 +289,6 @@ mod tests {
             },
             mutable: WaitMutable {
                 local_metrics: &mut local_metrics,
-                force_full_cleanup: &mut force_full_cleanup,
                 terminal_error: &mut terminal_error,
             },
         });
@@ -319,7 +301,6 @@ mod tests {
         ));
         assert_eq!(system_power.take_pending(), SYSTEM_POWER_SUSPEND_PENDING);
         assert!(system_power.down_blocked());
-        assert!(!force_full_cleanup);
         assert!(terminal_error.is_none());
     }
 
@@ -336,7 +317,6 @@ mod tests {
         let system_power = SystemPowerState::default();
         assert!(system_power.notify(true, &interrupt));
         let mut local_metrics = WorkerMetricsLocal::default();
-        let mut force_full_cleanup = false;
         let mut terminal_error = None;
 
         let boundary = wait_for_next_boundary(WaitBoundaryInput {
@@ -355,7 +335,6 @@ mod tests {
             },
             mutable: WaitMutable {
                 local_metrics: &mut local_metrics,
-                force_full_cleanup: &mut force_full_cleanup,
                 terminal_error: &mut terminal_error,
             },
         });
@@ -366,7 +345,6 @@ mod tests {
                 if matches!(wait_result.outcome, sky_dispatch_win32::wait::WaitOutcome::Interrupted)
         ));
         assert!(system_power.down_blocked());
-        assert!(!force_full_cleanup);
         assert!(terminal_error.is_none());
     }
 }

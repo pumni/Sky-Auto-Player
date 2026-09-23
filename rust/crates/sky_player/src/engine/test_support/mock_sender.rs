@@ -139,6 +139,9 @@ pub(crate) fn create_mock_backend(
     if let Some(flag) = script.force_preflight_failure.clone() {
         backend.set_force_preflight_failure(flag);
     }
+    if let Some(mask) = script.preflight_user_held_mask {
+        backend.set_force_preflight_user_held_mask(mask);
+    }
     let script_packet = Arc::clone(&script);
     let call_index_packet = Arc::clone(&call_index);
     let send_call_count_packet = script.send_call_count.clone();

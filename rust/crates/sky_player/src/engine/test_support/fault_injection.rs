@@ -56,6 +56,8 @@ pub struct FaultInjectionScript {
     pub full_instrument_release_calls: Option<Arc<AtomicU64>>,
     /// Makes mock preflight fail closed when set.
     pub force_preflight_failure: Option<Arc<AtomicBool>>,
+    /// Makes mock preflight report these physical instrument keys as held.
+    pub preflight_user_held_mask: Option<u16>,
 }
 
 impl FaultInjectionScript {

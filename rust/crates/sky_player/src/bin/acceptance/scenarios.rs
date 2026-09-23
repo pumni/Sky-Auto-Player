@@ -219,6 +219,28 @@ pub(super) fn scenario_plan(
                 vec![0, 1],
                 false,
             ),
+            Scenario::AmbiguousPacket => (
+                vec![
+                    action(0, ActionKind::Down, 50_000, &[0]),
+                    action(1, ActionKind::Up, 100_000, &[0]),
+                    action(2, ActionKind::Down, 100_000, &[1]),
+                    action(3, ActionKind::Up, 150_000, &[1]),
+                ],
+                None,
+                vec![0, 1],
+                vec![0, 0, 1],
+                true,
+            ),
+            Scenario::PreflightUserHeld => (
+                vec![
+                    action(0, ActionKind::Down, 50_000, &[0]),
+                    action(1, ActionKind::Up, 80_000, &[0]),
+                ],
+                None,
+                vec![],
+                vec![],
+                true,
+            ),
             Scenario::CleanupFullRelease => (
                 vec![
                     action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()),
@@ -238,7 +260,7 @@ pub(super) fn scenario_plan(
                 ],
                 None,
                 vec![0, 1],
-                vec![0].into_iter().chain(0..MAX_KEYS).chain([1]).collect(),
+                vec![0, 1],
                 true,
             ),
             Scenario::TargetHwndChange => (
@@ -248,7 +270,7 @@ pub(super) fn scenario_plan(
                 ],
                 None,
                 vec![],
-                (0..MAX_KEYS).collect(),
+                vec![],
                 true,
             ),
             Scenario::StopCleanup | Scenario::SkipCleanup => (
@@ -270,7 +292,7 @@ pub(super) fn scenario_plan(
                 ],
                 None,
                 vec![0, 1],
-                vec![0, 1].into_iter().chain(0..MAX_KEYS).collect(),
+                vec![0, 1],
                 true,
             ),
             Scenario::SuspendResume => (
@@ -282,7 +304,7 @@ pub(super) fn scenario_plan(
                 ],
                 None,
                 vec![0, 1],
-                (0..MAX_KEYS).chain([0, 1]).collect(),
+                vec![0, 0, 1],
                 true,
             ),
             Scenario::SupervisorLeaseExpiry => (
@@ -292,7 +314,7 @@ pub(super) fn scenario_plan(
                 ],
                 None,
                 vec![],
-                (0..MAX_KEYS).collect(),
+                vec![],
                 true,
             ),
             Scenario::TimingMarginSweep => {
@@ -316,12 +338,26 @@ pub(super) fn scenario_plan(
         };
     let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
         .map_err(|error| format!("scenario schedule compilation failed: {error}"))?;
+    let expected_safety_up_slots = match scenario {
+        Scenario::CleanupFullRelease => (0..MAX_KEYS).collect(),
+        Scenario::StopCleanup | Scenario::SkipCleanup | Scenario::SuspendResume => vec![0],
+        Scenario::AmbiguousPacket => vec![0, 1],
+        _ => Vec::new(),
+    };
+    let mut expected_authored_up_slots = expected_up_slots.clone();
+    for slot in &expected_safety_up_slots {
+        if let Some(index) = expected_authored_up_slots.iter().position(|expected| expected == slot) {
+            expected_authored_up_slots.remove(index);
+        }
+    }
     Ok(ScenarioPlan {
         schedule,
         profile,
         expected_down_slots,
         expected_up_slots,
         allow_unpaired_cleanup_ups,
+        expected_authored_up_slots,
+        expected_safety_up_slots,
     })
 }
 
@@ -337,7 +373,10 @@ pub(super) fn production_options(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
     profile: Option<InstrumentKeyProfileSpec>,
     timing_margin_us: u64,
+    scenario: Scenario,
 ) -> NativeSessionOptions {
+    #[cfg(not(feature = "test-support"))]
+    let _ = scenario;
     NativeSessionOptions {
         schedule,
         backend: BackendConfig::Production,
@@ -383,6 +422,10 @@ pub(super) fn production_options(
         focus_pause_hook: None,
         #[cfg(feature = "test-support")]
         timer_lifecycle_context: None,
+        #[cfg(feature = "test-support")]
+        prepared_packet_ambiguity_mask: (scenario == Scenario::AmbiguousPacket).then_some(0b11),
+        #[cfg(feature = "test-support")]
+        preflight_user_held_mask: (scenario == Scenario::PreflightUserHeld).then_some(0b01),
     }
 }
 

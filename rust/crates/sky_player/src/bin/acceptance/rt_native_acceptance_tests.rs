@@ -1,7 +1,7 @@
 use super::{
     ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US,
     DRAIN_DEADLINE_MS, DrainClock, DrainMode, DrainResult, EVENT_SCHEMA_VERSION, EventRecord,
-    EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY, MAX_KEYS,
+    EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY,
     MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
     PRETERMINAL_DEADLINE_MS, PROBE_KIND, PROBE_TITLE, ParsedCommand, PhysicalExpectation,
     RELEASE_GAP_STRESS_CYCLES,
@@ -16,7 +16,7 @@ use super::{
 use super::release_gap_stress::{
     strict_physical_forensics_qualification, RELEASE_GAP_STRESS_MIN_SAMPLES,
 };
-use sky_dispatch_core::coordinator::GenerationAccounting;
+use sky_dispatch_core::{coordinator::GenerationAccounting, model::MAX_KEYS};
 
 fn base_arguments(scenario: &str) -> Vec<String> {
     [
@@ -190,6 +190,8 @@ fn canonical_and_w4_expectations_are_physical() {
         "rapid-retrigger",
         "release-gap-stress",
         "mixed-up-down",
+        "ambiguous-packet",
+        "preflight-user-held",
         "target-hwnd-change",
         "pause-resume",
         "suspend-resume",
@@ -205,13 +207,45 @@ fn canonical_and_w4_expectations_are_physical() {
     }
 }
 #[test]
-fn pause_resume_expects_the_full_instrument_suspension_sweep() {
-    let plan = scenario_plan(Scenario::PauseResume, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
-    let mut expected_up = vec![0, 1];
-    expected_up.extend(0..MAX_KEYS);
-    assert_eq!(plan.expected_down_slots, vec![0, 1]);
-    assert_eq!(plan.expected_up_slots, expected_up);
-    assert!(plan.allow_unpaired_cleanup_ups);
+fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
+    let pause = scenario_plan(Scenario::PauseResume, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    assert_eq!(pause.expected_down_slots, vec![0, 1]);
+    assert_eq!(pause.expected_up_slots, vec![0, 1]);
+    assert_eq!(pause.expected_authored_up_slots, vec![0, 1]);
+    assert!(pause.expected_safety_up_slots.is_empty());
+    assert!(pause.allow_unpaired_cleanup_ups);
+
+    let suspend = scenario_plan(Scenario::SuspendResume, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    assert_eq!(suspend.expected_down_slots, vec![0, 1]);
+    assert_eq!(suspend.expected_up_slots, vec![0, 0, 1]);
+    assert_eq!(suspend.expected_authored_up_slots, vec![0, 1]);
+    assert_eq!(suspend.expected_safety_up_slots, vec![0]);
+    assert!(suspend.allow_unpaired_cleanup_ups);
+
+    let ambiguous = scenario_plan(Scenario::AmbiguousPacket, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    assert_eq!(ambiguous.expected_down_slots, vec![0, 1]);
+    assert_eq!(ambiguous.expected_up_slots, vec![0, 0, 1]);
+    assert_eq!(ambiguous.expected_authored_up_slots, vec![0]);
+    assert_eq!(ambiguous.expected_safety_up_slots, vec![0, 1]);
+    assert_eq!(ambiguous.schedule.packets[1].up_mask, 0b01);
+    assert_eq!(ambiguous.schedule.packets[1].down_mask, 0b10);
+    assert!(ambiguous.allow_unpaired_cleanup_ups);
+
+    let preflight = scenario_plan(Scenario::PreflightUserHeld, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    assert!(preflight.expected_down_slots.is_empty());
+    assert!(preflight.expected_up_slots.is_empty());
+    assert!(preflight.expected_authored_up_slots.is_empty());
+    assert!(preflight.expected_safety_up_slots.is_empty());
+    assert!(preflight.allow_unpaired_cleanup_ups);
+
+    for scenario in [Scenario::TargetHwndChange, Scenario::SupervisorLeaseExpiry] {
+        let plan = scenario_plan(scenario, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+        assert!(plan.expected_down_slots.is_empty(), "{scenario:?} Down");
+        assert!(plan.expected_up_slots.is_empty(), "{scenario:?} Up");
+        assert!(plan.expected_authored_up_slots.is_empty(), "{scenario:?} authored Up");
+        assert!(plan.expected_safety_up_slots.is_empty(), "{scenario:?} safety Up");
+        assert!(plan.allow_unpaired_cleanup_ups);
+    }
 }
 #[test]
 fn processkey_correct_scan_passes_and_wrong_scan_fails() {
@@ -761,6 +795,7 @@ fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
         plan.schedule,
         None,
         ACCEPTANCE_TIMING_MARGIN_US,
+        Scenario::CanonicalSingle,
     );
     assert_eq!(options.timing.min_hold_us, authored_hold);
     assert_eq!(options.timing.min_release_gap_us, authored_gap);

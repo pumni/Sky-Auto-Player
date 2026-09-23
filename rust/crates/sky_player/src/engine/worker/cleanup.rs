@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
-use sky_dispatch_win32::input::{ReleaseAllOutcome, ReleaseScope};
+use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::any::Any;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -32,7 +32,6 @@ pub(super) struct FinalizeState {
     pub(super) worker_result: Result<(), Box<dyn Any + Send>>,
     pub(super) local_metrics: WorkerMetricsLocal,
     pub(super) abort_counts: HashMap<&'static str, u64>,
-    pub(super) force_full_cleanup: bool,
     pub(super) terminal_error: Option<String>,
     pub(super) secondary_errors: Vec<String>,
     pub(super) last_published_error: Option<String>,
@@ -74,6 +73,7 @@ pub(crate) struct FinalizeTestObservation {
     pub(crate) active_mask: u16,
     pub(crate) possibly_active_mask: u16,
     pub(crate) failed_release_mask: u16,
+    pub(crate) in_flight_mask: u16,
     pub(crate) attempted_mask: u16,
     pub(crate) generation_accounting: sky_dispatch_core::coordinator::GenerationAccounting,
 }
@@ -101,7 +101,6 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         worker_result,
         mut local_metrics,
         mut abort_counts,
-        mut force_full_cleanup,
         mut terminal_error,
         mut secondary_errors,
         mut last_published_error,
@@ -131,7 +130,6 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     // coordinator mismatch. The first failure remains primary; later cleanup
     // and accounting failures are retained as secondary diagnostics.
     if let Err(error) = coordinator.check_invariants() {
-        force_full_cleanup = true;
         record_termination_error(
             &mut terminal_error,
             &mut secondary_errors,
@@ -140,7 +138,6 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
 
     if worker_result.is_err() {
-        force_full_cleanup = true;
         record_termination_error(
             &mut terminal_error,
             &mut secondary_errors,
@@ -149,16 +146,11 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
 
     // This cleanup sits outside the contained loop so it also runs when an
-    // unexpected panic crosses the orchestration/backend seam. The release
-    // scope is decided once, up front: a terminal/full state releases the
-    // whole instrument, a normal completion releases only the tracked set.
-    // A second cleanup FSM is never chained, so cleanup latency is bounded to
-    // a single FSM invocation.
-    let release_scope = if worker_result.is_err() || force_full_cleanup {
-        ReleaseScope::FullInstrument
-    } else {
-        ReleaseScope::Tracked
-    };
+    // unexpected panic crosses the orchestration/backend seam. It always
+    // releases the persistent backend's tracked obligations, including any
+    // bounded in-flight packet mask. A second cleanup FSM is never chained,
+    // so cleanup latency is bounded to a single FSM invocation.
+    let release_scope = sky_dispatch_win32::input::ReleaseScope::Tracked;
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
         backend.release_scope(release_scope, target_hwnd.load(Ordering::Acquire))
     }));
@@ -192,6 +184,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         observation.active_mask = backend.active_mask;
         observation.possibly_active_mask = backend.possibly_active_mask;
         observation.failed_release_mask = backend.failed_release_mask;
+        observation.in_flight_mask = backend.in_flight_mask;
         observation.attempted_mask = cleanup_result
             .as_ref()
             .ok()
@@ -326,12 +319,10 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
 
 pub(crate) fn cancel_coordinator_or_terminal(
     coordinator: &mut RuntimeDispatchCoordinator,
-    force_full_cleanup: &mut bool,
     terminal_error: &mut Option<String>,
     secondary_errors: &mut Vec<String>,
 ) {
     if let Err(error) = coordinator.cancel_all() {
-        *force_full_cleanup = true;
         record_termination_error(
             terminal_error,
             secondary_errors,
@@ -417,11 +408,11 @@ pub(crate) fn suspend_live_input(
         guard.invalidate();
     }
 
-    // A suspension is fail-closed: release the whole instrument in a single
-    // FSM invocation. The scope is decided before the call so two release
-    // FSMs are never chained (which held the total cleanup latency at
+    // A suspension is fail-closed: release the owned or possibly owned keys
+    // in a single FSM invocation. The scope is decided before the call so two
+    // release FSMs are never chained (which held the total cleanup latency at
     // ~330 ms plus duplicated retries).
-    let release = backend.release_all_full_instrument(target_hwnd);
+    let release = backend.release_all(target_hwnd);
     if !release_state_verified(backend, &release) {
         return Err(format!(
             "release verification failed: {}",

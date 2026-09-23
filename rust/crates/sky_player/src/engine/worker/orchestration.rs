@@ -58,7 +58,6 @@ impl Worker<'_> {
                 worker_result,
                 local_metrics: std::mem::take(&mut core.metrics),
                 abort_counts: std::mem::take(&mut core.errors.abort_counts),
-                force_full_cleanup: core.runtime.force_full_cleanup,
                 terminal_error: std::mem::take(&mut core.runtime.terminal_error),
                 secondary_errors: std::mem::take(&mut core.errors.secondary),
                 last_published_error: std::mem::take(&mut core.errors.last_published),
