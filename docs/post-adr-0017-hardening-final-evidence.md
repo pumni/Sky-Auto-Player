@@ -23,7 +23,7 @@ Post-merge CI for the exact qualification source SHA passed:
 |---|---|---|---|---|
 | P0 | Current-main rebaseline; accepted on `e5bf883fd8549005d1bc02bc98f4e14d1dc16e0b`; no PR | `e5bf883fd8549005d1bc02bc98f4e14d1dc16e0b` | — | `e5bf883fd8549005d1bc02bc98f4e14d1dc16e0b` |
 | P1 / #372 | Lease tied to actual monitor progress; #372 completed | `e5bf883fd8549005d1bc02bc98f4e14d1dc16e0b` | #419 `a3c7a13205d00e23a610eab0606e02d022cb5ade` | `5b726e177eeeb4717f14b4bc9ffefe79a74608d9` |
-| P2 / #377 | Old orphan authored-Up defect not reproduced on the shipping prepared path; evidence-only closure | `5b726e177eeeb4717f14b4bc9ffefe79a74608d9` | #420 `c14b6289a78563097b4d9aa988ec71c7d310f51c` | `4edf7751722512d326e8bec78ed9b375f2d13405` |
+| P2 / #377 | Old orphan authored-Up defect not reproduced on the shipping prepared path; disposition remains `not_planned` | `5b726e177eeeb4717f14b4bc9ffefe79a74608d9` | #420 `c14b6289a78563097b4d9aa988ec71c7d310f51c` | `4edf7751722512d326e8bec78ed9b375f2d13405` |
 | P3 / #378 | Lifecycle release obligations scoped to tracked ownership | `4edf7751722512d326e8bec78ed9b375f2d13405` | #421 `59334d741cc906d933861afa0b8d89fc734f97e5` | `2896a889c1c19469bd2dbc7ca5bb036dfa03ebe8` |
 | P4 | Healthy natural completion requires authoritative generation accounting | `2896a889c1c19469bd2dbc7ca5bb036dfa03ebe8` | #422 `48ae0bdbabbefbb8e7a48888fad7ea6deeb87635` | `ac153fc08e769ae0806506b0207bfc9a4db88fe2` |
 | P5 / #373 | Target HWND/generation authority made ABA-safe | `ac153fc08e769ae0806506b0207bfc9a4db88fe2` | #423 `b9f9b02727636f5f208ae479dc0e8cfc4e9ede2c` | `11ec8b00831e2bc08d390cdad3c0180e82d8f36b` |
@@ -31,6 +31,14 @@ Post-merge CI for the exact qualification source SHA passed:
 | P7a / #375 | Physical-key interference and cost characterized; no note-key probe approved | `03da9d4df93e19f080336d6d8dd96420adc8fba6` | #425 `20b83335bf14db694b9623938f3c069c04a50a7d` | `2d14025e46963ac5ea25e173f8453138a3694c29` |
 | P7b / #375 | Fixed five-modifier Down guard; #375 closed after merged evidence with zero-return, query-to-send, and same-note residuals retained | `2d14025e46963ac5ea25e173f8453138a3694c29` | #426 `c6b507ba0f89243b9ed0534d9bacc2c76b603bd4` | `8231e381492852d88bbd9a8bd3922f00084c905a` |
 | H4a / #427 | Stale power callback epoch/rundown fence | `8231e381492852d88bbd9a8bd3922f00084c905a` | #428 `993f3febbe89d4d7c078360d96010a5991cd4657` | `70bcd7174cbcb6a286cde42d7ae38dae0fff7419` |
+
+## Proposed issue dispositions after #429 merges
+
+#376, #418, and umbrella #371 remain open at this checkpoint. The proposed
+disposition is to close all three as `completed` after #429 merges, using the
+merged-tree P8/H4 evidence and required CI as the completion evidence. This
+report does not close them. Keep #377 as `not_planned`. Preserve the accepted
+residuals listed below with any of those closures.
 
 The P8 runtime matrix below uses only the final H4a merge tree. Earlier PR
 checks and partial P8 runs are phase history or fix evidence, not final P8/H4
@@ -147,7 +155,7 @@ The final merged-tree tests and ReceiveOnly cases cover:
 | Numeric HWND reuse, owner query failure, owner process exit | P6 deterministic tests plus `owner-mismatch`, `owner-query-failure`, and `owner-process-termination` native cases. |
 | Focus loss/restore and published-focus races | `final_admission_requires_fresh_foreground_match_and_rechecks_atomic_focus`, focus lifecycle tests, and `focus-loss` native case. |
 | Startup held key, modifier held on first Down/after existing ownership, and UpOnly behavior | P7a deterministic key-state seam; `preflight-user-held`, `modifier-held-final-boundary`, and `modifier-held-after-owned` native cases. The guard queries five modifier VKs on Down-bearing packets and none on UpOnly. |
-| Zero/partial/ambiguous transport, post-send clock uncertainty, QPC failures, and cleanup ownership | Win32/player deterministic test-support suites; `ambiguous-packet`, `mixed-up-down`, and `cleanup-full-release` native cases. No musical Down replay; cleanup is based on tracked/possible ownership. |
+| Zero/partial/ambiguous transport, post-send clock uncertainty, QPC failures, and cleanup ownership | Win32/player deterministic test-support suites; `ambiguous-packet`, `mixed-up-down`, and `cleanup-full-release` native cases. No musical Down replay; release obligation is `active_mask | possibly_active_mask | failed_release_mask | in_flight_mask`. |
 | Pause, suspend/resume, stop, skip, and terminal cleanup | Worker lifecycle regressions and the corresponding final native cases above, including the stale callback reset and due-Down regressions. |
 | Maximum chord, dense alternating, retrigger, release gap, and timing margin | `canonical-max-chord`, `dense-alternating`, `near-minimum-retrigger`, `rapid-retrigger`, `release-gap-stress`, and `timing-margin-sweep`; quiet plus CPU-contention dense case. |
 
@@ -186,12 +194,15 @@ On the merged production build:
   pre-call instrumentation.
 - The `rt_dispatch_no_alloc` test passed (23/23).
 
-The broader legacy `audit_dispatch_assembly.ps1` did **not** fully pass its
-symbol-presence check: it reported
-`recover_missed_down_boundary: NOT_FOUND (required clean target)`, consistent
-with that helper being inlined into the optimized caller. The scoped shipping
-suffix audits above passed, but the broad audit must remain recorded as
-incomplete; this report does not claim the legacy audit was clean.
+The broader legacy `audit_dispatch_assembly.ps1` reported
+`recover_missed_down_boundary: NOT_FOUND (required clean target)`. This is
+accepted as a legacy tooling/symbol-retention limitation, not a runtime defect;
+inlining into the optimized caller may explain the missing symbol. The scoped
+`audit_prepared_normal_assembly.ps1` and
+`audit_modifier_guard_assembly.ps1` results above are the acceptance evidence
+for the shipping suffix. The legacy audit does **not** independently certify
+the optimized body of the recovery helper, so it remains incomplete and is not
+described as clean.
 
 Seven real-wait-core gap benchmarks (5, 20, 25, 100, 250, 500, and 1000 ms)
 also passed dispatch/waiter cleanliness checks with zero misses. They are
@@ -208,13 +219,13 @@ these measurements do not qualify production sender latency. Exact reports:
 |---|---|
 | Normal current prepared Down makes one attempt only after live lifecycle, target, focus/owner, modifier, suspend, lease, and preflight gates | `sky_player::engine::worker::dispatch::prepared::send_prepared_normal_precision_frame`; `worker/admission.rs`; `sky_dispatch_win32::input::tracked::packet_send`; ADR-0017. Fresh foreground and owner proof occur for eligible focused Down. |
 | Mixed/chord packet is one Up-before-Down `SendInput` transaction | `sky_dispatch_win32::input::packet` packet construction and one-call sender; ReceiveOnly `canonical-chord`, `canonical-max-chord`, and `mixed-up-down` pass. |
-| Failed, partial, ambiguous, or clock-uncertain musical Down is never replayed | Prepared dispatch terminates the attempt; tracked transport preserves the conservative `active | possibly_active | failed_release` release obligation. |
+| Failed, partial, ambiguous, or clock-uncertain musical Down is never replayed | Prepared dispatch terminates the attempt; tracked transport preserves the conservative `active_mask | possibly_active_mask | failed_release_mask | in_flight_mask` release obligation. |
 | Physical hold/repress policy | `PhysicalTimingGuard::observe_successful_packet`: successful Down completion + materialized effective minimum hold; successful Up completion + one frame for next same-key Down. 724/673 native pairs had zero floor violations. |
 | Target authority | P5 coherent HWND/generation publication rejects ABA; P6 binds the target to startup owner PID/process identity and rechecks current foreground HWND/owner PID at final focused Down admission. |
 | Supervisor lease | P1 progress comes from the actual monitor; a shared atomic deadline/latch rejects late progress and cannot be healed after expiry. |
 | Physical-key preflight | Startup/preflight samples the 15 instrument-note keys and caches by target stamp. A zero `GetAsyncKeyState` result is `NoHeldObserved`, not proof of physical AllUp. Instrument-note keys are not sampled again on each Down. |
 | Modifier guard | P7b samples `VK_LWIN`, `VK_RWIN`, `VK_CONTROL`, `VK_SHIFT`, and `VK_MENU` for Down-bearing packets. A detected held modifier rejects the Down; UpOnly remains independent. |
-| Cleanup ownership | `release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask`; zero ownership produces no cleanup keyboard event, and ambiguous packet cleanup is scoped to the uncertain packet ownership. |
+| Cleanup ownership | `release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask | in_flight_mask`; zero ownership produces no cleanup keyboard event, and ambiguous packet cleanup is scoped to the uncertain packet ownership. |
 | Healthy natural finish | `clean_completion_proven` requires total = activated = released, zero drop/cancel/anomaly buckets, and zero final release obligation. Lifecycle termination has distinct semantics. |
 
 The documentation search found no current normative claim that the bounded
@@ -274,7 +285,7 @@ Risk summary for the coordinator:
 | Window can be destroyed/recreated by the same process between supervisor checks; foreground/owner validation can race with the following send | The current PID/process identity and fresh owner check reject observed owner changes, but Windows exposes no stable HWND lifetime token here and validation-to-send cannot be atomic. No such wrong-window send was reproduced in the final matrix. |
 | SendInput success is system-stream insertion, not game receipt/audio | The ReceiveOnly sink proves the project's sender-side event stream only. Game-side sampling, rendering, and sound onset remain unmeasured. |
 | Suspend/resume forensic unmatched Up | One in the final `suspend-resume` run; accepted safety-Up accounting residual, with zero stuck keys and failed releases. |
-| Broad legacy optimized symbol audit | `recover_missed_down_boundary` was not found as a distinct optimized symbol; scoped production suffix audits passed, but the broad audit remains incomplete. |
+| Legacy optimized symbol audit limitation | `recover_missed_down_boundary: NOT_FOUND` is accepted as a legacy tooling/symbol-retention limitation, not a runtime defect. The scoped `audit_prepared_normal_assembly.ps1` and `audit_modifier_guard_assembly.ps1` results are the shipping suffix acceptance evidence; the legacy audit does not independently certify the optimized recovery-helper body and remains incomplete, not clean. |
 | Small real-wait-core benchmark samples | Diagnostic evidence only; not statistical qualification or production sender-latency evidence. |
 
 No new defect was deterministically reproduced after #428 merged. The original
