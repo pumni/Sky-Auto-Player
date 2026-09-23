@@ -604,6 +604,16 @@ impl TrackedKeyState {
         test_started_ticks: Option<QpcTicks>,
     ) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
+        if prepared.packet().down_mask != 0
+            && let Some(hook) = self.physical_study_hook.as_ref()
+        {
+            hook(prepared.packet().down_mask);
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        if self.use_actual_pre_call_clock_for_test && self.qpc_clock.is_some() {
+            return self.send_prepared_physical_packet(prepared);
+        }
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(test_started_ticks) = test_started_ticks {
             return self.send_prepared_physical_packet_with_start(prepared, test_started_ticks);
         }

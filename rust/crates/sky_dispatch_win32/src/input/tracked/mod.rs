@@ -25,6 +25,12 @@ pub type CustomProbeFn =
     Box<dyn Fn(u16, u16) -> super::physical::InstrumentPhysicalState + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
+pub type PhysicalStudyHook = Box<dyn Fn(u16) + Send + Sync>;
+
+#[cfg(any(test, feature = "test-support"))]
+pub type PreflightPhysicalMaskProbe = Box<dyn Fn() -> u16 + Send + Sync>;
+
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -97,6 +103,12 @@ pub struct TrackedKeyState {
     pub custom_packet_emitter: Option<CustomPacketEmitterFn>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) custom_probe: Option<CustomProbeFn>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) physical_study_hook: Option<PhysicalStudyHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) use_actual_pre_call_clock_for_test: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) preflight_physical_mask_probe: Option<PreflightPhysicalMaskProbe>,
     #[cfg(any(test, feature = "test-support"))]
     pub full_instrument_release_calls: u64,
     #[cfg(any(test, feature = "test-support"))]

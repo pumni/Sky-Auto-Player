@@ -27,9 +27,12 @@ use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
     DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
 };
-use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, PhysicalKey, SendTransactionStatus};
+use sky_dispatch_win32::input::{
+    InstrumentKeyProfileSpec, PacketRetryReason, PhysicalKey, PhysicalPacket,
+    PreparedPhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
+};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU16, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const TEST_WALL_CLOCK_PREROLL_US: u64 = 500_000;
@@ -3650,6 +3653,70 @@ fn target_stamp_rearms_preflight_without_rechecking_steady_state() {
     };
     ensure_preflight_for_target(&backend, next_generation, &mut verified).unwrap();
     assert_eq!(verified, Some(next_generation));
+}
+
+#[test]
+fn cached_preflight_does_not_notice_a_late_physical_down_at_final_boundary() {
+    let physical_mask = Arc::new(AtomicU16::new(0));
+    let preflight_calls = Arc::new(AtomicU64::new(0));
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let preflight_mask = Arc::clone(&physical_mask);
+    let probe_count = Arc::clone(&preflight_calls);
+    let sender_count = Arc::clone(&send_calls);
+    let mut backend = TrackedKeyState::with_packet_emitter(move |packet| {
+        sender_count.fetch_add(1, Ordering::SeqCst);
+        SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: None,
+                completed_ticks: None,
+                timing_error: None,
+            },
+        }
+    });
+    backend.set_preflight_physical_mask_probe(move || {
+        probe_count.fetch_add(1, Ordering::SeqCst);
+        preflight_mask.load(Ordering::Acquire)
+    });
+
+    let stamp = TargetStamp {
+        hwnd: 123,
+        generation: 1,
+    };
+    let mut verified_target = None;
+    ensure_preflight_for_target(&backend, stamp, &mut verified_target).unwrap();
+    assert_eq!(preflight_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(verified_target, Some(stamp));
+
+    backend.set_physical_study_hook({
+        let physical_mask = Arc::clone(&physical_mask);
+        move |pending_down_mask| physical_mask.store(pending_down_mask, Ordering::Release)
+    });
+    ensure_preflight_for_target(&backend, stamp, &mut verified_target).unwrap();
+    assert_eq!(preflight_calls.load(Ordering::SeqCst), 1);
+
+    let packet = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1))
+        .expect("valid single-key Down packet");
+    let outcome =
+        backend.send_prepared_physical_packet_at_final_boundary(&packet, Some(QpcTicks::ZERO));
+    assert_eq!(outcome.status, SendTransactionStatus::Complete);
+    assert_eq!(physical_mask.load(Ordering::Acquire), 1);
+    assert_eq!(preflight_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 1);
+
+    let mut fresh_verification = None;
+    assert!(ensure_preflight_for_target(&backend, stamp, &mut fresh_verification).is_err());
+    assert_eq!(preflight_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fresh_verification, None);
 }
 
 #[test]

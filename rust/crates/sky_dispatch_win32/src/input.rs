@@ -8,6 +8,9 @@ pub mod profile;
 mod raw;
 mod scan_code;
 mod tracked;
+
+#[cfg(feature = "test-support")]
+pub mod physical_study;
 mod up_transaction;
 
 #[cfg(test)]

@@ -32,7 +32,10 @@ enum PreparedNormalAdmission {
 
 enum PreparedNormalPrecisionResult {
     Rejected(PreparedNormalAdmission),
-    Sent(sky_dispatch_win32::input::SendTransactionOutcome),
+    Sent {
+        result: sky_dispatch_win32::input::SendTransactionOutcome,
+        final_policy_qpc: Option<QpcTicks>,
+    },
 }
 
 /// The complete normal precision suffix.  The payload has already been
@@ -154,6 +157,12 @@ fn send_prepared_normal_precision_frame(
 
     // The prepared payload and Win32 call metadata are fully resolved by the
     // sender before its authoritative pre-call QPC boundary.
+    // P7a's test-support benchmark records the final admission-to-SendInput
+    // suffix without adding a QPC read to the production path.
+    #[cfg(any(test, feature = "test-support"))]
+    let final_policy_qpc = backend.physical_study_final_policy_qpc_for_test();
+    #[cfg(not(any(test, feature = "test-support")))]
+    let final_policy_qpc = None;
     let result = backend.send_prepared_physical_packet_at_final_boundary(
         &frame.view.prepared_packet,
         #[cfg(any(test, feature = "test-support"))]
@@ -161,7 +170,10 @@ fn send_prepared_normal_precision_frame(
         #[cfg(not(any(test, feature = "test-support")))]
         None,
     );
-    Ok(PreparedNormalPrecisionResult::Sent(result))
+    Ok(PreparedNormalPrecisionResult::Sent {
+        result,
+        final_policy_qpc,
+    })
 }
 
 /// Normal playback precision envelope for one startup-prepared frame.
@@ -266,8 +278,11 @@ pub(crate) fn dispatch_prepared_normal_frame(
         Ok(result) => result,
         Err(error) => return DispatchStep::TerminateStatic(error),
     };
-    let result = match precision_result {
-        PreparedNormalPrecisionResult::Sent(result) => result,
+    let (result, prepared_final_policy_qpc) = match precision_result {
+        PreparedNormalPrecisionResult::Sent {
+            result,
+            final_policy_qpc,
+        } => (result, final_policy_qpc),
         PreparedNormalPrecisionResult::Rejected(PreparedNormalAdmission::EarlyControl) => {
             runtime.verified_target = None;
             return DispatchStep::Continue;
@@ -342,6 +357,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
         physical_target_qpc,
         physical_timing_window,
         boundary_crossing_qpc,
+        prepared_final_policy_qpc,
         result,
         explicitly_cancelled_by_suspension,
         observer,
