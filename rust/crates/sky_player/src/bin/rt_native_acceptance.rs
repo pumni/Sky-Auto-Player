@@ -5,9 +5,12 @@ mod acceptance {
 #[path = "release_gap_stress.rs"] mod release_gap_stress;
 #[path = "snapshot_report.rs"] mod snapshot_report;
 #[path = "scenarios.rs"] mod scenarios;
+#[path = "modifier_guard.rs"] mod modifier_guard;
+#[path = "arguments.rs"] mod arguments;
 #[path = "owner_identity.rs"] mod owner_identity;
 use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
-use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, production_options, scenario_plan};
+use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, scenario_plan};
+use arguments::{ParsedCommand, RunArgs, Scenario};
 #[cfg(test)]
 pub(super) use scenarios::w4_profile_spec;
 use snapshot_report::{
@@ -38,6 +41,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 #[cfg(windows)]
 use std::thread;
 #[cfg(windows)]
@@ -67,29 +71,6 @@ const ACCEPTANCE_TIMING_MARGIN_MAX_US: u64 = 3_000;
 const ACCEPTANCE_TIMING_MARGIN_STEP_US: u64 = 100;
 const ACCEPTANCE_INPUT_PATH_WARN_US: u64 = 300;
 const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scenario { CanonicalSingle, CanonicalChord, CanonicalMaxChord, Hold, LongSingleSequence, DenseAlternating, ChordSweep, NearMinimumRetrigger, RapidRetrigger, ReleaseGapStress, MixedUpDown, AmbiguousPacket, PreflightUserHeld, CleanupFullRelease, FocusLoss, TargetHwndChange, OwnerMismatch, OwnerQueryFailure, OwnerProcessTermination, PauseResume, SuspendResume, StopCleanup, SkipCleanup, SupervisorLeaseExpiry, W4Noncanonical, TimingMarginSweep }
-impl Scenario {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value { "canonical-single" => Ok(Self::CanonicalSingle), "canonical-chord" => Ok(Self::CanonicalChord), "canonical-max-chord" => Ok(Self::CanonicalMaxChord), "hold" => Ok(Self::Hold), "long-single-sequence" => Ok(Self::LongSingleSequence), "dense-alternating" => Ok(Self::DenseAlternating), "chord-sweep" => Ok(Self::ChordSweep), "near-minimum-retrigger" => Ok(Self::NearMinimumRetrigger), "rapid-retrigger" => Ok(Self::RapidRetrigger), "release-gap-stress" => Ok(Self::ReleaseGapStress), "mixed-up-down" => Ok(Self::MixedUpDown), "ambiguous-packet" => Ok(Self::AmbiguousPacket), "preflight-user-held" => Ok(Self::PreflightUserHeld), "cleanup-full-release" => Ok(Self::CleanupFullRelease), "focus-loss" => Ok(Self::FocusLoss), "target-hwnd-change" => Ok(Self::TargetHwndChange), "owner-mismatch" => Ok(Self::OwnerMismatch), "owner-query-failure" => Ok(Self::OwnerQueryFailure), "owner-process-termination" => Ok(Self::OwnerProcessTermination), "pause-resume" => Ok(Self::PauseResume), "suspend-resume" => Ok(Self::SuspendResume), "stop-cleanup" => Ok(Self::StopCleanup), "skip-cleanup" => Ok(Self::SkipCleanup), "supervisor-lease-expiry" => Ok(Self::SupervisorLeaseExpiry), "w4-noncanonical" => Ok(Self::W4Noncanonical), "timing-margin-sweep" => Ok(Self::TimingMarginSweep), _ => Err(format!("unsupported scenario: {value}")) }
-    }
-    const fn label(self) -> &'static str {
-        match self { Self::CanonicalSingle => "canonical-single", Self::CanonicalChord => "canonical-chord", Self::CanonicalMaxChord => "canonical-max-chord", Self::Hold => "hold", Self::LongSingleSequence => "long-single-sequence", Self::DenseAlternating => "dense-alternating", Self::ChordSweep => "chord-sweep", Self::NearMinimumRetrigger => "near-minimum-retrigger", Self::RapidRetrigger => "rapid-retrigger", Self::ReleaseGapStress => "release-gap-stress", Self::MixedUpDown => "mixed-up-down", Self::AmbiguousPacket => "ambiguous-packet", Self::PreflightUserHeld => "preflight-user-held", Self::CleanupFullRelease => "cleanup-full-release", Self::FocusLoss => "focus-loss", Self::TargetHwndChange => "target-hwnd-change", Self::OwnerMismatch => "owner-mismatch", Self::OwnerQueryFailure => "owner-query-failure", Self::OwnerProcessTermination => "owner-process-termination", Self::PauseResume => "pause-resume", Self::SuspendResume => "suspend-resume", Self::StopCleanup => "stop-cleanup", Self::SkipCleanup => "skip-cleanup", Self::SupervisorLeaseExpiry => "supervisor-lease-expiry", Self::W4Noncanonical => "w4-noncanonical", Self::TimingMarginSweep => "timing-margin-sweep" }
-    }
-    const fn needs_focus_probe(self) -> bool {
-        matches!(self, Self::FocusLoss)
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RunArgs {
-    run_id: String, sink_ready: PathBuf, sink_events: PathBuf, target_hwnd: isize, scenario: Scenario,
-    evidence: PathBuf, timing_margin_us: u64, focus_probe_ready: Option<PathBuf>, focus_probe_events: Option<PathBuf>, focus_probe_hwnd: Option<isize>, focus_restore_request: Option<PathBuf>,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ParsedCommand {
-    Help,
-    Run(Box<RunArgs>),
-}
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct ReadyRecord { schema_version: u32, run_id: String, role: String, sink_kind: String, pid: u32, hwnd: i64, title: String, process: String, input_policy: String, event_log_id: String, event_schema_version: u32, process_start_time_filetime: u64 }
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct EventRecord { schema_version: u32, run_id: String, role: String, event_log_id: String, sequence: u64, kind: String, scan_code: u16, extended: bool, virtual_key: i32, message: u32, observed_utc: String }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] struct LogCursor { offset: u64, sequence: u64 }
@@ -565,6 +546,9 @@ fn run_windows(args: RunArgs) -> i32 {
             return write_report(&args, Verdict::Inconclusive, $reason, $details)
         };
     }
+    if let Some(reason) = modifier_guard::unsupported_query_seam_reason(args.scenario) {
+        inconclusive!(reason, json!({ "modifier_query_seam_enabled": false }));
+    }
     let targets = match authorize(&args) {
         Ok(targets) => targets,
         Err(error) => inconclusive!(&error, json!({})),
@@ -586,7 +570,8 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
-    let session = match NativeDispatchSession::new(production_options(plan.schedule, plan.profile, args.timing_margin_us, args.scenario)) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
+    let (options, modifier_query_count) = modifier_guard::native_session_options(plan.schedule, plan.profile, args.timing_margin_us, args.scenario);
+    let session = match NativeDispatchSession::new(options) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
     let owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
@@ -763,6 +748,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
         object.insert("expected_down_key_count".to_string(), json!(expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
+        modifier_guard::attach_query_evidence(object, args.scenario, modifier_query_count.load(Ordering::SeqCst));
         owner_binding.insert_report_fields(args.scenario, object);
         let power = session.system_power_snapshot();
         object.insert("system_power".to_string(), json!({"suspended": power.suspended, "down_blocked": power.down_blocked, "suspend_notifications": power.suspend_notifications, "resume_notifications": power.resume_notifications, "duplicate_notifications": power.duplicate_notifications}));
@@ -783,7 +769,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_target_preflight_failure = args.scenario == Scenario::TargetHwndChange && target_change_preflight_error(&snapshot);
     let target_cleanup_exception = target_change_cleanup_exception(&snapshot);
     let expected_supervisor_expiry = args.scenario == Scenario::SupervisorLeaseExpiry && supervisor_expiry_cleanup_exception(&snapshot); let expected_ambiguous_cleanup = args.scenario == Scenario::AmbiguousPacket && ambiguous_packet_cleanup_qualified(&snapshot, 0b11);
-    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || snapshot.final_release_obligation_mask != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || (snapshot.sendinput_partial_events != 0 && !expected_ambiguous_cleanup) || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry && !expected_ambiguous_cleanup && !owner_identity::failure_matches(args.scenario, snapshot.terminal_error.as_deref()))
+    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || snapshot.final_release_obligation_mask != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || (snapshot.sendinput_partial_events != 0 && !expected_ambiguous_cleanup) || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry && !expected_ambiguous_cleanup && !modifier_guard::requires_test_query_seam(args.scenario) && !owner_identity::failure_matches(args.scenario, snapshot.terminal_error.as_deref()))
     {
         return write_report(
             &args,
@@ -846,6 +832,11 @@ fn run_windows(args: RunArgs) -> i32 {
     ) {
         return write_report(&args, Verdict::Fail, &error, details);
     }
+    let mut modifier_terminal_details = Some(details);
+    if let Some(code) = modifier_guard::terminal_result(&args, &mut modifier_terminal_details, args.scenario, snapshot.terminal_error.as_deref(), modifier_query_count.load(Ordering::SeqCst), &sink_events, plan.profile.as_ref(), outcome.attempted_mask as u64, outcome.attempts as u64) {
+        return code;
+    }
+    let details = modifier_terminal_details.expect("non-modifier scenario report evidence is available");
     let (generation_verdict, generation_reason) = healthy_generation_qualification(
         args.scenario,
         snapshot.generation_accounting,

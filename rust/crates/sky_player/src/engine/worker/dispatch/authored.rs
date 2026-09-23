@@ -176,6 +176,7 @@ fn commit_down_send_outcome(
         local_metrics,
         focus_active,
         target,
+        backend,
         quit_requested,
         skip_requested,
         panic_requested,
@@ -388,6 +389,7 @@ fn admit_authored_down(
     })
 }
 #[allow(clippy::too_many_arguments)]
+#[rustfmt::skip]
 fn finalize_authored_down_admission(
     view: &AuthoredBatchView,
     config: &WorkerConfig,
@@ -397,6 +399,7 @@ fn finalize_authored_down_admission(
     local_metrics: &mut WorkerMetricsLocal,
     focus_active: &AtomicBool,
     target: &SessionTarget,
+    backend: &TrackedKeyState,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -447,8 +450,10 @@ fn finalize_authored_down_admission(
         supervisor_expired,
         system_power: Some(system_power),
     };
-    let control_admission = final_control_precheck(control_signals);
-    if !matches!(control_admission, FinalControlAdmission::Allowed) {
+    if !matches!(
+        final_control_precheck(control_signals),
+        FinalControlAdmission::Allowed
+    ) {
         runtime.verified_target = None;
         record_final_gate_rejection(local_metrics, FinalGateRejection::Control);
         return Ok(AdmissionOutcome::ControlRejected);
@@ -530,6 +535,16 @@ fn finalize_authored_down_admission(
     if !final_atomic_revalidation(control_signals, runtime, local_metrics) {
         return Ok(AdmissionOutcome::ControlRejected);
     }
+    if let Some(rejection) = super::super::admission::modifier_guard_and_final_revalidation(
+        view_has_down, backend, preflight_target, config, focus_active, target,
+        control_signals,
+        #[cfg(any(test, feature = "test-support"))] quit_requested,
+        #[cfg(any(test, feature = "test-support"))] skip_requested,
+        #[cfg(any(test, feature = "test-support"))] panic_requested,
+        #[cfg(any(test, feature = "test-support"))] desired_pause,
+        #[cfg(any(test, feature = "test-support"))] system_power,
+        runtime, local_metrics, qpc_clock, clock_state, progress_clock,
+    )? { return Ok(rejection); }
     #[cfg(any(test, feature = "test-support"))]
     let final_policy_qpc = if test_direct_boundary {
         physical_target_qpc

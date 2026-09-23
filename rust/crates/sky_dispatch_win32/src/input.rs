@@ -1,6 +1,7 @@
 //! Windows SendInput API wrappers, input packet prewarming, and tracked key backend.
 
 mod down_transaction;
+mod modifier_guard;
 mod outcome;
 mod packet;
 mod physical;
@@ -16,6 +17,7 @@ mod up_transaction;
 #[cfg(test)]
 pub(crate) use down_transaction::emit_down_with;
 pub use down_transaction::{emit_down, emit_down_once, emit_down_once_with};
+pub use modifier_guard::{ModifierKeyObservation, ModifierMask};
 pub use outcome::{
     PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket,
     PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,

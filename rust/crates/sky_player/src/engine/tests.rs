@@ -94,6 +94,7 @@ fn test_session_options(
         timer_lifecycle_context: None,
         prepared_packet_ambiguity_mask: None,
         preflight_user_held_mask: None,
+        modifier_key_state_query_for_test: None,
     }
 }
 
@@ -869,6 +870,240 @@ fn production_profile_has_no_observer_samples_or_trace_records() {
     assert!(snapshot.recent_latencies_us.is_empty());
     assert_eq!(snapshot.observer_queue_high_watermark, 0);
     assert_eq!(telemetry["records"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn modifier_guard_rejects_each_modifier_and_exact_multi_mask_without_send() {
+    let held_sets: &[(&[i32], u8)] = &[
+        (&[0x5B], 0x01),
+        (&[0x5C], 0x02),
+        (&[0x11], 0x04),
+        (&[0x10], 0x08),
+        (&[0x12], 0x10),
+        (&[0x5B, 0x11, 0x12], 0x15),
+    ];
+
+    for &(held_vks, expected_mask) in held_sets {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_packet_capture();
+        let query_count = Arc::new(AtomicU64::new(0));
+        let counted = Arc::clone(&query_count);
+        let held_vks = held_vks.to_vec();
+        harness.set_modifier_key_state_query_for_test(move |virtual_key| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            if held_vks.contains(&virtual_key) {
+                i16::MIN
+            } else {
+                0
+            }
+        });
+        harness.prepare_prepared_stream_for_test();
+
+        let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000);
+        assert!(matches!(
+            step,
+            super::worker::DispatchStep::Terminate(ref error)
+                if error == &format!("physical_modifier_held:{expected_mask:02X}")
+        ));
+        assert_eq!(query_count.load(Ordering::SeqCst), 5);
+        assert!(packets.lock().expect("packet capture").is_empty());
+    }
+}
+
+#[test]
+fn modifier_guard_rejects_first_down_without_send_or_unowned_cleanup() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let packets = harness.configure_packet_capture();
+    let query_count = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&query_count);
+    harness.set_modifier_key_state_query_for_test(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        i16::MIN
+    });
+    harness.prepare_prepared_stream_for_test();
+    let accounting_before = harness.generation_accounting_for_test();
+    let cursor_before = harness.prepared_cursor_for_test();
+
+    let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000);
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::Terminate(ref error)
+            if error == "physical_modifier_held:1F"
+    ));
+    assert_eq!(query_count.load(Ordering::SeqCst), 5);
+    assert!(packets.lock().expect("packet capture").is_empty());
+    assert_eq!(harness.backend_active_mask(), 0);
+    assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
+    assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+
+    let mut cleanup = super::worker::FinalizeTestObservation::default();
+    let _ = harness.finalize_worker_for_test(false, &mut cleanup);
+    assert_eq!(cleanup.attempted_mask, 0);
+    assert!(packets.lock().expect("packet capture").is_empty());
+}
+
+#[test]
+fn modifier_guard_queries_mixed_packet_once_and_keeps_up_before_down_send() {
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let packets = harness.configure_packet_capture();
+    let query_count = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&query_count);
+    harness.set_modifier_key_state_query_for_test(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        0
+    });
+    harness.prepare_prepared_stream_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(query_count.load(Ordering::SeqCst), 10);
+    assert_eq!(
+        *packets.lock().expect("packet capture"),
+        vec![
+            PhysicalPacket::new(0, 0b001),
+            PhysicalPacket::new(0b001, 0b010),
+        ]
+    );
+}
+
+#[test]
+fn modifier_guard_rejection_after_owned_down_runs_only_scoped_cleanup() {
+    let mut harness = ProductionDispatchTestHarness::new_mixed();
+    let packets = harness.configure_packet_capture();
+    let query_count = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&query_count);
+    harness.set_modifier_key_state_query_for_test(move |_| {
+        let index = counted.fetch_add(1, Ordering::SeqCst);
+        if index < 5 { 0 } else { i16::MIN }
+    });
+    harness.prepare_prepared_stream_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.backend_active_mask(), 0b001);
+    let accounting_before_rejection = harness.generation_accounting_for_test();
+    let cursor_before_rejection = harness.prepared_cursor_for_test();
+
+    let step = harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000);
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::Terminate(ref error)
+            if error == "physical_modifier_held:1F"
+    ));
+    assert_eq!(query_count.load(Ordering::SeqCst), 10);
+    assert_eq!(harness.prepared_cursor_for_test(), cursor_before_rejection);
+    assert_eq!(
+        harness.generation_accounting_for_test(),
+        accounting_before_rejection
+    );
+    assert_eq!(
+        *packets.lock().expect("packet capture"),
+        vec![PhysicalPacket::new(0, 0b001)]
+    );
+
+    let mut cleanup = super::worker::FinalizeTestObservation::default();
+    let _ = harness.finalize_worker_for_test(false, &mut cleanup);
+    assert_eq!(cleanup.attempted_mask, 0b001);
+    assert_eq!(cleanup.active_mask, 0);
+    assert_eq!(
+        *packets.lock().expect("packet capture"),
+        vec![PhysicalPacket::new(0, 0b001)]
+    );
+}
+
+#[test]
+fn modifier_guard_up_only_packet_performs_no_additional_modifier_queries() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let packets = harness.configure_packet_capture();
+    let query_count = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&query_count);
+    harness.set_modifier_key_state_query_for_test(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        0
+    });
+    harness.prepare_prepared_stream_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(query_count.load(Ordering::SeqCst), 5);
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(query_count.load(Ordering::SeqCst), 5);
+    assert_eq!(packets.lock().expect("packet capture").len(), 2);
+}
+
+#[test]
+fn modifier_guard_final_revalidation_rejects_post_probe_p5_target_aba() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let packets = harness.configure_packet_capture();
+    let query_count = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&query_count);
+    harness.set_modifier_key_state_query_for_test(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        0
+    });
+    harness.set_post_modifier_revalidation_race_hook(|_, target, _, _, _, _, _| {
+        target.publish(456);
+    });
+    harness.prepare_prepared_stream_for_test();
+    let accounting_before = harness.generation_accounting_for_test();
+    let cursor_before = harness.prepared_cursor_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::Continue
+    ));
+    assert_eq!(query_count.load(Ordering::SeqCst), 5);
+    assert!(packets.lock().expect("packet capture").is_empty());
+    assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
+    assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+}
+
+#[test]
+fn modifier_guard_final_revalidation_rejects_post_probe_p6_owner_loss() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_override_reset = FocusOverrideResetGuard;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.set_require_focus_for_test(true);
+    harness.bind_owner_identity_for_test(77);
+    let packets = harness.configure_packet_capture();
+    let query_count = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&query_count);
+    harness.set_modifier_key_state_query_for_test(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        0
+    });
+    harness.set_post_modifier_revalidation_race_hook(|_, target, _, _, _, _, _| {
+        target.invalidate_owner_identity();
+    });
+    harness.prepare_prepared_stream_for_test();
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
+    let accounting_before = harness.generation_accounting_for_test();
+    let cursor_before = harness.prepared_cursor_for_test();
+
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        super::worker::DispatchStep::TerminateStatic("prepared_down_owner_process_terminated")
+    ));
+    assert_eq!(query_count.load(Ordering::SeqCst), 5);
+    assert!(packets.lock().expect("packet capture").is_empty());
+    assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
+    assert_eq!(harness.generation_accounting_for_test(), accounting_before);
 }
 
 #[test]

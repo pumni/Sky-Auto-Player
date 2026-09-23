@@ -16,6 +16,7 @@ use sky_player::engine::{
 };
 use smallvec::SmallVec;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 pub(super) fn action(
     source_action_index: u32,
@@ -241,6 +242,28 @@ pub(super) fn scenario_plan(
                 vec![],
                 true,
             ),
+            Scenario::ModifierHeldFinalBoundary => (
+                vec![
+                    action(0, ActionKind::Down, 50_000, &[0]),
+                    action(1, ActionKind::Up, 80_000, &[0]),
+                ],
+                None,
+                vec![],
+                vec![],
+                true,
+            ),
+            Scenario::ModifierHeldAfterOwned => (
+                vec![
+                    action(0, ActionKind::Down, 50_000, &[0]),
+                    action(1, ActionKind::Down, 100_000, &[1]),
+                    action(2, ActionKind::Up, 150_000, &[0]),
+                    action(3, ActionKind::Up, 200_000, &[1]),
+                ],
+                None,
+                vec![0],
+                vec![0],
+                false,
+            ),
             Scenario::CleanupFullRelease => (
                 vec![
                     action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()),
@@ -343,7 +366,10 @@ pub(super) fn scenario_plan(
         .map_err(|error| format!("scenario schedule compilation failed: {error}"))?;
     let expected_safety_up_slots = match scenario {
         Scenario::CleanupFullRelease => (0..MAX_KEYS).collect(),
-        Scenario::StopCleanup | Scenario::SkipCleanup | Scenario::SuspendResume => vec![0],
+        Scenario::StopCleanup
+        | Scenario::SkipCleanup
+        | Scenario::SuspendResume
+        | Scenario::ModifierHeldAfterOwned => vec![0],
         Scenario::AmbiguousPacket => vec![0, 1],
         _ => Vec::new(),
     };
@@ -377,9 +403,10 @@ pub(super) fn production_options(
     profile: Option<InstrumentKeyProfileSpec>,
     timing_margin_us: u64,
     scenario: Scenario,
+    modifier_query_count: Arc<AtomicU64>,
 ) -> NativeSessionOptions {
-    #[cfg(not(feature = "test-support"))]
-    let _ = scenario;
+    let modifier_key_state_query_for_test =
+        super::modifier_guard::query_for_scenario(scenario, Arc::clone(&modifier_query_count));
     NativeSessionOptions {
         schedule,
         backend: BackendConfig::Production,
@@ -429,6 +456,8 @@ pub(super) fn production_options(
         prepared_packet_ambiguity_mask: (scenario == Scenario::AmbiguousPacket).then_some(0b11),
         #[cfg(feature = "test-support")]
         preflight_user_held_mask: (scenario == Scenario::PreflightUserHeld).then_some(0b01),
+        #[cfg(feature = "test-support")]
+        modifier_key_state_query_for_test,
     }
 }
 

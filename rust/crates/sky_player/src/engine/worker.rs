@@ -27,9 +27,10 @@ pub(crate) use admission::invoke_final_gate_race_hook;
 pub(crate) use admission::{
     DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, ensure_preflight_for_target, enter_focus_pause,
-    final_control_precheck, final_down_target_admission, focus_matches, focus_matches_hwnd,
-    handle_final_focus_loss, load_target_stamp, record_final_gate_rejection,
-    target_stamp_still_current, trace_kind_for_packet_kind,
+    final_control_precheck, final_down_atomic_revalidation, final_down_target_admission,
+    focus_matches, focus_matches_hwnd, handle_final_focus_loss, load_target_stamp,
+    modifier_guard_rejection_step, record_final_gate_rejection, target_stamp_still_current,
+    trace_kind_for_packet_kind,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
@@ -394,6 +395,8 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_gate_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) final_gate_post_modifier_race_hook: Option<super::config::FinalGateRaceHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     /// Musical Down admission state. Up-only safety sends never mutate this
@@ -692,6 +695,8 @@ impl<'a> Worker<'a> {
                     prepared_packet_ambiguity_mask,
                     #[cfg(any(test, feature = "test-support"))]
                     preflight_user_held_mask,
+                    #[cfg(any(test, feature = "test-support"))]
+                    modifier_key_state_query_for_test,
                     instrument_key_profile: _,
                 },
             instrument_key_profile,
@@ -719,6 +724,8 @@ impl<'a> Worker<'a> {
                 prepared_packet_ambiguity_mask,
                 #[cfg(any(test, feature = "test-support"))]
                 preflight_user_held_mask,
+                #[cfg(any(test, feature = "test-support"))]
+                modifier_key_state_query_for_test,
             },
             shared,
             epoch_qpc,

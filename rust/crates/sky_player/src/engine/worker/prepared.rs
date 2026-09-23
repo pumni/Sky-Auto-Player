@@ -161,6 +161,11 @@ impl PreparedDispatchStream {
         self.entries.get(self.cursor)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn cursor_for_test(&self) -> usize {
+        self.cursor
+    }
+
     #[inline]
     pub(crate) fn advance(&mut self) -> Result<(), &'static str> {
         self.cursor = self
