@@ -5,16 +5,23 @@ use std::cell::Cell;
 #[cfg(feature = "test-support")]
 use std::sync::Mutex;
 #[cfg(feature = "test-support")]
+use std::sync::atomic::AtomicU64;
+#[cfg(feature = "test-support")]
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 #[cfg(feature = "test-support")]
 thread_local! {
     static FOREGROUND_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
     static REAL_FOREGROUND_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
+    static OWNER_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
 }
 
 #[cfg(feature = "test-support")]
 static TEST_FOREGROUND_HWND: AtomicIsize = AtomicIsize::new(isize::MIN);
+#[cfg(feature = "test-support")]
+static TEST_FOREGROUND_OWNER: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "test-support")]
+static WINDOW_IDENTITY_AUTHORITY_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "test-support")]
 static TEST_FOREGROUND_LOCK: Mutex<()> = Mutex::new(());
 
@@ -22,6 +29,7 @@ static TEST_FOREGROUND_LOCK: Mutex<()> = Mutex::new(());
 pub fn reset_foreground_query_count() {
     FOREGROUND_QUERY_COUNT.with(|count| count.set(0));
     REAL_FOREGROUND_QUERY_COUNT.with(|count| count.set(0));
+    OWNER_QUERY_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(feature = "test-support")]
@@ -32,6 +40,11 @@ pub fn foreground_query_count() -> u64 {
 #[cfg(feature = "test-support")]
 pub fn real_foreground_query_count() -> u64 {
     REAL_FOREGROUND_QUERY_COUNT.with(Cell::get)
+}
+
+#[cfg(feature = "test-support")]
+pub fn owner_query_count() -> u64 {
+    OWNER_QUERY_COUNT.with(Cell::get)
 }
 
 /// Sample the host's actual foreground window for benchmark setup. This seam
@@ -60,6 +73,29 @@ pub fn current_foreground_window_for_benchmark() -> Option<isize> {
 #[cfg(feature = "test-support")]
 pub fn set_foreground_window_for_test(hwnd: Option<isize>) {
     TEST_FOREGROUND_HWND.store(hwnd.unwrap_or(isize::MIN), Ordering::Release);
+    if hwnd.is_some() {
+        let _ = TEST_FOREGROUND_OWNER.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire);
+    } else {
+        TEST_FOREGROUND_OWNER.store(0, Ordering::Release);
+    }
+}
+
+/// Override one foreground owner query. `None` clears the override,
+/// `Some(None)` simulates an unavailable owner, and `Some(Some(pid))` returns
+/// that PID. The seam is read without locking on the worker path.
+#[cfg(feature = "test-support")]
+pub fn set_foreground_owner_for_test(owner: Option<Option<u32>>) {
+    let encoded = match owner {
+        None => 0,
+        Some(None) => u64::MAX,
+        Some(Some(pid)) => u64::from(pid) + 1,
+    };
+    TEST_FOREGROUND_OWNER.store(encoded, Ordering::Release);
+}
+
+#[cfg(feature = "test-support")]
+pub fn window_identity_authority_drop_count_for_test() -> u64 {
+    WINDOW_IDENTITY_AUTHORITY_DROP_COUNT.load(Ordering::Acquire)
 }
 
 /// Serialize tests that temporarily override the process-wide foreground
@@ -100,20 +136,120 @@ pub fn foreground_window_matches(target_hwnd: isize) -> bool {
     }
 }
 
-/// Identity of a live window and the process that owns it.
-///
-/// This is deliberately a read-only boundary for qualification tooling. It
-/// does not inspect process memory or command lines, and it does not grant
-/// permission to send input by itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WindowIdentity {
-    pub hwnd: isize,
-    pub owner_pid: u32,
-    pub title: String,
-    /// Windows FILETIME ticks since 1601-01-01 UTC, represented as one u64.
-    pub process_start_time_filetime: u64,
-    pub process_image_basename: String,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForegroundOwnerMatch {
+    Match,
+    NotForeground,
+    OwnerMismatch,
+    OwnerQueryUnavailable,
 }
+
+/// Read the exact foreground HWND once, then resolve that same HWND's owner
+/// PID. This is the final control-plane identity query used for physical Down
+/// admission; callers must bypass it for UpOnly and non-focus sessions.
+pub fn foreground_window_owner_matches(
+    target_hwnd: isize,
+    expected_owner_pid: u32,
+) -> ForegroundOwnerMatch {
+    if target_hwnd == 0 || expected_owner_pid == 0 {
+        return ForegroundOwnerMatch::OwnerQueryUnavailable;
+    }
+    #[cfg(feature = "test-support")]
+    FOREGROUND_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+
+    #[cfg(feature = "test-support")]
+    let foreground_hwnd = {
+        let overridden = TEST_FOREGROUND_HWND.load(Ordering::Acquire);
+        if overridden != isize::MIN {
+            overridden
+        } else {
+            #[cfg(windows)]
+            {
+                #[cfg(feature = "test-support")]
+                REAL_FOREGROUND_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+                // SAFETY: GetForegroundWindow has no pointer arguments and the
+                // HWND is only compared and passed to its documented owner query.
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() as isize
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                0
+            }
+        }
+    };
+    #[cfg(not(feature = "test-support"))]
+    let foreground_hwnd = {
+        #[cfg(windows)]
+        {
+            // SAFETY: GetForegroundWindow has no pointer arguments and the
+            // HWND is only compared and passed to its documented owner query.
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() as isize }
+        }
+        #[cfg(not(windows))]
+        {
+            0
+        }
+    };
+
+    if foreground_hwnd != target_hwnd {
+        return ForegroundOwnerMatch::NotForeground;
+    }
+
+    #[cfg(feature = "test-support")]
+    {
+        match TEST_FOREGROUND_OWNER.load(Ordering::Acquire) {
+            0 => {}
+            u64::MAX => {
+                OWNER_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+                return ForegroundOwnerMatch::OwnerQueryUnavailable;
+            }
+            encoded => {
+                OWNER_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+                let owner_pid = (encoded - 1) as u32;
+                return if owner_pid == expected_owner_pid {
+                    ForegroundOwnerMatch::Match
+                } else {
+                    ForegroundOwnerMatch::OwnerMismatch
+                };
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+        let mut owner_pid = 0u32;
+        #[cfg(feature = "test-support")]
+        OWNER_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+        // SAFETY: the exact foreground HWND was sampled above and this call
+        // writes only the owner PID into caller-owned storage.
+        if unsafe {
+            GetWindowThreadProcessId(
+                foreground_hwnd as windows_sys::Win32::Foundation::HWND,
+                &mut owner_pid,
+            )
+        } == 0
+            || owner_pid == 0
+        {
+            return ForegroundOwnerMatch::OwnerQueryUnavailable;
+        }
+        if owner_pid == expected_owner_pid {
+            ForegroundOwnerMatch::Match
+        } else {
+            ForegroundOwnerMatch::OwnerMismatch
+        }
+    }
+
+    #[cfg(not(windows))]
+    ForegroundOwnerMatch::OwnerQueryUnavailable
+}
+
+mod window_identity;
+pub use window_identity::{
+    WindowIdentity, WindowIdentityAuthority, WindowIdentityContinuity, retain_window_identity,
+};
 
 /// Result of the control-plane integrity comparison used to identify a
 /// likely Windows UIPI block before a physical session is armed.
@@ -628,6 +764,112 @@ mod tests {
                     "realtime worker hot path contains forbidden integrity query {forbidden}"
                 );
             }
+        }
+    }
+
+    #[cfg(all(windows, feature = "test-support"))]
+    #[test]
+    fn retained_process_object_reports_child_termination_without_pid_reopen() {
+        use super::{
+            WindowIdentity, WindowIdentityAuthority, WindowIdentityContinuity, filetime_ticks,
+        };
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+        use windows_sys::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            QueryFullProcessImageNameW,
+        };
+
+        let executable = std::env::current_exe().expect("current test executable");
+        let mut child = Command::new(executable)
+            .args([
+                "--exact",
+                "focus::tests::retained_process_child_for_identity_test",
+                "--ignored",
+            ])
+            .env("SKY_TEST_RETAINED_IDENTITY_CHILD", "1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn isolated child test process");
+        std::thread::sleep(Duration::from_millis(100));
+
+        // SAFETY: only limited query access is requested, inheritance is
+        // disabled, and the process ID belongs to the test-owned child.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, child.id()) };
+        assert!(!process.is_null(), "open child with query-limited rights");
+        let mut creation = windows_sys::Win32::Foundation::FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let mut exit = windows_sys::Win32::Foundation::FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let mut kernel = windows_sys::Win32::Foundation::FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let mut user = windows_sys::Win32::Foundation::FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        assert_ne!(
+            unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) },
+            0
+        );
+        let mut image = [0u16; 4096];
+        let mut image_length = image.len() as u32;
+        assert_ne!(
+            unsafe {
+                QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut image_length)
+            },
+            0
+        );
+        let image_identity =
+            String::from_utf16(&image[..image_length as usize]).expect("child executable path");
+        let image_basename = std::path::Path::new(&image_identity)
+            .file_name()
+            .expect("child executable basename")
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        let authority = WindowIdentityAuthority {
+            identity: WindowIdentity {
+                hwnd: 1,
+                owner_pid: child.id(),
+                title: String::new(),
+                process_start_time_filetime: filetime_ticks(creation),
+                process_image_basename: image_basename,
+            },
+            image_identity,
+            process_handle: Some(process as isize),
+        };
+        assert_eq!(
+            authority.process_continuity(),
+            WindowIdentityContinuity::Continuous
+        );
+
+        child.kill().expect("terminate the test-owned child");
+        let _ = child.wait().expect("wait for child termination");
+        assert_eq!(
+            authority.process_continuity(),
+            WindowIdentityContinuity::ProcessTerminated
+        );
+        // Keep the limited-query handle alive through the post-exit check.
+        let drop_count_before = super::window_identity_authority_drop_count_for_test();
+        drop(authority);
+        assert_eq!(
+            super::window_identity_authority_drop_count_for_test(),
+            drop_count_before + 1
+        );
+    }
+
+    #[cfg(all(windows, feature = "test-support"))]
+    #[test]
+    #[ignore = "spawned only by retained_process_object_reports_child_termination_without_pid_reopen"]
+    fn retained_process_child_for_identity_test() {
+        if std::env::var_os("SKY_TEST_RETAINED_IDENTITY_CHILD").is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(30));
         }
     }
 }

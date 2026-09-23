@@ -193,6 +193,9 @@ fn canonical_and_w4_expectations_are_physical() {
         "ambiguous-packet",
         "preflight-user-held",
         "target-hwnd-change",
+        "owner-mismatch",
+        "owner-query-failure",
+        "owner-process-termination",
         "pause-resume",
         "suspend-resume",
         "stop-cleanup",
@@ -238,7 +241,13 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert!(preflight.expected_safety_up_slots.is_empty());
     assert!(preflight.allow_unpaired_cleanup_ups);
 
-    for scenario in [Scenario::TargetHwndChange, Scenario::SupervisorLeaseExpiry] {
+    for scenario in [
+        Scenario::TargetHwndChange,
+        Scenario::OwnerMismatch,
+        Scenario::OwnerQueryFailure,
+        Scenario::OwnerProcessTermination,
+        Scenario::SupervisorLeaseExpiry,
+    ] {
         let plan = scenario_plan(scenario, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
         assert!(plan.expected_down_slots.is_empty(), "{scenario:?} Down");
         assert!(plan.expected_up_slots.is_empty(), "{scenario:?} Up");

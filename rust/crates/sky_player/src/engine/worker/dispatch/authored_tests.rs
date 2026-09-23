@@ -104,9 +104,12 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
     let atomic_focus = target_admission_body
         .find("focus_matches(target.require_focus")
         .expect("published focus hint check");
+    let identity = target_admission_body
+        .find("owner_identity_status(")
+        .expect("generation-bound owner proof");
     let foreground = target_admission_body
-        .find("focus_matches_hwnd(")
-        .expect("fresh foreground proof");
+        .find("foreground_window_owner_matches(")
+        .expect("fresh foreground and owner proof");
     let post_focus_hook = target_admission_body
         .find("target.post_focus_race_hook")
         .expect("post-focus race seam");
@@ -116,7 +119,8 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
     let final_atomic_focus = target_admission_body
         .rfind("focus_matches(target.require_focus")
         .expect("final published focus recheck");
-    assert!(atomic_focus < foreground);
+    assert!(atomic_focus < identity);
+    assert!(identity < foreground);
     assert!(foreground < post_focus_hook);
     assert!(post_focus_hook < target_recheck);
     assert!(target_recheck < final_atomic_focus);

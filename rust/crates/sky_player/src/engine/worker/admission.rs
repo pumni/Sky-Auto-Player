@@ -2,6 +2,7 @@ use super::super::{PlaybackClockState, QpcClock};
 use super::dispatch::DispatchStep;
 use super::{TrackedKeyState, focus_gate_matches};
 use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
+use crate::engine::target::OwnerIdentityStatus;
 use crate::engine::telemetry::{
     TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP, WorkerMetricsLocal,
 };
@@ -113,6 +114,12 @@ pub(crate) enum DownAdmission {
     Allowed,
     TargetChanged,
     FocusLost,
+    OwnerMismatch,
+    OwnerQueryUnavailable,
+    OwnerIdentityAbsent,
+    OwnerIdentityStale,
+    OwnerProcessTerminated,
+    OwnerIdentityDrift,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,12 +188,46 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
     if !focus_matches(target.require_focus, target.focus_active) {
         return DownAdmission::FocusLost;
     }
-    if !focus_matches_hwnd(
-        target.require_focus,
-        target.focus_active,
-        target.expected.hwnd,
-    ) {
-        return DownAdmission::FocusLost;
+    if target.require_focus {
+        if target.expected.hwnd == 0 {
+            return DownAdmission::FocusLost;
+        }
+        let owner_pid = match target
+            .target
+            .owner_identity_status(target.expected.generation)
+        {
+            OwnerIdentityStatus::Bound(owner_pid) => owner_pid,
+            OwnerIdentityStatus::NotRequired | OwnerIdentityStatus::Missing => {
+                return DownAdmission::OwnerIdentityAbsent;
+            }
+            OwnerIdentityStatus::Stale => return DownAdmission::OwnerIdentityStale,
+            OwnerIdentityStatus::ProcessTerminated => {
+                return DownAdmission::OwnerProcessTerminated;
+            }
+            OwnerIdentityStatus::OwnerMismatch => return DownAdmission::OwnerMismatch,
+            OwnerIdentityStatus::QueryUnavailable => {
+                return DownAdmission::OwnerQueryUnavailable;
+            }
+            OwnerIdentityStatus::WindowUnavailable
+            | OwnerIdentityStatus::ProcessIdentityMismatch => {
+                return DownAdmission::OwnerIdentityDrift;
+            }
+        };
+        match sky_dispatch_win32::focus::foreground_window_owner_matches(
+            target.expected.hwnd,
+            owner_pid,
+        ) {
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => {}
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => {
+                return DownAdmission::FocusLost;
+            }
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
+                return DownAdmission::OwnerMismatch;
+            }
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
+                return DownAdmission::OwnerQueryUnavailable;
+            }
+        }
     }
     #[cfg(any(test, feature = "test-support"))]
     if let (Some(hook), Some(control), Some(system_power)) = (
@@ -211,6 +252,30 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
     }
     if !focus_matches(target.require_focus, target.focus_active) {
         return DownAdmission::FocusLost;
+    }
+    if target.require_focus {
+        match target
+            .target
+            .owner_identity_status(target.expected.generation)
+        {
+            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => {}
+            OwnerIdentityStatus::NotRequired | OwnerIdentityStatus::Missing => {
+                return DownAdmission::OwnerIdentityAbsent;
+            }
+            OwnerIdentityStatus::Stale => return DownAdmission::OwnerIdentityStale,
+            OwnerIdentityStatus::ProcessTerminated => {
+                return DownAdmission::OwnerProcessTerminated;
+            }
+            OwnerIdentityStatus::OwnerMismatch => return DownAdmission::OwnerMismatch,
+            OwnerIdentityStatus::QueryUnavailable => {
+                return DownAdmission::OwnerQueryUnavailable;
+            }
+            OwnerIdentityStatus::WindowUnavailable
+            | OwnerIdentityStatus::ProcessIdentityMismatch => {
+                return DownAdmission::OwnerIdentityDrift;
+            }
+            OwnerIdentityStatus::Bound(_) => return DownAdmission::OwnerIdentityAbsent,
+        }
     }
     DownAdmission::Allowed
 }

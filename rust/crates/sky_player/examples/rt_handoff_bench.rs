@@ -108,6 +108,20 @@ fn configure_focus_for_benchmark(
                         .to_string()
                 })?;
             harness.set_target_hwnd_for_benchmark(hwnd);
+            let identity = sky_dispatch_win32::focus::inspect_window_identity(hwnd)?;
+            if identity.hwnd != hwnd
+                || !harness.bind_owner_identity_for_benchmark(identity.owner_pid)
+            {
+                return Err(
+                    "real foreground owner identity could not bind to the benchmark target"
+                        .to_string(),
+                );
+            }
+        } else if !harness.bind_owner_identity_for_benchmark(1) {
+            return Err(
+                "synthetic foreground owner identity could not bind to the benchmark target"
+                    .to_string(),
+            );
         }
     }
     sky_dispatch_win32::focus::reset_foreground_query_count();
@@ -295,6 +309,7 @@ struct Samples {
     transport_anomaly_count: usize,
     foreground_query_count: Vec<u64>,
     real_foreground_query_count: Vec<u64>,
+    owner_query_count: Vec<u64>,
     spin_time_us: Vec<u64>,
     wall_time_us: Vec<u64>,
 }
@@ -338,6 +353,7 @@ impl Samples {
             missed_pre_call_lateness_us,
             foreground_query_count,
             real_foreground_query_count,
+            owner_query_count,
             spin_time_us,
             wall_time_us,
         );
@@ -431,7 +447,7 @@ fn observer_ab_iterations() -> usize {
 }
 
 fn representative_observation() -> DispatchObservation {
-    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 0);
+    let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 1_000);
     let mut plan = NextDispatchPlan::default();
     harness.plan_current_dispatch_projected_into(&mut plan);
     let step = harness.dispatch_authored_with_plan(&plan);
@@ -1515,6 +1531,7 @@ fn wait_and_dispatch_or_record(
     benchmark_mode: BenchmarkMode,
     samples: &mut Samples,
 ) -> Result<Option<()>, String> {
+    sky_dispatch_win32::focus::reset_foreground_query_count();
     let step = match benchmark_mode {
         BenchmarkMode::RealWait => {
             let step = match harness.wait_and_dispatch_current_plan(plan) {
@@ -1561,6 +1578,9 @@ fn wait_and_dispatch_or_record(
     samples
         .real_foreground_query_count
         .push(sky_dispatch_win32::focus::real_foreground_query_count());
+    samples
+        .owner_query_count
+        .push(sky_dispatch_win32::focus::owner_query_count());
     if matches!(step, DispatchStep::Dispatched) {
         Ok(Some(()))
     } else {
@@ -1758,6 +1778,7 @@ fn run_prepared_down_iteration(
     harness.prepare_prepared_stream_for_test();
     harness.reset_preparation_counts_for_test();
     harness.align_prepared_current_to_benchmark_margin_for_test(gap_us)?;
+    sky_dispatch_win32::focus::reset_foreground_query_count();
     let step = harness.wait_and_dispatch_prepared_current_for_test()?;
     samples
         .foreground_query_count
@@ -1765,6 +1786,9 @@ fn run_prepared_down_iteration(
     samples
         .real_foreground_query_count
         .push(sky_dispatch_win32::focus::real_foreground_query_count());
+    samples
+        .owner_query_count
+        .push(sky_dispatch_win32::focus::owner_query_count());
     if !matches!(step, DispatchStep::Dispatched) {
         samples.record_step_failure(&step);
         samples
@@ -2914,6 +2938,7 @@ fn summarize_for_attempts(mut samples: Samples, expected_attempts: usize) -> ser
         "transport_anomaly_count": samples.transport_anomaly_count,
         "foreground_query_count": unsigned_summary(samples.foreground_query_count),
         "real_foreground_query_count": unsigned_summary(samples.real_foreground_query_count),
+        "owner_query_count": unsigned_summary(samples.owner_query_count),
         "spin_time_us": unsigned_summary(samples.spin_time_us),
         "wall_time_us": unsigned_summary(samples.wall_time_us),
         "total_spin_time_us": total_spin_time_us,

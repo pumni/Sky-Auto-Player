@@ -19,6 +19,7 @@
     {"path":"rust/crates/sky_dispatch_win32/src/cpu.rs","rule":"unsafe_boundary","reason":"existing CPU accounting Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/event.rs","rule":"unsafe_boundary","reason":"existing event Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/focus.rs","rule":"unsafe_boundary","reason":"existing focus Win32 seam","expires_phase":"Phase 12"},
+    {"path":"rust/crates/sky_dispatch_win32/src/focus/window_identity.rs","rule":"unsafe_boundary","reason":"retained target process identity queries with PROCESS_QUERY_LIMITED_INFORMATION in the Win32 focus boundary","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/input/physical.rs","rule":"unsafe_boundary","reason":"existing physical keyboard Win32 seam","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/input/packet.rs","rule":"unsafe_boundary","reason":"SendInput packet construction and syscall boundary remains isolated in the Win32 input module","expires_phase":"Phase 12"},
     {"path":"rust/crates/sky_dispatch_win32/src/mmcss.rs","rule":"unsafe_boundary","reason":"existing MMCSS Win32 seam","expires_phase":"Phase 12"},

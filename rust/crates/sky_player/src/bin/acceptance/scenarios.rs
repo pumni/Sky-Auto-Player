@@ -263,7 +263,10 @@ pub(super) fn scenario_plan(
                 vec![0, 1],
                 true,
             ),
-            Scenario::TargetHwndChange => (
+            Scenario::TargetHwndChange
+            | Scenario::OwnerMismatch
+            | Scenario::OwnerQueryFailure
+            | Scenario::OwnerProcessTermination => (
                 vec![
                     action(0, ActionKind::Down, 500_000, &[0]),
                     action(1, ActionKind::Up, 600_000, &[0]),

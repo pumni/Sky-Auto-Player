@@ -61,6 +61,29 @@ hot-path behavior, and emergency release-all cleanup. Supervisor controls and
 diagnostics stay outside the realtime data path. Dry-run playback never reaches
 the physical input backend.
 
+### Physical target owner authority
+
+A physical require-focus session binds the selected HWND to its startup owner
+PID, process creation time, and full image path. The session retains one process
+handle opened with `PROCESS_QUERY_LIMITED_INFORMATION`; the desktop supervisor
+checks that process object and the HWND owner off the realtime thread. A target
+generation change invalidates the binding. Rebinding requires fresh
+control-plane validation and a new generation, including when Windows reuses
+the same numeric HWND.
+
+Before each Down-bearing send, the worker samples the foreground HWND once and
+queries the owner PID once for that exact HWND. It rejects a mismatch or failed
+query before the sender. UpOnly safety release and sessions with focus checks
+disabled do not query the foreground owner.
+
+If the supervisor observes process termination, HWND destruction, owner drift,
+or identity-query failure, it invalidates Down authority and requests terminal
+cleanup. A same-process window destroyed and recreated with the same numeric
+HWND entirely between supervisor checks can remain indistinguishable: the PID,
+creation time, image, and final owner query can all still match. The HWND APIs
+do not expose a stable window-lifetime identifier for that case, and the final
+owner check retains the existing query-to-`SendInput` race.
+
 ## Calibration and update boundaries
 
 Calibration is coordinated by the native application and measures through the
