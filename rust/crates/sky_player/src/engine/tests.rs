@@ -4997,6 +4997,82 @@ fn system_suspend_after_wait_wake_blocks_final_down_admission_until_revalidated_
 }
 
 #[test]
+fn stale_epoch_resume_cannot_authorize_due_worker_down() {
+    use super::shared::SystemPowerEndpoint;
+    use super::test_support::ProductionDispatchTestHarness;
+    use super::worker::DispatchStep;
+    use std::sync::Arc;
+
+    let endpoint = SystemPowerEndpoint::new().expect("stable power endpoint");
+    endpoint
+        .reset_for_new_session()
+        .expect("open old session epoch");
+    let state = endpoint.state();
+    assert!(endpoint.notify_system_power(true, Some(QpcTicks::from_raw(10_000))));
+
+    // Pause after the old callback captures its epoch, before it takes an
+    // in-flight reference. The lifecycle reset can retire that authority.
+    state.arm_epoch_capture_pause_for_test();
+    let stale_endpoint = Arc::clone(&endpoint);
+    let stale_resume = std::thread::spawn(move || stale_endpoint.notify_system_power(false, None));
+    while !state.epoch_capture_pause_reached_for_test() {
+        std::thread::yield_now();
+    }
+
+    endpoint
+        .reset_for_new_session()
+        .expect("rundown old epoch and open new session");
+    assert!(endpoint.notify_system_power(true, Some(QpcTicks::from_raw(20_000))));
+    let current_signal_generation = endpoint.interrupt().signal_generation();
+
+    let mut worker = ProductionDispatchTestHarness::new_down_only();
+    worker.attach_system_power_endpoint_for_test(&endpoint);
+    let sender_calls = worker.configure_send_counter();
+    let mut due_down = worker.build_prepared_stream_for_test();
+
+    state.release_epoch_capture_pause_for_test();
+    assert!(!stale_resume.join().expect("stale callback is ignored"));
+    assert!(state.os_suspended());
+    assert!(state.down_blocked());
+    assert_eq!(
+        state.suspend_boundary_qpc(),
+        Some(QpcTicks::from_raw(20_000))
+    );
+    assert_eq!(state.snapshot(), (true, true, 1, 0, 0));
+    assert_eq!(
+        endpoint.interrupt().signal_generation(),
+        current_signal_generation,
+        "stale callback must not signal the new session"
+    );
+
+    let blocked_step = worker.dispatch_prepared_current_at_lateness_for_test(&mut due_down, 2_000);
+    assert!(
+        !matches!(blocked_step, DispatchStep::Dispatched),
+        "new-session suspend admitted a due Down: {blocked_step:?}"
+    );
+    assert_eq!(sender_calls.load(Ordering::SeqCst), 0);
+
+    assert_eq!(
+        worker.take_system_power_pending_for_test(),
+        super::shared::SYSTEM_POWER_SUSPEND_PENDING
+    );
+    assert!(endpoint.notify_system_power(false, None));
+    assert_eq!(
+        worker.take_system_power_pending_for_test(),
+        super::shared::SYSTEM_POWER_RESUME_PENDING
+    );
+    assert!(worker.complete_system_resume_for_test());
+    assert!(!state.down_blocked());
+
+    let resumed_step = worker.dispatch_prepared_current_at_lateness_for_test(&mut due_down, 2_000);
+    assert!(
+        matches!(resumed_step, DispatchStep::Dispatched),
+        "current-epoch resume did not admit due Down: {resumed_step:?}"
+    );
+    assert_eq!(sender_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn shutdown_during_system_suspend_finishes_with_physical_state_released() {
     let send_call_count = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();

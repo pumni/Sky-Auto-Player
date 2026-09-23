@@ -309,12 +309,15 @@ unsafe extern "system" fn on_suspend_resume(
     #[cfg(windows)]
     match event_type {
         windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMSUSPEND => {
-            let suspend_qpc = context.qpc_clock.now().ok();
-            context.endpoint.notify_system_power(true, suspend_qpc);
+            context
+                .endpoint
+                .notify_system_power_with_clock(true, context.qpc_clock);
         }
         windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMRESUMESUSPEND
         | windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMRESUMEAUTOMATIC => {
-            context.endpoint.notify_system_power(false, None);
+            context
+                .endpoint
+                .notify_system_power_with_clock(false, context.qpc_clock);
         }
         _ => {}
     }
@@ -687,6 +690,194 @@ mod tests {
             .is_err()
         );
         assert_eq!(failed_diagnostics.snapshot().registration_failures, 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stable_callback_context_routes_current_epoch_and_ignores_retired_epoch() {
+        use sky_player::adapter_support::{ActionKind, KeyActionInput, compile_runtime_intents};
+        use sky_player::engine::{
+            BackendConfig, DispatchProfile, FocusOptions, NativeDispatchSession,
+            NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TimingOptions,
+            WaitOptions,
+        };
+
+        let options = || {
+            let schedule = compile_runtime_intents(
+                &[
+                    KeyActionInput {
+                        source_action_index: 0,
+                        kind: ActionKind::Down,
+                        scheduled_us: 0,
+                        scan_codes: smallvec::smallvec![0x15],
+                        reason: "callback-test-down".into(),
+                    },
+                    KeyActionInput {
+                        source_action_index: 1,
+                        kind: ActionKind::Up,
+                        scheduled_us: 100_000,
+                        scan_codes: smallvec::smallvec![0x15],
+                        reason: "callback-test-up".into(),
+                    },
+                ],
+                &[0x15],
+            )
+            .expect("callback-test runtime schedule");
+            NativeSessionOptions {
+                schedule,
+                backend: BackendConfig::Production,
+                profile: DispatchProfile::Production,
+                timing: TimingOptions {
+                    game_fps: 60,
+                    min_hold_us: 500,
+                    min_release_gap_us: 17_167,
+                    frame_us: 16_667,
+                    frame_base_hold_us: 0,
+                    timing_margin_us: 500,
+                    strict_timing: false,
+                    strict_down_completion_late_us: 2_000,
+                    strict_up_completion_late_us: 2_000,
+                    input_path_warn_us: 300,
+                },
+                focus: FocusOptions {
+                    require_focus: false,
+                    focus_restore_grace_us: 100_000,
+                },
+                wait: WaitOptions {
+                    enable_waitable_timer: true,
+                    enable_event_wait: true,
+                    supervisor_lease_timeout_us: 0,
+                    #[cfg(feature = "tauri-test")]
+                    test_spin_threshold_us: None,
+                    #[cfg(feature = "tauri-test")]
+                    test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                },
+                telemetry: TelemetryOptions {
+                    mode: TelemetryMode::Ring,
+                    capacity: 64,
+                },
+                priority: PriorityOptions {
+                    mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
+                },
+                instrument_key_profile: None,
+                #[cfg(feature = "tauri-test")]
+                startup_ordering_hook: None,
+                #[cfg(feature = "tauri-test")]
+                restore_race_hook: None,
+                #[cfg(feature = "tauri-test")]
+                focus_pause_hook: None,
+                #[cfg(feature = "tauri-test")]
+                timer_lifecycle_context: None,
+                #[cfg(feature = "tauri-test")]
+                prepared_packet_ambiguity_mask: None,
+                #[cfg(feature = "tauri-test")]
+                preflight_user_held_mask: None,
+                #[cfg(feature = "tauri-test")]
+                modifier_key_state_query_for_test: None,
+            }
+        };
+        let endpoint = system_power_endpoint().expect("stable process endpoint");
+        let session =
+            NativeDispatchSession::new_with_power_endpoint(options(), Arc::clone(&endpoint))
+                .expect("session opens a fresh callback epoch");
+
+        let first_context = callback_context().expect("first callback context");
+        let second_context = callback_context().expect("same process callback context");
+        assert!(Arc::ptr_eq(&first_context, &second_context));
+
+        let platform = Arc::new(FakePlatform::default());
+        let diagnostics = Arc::new(PowerLifecycleDiagnostics::default());
+        let registration =
+            SuspendResumeRegistration::register(platform.clone(), Weak::new(), diagnostics)
+                .expect("callback registration");
+        let (callback, context) = platform.callback_contexts.lock().unwrap()[0];
+
+        // SAFETY: callback_context is held by its process-lifetime OnceLock.
+        assert_eq!(
+            unsafe {
+                callback(
+                    context as *const c_void,
+                    windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMSUSPEND,
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        let suspended = session.system_power_snapshot();
+        assert!(suspended.suspended && suspended.down_blocked);
+        assert_eq!(suspended.suspend_notifications, 1);
+
+        let resume_event = windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMRESUMEAUTOMATIC;
+        endpoint.arm_callback_epoch_capture_pause_for_test();
+        let callback_to_resume = callback;
+        let context_to_resume = context;
+        let stale_resume = std::thread::spawn(move || {
+            // SAFETY: callback_context is process-lifetime retained; the
+            // interleaving pauses before callback authority is acquired.
+            unsafe {
+                callback_to_resume(
+                    context_to_resume as *const c_void,
+                    resume_event,
+                    std::ptr::null(),
+                )
+            }
+        });
+        while !endpoint.callback_epoch_capture_pause_reached_for_test() {
+            std::thread::yield_now();
+        }
+
+        session.deactivate_system_power();
+        let next_session =
+            NativeDispatchSession::new_with_power_endpoint(options(), Arc::clone(&endpoint))
+                .expect("next session opens a fresh callback epoch");
+
+        // SAFETY: same stable process-lifetime callback context; this is the
+        // legitimate current-epoch suspend.
+        assert_eq!(
+            unsafe {
+                callback(
+                    context as *const c_void,
+                    windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMSUSPEND,
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        let current_suspend = next_session.system_power_snapshot();
+        assert!(current_suspend.suspended && current_suspend.down_blocked);
+        assert_eq!(current_suspend.suspend_notifications, 1);
+
+        endpoint.release_callback_epoch_capture_pause_for_test();
+        assert_eq!(stale_resume.join().expect("stale callback returns"), 0);
+        assert_eq!(next_session.system_power_snapshot(), current_suspend);
+
+        // SAFETY: current context, current epoch. Worker completion is
+        // intentionally absent, so Down authority remains blocked here.
+        assert_eq!(
+            unsafe { callback(context as *const c_void, resume_event, std::ptr::null()) },
+            0
+        );
+        let resumed = next_session.system_power_snapshot();
+        assert!(!resumed.suspended && resumed.down_blocked);
+        assert_eq!(resumed.resume_notifications, 1);
+
+        next_session.deactivate_system_power();
+        let retired = next_session.system_power_snapshot();
+        assert!(!retired.suspended && !retired.down_blocked);
+        drop(registration);
+        // SAFETY: unregister does not invalidate the retained context. The
+        // retired epoch must ignore callbacks that arrive after rundown.
+        assert_eq!(
+            unsafe {
+                callback(
+                    context as *const c_void,
+                    windows_sys::Win32::UI::WindowsAndMessaging::PBT_APMSUSPEND,
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        assert_eq!(session.system_power_snapshot(), retired);
     }
 
     #[test]

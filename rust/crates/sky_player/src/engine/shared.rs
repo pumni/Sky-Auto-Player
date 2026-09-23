@@ -282,42 +282,165 @@ pub(super) const SYSTEM_POWER_DOWN_BLOCKED: u8 = 1 << 1;
 pub(super) const SYSTEM_POWER_SUSPEND_PENDING: u8 = 1 << 2;
 pub(super) const SYSTEM_POWER_RESUME_PENDING: u8 = 1 << 3;
 const SYSTEM_POWER_PENDING_MASK: u8 = SYSTEM_POWER_SUSPEND_PENDING | SYSTEM_POWER_RESUME_PENDING;
+const SYSTEM_POWER_NOTIFY_CAS_ATTEMPTS: usize = 8;
 
-/// Lock-free notification state shared by the OS callback and playback worker.
-/// The callback only updates atomics and signals the already-owned interrupt.
+/// Notification state shared by the OS callback and playback worker.
+///
+/// Callback mutation uses an even/odd epoch plus an in-flight rundown count.
+/// Lifecycle operations serialize on `lifecycle`, close the old epoch, wait
+/// for callbacks that already acquired authority, clear old state and event
+/// signals, then open the next even epoch. Callbacks never take that mutex.
 pub struct SystemPowerState {
     state: AtomicU8,
-    active: AtomicBool,
+    callback_epoch: AtomicU64,
+    callbacks_in_flight: AtomicU64,
+    lifecycle: StdMutex<()>,
     suspend_boundary_qpc: AtomicU64,
     suspend_count: AtomicU64,
     resume_count: AtomicU64,
     duplicate_count: AtomicU64,
+    #[cfg(any(test, feature = "test-support"))]
+    after_epoch_capture: TestPause,
+    #[cfg(any(test, feature = "test-support"))]
+    after_lease_acquired: TestPause,
+    #[cfg(any(test, feature = "test-support"))]
+    force_notify_cas_failures: AtomicBool,
 }
 
 impl Default for SystemPowerState {
     fn default() -> Self {
         Self {
             state: AtomicU8::new(0),
-            active: AtomicBool::new(true),
+            // Epoch zero is the initial active epoch for standalone worker
+            // tests. The stable process endpoint starts closed at epoch one.
+            callback_epoch: AtomicU64::new(0),
+            callbacks_in_flight: AtomicU64::new(0),
+            lifecycle: StdMutex::new(()),
             suspend_boundary_qpc: AtomicU64::new(0),
             suspend_count: AtomicU64::new(0),
             resume_count: AtomicU64::new(0),
             duplicate_count: AtomicU64::new(0),
+            #[cfg(any(test, feature = "test-support"))]
+            after_epoch_capture: TestPause::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            after_lease_acquired: TestPause::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            force_notify_cas_failures: AtomicBool::new(false),
         }
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Default)]
+struct TestPause {
+    armed: AtomicBool,
+    reached: AtomicBool,
+    released: AtomicBool,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl TestPause {
+    fn arm(&self) {
+        self.reached.store(false, Ordering::Relaxed);
+        self.released.store(false, Ordering::Relaxed);
+        self.armed.store(true, Ordering::Release);
+    }
+
+    fn pause_if_armed(&self) {
+        if self.armed.swap(false, Ordering::AcqRel) {
+            self.reached.store(true, Ordering::Release);
+            while !self.released.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+        }
+    }
+}
+
+struct SystemPowerCallbackLease<'a> {
+    state: &'a SystemPowerState,
+}
+
+impl Drop for SystemPowerCallbackLease<'_> {
+    fn drop(&mut self) {
+        self.state
+            .callbacks_in_flight
+            .fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl SystemPowerState {
+    /// Acquires mutation authority for one callback epoch. The SeqCst order
+    /// makes validation and epoch close comparable: either validation wins,
+    /// in which case rundown observes the reference, or close wins and this
+    /// callback returns without touching state, counters, boundary, or event.
+    fn enter_callback(&self) -> Option<SystemPowerCallbackLease<'_>> {
+        let captured_epoch = self.callback_epoch.load(Ordering::SeqCst);
+        if captured_epoch & 1 != 0 {
+            return None;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        self.after_epoch_capture.pause_if_armed();
+
+        // A process cannot have u64::MAX callbacks executing concurrently;
+        // this monotonic count therefore cannot wrap during a live process.
+        self.callbacks_in_flight.fetch_add(1, Ordering::SeqCst);
+        if self.callback_epoch.load(Ordering::SeqCst) != captured_epoch {
+            self.callbacks_in_flight.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        self.after_lease_acquired.pause_if_armed();
+        Some(SystemPowerCallbackLease { state: self })
+    }
+
+    fn close_epoch_and_rundown(&self) -> u64 {
+        let observed_epoch = self.callback_epoch.load(Ordering::SeqCst);
+        let closed_epoch = if observed_epoch & 1 == 0 {
+            // Active epochs are even and can only reach u64::MAX - 1, so
+            // closing by one is representable and permanently rejects entry.
+            observed_epoch + 1
+        } else {
+            observed_epoch
+        };
+        self.callback_epoch.store(closed_epoch, Ordering::SeqCst);
+        while self.callbacks_in_flight.load(Ordering::SeqCst) != 0 {
+            std::thread::yield_now();
+        }
+        closed_epoch
+    }
+
     pub(super) fn notify_at(
         &self,
         suspended: bool,
         suspend_boundary_qpc: Option<QpcTicks>,
         interrupt: &OwnedEvent,
     ) -> bool {
-        if !self.active.load(Ordering::Acquire) {
+        let Some(_lease) = self.enter_callback() else {
             return false;
-        }
-        loop {
+        };
+        self.notify_authorized(suspended, suspend_boundary_qpc, interrupt)
+    }
+
+    fn notify_with_qpc(
+        &self,
+        suspended: bool,
+        interrupt: &OwnedEvent,
+        read_qpc: impl FnOnce() -> Option<QpcTicks>,
+    ) -> bool {
+        let Some(_lease) = self.enter_callback() else {
+            return false;
+        };
+        let suspend_boundary_qpc = suspended.then(read_qpc).flatten();
+        self.notify_authorized(suspended, suspend_boundary_qpc, interrupt)
+    }
+
+    fn notify_authorized(
+        &self,
+        suspended: bool,
+        suspend_boundary_qpc: Option<QpcTicks>,
+        interrupt: &OwnedEvent,
+    ) -> bool {
+        for _ in 0..SYSTEM_POWER_NOTIFY_CAS_ATTEMPTS {
             let current = self.state.load(Ordering::Acquire);
             let os_suspended = current & SYSTEM_POWER_OS_SUSPENDED != 0;
             if os_suspended == suspended {
@@ -332,6 +455,10 @@ impl SystemPowerState {
                     suspend_boundary_qpc.map_or(0, QpcTicks::as_u64),
                     Ordering::Release,
                 );
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            if self.force_notify_cas_failures.load(Ordering::Relaxed) {
+                continue;
             }
             let next = if suspended {
                 current
@@ -357,13 +484,23 @@ impl SystemPowerState {
                 return true;
             }
         }
+
+        // Contention beyond the fixed retry budget must never reopen Down
+        // admission on an ambiguous notification history. Treat it as a
+        // conservative suspend; only a current-epoch resume can reopen the
+        // gate after worker-side suspend/resume processing.
+        self.state.fetch_or(
+            SYSTEM_POWER_OS_SUSPENDED | SYSTEM_POWER_DOWN_BLOCKED | SYSTEM_POWER_SUSPEND_PENDING,
+            Ordering::AcqRel,
+        );
+        let _ = interrupt.signal();
+        false
     }
 
     pub(super) fn notify(&self, suspended: bool, interrupt: &OwnedEvent) -> bool {
-        let suspend_boundary_qpc = suspended
-            .then(|| sky_dispatch_win32::clock::qpc_now_ticks_checked().ok())
-            .flatten();
-        self.notify_at(suspended, suspend_boundary_qpc, interrupt)
+        self.notify_with_qpc(suspended, interrupt, || {
+            sky_dispatch_win32::clock::qpc_now_ticks_checked().ok()
+        })
     }
 
     pub(super) fn suspend_boundary_qpc(&self) -> Option<QpcTicks> {
@@ -375,19 +512,78 @@ impl SystemPowerState {
         self.suspend_boundary_qpc.store(0, Ordering::Release);
     }
 
-    pub(super) fn reset_for_new_session(&self) {
+    pub(super) fn reset_for_new_session(&self, interrupt: &OwnedEvent) -> Result<(), String> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let closed_epoch = self.close_epoch_and_rundown();
         self.state.store(0, Ordering::Release);
         self.suspend_boundary_qpc.store(0, Ordering::Release);
         self.suspend_count.store(0, Ordering::Relaxed);
         self.resume_count.store(0, Ordering::Relaxed);
         self.duplicate_count.store(0, Ordering::Relaxed);
-        self.active.store(true, Ordering::Release);
+        // The auto-reset event is shared across sessions. Drain its old
+        // signal only after every callback that could set it has rundown.
+        let _ = interrupt.try_take();
+        let next_epoch = closed_epoch.checked_add(1).ok_or_else(|| {
+            "system power callback epoch exhausted; endpoint remains closed".to_string()
+        })?;
+        self.callback_epoch.store(next_epoch, Ordering::SeqCst);
+        Ok(())
     }
 
-    pub(super) fn deactivate(&self) {
-        self.active.store(false, Ordering::Release);
+    #[cfg(test)]
+    fn pause_after_epoch_capture_for_test(&self) {
+        self.after_epoch_capture.arm();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn arm_epoch_capture_pause_for_test(&self) {
+        self.after_epoch_capture.arm();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn epoch_capture_pause_reached_for_test(&self) -> bool {
+        self.after_epoch_capture.reached.load(Ordering::Acquire)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn release_epoch_capture_pause_for_test(&self) {
+        self.after_epoch_capture
+            .released
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_notify_cas_failures_for_test(&self, force: bool) {
+        self.force_notify_cas_failures
+            .store(force, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn pause_after_lease_for_test(&self) {
+        self.after_lease_acquired.arm();
+    }
+
+    #[cfg(test)]
+    fn test_pause(&self, after_epoch_capture: bool) -> &TestPause {
+        if after_epoch_capture {
+            &self.after_epoch_capture
+        } else {
+            &self.after_lease_acquired
+        }
+    }
+
+    pub(super) fn deactivate(&self, interrupt: &OwnedEvent) {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.close_epoch_and_rundown();
         self.state.store(0, Ordering::Release);
         self.suspend_boundary_qpc.store(0, Ordering::Release);
+        let _ = interrupt.try_take();
     }
 
     pub(super) fn take_pending(&self) -> u8 {
@@ -457,7 +653,7 @@ impl SystemPowerEndpoint {
             .ok_or_else(|| "failed to create system power command event".to_string())?;
         Ok(Arc::new(Self {
             state: Arc::new(SystemPowerState {
-                active: AtomicBool::new(false),
+                callback_epoch: AtomicU64::new(1),
                 ..SystemPowerState::default()
             }),
             interrupt: Arc::new(interrupt),
@@ -481,8 +677,30 @@ impl SystemPowerEndpoint {
             .notify_at(suspended, suspend_boundary_qpc, &self.interrupt)
     }
 
-    pub(crate) fn reset_for_new_session(&self) {
-        self.state.reset_for_new_session();
+    /// Route an OS callback while holding its current epoch authority, including
+    /// the QPC read used for a suspend boundary.
+    pub fn notify_system_power_with_clock(&self, suspended: bool, qpc_clock: QpcClock) -> bool {
+        self.state
+            .notify_with_qpc(suspended, &self.interrupt, || qpc_clock.now().ok())
+    }
+
+    pub(crate) fn reset_for_new_session(&self) -> Result<(), String> {
+        self.state.reset_for_new_session(&self.interrupt)
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn arm_callback_epoch_capture_pause_for_test(&self) {
+        self.state.arm_epoch_capture_pause_for_test();
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn callback_epoch_capture_pause_reached_for_test(&self) -> bool {
+        self.state.epoch_capture_pause_reached_for_test()
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn release_callback_epoch_capture_pause_for_test(&self) {
+        self.state.release_epoch_capture_pause_for_test();
     }
 }
 
@@ -516,199 +734,5 @@ pub(super) struct SessionShared {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use sky_dispatch_core::clock::PauseReason;
-    use std::num::NonZeroU64;
-
-    fn test_qpc_clock() -> QpcClock {
-        QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap())
-    }
-
-    #[test]
-    fn progress_projection_advances_without_worker_publication() {
-        let clock =
-            PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
-        let shared = SharedProgressClock::default();
-        shared.publish(&clock);
-        let anchor = shared.load().expect("published playback anchor");
-        let qpc_clock = test_qpc_clock();
-
-        assert_eq!(
-            anchor.elapsed_us(QpcTicks::from_raw(2_000), qpc_clock),
-            1_000
-        );
-        assert_eq!(
-            anchor.elapsed_us(QpcTicks::from_raw(3_000), qpc_clock),
-            2_000
-        );
-    }
-
-    #[test]
-    fn progress_projection_freezes_pause_and_excludes_pause_on_resume() {
-        let mut clock =
-            PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
-        let shared = SharedProgressClock::default();
-        let qpc_clock = test_qpc_clock();
-
-        clock
-            .enter_pause(PauseReason::Manual, QpcTicks::from_raw(2_000))
-            .unwrap();
-        shared.publish(&clock);
-        let paused_anchor = shared.load().expect("published pause anchor");
-        assert!(paused_anchor.paused);
-        assert_eq!(
-            paused_anchor.elapsed_us(QpcTicks::from_raw(9_000), qpc_clock),
-            1_000
-        );
-
-        clock
-            .exit_pause(PauseReason::Manual, QpcTicks::from_raw(5_000))
-            .unwrap();
-        shared.publish(&clock);
-        let resumed_anchor = shared.load().expect("published resume anchor");
-        assert!(!resumed_anchor.paused);
-        assert_eq!(
-            resumed_anchor.elapsed_us(QpcTicks::from_raw(7_000), qpc_clock),
-            3_000
-        );
-    }
-
-    #[test]
-    fn progress_projection_clamps_before_future_epoch() {
-        let clock =
-            PlaybackClockState::new(QpcTicks::from_raw(2_000), DurationTicks::ZERO).unwrap();
-        let shared = SharedProgressClock::default();
-        shared.publish(&clock);
-        let anchor = shared.load().expect("published future anchor");
-
-        assert_eq!(
-            anchor.elapsed_us(QpcTicks::from_raw(1_000), test_qpc_clock()),
-            0
-        );
-    }
-
-    #[test]
-    fn terminal_progress_projection_stays_frozen() {
-        let clock =
-            PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
-        let shared = SharedProgressClock::default();
-        shared.publish_terminal(&clock, QpcTicks::from_raw(3_000));
-        let anchor = shared.load().expect("published terminal anchor");
-
-        assert!(anchor.frozen);
-        assert_eq!(
-            anchor.elapsed_us(QpcTicks::from_raw(9_000), test_qpc_clock()),
-            2_000
-        );
-    }
-
-    #[test]
-    fn focus_pause_before_future_epoch_remains_clamped() {
-        let mut clock =
-            PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
-        clock
-            .enter_pause(PauseReason::Focus, QpcTicks::from_raw(900))
-            .unwrap();
-        let shared = SharedProgressClock::default();
-        shared.publish(&clock);
-        let anchor = shared.load().expect("published focus anchor");
-
-        assert_eq!(
-            anchor.elapsed_us(QpcTicks::from_raw(2_000), test_qpc_clock()),
-            0
-        );
-    }
-
-    #[test]
-    fn power_notifications_are_idempotent_and_down_stays_blocked_until_worker_resume() {
-        let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
-        let power = SystemPowerState::default();
-
-        assert!(power.notify(true, &interrupt));
-        assert!(!power.notify(true, &interrupt));
-        assert!(power.os_suspended());
-        assert!(power.down_blocked());
-        assert_eq!(power.take_pending(), SYSTEM_POWER_SUSPEND_PENDING);
-
-        assert!(power.notify(false, &interrupt));
-        assert!(!power.notify(false, &interrupt));
-        assert!(!power.os_suspended());
-        assert!(power.down_blocked());
-        assert_eq!(power.take_pending(), SYSTEM_POWER_RESUME_PENDING);
-
-        assert!(power.complete_resume());
-        assert!(!power.down_blocked());
-        let (_, _, suspends, resumes, duplicates) = power.snapshot();
-        assert_eq!((suspends, resumes, duplicates), (1, 1, 2));
-
-        assert!(power.notify(true, &interrupt));
-        assert!(!power.complete_resume());
-        assert!(power.down_blocked());
-    }
-
-    #[test]
-    fn pending_power_fast_path_returns_without_consume_when_clear() {
-        let power = SystemPowerState::default();
-
-        assert_eq!(power.take_pending(), 0);
-        assert_eq!(power.take_pending(), 0);
-    }
-
-    #[test]
-    fn pending_power_source_loads_before_conditional_consume() {
-        let source = include_str!("shared.rs");
-        let method = source
-            .split("pub(super) fn take_pending")
-            .nth(1)
-            .expect("pending power method")
-            .split("pub(super) fn down_blocked")
-            .next()
-            .expect("pending power method body");
-        assert!(
-            method.find("load(Ordering::Acquire)").unwrap() < method.find("fetch_and(").unwrap()
-        );
-        assert!(method.contains("return 0"));
-    }
-
-    #[test]
-    fn suspend_boundary_is_captured_before_worker_wakes_and_survives_resume_notification() {
-        let endpoint = SystemPowerEndpoint::new().expect("power endpoint");
-        endpoint.reset_for_new_session();
-        let suspend_qpc = QpcTicks::from_raw(10_000);
-        assert!(endpoint.notify_system_power(true, Some(suspend_qpc)));
-        // The worker has not run yet. A resume callback may arrive while it is
-        // asleep; the original suspend boundary must remain available.
-        assert!(endpoint.notify_system_power(false, None));
-        assert_eq!(endpoint.state().suspend_boundary_qpc(), Some(suspend_qpc));
-    }
-
-    #[test]
-    fn callback_suspend_boundary_excludes_sleep_sized_qpc_interval() {
-        let mut clock =
-            PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
-        let endpoint = SystemPowerEndpoint::new().expect("power endpoint");
-        endpoint.reset_for_new_session();
-        let suspend_qpc = QpcTicks::from_raw(2_000);
-        let resume_qpc = QpcTicks::from_raw(2_000_000_000);
-        assert!(endpoint.notify_system_power(true, Some(suspend_qpc)));
-        assert!(endpoint.notify_system_power(false, None));
-        clock
-            .enter_pause(
-                PauseReason::SystemSuspend,
-                endpoint.state().suspend_boundary_qpc().unwrap(),
-            )
-            .unwrap();
-        clock
-            .exit_pause(PauseReason::SystemSuspend, resume_qpc)
-            .unwrap();
-        assert_eq!(
-            test_qpc_clock()
-                .duration_to_us(DurationTicks::from_raw(
-                    clock.get_elapsed(resume_qpc).unwrap().as_u64(),
-                ))
-                .unwrap(),
-            1_000
-        );
-    }
-}
+#[path = "shared_tests.rs"]
+mod tests;
