@@ -3508,6 +3508,8 @@ struct NativePlaybackService {
     startup_failure: Option<String>,
     #[cfg(test)]
     settings_invalidation_count: AtomicU64,
+    #[cfg(all(test, feature = "tauri-test"))]
+    monitor_progress_test_hook: Option<Arc<dyn Fn(bool) + Send + Sync>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3554,7 +3556,6 @@ impl SenderTraceState {
 }
 
 const DIAGNOSTICS_INTERVAL: Duration = Duration::from_millis(100);
-const SUPERVISOR_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Default)]
 struct DiagnosticsPublicationState {
@@ -3696,8 +3697,6 @@ struct NativeActivePlayback {
     stop_requested: AtomicBool,
     skip_requested: AtomicBool,
     done: AtomicBool,
-    heartbeat_stop: AtomicBool,
-    heartbeat_thread: Mutex<Option<thread::JoinHandle<()>>>,
     sequence: AtomicU64,
 }
 
@@ -4098,6 +4097,8 @@ impl NativePlaybackService {
             startup_failure: None,
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
+            #[cfg(all(test, feature = "tauri-test"))]
+            monitor_progress_test_hook: None,
         }
     }
 
@@ -4472,8 +4473,6 @@ impl NativePlaybackService {
                     stop_requested: AtomicBool::new(false),
                     skip_requested: AtomicBool::new(false),
                     done: AtomicBool::new(false),
-                    heartbeat_stop: AtomicBool::new(true),
-                    heartbeat_thread: Mutex::new(None),
                     sequence: AtomicU64::new(0),
                 });
                 let _ = publish_playback_state(
@@ -4540,8 +4539,6 @@ impl NativePlaybackService {
             stop_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
             done: AtomicBool::new(false),
-            heartbeat_stop: AtomicBool::new(false),
-            heartbeat_thread: Mutex::new(None),
             sequence: AtomicU64::new(0),
         });
         if let Some(player) = &active.player {
@@ -4603,56 +4600,6 @@ impl NativePlaybackService {
             }
             return Err(error);
         }
-        if let Err(error) = spawn_supervisor_heartbeat(&active) {
-            stop_supervisor_heartbeat(&active);
-            if active.physical
-                && let Ok(mut trace_state) = self.sender_trace_state.lock()
-            {
-                trace_state.finish_physical_session(
-                    &active.session_id,
-                    &active.song_id,
-                    &active.title,
-                    &active.plan_fingerprint,
-                    None,
-                );
-            }
-            if let Some(player) = &active.player {
-                let _ = player.panic_release();
-                let _ = player.quit();
-                let _ = player.join(Duration::from_secs(5));
-            }
-            let mut last_event_state = PlaybackEventState::Starting;
-            match publish_terminal_poll_state(
-                &events,
-                &active,
-                &mut last_event_state,
-                EnginePollStatus::Error,
-            ) {
-                Ok(publication) => {
-                    let _ = publish_retirement_barrier(
-                        &events,
-                        &self.active,
-                        &self.last_terminal,
-                        &active,
-                        &publication,
-                    );
-                }
-                Err(_) => {
-                    let _ = release_terminal_ownership(
-                        &self.active,
-                        &self.last_terminal,
-                        &active,
-                        None,
-                    );
-                }
-            }
-            if let Ok(mut prepared) = self.prepared.lock() {
-                prepared.push_back((request.prepared_id, record));
-            }
-            return Err(format!(
-                "failed to start native playback heartbeat: {error}"
-            ));
-        }
         let service = Arc::new(self.clone_handle());
         let active_for_thread = active.clone();
         let events_for_thread = events.clone();
@@ -4660,7 +4607,6 @@ impl NativePlaybackService {
             .name("sky-native-playback-supervisor".into())
             .spawn(move || service.monitor(active_for_thread, events_for_thread));
         if let Err(error) = spawn_result {
-            stop_supervisor_heartbeat(&active);
             if active.physical
                 && let Ok(mut trace_state) = self.sender_trace_state.lock()
             {
@@ -4823,7 +4769,6 @@ impl NativePlaybackService {
         let mut terminal_publication = None;
         loop {
             if active.stop_requested.load(Ordering::Acquire) {
-                stop_supervisor_heartbeat(&active);
                 if let Some(player) = &active.player {
                     let _ = player.quit();
                     let _ = player.join(Duration::from_secs(5));
@@ -4931,9 +4876,16 @@ impl NativePlaybackService {
                 }
                 last_snapshot = Instant::now();
             }
+            if let Some(player) = &active.player {
+                let progress_result = player.publish_supervisor_progress();
+                #[cfg(all(test, feature = "tauri-test"))]
+                if let Some(hook) = &self.monitor_progress_test_hook {
+                    hook(progress_result.is_ok());
+                }
+                let _ = progress_result;
+            }
             thread::sleep(Duration::from_millis(20));
         }
-        stop_supervisor_heartbeat(&active);
         if let Some(player) = &active.player
             && !matches!(player.join(Duration::from_secs(5)), Ok(true))
         {
@@ -5268,6 +5220,8 @@ impl NativePlaybackServiceHandle {
             startup_failure: None,
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
+            #[cfg(all(test, feature = "tauri-test"))]
+            monitor_progress_test_hook: None,
         };
         service.monitor(active, events);
     }
@@ -5303,63 +5257,6 @@ fn sender_trace_export_json(
         },
         "telemetry": telemetry,
     }))
-}
-
-fn supervisor_heartbeat_loop<F>(
-    stop: &AtomicBool,
-    done: &AtomicBool,
-    interval: Duration,
-    mut heartbeat: F,
-) where
-    F: FnMut(),
-{
-    while !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
-        heartbeat();
-        thread::sleep(interval);
-    }
-}
-
-fn spawn_supervisor_heartbeat(active: &Arc<NativeActivePlayback>) -> Result<(), String> {
-    let Some(player) = active.player.clone() else {
-        return Ok(());
-    };
-    let heartbeat_active = Arc::clone(active);
-    let handle = thread::Builder::new()
-        .name("sky-native-playback-heartbeat".into())
-        .spawn(move || {
-            supervisor_heartbeat_loop(
-                &heartbeat_active.heartbeat_stop,
-                &heartbeat_active.done,
-                SUPERVISOR_HEARTBEAT_INTERVAL,
-                || {
-                    let _ = player.heartbeat();
-                },
-            );
-        })
-        .map_err(|error| format!("could not spawn supervisor heartbeat: {error}"))?;
-    match active.heartbeat_thread.lock() {
-        Ok(mut slot) => {
-            *slot = Some(handle);
-            Ok(())
-        }
-        Err(_) => {
-            active.heartbeat_stop.store(true, Ordering::Release);
-            let _ = handle.join();
-            Err("supervisor heartbeat state lock poisoned".into())
-        }
-    }
-}
-
-fn stop_supervisor_heartbeat(active: &NativeActivePlayback) {
-    active.heartbeat_stop.store(true, Ordering::Release);
-    let handle = active
-        .heartbeat_thread
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take());
-    if let Some(handle) = handle {
-        let _ = handle.join();
-    }
 }
 
 fn playback_event_state(status: EnginePollStatus) -> PlaybackEventState {
@@ -5750,7 +5647,6 @@ fn diagnostics_backend_status(
 
 fn cleanup_failed_event_delivery(active: &NativeActivePlayback) {
     active.stop_requested.store(true, Ordering::Release);
-    stop_supervisor_heartbeat(active);
     let _ = set_playback_state(active, PlaybackSessionState::Failed);
     if let Some(player) = &active.player {
         let _ = player.panic_release();
@@ -6083,7 +5979,6 @@ fn release_terminal_ownership(
         .lock()
         .map_err(|_| "native playback control lock poisoned".to_string())?
         .take();
-    active.heartbeat_stop.store(true, Ordering::Release);
     active
         .activity_lease
         .lock()
@@ -6118,7 +6013,6 @@ fn retire_pre_activation_failure(
         .lock()
         .map_err(|_| "native playback control lock poisoned".to_string())?
         .take();
-    active.heartbeat_stop.store(true, Ordering::Release);
     active
         .activity_lease
         .lock()
@@ -6659,8 +6553,8 @@ mod tests {
         recommended_calibrated_timing_margin_us, release_terminal_ownership,
         remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
         safe_calibration_evidence, sender_sample_summary, sender_trace_export_json,
-        settings_fingerprint, supervisor_heartbeat_loop, target_integrity_startup_failure,
-        timing_margin_recommendation, validate_playback_start_request,
+        settings_fingerprint, target_integrity_startup_failure, timing_margin_recommendation,
+        validate_playback_start_request,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
@@ -6685,6 +6579,232 @@ mod tests {
     use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
+        use sky_player::adapter_support::{
+            ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
+        };
+        use sky_player::engine::{
+            BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions,
+            NativeDispatchSession, NativeSessionOptions, PriorityOptions, TelemetryMode,
+            TelemetryOptions, TestWaitPolicy, TimingOptions, WaitOptions,
+        };
+
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: DispatchActionKind::Down,
+                    scheduled_us: 30_000_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: Arc::<str>::from("monitor-stall-runtime-test-down"),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: DispatchActionKind::Up,
+                    scheduled_us: 30_100_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: Arc::<str>::from("monitor-stall-runtime-test-up"),
+                },
+            ],
+            &sky_app_core::song::SKY_SCAN_CODES,
+        )
+        .expect("runtime test schedule");
+        let player = Arc::new(
+            NativeDispatchSession::new_with_power_endpoint(
+                NativeSessionOptions {
+                    schedule,
+                    backend: BackendConfig::Mock {
+                        latency_base_us: 0,
+                        latency_per_key_us: 0,
+                        fault_script: FaultInjectionScript::none(),
+                    },
+                    profile: DispatchProfile::MockTest,
+                    timing: TimingOptions {
+                        game_fps: 60,
+                        min_hold_us: 17_467,
+                        min_release_gap_us: 17_467,
+                        frame_us: 16_667,
+                        frame_base_hold_us: 16_667,
+                        timing_margin_us: 800,
+                        strict_timing: false,
+                        strict_down_completion_late_us: 2_000,
+                        strict_up_completion_late_us: 2_000,
+                        input_path_warn_us: 300,
+                    },
+                    focus: FocusOptions {
+                        require_focus: false,
+                        focus_restore_grace_us: 100_000,
+                    },
+                    wait: WaitOptions {
+                        enable_waitable_timer: true,
+                        enable_event_wait: true,
+                        supervisor_lease_timeout_us: 250_000,
+                        test_spin_threshold_us: None,
+                        test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+                    },
+                    telemetry: TelemetryOptions {
+                        mode: TelemetryMode::Ring,
+                        capacity: 64,
+                    },
+                    priority: PriorityOptions {
+                        mode: PriorityMode::Off,
+                    },
+                    instrument_key_profile: None,
+                    startup_ordering_hook: None,
+                    restore_race_hook: None,
+                    focus_pause_hook: None,
+                    timer_lifecycle_context: None,
+                },
+                super::system_power_endpoint().expect("system power endpoint"),
+            )
+            .expect("mock native session"),
+        );
+        player.arm(0).expect("arm mock native session");
+
+        let active = Arc::new(NativeActivePlayback {
+            session_id: "a".repeat(32),
+            prepared_id: "b".repeat(32),
+            song_id: "c".repeat(32),
+            title: "Monitor lease runtime fixture".into(),
+            total_us: 30_100_000,
+            config: PlaybackConfigDto {
+                hold_frames: 1.0,
+                timing_margin_us: 800,
+                tempo_scale: 1.0,
+                fps: 60,
+                dry_run: false,
+            },
+            timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
+                .expect("runtime fixture timing policy"),
+            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
+                recommended_timing_margin_us: Some(800),
+                qualified: false,
+                source: "default_fallback".into(),
+            },
+            plan_fingerprint: "d".repeat(64),
+            physical: false,
+            activity_lease: Mutex::new(None),
+            target_hwnd: Some(0),
+            state: Mutex::new(PlaybackSessionState::Starting),
+            pending: Mutex::new(None),
+            player: Some(player.clone()),
+            power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
+            power_request: Mutex::new(None),
+            suspend_resume_registration: Mutex::new(None),
+            started_at: Instant::now(),
+            paused_since: Mutex::new(None),
+            paused_total: Mutex::new(Duration::ZERO),
+            stop_requested: AtomicBool::new(false),
+            skip_requested: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            sequence: AtomicU64::new(0),
+        });
+        let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+        *service.active.lock().expect("active playback slot") = Some(active.clone());
+
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let hook_gate = Arc::clone(&gate);
+        let hook_player = Arc::clone(&player);
+        let progress_calls = Arc::new(AtomicU64::new(0));
+        let hook_progress_calls = Arc::clone(&progress_calls);
+        let (progress_tx, progress_rx) = mpsc::channel();
+        service.monitor_progress_test_hook = Some(Arc::new(move |accepted| {
+            if hook_player.snapshot().startup_ready
+                && hook_progress_calls.fetch_add(1, Ordering::AcqRel) == 0
+            {
+                progress_tx
+                    .send(accepted)
+                    .expect("monitor progress receiver");
+                let (released, changed) = &*hook_gate;
+                let mut released = released.lock().expect("monitor test gate");
+                while !*released {
+                    released = changed.wait(released).expect("monitor test gate wait");
+                }
+            }
+        }));
+
+        let service = Arc::new(service);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let (monitor_done_tx, monitor_done_rx) = mpsc::channel();
+        let monitor_service = Arc::clone(&service);
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor_thread = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events);
+            let _ = monitor_done_tx.send(());
+        });
+
+        let first_progress = progress_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("actual monitor should publish progress after startup readiness");
+        assert!(
+            first_progress,
+            "the actual monitor progress point must be accepted"
+        );
+
+        let helper_running = Arc::new(AtomicBool::new(true));
+        let helper_ticks = Arc::new(AtomicU64::new(0));
+        let helper_running_thread = Arc::clone(&helper_running);
+        let helper_ticks_thread = Arc::clone(&helper_ticks);
+        let helper_thread = thread::spawn(move || {
+            while helper_running_thread.load(Ordering::Acquire) {
+                helper_ticks_thread.fetch_add(1, Ordering::Relaxed);
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+
+        let expiry_deadline = Instant::now() + Duration::from_secs(5);
+        while player.snapshot().terminal_error.as_deref() != Some("supervisor_lease_expired")
+            && Instant::now() < expiry_deadline
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let terminal_error = player.snapshot().terminal_error;
+        let helper_remained_active = helper_ticks.load(Ordering::Acquire) > 1;
+
+        helper_running.store(false, Ordering::Release);
+        helper_thread.join().expect("unrelated liveness helper");
+        {
+            let (released, changed) = &*gate;
+            *released.lock().expect("monitor test gate") = true;
+            changed.notify_all();
+        }
+
+        let monitor_completed = monitor_done_rx.recv_timeout(Duration::from_secs(3)).is_ok();
+        if !monitor_completed {
+            active.stop_requested.store(true, Ordering::Release);
+            let _ = monitor_done_rx.recv_timeout(Duration::from_secs(3));
+        }
+        monitor_thread.join().expect("native monitor thread");
+
+        assert_eq!(
+            terminal_error.as_deref(),
+            Some("supervisor_lease_expired"),
+            "the worker watchdog must latch hard-stop authority while the real monitor is stalled"
+        );
+        assert!(
+            helper_remained_active,
+            "unrelated thread activity must continue during the stall"
+        );
+        assert!(
+            monitor_completed,
+            "the resumed monitor must observe terminal lease expiry and exit"
+        );
+        assert_eq!(
+            progress_calls.load(Ordering::Acquire),
+            1,
+            "the resumed monitor must not certify progress after terminal supervision"
+        );
+        assert_eq!(
+            player.snapshot().terminal_error.as_deref(),
+            Some("supervisor_lease_expired"),
+            "resuming the monitor must not heal the expiry latch"
+        );
+        assert!(active.done.load(Ordering::Acquire));
+    }
 
     fn catalog_generation(runtime: &NativeDesktopRuntime) -> u64 {
         runtime
@@ -6787,8 +6907,6 @@ mod tests {
             stop_requested: std::sync::atomic::AtomicBool::new(false),
             skip_requested: std::sync::atomic::AtomicBool::new(false),
             done: std::sync::atomic::AtomicBool::new(false),
-            heartbeat_stop: std::sync::atomic::AtomicBool::new(true),
-            heartbeat_thread: Mutex::new(None),
             sequence: std::sync::atomic::AtomicU64::new(0),
         })
     }
@@ -10227,44 +10345,54 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_heartbeat_progresses_while_ui_publication_is_stalled() {
-        let stop = Arc::new(AtomicBool::new(false));
-        let done = Arc::new(AtomicBool::new(false));
-        let heartbeats = Arc::new(AtomicU64::new(0));
-        let publication_started = Arc::new(std::sync::Barrier::new(2));
-        let publication_release = Arc::new(std::sync::Barrier::new(2));
+    fn native_supervisor_progress_belongs_to_completed_monitor_iterations() {
+        let source = include_str!("native_runtime.rs");
+        let independent_thread_name = ["sky-native-playback", "heartbeat"].join("-");
+        let heartbeat_spawner = ["spawn_supervisor_", "heartbeat"].concat();
+        assert!(!source.contains(&independent_thread_name));
+        assert!(!source.contains(&heartbeat_spawner));
 
-        let ui_started = Arc::clone(&publication_started);
-        let ui_release = Arc::clone(&publication_release);
-        let ui = thread::spawn(move || {
-            ui_started.wait();
-            ui_release.wait();
-        });
-        publication_started.wait();
+        let monitor = source
+            .split(&concat!(
+                "fn monitor(&self, active: Arc<NativeActivePlayback>, events: Arc<Mutex<NativeEventHub>>) ",
+                "{"
+            ))
+            .nth(1)
+            .expect("native playback monitor")
+            .split("\n    }\n}\n\nstruct NativePlaybackServiceHandle")
+            .next()
+            .expect("monitor implementation body");
+        let stop = monitor
+            .find("if active.stop_requested.load(Ordering::Acquire)")
+            .expect("stop branch");
+        let terminal = monitor
+            .find("if is_terminal_status(status)")
+            .expect("terminal branch");
+        let poll = monitor.find("player.poll_state()").expect("engine poll");
+        let diagnostics = monitor
+            .find("publish_diagnostics_snapshot_for_active")
+            .expect("supervision publication");
+        let progress = monitor
+            .find("player.publish_supervisor_progress()")
+            .expect("progress publication");
+        let sleep = monitor
+            .find("thread::sleep(Duration::from_millis(20))")
+            .expect("normal monitor sleep");
 
-        let heartbeat_stop = Arc::clone(&stop);
-        let heartbeat_done = Arc::clone(&done);
-        let heartbeat_count = Arc::clone(&heartbeats);
-        let heartbeat = thread::spawn(move || {
-            supervisor_heartbeat_loop(
-                &heartbeat_stop,
-                &heartbeat_done,
-                Duration::from_millis(5),
-                || {
-                    heartbeat_count.fetch_add(1, Ordering::Relaxed);
-                },
-            );
-        });
-
-        let deadline = Instant::now() + Duration::from_millis(200);
-        while heartbeats.load(Ordering::Relaxed) < 3 && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(5));
-        }
-        assert!(heartbeats.load(Ordering::Relaxed) >= 3);
-        publication_release.wait();
-        ui.join().expect("UI publication seam");
-        stop.store(true, Ordering::Release);
-        heartbeat.join().expect("heartbeat seam");
+        assert!(stop < progress, "stop exits before publishing progress");
+        assert!(poll < progress, "progress follows engine polling");
+        assert!(
+            terminal < progress,
+            "terminal poll exits before publishing progress"
+        );
+        assert!(
+            diagnostics < progress,
+            "progress follows completed supervision work"
+        );
+        assert!(
+            progress < sleep,
+            "progress is published before the normal poll delay"
+        );
     }
 
     #[test]

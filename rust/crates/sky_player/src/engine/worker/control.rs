@@ -3,6 +3,7 @@ use super::{
     cancel_coordinator_or_terminal, describe_release_outcome, publish_backend_metrics,
     record_termination_error, release_state_verified, try_publish_metrics,
 };
+use crate::engine::shared::SupervisorLeaseState;
 use crate::engine::telemetry::SharedMetrics;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
@@ -22,7 +23,7 @@ pub(super) struct CommandControlSignals<'a> {
     pub(super) quit_requested: &'a AtomicBool,
     pub(super) skip_requested: &'a AtomicBool,
     pub(super) panic_requested: &'a AtomicBool,
-    pub(super) supervisor_expired: &'a AtomicBool,
+    pub(super) supervisor_expired: &'a SupervisorLeaseState,
     pub(super) target_hwnd: &'a AtomicIsize,
 }
 
@@ -101,7 +102,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
         last_published_error,
     } = metrics;
 
-    let supervisor_expired_before = supervisor_expired.load(Ordering::Acquire);
+    let supervisor_expired_before = supervisor_expired.is_expired();
     let command_exit =
         quit_requested.load(Ordering::Acquire) || skip_requested.load(Ordering::Acquire);
     let panic_hard_stop_consumed = consume_panic_request_if_pending(panic_requested, command_exit);
@@ -140,7 +141,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
                 return CommandControl::Exit;
             }
         };
-        let supervisor_expired_after = supervisor_expired.load(Ordering::Acquire);
+        let supervisor_expired_after = supervisor_expired.is_expired();
         *terminal_error = Some(
             terminal_reason_for_hard_stop(
                 supervisor_expired_before,
@@ -166,15 +167,17 @@ mod tests {
 
     #[test]
     fn watchdog_expiry_after_worker_sample_keeps_terminal_identity() {
-        let supervisor_expired = AtomicBool::new(false);
+        let supervisor_expired = super::super::super::shared::SupervisorLeaseState::new(
+            sky_dispatch_core::time::QpcTicks::from_raw(1),
+        );
         let panic_requested = AtomicBool::new(true);
 
         // Deterministic interleaving: the worker sampled the old state, then
         // the watchdog published expiry before the hard-stop was consumed.
-        let sampled_before = supervisor_expired.load(Ordering::Acquire);
-        supervisor_expired.store(true, Ordering::Release);
+        let sampled_before = supervisor_expired.is_expired();
+        supervisor_expired.latch_expired();
         let hard_stop_consumed = panic_requested.swap(false, Ordering::AcqRel);
-        let sampled_after = supervisor_expired.load(Ordering::Acquire);
+        let sampled_after = supervisor_expired.is_expired();
 
         assert_eq!(
             terminal_reason_for_hard_stop(sampled_before, hard_stop_consumed, sampled_after),

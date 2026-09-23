@@ -6,10 +6,48 @@ use sky_player::adapter_support::compile_runtime_intents;
 use sky_player::engine::NativeDispatchSession;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 pub(super) const RELEASE_GAP_STRESS_CYCLES: usize = 513;
 pub(super) const RELEASE_GAP_STRESS_MIN_SAMPLES: u64 = 512;
+
+pub(super) struct IndependentHelperLivenessProbe {
+    stop: Arc<AtomicBool>,
+    ticks: Arc<AtomicU64>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl IndependentHelperLivenessProbe {
+    pub(super) fn start() -> Result<Self, std::io::Error> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let ticks = Arc::new(AtomicU64::new(0));
+        let thread_ticks = Arc::clone(&ticks);
+        let thread = std::thread::Builder::new()
+            .name("rt-native-acceptance-independent-helper".into())
+            .spawn(move || {
+                while !thread_stop.load(Ordering::Acquire) {
+                    thread_ticks.fetch_add(1, Ordering::Relaxed);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            })?;
+        Ok(Self {
+            stop,
+            ticks,
+            thread: Some(thread),
+        })
+    }
+
+    pub(super) fn stop_and_read(mut self) -> u64 {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        self.ticks.load(Ordering::Acquire)
+    }
+}
 
 pub(super) fn healthy_generation_qualification(
     scenario: Scenario,
@@ -150,7 +188,7 @@ pub(super) fn start_heartbeat(session: Arc<NativeDispatchSession>) -> Result<(),
         .spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(60);
             while !heartbeat_session.snapshot().is_finished && Instant::now() < deadline {
-                let _ = heartbeat_session.heartbeat();
+                let _ = heartbeat_session.publish_supervisor_progress();
                 std::thread::sleep(Duration::from_millis(250));
             }
         });

@@ -134,7 +134,7 @@ fn actual_worker_wait_path_drops_waitable_timer_after_session_exit() {
 
 #[test]
 fn supervisor_lease_treats_future_heartbeat_as_fresh() {
-    let heartbeat = AtomicU64::new(1_001);
+    let heartbeat = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1_001));
     assert_eq!(
         supervisor_lease_expired(
             QpcTicks::from_raw(1_000),
@@ -142,6 +142,69 @@ fn supervisor_lease_treats_future_heartbeat_as_fresh() {
             &heartbeat,
         ),
         Ok(false)
+    );
+}
+
+#[test]
+fn late_supervisor_progress_cannot_heal_a_missed_deadline() {
+    let lease = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let timeout = DurationTicks::from_raw(100);
+    let late_progress = QpcTicks::from_raw(1_101);
+
+    assert!(!lease.publish_progress(late_progress, timeout));
+    assert!(lease.is_expired(), "late progress must latch expiry itself");
+    assert!(lease.check_expired(late_progress, timeout));
+}
+
+#[test]
+fn unrelated_heartbeat_cannot_keep_a_stalled_monitor_lease_alive() {
+    let lease = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let unrelated_helper_progress = AtomicU64::new(1_000);
+    unrelated_helper_progress.store(1_100, Ordering::Release);
+    let now = QpcTicks::from_raw(1_101);
+
+    assert!(unrelated_helper_progress.load(Ordering::Acquire) >= now.as_u64() - 1);
+    assert!(lease.check_expired(now, DurationTicks::from_raw(100)));
+}
+
+#[test]
+fn supervisor_lease_progress_extends_on_time_and_keeps_strict_equality_alive() {
+    let lease = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let timeout = DurationTicks::from_raw(100);
+
+    assert!(lease.publish_progress(QpcTicks::from_raw(1_050), timeout));
+    assert_eq!(lease.last_progress_ticks(), 1_050);
+    assert!(lease.publish_progress(QpcTicks::from_raw(1_150), timeout));
+    assert!(!lease.check_expired(QpcTicks::from_raw(1_250), timeout));
+    assert!(lease.publish_progress(QpcTicks::from_raw(1_250), timeout));
+    assert!(!lease.check_expired(QpcTicks::from_raw(1_350), timeout));
+    assert!(lease.check_expired(QpcTicks::from_raw(1_351), timeout));
+}
+
+#[test]
+fn terminal_session_does_not_accept_more_supervisor_progress() {
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.wait.supervisor_lease_timeout_us = 0;
+    let session = NativeDispatchSession::new(options).expect("terminal-progress admission");
+    session.arm(0).expect("terminal-progress arm");
+    session.quit().expect("terminal-progress stop");
+    assert!(session.join(Duration::from_secs(2)).expect("terminal join"));
+
+    let terminal_progress = session.supervisor_heartbeat_qpc_for_test();
+    session
+        .publish_supervisor_progress()
+        .expect("progress after terminal ownership is a no-op");
+    assert_eq!(
+        session.supervisor_heartbeat_qpc_for_test(),
+        terminal_progress
     );
 }
 
@@ -519,7 +582,7 @@ fn run_startup_first_physical_lead_probe(
         && !session.snapshot().is_finished
         && Instant::now() < deadline
     {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(1));
     }
     let snapshot = session.snapshot();
@@ -1652,7 +1715,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     .expect("system suspend cleanup");
             }
             "supervisor_expiry" => {
-                harness.supervisor_expired.store(true, Ordering::Release);
+                harness.supervisor_expired.latch_expired();
                 assert!(
                     harness.process_command_control_for_test(),
                     "{path}: process_command_control hard-stop owner"
@@ -1843,7 +1906,9 @@ fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
             Instant::now() < first_deadline,
             "prepared Down did not commit: {snapshot:?}"
         );
-        session.heartbeat().expect("heartbeat before pause");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat before pause");
         std::thread::yield_now();
     }
 
@@ -1869,7 +1934,9 @@ fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
             Instant::now() < resume_deadline,
             "prepared resume did not commit"
         );
-        session.heartbeat().expect("heartbeat after resume request");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat after resume request");
         std::thread::yield_now();
     }
 
@@ -1889,7 +1956,9 @@ fn native_prepared_normal_resume_sends_frozen_up_and_following_sentinel() {
             Instant::now() < sentinel_deadline,
             "sentinel Down did not send"
         );
-        session.heartbeat().expect("heartbeat before sentinel");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat before sentinel");
         std::thread::yield_now();
     }
 
@@ -1980,7 +2049,7 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
         );
         assert!(Instant::now() < first_deadline, "initial Down did not send");
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat before natural-resume pause");
         std::thread::yield_now();
     }
@@ -2008,7 +2077,7 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
             "resume acknowledgment timed out: {snapshot:?}"
         );
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat after natural-resume request");
         std::thread::yield_now();
     }
@@ -2028,7 +2097,7 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
             "prepared stream did not naturally finish: {snapshot:?}"
         );
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat during natural finish");
         std::thread::yield_now();
     }
@@ -2106,7 +2175,7 @@ fn normal_prepared_precision_suffix_suppresses_all_final_control_races() {
         let calls = harness.configure_send_counter();
         match control {
             0 => harness.panic_requested.store(true, Ordering::Release),
-            1 => harness.supervisor_expired.store(true, Ordering::Release),
+            1 => harness.supervisor_expired.latch_expired(),
             2 => harness.quit_requested.store(true, Ordering::Release),
             3 => harness.skip_requested.store(true, Ordering::Release),
             4 => harness.desired_pause.store(true, Ordering::Release),
@@ -2915,7 +2984,9 @@ fn native_telemetry_does_not_block_dispatch() {
     let session = NativeDispatchSession::new(options).expect("test session admission");
     session.arm(1_000_000).expect("worker arm");
     while !session.snapshot().is_finished {
-        session.heartbeat().expect("supervisor heartbeat");
+        session
+            .publish_supervisor_progress()
+            .expect("supervisor heartbeat");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
@@ -3824,7 +3895,7 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
         );
         assert!(Instant::now() < first_deadline, "first Down did not send");
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat before same-frame loss");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -3846,7 +3917,7 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
             session.snapshot(),
         );
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat during fresh focus rejection");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -3884,7 +3955,7 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
             "focus restore reconciliation did not run"
         );
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat during normal focus restore");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -3900,7 +3971,7 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
             "same current prepared frame did not send"
         );
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat after normal focus restore");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -3993,7 +4064,7 @@ fn final_control_admission_rejects_each_command_state_in_priority_order() {
     let skip_requested = AtomicBool::new(false);
     let panic_requested = AtomicBool::new(true);
     let desired_pause = AtomicBool::new(false);
-    let supervisor_expired = AtomicBool::new(false);
+    let supervisor_expired = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1));
 
     let admission = || {
         final_control_precheck(FinalControlSignals {
@@ -4024,7 +4095,7 @@ fn panic_arriving_after_outer_sample_is_caught_by_final_control_gate() {
     let skip_requested = AtomicBool::new(false);
     let panic_requested = AtomicBool::new(false);
     let desired_pause = AtomicBool::new(false);
-    let supervisor_expired = AtomicBool::new(false);
+    let supervisor_expired = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1));
     let signals = || FinalControlSignals {
         quit_requested: &quit_requested,
         skip_requested: &skip_requested,
@@ -4055,7 +4126,7 @@ fn system_suspend_after_wait_wake_blocks_final_down_admission_until_revalidated_
     let skip_requested = AtomicBool::new(false);
     let panic_requested = AtomicBool::new(false);
     let desired_pause = AtomicBool::new(false);
-    let supervisor_expired = AtomicBool::new(false);
+    let supervisor_expired = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1));
     let signals = || FinalControlSignals {
         quit_requested: &quit_requested,
         skip_requested: &skip_requested,
@@ -4134,7 +4205,8 @@ fn final_control_gate_uses_atomic_supervisor_hard_stop_without_lease_qpc() {
     let skip_requested = AtomicBool::new(false);
     let panic_requested = AtomicBool::new(false);
     let desired_pause = AtomicBool::new(false);
-    let supervisor_expired = AtomicBool::new(true);
+    let supervisor_expired = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1));
+    supervisor_expired.latch_expired();
     let signals = || FinalControlSignals {
         quit_requested: &quit_requested,
         skip_requested: &skip_requested,
@@ -4149,7 +4221,7 @@ fn final_control_gate_uses_atomic_supervisor_hard_stop_without_lease_qpc() {
         FinalControlAdmission::PanicRequested
     );
 
-    supervisor_expired.store(false, Ordering::Release);
+    supervisor_expired.reset(QpcTicks::from_raw(1));
     assert_eq!(
         final_control_precheck(signals()),
         FinalControlAdmission::Allowed
@@ -4194,7 +4266,7 @@ fn prepared_up_only_has_one_final_gate_for_every_hard_stop() {
             1 => harness.skip_requested.store(true, Ordering::Release),
             2 => harness.desired_pause.store(true, Ordering::Release),
             3 => harness.panic_requested.store(true, Ordering::Release),
-            4 => harness.supervisor_expired.store(true, Ordering::Release),
+            4 => harness.supervisor_expired.latch_expired(),
             5 => assert!(harness.notify_system_power_for_test(true)),
             6 => harness.set_final_gate_race_hook(
                 |_focus_active,
@@ -4233,9 +4305,7 @@ fn authored_up_only_ignores_stale_heartbeat_without_watchdog_hard_stop() {
     let calls = harness.configure_send_counter();
     harness.advance_playback_time_us(100_000);
     let plan = harness.plan_current_dispatch();
-    harness
-        .supervisor_heartbeat_ticks
-        .store(1, Ordering::Release);
+    harness.supervisor_expired.reset(QpcTicks::from_raw(1));
 
     let step = harness.dispatch_authored_with_plan(&plan);
     assert!(
@@ -4428,7 +4498,7 @@ fn wait_for_focus_down(session: &NativeDispatchSession) -> super::EngineProgress
         && Instant::now() < deadline
     {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while waiting for Down");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
@@ -4444,7 +4514,9 @@ fn wait_for_focus_pause(session: &NativeDispatchSession) -> super::EngineProgres
     let deadline = Instant::now() + Duration::from_secs(1);
     let mut snapshot = session.snapshot_lite();
     while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < deadline {
-        session.heartbeat().expect("heartbeat while focus is lost");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while focus is lost");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
     }
@@ -4475,7 +4547,7 @@ fn wait_for_pause_ack(session: &NativeDispatchSession, generation: u64) -> Comma
             "pause acknowledgment timed out: {snapshot:?}"
         );
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while waiting for pause");
         std::thread::yield_now();
     }
@@ -4504,7 +4576,7 @@ fn wait_for_clean_suspension(
             "suspension state publication timed out: {snapshot:?}"
         );
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while waiting for suspension");
         std::thread::yield_now();
     }
@@ -4531,7 +4603,7 @@ fn wait_for_lifecycle_ack(
             "{transition} acknowledgment timed out: {snapshot:?}"
         );
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while waiting for lifecycle transition");
         std::thread::yield_now();
     }
@@ -4542,7 +4614,7 @@ fn wait_for_focus_finish(session: &NativeDispatchSession) -> super::EngineProgre
     let mut snapshot = session.snapshot_lite();
     while !snapshot.is_finished && Instant::now() < deadline {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while waiting for terminal state");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
@@ -4611,7 +4683,7 @@ fn focus_loss_with_inconclusive_probe_stays_paused_without_terminal_cleanup() {
         && Instant::now() < deadline
     {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while waiting for Down");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
@@ -4625,7 +4697,9 @@ fn focus_loss_with_inconclusive_probe_stays_paused_without_terminal_cleanup() {
     force_inconclusive_probe.store(true, Ordering::Release);
     session.set_focus_hint(false);
     while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < deadline {
-        session.heartbeat().expect("heartbeat while focus is lost");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while focus is lost");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
     }
@@ -4722,7 +4796,7 @@ fn focus_restore_after_grace_releases_and_resumes() {
         && Instant::now() < deadline
     {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while waiting for Down");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
@@ -4733,7 +4807,9 @@ fn focus_restore_after_grace_releases_and_resumes() {
     force_inconclusive_probe.store(true, Ordering::Release);
     session.set_focus_hint(false);
     while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < deadline {
-        session.heartbeat().expect("heartbeat while focus is lost");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while focus is lost");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
     }
@@ -4749,7 +4825,7 @@ fn focus_restore_after_grace_releases_and_resumes() {
     let restore_deadline = Instant::now() + Duration::from_secs(2);
     while snapshot.is_paused && !snapshot.is_finished && Instant::now() < restore_deadline {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while focus is restored");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
@@ -4795,7 +4871,9 @@ fn focus_restore_before_grace_keeps_pause_without_cleanup_or_dispatch() {
     session.set_focus_hint(true);
     let grace_deadline = Instant::now() + Duration::from_millis(30);
     while Instant::now() < grace_deadline {
-        session.heartbeat().expect("heartbeat during restore grace");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat during restore grace");
         std::thread::sleep(Duration::from_millis(1));
     }
 
@@ -4834,7 +4912,9 @@ fn focus_bounce_resets_restore_grace_without_cleanup() {
     session.set_focus_hint(true);
     let first_restore_deadline = first_restore_started + Duration::from_millis(30);
     while Instant::now() < first_restore_deadline {
-        session.heartbeat().expect("heartbeat during first restore");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat during first restore");
         std::thread::sleep(Duration::from_millis(1));
     }
 
@@ -4843,7 +4923,7 @@ fn focus_bounce_resets_restore_grace_without_cleanup() {
     let focus_loss_observation_deadline = Instant::now() + Duration::from_millis(20);
     while Instant::now() < focus_loss_observation_deadline {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while observing focus bounce loss");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -4860,7 +4940,7 @@ fn focus_bounce_resets_restore_grace_without_cleanup() {
     );
     while Instant::now() < old_grace_deadline + Duration::from_millis(5) {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat during second restore");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -4877,7 +4957,7 @@ fn focus_bounce_resets_restore_grace_without_cleanup() {
     let mut snapshot = session.snapshot_lite();
     while snapshot.is_paused && Instant::now() < resume_deadline {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat while waiting for second restore grace");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
@@ -4990,7 +5070,9 @@ fn focus_restore_race_after_validation_does_not_resume() {
     session.set_focus_hint(true);
     let race_deadline = Instant::now() + Duration::from_millis(300);
     while !raced.load(Ordering::Acquire) && Instant::now() < race_deadline {
-        session.heartbeat().expect("heartbeat during restore race");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat during restore race");
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(
@@ -4999,7 +5081,9 @@ fn focus_restore_race_after_validation_does_not_resume() {
     );
     let settle_deadline = Instant::now() + Duration::from_millis(30);
     while Instant::now() < settle_deadline {
-        session.heartbeat().expect("heartbeat after restore race");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat after restore race");
         std::thread::sleep(Duration::from_millis(1));
     }
 
@@ -5036,7 +5120,9 @@ fn manual_and_focus_pauses_compose_without_auto_resume() {
     let manual_pause_deadline = Instant::now() + Duration::from_secs(1);
     let mut snapshot = session.snapshot_lite();
     while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < manual_pause_deadline {
-        session.heartbeat().expect("heartbeat during manual pause");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat during manual pause");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
     }
@@ -5053,7 +5139,7 @@ fn manual_and_focus_pauses_compose_without_auto_resume() {
     let restore_deadline = Instant::now() + Duration::from_millis(150);
     while Instant::now() < restore_deadline {
         session
-            .heartbeat()
+            .publish_supervisor_progress()
             .expect("heartbeat during composed pause");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -5068,7 +5154,9 @@ fn manual_and_focus_pauses_compose_without_auto_resume() {
     session.resume().expect("manual resume");
     let resume_deadline = Instant::now() + Duration::from_secs(1);
     while snapshot.is_paused && !snapshot.is_finished && Instant::now() < resume_deadline {
-        session.heartbeat().expect("heartbeat during manual resume");
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat during manual resume");
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
     }
@@ -5639,7 +5727,7 @@ fn frozen_target_reaches_dispatch_and_observation_without_reconstruction() {
 
 #[test]
 fn supervisor_lease_treats_equal_heartbeat_as_fresh() {
-    let heartbeat = AtomicU64::new(1_000);
+    let heartbeat = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
     assert_eq!(
         supervisor_lease_expired(
             QpcTicks::from_raw(1_000),
@@ -5652,7 +5740,7 @@ fn supervisor_lease_treats_equal_heartbeat_as_fresh() {
 
 #[test]
 fn supervisor_lease_preserves_fresh_boundary_and_expiration() {
-    let heartbeat = AtomicU64::new(1_000);
+    let heartbeat = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
     let timeout = DurationTicks::from_raw(100);
     assert_eq!(
         supervisor_lease_expired(QpcTicks::from_raw(1_050), timeout, &heartbeat),
@@ -5704,7 +5792,9 @@ fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
     heartbeat_session.arm(0).expect("heartbeat session arm");
     let deadline = Instant::now() + Duration::from_secs(2);
     while !heartbeat_session.snapshot().is_finished && Instant::now() < deadline {
-        heartbeat_session.heartbeat().expect("supervisor heartbeat");
+        heartbeat_session
+            .publish_supervisor_progress()
+            .expect("supervisor heartbeat");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(
@@ -5836,7 +5926,8 @@ fn watchdog_age_begins_at_arm_heartbeat_not_construction() {
             .expect("lease timeout")
             .as_u64(),
     );
-    let stale_construction_heartbeat = AtomicU64::new(construction_heartbeat.as_u64());
+    let stale_construction_heartbeat =
+        super::shared::SupervisorLeaseState::new(construction_heartbeat);
     assert!(
         supervisor_lease_expired(now, timeout, &stale_construction_heartbeat)
             .expect("construction heartbeat age")
@@ -5845,7 +5936,7 @@ fn watchdog_age_begins_at_arm_heartbeat_not_construction() {
     session.arm(0).expect("delayed-arm worker arm");
     let arm_heartbeat = session.supervisor_heartbeat_qpc_for_test();
     assert!(arm_heartbeat > construction_heartbeat);
-    let fresh_arm_heartbeat = AtomicU64::new(arm_heartbeat.as_u64());
+    let fresh_arm_heartbeat = super::shared::SupervisorLeaseState::new(arm_heartbeat);
     assert!(
         !supervisor_lease_expired(
             QpcClock::initialize()
@@ -5965,7 +6056,7 @@ fn explicit_panic_release_keeps_user_terminal_identity() {
 
 #[test]
 fn supervisor_lease_disabled_is_never_expired() {
-    let heartbeat = AtomicU64::new(1);
+    let heartbeat = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1));
     assert_eq!(
         supervisor_lease_expired(QpcTicks::from_raw(2), DurationTicks::ZERO, &heartbeat),
         Ok(false)
@@ -6006,13 +6097,15 @@ fn recent_latency_ring_is_bounded_and_keeps_latest_values() {
 
 #[test]
 fn supervisor_lease_concurrent_publication_never_reports_clock_error() {
-    let heartbeat = Arc::new(AtomicU64::new(1_000));
+    let heartbeat = Arc::new(super::shared::SupervisorLeaseState::new(
+        QpcTicks::from_raw(1_000),
+    ));
     let publisher_heartbeat = Arc::clone(&heartbeat);
     let publisher = std::thread::spawn(move || {
         for index in 0..10_000 {
-            publisher_heartbeat.store(
-                if index % 2 == 0 { 1_000 } else { 1_001 },
-                Ordering::Release,
+            publisher_heartbeat.publish_progress(
+                QpcTicks::from_raw(if index % 2 == 0 { 1_000 } else { 1_001 }),
+                DurationTicks::from_raw(100),
             );
         }
     });
@@ -7977,7 +8070,7 @@ fn slow_observer_defers_when_slack_is_insufficient() {
     let session = NativeDispatchSession::new(options).expect("session");
     session.arm(2_000_000).expect("worker arm");
     while !session.snapshot().is_finished {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(session.join(Duration::from_secs(5)).expect("join"));
@@ -8094,7 +8187,7 @@ fn slow_observer_drains_in_ample_slack_without_rebase() {
     let session = NativeDispatchSession::new(options).expect("session");
     start_with_test_wall_clock_slack(&session);
     while !session.snapshot().is_finished {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(session.join(Duration::from_secs(5)).expect("join"));
@@ -8289,7 +8382,7 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     assert!(!snap.has_terminal_error);
 
     let send_count_before = send_call_count.load(Ordering::SeqCst);
-    session.heartbeat().expect("heartbeat");
+    session.publish_supervisor_progress().expect("heartbeat");
     assert_eq!(
         send_call_count.load(Ordering::SeqCst),
         send_count_before,
@@ -8306,7 +8399,7 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     let resume_deadline = Instant::now() + Duration::from_secs(2);
     let mut post_snap = session.snapshot_lite();
     while post_snap.is_paused && Instant::now() < resume_deadline {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::yield_now();
         post_snap = session.snapshot_lite();
     }
@@ -8407,11 +8500,11 @@ fn focus_then_manual_then_unfocused_resume_suspends_before_manual_resume() {
         .load(Ordering::Acquire)
         && Instant::now() < deadline
     {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(1));
     }
     for _ in 0..10 {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(2));
     }
     assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
@@ -8434,7 +8527,7 @@ fn focus_then_manual_then_unfocused_resume_suspends_before_manual_resume() {
 
     let mut snap = session.snapshot_lite();
     while snap.is_paused && Instant::now() < deadline {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(1));
         snap = session.snapshot_lite();
     }
@@ -8581,7 +8674,7 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
     let resume_deadline = Instant::now() + Duration::from_secs(2);
     let mut post_snap = session.snapshot_lite();
     while post_snap.is_paused && Instant::now() < resume_deadline {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::yield_now();
         post_snap = session.snapshot_lite();
     }
@@ -8723,11 +8816,11 @@ fn deferred_manual_suspension_failure_terminates_fail_closed() {
         .load(Ordering::Acquire)
         && Instant::now() < deadline
     {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(1));
     }
     for _ in 0..10 {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(2));
     }
 
@@ -8740,7 +8833,7 @@ fn deferred_manual_suspension_failure_terminates_fail_closed() {
     session.set_focus_hint(true);
 
     for _ in 0..20 {
-        session.heartbeat().expect("heartbeat");
+        session.publish_supervisor_progress().expect("heartbeat");
         std::thread::sleep(Duration::from_millis(2));
     }
 
@@ -8749,7 +8842,7 @@ fn deferred_manual_suspension_failure_terminates_fail_closed() {
     let resume_deadline = Instant::now() + Duration::from_secs(2);
     let mut snap = session.snapshot_lite();
     while !snap.has_terminal_error && !snap.is_finished && Instant::now() < resume_deadline {
-        let _ = session.heartbeat();
+        let _ = session.publish_supervisor_progress();
         std::thread::sleep(Duration::from_millis(1));
         snap = session.snapshot_lite();
     }

@@ -1,5 +1,6 @@
 use super::super::shared::{
-    SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING, SystemPowerState,
+    SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING, SupervisorLeaseState,
+    SystemPowerState,
 };
 use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
@@ -10,8 +11,7 @@ use super::{
     WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
     focus_matches, focus_matches_hwnd, load_target_stamp, plan_next_dispatch_projected,
     process_command_control, publish_backend_counters, publish_backend_metrics,
-    record_wait_failure, supervisor_lease_expired, suspend_live_input, target_stamp_still_current,
-    wait_for_next_boundary,
+    record_wait_failure, suspend_live_input, target_stamp_still_current, wait_for_next_boundary,
 };
 use super::{PreparedDispatchEntry, PreparedDispatchStream, dispatch_prepared_normal_frame};
 use sky_dispatch_core::clock::PauseReason;
@@ -212,7 +212,7 @@ pub(crate) fn dispatch_due_from_plan(
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
-    supervisor_expired: &AtomicBool,
+    supervisor_expired: &SupervisorLeaseState,
     desired_pause: &AtomicBool,
     system_power: &SystemPowerState,
     progress_clock: &crate::engine::shared::SharedProgressClock,
@@ -528,7 +528,7 @@ pub(crate) struct SystemResumeTransition<'a> {
     pub(crate) target_hwnd: &'a AtomicIsize,
     pub(crate) target_generation: &'a AtomicU64,
     pub(crate) lease_timeout_ticks: DurationTicks,
-    pub(crate) supervisor_heartbeat_ticks: &'a AtomicU64,
+    pub(crate) supervisor_lease: &'a SupervisorLeaseState,
 }
 
 pub(crate) fn try_complete_system_resume_transition(
@@ -548,7 +548,7 @@ pub(crate) fn try_complete_system_resume_transition(
         target_hwnd,
         target_generation,
         lease_timeout_ticks,
-        supervisor_heartbeat_ticks,
+        supervisor_lease,
     } = transition;
     if !*suspend_applied || !*resume_pending || system_power.os_suspended() {
         return Ok(false);
@@ -570,12 +570,9 @@ pub(crate) fn try_complete_system_resume_transition(
     let resumed_ticks = qpc_clock
         .now()
         .map_err(|error| format!("system resume lease QPC failure: {error:?}"))?;
-    let lease_expired = supervisor_lease_expired(
-        resumed_ticks,
-        lease_timeout_ticks,
-        supervisor_heartbeat_ticks,
-    )
-    .map_err(|error| format!("system resume lease QPC failure: {error:?}"))?;
+    let lease_expired =
+        super::supervisor_lease_expired(resumed_ticks, lease_timeout_ticks, supervisor_lease)
+            .map_err(|error| format!("system resume lease QPC failure: {error:?}"))?;
     if !preflight_and_focus_current || lease_expired || !system_power.complete_resume() {
         runtime.verified_target = None;
         return Ok(false);
@@ -612,7 +609,7 @@ pub(super) fn dispatch(
     let target_hwnd = &shared.target.target_hwnd;
     let target_generation = &shared.target.target_generation;
     let metrics = &shared.publication.metrics;
-    let supervisor_heartbeat_ticks = &shared.publication.supervisor_heartbeat_ticks;
+    let supervisor_lease = &shared.commands.supervisor_expired;
     #[cfg(any(test, feature = "test-support"))]
     let command_timing = &shared.commands.command_timing;
 
@@ -1096,7 +1093,7 @@ pub(super) fn dispatch(
                     target_hwnd,
                     target_generation,
                     lease_timeout_ticks: timing.lease_timeout_ticks,
-                    supervisor_heartbeat_ticks,
+                    supervisor_lease,
                 },
             ) {
                 core.runtime.force_full_cleanup = true;

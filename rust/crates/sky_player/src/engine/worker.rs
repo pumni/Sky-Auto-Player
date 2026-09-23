@@ -137,7 +137,7 @@ pub(crate) fn process_command_control_for_test(
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
-    supervisor_expired: &AtomicBool,
+    supervisor_expired: &crate::engine::shared::SupervisorLeaseState,
     target_hwnd: &AtomicIsize,
     local_metrics: &mut WorkerMetricsLocal,
     metrics: &SharedMetrics,

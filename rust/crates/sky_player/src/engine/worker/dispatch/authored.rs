@@ -19,7 +19,7 @@ use super::observer::publisher_down_send_outcome;
 use super::recovery::{DownMissReason, recover_missed_down_boundary};
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
-use crate::engine::shared::{SharedProgressClock, SystemPowerState};
+use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState, SystemPowerState};
 use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_win32::input::SendTransactionOutcome;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
@@ -135,7 +135,7 @@ fn commit_down_send_outcome(
     down_admission: DownBoundaryAdmission,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
-    supervisor_expired: &AtomicBool,
+    supervisor_expired: &SupervisorLeaseState,
     boundary_crossing_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     #[cfg(any(test, feature = "test-support"))] test_inject_sender_start: bool,
@@ -306,7 +306,7 @@ fn admit_authored_down(
     has_conflicts: bool,
     focus_loss_fault: bool,
     preflight_target: Option<TargetStamp>,
-    supervisor_expired: &AtomicBool,
+    supervisor_expired: &SupervisorLeaseState,
     observer: Option<&PendingObservationQueue>,
 ) -> Result<AdmissionOutcome, DispatchStep> {
     let trace_kind = trace_kind_for_packet_kind(view.prepared_batch.packet_kind);
@@ -412,7 +412,7 @@ fn finalize_authored_down_admission(
     progress_clock: &SharedProgressClock,
     physical_target_qpc: QpcTicks,
     down_admission: DownBoundaryAdmission,
-    supervisor_expired: &AtomicBool,
+    supervisor_expired: &SupervisorLeaseState,
     boundary_crossing_qpc: Option<QpcTicks>,
     #[cfg(any(test, feature = "test-support"))] test_direct_boundary: bool,
     admission: AdmissionOutcome,
