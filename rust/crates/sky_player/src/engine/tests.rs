@@ -905,7 +905,7 @@ fn normal_prepared_overdue_boundaries_send_sequentially() {
 #[test]
 fn prepared_late_down_keeps_following_up_accounting() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
-    let packets = harness.configure_packet_capture();
+    let (packets, evidence) = harness.configure_prepared_packet_capture_with_evidence_for_test();
     let mut stream = harness.build_prepared_stream_for_test();
 
     assert!(matches!(
@@ -916,6 +916,18 @@ fn prepared_late_down_keeps_following_up_accounting() {
         *packets.lock().expect("packet capture"),
         vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 1)]
     );
+    {
+        let captured = evidence.lock().expect("prepared Down evidence");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].requested_mask, 1);
+        assert_eq!(captured[0].confirmed_mask, 1);
+        assert_eq!(captured[0].attempts, 1);
+    }
+    let after_down = harness.resources.coordinator.generation_accounting();
+    assert_eq!(after_down.activated, 1);
+    assert_eq!(after_down.active, 1);
+    assert_eq!(after_down.released, 0);
+    assert_eq!(after_down.dropped_expired, 0);
 
     assert!(matches!(
         harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 2_000),
@@ -928,8 +940,20 @@ fn prepared_late_down_keeps_following_up_accounting() {
             sky_dispatch_win32::input::PhysicalPacket::new(1, 0),
         ]
     );
+    {
+        let captured = evidence.lock().expect("prepared Down/Up evidence");
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[1].requested_mask, 1);
+        assert_eq!(captured[1].confirmed_mask, 1);
+        assert_eq!(captured[1].attempts, 1);
+    }
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
     assert_eq!(harness.backend_active_mask(), 0);
+    let after_up = harness.resources.coordinator.generation_accounting();
+    assert_eq!(after_up.activated, 1);
+    assert_eq!(after_up.active, 0);
+    assert_eq!(after_up.released, 1);
+    assert_eq!(after_up.dropped_expired, 0);
 }
 
 #[test]
