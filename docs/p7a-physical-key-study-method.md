@@ -4,6 +4,14 @@ P7a is an evidence-only study. Its optional probe and packet hook compile only
 with `test-support`; no production admission, release, timing, or scheduling
 policy changes in this phase.
 
+This method records the P7a baseline and candidate comparisons. P7b later added
+a production modifier guard for Down-bearing traffic. The final sender now
+samples the five supported modifier VKs on Down-bearing packets, but it still
+does not re-sample instrument-note VKs after cached preflight. Candidate A is
+therefore still the note-key baseline; candidates B and C were study candidates
+and were not adopted for instrument-note admission. See the current
+[post-ADR-0017 hardening evidence](post-adr-0017-hardening-final-evidence.md).
+
 ## Current behavior under study
 
 - `TrackedKeyState::ensure_instrument_keys_physically_up` preflights the full
@@ -11,11 +19,13 @@ policy changes in this phase.
   layout resolution, maps each scan code with `MapVirtualKeyExW`, and samples
   `GetAsyncKeyState` for each mapped virtual key.
 - The current classifier checks only the high-order down bit. If every sample
-  is zero, production calls that state `AllUp`; the API also returns zero when
-  the query fails, so this report calls the observation `NoHeldObserved`.
+  is zero, the production classifier labels that state `AllUp`; because the
+  API also returns zero when the query fails, that label is not proof of
+  physical AllUp. This report calls the observation `NoHeldObserved`.
 - `ensure_preflight_for_target` caches a successful probe by `TargetStamp`.
-  Later Down packets for the same stamp reuse that proof. The final packet
-  sender does not take another physical-key sample.
+  Later Down packets for the same stamp reuse that proof for instrument-note
+  VKs. The final sender does not take another instrument-note sample; P7b's
+  separate five-VK modifier guard still runs for Down-bearing packets.
 - The calibration helper `is_scan_code_physically_down` maps and samples one
   scan code independently. Ownership-derived cleanup remains in the tracked
   release path and is not driven by Down admission evidence.
@@ -44,7 +54,9 @@ game:
 
 ## Candidate definitions
 
-- **A:** current cached preflight only; no final-boundary physical query.
+- **A:** P7a note-key baseline: cached preflight only, with no final-boundary
+  instrument-note query. Current production retains this note-key behavior and
+  separately applies the P7b modifier guard to Down-bearing packets.
 - **B:** query only the mapped VKs for the packet's pending Down mask.
 - **C:** B plus five pre-materialized modifier VK queries: `VK_LWIN` (`0x5b`),
   `VK_RWIN` (`0x5c`), aggregate `VK_CONTROL` (`0x11`), `VK_SHIFT` (`0x10`),
