@@ -9,6 +9,7 @@ use crate::engine::telemetry::{
 };
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
+use sky_dispatch_core::coordinator::GenerationAccounting;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
 use sky_dispatch_win32::input::ReleaseAllOutcome;
@@ -346,23 +347,24 @@ pub(crate) fn clean_completion_proven(
     coordinator: &RuntimeDispatchCoordinator,
     backend: &TrackedKeyState,
 ) -> bool {
-    let counts = coordinator.generation_status_counts();
-    let released = counts.get("released").copied().unwrap_or_default();
-    let missed = counts.get("dropped_expired").copied().unwrap_or_default();
-    let all_completed = released.saturating_add(missed) == coordinator.schedule.generation_count
-        && counts.values().sum::<u64>() == coordinator.schedule.generation_count;
-    all_completed
-        && counts.get("scheduled").copied().unwrap_or_default() == 0
-        && counts.get("active").copied().unwrap_or_default() == 0
-        && counts.get("dropped_backend").copied().unwrap_or_default() == 0
-        && counts.get("dropped_conflict").copied().unwrap_or_default() == 0
-        && counts.get("cancelled").copied().unwrap_or_default() == 0
+    clean_generation_accounting_proven(coordinator.generation_accounting())
         && backend.release_obligation_mask() == 0
         && backend.keys_dropped == 0
         && backend.chord_split_events == 0
         && backend.sendinput_partial_events == 0
         && backend.sendinput_zero_progress_failures == 0
         && backend.authored_keys_rejected == 0
+}
+
+fn clean_generation_accounting_proven(accounting: GenerationAccounting) -> bool {
+    accounting.total == accounting.activated
+        && accounting.total == accounting.released
+        && accounting.scheduled == 0
+        && accounting.active == 0
+        && accounting.dropped_conflict == 0
+        && accounting.dropped_backend == 0
+        && accounting.dropped_expired == 0
+        && accounting.cancelled == 0
 }
 
 pub(crate) fn describe_release_outcome(
@@ -473,5 +475,195 @@ pub(crate) fn release_runtime_outcome(
         (false, true, false) => "partial_note_off",
         (false, false, true) => "deferred_failed_note_off",
         (false, false, false) => "failed_note_off",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TrackedKeyState, clean_completion_proven, clean_generation_accounting_proven};
+    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::coordinator::{GenerationAccounting, RuntimeDispatchCoordinator};
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
+
+    fn one_generation_coordinator() -> RuntimeDispatchCoordinator {
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: ActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "clean-completion-down".into(),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: ActionKind::Up,
+                    scheduled_us: 100,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: "clean-completion-up".into(),
+                },
+            ],
+            &[0x15],
+        )
+        .expect("valid clean-completion schedule");
+        RuntimeDispatchCoordinator::try_new_ticks(
+            schedule,
+            0,
+            DurationTicks::ZERO,
+            |microseconds| Ok(TimelineTicks::from_raw(microseconds)),
+        )
+        .expect("valid clean-completion coordinator")
+    }
+
+    fn one_released_generation_coordinator() -> RuntimeDispatchCoordinator {
+        let mut coordinator = one_generation_coordinator();
+        for now in [TimelineTicks::ZERO, TimelineTicks::from_raw(100)] {
+            let prepared = coordinator
+                .prepare_next_due_authored(now)
+                .expect("prepare authored packet")
+                .expect("authored packet is due");
+            coordinator
+                .commit_packet_success(prepared, now, now)
+                .expect("commit successful authored packet");
+        }
+        coordinator
+    }
+
+    fn healthy_generation_accounting() -> GenerationAccounting {
+        GenerationAccounting {
+            total: 1,
+            activated: 1,
+            scheduled: 0,
+            active: 0,
+            released: 1,
+            dropped_conflict: 0,
+            dropped_backend: 0,
+            dropped_expired: 0,
+            cancelled: 0,
+        }
+    }
+
+    #[test]
+    fn clean_completion_rejects_dropped_expired_even_when_additive_count_matches() {
+        let mut coordinator = one_generation_coordinator();
+        let down = coordinator
+            .schedule
+            .try_materialize_batch_authored(0)
+            .expect("materialize authored Down");
+        coordinator
+            .drop_expired_downs(&down.intents)
+            .expect("record zero-attempt expired Down");
+
+        let accounting = coordinator.generation_accounting();
+        assert_eq!(accounting.total, 1);
+        assert_eq!(accounting.activated, 0);
+        assert_eq!(accounting.released, 0);
+        assert_eq!(accounting.dropped_expired, 1);
+        assert_eq!(
+            accounting.released + accounting.dropped_expired,
+            accounting.total,
+            "the former additive shortcut still matches the total"
+        );
+        assert!(!clean_completion_proven(
+            &coordinator,
+            &TrackedKeyState::new()
+        ));
+    }
+
+    #[test]
+    fn clean_generation_accounting_requires_every_generation_to_be_activated_and_released() {
+        let healthy = healthy_generation_accounting();
+        assert!(clean_generation_accounting_proven(healthy));
+
+        let mut dropped_expired = healthy;
+        dropped_expired.activated = 0;
+        dropped_expired.released = 0;
+        dropped_expired.dropped_expired = 1;
+
+        let mut dropped_conflict = dropped_expired;
+        dropped_conflict.dropped_expired = 0;
+        dropped_conflict.dropped_conflict = 1;
+
+        let mut dropped_backend = dropped_expired;
+        dropped_backend.dropped_expired = 0;
+        dropped_backend.dropped_backend = 1;
+
+        let mut cancelled = dropped_expired;
+        cancelled.dropped_expired = 0;
+        cancelled.cancelled = 1;
+
+        let mut scheduled = dropped_expired;
+        scheduled.dropped_expired = 0;
+        scheduled.scheduled = 1;
+
+        let mut active = healthy;
+        active.released = 0;
+        active.active = 1;
+
+        let activated_shortfall = GenerationAccounting {
+            total: 2,
+            activated: 1,
+            released: 1,
+            ..GenerationAccounting::default()
+        };
+
+        let mut released_shortfall = healthy;
+        released_shortfall.released = 0;
+
+        for (label, accounting) in [
+            ("DroppedExpired", dropped_expired),
+            ("DroppedConflict", dropped_conflict),
+            ("DroppedBackend", dropped_backend),
+            ("Cancelled", cancelled),
+            ("Scheduled", scheduled),
+            ("Active", active),
+            ("activated < total", activated_shortfall),
+            ("released != total", released_shortfall),
+        ] {
+            assert!(
+                !clean_generation_accounting_proven(accounting),
+                "{label} must not prove clean natural completion"
+            );
+        }
+    }
+
+    #[test]
+    fn clean_completion_rejects_each_backend_residue_and_transport_anomaly() {
+        let coordinator = one_released_generation_coordinator();
+        assert!(clean_completion_proven(
+            &coordinator,
+            &TrackedKeyState::new()
+        ));
+
+        for residue in [
+            "active",
+            "possibly_active",
+            "failed_release",
+            "in_flight",
+            "keys_dropped",
+            "chord_split_events",
+            "sendinput_partial_events",
+            "sendinput_zero_progress_failures",
+            "authored_keys_rejected",
+        ] {
+            let mut backend = TrackedKeyState::new();
+            match residue {
+                "active" => backend.active_mask = 1,
+                "possibly_active" => backend.possibly_active_mask = 1,
+                "failed_release" => backend.failed_release_mask = 1,
+                "in_flight" => backend.in_flight_mask = 1,
+                "keys_dropped" => backend.keys_dropped = 1,
+                "chord_split_events" => backend.chord_split_events = 1,
+                "sendinput_partial_events" => backend.sendinput_partial_events = 1,
+                "sendinput_zero_progress_failures" => backend.sendinput_zero_progress_failures = 1,
+                "authored_keys_rejected" => backend.authored_keys_rejected = 1,
+                _ => unreachable!("residue cases are listed explicitly"),
+            }
+            assert!(
+                !clean_completion_proven(&coordinator, &backend),
+                "{residue} must prevent clean natural completion"
+            );
+        }
     }
 }

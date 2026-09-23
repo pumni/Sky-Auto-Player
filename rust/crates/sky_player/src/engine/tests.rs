@@ -1650,7 +1650,8 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: command-exit owner"
                 );
                 let mut observation = super::worker::FinalizeTestObservation::default();
-                harness.finalize_worker_for_test(false, &mut observation);
+                let outcome = harness.finalize_worker_for_test(false, &mut observation);
+                assert_eq!(outcome, super::OUTCOME_QUIT, "{path}: quit remains quit");
                 assert_eq!(
                     observation.attempted_mask, 0b1,
                     "{path}: tracked scope mask"
@@ -1686,7 +1687,12 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     "{path}: command-exit owner"
                 );
                 let mut observation = super::worker::FinalizeTestObservation::default();
-                harness.finalize_worker_for_test(false, &mut observation);
+                let outcome = harness.finalize_worker_for_test(false, &mut observation);
+                assert_eq!(
+                    outcome,
+                    super::OUTCOME_SKIPPED,
+                    "{path}: skip remains skipped"
+                );
                 assert_eq!(
                     observation.attempted_mask, 0b1,
                     "{path}: tracked scope mask"
@@ -2238,9 +2244,10 @@ fn native_prepared_normal_resume_naturally_finishes_after_reconciled_up() {
     assert_eq!(snapshot.generation_status_counts["dropped_expired"], 0);
     assert_eq!(snapshot.generation_status_counts["dropped_backend"], 0);
     assert_eq!(snapshot.generation_status_counts["dropped_conflict"], 0);
-    sky_dispatch_core::testing::assert_clean_generation_completion(
-        session.generation_accounting_for_test(),
-    );
+    let accounting = session.generation_accounting_for_test();
+    assert_eq!(accounting.total, accounting.activated);
+    assert_eq!(accounting.total, accounting.released);
+    sky_dispatch_core::testing::assert_clean_generation_completion(accounting);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.failed_release_count, 0);
@@ -6890,6 +6897,13 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
 
     let snapshot = session.snapshot();
     assert_eq!(snapshot.status, "error", "zero progress must be terminal");
+    assert!(
+        snapshot
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| !error.starts_with("clean completion contract failed:")),
+        "transport fault identity must survive finalization: {snapshot:?}"
+    );
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
             .expect("valid telemetry JSON");
