@@ -146,6 +146,36 @@ impl TrackedKeyState {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub fn set_physical_study_hook<F>(&mut self, hook: F)
+    where
+        F: Fn(u16) + Send + Sync + 'static,
+    {
+        self.physical_study_hook = Some(Box::new(hook));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn use_actual_pre_call_clock_for_test(&mut self) {
+        self.use_actual_pre_call_clock_for_test = true;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn physical_study_final_policy_qpc_for_test(&self) -> Option<crate::clock::QpcTicks> {
+        if self.use_actual_pre_call_clock_for_test {
+            self.qpc_clock.and_then(|clock| clock.now().ok())
+        } else {
+            None
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_preflight_physical_mask_probe<F>(&mut self, probe: F)
+    where
+        F: Fn() -> u16 + Send + Sync + 'static,
+    {
+        self.preflight_physical_mask_probe = Some(Box::new(probe));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_full_instrument_release_counter(
         &mut self,
         counter: std::sync::Arc<std::sync::atomic::AtomicU64>,

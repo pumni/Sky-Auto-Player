@@ -21,6 +21,17 @@ impl TrackedKeyState {
             ));
         }
         #[cfg(any(test, feature = "test-support"))]
+        if let Some(probe) = &self.preflight_physical_mask_probe {
+            let held_mask = probe();
+            if held_mask != 0 {
+                return Err(PhysicalKeyPreflightError::UserHeld(
+                    self.instrument_key_profile
+                        .scan_codes_from_mask(held_mask)
+                        .into_vec(),
+                ));
+            }
+        }
+        #[cfg(any(test, feature = "test-support"))]
         if self
             .force_preflight_failure
             .as_ref()

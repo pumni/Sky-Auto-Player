@@ -2589,6 +2589,26 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.set_force_preflight_failure(flag);
     }
 
+    pub fn set_physical_study_hook_for_test<F>(&mut self, hook: F)
+    where
+        F: Fn(u16) + Send + Sync + 'static,
+    {
+        self.resources.backend.set_physical_study_hook(hook);
+    }
+
+    pub fn use_actual_pre_call_clock_for_physical_study_for_test(&mut self) {
+        self.resources.backend.use_actual_pre_call_clock_for_test();
+    }
+
+    pub fn set_preflight_physical_mask_probe_for_test<F>(&mut self, probe: F)
+    where
+        F: Fn() -> u16 + Send + Sync + 'static,
+    {
+        self.resources
+            .backend
+            .set_preflight_physical_mask_probe(probe);
+    }
+
     /// Inject a deterministic mutation immediately after worker target
     /// crossing and before the final control/target/focus gate. This is a
     /// runtime integration seam, not a production synchronization path.

@@ -214,7 +214,7 @@ pub(crate) fn classify_logical_async_key_states(
     }
 }
 
-fn query_async_key_state(_index: usize, virtual_key: i32) -> i16 {
+pub(crate) fn query_async_key_state(_index: usize, virtual_key: i32) -> i16 {
     #[cfg(windows)]
     {
         // SAFETY: GetAsyncKeyState accepts the validated virtual-key scalar
