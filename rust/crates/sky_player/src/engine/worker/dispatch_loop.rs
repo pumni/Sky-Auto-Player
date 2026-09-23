@@ -1,5 +1,5 @@
 use super::super::shared::{
-    SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING, SupervisorLeaseState,
+    SYSTEM_POWER_RESUME_PENDING, SYSTEM_POWER_SUSPEND_PENDING, SessionTarget, SupervisorLeaseState,
     SystemPowerState,
 };
 use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
@@ -17,7 +17,7 @@ use super::{PreparedDispatchEntry, PreparedDispatchStream, dispatch_prepared_nor
 use sky_dispatch_core::clock::PauseReason;
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn physical_target_qpc_for_work(
     target: Option<sky_dispatch_win32::clock::QpcTicks>,
@@ -146,8 +146,7 @@ pub(crate) fn preflight_prepared_plan(
     plan: &mut super::planning::NextDispatchPlan,
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     runtime: &mut super::WorkerRuntime,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
 ) -> Result<bool, super::DispatchStep> {
     let Some(physical) = plan.physical_mut() else {
         return Ok(true);
@@ -157,21 +156,25 @@ pub(crate) fn preflight_prepared_plan(
         return Ok(true);
     }
     runtime.preparation_probe.record_preflight();
-    let target = super::load_target_stamp(target_hwnd, target_generation);
+    let Some(target_stamp) = super::load_target_stamp(target) else {
+        runtime.verified_target = None;
+        runtime.invalidate_down_authorization();
+        return Ok(false);
+    };
     if let Err(error) =
-        super::ensure_preflight_for_target(backend, target, &mut runtime.verified_target)
+        super::ensure_preflight_for_target(backend, target_stamp, &mut runtime.verified_target)
     {
         runtime.verified_target = None;
         return Err(super::DispatchStep::Terminate(format!(
             "instrument key preflight failed before timed wait; release the 15 instrument keys before playback: {error}"
         )));
     }
-    if !super::target_stamp_still_current(target_hwnd, target_generation, target) {
+    if !super::target_stamp_still_current(target, target_stamp) {
         runtime.verified_target = None;
         runtime.invalidate_down_authorization();
         return Ok(false);
     }
-    physical.target_proof = super::TargetProof::Verified(target);
+    physical.target_proof = super::TargetProof::Verified(target_stamp);
     Ok(true)
 }
 
@@ -207,8 +210,7 @@ pub(crate) fn dispatch_due_from_plan(
     runtime: &mut super::WorkerRuntime,
     local_metrics: &mut super::WorkerMetricsLocal,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -414,8 +416,7 @@ pub(crate) fn dispatch_due_from_plan(
         runtime,
         local_metrics,
         focus_active,
-        target_hwnd,
-        target_generation,
+        target,
         quit_requested,
         skip_requested,
         panic_requested,
@@ -525,8 +526,7 @@ pub(crate) struct SystemResumeTransition<'a> {
     pub(crate) progress_clock: &'a super::super::shared::SharedProgressClock,
     pub(crate) qpc_clock: sky_dispatch_win32::clock::QpcClock,
     pub(crate) focus_active: &'a AtomicBool,
-    pub(crate) target_hwnd: &'a AtomicIsize,
-    pub(crate) target_generation: &'a AtomicU64,
+    pub(crate) target: &'a SessionTarget,
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(crate) supervisor_lease: &'a SupervisorLeaseState,
 }
@@ -545,27 +545,28 @@ pub(crate) fn try_complete_system_resume_transition(
         progress_clock,
         qpc_clock,
         focus_active,
-        target_hwnd,
-        target_generation,
+        target,
         lease_timeout_ticks,
         supervisor_lease,
     } = transition;
     if !*suspend_applied || !*resume_pending || system_power.os_suspended() {
         return Ok(false);
     }
-    let resume_target = load_target_stamp(target_hwnd, target_generation);
-    let target_and_focus_current =
-        target_stamp_still_current(target_hwnd, target_generation, resume_target)
-            && focus_matches_hwnd(config.focus.require_focus, focus_active, resume_target.hwnd);
+    let Some(resume_target) = load_target_stamp(target) else {
+        runtime.verified_target = None;
+        return Ok(false);
+    };
+    let target_and_focus_current = target_stamp_still_current(target, resume_target)
+        && focus_matches_hwnd(config.focus.require_focus, focus_active, resume_target.hwnd);
     if !target_and_focus_current {
         runtime.verified_target = None;
         return Ok(false);
     }
     ensure_preflight_for_target(backend, resume_target, &mut runtime.verified_target)
         .map_err(|error| format!("instrument key preflight failed after system resume: {error}"))?;
-    let post_preflight_target = load_target_stamp(target_hwnd, target_generation);
-    let preflight_and_focus_current = post_preflight_target == resume_target
-        && target_stamp_still_current(target_hwnd, target_generation, resume_target)
+    let post_preflight_target = load_target_stamp(target);
+    let preflight_and_focus_current = post_preflight_target == Some(resume_target)
+        && target_stamp_still_current(target, resume_target)
         && focus_matches_hwnd(config.focus.require_focus, focus_active, resume_target.hwnd);
     let resumed_ticks = qpc_clock
         .now()
@@ -606,8 +607,7 @@ pub(super) fn dispatch(
     let supervisor_expired = &shared.commands.supervisor_expired;
     let focus_active = &shared.commands.focus_active;
     let system_power = &shared.commands.system_power;
-    let target_hwnd = &shared.target.target_hwnd;
-    let target_generation = &shared.target.target_generation;
+    let target = &shared.target;
     let metrics = &shared.publication.metrics;
     let supervisor_lease = &shared.commands.supervisor_expired;
     #[cfg(any(test, feature = "test-support"))]
@@ -676,7 +676,7 @@ pub(super) fn dispatch(
                     skip_requested,
                     panic_requested,
                     supervisor_expired,
-                    target_hwnd,
+                    target,
                 },
                 runtime: CommandControlRuntime {
                     backend: &mut resources.backend,
@@ -708,7 +708,7 @@ pub(super) fn dispatch(
                     &shared.publication.progress_clock,
                     now_ticks,
                     system_power.suspend_boundary_qpc(),
-                    target_hwnd.load(Ordering::Acquire),
+                    target.hwnd_for_safety_release(),
                     prepared_stream.as_mut(),
                 ) {
                     core.runtime.terminal_error =
@@ -796,7 +796,11 @@ pub(super) fn dispatch(
                     }
                 };
                 if focus_grace_elapsed >= timing.focus_restore_grace_ticks {
-                    let preflight_target = load_target_stamp(target_hwnd, target_generation);
+                    let Some(preflight_target) = load_target_stamp(target) else {
+                        core.runtime.verified_target = None;
+                        core.runtime.focus_restore_started_ticks = None;
+                        continue;
+                    };
                     let manual_pause_active =
                         manual_pause || resources.playback.has_pause_reason(PauseReason::Manual);
                     core.runtime.verified_target = None;
@@ -804,11 +808,8 @@ pub(super) fn dispatch(
                         config.focus.require_focus,
                         focus_active,
                         preflight_target.hwnd,
-                    ) || !target_stamp_still_current(
-                        target_hwnd,
-                        target_generation,
-                        preflight_target,
-                    ) {
+                    ) || !target_stamp_still_current(target, preflight_target)
+                    {
                         if let Some(guard) = core.runtime.physical_timing_guard.as_mut() {
                             guard.invalidate();
                         }
@@ -880,18 +881,19 @@ pub(super) fn dispatch(
                     }
                     #[cfg(any(test, feature = "test-support"))]
                     if let Some(hook) = core.runtime.restore_race_hook.as_ref() {
-                        hook(focus_active, target_hwnd, target_generation);
+                        hook(focus_active, target);
                     }
-                    let post_restore_target = load_target_stamp(target_hwnd, target_generation);
+                    let Some(post_restore_target) = load_target_stamp(target) else {
+                        core.runtime.verified_target = None;
+                        core.runtime.focus_restore_started_ticks = None;
+                        continue;
+                    };
                     if !focus_matches_hwnd(
                         config.focus.require_focus,
                         focus_active,
                         post_restore_target.hwnd,
-                    ) || !target_stamp_still_current(
-                        target_hwnd,
-                        target_generation,
-                        preflight_target,
-                    ) || post_restore_target != preflight_target
+                    ) || !target_stamp_still_current(target, preflight_target)
+                        || post_restore_target != preflight_target
                     {
                         core.runtime.verified_target = None;
                         core.runtime.focus_restore_started_ticks = None;
@@ -947,7 +949,7 @@ pub(super) fn dispatch(
                         &mut resources.coordinator,
                         &mut core.runtime,
                         lifecycle_effective_now,
-                        target_hwnd.load(Ordering::Acquire),
+                        target.hwnd_for_safety_release(),
                         prepared_stream.as_mut(),
                     ) {
                         core.runtime.terminal_error =
@@ -1005,7 +1007,7 @@ pub(super) fn dispatch(
                             &mut resources.coordinator,
                             &mut core.runtime,
                             lifecycle_effective_now,
-                            target_hwnd.load(Ordering::Acquire),
+                            target.hwnd_for_safety_release(),
                             prepared_stream.as_mut(),
                         ) {
                             core.runtime.terminal_error =
@@ -1017,7 +1019,11 @@ pub(super) fn dispatch(
                             super::dispatch::observation::ObserverLifecycle::ResetAll,
                         );
                     }
-                    let preflight_target = load_target_stamp(target_hwnd, target_generation);
+                    let Some(preflight_target) = load_target_stamp(target) else {
+                        core.runtime.verified_target = None;
+                        core.runtime.invalidate_down_authorization();
+                        continue;
+                    };
                     if let Err(error) = ensure_preflight_for_target(
                         &resources.backend,
                         preflight_target,
@@ -1033,11 +1039,8 @@ pub(super) fn dispatch(
                         config.focus.require_focus,
                         focus_active,
                         preflight_target.hwnd,
-                    ) || !target_stamp_still_current(
-                        target_hwnd,
-                        target_generation,
-                        preflight_target,
-                    ) {
+                    ) || !target_stamp_still_current(target, preflight_target)
+                    {
                         core.runtime.verified_target = None;
                         continue;
                     }
@@ -1072,8 +1075,7 @@ pub(super) fn dispatch(
                     progress_clock: &shared.publication.progress_clock,
                     qpc_clock,
                     focus_active,
-                    target_hwnd,
-                    target_generation,
+                    target,
                     lease_timeout_ticks: timing.lease_timeout_ticks,
                     supervisor_lease,
                 },
@@ -1166,10 +1168,14 @@ pub(super) fn dispatch(
                         None
                     } else {
                         core.runtime.preparation_probe.record_preflight();
-                        let target = load_target_stamp(target_hwnd, target_generation);
+                        let Some(target_stamp) = load_target_stamp(target) else {
+                            core.runtime.verified_target = None;
+                            core.runtime.invalidate_down_authorization();
+                            continue;
+                        };
                         if let Err(error) = ensure_preflight_for_target(
                             &resources.backend,
-                            target,
+                            target_stamp,
                             &mut core.runtime.verified_target,
                         ) {
                             core.runtime.verified_target = None;
@@ -1178,12 +1184,12 @@ pub(super) fn dispatch(
                             ));
                             break;
                         }
-                        if !target_stamp_still_current(target_hwnd, target_generation, target) {
+                        if !target_stamp_still_current(target, target_stamp) {
                             core.runtime.verified_target = None;
                             core.runtime.invalidate_down_authorization();
                             continue;
                         }
-                        Some(target)
+                        Some(target_stamp)
                     }
                 } else {
                     None
@@ -1346,8 +1352,7 @@ pub(super) fn dispatch(
                         &mut core.runtime,
                         &mut core.metrics,
                         focus_active,
-                        target_hwnd,
-                        target_generation,
+                        target,
                         quit_requested,
                         skip_requested,
                         panic_requested,
@@ -1516,8 +1521,7 @@ pub(super) fn dispatch(
                 &mut dispatch_plan,
                 &mut resources.backend,
                 &mut core.runtime,
-                target_hwnd,
-                target_generation,
+                target,
             ) {
                 Ok(true) => {}
                 Ok(false) => continue,
@@ -1544,8 +1548,7 @@ pub(super) fn dispatch(
                 &mut core.runtime,
                 &mut core.metrics,
                 focus_active,
-                target_hwnd,
-                target_generation,
+                target,
                 quit_requested,
                 skip_requested,
                 panic_requested,
@@ -1676,8 +1679,7 @@ pub(super) fn dispatch(
                         &mut core.runtime,
                         &mut core.metrics,
                         focus_active,
-                        target_hwnd,
-                        target_generation,
+                        target,
                         quit_requested,
                         skip_requested,
                         panic_requested,

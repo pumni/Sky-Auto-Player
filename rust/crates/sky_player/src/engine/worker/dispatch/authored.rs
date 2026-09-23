@@ -9,7 +9,7 @@ use super::super::{
     DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
     WorkerResources, WorkerRuntime, WorkerTimingState, enter_focus_pause, final_control_precheck,
-    final_down_target_admission, focus_matches, handle_final_focus_loss, load_target_stamp,
+    final_down_target_admission, focus_matches, handle_final_focus_loss,
     record_final_gate_rejection, signed_ticks_to_us, target_stamp_still_current,
     trace_kind_for_packet_kind,
 };
@@ -19,10 +19,12 @@ use super::observer::publisher_down_send_outcome;
 use super::recovery::{DownMissReason, recover_missed_down_boundary};
 use super::timing::interpret_down_send_timing;
 use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObservationQueue};
-use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState, SystemPowerState};
+use crate::engine::shared::{
+    SessionTarget, SharedProgressClock, SupervisorLeaseState, SystemPowerState,
+};
 use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_win32::input::SendTransactionOutcome;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
+use std::sync::atomic::AtomicBool;
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_authored_packet(
     ctx: AuthoredPacketContext<'_>,
@@ -33,8 +35,7 @@ pub(crate) fn dispatch_authored_packet(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -79,8 +80,7 @@ pub(crate) fn dispatch_authored_packet(
         runtime,
         local_metrics,
         focus_active,
-        target_hwnd,
-        target_generation,
+        target,
         quit_requested,
         skip_requested,
         panic_requested,
@@ -116,8 +116,7 @@ fn commit_down_send_outcome(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -149,8 +148,7 @@ fn commit_down_send_outcome(
         runtime,
         local_metrics,
         focus_active,
-        target_hwnd,
-        target_generation,
+        target,
         quit_requested,
         skip_requested,
         panic_requested,
@@ -177,8 +175,7 @@ fn commit_down_send_outcome(
         runtime,
         local_metrics,
         focus_active,
-        target_hwnd,
-        target_generation,
+        target,
         quit_requested,
         skip_requested,
         panic_requested,
@@ -292,8 +289,7 @@ fn admit_authored_down(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -351,13 +347,11 @@ fn admit_authored_down(
                 "down-bearing dispatch reached final admission without preflight proof".to_string(),
             ));
         };
-        preflight_target
+        Some(preflight_target)
     } else {
-        load_target_stamp(target_hwnd, target_generation)
+        None
     };
-    if has_down_events
-        && !target_stamp_still_current(target_hwnd, target_generation, preflight_target)
-    {
+    if preflight_target.is_some_and(|expected| !target_stamp_still_current(target, expected)) {
         runtime.verified_target = None;
         runtime.invalidate_down_authorization();
         return Ok(AdmissionOutcome::TargetChanged);
@@ -390,7 +384,7 @@ fn admit_authored_down(
     }
     Ok(AdmissionOutcome::Guarded {
         trace_kind,
-        preflight_target: has_down_events.then_some(preflight_target),
+        preflight_target,
     })
 }
 #[allow(clippy::too_many_arguments)]
@@ -402,8 +396,7 @@ fn finalize_authored_down_admission(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -439,8 +432,7 @@ fn finalize_authored_down_admission(
     invoke_final_gate_race_hook(
         runtime.final_gate_race_hook.as_ref(),
         focus_active,
-        target_hwnd,
-        target_generation,
+        target,
         quit_requested,
         skip_requested,
         panic_requested,
@@ -473,8 +465,7 @@ fn finalize_authored_down_admission(
             expected,
             require_focus: config.focus.require_focus,
             focus_active,
-            target_hwnd,
-            target_generation,
+            target,
             #[cfg(any(test, feature = "test-support"))]
             post_focus_race_hook: runtime.final_gate_post_focus_race_hook.as_ref(),
             #[cfg(any(test, feature = "test-support"))]

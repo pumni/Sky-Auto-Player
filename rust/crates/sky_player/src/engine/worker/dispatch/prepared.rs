@@ -9,11 +9,12 @@ use super::super::{
 };
 use super::authored::record_prepared_normal_send_outcome;
 use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue};
+use crate::engine::shared::SessionTarget;
 use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState, SystemPowerState};
 use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionOutcome;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
+use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreparedNormalAdmission {
@@ -38,8 +39,7 @@ fn send_prepared_normal_precision_frame(
     frame: &PreparedDispatchFrame,
     require_focus: bool,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -79,8 +79,7 @@ fn send_prepared_normal_precision_frame(
             expected,
             require_focus,
             focus_active,
-            target_hwnd,
-            target_generation,
+            target,
             #[cfg(any(test, feature = "test-support"))]
             post_focus_race_hook,
             #[cfg(any(test, feature = "test-support"))]
@@ -146,8 +145,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -199,8 +197,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
     super::super::invoke_final_gate_race_hook(
         runtime.final_gate_race_hook.as_ref(),
         focus_active,
-        target_hwnd,
-        target_generation,
+        target,
         quit_requested,
         skip_requested,
         panic_requested,
@@ -215,8 +212,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
         frame,
         config.focus.require_focus,
         focus_active,
-        target_hwnd,
-        target_generation,
+        target,
         quit_requested,
         skip_requested,
         panic_requested,

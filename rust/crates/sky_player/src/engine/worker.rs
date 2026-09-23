@@ -137,7 +137,7 @@ pub(crate) fn process_command_control_for_test(
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     supervisor_expired: &crate::engine::shared::SupervisorLeaseState,
-    target_hwnd: &AtomicIsize,
+    target: &crate::engine::shared::SessionTarget,
     local_metrics: &mut WorkerMetricsLocal,
     metrics: &SharedMetrics,
     last_published_error: &mut Option<String>,
@@ -152,7 +152,7 @@ pub(crate) fn process_command_control_for_test(
                 skip_requested,
                 panic_requested,
                 supervisor_expired,
-                target_hwnd,
+                target,
             },
             runtime: CommandControlRuntime {
                 backend,
@@ -175,7 +175,7 @@ pub(crate) fn process_command_control_for_test(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finalize_worker_for_test(
     resources: WorkerResources,
-    target_hwnd: &AtomicIsize,
+    target: &crate::engine::shared::SessionTarget,
     skip_requested: &AtomicBool,
     quit_requested: &AtomicBool,
     metrics: &SharedMetrics,
@@ -209,7 +209,7 @@ pub(crate) fn finalize_worker_for_test(
                 last_published_error: None,
             },
             signals: FinalizeSignals {
-                target_hwnd,
+                target,
                 skip_requested,
                 quit_requested,
             },

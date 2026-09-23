@@ -156,11 +156,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     if let Some(mask) = worker.config.preflight_user_held_mask {
         backend.set_force_preflight_user_held_mask(mask);
     }
-    let target_hwnd = &shared.target.target_hwnd;
+    let target = &shared.target;
     let priority_acquired = &shared.publication.priority_acquired;
     let admission_failure =
         |backend: &mut TrackedKeyState, metrics: &SharedMetrics, primary_error: String| {
-            let verification_hwnd = target_hwnd.load(Ordering::Acquire);
+            let verification_hwnd = target.hwnd_for_safety_release();
             let cleanup = backend.release_all(verification_hwnd);
             let message = if release_state_verified(backend, &cleanup) {
                 primary_error
@@ -196,8 +196,14 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let schedule_has_down = schedule.packets.iter().any(|packet| packet.down_mask != 0);
     if config.focus.require_focus && schedule_has_down {
         core.runtime.preparation_probe.record_preflight();
-        let target = load_target_stamp(target_hwnd, &shared.target.target_generation);
-        if !focus_matches_hwnd(true, &shared.commands.focus_active, target.hwnd) {
+        let Some(target_stamp) = load_target_stamp(target) else {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                "target publication changed during preroll admission".to_string(),
+            );
+        };
+        if !focus_matches_hwnd(true, &shared.commands.focus_active, target_stamp.hwnd) {
             return admission_failure(
                 &mut backend,
                 metrics,
@@ -205,7 +211,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
         if let Err(error) =
-            ensure_preflight_for_target(&backend, target, &mut core.runtime.verified_target)
+            ensure_preflight_for_target(&backend, target_stamp, &mut core.runtime.verified_target)
         {
             return admission_failure(
                 &mut backend,

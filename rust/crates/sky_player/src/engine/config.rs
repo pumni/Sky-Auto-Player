@@ -86,7 +86,7 @@ pub(crate) fn validate_timing_constants() -> Result<(), String> {
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
 use super::FaultInjectionScript;
@@ -94,7 +94,8 @@ use super::FaultInjectionScript;
 use super::SystemPowerState;
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) type RestoreRaceHook = Arc<dyn Fn(&AtomicBool, &AtomicIsize, &AtomicU64) + Send + Sync>;
+pub type RestoreRaceHook =
+    Arc<dyn Fn(&AtomicBool, &super::dispatch_primitives::SessionTarget) + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) type FocusPauseHook = Arc<dyn Fn() + Send + Sync>;
@@ -103,8 +104,7 @@ pub(crate) type FocusPauseHook = Arc<dyn Fn() + Send + Sync>;
 pub(crate) type FinalGateRaceHook = Arc<
     dyn Fn(
             &AtomicBool,
-            &AtomicIsize,
-            &AtomicU64,
+            &super::shared::SessionTarget,
             &AtomicBool,
             &AtomicBool,
             &AtomicBool,

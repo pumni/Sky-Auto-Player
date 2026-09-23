@@ -7,7 +7,7 @@
 
 use crate::engine::SystemPowerState;
 use crate::engine::config::{DispatchProfile, WorkerConfig};
-use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState};
+use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
 use crate::engine::telemetry::{
     RtTraceRecord, SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
@@ -39,7 +39,7 @@ use sky_dispatch_win32::input::{
     SendTransactionStatus, TrackedKeyState,
 };
 use sky_dispatch_win32::wait::HybridWaiter;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,8 +71,7 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) runtime: WorkerRuntime,
     pub(crate) local_metrics: WorkerMetricsLocal,
     pub(crate) focus_active: AtomicBool,
-    pub(crate) target_hwnd: AtomicIsize,
-    pub(crate) target_generation: AtomicU64,
+    pub(crate) target: SessionTarget,
     pub(crate) quit_requested: AtomicBool,
     pub(crate) skip_requested: AtomicBool,
     pub(crate) panic_requested: AtomicBool,
@@ -1150,8 +1149,7 @@ impl ProductionDispatchTestHarness {
             runtime,
             local_metrics: WorkerMetricsLocal::default(),
             focus_active: AtomicBool::new(true),
-            target_hwnd: AtomicIsize::new(1),
-            target_generation: AtomicU64::new(0),
+            target: SessionTarget::new(1, 0),
             quit_requested: AtomicBool::new(false),
             skip_requested: AtomicBool::new(false),
             panic_requested: AtomicBool::new(false),
@@ -1219,7 +1217,15 @@ impl ProductionDispatchTestHarness {
     /// is setup-only; admission still performs its normal production checks.
     pub fn set_target_hwnd_for_benchmark(&self, hwnd: isize) {
         assert_ne!(hwnd, 0, "benchmark target HWND must be nonzero");
-        self.target_hwnd.store(hwnd, Ordering::Release);
+        self.target.publish(hwnd);
+    }
+
+    fn target_stamp_for_test(&self) -> TargetStamp {
+        let (hwnd, generation) = self
+            .target
+            .load_stable()
+            .expect("test target publication is stable");
+        TargetStamp { hwnd, generation }
     }
 
     pub fn is_physically_feasible_for_test(
@@ -1585,7 +1591,7 @@ impl ProductionDispatchTestHarness {
             &self.skip_requested,
             &self.panic_requested,
             &self.supervisor_expired,
-            &self.target_hwnd,
+            &self.target,
             &mut self.local_metrics,
             &self.metrics,
             &mut last_published_error,
@@ -1600,7 +1606,7 @@ impl ProductionDispatchTestHarness {
             &mut self.resources.coordinator,
             &mut self.runtime,
             Ok(self.effective_now_ticks),
-            self.target_hwnd.load(Ordering::Acquire),
+            self.target.hwnd_for_safety_release(),
             self.prepared_stream_for_test.as_mut(),
         )
     }
@@ -1611,7 +1617,7 @@ impl ProductionDispatchTestHarness {
     /// coordinator mutation.
     pub fn suspend_live_input_for_test(&mut self) -> Result<Vec<u64>, String> {
         let effective_now_ticks = self.effective_now_ticks;
-        let target_hwnd = self.target_hwnd.load(Ordering::Acquire);
+        let target_hwnd = self.target.hwnd_for_safety_release();
         let cancelled = super::super::worker::suspend_live_input(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -1632,7 +1638,7 @@ impl ProductionDispatchTestHarness {
     ) -> u8 {
         let ProductionDispatchTestHarness {
             resources,
-            target_hwnd,
+            target,
             quit_requested,
             skip_requested,
             metrics,
@@ -1641,7 +1647,7 @@ impl ProductionDispatchTestHarness {
         } = self;
         super::super::worker::finalize_worker_for_test(
             resources,
-            &target_hwnd,
+            &target,
             &skip_requested,
             &quit_requested,
             &metrics,
@@ -1660,7 +1666,7 @@ impl ProductionDispatchTestHarness {
             &self.progress_clock,
             now_ticks,
             self.system_power.suspend_boundary_qpc(),
-            self.target_hwnd.load(Ordering::Acquire),
+            self.target.hwnd_for_safety_release(),
             None,
         )
     }
@@ -1708,8 +1714,7 @@ impl ProductionDispatchTestHarness {
                 progress_clock: &self.progress_clock,
                 qpc_clock: self.resources.clock,
                 focus_active: &self.focus_active,
-                target_hwnd: &self.target_hwnd,
-                target_generation: &self.target_generation,
+                target: &self.target,
                 lease_timeout_ticks,
                 supervisor_lease: &self.supervisor_expired,
             },
@@ -1934,8 +1939,7 @@ impl ProductionDispatchTestHarness {
             &mut plan,
             &mut self.resources.backend,
             &mut self.runtime,
-            &self.target_hwnd,
-            &self.target_generation,
+            &self.target,
         )
         .expect("preflight prepared dispatch plan");
         self.refresh_physical_target_for_test(&mut plan);
@@ -1966,8 +1970,7 @@ impl ProductionDispatchTestHarness {
             plan,
             &mut self.resources.backend,
             &mut self.runtime,
-            &self.target_hwnd,
-            &self.target_generation,
+            &self.target,
         )
         .expect("preflight prepared projected plan");
         self.refresh_physical_target_for_test(plan);
@@ -2105,10 +2108,8 @@ impl ProductionDispatchTestHarness {
             .checked_duration_since(self.resources.playback.epoch)
             .expect("prepared stalled QPC precedes playback epoch");
         let effective_now_ticks = TimelineTicks::from_raw(elapsed_from_epoch.as_u64());
-        let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
-            hwnd: self.target_hwnd.load(Ordering::Acquire),
-            generation: self.target_generation.load(Ordering::Acquire),
-        });
+        let preflight_target =
+            (frame.view.packet_masks.down_mask != 0).then(|| self.target_stamp_for_test());
         let physical_timing_window = self
             .runtime
             .physical_timing_window_for_test(
@@ -2126,8 +2127,7 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             &mut self.local_metrics,
             &self.focus_active,
-            &self.target_hwnd,
-            &self.target_generation,
+            &self.target,
             &self.quit_requested,
             &self.skip_requested,
             &self.panic_requested,
@@ -2216,10 +2216,8 @@ impl ProductionDispatchTestHarness {
                 .expect("prepared synthetic elapsed time")
                 .as_u64(),
         );
-        let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
-            hwnd: self.target_hwnd.load(Ordering::Acquire),
-            generation: self.target_generation.load(Ordering::Acquire),
-        });
+        let preflight_target =
+            (frame.view.packet_masks.down_mask != 0).then(|| self.target_stamp_for_test());
         let physical_timing_window = self
             .runtime
             .physical_timing_window_for_test(
@@ -2237,8 +2235,7 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             &mut self.local_metrics,
             &self.focus_active,
-            &self.target_hwnd,
-            &self.target_generation,
+            &self.target,
             &self.quit_requested,
             &self.skip_requested,
             &self.panic_requested,
@@ -2350,11 +2347,8 @@ impl ProductionDispatchTestHarness {
         let preflight_target = if frame.view.packet_masks.down_mask == 0 {
             None
         } else {
-            let target = TargetStamp {
-                hwnd: self.target_hwnd.load(Ordering::Acquire),
-                generation: self.target_generation.load(Ordering::Acquire),
-            };
-            if !target_stamp_still_current(&self.target_hwnd, &self.target_generation, target) {
+            let target = self.target_stamp_for_test();
+            if !target_stamp_still_current(&self.target, target) {
                 return Err("prepared wait target changed before wait".to_string());
             }
             Some(target)
@@ -2440,8 +2434,7 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             &mut self.local_metrics,
             &self.focus_active,
-            &self.target_hwnd,
-            &self.target_generation,
+            &self.target,
             &self.quit_requested,
             &self.skip_requested,
             &self.panic_requested,
@@ -2516,10 +2509,8 @@ impl ProductionDispatchTestHarness {
                 .checked_sub(epoch.as_u64())
                 .expect("prepared effective now"),
         );
-        let preflight_target = (frame.view.packet_masks.down_mask != 0).then_some(TargetStamp {
-            hwnd: self.target_hwnd.load(Ordering::Acquire),
-            generation: self.target_generation.load(Ordering::Acquire),
-        });
+        let preflight_target =
+            (frame.view.packet_masks.down_mask != 0).then(|| self.target_stamp_for_test());
         let physical_timing_window = self
             .runtime
             .physical_timing_window_for_test(
@@ -2537,8 +2528,7 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             &mut self.local_metrics,
             &self.focus_active,
-            &self.target_hwnd,
-            &self.target_generation,
+            &self.target,
             &self.quit_requested,
             &self.skip_requested,
             &self.panic_requested,
@@ -2574,8 +2564,7 @@ impl ProductionDispatchTestHarness {
     where
         F: Fn(
                 &AtomicBool,
-                &AtomicIsize,
-                &AtomicU64,
+                &SessionTarget,
                 &AtomicBool,
                 &AtomicBool,
                 &AtomicBool,
@@ -2595,8 +2584,7 @@ impl ProductionDispatchTestHarness {
     where
         F: Fn(
                 &AtomicBool,
-                &AtomicIsize,
-                &AtomicU64,
+                &SessionTarget,
                 &AtomicBool,
                 &AtomicBool,
                 &AtomicBool,
@@ -2826,8 +2814,7 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             &mut self.local_metrics,
             &self.focus_active,
-            &self.target_hwnd,
-            &self.target_generation,
+            &self.target,
             &self.quit_requested,
             &self.skip_requested,
             &self.panic_requested,
@@ -3386,8 +3373,7 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             &mut self.local_metrics,
             &self.focus_active,
-            &self.target_hwnd,
-            &self.target_generation,
+            &self.target,
             &self.quit_requested,
             &self.skip_requested,
             &self.panic_requested,

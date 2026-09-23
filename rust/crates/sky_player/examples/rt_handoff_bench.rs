@@ -2521,8 +2521,7 @@ fn baseline_report() -> serde_json::Value {
         let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 10_000);
         harness.set_final_gate_race_hook(
             |_focus_active,
-             _target_hwnd,
-             _target_generation,
+             _target,
              quit_requested,
              _skip_requested,
              _panic_requested,

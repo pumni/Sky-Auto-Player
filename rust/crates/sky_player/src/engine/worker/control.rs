@@ -3,12 +3,13 @@ use super::{
     cancel_coordinator_or_terminal, describe_release_outcome, publish_backend_metrics,
     record_termination_error, release_state_verified, try_publish_metrics,
 };
+use crate::engine::shared::SessionTarget;
 use crate::engine::shared::SupervisorLeaseState;
 use crate::engine::telemetry::SharedMetrics;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) enum CommandControl {
     Continue,
@@ -24,7 +25,7 @@ pub(super) struct CommandControlSignals<'a> {
     pub(super) skip_requested: &'a AtomicBool,
     pub(super) panic_requested: &'a AtomicBool,
     pub(super) supervisor_expired: &'a SupervisorLeaseState,
-    pub(super) target_hwnd: &'a AtomicIsize,
+    pub(super) target: &'a SessionTarget,
 }
 
 pub(super) struct CommandControlRuntime<'a> {
@@ -85,7 +86,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
         skip_requested,
         panic_requested,
         supervisor_expired,
-        target_hwnd,
+        target,
     } = signals;
     let CommandControlRuntime {
         backend,
@@ -106,7 +107,7 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
     let panic_hard_stop_consumed = consume_panic_request_if_pending(panic_requested, command_exit);
     let panic_requested = supervisor_expired_before || panic_hard_stop_consumed;
     if panic_requested {
-        let panic_release = backend.release_all(target_hwnd.load(Ordering::Acquire));
+        let panic_release = backend.release_all(target.hwnd_for_safety_release());
         if !release_state_verified(backend, &panic_release) {
             record_termination_error(
                 terminal_error,

@@ -4,6 +4,7 @@ mod config;
 mod session;
 mod shared;
 mod snapshot;
+mod target;
 pub(crate) mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 mod test_support;
@@ -11,14 +12,14 @@ mod worker;
 
 pub use config::DispatchProfile;
 #[cfg(any(test, feature = "test-support"))]
-pub use config::StartupOrderingHook;
-#[cfg(any(test, feature = "test-support"))]
 pub use config::TestWaitPolicy;
 use config::WorkerConfig;
 pub use config::{
     BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, FocusOptions, NativeSessionOptions,
     PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use config::{RestoreRaceHook, StartupOrderingHook};
 pub use session::{NativeDispatchSession, SystemPowerSnapshot};
 pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]
@@ -48,6 +49,7 @@ pub(crate) use worker::*;
 pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
     //! Do not use in production code.
+    pub use super::target::SessionTarget;
     pub use super::test_support::{
         PhysicalFloorEvidence, PreparedBoundaryEvidence, ProductionDispatchTestHarness,
     };
@@ -135,7 +137,7 @@ use sky_dispatch_win32::input::TrackedKeyState;
 pub(crate) use sky_dispatch_win32::wait::WakeErrorStats;
 use sky_dispatch_win32::wait::{HybridWaiter, WaitOutcome};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 const LIFECYCLE_NEW: u8 = 0;
 const LIFECYCLE_RUNNING: u8 = 1;
