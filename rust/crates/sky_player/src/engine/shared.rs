@@ -6,7 +6,7 @@ use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks};
 use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::event::OwnedEvent;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 
 /// A transition-only projection of the authoritative playback clock.
@@ -486,10 +486,7 @@ impl SystemPowerEndpoint {
     }
 }
 
-pub(super) struct SessionTarget {
-    pub(super) target_hwnd: AtomicIsize,
-    pub(super) target_generation: AtomicU64,
-}
+pub(super) use super::target::SessionTarget;
 
 pub(super) struct SessionLifecycle {
     pub(super) lifecycle: AtomicU8,

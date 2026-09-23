@@ -1,14 +1,14 @@
 use super::super::{PlaybackClockState, QpcClock};
 use super::dispatch::DispatchStep;
 use super::{TrackedKeyState, focus_gate_matches};
-use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState};
+use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
 use crate::engine::telemetry::{
     TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP, WorkerMetricsLocal,
 };
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_win32::clock::QpcTicks;
 use sky_dispatch_win32::input::PhysicalKeyPreflightError;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TargetStamp {
@@ -28,8 +28,7 @@ pub(crate) enum FinalGateRejection {
 pub(crate) fn invoke_final_gate_race_hook(
     hook: Option<&super::super::config::FinalGateRaceHook>,
     focus_active: &AtomicBool,
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
+    target: &SessionTarget,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
@@ -39,8 +38,7 @@ pub(crate) fn invoke_final_gate_race_hook(
     if let Some(hook) = hook {
         hook(
             focus_active,
-            target_hwnd,
-            target_generation,
+            target,
             quit_requested,
             skip_requested,
             panic_requested,
@@ -81,14 +79,10 @@ pub(crate) fn trace_kind_for_packet_kind(
     }
 }
 
-pub(crate) fn load_target_stamp(
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
-) -> TargetStamp {
-    TargetStamp {
-        hwnd: target_hwnd.load(Ordering::Acquire),
-        generation: target_generation.load(Ordering::Acquire),
-    }
+pub(crate) fn load_target_stamp(target: &SessionTarget) -> Option<TargetStamp> {
+    target
+        .load_stable()
+        .map(|(hwnd, generation)| TargetStamp { hwnd, generation })
 }
 
 pub(crate) fn focus_matches_hwnd(
@@ -145,8 +139,7 @@ pub(crate) struct FinalTargetSignals<'a> {
     pub(crate) expected: TargetStamp,
     pub(crate) require_focus: bool,
     pub(crate) focus_active: &'a AtomicBool,
-    pub(crate) target_hwnd: &'a AtomicIsize,
-    pub(crate) target_generation: &'a AtomicU64,
+    pub(crate) target: &'a SessionTarget,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) post_focus_race_hook: Option<&'a super::super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
@@ -182,11 +175,7 @@ pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalC
 /// eligible then receives one fresh foreground proof before the final atomic
 /// revalidation.
 pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> DownAdmission {
-    if !target_stamp_still_current(
-        target.target_hwnd,
-        target.target_generation,
-        target.expected,
-    ) {
+    if !target_stamp_still_current(target.target, target.expected) {
         return DownAdmission::TargetChanged;
     }
     if !focus_matches(target.require_focus, target.focus_active) {
@@ -209,8 +198,7 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
     ) {
         hook(
             target.focus_active,
-            target.target_hwnd,
-            target.target_generation,
+            target.target,
             control.quit_requested,
             control.skip_requested,
             control.panic_requested,
@@ -218,11 +206,7 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
             system_power,
         );
     }
-    if !target_stamp_still_current(
-        target.target_hwnd,
-        target.target_generation,
-        target.expected,
-    ) {
+    if !target_stamp_still_current(target.target, target.expected) {
         return DownAdmission::TargetChanged;
     }
     if !focus_matches(target.require_focus, target.focus_active) {
@@ -282,11 +266,6 @@ pub(crate) fn ensure_preflight_for_target(
     Ok(())
 }
 
-pub(crate) fn target_stamp_still_current(
-    target_hwnd: &AtomicIsize,
-    target_generation: &AtomicU64,
-    expected: TargetStamp,
-) -> bool {
-    target_generation.load(Ordering::Acquire) == expected.generation
-        && target_hwnd.load(Ordering::Acquire) == expected.hwnd
+pub(crate) fn target_stamp_still_current(target: &SessionTarget, expected: TargetStamp) -> bool {
+    target.is_current(expected.hwnd, expected.generation)
 }

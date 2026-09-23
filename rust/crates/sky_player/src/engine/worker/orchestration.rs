@@ -63,7 +63,7 @@ impl Worker<'_> {
                 last_published_error: std::mem::take(&mut core.errors.last_published),
             },
             signals: FinalizeSignals {
-                target_hwnd: &shared.target.target_hwnd,
+                target: &shared.target,
                 skip_requested: &shared.commands.skip_requested,
                 quit_requested: &shared.commands.quit_requested,
             },

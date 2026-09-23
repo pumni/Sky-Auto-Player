@@ -3,6 +3,7 @@ use super::{
     TrackedKeyState, WorkerMetricsLocal, WorkerRuntime, WorkerSchedulingGuards,
     current_process_cpu_time_us, current_thread_cpu_time_us, publish_backend_metrics,
 };
+use crate::engine::shared::SessionTarget;
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::telemetry::{
     NativeTelemetryOutput, SharedMetrics, TelemetryCollector, publish_terminal_metrics,
@@ -17,7 +18,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) struct FinalizeResources {
     pub(super) backend: TrackedKeyState,
@@ -39,7 +40,7 @@ pub(super) struct FinalizeState {
 }
 
 pub(super) struct FinalizeSignals<'a> {
-    pub(super) target_hwnd: &'a AtomicIsize,
+    pub(super) target: &'a SessionTarget,
     pub(super) skip_requested: &'a AtomicBool,
     pub(super) quit_requested: &'a AtomicBool,
 }
@@ -107,7 +108,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         mut last_published_error,
     } = state;
     let FinalizeSignals {
-        target_hwnd,
+        target,
         skip_requested,
         quit_requested,
     } = signals;
@@ -153,7 +154,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     // so cleanup latency is bounded to a single FSM invocation.
     let release_scope = sky_dispatch_win32::input::ReleaseScope::Tracked;
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
-        backend.release_scope(release_scope, target_hwnd.load(Ordering::Acquire))
+        backend.release_scope(release_scope, target.hwnd_for_safety_release())
     }));
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.clone());

@@ -256,10 +256,7 @@ impl NativeDispatchSession {
                 #[cfg(any(test, feature = "test-support"))]
                 command_timing: CommandTimingState::default(),
             },
-            target: SessionTarget {
-                target_hwnd: AtomicIsize::new(0),
-                target_generation: AtomicU64::new(0),
-            },
+            target: SessionTarget::new(0, 0),
             lifecycle: SessionLifecycle {
                 lifecycle: AtomicU8::new(LIFECYCLE_NEW),
                 terminal_outcome: AtomicU8::new(OUTCOME_NONE),
@@ -715,11 +712,7 @@ impl NativeDispatchSession {
     }
 
     pub fn set_target_hwnd(&self, hwnd: isize) {
-        if self.shared.target.target_hwnd.swap(hwnd, Ordering::AcqRel) != hwnd {
-            self.shared
-                .target
-                .target_generation
-                .fetch_add(1, Ordering::AcqRel);
+        if self.shared.target.publish(hwnd) {
             let _ = self.shared.commands.interrupt.signal();
         }
     }

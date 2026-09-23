@@ -1,3 +1,4 @@
+use super::shared::SessionTarget;
 use super::telemetry::metrics::RecentLatencyRing;
 use super::test_support::ProductionDispatchTestHarness;
 use super::test_support::command_timing::{
@@ -1742,8 +1743,7 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     .expect("focus restoration dispatch-loop cleanup seam");
             }
             "target_hwnd_generation_change" => {
-                harness.target_hwnd.store(2, Ordering::Release);
-                harness.target_generation.store(1, Ordering::Release);
+                harness.target.publish(2);
                 harness
                     .apply_resumable_lifecycle_transition_for_test()
                     .expect("target-change dispatch-loop cleanup seam");
@@ -2284,8 +2284,7 @@ fn normal_prepared_final_control_race_suppresses_send_without_cursor_advance() {
     let mut stream = harness.build_prepared_stream_for_test();
     harness.set_final_gate_race_hook(
         |_focus_active,
-         _target_hwnd,
-         _target_generation,
+         _target,
          quit_requested,
          _skip_requested,
          _panic_requested,
@@ -2303,6 +2302,32 @@ fn normal_prepared_final_control_race_suppresses_send_without_cursor_advance() {
 }
 
 #[test]
+fn prepared_final_admission_rejects_aba_without_send_cursor_or_accounting_advance() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let calls = harness.configure_send_counter();
+    let mut stream = harness.build_prepared_stream_for_test();
+    let initial_entry = stream.current().expect("prepared physical entry") as *const _;
+    let accounting_before = harness.generation_accounting_for_test();
+    assert_eq!(harness.target.load_stable(), Some((1, 0)));
+
+    harness.set_post_focus_revalidation_race_hook(|_, target, _, _, _, _, _| {
+        target.publish(2);
+        target.publish(1);
+    });
+    let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+
+    assert!(matches!(step, super::worker::DispatchStep::Continue));
+    assert_eq!(harness.target.load_stable(), Some((1, 2)));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.resources.coordinator.cursor, 0);
+    assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+    assert_eq!(
+        stream.current().expect("rejected entry remains current") as *const _,
+        initial_entry
+    );
+}
+
+#[test]
 fn normal_prepared_precision_suffix_suppresses_all_final_control_races() {
     for control in 0..8 {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
@@ -2316,14 +2341,7 @@ fn normal_prepared_precision_suffix_suppresses_all_final_control_races() {
             5 => {
                 harness.config.focus.require_focus = true;
                 harness.set_final_gate_race_hook(
-                    |focus_active,
-                     _target_hwnd,
-                     _target_generation,
-                     _quit,
-                     _skip,
-                     _panic,
-                     _pause,
-                     _system_power| {
+                    |focus_active, _target, _quit, _skip, _panic, _pause, _system_power| {
                         focus_active.store(false, Ordering::Release);
                     },
                 );
@@ -2332,15 +2350,8 @@ fn normal_prepared_precision_suffix_suppresses_all_final_control_races() {
                 assert!(harness.notify_system_power_for_test(true));
             }
             7 => harness.set_final_gate_race_hook(
-                |_focus_active,
-                 _target_hwnd,
-                 target_generation,
-                 _quit,
-                 _skip,
-                 _panic,
-                 _pause,
-                 _system_power| {
-                    target_generation.store(1, Ordering::Release);
+                |_focus_active, target, _quit, _skip, _panic, _pause, _system_power| {
+                    target.publish(456);
                 },
             ),
             _ => unreachable!(),
@@ -3674,17 +3685,38 @@ fn failed_preflight_does_not_cache_a_stamp() {
 
 #[test]
 fn target_change_is_rejected_at_the_final_send_boundary() {
-    let target = AtomicIsize::new(123);
-    let generation = AtomicU64::new(1);
+    let target = SessionTarget::new(123, 1);
     let stamp = TargetStamp {
         hwnd: 123,
         generation: 1,
     };
-    assert!(target_stamp_still_current(&target, &generation, stamp));
-    generation.store(2, Ordering::Release);
-    assert!(!target_stamp_still_current(&target, &generation, stamp));
+    assert!(target_stamp_still_current(&target, stamp));
+    target.publish(456);
+    assert!(!target_stamp_still_current(&target, stamp));
+}
+
+#[test]
+fn historical_pair_check_false_accepts_a_deterministic_aba_interleaving() {
+    let target = AtomicIsize::new(123);
+    let generation = AtomicU64::new(0);
+    let expected = TargetStamp {
+        hwnd: 123,
+        generation: 0,
+    };
+
+    // Reproduce the old final reader's exact order: generation first, HWND
+    // second. The writer completes A -> B -> A between those two loads.
+    let observed_generation = generation.load(Ordering::Acquire);
     target.store(456, Ordering::Release);
-    assert!(!target_stamp_still_current(&target, &generation, stamp));
+    generation.fetch_add(1, Ordering::AcqRel);
+    target.store(123, Ordering::Release);
+    generation.fetch_add(1, Ordering::AcqRel);
+    let observed_hwnd = target.load(Ordering::Acquire);
+
+    assert_eq!(observed_generation, expected.generation);
+    assert_eq!(observed_hwnd, expected.hwnd);
+    assert!(observed_generation == expected.generation && observed_hwnd == expected.hwnd);
+    assert_eq!(generation.load(Ordering::Acquire), 2);
 }
 
 #[test]
@@ -3699,11 +3731,10 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::reset_foreground_query_count();
     let focus_active = AtomicBool::new(true);
-    let target = AtomicIsize::new(123);
     assert!(focus_matches(true, &focus_active));
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
 
-    let generation = AtomicU64::new(1);
+    let target = SessionTarget::new(123, 1);
     let expected = TargetStamp {
         hwnd: 123,
         generation: 1,
@@ -3713,8 +3744,7 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
             expected,
             require_focus: true,
             focus_active: &focus_active,
-            target_hwnd: &target,
-            target_generation: &generation,
+            target: &target,
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
@@ -3726,8 +3756,7 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
 
 #[test]
 fn final_down_admission_rejects_target_change_before_send() {
-    let target = AtomicIsize::new(456);
-    let generation = AtomicU64::new(2);
+    let target = SessionTarget::new(456, 2);
     let focus_active = AtomicBool::new(false);
     let expected = TargetStamp {
         hwnd: 123,
@@ -3739,8 +3768,7 @@ fn final_down_admission_rejects_target_change_before_send() {
             expected,
             require_focus: false,
             focus_active: &focus_active,
-            target_hwnd: &target,
-            target_generation: &generation,
+            target: &target,
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
@@ -3751,8 +3779,7 @@ fn final_down_admission_rejects_target_change_before_send() {
 #[test]
 fn final_down_target_admission_checks_target_before_focus() {
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    let target = AtomicIsize::new(123);
-    let generation = AtomicU64::new(1);
+    let target = SessionTarget::new(123, 1);
     let focus_active = AtomicBool::new(false);
     let expected = TargetStamp {
         hwnd: 123,
@@ -3764,8 +3791,7 @@ fn final_down_target_admission_checks_target_before_focus() {
             expected,
             require_focus: true,
             focus_active: &focus_active,
-            target_hwnd: &target,
-            target_generation: &generation,
+            target: &target,
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
@@ -3782,8 +3808,7 @@ fn final_admission_requires_fresh_foreground_match_and_rechecks_atomic_focus() {
     // The supervisor hint is stale-true, but the fresh foreground proof rejects
     // the Down before the sender boundary.
     let focus_active = AtomicBool::new(true);
-    let target_hwnd = AtomicIsize::new(123);
-    let target_generation = AtomicU64::new(1);
+    let target = SessionTarget::new(123, 1);
     let final_admission = final_down_target_admission(FinalTargetSignals {
         expected: TargetStamp {
             hwnd: 123,
@@ -3791,8 +3816,7 @@ fn final_admission_requires_fresh_foreground_match_and_rechecks_atomic_focus() {
         },
         require_focus: true,
         focus_active: &focus_active,
-        target_hwnd: &target_hwnd,
-        target_generation: &target_generation,
+        target: &target,
         post_focus_race_hook: None,
         post_focus_control_signals: None,
     });
@@ -3810,8 +3834,7 @@ fn final_admission_requires_fresh_foreground_match_and_rechecks_atomic_focus() {
             },
             require_focus: true,
             focus_active: &focus_active,
-            target_hwnd: &target_hwnd,
-            target_generation: &target_generation,
+            target: &target,
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
@@ -4015,7 +4038,7 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
     options.focus.focus_restore_grace_us = 0;
     options.restore_race_hook = Some({
         let restore_reconcile_count = Arc::clone(&restore_reconcile_count);
-        Arc::new(move |_, _, _| {
+        Arc::new(move |_, _| {
             restore_reconcile_count.fetch_add(1, Ordering::Release);
         })
     });
@@ -4158,8 +4181,7 @@ fn final_down_foreground_proof_rejects_invalid_target_without_query() {
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
     sky_dispatch_win32::focus::reset_foreground_query_count();
     let focus_active = AtomicBool::new(true);
-    let target_hwnd = AtomicIsize::new(0);
-    let target_generation = AtomicU64::new(1);
+    let target = SessionTarget::new(0, 1);
     assert_eq!(
         final_down_target_admission(FinalTargetSignals {
             expected: TargetStamp {
@@ -4168,8 +4190,7 @@ fn final_down_foreground_proof_rejects_invalid_target_without_query() {
             },
             require_focus: true,
             focus_active: &focus_active,
-            target_hwnd: &target_hwnd,
-            target_generation: &target_generation,
+            target: &target,
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
@@ -4408,14 +4429,7 @@ fn prepared_up_only_has_one_final_gate_for_every_hard_stop() {
             4 => harness.supervisor_expired.latch_expired(),
             5 => assert!(harness.notify_system_power_for_test(true)),
             6 => harness.set_final_gate_race_hook(
-                |_focus_active,
-                 _target_hwnd,
-                 _target_generation,
-                 quit,
-                 _skip,
-                 _panic,
-                 _pause,
-                 _system_power| {
+                |_focus_active, _target, quit, _skip, _panic, _pause, _system_power| {
                     quit.store(true, Ordering::Release);
                 },
             ),
@@ -5246,11 +5260,10 @@ fn focus_restore_race_after_validation_does_not_resume() {
     fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
     let race_hook: super::config::RestoreRaceHook = {
         let raced = Arc::clone(&raced);
-        Arc::new(move |focus_active, target_hwnd, target_generation| {
+        Arc::new(move |focus_active, target| {
             if !raced.swap(true, Ordering::SeqCst) {
                 focus_active.store(false, Ordering::Release);
-                target_hwnd.store(456, Ordering::Release);
-                target_generation.fetch_add(1, Ordering::AcqRel);
+                target.publish(456);
             }
         })
     };
@@ -5376,8 +5389,7 @@ fn authored_up_only_is_not_blocked_by_target_change() {
     let calls = harness.configure_send_counter();
     harness.advance_playback_time_us(100_000);
     let plan = harness.plan_current_dispatch();
-    harness.target_generation.store(1, Ordering::Release);
-    harness.target_hwnd.store(99, Ordering::Release);
+    harness.target.publish(99);
 
     let step = harness.dispatch_authored_with_plan(&plan);
 
@@ -5397,15 +5409,15 @@ fn authored_down_final_control_races_never_reach_transport() {
         let calls = harness.configure_send_counter();
         harness.advance_playback_time_us(100_000);
         let plan = harness.plan_current_dispatch();
-        harness.set_final_gate_race_hook(
-            move |_, _, _, quit, skip, panic, pause, _system_power| match command {
+        harness.set_final_gate_race_hook(move |_, _, quit, skip, panic, pause, _system_power| {
+            match command {
                 "pause" => pause.store(true, Ordering::Release),
                 "quit" => quit.store(true, Ordering::Release),
                 "skip" => skip.store(true, Ordering::Release),
                 "panic" => panic.store(true, Ordering::Release),
                 _ => unreachable!("control race table"),
-            },
-        );
+            }
+        });
 
         let step = harness.dispatch_at_plan_target_for_test(&plan);
 
@@ -5423,9 +5435,8 @@ fn authored_down_target_change_after_crossing_never_reaches_transport() {
     let calls = harness.configure_send_counter();
     harness.advance_playback_time_us(100_000);
     let plan = harness.plan_current_dispatch();
-    harness.set_final_gate_race_hook(|_, hwnd, generation, _, _, _, _, _| {
-        hwnd.store(456, Ordering::Release);
-        generation.fetch_add(1, Ordering::AcqRel);
+    harness.set_final_gate_race_hook(|_, target, _, _, _, _, _| {
+        target.publish(456);
     });
 
     let step = harness.dispatch_at_plan_target_for_test(&plan);
@@ -5457,7 +5468,7 @@ fn authored_down_focus_loss_after_crossing_never_reaches_transport() {
     let coordinator_active_mask = harness.resources.coordinator.active_mask;
     while harness.pop_observation().is_some() {}
     let plan = harness.plan_current_dispatch();
-    harness.set_final_gate_race_hook(|focus, _, _, _, _, _, _, _| {
+    harness.set_final_gate_race_hook(|focus, _, _, _, _, _, _| {
         focus.store(false, Ordering::Release);
     });
 
@@ -5502,10 +5513,9 @@ fn authored_down_post_foreground_revalidation_blocks_atomic_races() {
         sky_dispatch_win32::focus::reset_foreground_query_count();
         let interrupt = Arc::new(OwnedEvent::new_auto_reset().expect("post-focus interrupt"));
         harness.set_post_focus_revalidation_race_hook(
-            move |_, hwnd, generation, quit, skip, panic, pause, system_power| match race {
+            move |_, target, quit, skip, panic, pause, system_power| match race {
                 "target" => {
-                    hwnd.store(456, Ordering::Release);
-                    generation.fetch_add(1, Ordering::AcqRel);
+                    target.publish(456);
                 }
                 "quit" => quit.store(true, Ordering::Release),
                 "skip" => skip.store(true, Ordering::Release),
@@ -8450,8 +8460,7 @@ fn invariant_mismatch_prevents_sender_invocation() {
         }
     });
 
-    let target = AtomicIsize::new(456);
-    let generation = AtomicU64::new(2);
+    let target = SessionTarget::new(456, 2);
     let focus_active = AtomicBool::new(false);
     let expected = TargetStamp {
         hwnd: 123,
@@ -8462,8 +8471,7 @@ fn invariant_mismatch_prevents_sender_invocation() {
         expected,
         require_focus: false,
         focus_active: &focus_active,
-        target_hwnd: &target,
-        target_generation: &generation,
+        target: &target,
         post_focus_race_hook: None,
         post_focus_control_signals: None,
     });
@@ -8812,7 +8820,7 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
     });
     options.restore_race_hook = Some({
         let restored = Arc::clone(&restored);
-        Arc::new(move |_, _, _| {
+        Arc::new(move |_, _| {
             restored.store(true, Ordering::Release);
         })
     });
