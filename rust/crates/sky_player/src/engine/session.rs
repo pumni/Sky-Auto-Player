@@ -199,7 +199,7 @@ impl NativeDispatchSession {
         mut options: NativeSessionOptions,
         power_endpoint: Arc<SystemPowerEndpoint>,
     ) -> Result<Self, String> {
-        power_endpoint.reset_for_new_session();
+        power_endpoint.reset_for_new_session()?;
         validate_timing_constants()?;
         validate_native_timing_contract(&options.timing)?;
         // This is the authoritative native admission boundary.  Python calls
@@ -886,7 +886,10 @@ impl NativeDispatchSession {
     /// process-level endpoint can then be reused by a later session without
     /// allowing a stale callback to wake an inactive worker.
     pub fn deactivate_system_power(&self) {
-        self.shared.commands.system_power.deactivate();
+        self.shared
+            .commands
+            .system_power
+            .deactivate(&self.shared.commands.interrupt);
     }
 
     pub fn system_power_snapshot(&self) -> SystemPowerSnapshot {

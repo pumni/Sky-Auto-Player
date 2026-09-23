@@ -5,7 +5,6 @@
 //! Provides `ProductionDispatchTestHarness` for deterministic zero-allocation
 //! verification of production dispatch functions.
 
-use crate::engine::SystemPowerState;
 use crate::engine::config::{DispatchProfile, WorkerConfig};
 use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
 use crate::engine::telemetry::{
@@ -25,6 +24,7 @@ use crate::engine::worker::{
     publish_backend_counters, publish_live_metrics_after_dispatch, target_stamp_still_current,
     wait_for_next_boundary,
 };
+use crate::engine::{SystemPowerEndpoint, SystemPowerState};
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::{
     CoordinatorError, GenerationAccounting, RuntimeDispatchCoordinator, physical_packet_kind,
@@ -77,11 +77,11 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) panic_requested: AtomicBool,
     pub(crate) supervisor_expired: SupervisorLeaseState,
     pub(crate) desired_pause: AtomicBool,
-    pub(super) system_power: SystemPowerState,
+    pub(super) system_power: Arc<SystemPowerState>,
     pub(crate) metrics: SharedMetrics,
     pub(crate) progress_clock: SharedProgressClock,
     pub(crate) observer: PendingObservationQueue,
-    pub(crate) interrupt: OwnedEvent,
+    pub(crate) interrupt: Arc<OwnedEvent>,
     pub(crate) last_wait_result: Option<WaitResult>,
     pub(crate) last_wait_observation: Option<WaitObservation>,
     effective_now_ticks: TimelineTicks,
@@ -1162,11 +1162,11 @@ impl ProductionDispatchTestHarness {
             panic_requested: AtomicBool::new(false),
             supervisor_expired: SupervisorLeaseState::new(QpcTicks::from_raw(1)),
             desired_pause: AtomicBool::new(false),
-            system_power: SystemPowerState::default(),
+            system_power: Arc::new(SystemPowerState::default()),
             metrics: SharedMetrics::default(),
             progress_clock,
             observer: PendingObservationQueue::default(),
-            interrupt: OwnedEvent::new_auto_reset().expect("test interrupt event"),
+            interrupt: Arc::new(OwnedEvent::new_auto_reset().expect("test interrupt event")),
             last_wait_result: None,
             last_wait_observation: None,
             effective_now_ticks: TimelineTicks::ZERO,
@@ -1177,6 +1177,13 @@ impl ProductionDispatchTestHarness {
             prepared_target_qpc: None,
             prepared_wait_entry_qpc: None,
         }
+    }
+
+    /// Use the endpoint's process-stable state and event in production-path
+    /// worker dispatch tests that coordinate stale callbacks across sessions.
+    pub fn attach_system_power_endpoint_for_test(&mut self, endpoint: &SystemPowerEndpoint) {
+        self.system_power = endpoint.state();
+        self.interrupt = endpoint.interrupt();
     }
 
     /// Configure the real HybridWaiter and tick-domain spin threshold used by
