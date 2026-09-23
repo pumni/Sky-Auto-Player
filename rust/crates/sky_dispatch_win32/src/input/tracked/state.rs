@@ -1,4 +1,7 @@
 #[cfg(any(test, feature = "test-support"))]
+use super::super::modifier_guard::observe_modifier_keys_with;
+use super::super::modifier_guard::{ModifierKeyObservation, observe_current_modifier_keys};
+#[cfg(any(test, feature = "test-support"))]
 use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
@@ -49,6 +52,16 @@ impl TrackedKeyState {
             | self.possibly_active_mask
             | self.failed_release_mask
             | self.in_flight_mask
+    }
+
+    /// Observe only fixed system modifiers at the final musical Down boundary.
+    #[inline]
+    pub fn observe_modifiers_before_down(&self) -> ModifierKeyObservation {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(query) = self.modifier_key_state_query.as_ref() {
+            return observe_modifier_keys_with(query.as_ref());
+        }
+        observe_current_modifier_keys()
     }
 
     #[cfg(test)]
@@ -173,6 +186,14 @@ impl TrackedKeyState {
         F: Fn() -> u16 + Send + Sync + 'static,
     {
         self.preflight_physical_mask_probe = Some(Box::new(probe));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_modifier_key_state_query_for_test<F>(&mut self, query: F)
+    where
+        F: Fn(i32) -> i16 + Send + Sync + 'static,
+    {
+        self.modifier_key_state_query = Some(Box::new(query));
     }
 
     #[cfg(any(test, feature = "test-support"))]

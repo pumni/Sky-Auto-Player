@@ -1,6 +1,8 @@
 use super::super::{PlaybackClockState, QpcClock};
 use super::dispatch::DispatchStep;
-use super::{TrackedKeyState, focus_gate_matches};
+use super::{TrackedKeyState, WorkerConfig, WorkerRuntime, focus_gate_matches};
+#[cfg(any(test, feature = "test-support"))]
+use crate::engine::shared::SystemPowerState;
 use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
 use crate::engine::target::OwnerIdentityStatus;
 use crate::engine::telemetry::{
@@ -8,7 +10,7 @@ use crate::engine::telemetry::{
 };
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_win32::clock::QpcTicks;
-use sky_dispatch_win32::input::PhysicalKeyPreflightError;
+use sky_dispatch_win32::input::{ModifierKeyObservation, ModifierMask, PhysicalKeyPreflightError};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,17 +249,32 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
             system_power,
         );
     }
-    if !target_stamp_still_current(target.target, target.expected) {
+    final_down_atomic_revalidation(
+        target.target,
+        target.expected,
+        target.require_focus,
+        target.focus_active,
+    )
+}
+
+/// Recheck only bounded atomic target, focus, and owner state after the
+/// modifier queries. The fresh foreground/process proof remains owned by
+/// `final_down_target_admission` immediately before this final suffix.
+#[inline(always)]
+pub(crate) fn final_down_atomic_revalidation(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+) -> DownAdmission {
+    if !target_stamp_still_current(target, expected) {
         return DownAdmission::TargetChanged;
     }
-    if !focus_matches(target.require_focus, target.focus_active) {
+    if !focus_matches(require_focus, focus_active) {
         return DownAdmission::FocusLost;
     }
-    if target.require_focus {
-        match target
-            .target
-            .owner_identity_status(target.expected.generation)
-        {
+    if require_focus {
+        match target.owner_identity_status(expected.generation) {
             OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => {}
             OwnerIdentityStatus::NotRequired | OwnerIdentityStatus::Missing => {
                 return DownAdmission::OwnerIdentityAbsent;
@@ -278,6 +295,93 @@ pub(crate) fn final_down_target_admission(target: FinalTargetSignals<'_>) -> Dow
         }
     }
     DownAdmission::Allowed
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn modifier_guard_and_final_revalidation(
+    has_down: bool,
+    backend: &TrackedKeyState,
+    preflight_target: Option<TargetStamp>,
+    config: &WorkerConfig,
+    focus_active: &AtomicBool,
+    target: &SessionTarget,
+    control_signals: FinalControlSignals<'_>,
+    #[cfg(any(test, feature = "test-support"))] quit_requested: &AtomicBool,
+    #[cfg(any(test, feature = "test-support"))] skip_requested: &AtomicBool,
+    #[cfg(any(test, feature = "test-support"))] panic_requested: &AtomicBool,
+    #[cfg(any(test, feature = "test-support"))] desired_pause: &AtomicBool,
+    #[cfg(any(test, feature = "test-support"))] system_power: &SystemPowerState,
+    runtime: &mut WorkerRuntime,
+    local_metrics: &mut WorkerMetricsLocal,
+    qpc_clock: QpcClock,
+    clock_state: &mut PlaybackClockState,
+    progress_clock: &SharedProgressClock,
+) -> Result<Option<super::dispatch::AdmissionOutcome>, DispatchStep> {
+    if !has_down {
+        return Ok(None);
+    }
+    match backend.observe_modifiers_before_down() {
+        ModifierKeyObservation::NoHeldObserved => {}
+        ModifierKeyObservation::HeldObserved(mask) => {
+            return Err(modifier_guard_rejection_step(mask));
+        }
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    invoke_final_gate_race_hook(
+        runtime.final_gate_post_modifier_race_hook.as_ref(),
+        focus_active,
+        target,
+        quit_requested,
+        skip_requested,
+        panic_requested,
+        desired_pause,
+        system_power,
+    );
+    let Some(expected) = preflight_target else {
+        return Err(DispatchStep::TerminateStatic(
+            "modifier guard reached without frozen target proof",
+        ));
+    };
+    match final_down_atomic_revalidation(target, expected, config.focus.require_focus, focus_active)
+    {
+        DownAdmission::Allowed => {}
+        DownAdmission::TargetChanged => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, FinalGateRejection::Target);
+            return Ok(Some(super::dispatch::AdmissionOutcome::TargetChanged));
+        }
+        DownAdmission::FocusLost => {
+            record_final_gate_rejection(local_metrics, FinalGateRejection::Focus);
+            handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)?;
+            return Ok(Some(super::dispatch::AdmissionOutcome::FocusLost));
+        }
+        DownAdmission::OwnerMismatch
+        | DownAdmission::OwnerQueryUnavailable
+        | DownAdmission::OwnerIdentityAbsent
+        | DownAdmission::OwnerIdentityStale
+        | DownAdmission::OwnerProcessTerminated
+        | DownAdmission::OwnerIdentityDrift => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            return Err(DispatchStep::TerminateStatic(
+                "authored_down_owner_changed_after_modifier_guard",
+            ));
+        }
+    }
+    if !matches!(
+        final_control_precheck(control_signals),
+        FinalControlAdmission::Allowed
+    ) {
+        runtime.verified_target = None;
+        record_final_gate_rejection(local_metrics, FinalGateRejection::Control);
+        return Ok(Some(super::dispatch::AdmissionOutcome::ControlRejected));
+    }
+    Ok(None)
+}
+
+pub(crate) fn modifier_guard_rejection_step(mask: ModifierMask) -> DispatchStep {
+    DispatchStep::Terminate(format!("physical_modifier_held:{:02X}", mask.bits()))
 }
 
 pub(crate) fn enter_focus_pause(

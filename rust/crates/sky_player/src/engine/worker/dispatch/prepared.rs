@@ -4,8 +4,9 @@ use super::super::{
     DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
     PreparedDispatchFrame, QpcClock, RuntimeDispatchCoordinator, TargetStamp, TrackedKeyState,
     WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
-    WorkerTimingState, final_control_precheck, final_down_target_admission, focus_matches,
-    handle_final_focus_loss, record_final_gate_rejection, record_sendinput_pre_call_lateness,
+    WorkerTimingState, final_control_precheck, final_down_atomic_revalidation,
+    final_down_target_admission, focus_matches, handle_final_focus_loss,
+    modifier_guard_rejection_step, record_final_gate_rejection, record_sendinput_pre_call_lateness,
 };
 use super::authored::record_prepared_normal_send_outcome;
 use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue};
@@ -13,7 +14,7 @@ use crate::engine::shared::SessionTarget;
 use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState, SystemPowerState};
 use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
-use sky_dispatch_win32::input::SendTransactionOutcome;
+use sky_dispatch_win32::input::{ModifierKeyObservation, ModifierMask, SendTransactionOutcome};
 use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +29,23 @@ enum PreparedNormalAdmission {
     OwnerIdentityStale,
     OwnerProcessTerminated,
     OwnerIdentityDrift,
+    ModifierHeld(ModifierMask),
+}
+
+impl PreparedNormalAdmission {
+    fn from_down_admission(admission: DownAdmission) -> Option<Self> {
+        match admission {
+            DownAdmission::Allowed => None,
+            DownAdmission::FocusLost => Some(Self::FocusLost),
+            DownAdmission::TargetChanged => Some(Self::TargetChanged),
+            DownAdmission::OwnerMismatch => Some(Self::OwnerMismatch),
+            DownAdmission::OwnerQueryUnavailable => Some(Self::OwnerQueryUnavailable),
+            DownAdmission::OwnerIdentityAbsent => Some(Self::OwnerIdentityAbsent),
+            DownAdmission::OwnerIdentityStale => Some(Self::OwnerIdentityStale),
+            DownAdmission::OwnerProcessTerminated => Some(Self::OwnerProcessTerminated),
+            DownAdmission::OwnerIdentityDrift => Some(Self::OwnerIdentityDrift),
+        }
+    }
 }
 
 enum PreparedNormalPrecisionResult {
@@ -37,6 +55,9 @@ enum PreparedNormalPrecisionResult {
         final_policy_qpc: Option<QpcTicks>,
     },
 }
+
+use PreparedNormalAdmission::ModifierHeld;
+use PreparedNormalPrecisionResult::Rejected;
 
 /// The complete normal precision suffix.  The payload has already been
 /// materialized by the startup-owned stream.  This helper owns only the final
@@ -57,6 +78,9 @@ fn send_prepared_normal_precision_frame(
     system_power: &SystemPowerState,
     preflight_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))] post_focus_race_hook: Option<
+        &crate::engine::config::FinalGateRaceHook,
+    >,
+    #[cfg(any(test, feature = "test-support"))] post_modifier_race_hook: Option<
         &crate::engine::config::FinalGateRaceHook,
     >,
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
@@ -84,7 +108,7 @@ fn send_prepared_normal_precision_frame(
         let Some(expected) = preflight_target else {
             return Err("prepared Down reached final admission without target proof");
         };
-        match final_down_target_admission(FinalTargetSignals {
+        let down_admission = final_down_target_admission(FinalTargetSignals {
             expected,
             require_focus,
             focus_active,
@@ -93,48 +117,9 @@ fn send_prepared_normal_precision_frame(
             post_focus_race_hook,
             #[cfg(any(test, feature = "test-support"))]
             post_focus_control_signals: Some(control_signals),
-        }) {
-            DownAdmission::Allowed => {}
-            DownAdmission::FocusLost => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::FocusLost,
-                ));
-            }
-            DownAdmission::TargetChanged => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::TargetChanged,
-                ));
-            }
-            DownAdmission::OwnerMismatch => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::OwnerMismatch,
-                ));
-            }
-            DownAdmission::OwnerQueryUnavailable => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::OwnerQueryUnavailable,
-                ));
-            }
-            DownAdmission::OwnerIdentityAbsent => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::OwnerIdentityAbsent,
-                ));
-            }
-            DownAdmission::OwnerIdentityStale => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::OwnerIdentityStale,
-                ));
-            }
-            DownAdmission::OwnerProcessTerminated => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::OwnerProcessTerminated,
-                ));
-            }
-            DownAdmission::OwnerIdentityDrift => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::OwnerIdentityDrift,
-                ));
-            }
+        });
+        if let Some(admission) = PreparedNormalAdmission::from_down_admission(down_admission) {
+            return Ok(PreparedNormalPrecisionResult::Rejected(admission));
         }
     }
 
@@ -153,6 +138,42 @@ fn send_prepared_normal_precision_frame(
         return Ok(PreparedNormalPrecisionResult::Rejected(
             PreparedNormalAdmission::LateControl,
         ));
+    }
+
+    if has_down_events {
+        match backend.observe_modifiers_before_down() {
+            ModifierKeyObservation::NoHeldObserved => {}
+            ModifierKeyObservation::HeldObserved(mask) => {
+                return Ok(PreparedNormalPrecisionResult::Rejected(
+                    PreparedNormalAdmission::ModifierHeld(mask),
+                ));
+            }
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        super::super::invoke_final_gate_race_hook(
+            post_modifier_race_hook,
+            focus_active,
+            target,
+            quit_requested,
+            skip_requested,
+            panic_requested,
+            desired_pause,
+            system_power,
+        );
+        let expected = preflight_target.expect("prepared Down target was checked above");
+        let authority =
+            final_down_atomic_revalidation(target, expected, require_focus, focus_active);
+        if let Some(admission) = PreparedNormalAdmission::from_down_admission(authority) {
+            return Ok(PreparedNormalPrecisionResult::Rejected(admission));
+        }
+        if !matches!(
+            final_control_precheck(control_signals),
+            FinalControlAdmission::Allowed
+        ) {
+            return Ok(PreparedNormalPrecisionResult::Rejected(
+                PreparedNormalAdmission::LateControl,
+            ));
+        }
     }
 
     // The prepared payload and Win32 call metadata are fully resolved by the
@@ -216,10 +237,8 @@ pub(crate) fn dispatch_prepared_normal_frame(
     let _ = now_ticks;
     let view = &frame.view;
     let has_down_events = view.packet_masks.down_mask != 0;
-    // Keep this cheap outer read for the distinct preroll/focus-pause path.
-    // The precision helper still performs the authoritative final atomic
-    // admission; removing this read would merge the preroll fault path with
-    // the post-start revalidation path and the test-only focus fault seam.
+    // Keep the cheap outer read for the preroll/focus-pause fault path; the
+    // precision helper still owns the authoritative final atomic gate.
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
         if !runtime.musical_physical_commit_started {
             return DispatchStep::TerminateStatic("focus_lost_during_preroll");
@@ -270,6 +289,8 @@ pub(crate) fn dispatch_prepared_normal_frame(
         preflight_target,
         #[cfg(any(test, feature = "test-support"))]
         runtime.final_gate_post_focus_race_hook.as_ref(),
+        #[cfg(any(test, feature = "test-support"))]
+        runtime.final_gate_post_modifier_race_hook.as_ref(),
         &mut resources.backend,
         #[cfg(any(test, feature = "test-support"))]
         test_inject_sender_start.then_some(now_ticks),
@@ -340,6 +361,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
             runtime.invalidate_down_authorization();
             return DispatchStep::TerminateStatic("prepared_down_owner_identity_drift");
         }
+        Rejected(ModifierHeld(mask)) => return modifier_guard_rejection_step(mask),
     };
     debug_assert_eq!(view.prepared_packet.packet(), view.packet_masks);
     record_prepared_normal_send_outcome(
@@ -532,13 +554,34 @@ mod tests {
             .expect("final control gate");
         assert_eq!(
             helper.matches("final_control_precheck").count(),
-            2,
-            "Down keeps early+late control gates; UpOnly has only the shared late gate"
+            3,
+            "Down keeps early, post-focus, and post-modifier control gates; UpOnly has only the shared late gate"
         );
+        let control_gates = helper
+            .match_indices("final_control_precheck")
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let target = helper
+            .find("final_down_target_admission")
+            .expect("P5/P6 foreground and owner proof");
+        let modifier = helper
+            .find("observe_modifiers_before_down")
+            .expect("fixed modifier guard");
+        let final_authority = helper
+            .find("final_down_atomic_revalidation")
+            .expect("post-modifier P5/P6 revalidation");
         let sender = helper
             .find("let result = backend.send_prepared_physical_packet_at_final_boundary")
             .expect("normal sender handoff");
-        assert!(final_control < sender, "final atomics must precede sender");
+        assert!(final_control < target);
+        assert!(target < control_gates[1]);
+        assert!(control_gates[1] < modifier);
+        assert!(modifier < final_authority);
+        assert!(final_authority < control_gates[2]);
+        assert!(
+            control_gates[2] < sender,
+            "final atomics must precede sender"
+        );
         assert!(helper.contains("final_down_target_admission"));
         assert!(helper.contains("test_now_ticks"));
         assert!(!helper.contains("inline(never)"));

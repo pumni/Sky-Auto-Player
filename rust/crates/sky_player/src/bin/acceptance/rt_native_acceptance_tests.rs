@@ -10,9 +10,10 @@ use super::{
     acceptance_min_release_gap_us, cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
     healthy_generation_qualification, production_visibility_qualification,
-    production_options, reconcile_events, scenario_plan,
+    reconcile_events, scenario_plan,
     validate_event_stream, validate_ready_record, w4_profile_spec, wait_for_sink_events_with,
 };
+use super::scenarios::production_options;
 use super::release_gap_stress::{
     strict_physical_forensics_qualification, RELEASE_GAP_STRESS_MIN_SAMPLES,
 };
@@ -192,6 +193,8 @@ fn canonical_and_w4_expectations_are_physical() {
         "mixed-up-down",
         "ambiguous-packet",
         "preflight-user-held",
+        "modifier-held-final-boundary",
+        "modifier-held-after-owned",
         "target-hwnd-change",
         "owner-mismatch",
         "owner-query-failure",
@@ -240,6 +243,19 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert!(preflight.expected_authored_up_slots.is_empty());
     assert!(preflight.expected_safety_up_slots.is_empty());
     assert!(preflight.allow_unpaired_cleanup_ups);
+
+    let modifier_first =
+        scenario_plan(Scenario::ModifierHeldFinalBoundary, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    assert!(modifier_first.expected_down_slots.is_empty());
+    assert!(modifier_first.expected_up_slots.is_empty());
+    assert!(modifier_first.expected_safety_up_slots.is_empty());
+
+    let modifier_owned =
+        scenario_plan(Scenario::ModifierHeldAfterOwned, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    assert_eq!(modifier_owned.expected_down_slots, vec![0]);
+    assert_eq!(modifier_owned.expected_up_slots, vec![0]);
+    assert!(modifier_owned.expected_authored_up_slots.is_empty());
+    assert_eq!(modifier_owned.expected_safety_up_slots, vec![0]);
 
     for scenario in [
         Scenario::TargetHwndChange,
@@ -805,6 +821,7 @@ fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
         None,
         ACCEPTANCE_TIMING_MARGIN_US,
         Scenario::CanonicalSingle,
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
     );
     assert_eq!(options.timing.min_hold_us, authored_hold);
     assert_eq!(options.timing.min_release_gap_us, authored_gap);

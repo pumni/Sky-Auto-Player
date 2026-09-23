@@ -4725,6 +4725,8 @@ impl NativePlaybackService {
         let player = Arc::new(NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
                 schedule: runtime_schedule,
+                #[cfg(feature = "tauri-test")]
+                modifier_key_state_query_for_test: None,
                 backend: BackendConfig::Production,
                 profile: DispatchProfile::Production,
                 timing: TimingOptions {
@@ -6647,6 +6649,8 @@ mod tests {
             NativeDispatchSession::new_with_power_endpoint(
                 NativeSessionOptions {
                     schedule,
+                    #[cfg(feature = "tauri-test")]
+                    modifier_key_state_query_for_test: None,
                     backend: BackendConfig::Mock {
                         latency_base_us: 0,
                         latency_per_key_us: 0,

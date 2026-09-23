@@ -156,6 +156,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     if let Some(mask) = worker.config.preflight_user_held_mask {
         backend.set_force_preflight_user_held_mask(mask);
     }
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(query) = worker.config.modifier_key_state_query_for_test.as_ref() {
+        let query = std::sync::Arc::clone(query);
+        backend.set_modifier_key_state_query_for_test(move |virtual_key| query(virtual_key));
+    }
     let target = &shared.target;
     let priority_acquired = &shared.publication.priority_acquired;
     let admission_failure =

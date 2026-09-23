@@ -184,6 +184,9 @@ pub struct NativeSessionOptions {
     pub prepared_packet_ambiguity_mask: Option<u16>,
     #[cfg(any(test, feature = "test-support"))]
     pub preflight_user_held_mask: Option<u16>,
+    /// Deterministic final modifier-state source for native acceptance only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub modifier_key_state_query_for_test: Option<Arc<dyn Fn(i32) -> i16 + Send + Sync>>,
 }
 
 pub(crate) struct AdmittedNativeSessionOptions {
@@ -236,6 +239,8 @@ pub(crate) struct WorkerConfig {
     pub(super) prepared_packet_ambiguity_mask: Option<u16>,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) preflight_user_held_mask: Option<u16>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) modifier_key_state_query_for_test: Option<Arc<dyn Fn(i32) -> i16 + Send + Sync>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -278,6 +283,7 @@ impl Default for WorkerConfig {
             },
             prepared_packet_ambiguity_mask: None,
             preflight_user_held_mask: None,
+            modifier_key_state_query_for_test: None,
         }
     }
 }

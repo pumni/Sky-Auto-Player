@@ -2034,6 +2034,12 @@ impl ProductionDispatchTestHarness {
         })
     }
 
+    pub fn prepared_cursor_for_test(&self) -> usize {
+        self.prepared_stream_for_test
+            .as_ref()
+            .map_or(0, PreparedDispatchStream::cursor_for_test)
+    }
+
     pub fn prepared_frame_offsets_for_test(&self) -> Vec<u64> {
         self.prepared_stream_for_test
             .as_ref()
@@ -2596,6 +2602,15 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.set_physical_study_hook(hook);
     }
 
+    pub fn set_modifier_key_state_query_for_test<F>(&mut self, query: F)
+    where
+        F: Fn(i32) -> i16 + Send + Sync + 'static,
+    {
+        self.resources
+            .backend
+            .set_modifier_key_state_query_for_test(query);
+    }
+
     pub fn use_actual_pre_call_clock_for_physical_study_for_test(&mut self) {
         self.resources.backend.use_actual_pre_call_clock_for_test();
     }
@@ -2647,6 +2662,34 @@ impl ProductionDispatchTestHarness {
             + 'static,
     {
         self.runtime.final_gate_post_focus_race_hook = Some(Arc::new(hook));
+    }
+
+    /// Inject a mutation after the five modifier queries and before the final
+    /// bounded target/owner/control revalidation.
+    pub fn set_post_modifier_revalidation_race_hook<F>(&mut self, hook: F)
+    where
+        F: Fn(
+                &AtomicBool,
+                &SessionTarget,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+                &SystemPowerState,
+            ) + Send
+            + Sync
+            + 'static,
+    {
+        self.runtime.final_gate_post_modifier_race_hook = Some(Arc::new(hook));
+    }
+
+    pub fn set_require_focus_for_test(&mut self, require_focus: bool) {
+        self.config.focus.require_focus = require_focus;
+    }
+
+    pub fn bind_owner_identity_for_test(&self, owner_pid: u32) {
+        self.target.require_owner_identity();
+        assert!(self.target.bind_owner_identity(1, 0, owner_pid));
     }
 
     /// Run the production wait boundary and direct frozen-plan dispatch path.

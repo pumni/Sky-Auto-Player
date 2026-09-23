@@ -70,16 +70,21 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .expect("target crossing handoff");
     assert!(!finalizer.contains("wait_to_precision_boundary"));
     let control = finalizer
-        .find("let control_admission")
+        .find("final_control_precheck")
         .expect("final control gate");
     let target = finalizer
         .find("final_down_target_admission")
         .expect("final target/focus gate");
+    let modifier_helper = finalizer
+        .find("modifier_guard_and_final_revalidation")
+        .expect("fixed modifier guard and post-query authority gate");
     let pre_call = finalizer
         .find("let final_policy_qpc")
         .expect("final policy timestamp");
     assert!(crossing < control);
     assert!(control < target);
+    assert!(target < modifier_helper);
+    assert!(modifier_helper < pre_call);
     assert!(target < pre_call);
 
     let finalizer_body = finalizer
@@ -93,6 +98,22 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
     assert!(!finalizer_body.contains("supervisor_heartbeat_ticks"));
 
     let admission = include_str!("../admission.rs");
+    let modifier_guard = admission
+        .split("pub(super) fn modifier_guard_and_final_revalidation")
+        .nth(1)
+        .expect("post-modifier admission helper");
+    let modifier = modifier_guard
+        .find("observe_modifiers_before_down")
+        .expect("fixed modifier guard");
+    let post_modifier_authority = modifier_guard
+        .find("final_down_atomic_revalidation")
+        .expect("post-modifier target/owner revalidation");
+    let final_control = modifier_guard
+        .find("final_control_precheck")
+        .expect("post-modifier control revalidation");
+    assert!(modifier < post_modifier_authority);
+    assert!(post_modifier_authority < final_control);
+
     let target_admission = admission
         .split("pub(crate) fn final_down_target_admission")
         .nth(1)
@@ -113,17 +134,33 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
     let post_focus_hook = target_admission_body
         .find("target.post_focus_race_hook")
         .expect("post-focus race seam");
-    let target_recheck = target_admission_body
-        .rfind("target_stamp_still_current(")
-        .expect("target recheck");
-    let final_atomic_focus = target_admission_body
-        .rfind("focus_matches(target.require_focus")
-        .expect("final published focus recheck");
+    let final_atomic_recheck = target_admission_body
+        .find("final_down_atomic_revalidation(")
+        .expect("post-focus atomic revalidation");
     assert!(atomic_focus < identity);
     assert!(identity < foreground);
     assert!(foreground < post_focus_hook);
-    assert!(post_focus_hook < target_recheck);
-    assert!(target_recheck < final_atomic_focus);
+    assert!(post_focus_hook < final_atomic_recheck);
+
+    let final_atomic = admission
+        .split("pub(crate) fn final_down_atomic_revalidation")
+        .nth(1)
+        .expect("atomic target and owner revalidation");
+    let final_atomic_body = final_atomic
+        .split("pub(super) fn modifier_guard_and_final_revalidation")
+        .next()
+        .expect("atomic revalidation body");
+    let atomic_target = final_atomic_body
+        .find("target_stamp_still_current(")
+        .expect("final target stamp check");
+    let atomic_focus = final_atomic_body
+        .find("focus_matches(require_focus")
+        .expect("final focus hint check");
+    let atomic_owner = final_atomic_body
+        .find("owner_identity_status(")
+        .expect("final owner status check");
+    assert!(atomic_target < atomic_focus);
+    assert!(atomic_focus < atomic_owner);
 
     let sender = source
         .split("fn record_down_send_outcome")

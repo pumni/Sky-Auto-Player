@@ -31,6 +31,9 @@ pub type PhysicalStudyHook = Box<dyn Fn(u16) + Send + Sync>;
 pub type PreflightPhysicalMaskProbe = Box<dyn Fn() -> u16 + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
+pub type ModifierKeyStateQuery = Box<dyn Fn(i32) -> i16 + Send + Sync>;
+
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -109,6 +112,8 @@ pub struct TrackedKeyState {
     pub(crate) use_actual_pre_call_clock_for_test: bool,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) preflight_physical_mask_probe: Option<PreflightPhysicalMaskProbe>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) modifier_key_state_query: Option<ModifierKeyStateQuery>,
     #[cfg(any(test, feature = "test-support"))]
     pub full_instrument_release_calls: u64,
     #[cfg(any(test, feature = "test-support"))]
