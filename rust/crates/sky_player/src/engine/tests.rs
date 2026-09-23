@@ -3696,6 +3696,32 @@ fn target_change_is_rejected_at_the_final_send_boundary() {
 }
 
 #[test]
+fn fresh_target_proof_is_admitted_after_aba_invalidates_old_proof() {
+    let target = SessionTarget::new(123, 0);
+    let old_proof = TargetStamp {
+        hwnd: 123,
+        generation: 0,
+    };
+    target.publish(456);
+    target.publish(123);
+
+    assert!(!target_stamp_still_current(&target, old_proof));
+    let (hwnd, generation) = target.load_stable().expect("fresh stable target");
+    let focus_active = AtomicBool::new(false);
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp { hwnd, generation },
+            require_focus: false,
+            focus_active: &focus_active,
+            target: &target,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::Allowed
+    );
+}
+
+#[test]
 fn historical_pair_check_false_accepts_a_deterministic_aba_interleaving() {
     let target = AtomicIsize::new(123);
     let generation = AtomicU64::new(0);
