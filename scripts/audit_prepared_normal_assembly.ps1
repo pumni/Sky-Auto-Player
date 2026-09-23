@@ -39,9 +39,9 @@ function Find-FunctionBody([string]$fragment) {
     throw "No .seh_endproc found for $fragment"
 }
 
-$range = Find-FunctionBody 'dispatch_loop8dispatch0B9_:'
+$range = Find-FunctionBody 'dispatch_prepared_normal_frame:'
 if ($null -eq $range) {
-    throw 'prepared normal shipping caller was not emitted'
+    throw 'prepared normal dispatch boundary was not emitted'
 }
 $body = $lines[$range[0]..$range[1]]
 $senderIndices = @(
@@ -52,13 +52,24 @@ $senderIndices = @(
     }
 )
 if ($senderIndices.Count -ne 1) {
-    throw "expected exactly one full prepared sender transaction in the shipping caller, found $($senderIndices.Count)"
+    throw "expected exactly one full prepared sender transaction in the normal prepared boundary, found $($senderIndices.Count)"
 }
 
-# ThinLTO inlines the normal precision helper into a large dispatch caller.
-# The reproducible Phase 3 scope is the bounded optimized suffix ending at
-# the one healthy prepared sender handoff. The unrelated legacy caller body is
-# intentionally outside this gate.
+$admissionIndices = @(
+    for ($index = 0; $index -lt $senderIndices[0]; $index++) {
+        if ($body[$index] -match 'callq.*final_down_target_admission') {
+            $index
+        }
+    }
+)
+if ($admissionIndices.Count -gt 1) {
+    throw "expected at most one out-of-line final Down authority call before the prepared sender, found $($admissionIndices.Count)"
+}
+
+# ThinLTO may inline the precision helper into this normal prepared boundary.
+# The reproducible scope is its bounded optimized suffix ending at the one
+# healthy prepared sender handoff. The outer worker loop and legacy caller
+# bodies are intentionally outside this gate.
 $senderIndex = $senderIndices[0]
 $suffixStart = [Math]::Max(0, $senderIndex - 96)
 $suffix = @($body[$suffixStart..$senderIndex])
@@ -80,7 +91,13 @@ $forbiddenCalls = @(
     'alloc',
     'free',
     'lock',
-    'Mutex'
+    'Mutex',
+    'OpenProcess',
+    'GetProcessTimes',
+    'QueryFullProcessImageNameW',
+    'GetWindowThreadProcessId',
+    'GetForegroundWindow',
+    'QueryPerformanceCounter'
 )
 $forbiddenCallMatches = @(
     $suffix | Where-Object {
@@ -102,8 +119,9 @@ $copyMatches = @($suffix | Where-Object { $_ -match '\b(?:memcpy|memmove|__chkst
 $helperMatches = @($body | Where-Object { $_ -match 'callq.*send_prepared_normal_precision_frame' })
 
 Write-Output "assembly=$resolvedAssemblyPath"
-Write-Output "scope=dispatch_loop8dispatch0B9_ suffix_lines=$($suffixStart + $range[0] + 1)-$($senderIndex + $range[0] + 1)"
+Write-Output "scope=dispatch_prepared_normal_frame suffix_lines=$($suffixStart + $range[0] + 1)-$($senderIndex + $range[0] + 1)"
 Write-Output "normal_prepared_sender_calls=$($senderIndices.Count)"
+Write-Output "pre_sender_final_down_authority_calls=$($admissionIndices.Count)"
 Write-Output "retained_precision_helper_calls=$($helperMatches.Count)"
 Write-Output "scoped_forbidden_calls=$($forbiddenCallMatches.Count)"
 Write-Output "scoped_copy_or_division_symbols=$($copyMatches.Count)"

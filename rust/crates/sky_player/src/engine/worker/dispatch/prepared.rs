@@ -22,6 +22,12 @@ enum PreparedNormalAdmission {
     FocusLost,
     TargetChanged,
     LateControl,
+    OwnerMismatch,
+    OwnerQueryUnavailable,
+    OwnerIdentityAbsent,
+    OwnerIdentityStale,
+    OwnerProcessTerminated,
+    OwnerIdentityDrift,
 }
 
 enum PreparedNormalPrecisionResult {
@@ -94,6 +100,36 @@ fn send_prepared_normal_precision_frame(
             DownAdmission::TargetChanged => {
                 return Ok(PreparedNormalPrecisionResult::Rejected(
                     PreparedNormalAdmission::TargetChanged,
+                ));
+            }
+            DownAdmission::OwnerMismatch => {
+                return Ok(PreparedNormalPrecisionResult::Rejected(
+                    PreparedNormalAdmission::OwnerMismatch,
+                ));
+            }
+            DownAdmission::OwnerQueryUnavailable => {
+                return Ok(PreparedNormalPrecisionResult::Rejected(
+                    PreparedNormalAdmission::OwnerQueryUnavailable,
+                ));
+            }
+            DownAdmission::OwnerIdentityAbsent => {
+                return Ok(PreparedNormalPrecisionResult::Rejected(
+                    PreparedNormalAdmission::OwnerIdentityAbsent,
+                ));
+            }
+            DownAdmission::OwnerIdentityStale => {
+                return Ok(PreparedNormalPrecisionResult::Rejected(
+                    PreparedNormalAdmission::OwnerIdentityStale,
+                ));
+            }
+            DownAdmission::OwnerProcessTerminated => {
+                return Ok(PreparedNormalPrecisionResult::Rejected(
+                    PreparedNormalAdmission::OwnerProcessTerminated,
+                ));
+            }
+            DownAdmission::OwnerIdentityDrift => {
+                return Ok(PreparedNormalPrecisionResult::Rejected(
+                    PreparedNormalAdmission::OwnerIdentityDrift,
                 ));
             }
         }
@@ -256,6 +292,38 @@ pub(crate) fn dispatch_prepared_normal_frame(
             runtime.verified_target = None;
             record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Control);
             return DispatchStep::Continue;
+        }
+        PreparedNormalPrecisionResult::Rejected(PreparedNormalAdmission::OwnerMismatch) => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            return DispatchStep::TerminateStatic("prepared_down_owner_mismatch");
+        }
+        PreparedNormalPrecisionResult::Rejected(PreparedNormalAdmission::OwnerQueryUnavailable) => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            return DispatchStep::TerminateStatic("prepared_down_owner_query_unavailable");
+        }
+        PreparedNormalPrecisionResult::Rejected(PreparedNormalAdmission::OwnerIdentityAbsent) => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            return DispatchStep::TerminateStatic("prepared_down_owner_identity_absent");
+        }
+        PreparedNormalPrecisionResult::Rejected(PreparedNormalAdmission::OwnerIdentityStale) => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            return DispatchStep::TerminateStatic("prepared_down_owner_identity_stale");
+        }
+        PreparedNormalPrecisionResult::Rejected(
+            PreparedNormalAdmission::OwnerProcessTerminated,
+        ) => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            return DispatchStep::TerminateStatic("prepared_down_owner_process_terminated");
+        }
+        PreparedNormalPrecisionResult::Rejected(PreparedNormalAdmission::OwnerIdentityDrift) => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            return DispatchStep::TerminateStatic("prepared_down_owner_identity_drift");
         }
     };
     debug_assert_eq!(view.prepared_packet.packet(), view.packet_masks);

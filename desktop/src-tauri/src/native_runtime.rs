@@ -3712,6 +3712,7 @@ impl NativeActivePlayback {
     fn release_power_resources(&self) {
         if let Some(player) = &self.player {
             player.deactivate_system_power();
+            player.close_window_identity_authority();
         }
         self.release_power_request();
         if let Ok(mut owner) = self.suspend_resume_registration.lock()
@@ -4705,6 +4706,22 @@ impl NativePlaybackService {
         if !sky_dispatch_win32::focus::focus_window_and_verify(target, Duration::from_millis(100)) {
             return Err("validated Sky window could not be focused".into());
         }
+        let owner_authority = sky_dispatch_win32::focus::retain_window_identity(target)?;
+        let identity = owner_authority.identity();
+        let expected_process = settings.sky_process_names.is_empty()
+            || settings.allow_title_fallback
+            || settings
+                .sky_process_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&identity.process_image_basename));
+        if !expected_process || (identity.title != "Sky" && !identity.title.starts_with("Sky")) {
+            return Err("focused window no longer matches the admitted Sky process".into());
+        }
+        if owner_authority.continuity()
+            != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+        {
+            return Err("focused window owner changed during identity capture".into());
+        }
         let player = Arc::new(NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
                 schedule: runtime_schedule,
@@ -4762,6 +4779,7 @@ impl NativePlaybackService {
             system_power_endpoint()?,
         )?);
         player.set_target_hwnd(target);
+        player.bind_window_identity_authority(owner_authority)?;
         player.set_focus_hint(true);
         player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());
         Ok((player, target))
@@ -4769,6 +4787,7 @@ impl NativePlaybackService {
 
     fn monitor(&self, active: Arc<NativeActivePlayback>, events: Arc<Mutex<NativeEventHub>>) {
         let mut last_snapshot = Instant::now();
+        let mut last_identity_check = Instant::now();
         let mut last_event_state = PlaybackEventState::Starting;
         let mut terminal_publication = None;
         loop {
@@ -4801,6 +4820,14 @@ impl NativePlaybackService {
                 // still performs its fresh exact-HWND final admission.
                 let focused = sky_dispatch_win32::focus::foreground_window_matches(target);
                 player.set_focus_hint(focused);
+            }
+            if last_identity_check.elapsed() >= Duration::from_millis(100) {
+                if let Some(player) = &active.player
+                    && !player.poll_window_identity_authority()
+                {
+                    let _ = player.panic_release();
+                }
+                last_identity_check = Instant::now();
             }
             let (elapsed, pre_roll_remaining, status) = if let Some(player) = &active.player {
                 let state = player.poll_state();

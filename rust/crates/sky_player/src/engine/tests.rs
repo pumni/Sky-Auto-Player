@@ -34,6 +34,11 @@ use std::time::{Duration, Instant};
 
 const TEST_WALL_CLOCK_PREROLL_US: u64 = 500_000;
 
+fn bind_test_owner_identity(target: &SessionTarget, hwnd: isize, generation: u64, pid: u32) {
+    target.require_owner_identity();
+    assert!(target.bind_owner_identity(hwnd, generation, pid));
+}
+
 fn issue_379_materialized_policy() -> MaterializedTimingPolicy {
     MaterializedTimingPolicy::from_user_margin(60, 1.0, 500)
         .expect("issue #379 materialized timing policy")
@@ -3761,6 +3766,7 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
 
     let target = SessionTarget::new(123, 1);
+    bind_test_owner_identity(&target, 123, 1, 1);
     let expected = TargetStamp {
         hwnd: 123,
         generation: 1,
@@ -3777,7 +3783,319 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
         DownAdmission::Allowed
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn final_down_owner_proof_rejects_recycled_hwnd_owner() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(200)));
+    assert_eq!(
+        sky_dispatch_win32::focus::foreground_window_owner_matches(123, 100),
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch
+    );
+
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    let target = SessionTarget::new(123, 1);
+    bind_test_owner_identity(&target, 123, 1, 100);
+    let focus_active = AtomicBool::new(true);
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 1,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &target,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::OwnerMismatch
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+}
+
+#[test]
+fn final_down_owner_proof_has_typed_failures_and_one_query_per_suffix() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    let focus_active = AtomicBool::new(true);
+
+    let missing = SessionTarget::new(123, 1);
+    missing.require_owner_identity();
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 1,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &missing,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::OwnerIdentityAbsent
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 0);
+
+    let stale = SessionTarget::new(123, 1);
+    bind_test_owner_identity(&stale, 123, 1, 100);
+    stale.publish(456);
+    stale.publish(123);
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 3,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &stale,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::OwnerIdentityStale
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+
+    let terminated = SessionTarget::new(123, 1);
+    bind_test_owner_identity(&terminated, 123, 1, 100);
+    terminated.invalidate_owner_identity();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 1,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &terminated,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::OwnerProcessTerminated
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+
+    let healthy = SessionTarget::new(123, 1);
+    bind_test_owner_identity(&healthy, 123, 1, 100);
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(None));
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 1,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &healthy,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::OwnerQueryUnavailable
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
+
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(100)));
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 1,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &healthy,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::Allowed
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
+
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(None));
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 1,
+            },
+            require_focus: false,
+            focus_active: &focus_active,
+            target: &missing,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::Allowed
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 0);
+
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn final_down_rechecks_identity_after_the_post_focus_race_hook() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(100)));
+    let target = SessionTarget::new(123, 1);
+    bind_test_owner_identity(&target, 123, 1, 100);
+    let focus_active = AtomicBool::new(true);
+    let quit = AtomicBool::new(false);
+    let skip = AtomicBool::new(false);
+    let panic = AtomicBool::new(false);
+    let pause = AtomicBool::new(false);
+    let supervisor = super::shared::SupervisorLeaseState::new(QpcTicks::from_raw(1));
+    let system_power = super::shared::SystemPowerState::default();
+    let hook: super::config::FinalGateRaceHook =
+        Arc::new(|_focus, target, _quit, _skip, _panic, _pause, _power| {
+            target
+                .invalidate_owner_identity_with(super::target::OwnerIdentityFailure::OwnerMismatch);
+        });
+    let controls = FinalControlSignals {
+        quit_requested: &quit,
+        skip_requested: &skip,
+        panic_requested: &panic,
+        desired_pause: &pause,
+        supervisor_expired: &supervisor,
+        system_power: Some(&system_power),
+    };
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected: TargetStamp {
+                hwnd: 123,
+                generation: 1,
+            },
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &target,
+            post_focus_race_hook: Some(&hook),
+            post_focus_control_signals: Some(controls),
+        }),
+        DownAdmission::OwnerMismatch
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn target_aba_rejects_stale_owner_authority_until_full_rebind() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(100)));
+    let target = SessionTarget::new(123, 1);
+    bind_test_owner_identity(&target, 123, 1, 100);
+    assert!(target.publish(456));
+    assert!(target.publish(123));
+    let expected = TargetStamp {
+        hwnd: 123,
+        generation: 3,
+    };
+    let focus_active = AtomicBool::new(true);
+
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected,
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &target,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::OwnerIdentityStale
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 0);
+
+    assert!(target.bind_owner_identity(123, 3, 100));
+    sky_dispatch_win32::focus::reset_foreground_query_count();
+    assert_eq!(
+        final_down_target_admission(FinalTargetSignals {
+            expected,
+            require_focus: true,
+            focus_active: &focus_active,
+            target: &target,
+            post_focus_race_hook: None,
+            post_focus_control_signals: None,
+        }),
+        DownAdmission::Allowed
+    );
+    assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn retained_window_authority_closes_once_on_terminal_teardown() {
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 50_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "identity-close-test-down".to_string().into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 70_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "identity-close-test-up".to_string().into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("schedule");
+    let options = test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.set_target_hwnd(123);
+    session
+        .bind_window_identity_authority(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
+        )
+        .expect("bind synthetic test authority");
+    let before = sky_dispatch_win32::focus::window_identity_authority_drop_count_for_test();
+
+    session.close_window_identity_authority();
+    session.close_window_identity_authority();
+    assert_eq!(
+        sky_dispatch_win32::focus::window_identity_authority_drop_count_for_test(),
+        before + 1
+    );
+    drop(session);
+    assert_eq!(
+        sky_dispatch_win32::focus::window_identity_authority_drop_count_for_test(),
+        before + 1
+    );
 }
 
 #[test]
@@ -3835,6 +4153,7 @@ fn final_admission_requires_fresh_foreground_match_and_rechecks_atomic_focus() {
     // the Down before the sender boundary.
     let focus_active = AtomicBool::new(true);
     let target = SessionTarget::new(123, 1);
+    bind_test_owner_identity(&target, 123, 1, 1);
     let final_admission = final_down_target_admission(FinalTargetSignals {
         expected: TargetStamp {
             hwnd: 123,
@@ -3926,6 +4245,39 @@ fn prepared_down_final_foreground_proof_has_exact_query_scope() {
     ));
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
 
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn prepared_down_owner_rejections_do_not_send_or_advance_accounting() {
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    for (owner_override, expected_reason) in [
+        (Some(Some(200)), "prepared_down_owner_mismatch"),
+        (Some(None), "prepared_down_owner_query_unavailable"),
+    ] {
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(owner_override);
+        sky_dispatch_win32::focus::reset_foreground_query_count();
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        harness.config.focus.require_focus = true;
+        let calls = harness.configure_send_counter();
+        let mut stream = harness.build_prepared_stream_for_test();
+        let accounting_before = harness.generation_accounting_for_test();
+        let cursor_before = harness.resources.coordinator.cursor;
+
+        let step = harness.dispatch_prepared_current_at_lateness_for_test(&mut stream, 10_000);
+
+        assert!(matches!(
+            step,
+            super::worker::DispatchStep::TerminateStatic(reason) if reason == expected_reason
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(harness.resources.coordinator.cursor, cursor_before);
+        assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+        assert_eq!(harness.release_obligation_mask_for_test(), 0);
+        assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+        assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
+    }
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
 }
 

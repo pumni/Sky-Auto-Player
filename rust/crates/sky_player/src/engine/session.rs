@@ -6,6 +6,7 @@ use super::shared::{
 use super::worker::Worker;
 use super::*;
 use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_timing_constants};
+use crate::engine::target::OwnerIdentityFailure;
 use crate::engine::{EnginePollSnapshot, EnginePollStatus};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_core::coordinator::GenerationAccounting;
@@ -175,6 +176,8 @@ pub struct NativeDispatchSession {
     supervisor_lease_timeout_ticks: AtomicU64,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     watchdog_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+    window_identity_authority:
+        Mutex<Option<(sky_dispatch_win32::focus::WindowIdentityAuthority, u64)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +237,12 @@ impl NativeDispatchSession {
             .last()
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = options.schedule.generation_count;
+        let require_owner_identity =
+            options.focus.require_focus && matches!(&options.backend, BackendConfig::Production);
+        let target = SessionTarget::new(0, 0);
+        if require_owner_identity {
+            target.require_owner_identity();
+        }
         let metrics = Arc::new(SharedMetrics::default());
         *metrics.requested_priority_mode.lock() = "unknown".to_string();
         *metrics.requested_wait_policy.lock() = "unknown".to_string();
@@ -251,12 +260,12 @@ impl NativeDispatchSession {
                 panic_requested: AtomicBool::new(false),
                 supervisor_expired: SupervisorLeaseState::new(initial_heartbeat_ticks),
                 // Supervisor-published focus state is the precision-path hint;
-                // final admission revalidates only the target/focus atomics.
+                // final admission revalidates target and bound owner atomics.
                 focus_active: AtomicBool::new(true),
                 #[cfg(any(test, feature = "test-support"))]
                 command_timing: CommandTimingState::default(),
             },
-            target: SessionTarget::new(0, 0),
+            target,
             lifecycle: SessionLifecycle {
                 lifecycle: AtomicU8::new(LIFECYCLE_NEW),
                 terminal_outcome: AtomicU8::new(OUTCOME_NONE),
@@ -289,6 +298,7 @@ impl NativeDispatchSession {
             supervisor_lease_timeout_ticks: AtomicU64::new(0),
             thread_handle: Mutex::new(None),
             watchdog_handle: Mutex::new(None),
+            window_identity_authority: Mutex::new(None),
         })
     }
 
@@ -713,8 +723,132 @@ impl NativeDispatchSession {
 
     pub fn set_target_hwnd(&self, hwnd: isize) {
         if self.shared.target.publish(hwnd) {
+            #[cfg(feature = "test-support")]
+            {
+                let mock_focus_session = self.config.lock().as_ref().is_some_and(|admitted| {
+                    admitted.options.focus.require_focus
+                        && matches!(&admitted.options.backend, BackendConfig::Mock { .. })
+                });
+                if mock_focus_session
+                    && let Some((current_hwnd, generation)) = self.shared.target.load_stable()
+                    && self.shared.target.owner_identity_status(generation)
+                        == super::target::OwnerIdentityStatus::NotRequired
+                {
+                    let _ = self
+                        .shared
+                        .target
+                        .bind_owner_identity(current_hwnd, generation, 1);
+                }
+            }
             let _ = self.shared.commands.interrupt.signal();
         }
+    }
+
+    /// Publish a fresh P5 target generation after control-plane revalidation,
+    /// including when the numeric HWND was reused for a new window lifetime.
+    pub fn republish_target_generation_for_revalidation(&self, hwnd: isize) -> bool {
+        let published = self.shared.target.republish_same_hwnd(hwnd);
+        if published {
+            let _ = self.shared.commands.interrupt.signal();
+        }
+        published
+    }
+
+    /// Bind a retained Win32 process object to the current coherent target
+    /// generation. Production require-focus sessions reject Down traffic
+    /// until this succeeds.
+    pub fn bind_window_identity_authority(
+        &self,
+        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
+    ) -> Result<(), String> {
+        let owner_pid = authority.identity().owner_pid;
+        self.bind_window_identity_authority_with_pid(authority, owner_pid)
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn bind_window_identity_authority_for_test(
+        &self,
+        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
+        expected_owner_pid: u32,
+    ) -> Result<(), String> {
+        self.bind_window_identity_authority_with_pid(authority, expected_owner_pid)
+    }
+
+    fn bind_window_identity_authority_with_pid(
+        &self,
+        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
+        expected_owner_pid: u32,
+    ) -> Result<(), String> {
+        let identity = authority.identity();
+        let Some((hwnd, generation)) = self.shared.target.load_stable() else {
+            return Err("target is unavailable while binding window identity".to_string());
+        };
+        if hwnd != identity.hwnd || expected_owner_pid == 0 {
+            return Err("window identity HWND does not match the published target".to_string());
+        }
+        let mut retained = self.window_identity_authority.lock();
+        if authority.continuity() != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+        {
+            return Err("window process identity changed during startup binding".to_string());
+        }
+        if !self
+            .shared
+            .target
+            .bind_owner_identity(hwnd, generation, expected_owner_pid)
+        {
+            return Err("window identity could not bind to the current target generation".into());
+        }
+        *retained = Some((authority, generation));
+        Ok(())
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn invalidate_window_identity_authority_for_test(&self) {
+        self.shared.target.invalidate_owner_identity();
+    }
+
+    /// Poll the retained process object and exact target HWND on the desktop
+    /// supervisor thread. This function never runs in the precision suffix.
+    pub fn poll_window_identity_authority(&self) -> bool {
+        let retained = self.window_identity_authority.lock();
+        let Some((authority, bound_generation)) = retained.as_ref() else {
+            return self.shared.target.owner_identity_status(0)
+                == super::target::OwnerIdentityStatus::NotRequired;
+        };
+        let Some(target) = self.shared.target.load_stable() else {
+            self.shared.target.invalidate_owner_identity();
+            return false;
+        };
+        if target != (authority.identity().hwnd, *bound_generation) {
+            return false;
+        }
+        let failure = match authority.continuity() {
+            sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => return true,
+            sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
+                OwnerIdentityFailure::ProcessTerminated
+            }
+            sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch => {
+                OwnerIdentityFailure::OwnerMismatch
+            }
+            sky_dispatch_win32::focus::WindowIdentityContinuity::WindowUnavailable => {
+                OwnerIdentityFailure::WindowUnavailable
+            }
+            sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessIdentityMismatch => {
+                OwnerIdentityFailure::ProcessIdentityMismatch
+            }
+            sky_dispatch_win32::focus::WindowIdentityContinuity::QueryUnavailable => {
+                OwnerIdentityFailure::QueryUnavailable
+            }
+        };
+        self.shared.target.invalidate_owner_identity_with(failure);
+        false
+    }
+
+    /// Release the retained process object exactly once at terminal session
+    /// teardown. The caller joins the worker/supervisor before closing it.
+    pub fn close_window_identity_authority(&self) {
+        self.window_identity_authority.lock().take();
+        self.shared.target.invalidate_owner_identity();
     }
 
     /// Publish a transition-only supervisor focus hint. This wakes the worker

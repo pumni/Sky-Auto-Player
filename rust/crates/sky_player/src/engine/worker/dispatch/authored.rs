@@ -483,6 +483,48 @@ fn finalize_authored_down_admission(
                 record_final_gate_rejection(local_metrics, FinalGateRejection::Target);
                 return Ok(AdmissionOutcome::TargetChanged);
             }
+            DownAdmission::OwnerMismatch => {
+                runtime.verified_target = None;
+                runtime.invalidate_down_authorization();
+                return Err(DispatchStep::TerminateStatic(
+                    "authored_down_owner_mismatch",
+                ));
+            }
+            DownAdmission::OwnerQueryUnavailable => {
+                runtime.verified_target = None;
+                runtime.invalidate_down_authorization();
+                return Err(DispatchStep::TerminateStatic(
+                    "authored_down_owner_query_unavailable",
+                ));
+            }
+            DownAdmission::OwnerIdentityAbsent => {
+                runtime.verified_target = None;
+                runtime.invalidate_down_authorization();
+                return Err(DispatchStep::TerminateStatic(
+                    "authored_down_owner_identity_absent",
+                ));
+            }
+            DownAdmission::OwnerIdentityStale => {
+                runtime.verified_target = None;
+                runtime.invalidate_down_authorization();
+                return Err(DispatchStep::TerminateStatic(
+                    "authored_down_owner_identity_stale",
+                ));
+            }
+            DownAdmission::OwnerProcessTerminated => {
+                runtime.verified_target = None;
+                runtime.invalidate_down_authorization();
+                return Err(DispatchStep::TerminateStatic(
+                    "authored_down_owner_process_terminated",
+                ));
+            }
+            DownAdmission::OwnerIdentityDrift => {
+                runtime.verified_target = None;
+                runtime.invalidate_down_authorization();
+                return Err(DispatchStep::TerminateStatic(
+                    "authored_down_owner_identity_drift",
+                ));
+            }
         }
     }
     if !final_atomic_revalidation(control_signals, runtime, local_metrics) {

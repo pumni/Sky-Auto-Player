@@ -950,7 +950,7 @@ impl ProductionDispatchTestHarness {
             "dense alternating event count must be an even value in 2..=14"
         );
         let transition_count = event_count / 2;
-        let mut actions = Vec::with_capacity(event_count + 1);
+        let mut actions = Vec::with_capacity(event_count + 2);
         actions.push(KeyActionInput {
             source_action_index: 0,
             kind: ActionKind::Down,
@@ -975,6 +975,13 @@ impl ProductionDispatchTestHarness {
                 reason: "dense-alternating-down".into(),
             });
         }
+        actions.push(KeyActionInput {
+            source_action_index: (transition_count * 2 + 1) as u32,
+            kind: ActionKind::Up,
+            scheduled_us: (transition_count as u64 + 1).saturating_mul(gap_us),
+            scan_codes: vec![PHYSICAL_INSTRUMENT_SCAN_CODES[transition_count]].into(),
+            reason: "dense-alternating-final-up".into(),
+        });
         let mut harness = Self::create_harness(&actions);
         harness.align_next_plan_to_benchmark_margin_for_test(gap_us);
         let plan = harness.plan_current_dispatch();
@@ -1218,6 +1225,15 @@ impl ProductionDispatchTestHarness {
     pub fn set_target_hwnd_for_benchmark(&self, hwnd: isize) {
         assert_ne!(hwnd, 0, "benchmark target HWND must be nonzero");
         self.target.publish(hwnd);
+    }
+
+    /// Bind the benchmark target to an owner PID outside the timed suffix.
+    pub fn bind_owner_identity_for_benchmark(&self, owner_pid: u32) -> bool {
+        let Some((hwnd, generation)) = self.target.load_stable() else {
+            return false;
+        };
+        self.target.require_owner_identity();
+        self.target.bind_owner_identity(hwnd, generation, owner_pid)
     }
 
     fn target_stamp_for_test(&self) -> TargetStamp {
@@ -2469,7 +2485,23 @@ impl ProductionDispatchTestHarness {
         stream: &mut PreparedDispatchStream,
         lateness_us: u64,
     ) -> DispatchStep {
+        self.bind_default_test_owner_if_needed();
         self.dispatch_prepared_current_at_lateness_inner_for_test(stream, lateness_us)
+    }
+
+    fn bind_default_test_owner_if_needed(&self) {
+        if !self.config.focus.require_focus {
+            return;
+        }
+        let Some((hwnd, generation)) = self.target.load_stable() else {
+            return;
+        };
+        if self.target.owner_identity_status(generation)
+            == super::super::target::OwnerIdentityStatus::NotRequired
+        {
+            self.target.require_owner_identity();
+            let _ = self.target.bind_owner_identity(hwnd, generation, 1);
+        }
     }
 
     fn dispatch_prepared_current_at_lateness_inner_for_test(
@@ -2801,6 +2833,7 @@ impl ProductionDispatchTestHarness {
         test_physical_target_qpc: Option<QpcTicks>,
         test_inject_sender_start: bool,
     ) -> DispatchStep {
+        self.bind_default_test_owner_if_needed();
         self.effective_now_ticks = effective_now_ticks;
         dispatch_due_from_plan(
             plan,
