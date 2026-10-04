@@ -156,7 +156,7 @@ try {
 
     $headSha = (& git -C $repoRoot rev-parse --verify HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $headSha -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the full source revision' }
-    $runtimeRevision = (& git -C $repoRoot rev-parse --verify 'HEAD^').Trim()
+    $runtimeRevision = (& git -C $repoRoot merge-base HEAD refs/remotes/origin/main).Trim()
     if ($LASTEXITCODE -ne 0 -or $runtimeRevision -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the baseline runtime revision' }
     $statusLines = @(& git -C $repoRoot status --porcelain --untracked-files=all)
     if ($LASTEXITCODE -ne 0) { throw 'Could not verify source-tree cleanliness' }
