@@ -52,7 +52,7 @@ pub mod dispatch_primitives {
     pub use super::target::SessionTarget;
     pub use super::test_support::{
         PhysicalFloorEvidence, PreparedBoundaryEvidence, ProductionDispatchTestHarness,
-        RtR3FinalizeEvidence,
+        RtR3CleanupCapture, RtR3FinalizeEvidence,
     };
     pub use super::worker::WaitObservation;
     pub use super::worker::dispatch::DispatchStep;

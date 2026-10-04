@@ -109,6 +109,8 @@ pub struct RtR3FinalizeEvidence {
     pub active_generations: u64,
 }
 
+pub type RtR3CleanupCapture = Arc<Mutex<Vec<(Vec<u16>, bool)>>>;
+
 #[allow(dead_code)]
 impl ProductionDispatchTestHarness {
     pub fn new_down_only() -> Self {
@@ -1975,9 +1977,7 @@ impl ProductionDispatchTestHarness {
         captured
     }
 
-    pub fn configure_r3_mock_cleanup_emitter_for_test(
-        &mut self,
-    ) -> Arc<Mutex<Vec<(Vec<u16>, bool)>>> {
+    pub fn configure_r3_mock_cleanup_emitter_for_test(&mut self) -> RtR3CleanupCapture {
         let captured = Arc::new(Mutex::new(Vec::with_capacity(4)));
         let capture = Arc::clone(&captured);
         let clock = self.resources.clock;

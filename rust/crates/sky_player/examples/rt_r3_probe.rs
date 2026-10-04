@@ -10,7 +10,9 @@ use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::input::{PhysicalPacket, SendEvidence};
-use sky_player::engine::dispatch_primitives::{DispatchStep, ProductionDispatchTestHarness};
+use sky_player::engine::dispatch_primitives::{
+    DispatchStep, ProductionDispatchTestHarness, RtR3CleanupCapture,
+};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::Command;
@@ -220,11 +222,11 @@ fn run() -> Result<(), String> {
     });
     let encoded =
         serde_json::to_vec_pretty(&report).map_err(|error| format!("serialize JSON: {error}"))?;
-    if let Some(parent) = arguments.output.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("create output folder: {error}"))?;
-        }
+    if let Some(parent) = arguments.output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create output folder: {error}"))?;
     }
     std::fs::write(&arguments.output, encoded)
         .map_err(|error| format!("write {}: {error}", arguments.output.display()))?;
@@ -965,9 +967,7 @@ fn packet_json(packet: PhysicalPacket) -> Value {
     json!({"up_mask":packet.up_mask,"down_mask":packet.down_mask,"event_count":packet.event_count()})
 }
 
-fn cleanup_sends_json(
-    captured: &std::sync::Arc<std::sync::Mutex<Vec<(Vec<u16>, bool)>>>,
-) -> Result<Vec<Value>, String> {
+fn cleanup_sends_json(captured: &RtR3CleanupCapture) -> Result<Vec<Value>, String> {
     captured
         .lock()
         .map_err(|_| "P0 cleanup capture lock poisoned".to_string())

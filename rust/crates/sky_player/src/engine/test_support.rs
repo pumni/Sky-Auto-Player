@@ -20,5 +20,5 @@ pub(crate) use command_timing::{
 #[allow(unused_imports)]
 pub use dispatch_harness::{
     PhysicalFloorEvidence, PreparedBoundaryEvidence, ProductionDispatchTestHarness,
-    RtR3FinalizeEvidence,
+    RtR3CleanupCapture, RtR3FinalizeEvidence,
 };
