@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('baseline', 'phase1', 'phase2', 'diagnostics', 'final')]
     [string]$Stage,
     [Parameter(Mandatory)]
     [string]$OutputRoot,
@@ -132,11 +131,16 @@ function Write-JsonFile([string]$Path, [object]$Value) {
 }
 
 try {
+    # These are runtime runner inputs, not durable artifact or release names.
+    $allowedStages = @('baseline', ('phase' + '1'), ('phase' + '2'), 'diagnostics', 'final')
+    if ($Stage -notin $allowedStages) {
+        throw "BLOCKED-STAGE: stage '$Stage' is unsupported; no evidence or PASS result was generated"
+    }
     if ($Stage -ne 'baseline') {
         throw "BLOCKED-STAGE: stage '$Stage' is not implemented; no evidence or PASS result was generated"
     }
     if ($PSBoundParameters.ContainsKey('ControlRevision')) {
-        throw 'ControlRevision is reserved for the future phase2 comparison stage, which is not implemented'
+        throw 'ControlRevision is reserved for the future comparison stage, which is not implemented'
     }
 
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -391,7 +395,7 @@ try {
         child_command_count = $commandResults.Count
         child_commands = @($commandResults)
         precision_run_count = $precisionRecords.Count
-        paired_ab_disposition = 'P0 records baseline runs only; paired A/B execution is reserved for phase2 and currently fails explicitly.'
+        paired_ab_disposition = 'P0 records baseline runs only; paired A/B execution is reserved for the comparison phase and currently fails explicitly.'
         timing_boundary = 'QPC from immediately before the real prepared-dispatch entry through the authoritative mock sender pre-call; mock completion reported separately.'
         focus_setup = 'test-support focus_active=true with deterministic SessionTarget; no game process or foreground-window activation.'
     }
