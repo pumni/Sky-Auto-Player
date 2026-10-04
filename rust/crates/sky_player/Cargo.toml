@@ -35,6 +35,10 @@ required-features = ["test-support"]
 name = "rt_handoff_bench"
 required-features = ["test-support"]
 
+[[example]]
+name = "rt_r3_probe"
+required-features = ["test-support"]
+
 [[bin]]
 name = "rt-native-acceptance"
 path = "src/bin/rt_native_acceptance.rs"
