@@ -230,16 +230,31 @@ try {
     $contractEnvironment.SKY_RT_R3_CONTENTION_WORKERS = '0'
     [void](Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'contracts', '--load-mode', 'quiet', '--output', $contractPath) -Label 'contracts' -Environment $contractEnvironment)
     $contractReport = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
-    $vectorA = $contractReport.test_vectors.A_late_same_key_pause_resume
+    $vectorA = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume
     $vectorB = $contractReport.test_vectors.B_enabled_lease_watchdog_delayed
+    $vectorC = $contractReport.test_vectors.C_serial_HOL
     $vectorD = $contractReport.test_vectors.D_focus_loss_policy
-    if ($vectorA.hypothesis_status -ne 'REPRODUCED' -or $vectorA.vector_cases.Count -ne 3 -or
-        @($vectorA.vector_cases | Where-Object { $_.below_completion_plus_frame -ne $true }).Count -ne 0 -or
-        $vectorA.exact_vector_duplicate_tail.status -ne 'REJECTED_BY_SCHEDULE_COMPILER' -or
+    if ($vectorA.hypothesis_status -ne 'FLOOR_GATE_PASS' -or $vectorA.contract_passed -ne $true -or $vectorA.vector_cases.Count -ne 3 -or
+        @($vectorA.vector_cases | Where-Object { $_.contract_passed -ne $true -or $_.below_completion_plus_frame -ne $false -or $_.authored_offsets_us.Count -ne 4 -or $_.conversion.native_admission -ne 'PASS' -or $_.conversion.effective_hold_h_us -ne 17167 -or $_.conversion.min_release_gap_us -ne 17167 -or $_.no_pause_negative_control.qpc.microseconds_from_zero -ne 118300 -or $_.no_pause_negative_control.floor.microseconds_from_zero -ne 133884 -or $_.lifecycle_snapshots.before_next_down.floor.qpc_ticks -ne $_.required_next_down_not_before.qpc_ticks -or $_.events.redown.pre_call.qpc_ticks -ne $_.required_next_down_not_before.qpc_ticks -or $_.steps.final_up -ne 'Dispatched' -or $_.final_generation_accounting.activated -ne 2 -or $_.final_generation_accounting.released -ne 2 -or $_.final_release_obligation_mask -ne 0 }).Count -ne 0 -or
+        @($vectorA.vector_cases | Where-Object { $_.no_pause_negative_control.not_due_without_send_or_advance -ne $true -or $_.lifecycle_snapshots.before_next_down.not_due_without_send_or_advance -ne $true }).Count -ne 0 -or
+        $vectorA.malformed_duplicate_up_control.status -ne 'REJECTED_BY_SCHEDULE_COMPILER' -or
+        $vectorC.timing_config.native_admission -ne 'PASS' -or
+        $vectorC.timing_config.tick_domain_admission -ne 'PASS' -or
+        $vectorC.timing_config.frame_gap_g_us -ne 16667 -or
+        $vectorC.timing_config.effective_hold_h_us -ne 17167 -or
+        $vectorC.timing_config.min_release_gap_us -ne 17167 -or
         $vectorB.hypothesis_status -ne 'REPRODUCED' -or
         $vectorB.expired_without_watchdog.disposition -ne 'STALE_LEASE_ACCEPTED' -or
         $vectorB.expired_without_watchdog.lease_enabled -ne $true -or
         $vectorB.expired_without_watchdog.musical_sender_attempts -ne 1 -or
+        $vectorB.timeout_equality.lease_enabled -ne $true -or
+        $vectorB.timeout_equality.disposition -ne 'AT_TIMEOUT_ALLOWED' -or
+        $vectorB.timeout_equality.musical_sender_attempts -ne 1 -or
+        $vectorB.timeout_equality.dispatch_was_allowed -ne $true -or
+        $vectorB.prior_fresh_progress.disposition -ne 'FRESH_PROGRESS_ALLOWED' -or
+        $vectorB.prior_fresh_progress.lease_enabled -ne $true -or
+        $vectorB.prior_fresh_progress.musical_sender_attempts -ne 1 -or
+        $vectorB.prior_fresh_progress.dispatch_was_allowed -ne $true -or
         $vectorD.restore_path.release_on_restore -ne $true -or
         $vectorD.terminal_cleanup_while_unfocused.ownership_scoped_terminal_release -ne $true -or
         $contractReport.test_vectors.E_empty_cleanup.oracle_passed -ne $true) {
@@ -275,12 +290,39 @@ try {
                     $command = Invoke-CapturedCommand -Name $probePath -Arguments $arguments -Label "precision-$workload-$loadMode-r$runIndex" -Environment $runEnvironment
                     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
                     $precisionRun = @($report.test_vectors.precision_runs)[0]
+                    $expectedSetupRefreshes = if ($workload.StartsWith('mixed-') -or $workload.StartsWith('up-only-')) { 11000 } else { 0 }
+                    $expectedFrameTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 16667 / 1000000)
+                    $expectedMarginTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 500 / 1000000)
+                    $expectedHoldTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 17167 / 1000000)
+                    $expectedLeaseTicks = [long][Math]::Ceiling([double]$report.qpc_frequency_hz * 3000000 / 1000000)
                     if ($report.schema_version -ne 1 -or $report.source_revision.ToLowerInvariant() -ne $headSha -or
                         $report.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or $report.profile -ne 'release' -or
                         $report.transport_kind -ne 'deterministic-mock' -or $report.run_id -ne $childRunId -or
                         $report.mode -ne 'precision' -or $report.load_mode -ne $loadMode -or
                         $report.contention_workers -ne $(if ($loadMode -eq 'cpu_contention') { 2 } else { 0 }) -or
                         $report.warmup_count -ne 1000 -or $report.measured_count -ne 10000 -or
+                        $precisionRun.r3_timing_config.frame_gap_g_us -ne 16667 -or
+                        $precisionRun.r3_timing_config.frame_gap_g_ticks -ne $expectedFrameTicks -or
+                        $precisionRun.r3_timing_config.frame_base_hold_us -ne 16667 -or
+                        $precisionRun.r3_timing_config.timing_margin_us -ne 500 -or
+                        $precisionRun.r3_timing_config.timing_margin_ticks -ne $expectedMarginTicks -or
+                        $precisionRun.r3_timing_config.effective_hold_h_us -ne 17167 -or
+                        $precisionRun.r3_timing_config.effective_hold_h_ticks -ne $expectedHoldTicks -or
+                        $precisionRun.r3_timing_config.min_release_gap_us -ne 17167 -or
+                        $precisionRun.r3_timing_config.min_release_gap_ticks -ne $expectedHoldTicks -or
+                        $precisionRun.r3_timing_config.native_admission -ne 'PASS' -or
+                        $precisionRun.r3_timing_config.tick_domain_admission -ne 'PASS' -or
+                        $precisionRun.lease.enabled -ne $true -or $precisionRun.lease.timeout_us -ne 3000000 -or
+                        $precisionRun.lease.timeout_ticks -ne $expectedLeaseTicks -or
+                        $precisionRun.lease.progress_state -ne 'fresh_progress_before_each_sample' -or
+                        $precisionRun.lease.sample_progress_publication_count -ne 11000 -or
+                        $precisionRun.lease.expected_sample_progress_publications -ne 11000 -or
+                        [long]$precisionRun.lease.first_sample_progress_qpc_ticks -le 0 -or
+                        [long]$precisionRun.lease.last_sample_progress_qpc_ticks -lt [long]$precisionRun.lease.first_sample_progress_qpc_ticks -or
+                        $precisionRun.lease.setup_progress_publication_count -ne $expectedSetupRefreshes -or
+                        $precisionRun.lease.setup_progress_published_before_setup_dispatch -ne $true -or
+                        $precisionRun.lease.watchdog_scheduler_started -ne $false -or
+                        [string]::IsNullOrWhiteSpace($precisionRun.completion_model) -or
                         $precisionRun.statistics_eligible -ne $true -or $precisionRun.sample_count -ne 10000 -or
                         $precisionRun.failed_sample_count -ne 0 -or $precisionRun.counters.measured_sender_attempts -ne 10000) {
                         throw "BLOCKED-MEASUREMENT: $childRunId did not satisfy the pinned 1,000 warmup / 10,000 measured baseline contract"
@@ -377,11 +419,14 @@ try {
         profile = 'release'
         transport_kind = 'deterministic-mock'
         contracts = [ordered]@{
-            A_hypothesis = $contractReport.test_vectors.A_late_same_key_pause_resume.hypothesis_status
-            A_exact_vector_status = $contractReport.test_vectors.A_late_same_key_pause_resume.exact_vector_duplicate_tail.status
-            A_valid_prefix_cases = $contractReport.test_vectors.A_late_same_key_pause_resume.vector_cases.Count
+            A_contract = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume.hypothesis_status
+            A_malformed_duplicate_control = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume.malformed_duplicate_up_control.status
+            A_four_event_cases = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume.vector_cases.Count
             B_hypothesis = $contractReport.test_vectors.B_enabled_lease_watchdog_delayed.hypothesis_status
             B_expired_case = $contractReport.test_vectors.B_enabled_lease_watchdog_delayed.expired_without_watchdog.disposition
+            B_equality_case = $contractReport.test_vectors.B_enabled_lease_watchdog_delayed.timeout_equality.disposition
+            B_fresh_case = $contractReport.test_vectors.B_enabled_lease_watchdog_delayed.prior_fresh_progress.disposition
+            C_native_admission = $contractReport.test_vectors.C_serial_HOL.timing_config.native_admission
             D_release_while_unfocused = $contractReport.test_vectors.D_focus_loss_policy.restore_path.cleanup_sends_while_unfocused
             D_release_after_restore = $contractReport.test_vectors.D_focus_loss_policy.restore_path.release_on_restore
             D_terminal_cleanup = $contractReport.test_vectors.D_focus_loss_policy.terminal_cleanup_while_unfocused.ownership_scoped_terminal_release
@@ -396,7 +441,7 @@ try {
         child_commands = @($commandResults)
         precision_run_count = $precisionRecords.Count
         paired_ab_disposition = 'P0 records baseline runs only; paired A/B execution is reserved for the comparison phase and currently fails explicitly.'
-        timing_boundary = 'QPC from immediately before the real prepared-dispatch entry through the authoritative mock sender pre-call; mock completion reported separately.'
+        timing_boundary = 'Sample-start QPC immediately before prepared-dispatch entry through the mock sender authoritative pre-call QPC; immediate mock completion equals pre-call and is not SendInput cost or receipt.'
         focus_setup = 'test-support focus_active=true with deterministic SessionTarget; no game process or foreground-window activation.'
     }
     Write-JsonFile (Join-Path $runDirectory 'summary.json') $summary
