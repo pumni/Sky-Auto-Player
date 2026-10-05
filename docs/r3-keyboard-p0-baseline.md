@@ -6,22 +6,20 @@ P0 is characterization only. No production timing, lease, scheduler, focus, or c
 
 ## Pinned evidence
 
-- Run: r3-p0-20261004T234223688Z-d88f1a19
-- Implementation/source revision: 325f45e6089c46218e1ee988ff391643d83ad43a
-- Runtime/base revision: dd915bf31e49e45315b8dbb427d0506046c876b7 (origin/main merge base)
-- Release probe SHA-256: fe7ca9ba6b9abc26110de583127585b5c56ccfad8a2f40412f3567fdf98138ad
-- Evidence commit: e8c49fac8ba5bebf02ef0b47c05f7908a4769a3d on rt-r3/evidence/p0-325f45e6089c
-- Outer manifest SHA-256: 296024e46c366457504373043825364d13c5b322bd11345695cd35c7d29bc38c
-- ZIP SHA-256: 4218cb9213114becfbb60f234716eb64bfa4a92fb3ff46afb36f40794d36bbf0 (1,088,971 bytes; one part)
-- runner-outputs.json SHA-256 inside the ZIP: a239e419e5cc2a8fc32fbc199596bc414f8cd60259602eda81360abe60a98379
-- files/contracts.json SHA-256 inside the ZIP: f865d41b6ee637fb02ab697905fe1030bf84d1b4b20fcd9bdf45d3d97a9c130d
-- files/summary.json SHA-256 inside the ZIP: 89ee60ea4cf284603056a5c1aa252125c523db0a51c6fb6ff311e2a5eff147d6
-- Pinned run: [evidence directory](https://github.com/pumni/Sky-Auto-Player/tree/e8c49fac8ba5bebf02ef0b47c05f7908a4769a3d/runs/r3-p0-20261004T234223688Z-d88f1a19)
-- Pinned files: [outer manifest](https://github.com/pumni/Sky-Auto-Player/blob/e8c49fac8ba5bebf02ef0b47c05f7908a4769a3d/runs/r3-p0-20261004T234223688Z-d88f1a19/manifest.json), [SHA256SUMS.txt](https://github.com/pumni/Sky-Auto-Player/blob/e8c49fac8ba5bebf02ef0b47c05f7908a4769a3d/runs/r3-p0-20261004T234223688Z-d88f1a19/SHA256SUMS.txt), [evidence.zip](https://github.com/pumni/Sky-Auto-Player/blob/e8c49fac8ba5bebf02ef0b47c05f7908a4769a3d/runs/r3-p0-20261004T234223688Z-d88f1a19/archive/evidence.zip)
+- Run: r3-p0-20261005T024258505Z-700aaab7
+- Implementation/source revision: 458ee68aa40ad48a9805b07b62afaec2e0ba58a5
+- Runtime/base revision: 1574aa267b8364b1930bd6abc7baa36636d33843 (verified #439 merge on origin/main)
+- Release probe SHA-256: 309de78a9f6847ad2097c5915052b99e130476259e1beac8980efb912666c22e
+- Evidence commit: 596664e809b69318eb216d25b9bed680446641e3 on rt-r3/evidence/p0-458ee68aa40a
+- Outer manifest SHA-256: ca4904e3114d77f2a7abf769b3a3701954297a803629cd16f6768999a4aa5fbb
+- ZIP SHA-256: daaa6881c724a2319a43a24e469ea70d27c2472b263cd60a513421086a187e7c (1,170,232 bytes; one part)
+- runner-outputs.json SHA-256 inside the ZIP: 7277874d3eb4b8258d2dbd6db24c6e89beb7cb3fe926b0609ed8752f0bfa7b62
+- files/contracts.json SHA-256 inside the ZIP: 39179a62021b870bbe78e95182882ad66aeeff2476eb574f5a27e5b8b80ab1bd
+- files/summary.json SHA-256 inside the ZIP: 0a3c6b6ff0e2954dec6a48c0800b07d062c088fe4eb931c1519f136e68339b2c
+- Pinned run: [evidence directory](https://github.com/pumni/Sky-Auto-Player/tree/596664e809b69318eb216d25b9bed680446641e3/runs/r3-p0-20261005T024258505Z-700aaab7)
+- Pinned files: [outer manifest](https://github.com/pumni/Sky-Auto-Player/blob/596664e809b69318eb216d25b9bed680446641e3/runs/r3-p0-20261005T024258505Z-700aaab7/manifest.json), [SHA256SUMS.txt](https://github.com/pumni/Sky-Auto-Player/blob/596664e809b69318eb216d25b9bed680446641e3/runs/r3-p0-20261005T024258505Z-700aaab7/SHA256SUMS.txt), [evidence.zip](https://github.com/pumni/Sky-Auto-Player/blob/596664e809b69318eb216d25b9bed680446641e3/runs/r3-p0-20261005T024258505Z-700aaab7/archive/evidence.zip)
 
-The archive contains 320 declared raw files totaling 55,368,576 bytes. runner-outputs.json, files/contracts.json, files/summary.json, precision reports, and native control directories are entries inside evidence.zip; they are not separate GitHub blobs at this pinned commit. This corrects the earlier nonexistent inner-file links. The earlier bundle remains immutable at [its pinned commit](https://github.com/pumni/Sky-Auto-Player/tree/5245909aeb6f204d8d6542f69f6f6ec3852e5d91/runs/r3-p0-20261004T185505507Z-0ab4da0e).
-
-The outer manifest SHA256 recorded for this earlier run was calculated from CRLF working-tree bytes. Git normalized the committed text blob to LF, so that recorded outer manifest hash and its checksum row do not verify against the pinned Git blob. The ZIP and all 320 raw files remain intact; the corrected publisher verifies committed manifest and archive bytes before pushing a new append-only run.
+The archive contains 320 declared raw files totaling 55,390,917 bytes. runner-outputs.json, files/contracts.json, files/summary.json, precision reports, and native control directories are entries inside evidence.zip; they are not separate GitHub blobs at this pinned commit. The publisher read and SHA-256 checked the committed manifest and archive blob bytes before pushing; the returned manifest hash is for the verified Git blob. This corrects the earlier nonexistent inner-file links and the newline-corrupted outer hash. The superseded run remains immutable at [its pinned commit](https://github.com/pumni/Sky-Auto-Player/tree/e8c49fac8ba5bebf02ef0b47c05f7908a4769a3d/runs/r3-p0-20261004T234223688Z-d88f1a19); its previously reported outer hash 296024e46c366457504373043825364d13c5b322bd11345695cd35c7d29bc38c was computed from CRLF working-tree bytes and does not match the normalized Git blob. Its ZIP and 320 raw files remain intact. The older bundle remains at [its separate pinned commit](https://github.com/pumni/Sky-Auto-Player/tree/5245909aeb6f204d8d6542f69f6f6ec3852e5d91/runs/r3-p0-20261004T185505507Z-0ab4da0e).
 
 ## Host and run setup
 
@@ -39,7 +37,7 @@ The outer manifest SHA256 recorded for this earlier run was calculated from CRLF
 
 The due-seam test helper accepts only synthetic wall QPC and recomputes the current production physical floor for the current prepared packet on every call. Before that floor it returns without entering the prepared suffix or changing sender attempts, cursor, generation accounting, or release obligations. It does not implement a second scheduler.
 
-The earlier R1 probe reused the pre-cleanup floor when checking the resume call. That input masked the required counterexample, so its claim that the resumed Down waited until 133,884 us is invalid. The new baseline records the pre-cleanup window as a snapshot only, checks the real resume at 118,300 us against the recomputed post-cleanup floor, and retries at the current floor only if resume is still early. It separately compares the observed Down with the independent Up-completion-plus-frame requirement. This is characterization evidence; production timing and cleanup behavior are unchanged.
+The earlier R1 probe reused the pre-cleanup floor when checking the resume call. That input masked the required counterexample, so its claim that the resumed Down waited until 133,884 us is invalid. In the corrected run, the resume call is at 118,300 us. The seam recomputes the post-cleanup production floor (118,034 us at 1,000,000 and 10,000,000 Hz; 118,036 us at 10,000,003 Hz), so resume is due and the prepared suffix dispatches immediately at 118,300 us. The independent Up-completion-plus-frame requirement remains 133,884 us (1,338,840 ticks at 10 MHz; 1,338,844 ticks at 10,000,003 Hz). Thus the normal-gap contract is REPRODUCED/false while due-seam integrity is true at all three frequencies. The pre-cleanup floor remains evidence only. The no-pause negative control at 118,300 us is still not due at 133,884 us and leaves sender attempts, cursor, generation accounting, and release obligation unchanged. Final Up dispatches at its current legal production floor; accounting is 2 activated / 2 released, with zero obligation. This is characterization evidence; production timing and cleanup behavior are unchanged.
 
 ### R2: native-admitted fixture configuration
 
@@ -83,12 +81,12 @@ Nine workloads ran five times in each of two load modes. Each run had 1,000 warm
 
 | Workload | Quiet: median P99 (range) | CPU contention: median P99 (range) |
 | --- | ---: | ---: |
-| down-1 | 2 (2-4) | 3 (3-4) |
-| down-5 | 3 (3-5) | 3 (3-4) |
-| down-15 | 3 (2-3) | 3 (2-4) |
-| mixed-1x1 | 1 (1-3) | 2 (1-3) |
-| mixed-2x3 | 3 (3-4) | 3 (2-3) |
-| mixed-7x8 | 2 (1-3) | 3 (1-3) |
+| down-1 | 4 (4-4) | 4 (4-7) |
+| down-5 | 3 (3-4) | 4 (4-4) |
+| down-15 | 4 (3-5) | 5 (4-11) |
+| mixed-1x1 | 3 (3-3) | 4 (3-4) |
+| mixed-2x3 | 3 (3-4) | 4 (4-21) |
+| mixed-7x8 | 4 (3-4) | 3 (3-4) |
 | up-only-1 | 0 (0-0) | 0 (0-0) |
 | up-only-5 | 0 (0-0) | 0 (0-0) |
 | up-only-15 | 0 (0-0) | 0 (0-0) |
@@ -101,28 +99,22 @@ The release harness and sink self-test passed. Each control reported matching Re
 
 | Scenario | Run ID | Result | Sink events |
 | --- | --- | --- | ---: |
-| canonical-single | native-case-20261005T064321-180da2ca | PASS, finished | 2 |
-| pause-resume | native-case-20261005T064325-b711544a | PASS, finished | 4 |
-| supervisor-lease-expiry | native-case-20261005T064329-8a86ff3f | PASS, watchdog expired | 0 |
+| canonical-single | native-case-20261005T094407-0f097726 | PASS, finished | 2 |
+| pause-resume | native-case-20261005T094411-7d4e2a91 | PASS, finished | 4 |
+| supervisor-lease-expiry | native-case-20261005T094416-1bdfe690 | PASS, watchdog expired | 0 |
 
 The zero-event supervisor case verifies its rejection/cleanup control path. These controls do not replace A/B vectors or prove game/audio receipt.
 
-## Gates
+## Verification and checkpoint
 
-Focused tests and local checks passed on implementation revision 325f45e6089c46218e1ee988ff391643d83ad43a:
+- Focused Rust suites: `sky_dispatch_core` PASS (73); `sky_dispatch_win32 --features test-support` PASS (248 passed, 1 ignored); `sky_player --features test-support --lib` PASS (371); `rt_dispatch_no_alloc` PASS (23). The final due-seam assertion was also covered by both successful workspace Rust stages inside `check all`.
+- `cargo xtask check static` PASS, with 31 allowlisted architecture warnings. `cargo fmt --manifest-path rust/Cargo.toml --all -- --check`, `git diff --check`, and PowerShell parser validation for the runner and publisher PASS.
+- Temporary publisher tests with `core.autocrlf=true` and `false` plus `* text=auto` verified byte-identical committed manifest, checksum, and archive contents. The final publisher also verified the committed outer manifest and archive blob bytes before push and returned the manifest SHA from that verified blob.
+- Final baseline run `r3-p0-20261005T024258505Z-700aaab7`: 97/97 child commands exited zero, 90 precision runs yielded 900,000 samples with no failed samples and 18/18 eligible cells, and all three native ReceiveOnly controls passed. The earlier unpublished native attempt stopped when the exact sink HWND lost foreground; the user confirmed an accidental focus change, then the fresh run passed. An earlier publisher attempt was blocked before push and is not part of the pinned evidence.
+- `cargo xtask check all` remains FAIL on the corrected P0 code. Two full runs exited 1 in `sky_desktop_shell_lib`: 228 passed and `power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch` failed at `desktop/src-tauri/src/power_lifecycle.rs:861:9` on `!resumed.suspended && resumed.down_blocked`. The output did not print the observed flag values. The targeted command `cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch` passed once. Workspace Rust tests, Clippy, Bun check/E2E, and static passed; no root cause is established. This remains an explicit full-gate failure, with no claim that it is transient.
 
-- cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core — PASS, 73 tests.
-- cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_win32 --features test-support — PASS, 248 passed, 1 ignored.
-- cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib — PASS, 371 tests.
-- cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc — PASS, 23 tests.
-- cargo xtask check static — PASS; 31 allowlisted architecture warnings.
-- cargo xtask check all — final full rerun PASS, including desktop checks and Bun E2E. The first `rtk cargo xtask check all` exited 1: `sky_desktop_shell_lib` reported 228 passed and 1 failed in `power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch`, at `desktop/src-tauri/src/power_lifecycle.rs:861:9`. The failing assertion was `!resumed.suspended && resumed.down_blocked`; the output did not print the observed field values. Its targeted rerun and a later full rerun passed. No root cause was established.
-- PowerShell parser validation of scripts/run_rt_r3_evidence.ps1 — PASS.
-- Baseline runner — PASS; 97/97 child commands exited zero, including release native acceptance build, sink self-test, and all three native scenarios.
-- git diff --check — PASS.
+The measured source revision is 458ee68aa40ad48a9805b07b62afaec2e0ba58a5. This report update is a separate documentation-only commit after measurement; the source SHA and release binary SHA above identify the code that produced the evidence. [GitHub CI run 37256459701](https://github.com/pumni/Sky-Auto-Player/actions/runs/37256459701) for the measured source revision completed successfully, including the required CI gate. The local full `check all` failures above remain recorded; the differing local and CI outcomes are unresolved, with no root-cause claim.
 
-The earlier result above belongs to implementation revision 325f45e6089c46218e1ee988ff391643d83ad43a. After merging #439 and applying the current P0 corrections, `rtk cargo xtask check all` reached the desktop library tests twice and exited 1 both times: 228 passed and `power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch` failed at `desktop/src-tauri/src/power_lifecycle.rs:861:9` on `!resumed.suspended && resumed.down_blocked`. The output does not print either observed flag value. The targeted command `rtk cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch` passed once; workspace Rust checks, Bun check/E2E, Clippy, and static passed. No root cause is established. This remains a failing full gate and is reported without a claim that the failure is transient.
+P0 remains active for coordinator review. PR #437 remains Draft and unmerged; issue #431 remains open. No merge or P1 work is authorized.
 
-GitHub exact-head CI is recorded in the #437 PR body and the #431 checkpoint. P0 remains active pending coordinator review. No merge, issue closure, or P1 work is authorized here.
-
-READY FOR COORDINATOR REVIEW; NEXT PHASE NOT STARTED
+P0 CHECKPOINT SUBMITTED; COORDINATOR ACCEPTANCE PENDING; NEXT PHASE NOT STARTED
