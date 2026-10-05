@@ -239,6 +239,8 @@ try {
         $vectorA.normal_gap_contract_passed -ne $false -or
         $vectorA.vector_cases.Count -ne 3 -or
         @($vectorA.vector_cases | Where-Object {
+            $resumeSnapshot = $_.lifecycle_snapshots.before_next_down
+            $expectedResumeStep = if ($resumeSnapshot.current_floor_was_due_at_resume) { 'Some(Dispatched)' } else { 'None' }
             $_.due_seam_integrity_passed -ne $true -or
             $_.normal_gap_contract_passed -ne $false -or
             $_.below_completion_plus_frame -ne $true -or
@@ -251,13 +253,18 @@ try {
             $_.no_pause_negative_control.floor.microseconds_from_zero -ne 133884 -or
             $_.lifecycle_snapshots.before_next_down.earliest_dispatch_qpc.qpc_ticks -ne $_.events.redown.pre_call.qpc_ticks -or
             $_.lifecycle_snapshots.before_next_down.post_cleanup_recomputed_floor.qpc_ticks -ne $_.production_down_floor.qpc_ticks -or
-            $_.lifecycle_snapshots.before_next_down.dispatch_step_at_resume -ne 'Some(Dispatched)' -or
+            $resumeSnapshot.dispatch_step_at_resume -ne $expectedResumeStep -or
             $_.steps.final_up -ne 'Dispatched' -or
             $_.final_generation_accounting.activated -ne 2 -or
             $_.final_generation_accounting.released -ne 2 -or
             $_.final_release_obligation_mask -ne 0
         }).Count -ne 0 -or
-        @($vectorA.vector_cases | Where-Object { $_.no_pause_negative_control.not_due_without_send_or_advance -ne $true -or $_.lifecycle_snapshots.before_next_down.not_due_without_send_or_advance -ne $true }).Count -ne 0 -or
+        @($vectorA.vector_cases | Where-Object {
+            $resumeSnapshot = $_.lifecycle_snapshots.before_next_down
+            $_.no_pause_negative_control.not_due_without_send_or_advance -ne $true -or
+            ($resumeSnapshot.current_floor_was_due_at_resume -eq $false -and $resumeSnapshot.not_due_without_send_or_advance -ne $true) -or
+            ($resumeSnapshot.current_floor_was_due_at_resume -eq $true -and $null -ne $resumeSnapshot.not_due_without_send_or_advance)
+        }).Count -ne 0 -or
         $vectorA.malformed_duplicate_up_control.status -ne 'REJECTED_BY_SCHEDULE_COMPILER' -or
         $vectorC.timing_config.native_admission -ne 'PASS' -or
         $vectorC.timing_config.tick_domain_admission -ne 'PASS' -or
