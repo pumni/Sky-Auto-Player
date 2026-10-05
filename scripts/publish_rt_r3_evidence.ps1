@@ -119,10 +119,14 @@ function Assert-CommittedEvidenceBytes(
 ) {
     $manifestPath = Join-Path $RunDirectory 'manifest.json'
     $checksumsPath = Join-Path $RunDirectory 'SHA256SUMS.txt'
-    $checksumText = [System.IO.File]::ReadAllText($checksumsPath, $utf8NoBom)
-    if ($checksumText.Contains("`r") -or -not $checksumText.EndsWith("`n") -or $checksumText.StartsWith([string][char]0xFEFF)) {
-        throw 'Generated outer SHA256SUMS.txt is not UTF-8 without BOM with fixed LF and trailing LF'
+    $checksumsBytes = [System.IO.File]::ReadAllBytes($checksumsPath)
+    $hasChecksumsBom = $checksumsBytes.Length -ge 3 -and $checksumsBytes[0] -eq 239 -and $checksumsBytes[1] -eq 187 -and $checksumsBytes[2] -eq 191
+    $hasChecksumsCr = [Array]::IndexOf($checksumsBytes, [byte]13) -ge 0
+    $hasChecksumsTrailingLf = $checksumsBytes.Length -gt 0 -and $checksumsBytes[$checksumsBytes.Length - 1] -eq 10
+    if ($hasChecksumsBom -or $hasChecksumsCr -or -not $hasChecksumsTrailingLf) {
+        throw "Generated outer SHA256SUMS.txt is not UTF-8 without BOM with fixed LF and trailing LF (size=$($checksumsBytes.Length), bom=$hasChecksumsBom, has_cr=$hasChecksumsCr, trailing_lf=$hasChecksumsTrailingLf)"
     }
+    $checksumText = $utf8NoBom.GetString($checksumsBytes)
 
     $expectedHashes = @{}
     foreach ($line in $checksumText.Split("`n", [System.StringSplitOptions]::RemoveEmptyEntries)) {
