@@ -21,6 +21,8 @@ P0 is characterization only. No production timing, lease, scheduler, focus, or c
 
 The archive contains 320 declared raw files totaling 55,368,576 bytes. runner-outputs.json, files/contracts.json, files/summary.json, precision reports, and native control directories are entries inside evidence.zip; they are not separate GitHub blobs at this pinned commit. This corrects the earlier nonexistent inner-file links. The earlier bundle remains immutable at [its pinned commit](https://github.com/pumni/Sky-Auto-Player/tree/5245909aeb6f204d8d6542f69f6f6ec3852e5d91/runs/r3-p0-20261004T185505507Z-0ab4da0e).
 
+The outer manifest SHA256 recorded for this earlier run was calculated from CRLF working-tree bytes. Git normalized the committed text blob to LF, so that recorded outer manifest hash and its checksum row do not verify against the pinned Git blob. The ZIP and all 320 raw files remain intact; the corrected publisher verifies committed manifest and archive bytes before pushing a new append-only run.
+
 ## Host and run setup
 
 - Windows 11 Home build 26300, x86_64-pc-windows-msvc; AMD Ryzen 5 5500U with Radeon Graphics.
@@ -35,13 +37,9 @@ The archive contains 320 declared raw files totaling 55,368,576 bytes. runner-ou
 
 ### R1: due-aware physical-floor gate
 
-A test-support scheduler seam now reads the production physical timing window and returns before the prepared suffix while synthetic wall time is below packet_not_before_qpc. A not-due attempt leaves sender attempts, cursor, and generation unchanged. The seam uses the existing dispatch path and does not implement a second scheduler.
+The due-seam test helper accepts only synthetic wall QPC and recomputes the current production physical floor for the current prepared packet on every call. Before that floor it returns without entering the prepared suffix or changing sender attempts, cursor, generation accounting, or release obligations. It does not implement a second scheduler.
 
-For D0,U17167,D34334,U51501, Down pre-call/completion was 100,000/100,000 us; musical Up pre-call/completion was 117,167/117,217 us; manual pause/resume was 117,300/118,300 us. At resume, the captured floor was 133,884 us. The probe did not send at 118,300 us: it made no sender attempt, cursor advance, or generation commit before due, then recorded the resumed Down at 133,884 us. The no-pause negative control at 118,300 us also remained not due with zero additional attempt, cursor movement, or generation commit.
-
-The cleanup snapshot is recorded separately: the recomputed floor after cleanup was 118,034 us (118,036 us at 10,000,003 Hz), below the pre-cleanup floor of 133,884 us. The due-aware test seam retains the captured production window to prevent the prepared suffix from bypassing that floor. This is characterization evidence, not a P0 production cleanup fix.
-
-The cases ran at all three QPC frequencies. At 10,000,003 Hz the feasible authored sequence was D0,U17168,D34336,U51504; the checked tick-domain floor was 1,338,844 ticks. At 1,000,000 and 10,000,000 Hz the floor was 133,884 and 1,338,840 ticks respectively. All final Ups dispatched at 151,051 us; accounting ended at 2 activated / 2 released and zero release obligation.
+The earlier R1 probe reused the pre-cleanup floor when checking the resume call. That input masked the required counterexample, so its claim that the resumed Down waited until 133,884 us is invalid. The new baseline records the pre-cleanup window as a snapshot only, checks the real resume at 118,300 us against the recomputed post-cleanup floor, and retries at the current floor only if resume is still early. It separately compares the observed Down with the independent Up-completion-plus-frame requirement. This is characterization evidence; production timing and cleanup behavior are unchanged.
 
 ### R2: native-admitted fixture configuration
 
@@ -53,7 +51,7 @@ A uses four valid authored events. The duplicate-Up vector is retained only as a
 
 All precision workloads use an enabled 3,000,000 us lease, materialized as 30,000,000 QPC ticks at the 10,000,000 Hz host frequency. Fresh progress is published after setup and outside each measured interval. The watchdog is not started in the microbenchmark. The runner fails closed on missing or mismatched lease, timing, or progress metadata.
 
-The sample-start QPC is taken immediately before prepared-dispatch entry, before modifier/late admission; the mock sender samples the authoritative pre-call QPC. Mock completion equals pre-call, so this characterizes admission and is not SendInput cost or receiver receipt.
+The sample-start QPC is taken immediately before prepared-dispatch entry, before modifier/late admission. The backend samples the authoritative sender pre-call before entering the deterministic mock emitter. The mock samples completion inside that emitter, so the pre-call-to-completion delta includes test-seam/QPC overhead and does not measure SendInput execution, device receipt, or game/audio receipt.
 
 ### R4: valid evidence URLs and hashes
 
@@ -118,10 +116,12 @@ Focused tests and local checks passed on implementation revision 325f45e6089c462
 - cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib — PASS, 371 tests.
 - cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc — PASS, 23 tests.
 - cargo xtask check static — PASS; 31 allowlisted architecture warnings.
-- cargo xtask check all — final full rerun PASS, including desktop checks and Bun E2E. The first full run had one transient failure in stable_callback_context_routes_current_epoch_and_ignores_retired_epoch; its targeted rerun passed and the second full run passed.
+- cargo xtask check all — final full rerun PASS, including desktop checks and Bun E2E. The first `rtk cargo xtask check all` exited 1: `sky_desktop_shell_lib` reported 228 passed and 1 failed in `power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch`, at `desktop/src-tauri/src/power_lifecycle.rs:861:9`. The failing assertion was `!resumed.suspended && resumed.down_blocked`; the output did not print the observed field values. Its targeted rerun and a later full rerun passed. No root cause was established.
 - PowerShell parser validation of scripts/run_rt_r3_evidence.ps1 — PASS.
 - Baseline runner — PASS; 97/97 child commands exited zero, including release native acceptance build, sink self-test, and all three native scenarios.
 - git diff --check — PASS.
+
+The earlier result above belongs to implementation revision 325f45e6089c46218e1ee988ff391643d83ad43a. After merging #439 and applying the current P0 corrections, `rtk cargo xtask check all` reached the desktop library tests twice and exited 1 both times: 228 passed and `power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch` failed at `desktop/src-tauri/src/power_lifecycle.rs:861:9` on `!resumed.suspended && resumed.down_blocked`. The output does not print either observed flag value. The targeted command `rtk cargo test --manifest-path rust/Cargo.toml -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch` passed once; workspace Rust checks, Bun check/E2E, Clippy, and static passed. No root cause is established. This remains a failing full gate and is reported without a claim that the failure is transient.
 
 GitHub exact-head CI is recorded in the #437 PR body and the #431 checkpoint. P0 remains active pending coordinator review. No merge, issue closure, or P1 work is authorized here.
 

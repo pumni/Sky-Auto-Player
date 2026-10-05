@@ -217,7 +217,7 @@ fn run() -> Result<(), String> {
         "distributions": distributions,
         "statistics_eligible": eligible,
         "qpc_source": qpc_source,
-        "measurement_boundary": "Precision sample-start QPC is sampled immediately before prepared-dispatch entry; authoritative sender pre-call is sampled by the deterministic mock; modeled immediate completion is recorded separately",
+        "measurement_boundary": "Precision sample-start QPC is sampled immediately before prepared-dispatch entry; the authoritative sender pre-call is sampled before the mock emitter; mock completion is sampled inside the emitter and its separate delta includes test-seam/QPC overhead",
         "receipt_boundary": "deterministic mock transport; no Raw Input or game/audio receipt claim"
     });
     let encoded =
@@ -327,18 +327,23 @@ fn contracts_report() -> Result<Value, String> {
             .as_u64()
             .unwrap_or(0)
             == 1;
-    let floor_gate_passed = vector_a.len() == 3
+    let lifecycle_counterexample_reproduced = vector_a.len() == 3
         && vector_a
             .iter()
-            .all(|case| case["contract_passed"].as_bool() == Some(true));
+            .all(|case| case["normal_gap_contract_passed"].as_bool() == Some(false));
+    let lifecycle_characterization_integrity_passed = vector_a.len() == 3
+        && vector_a
+            .iter()
+            .all(|case| case["due_seam_integrity_passed"].as_bool() == Some(true));
     Ok(json!({
         "A_same_key_physical_floor_pause_resume": {
-            "hypothesis_status": if floor_gate_passed { "FLOOR_GATE_PASS" } else { "FLOOR_GATE_FAIL" },
-            "contract_passed": floor_gate_passed,
+            "hypothesis_status": if lifecycle_counterexample_reproduced { "REPRODUCED" } else { "NO-REPRODUCTION" },
+            "characterization_integrity_passed": lifecycle_characterization_integrity_passed,
+            "normal_gap_contract_passed": vector_a.iter().all(|case| case["normal_gap_contract_passed"].as_bool() == Some(true)),
             "vector_cases": vector_a,
             "malformed_duplicate_up_control": malformed_duplicate_up_control,
-            "path_evidence": "test-support scheduler seam checks the production physical timing window before entering the unchanged prepared suffix; manual pause/resume uses the dispatch-loop verified resumable cleanup transition",
-            "oracle": "no sender, cursor advance, or generation commit before packet_not_before_qpc; resumed Down dispatches at the production floor, at least prior Up completion + one frame"
+            "path_evidence": "test-support due seam recomputes the current production physical timing window for the current prepared packet on every call, accepts wall QPC only, and enters the unchanged prepared suffix only when due; manual pause/resume uses the dispatch-loop verified resumable cleanup transition",
+            "oracle": "no sender, cursor advance, or generation commit before the current packet_not_before_qpc; independently compare resumed Down against musical Up completion + one frame and report a reproduced baseline gap when below"
         },
         "B_enabled_lease_watchdog_delayed": {
             "hypothesis_status": if lease_reproduced { "REPRODUCED" } else { "NO-REPRODUCTION" },
@@ -427,7 +432,7 @@ fn run_lifecycle_prefix(frequency_hz: u64, odd_vector: bool) -> Result<Lifecycle
     let down_floor = harness.prepared_physical_floor_for_r3_probe()?;
     harness.set_r3_mock_sender_start_qpc_for_test(down_at);
     let first_step = harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(down_at, down_floor)?
+        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(down_at)?
         .ok_or("first lifecycle Down was unexpectedly before its physical floor")?;
     let first_observation = harness.pop_r3_send_observation_for_test().is_some();
     let down_completion = evidence_completion(&packets, 0)?;
@@ -437,7 +442,6 @@ fn run_lifecycle_prefix(frequency_hz: u64, odd_vector: bool) -> Result<Lifecycle
     let up_step = harness
         .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
             up_floor.packet_not_before_qpc,
-            up_floor,
         )?
         .ok_or("musical Up was unexpectedly before its physical floor")?;
     let up_observation = harness.pop_r3_send_observation_for_test().is_some();
@@ -500,10 +504,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         .set_r3_mock_sender_start_qpc_for_test(no_pause_at);
     let no_pause_step = no_pause
         .harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
-            no_pause_at,
-            no_pause_floor,
-        )?;
+        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(no_pause_at)?;
     let no_pause_attempts_after = captured_packet_count(&no_pause.packets)?;
     let no_pause_cursor_after = no_pause.harness.prepared_cursor_for_test();
     let no_pause_accounting_after = generation_accounting_json(&no_pause.harness);
@@ -541,43 +542,71 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         "release_obligation_mask": after_cleanup_obligation
     });
 
-    // Manual pause/resume can clear the current guard projection. Preserve the
-    // production window captured for this same frozen Down before cleanup so
-    // the due check remains tied to U completion + one frame.
-    let before_next_down_floor = before_cleanup_floor;
+    // The pre-cleanup window is retained only as a snapshot. The contract seam
+    // recomputes current production authority after resume and accepts wall_now
+    // alone; if resume is early, advance to that current floor and retry.
     let cursor_before_next_down = lifecycle.harness.prepared_cursor_for_test();
     let attempts_before_next_down = captured_packet_count(&lifecycle.packets)?;
     let accounting_before_next_down = generation_accounting_json(&lifecycle.harness);
+    let obligation_before_next_down = lifecycle.harness.release_obligation_mask_for_test();
+    let resume_gate_was_due = resume_at >= after_cleanup_floor.packet_not_before_qpc;
     lifecycle
         .harness
         .set_r3_mock_sender_start_qpc_for_test(resume_at);
     let resume_step = lifecycle
         .harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
-            resume_at,
-            before_next_down_floor,
-        )?;
+        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(resume_at)?;
+    let resume_step_label = format!("{resume_step:?}");
     let cursor_after_resume_gate = lifecycle.harness.prepared_cursor_for_test();
     let attempts_after_resume_gate = captured_packet_count(&lifecycle.packets)?;
     let accounting_after_resume_gate = generation_accounting_json(&lifecycle.harness);
-    let next_down_pre_call = before_next_down_floor.packet_not_before_qpc;
-    lifecycle
-        .harness
-        .set_r3_mock_sender_start_qpc_for_test(next_down_pre_call);
-    let next_down_step = match lifecycle
-        .harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
-            next_down_pre_call,
-            before_next_down_floor,
-        )? {
-        Some(step) => step,
-        None => {
-            let floor = lifecycle.harness.prepared_physical_floor_for_r3_probe()?;
+    let obligation_after_resume_gate = lifecycle.harness.release_obligation_mask_for_test();
+    let resume_gate_integrity_passed = if resume_gate_was_due {
+        matches!(resume_step.as_ref(), Some(DispatchStep::Dispatched))
+            && attempts_after_resume_gate == attempts_before_next_down + 1
+            && cursor_after_resume_gate == cursor_before_next_down + 1
+    } else {
+        resume_step.is_none()
+            && attempts_after_resume_gate == attempts_before_next_down
+            && cursor_after_resume_gate == cursor_before_next_down
+            && accounting_after_resume_gate == accounting_before_next_down
+            && obligation_after_resume_gate == obligation_before_next_down
+    };
+    if !resume_gate_integrity_passed {
+        return Err(
+            "resume due-seam result did not match the current production physical floor"
+                .to_string(),
+        );
+    }
+    let (next_down_step, next_down_pre_call) = match resume_step {
+        Some(DispatchStep::Dispatched) => (DispatchStep::Dispatched, resume_at),
+        Some(step) => {
             return Err(format!(
-                "resumed next Down remained before its production physical floor: supplied={}, current_floor={}",
-                next_down_pre_call.as_u64(),
-                floor.packet_not_before_qpc.as_u64()
+                "resumed next Down returned unexpected step {step:?}"
             ));
+        }
+        None => {
+            let current_floor = lifecycle.harness.prepared_physical_floor_for_r3_probe()?;
+            let retry_at = if resume_at >= current_floor.packet_not_before_qpc {
+                resume_at
+            } else {
+                current_floor.packet_not_before_qpc
+            };
+            lifecycle
+                .harness
+                .set_r3_mock_sender_start_qpc_for_test(retry_at);
+            let step = lifecycle
+                .harness
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(retry_at)?
+                .ok_or(
+                    "resumed next Down remained before its recomputed production physical floor",
+                )?;
+            if !matches!(step, DispatchStep::Dispatched) {
+                return Err(format!(
+                    "resumed next Down returned unexpected step {step:?}"
+                ));
+            }
+            (step, retry_at)
         }
     };
     let next_down_observation = lifecycle
@@ -599,7 +628,6 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         .harness
         .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
             final_up_floor.packet_not_before_qpc,
-            final_up_floor,
         )?
         .ok_or("final lifecycle Up was unexpectedly before its physical floor")?;
     let final_up_observation = lifecycle
@@ -619,22 +647,32 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         && no_pause_attempts_before == no_pause_attempts_after
         && no_pause_accounting_before == no_pause_accounting_after
         && no_pause_obligation_before == no_pause_obligation_after;
-    let resumed_not_due = resume_step.is_none()
-        && cursor_before_next_down == cursor_after_resume_gate
-        && attempts_before_next_down == attempts_after_resume_gate
-        && accounting_before_next_down == accounting_after_resume_gate
-        && attempts_after_resume_gate == after_cleanup_attempts
-        && cursor_after_resume_gate == after_cleanup_cursor;
-    let floor_gate_passed = no_pause_not_due
-        && resumed_not_due
+    let resumed_not_due = if resume_gate_was_due {
+        None
+    } else {
+        Some(
+            resume_step.is_none()
+                && cursor_before_next_down == cursor_after_resume_gate
+                && attempts_before_next_down == attempts_after_resume_gate
+                && accounting_before_next_down == accounting_after_resume_gate
+                && obligation_before_next_down == obligation_after_resume_gate
+                && attempts_after_resume_gate == after_cleanup_attempts
+                && cursor_after_resume_gate == after_cleanup_cursor,
+        )
+    };
+    let normal_gap_contract_passed = actual_next_down >= required_down_floor;
+    let due_seam_integrity_passed = no_pause_not_due
+        && resume_gate_integrity_passed
+        && actual_next_down >= after_cleanup_floor.packet_not_before_qpc
         && config.native_admission_passed
         && config.frame_us == FRAME_US
         && config.effective_hold_us == HOLD_US
         && config.min_release_gap_us == HOLD_US
-        && actual_next_down == required_down_floor
         && actual_next_down == next_down_pre_call
         && final_up_actual == final_up_floor.packet_not_before_qpc
         && next_down_completion <= final_up_actual
+        && final_accounting["activated"].as_u64() == Some(2)
+        && final_accounting["released"].as_u64() == Some(2)
         && final_obligation == 0;
 
     Ok(json!({
@@ -664,7 +702,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         "steps": {
             "first_down": lifecycle.first_step,
             "musical_up": lifecycle.up_step,
-            "resume_before_floor": format!("{resume_step:?}"),
+            "dispatch_at_resume": resume_step_label,
             "redown": format!("{next_down_step:?}"),
             "final_up": format!("{final_up_step:?}")
         },
@@ -688,28 +726,32 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
             "before_cleanup": before_cleanup,
             "after_cleanup": after_cleanup,
             "before_next_down": {
-                "floor": tick_json(clock,before_next_down_floor.packet_not_before_qpc)?,
+                "pre_cleanup_floor_snapshot_only": tick_json(clock,before_cleanup_floor.packet_not_before_qpc)?,
                 "post_cleanup_recomputed_floor": tick_json(clock,after_cleanup_floor.packet_not_before_qpc)?,
                 "resume_qpc": tick_json(clock,resume_at)?,
-                "dispatch_step_before_due": format!("{resume_step:?}"),
+                "earliest_dispatch_qpc": tick_json(clock, if resume_at >= after_cleanup_floor.packet_not_before_qpc { resume_at } else { after_cleanup_floor.packet_not_before_qpc })?,
+                "dispatch_step_at_resume": resume_step_label,
+                "current_floor_was_due_at_resume": resume_gate_was_due,
                 "cursor_before": cursor_before_next_down,
                 "cursor_after_gate": cursor_after_resume_gate,
                 "sender_attempts_before": attempts_before_next_down,
                 "sender_attempts_after_gate": attempts_after_resume_gate,
                 "generation_accounting_before": accounting_before_next_down,
                 "generation_accounting_after_gate": accounting_after_resume_gate,
+                "release_obligation_before": obligation_before_next_down,
+                "release_obligation_after_gate": obligation_after_resume_gate,
                 "not_due_without_send_or_advance": resumed_not_due
             }
         },
         "cleanup_transport_sends": after_cleanup_attempts.saturating_sub(2),
         "required_next_down_not_before": tick_json(clock,required_down_floor)?,
-        "production_down_floor": tick_json(clock,before_next_down_floor.packet_not_before_qpc)?,
-        "actual_next_down_at_or_after_floor": actual_next_down >= required_down_floor,
+        "production_down_floor": tick_json(clock,after_cleanup_floor.packet_not_before_qpc)?,
+        "normal_gap_contract_passed": normal_gap_contract_passed,
         "below_completion_plus_frame": actual_next_down < required_down_floor,
         "final_generation_accounting": final_accounting,
         "final_release_obligation_mask": final_obligation,
-        "contract_passed": floor_gate_passed,
-        "disposition": if floor_gate_passed { "PHYSICAL_FLOOR_HELD" } else { "FLOOR_GATE_FAILED" }
+        "due_seam_integrity_passed": due_seam_integrity_passed,
+        "disposition": if normal_gap_contract_passed { "NOT_REPRODUCED" } else { "REPRODUCED" }
     }))
 }
 
@@ -1159,8 +1201,8 @@ fn precision_report(
             "pre_call_to_sender_completion_us":completion_us
         },
         "statistics_eligible":eligible,
-        "completion_model":"deterministic mock completion equals the authoritative sender pre-call QPC; this is not SendInput execution cost or device/game receipt",
-        "boundary_notes":"prepared-stream construction, optional setup dispatch, fresh lease progress publication, and sample-start setup occur outside each timed interval; sample-start QPC is sampled immediately before the measured prepared-dispatch entry; the mock sender samples its authoritative pre-call QPC; watchdog scheduler is not started; mock transport only"
+        "completion_model":"completion is sampled inside the deterministic mock emitter; its delta from the authoritative sender pre-call includes test-seam/QPC overhead and does not measure SendInput execution, device receipt, or game/audio receipt",
+        "boundary_notes":"prepared-stream construction, optional setup dispatch, fresh lease progress publication, and sample-start setup occur outside each timed interval; sample-start QPC is sampled immediately before the measured prepared-dispatch entry; the backend samples authoritative pre-call before the mock emitter; completion is sampled inside the emitter; watchdog scheduler is not started; mock transport only"
     }))
 }
 

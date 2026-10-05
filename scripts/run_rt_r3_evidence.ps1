@@ -234,8 +234,29 @@ try {
     $vectorB = $contractReport.test_vectors.B_enabled_lease_watchdog_delayed
     $vectorC = $contractReport.test_vectors.C_serial_HOL
     $vectorD = $contractReport.test_vectors.D_focus_loss_policy
-    if ($vectorA.hypothesis_status -ne 'FLOOR_GATE_PASS' -or $vectorA.contract_passed -ne $true -or $vectorA.vector_cases.Count -ne 3 -or
-        @($vectorA.vector_cases | Where-Object { $_.contract_passed -ne $true -or $_.below_completion_plus_frame -ne $false -or $_.conversion.authored_offsets_us.Count -ne 4 -or $_.conversion.native_admission -ne 'PASS' -or $_.conversion.effective_hold_h_us -ne 17167 -or $_.conversion.min_release_gap_us -ne 17167 -or $_.no_pause_negative_control.qpc.microseconds_from_zero -ne 118300 -or $_.no_pause_negative_control.floor.microseconds_from_zero -ne 133884 -or $_.lifecycle_snapshots.before_next_down.floor.qpc_ticks -ne $_.required_next_down_not_before.qpc_ticks -or $_.events.redown.pre_call.qpc_ticks -ne $_.required_next_down_not_before.qpc_ticks -or $_.steps.final_up -ne 'Dispatched' -or $_.final_generation_accounting.activated -ne 2 -or $_.final_generation_accounting.released -ne 2 -or $_.final_release_obligation_mask -ne 0 }).Count -ne 0 -or
+    if ($vectorA.hypothesis_status -ne 'REPRODUCED' -or
+        $vectorA.characterization_integrity_passed -ne $true -or
+        $vectorA.normal_gap_contract_passed -ne $false -or
+        $vectorA.vector_cases.Count -ne 3 -or
+        @($vectorA.vector_cases | Where-Object {
+            $_.due_seam_integrity_passed -ne $true -or
+            $_.normal_gap_contract_passed -ne $false -or
+            $_.below_completion_plus_frame -ne $true -or
+            $_.disposition -ne 'REPRODUCED' -or
+            $_.conversion.authored_offsets_us.Count -ne 4 -or
+            $_.conversion.native_admission -ne 'PASS' -or
+            $_.conversion.effective_hold_h_us -ne 17167 -or
+            $_.conversion.min_release_gap_us -ne 17167 -or
+            $_.no_pause_negative_control.qpc.microseconds_from_zero -ne 118300 -or
+            $_.no_pause_negative_control.floor.microseconds_from_zero -ne 133884 -or
+            $_.lifecycle_snapshots.before_next_down.earliest_dispatch_qpc.qpc_ticks -ne $_.events.redown.pre_call.qpc_ticks -or
+            $_.lifecycle_snapshots.before_next_down.post_cleanup_recomputed_floor.qpc_ticks -ne $_.production_down_floor.qpc_ticks -or
+            $_.lifecycle_snapshots.before_next_down.dispatch_step_at_resume -ne 'Some(Dispatched)' -or
+            $_.steps.final_up -ne 'Dispatched' -or
+            $_.final_generation_accounting.activated -ne 2 -or
+            $_.final_generation_accounting.released -ne 2 -or
+            $_.final_release_obligation_mask -ne 0
+        }).Count -ne 0 -or
         @($vectorA.vector_cases | Where-Object { $_.no_pause_negative_control.not_due_without_send_or_advance -ne $true -or $_.lifecycle_snapshots.before_next_down.not_due_without_send_or_advance -ne $true }).Count -ne 0 -or
         $vectorA.malformed_duplicate_up_control.status -ne 'REJECTED_BY_SCHEDULE_COMPILER' -or
         $vectorC.timing_config.native_admission -ne 'PASS' -or
@@ -420,6 +441,8 @@ try {
         transport_kind = 'deterministic-mock'
         contracts = [ordered]@{
             A_contract = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume.hypothesis_status
+            A_characterization_integrity = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume.characterization_integrity_passed
+            A_normal_gap_contract = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume.normal_gap_contract_passed
             A_malformed_duplicate_control = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume.malformed_duplicate_up_control.status
             A_four_event_cases = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume.vector_cases.Count
             B_hypothesis = $contractReport.test_vectors.B_enabled_lease_watchdog_delayed.hypothesis_status
@@ -441,7 +464,7 @@ try {
         child_commands = @($commandResults)
         precision_run_count = $precisionRecords.Count
         paired_ab_disposition = 'P0 records baseline runs only; paired A/B execution is reserved for the comparison phase and currently fails explicitly.'
-        timing_boundary = 'Sample-start QPC immediately before prepared-dispatch entry through the mock sender authoritative pre-call QPC; immediate mock completion equals pre-call and is not SendInput cost or receipt.'
+        timing_boundary = 'Sample-start QPC immediately before prepared-dispatch entry through the mock sender authoritative pre-call QPC. Mock emitter completion is sampled inside the deterministic mock; any delta includes test-seam/QPC overhead and does not measure SendInput cost or device/game receipt.'
         focus_setup = 'test-support focus_active=true with deterministic SessionTarget; no game process or foreground-window activation.'
     }
     Write-JsonFile (Join-Path $runDirectory 'summary.json') $summary

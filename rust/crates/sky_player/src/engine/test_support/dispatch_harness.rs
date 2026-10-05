@@ -2120,8 +2120,10 @@ impl ProductionDispatchTestHarness {
                 first_win32_error: None,
                 last_win32_error: None,
                 started_ticks: Some(started_ticks),
-                // This mock models an immediate completed transport; it does
-                // not measure SendInput execution or downstream receipt.
+                // This QPC sample occurs inside the mock emitter. The backend
+                // overwrites started_ticks with its authoritative pre-call;
+                // the resulting delta includes test-seam/QPC overhead, not
+                // SendInput execution or downstream receipt.
                 completed_ticks: Some(started_ticks),
                 timing_error: None,
             };
@@ -2816,15 +2818,15 @@ impl ProductionDispatchTestHarness {
         })
     }
 
-    /// Contract seam for scheduler floor behavior. It leaves the prepared
-    /// cursor and sender untouched until the synthetic QPC reaches a
-    /// production-computed window captured for this prepared packet, then
-    /// enters the existing suffix.
+    /// Contract seam for scheduler floor behavior. It reads the current
+    /// production timing window for the current prepared packet on every call,
+    /// leaves the cursor and sender untouched before that floor, and enters
+    /// the existing suffix only once the synthetic QPC is due.
     pub fn dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
         &mut self,
         wall_now: QpcTicks,
-        physical_floor: PhysicalFloorEvidence,
     ) -> Result<Option<DispatchStep>, String> {
+        let physical_floor = self.prepared_physical_floor_for_r3_probe()?;
         if wall_now < physical_floor.packet_not_before_qpc {
             return Ok(None);
         }
@@ -4200,12 +4202,11 @@ mod r3_p0_tests {
         let down_floor = harness
             .prepared_physical_floor_for_r3_probe()
             .expect("initial Down floor");
+        assert!(down_at >= down_floor.packet_not_before_qpc);
         harness.set_r3_mock_sender_start_qpc_for_test(down_at);
         assert!(matches!(
             harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
-                    down_at, down_floor,
-                )
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(down_at,)
                 .expect("due initial Down"),
             Some(DispatchStep::Dispatched)
         ));
@@ -4217,7 +4218,6 @@ mod r3_p0_tests {
             harness
                 .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
                     up_floor.packet_not_before_qpc,
-                    up_floor,
                 )
                 .expect("due musical Up"),
             Some(DispatchStep::Dispatched)
@@ -4241,10 +4241,7 @@ mod r3_p0_tests {
         harness.set_r3_mock_sender_start_qpc_for_test(early);
         assert!(
             harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
-                    early,
-                    floor_evidence,
-                )
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(early,)
                 .expect("not-due check")
                 .is_none()
         );
@@ -4262,10 +4259,7 @@ mod r3_p0_tests {
         harness.set_r3_mock_sender_start_qpc_for_test(floor);
         assert!(matches!(
             harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
-                    floor,
-                    floor_evidence,
-                )
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(floor,)
                 .expect("due next Down"),
             Some(DispatchStep::Dispatched)
         ));
