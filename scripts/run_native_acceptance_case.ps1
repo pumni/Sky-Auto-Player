@@ -92,9 +92,9 @@ try {
     if (-not (Test-Path -LiteralPath $harness)) {
         throw 'feature-gated release acceptance harness is missing; build it before the run'
     }
-    $head = (& rtk git rev-parse HEAD).Trim()
+    $head = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve source revision' }
-    $trackedChanges = (& rtk git status --porcelain --untracked-files=no) -join ''
+    $trackedChanges = (& git status --porcelain --untracked-files=no) -join ''
     if ($LASTEXITCODE -ne 0) { throw 'could not verify source-tree cleanliness' }
     $sourceTreeClean = [string]::IsNullOrWhiteSpace($trackedChanges)
     $sessionId = (Get-Process -Id $PID).SessionId
