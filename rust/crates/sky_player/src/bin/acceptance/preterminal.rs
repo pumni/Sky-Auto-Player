@@ -15,7 +15,7 @@ pub(super) enum PreTerminalResult {
 }
 
 impl PreTerminalResult {
-    fn verdict(&self) -> Verdict {
+    pub(super) fn verdict(&self) -> Verdict {
         match self {
             Self::Satisfied => Verdict::Pass,
             Self::TrustedFailure(_) | Self::IncompleteTimeout { complete: true } => Verdict::Fail,
@@ -59,7 +59,7 @@ pub(super) fn wait_for_sink_events(
     wait_for_sink_events_with(&mut reader, &mut clock, expected_down, expected_up)
 }
 
-fn wait_for_sink_events_with<R, C>(
+pub(super) fn wait_for_sink_events_with<R, C>(
     reader: &mut R,
     clock: &mut C,
     expected_down: &[PhysicalExpectation],

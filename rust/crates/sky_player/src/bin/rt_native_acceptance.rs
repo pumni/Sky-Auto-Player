@@ -22,6 +22,8 @@ use lifecycle_wait::{wait_for_focus_pause, wait_for_resume, wait_for_startup_rea
 use lifecycle_wait::publish_foreground_focus_hint;
 #[cfg(windows)]
 use preterminal::{finish_preterminal, wait_for_sink_events};
+#[cfg(windows)]
+use preterminal::{PreTerminalResult, wait_for_sink_events_with};
 use evidence_report::{Verdict, write_report};
 use acceptance_limits::*;
 use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
