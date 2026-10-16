@@ -68,14 +68,17 @@ Musical generation accounting is distinct from physical safety cleanup:
 
 ```text
 release_obligation_mask
-= active_mask | possibly_active_mask | failed_release_mask
+= active_mask | possibly_active_mask | failed_release_mask | in_flight_mask
 ```
 
 Successful musical Down and its matching musical Up are the only normal
 generation pairing. A safety/cleanup Up may be idempotently emitted without
 creating a musical `Released` transition. Raw physical Up count may therefore
-exceed musical Down count. Partial, ambiguous, and clock-uncertain Downs
-retain conservative release obligations and do not replay the musical Down.
+differ from musical Down count in abnormal or cleanup sessions. Tracked
+obligations include keys that are active, possibly active, awaiting a failed
+release, or part of an in-flight packet. Partial, ambiguous, and clock-uncertain
+Downs retain conservative release obligations and do not replay the musical
+Down.
 
 ### Evidence boundary
 

@@ -2,7 +2,9 @@
 
 This document is normative for the real-time playback path. The application
 reads authored schedules, materializes paired musical generations, and emits
-physical keyboard input through the Windows `SendInput` boundary.
+physical keyboard input through the Windows `SendInput` boundary. The current
+resumable lifecycle and final lease contract is recorded in
+[ADR-0018](adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md).
 
 ## Ownership boundaries
 
@@ -107,16 +109,19 @@ The worker performs the following sequence:
 3. Apply quit, skip, pause, suspend, lease, target, and focus gates.
 4. For eligible `require_focus=true` Down traffic, make one fresh foreground
    proof and then recheck target, published focus, and late control.
-5. Record `final_policy_qpc`, enter the trusted sender, reset Win32 last error,
+5. After modifier observation and final target atomic revalidation, prove the
+   enabled supervisor lease age with one fresh QPC sample before the final
+   control check and sender handoff.
+6. Record `final_policy_qpc`, enter the trusted sender, reset Win32 last error,
    take the sender-owned `pre_call_qpc`, and call `SendInput` exactly once.
-6. Validate completion QPC, confirmed/skipped masks, and packet integrity.
-7. Commit coordinator ownership and update floors only after complete success.
-8. Record bounded production evidence or enqueue one diagnostic observation.
+7. Validate completion QPC, confirmed/skipped masks, and packet integrity.
+8. Commit coordinator ownership and update floors only after complete success.
+9. Record bounded production evidence or enqueue one diagnostic observation.
 
 Up-only and `require_focus=false` paths do not perform the fresh foreground
-query. Partial or ambiguous Down transport is never retried. A skipped key
-still owned by the coordinator is a state disagreement and follows fail-closed
-cleanup.
+query. Up-only traffic also takes no new lease-age proof. Partial or ambiguous
+Down transport is never retried. A skipped key still owned by the coordinator
+is a state disagreement and follows fail-closed cleanup.
 
 ## Timing materialization
 
@@ -140,12 +145,15 @@ injection evidence only.
 
 ## Lifecycle and diagnostics
 
-Focus loss pauses physical admission and retains existing fail-closed cleanup
-semantics. Pause, suspend, and target-generation changes clear stale prepared
-work. Verified resumable cleanup clears canceled per-key floor evidence and
-establishes the absolute Down barrier above; failure paths invalidate the
-guard. A new session starts with a fresh guard. Cleanup releases remain safety
-operations.
+Focus loss immediately blocks new Downs and pauses musical time. Resumable
+release and reconciliation may remain deferred until trustworthy target
+restoration or existing terminal cleanup; a long unfocused period does not
+prove that held keys were physically released. Pause, suspend, and
+target-generation changes clear stale prepared work. Verified resumable cleanup
+clears canceled per-key floor evidence and establishes the absolute Down
+barrier above; failure paths invalidate the guard. A new session starts with a
+fresh guard. Cleanup releases remain safety operations and bypass the musical
+hold floor.
 
 Musical generation accounting and physical cleanup obligations are separate.
 Only a matching musical Up produces a normal generation `Released` transition;
@@ -153,7 +161,7 @@ safety/cleanup Ups may be idempotent and may make the raw physical Up count
 larger than the musical Down count. The cleanup contract is:
 
 ```text
-release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask
+release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask | in_flight_mask
 ```
 
 Partial, ambiguous, or clock-uncertain Downs retain conservative obligations

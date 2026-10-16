@@ -23,7 +23,7 @@ _Auto-plays Sky music sheets on Windows — notes, chords, and holds land on the
 
 ---
 
-**Sky Auto Player** transforms song sheets from the [specy/skyMusic](https://specy.github.io/skyMusic/) editor into clean chords, rapid arpeggios, and expressive holds played in-game with microsecond-level timing accuracy.
+**Sky Auto Player** transforms song sheets from the [specy/skyMusic](https://specy.github.io/skyMusic/) editor into chords, arpeggios, and frame-based holds using an immutable authored schedule, QPC-based runtime scheduling, and explicit sender-side timing floors.
 
 The application uses a **high-performance native architecture**:
 
@@ -34,13 +34,13 @@ Keystrokes are submitted solely through the public Windows `SendInput` API — t
 
 ## Why it sounds right
 
-Sky Auto Player doesn't replay a coarse macro timer. It schedules every note like a precision musical performance:
+Sky Auto Player keeps authored schedule offsets fixed and records sender-side timing details:
 
 - **Contiguous chord batches** — Chord notes are submitted in a single `SendInput` batch to minimize sender-side skew.
-- **Sub-millisecond native timing** — Unshifted absolute QPC target scheduling with precision spin-wait and Windows MMCSS (`Games/Pro Audio`) registration.
-- **Holds keep their full duration** — Long notes are never clipped short, even when subsequent notes follow in rapid succession.
+- **QPC-based native scheduling** — Immutable authored offsets, a high-resolution waitable-timer wake, and bounded QPC spin. `Auto` priority uses the MMCSS `Games` task when available, then falls back to `THREAD_PRIORITY_HIGHEST`.
+- **Frame-based hold policy** — A musical Up waits for successful Down completion plus the materialized hold floor. If a Down is late, its full authored duration is not guaranteed; later packets can also be delayed while authored offsets remain unchanged.
 - **Explicit hold-frame timing** — Select exact game frame holds (`1.0`, `1.25`, or `1.5` frames) tailored to the in-game FPS configuration.
-- **Calibrated transport margins** — Sender-side hold shrink is calibrated and proven during admission to safeguard physical hold floors.
+- **Explicit timing margin** — The persisted margin contributes once to authored hold and release-gap policy; startup wait calibration is a heuristic, not a percentile or service-level guarantee.
 - **Zero runtime Python dependency** — the packaged desktop runs without a Python interpreter or extension module.
 
 > [!WARNING]
@@ -50,7 +50,7 @@ Sky Auto Player doesn't replay a coarse macro timer. It schedules every note lik
 
 ## Quick Start
 
-**Requirements:** Windows 10 or 11 (64-bit). The canonical build is a per-user Tauri NSIS installer; it does not require administrator rights for installation. No system Python or Rust toolchain is required at runtime.
+**Requirements:** Windows 11 (64-bit). The production real-time worker requires the high-resolution waitable-timer API. The canonical build is a per-user Tauri NSIS installer; it does not require administrator rights for installation. No system Python or Rust toolchain is required at runtime.
 
 1. Download the canonical Tauri NSIS installer from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
 2. Run the installer and keep the default current-user install location.
@@ -67,11 +67,11 @@ Sky Auto Player doesn't replay a coarse macro timer. It schedules every note lik
 
 ## Features
 
-- ⚡ **Native Rust Dispatch Core** — Absolute QPC scheduling with MMCSS audio priority and zero GC/GIL pauses
-- 🎹 **Timing-first playback** — Contiguous chord batching, full hold preservation, and verified release gaps
+- ⚡ **Native Rust Dispatch Core** — Absolute QPC scheduling with MMCSS `Games` priority when available and a documented priority fallback
+- 🎹 **Timing-first playback** — Contiguous chord batching, frame-based hold policy, and sender-side release floors
 - 🖥️ **Modern Tauri desktop GUI** — Library search, Song Detail, Player Dock, Diagnostics, Settings, and Updates
 - 🎛️ **Per-song configuration** — Customizable hold profile, tempo multiplier, target FPS, and color palettes
-- 🛡️ **Fail-safe controls** — Real-time focus loss detection, auto-pause, and immediate all-up key release
+- 🛡️ **Fail-safe controls** — Focus loss immediately blocks new Downs and pauses musical time. Resumable release and reconciliation can wait until trustworthy target restoration or terminal cleanup; a long unfocused period does not prove that held keys were physically released.
 - 🔍 **Dry-run mode** — Preview playback rhythm in the HUD without sending keyboard input
 - ⌨️ **Desktop shortcuts** — `/` or `Ctrl+F` focuses search · `Esc` closes safe overlays · `q` does not quit the GUI
 
@@ -110,7 +110,7 @@ No. Sky Auto Player depends on Windows-specific system APIs — `SendInput` for 
 <details>
 <summary><b>Can I build it from source?</b></summary>
 
-Yes. Prerequisites: Windows 10/11, [Bun](https://bun.sh/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`). The canonical product checks and Tauri NSIS package use Rust and Bun only.
+Yes. Prerequisites: Windows 11 x64, [Bun](https://bun.sh/), and the Rust toolchain (pinned in `rust/rust-toolchain.toml`). The canonical product checks and Tauri NSIS package use Rust and Bun only.
 
 ```powershell
 # 1. Clone repository

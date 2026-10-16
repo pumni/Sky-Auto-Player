@@ -14,6 +14,7 @@ frame_base_hold_us = ceil(hold_frames * frame_us)
 timing_margin_us   = persisted user value
 min_hold_us        = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
+physical_same_key_release_gap_us = frame_us
 ```
 
 Each musical generation has exactly one authored Down and one matching
@@ -31,11 +32,18 @@ the whole session.
 
 At 60 FPS with a 500 µs margin:
 
-| Hold | Base hold | Authored minimum hold | Release gap |
-| ---: | ---: | ---: | ---: |
-| 1.0 frame | 16,667 µs | 17,167 µs | 17,167 µs |
-| 1.25 frames | 20,834 µs | 21,334 µs | 17,167 µs |
-| 1.5 frames | 25,001 µs | 25,501 µs | 17,167 µs |
+| Hold | Base hold | Authored minimum hold H | Authored gap G | Physical same-key gap G |
+| ---: | ---: | ---: | ---: | ---: |
+| 1.0 frame | 16,667 µs | 17,167 µs | 17,167 µs | 16,667 µs |
+| 1.25 frames | 20,834 µs | 21,334 µs | 17,167 µs | 16,667 µs |
+| 1.5 frames | 25,001 µs | 25,501 µs | 17,167 µs | 16,667 µs |
+
+At 60 FPS with a 500 µs margin, `H = frame_base_hold + margin = 17,167 µs`.
+The authored admission gap is `G = frame + margin = 17,167 µs`; the physical
+same-key release floor is one frame, `G = 16,667 µs`. These values serve
+different owners: authored admission validates the sheet, while the physical
+guard waits from successful Up completion. The margin is materialized once
+and is not added again to the physical one-frame floor.
 
 ## Current Down continuity
 
@@ -82,12 +90,32 @@ The resulting cases are:
    Up-before-Down packet.
 6. Unrelated authored targets never move because an earlier transition was
    late.
-7. Focus, pause, suspend, target, and lifecycle reset paths clear or
-   invalidate stale completion floors.
+7. A verified resumable cleanup clears canceled per-key musical floors and
+   starts the global Down barrier described below. The barrier survives manual,
+   focus, and power resume paths; only a new session starts with a clean guard.
 
-Emergency, focus-loss, and cleanup Ups retain immediate safety behavior and do
-not wait on musical floors. Chords are never split and transport anomalies are
+Emergency, focus-loss, and cleanup Ups bypass the musical H floor. Focus loss
+immediately blocks new Downs and pauses musical time, but release and
+reconciliation may remain deferred until trustworthy target restoration or
+terminal cleanup. Do not infer that held keys were physically released during
+a long unfocused interval. Chords are never split and transport anomalies are
 never retried.
+
+## Authored duration and scheduler lateness
+
+`hold_frames` supplies the materialized policy floor H; it does not promise
+that every authored long duration is preserved after a late Down. The authored
+Up target remains fixed. The physical Up is sent no earlier than the later of
+that target and `successful_down_completion + H`. A Down delayed beyond its
+authored target can therefore have a shorter physical duration than its
+authored interval, while still respecting H. Custom native durations require
+their own duration semantics and are not defined by this frame-policy floor.
+
+The worker preserves authored packet order and does not rebase the schedule.
+An earlier floor or sequential processing can delay unrelated Down packets;
+multiple already-overdue packets can consequently be emitted close together
+as the worker advances through them. This is head-of-line delay and overdue
+output, not a schedule rewrite or replay policy.
 
 ## Sender evidence and diagnostics
 
@@ -115,8 +143,11 @@ musical `Released` generation, so physical Up counts need not equal musical
 Down counts. Cleanup evidence uses:
 
 ```text
-release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask
+release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask | in_flight_mask
 ```
 
-`SendInput` success is sender/Windows injection evidence only and does not
-prove that the game sampled the key.
+The `SendInput` return count, sender pre-call/completion QPC, a project-owned
+ReceiveOnly sink observation, and game sampling are separate evidence layers.
+The application records them separately; none of the sender timestamps prove
+that Sky sampled the key. The frame-plus-margin receiver model is an application
+policy, not an official Windows timing guarantee.

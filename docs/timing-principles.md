@@ -21,6 +21,13 @@ min_hold_us        = frame_base_hold_us + timing_margin_us
 min_release_gap_us = frame_us + timing_margin_us
 ```
 
+Let `H = frame_base_hold + timing_margin` and `G = frame + margin` for
+authored admission. The physical same-key release floor is one frame,
+`G_physical = frame`; it does not include the margin. At 60 FPS with a 500 µs
+margin, `H = 17,167 µs`, authored `G = 17,167 µs`, and physical `G = 16,667
+µs`. The musical Up floor is `successful_down_completion + H`. The margin is
+included once in H and authored G, not added again by the physical guard.
+
 Every authored musical generation is paired and satisfies:
 
 ```text
@@ -73,17 +80,27 @@ final gates pass. A matching Up waits for the Down completion floor, and the
 next same-key Down waits for the Up completion floor. A mixed packet waits for
 the maximum relevant floor and remains one atomic Up-before-Down packet.
 
-After verified resumable cleanup, the worker samples fresh QPC after the
-cleanup call returns and sets `resume_down_not_before = Q + frame`. Every
-later Down-bearing packet applies this global absolute floor alongside its
-authored target and per-key floors. A mixed packet waits as a whole; Up-only
-packets are unaffected. A successful Down does not clear the barrier for other
-keys, and an authored target later than the barrier remains unchanged. Once
-the barrier has passed it adds no delay. A new session constructs a clean
-guard. Unverified cleanup, QPC failure, or checked-add overflow leaves the
-guard fail-closed and prevents later Down dispatch. A failed, partial,
-ambiguous, or untrustworthy transport result does not create completion
-evidence; the existing terminal cleanup policy applies.
+Authored timestamps remain immutable. A late Down can reduce the delivered
+duration from its authored interval, although its musical Up still waits for
+the physical H floor. An earlier physical floor or sequential worker processing
+can delay unrelated Down packets, and already-overdue packets can be emitted
+close together as the worker advances. This is head-of-line delay and overdue
+output, not schedule rebase, reordering, or replay. Custom native durations
+need distinct duration semantics; the frame-based policy floor does not
+promise full authored-duration preservation after a late Down.
+
+After verified resumable cleanup, the worker samples fresh QPC Q after the
+cleanup call returns and sets `resume_down_not_before = Q + frame`. Every later
+Down-bearing packet applies this global absolute floor alongside its authored
+target and per-key floors. A mixed packet waits as a whole; Up-only packets are
+unaffected. A successful Down does not clear the barrier for other keys, and
+an authored target later than the barrier remains unchanged. Once the barrier
+has passed it adds no delay. Manual, focus, and system-power resume paths keep
+the same barrier. A new session constructs a clean guard. Unverified cleanup,
+QPC failure, or checked-add overflow leaves the guard fail-closed and prevents
+later Down dispatch. A failed, partial, ambiguous, or untrustworthy transport
+result does not create completion evidence; the existing terminal cleanup
+policy applies.
 
 ## Physical dispatch ordering
 
@@ -98,7 +115,10 @@ The physical path is ordered as follows:
    physical floor.
 4. Run command, target, focus, and lease admission. Eligible
    `require_focus=true` Down traffic receives one fresh foreground proof,
-   followed by target, published-focus, and late-control rechecks.
+   followed by target, published-focus, and late-control rechecks. After
+   modifier observation and final target atomic revalidation, an enabled
+   supervisor lease receives one fresh QPC age proof before the final control
+   check and sender handoff.
 5. Take `final_policy_qpc`, enter the trusted sender, reset Win32 last error,
    take the sender-owned `pre_call_qpc`, and make exactly one `SendInput`
    call.
@@ -111,11 +131,14 @@ retried. Mixed packets are never split.
 
 ## Waiting and observation
 
-The waiter uses one interruptible high-resolution wait and bounded QPC spin to
-the selected physical wait target. Wait guard time is a wake mechanism only;
-it is not an applied dispatch lead. An interrupt, focus change, command, or
-lease transition replans the current boundary. The final gates remain
-authoritative after the wait.
+The production waiter requires an interruptible high-resolution waitable timer
+and bounded QPC spin to the selected physical wait target. Failure to create
+the high-resolution timer is a startup failure; there is no production
+coarse-timer fallback. Wait guard time is a wake mechanism only; it is not an
+applied dispatch lead. Startup uses six wake samples to initialize a heuristic,
+not a percentile or service-level guarantee. An interrupt, focus change,
+command, or lease transition replans the current boundary. The final gates
+remain authoritative after the wait.
 
 Production keeps bounded scalar sender and floor evidence. Strict/diagnostic
 mode may enqueue a fixed-capacity observation, but observer state cannot
@@ -130,8 +153,26 @@ generation, so raw physical Up count can exceed musical Down count. The
 authoritative cleanup evidence is:
 
 ```text
-release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask
+release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask | in_flight_mask
 ```
+
+Focus loss immediately blocks new Downs and pauses musical time. Resumable
+release/reconciliation may remain deferred until trustworthy target restoration
+or existing terminal cleanup, so an unfocused interval does not establish that
+held keys were physically released. Cleanup Ups are safety operations and
+bypass H.
+
+For enabled-lease Down-bearing traffic, final admission takes one fresh QPC
+sample after modifier observation and final target atomic revalidation, before
+the last control check and sender handoff. The proof uses at most two atomic
+state loads and one compare-exchange. A heartbeat age strictly greater than
+the configured timeout is Expired; equality remains Fresh. A missing enabled
+heartbeat, an inconclusive concurrent replacement, or QPC failure is
+Unproven/fail-closed as appropriate. Expired is latched monotonically; the
+proof does not retry in a loop. UpOnly traffic takes no new lease-age sample,
+and a disabled timeout preserves its diagnostic behavior. The watchdog remains
+active. Descheduling between a successful proof and the actual syscall remains
+an unavoidable race window.
 
 The following public counters may remain for schema compatibility:
 
@@ -155,5 +196,19 @@ are permitted.
 Relevant verification includes the paired-generation compiler and validator
 tests, sender and player suites, the no-allocation dispatch test, static
 security checks, and the Windows receive-only acceptance matrix recorded in
-issue #412. `SendInput` success is sender/Windows injection evidence only; it
-does not prove that Sky sampled the transition.
+issue #412.
+
+The transport return count (events inserted), sender-owned pre-call and
+completion QPC, a project-owned ReceiveOnly sink observation, and game
+sampling are distinct evidence layers. The application records them
+separately; none of the sender timestamps prove that Sky sampled the
+transition. Frame-plus-margin is the application's receiver model, not a
+Windows guarantee. See [ADR-0018](adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md)
+for API references and the source/test/evidence crosswalk.
+
+The production waiter arms `SetWaitableTimer` with a negative relative
+100-nanosecond interval. It does not pass QPC ticks as a FILETIME value. The
+high-resolution timer flag is documented for Windows 10 version 1803 and
+later; the product target is Windows 11 x64. `timeBeginPeriod` may affect
+waitable-timer resolution but Microsoft documents that it does not improve
+QPC precision.
