@@ -8,14 +8,14 @@ P5 adds final acceptance scenarios and test-support seams, the final evidence ru
 
 The accepted PRs below were merged with normal merge commits. Each PR head and reviewed base is retained so the runtime lineage is reproducible.
 
-| Phase | Issue | PR | Reviewed base | Reviewed head | Merge commit |
+| Phase | Issue | PR | Reviewed base | Reviewed PR head / evidence revision | Merge commit |
 | --- | --- | --- | --- | --- | --- |
 | P0 characterization | [#431](https://github.com/pumni/Sky-Auto-Player/issues/431) | [#437](https://github.com/pumni/Sky-Auto-Player/pull/437) | `4bd103c21a3fd8aad15eff281db15f8b10409493` | `1b6afb671d10a89cd632564ae772de6094850bb9` | `aa3c1a97c6a66c4036fed2c27617d0b3069773fd` |
 | P1 lifecycle release barrier | [#432](https://github.com/pumni/Sky-Auto-Player/issues/432) | [#447](https://github.com/pumni/Sky-Auto-Player/pull/447) | `aa3c1a97c6a66c4036fed2c27617d0b3069773fd` | `b28f75126d091b86b40bb41926526a78bed0b73e` | `b3324655c1b4be82849fc9b2d858541505d69963` |
 | P2 final lease age | [#433](https://github.com/pumni/Sky-Auto-Player/issues/433) | [#448](https://github.com/pumni/Sky-Auto-Player/pull/448) | `b3324655c1b4be82849fc9b2d858541505d69963` | `c9bea5e6593f576cc3c1b72d91633d628c37e900` | `df99c4080c556de163ea9aea7465ca70156b5739` |
 | P3 contract documentation | [#434](https://github.com/pumni/Sky-Auto-Player/issues/434) | [#449](https://github.com/pumni/Sky-Auto-Player/pull/449) | `df99c4080c556de163ea9aea7465ca70156b5739` | `e511f2223f32df5a08160a73dc8a714d372641ac` | `b012b0a1c135a9176cfc7c6aa8696fa0be29a481` |
 | P4 diagnostics | [#435](https://github.com/pumni/Sky-Auto-Player/issues/435) | [#450](https://github.com/pumni/Sky-Auto-Player/pull/450) | `b012b0a1c135a9176cfc7c6aa8696fa0be29a481` | `cb40f6b3e77162cf66f1ef26408d6b7546ffd034` | `bf5af844aa9e98f94b6cea8b81b3edb9a1d066ed` |
-| P5 final evidence | [#436](https://github.com/pumni/Sky-Auto-Player/issues/436) | Draft PR for this checkpoint | `bf5af844aa9e98f94b6cea8b81b3edb9a1d066ed` | Runtime evidence source: `be795506cc7b083673c30eca11d4627695dbad5a` | Pending coordinator review |
+| P5 final evidence | [#436](https://github.com/pumni/Sky-Auto-Player/issues/436) | [#451](https://github.com/pumni/Sky-Auto-Player/pull/451) (Draft) | `bf5af844aa9e98f94b6cea8b81b3edb9a1d066ed` | Evidence source: `be795506cc7b083673c30eca11d4627695dbad5a`; final docs-only PR head recorded in #436 checkpoint | Pending coordinator review |
 
 The measured runtime revision is `bf5af844aa9e98f94b6cea8b81b3edb9a1d066ed`. The P5 evidence runner and acceptance fixtures were measured from clean source revision `be795506cc7b083673c30eca11d4627695dbad5a`; that revision is not a new production runtime revision. The paired control is the accepted P1 merge `b3324655c1b4be82849fc9b2d858541505d69963`. The documentation-only PR head and its exact-head CI are recorded in the #436 checkpoint; the runtime evidence remains bound to `be795506cc7b083673c30eca11d4627695dbad5a`.
 
