@@ -117,6 +117,10 @@ fn run_release_floor_cycles(
                 "CASE-NOT-EXERCISED: actual successful Up completion {cycle} was not observed"
             ));
         }
+        // Let the next authored Down target fall below the post-cleanup global
+        // frame floor even at the 500us acceptance margin. This stays inside
+        // the test fixture and makes the native oracle exercise the barrier.
+        thread::sleep(Duration::from_millis(4));
         hook.r3_clear_pause_ack_qpc();
         session
             .pause()
@@ -192,7 +196,7 @@ fn run_release_floor_cycles(
         let down_sender_attempt_count = hook.r3_down_sender_attempt_count();
         if authored_target_qpc == 0 || authored_target_qpc >= barrier_qpc {
             return Err(format!(
-                "CASE-NOT-EXERCISED: resumed authored Down target was not before the release floor at cycle {cycle}"
+                "CASE-NOT-EXERCISED: resumed authored Down target {authored_target_qpc} was not before release floor {barrier_qpc} at cycle {cycle} (cleanup QPC {cleanup_qpc})"
             ));
         }
         if down_not_before_qpc < barrier_qpc
