@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "phase": "P4",
+  "run_id": "r3-p4-20261016T144725806Z-1a1edad1",
+  "evidence_branch": "rt-r3/evidence/p4-6a98f1bb27f2",
+  "source_revision": "6a98f1bb27f29c9fd52c555ff243fee3fe896772",
+  "runtime_revision": "b012b0a1c135a9176cfc7c6aa8696fa0be29a481",
+  "head_sha": "6a98f1bb27f29c9fd52c555ff243fee3fe896772",
+  "executable_sha256": "3206b7213fb3e7ba48f60dad567ae26fed7d5a91b9f5358077b112f4e2ad166b",
+  "runner_outputs_sha256": "32fe7b13af69558660cd48f4f3b64455cb9b2cfda1f19ea4de67f034b8b45fc8",
+  "raw_output_count": 27,
+  "raw_outputs": [
+    {
+      "path": "files/commands/001-build-probe.stderr.log",
+      "size_bytes": 254,
+      "sha256": "f5757e584d4d7ef84ca10b96183e4038891f263eade3d2b9ef50fd640b78a767"
+    },
+    {
+      "path": "files/commands/001-build-probe.stdout.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/002-diagnostics-probe-help.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/002-diagnostics-probe-help.stdout.log",
+      "size_bytes": 471,
+      "sha256": "d67e73dc4e8f61754674f2f3c52bead58584c8ac4522b5895615d7e14a861020"
+    },
+    {
+      "path": "files/commands/003-diagnostics-hol.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/003-diagnostics-hol.stdout.log",
+      "size_bytes": 138,
+      "sha256": "07f9b4ab5b31502a578716658d03335df516cbf0eb8d64bda9305c28db8ef388"
+    },
+    {
+      "path": "files/commands/004-diagnostics-startup-100.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/004-diagnostics-startup-100.stdout.log",
+      "size_bytes": 150,
+      "sha256": "0b7079289e1a977101b1d5fda8faba87f2e78ce37cd2e2748b54123ba0e3fbf2"
+    },
+    {
+      "path": "files/commands/005-diagnostics-startup-1000.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/005-diagnostics-startup-1000.stdout.log",
+      "size_bytes": 151,
+      "sha256": "3f29d4bc72c79912d8d628bc0e52bc061b82f78ab51f836fb5dc9c2b69f13493"
+    },
+    {
+      "path": "files/commands/006-diagnostics-startup-10000.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/006-diagnostics-startup-10000.stdout.log",
+      "size_bytes": 152,
+      "sha256": "fa688fe65992a022beb2ac647f977b2399c50b7ef00b6e45d07de4d26e1e4c97"
+    },
+    {
+      "path": "files/commands/007-diagnostics-startup-100000.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/007-diagnostics-startup-100000.stdout.log",
+      "size_bytes": 153,
+      "sha256": "0de9f350d3463249bd30913793a26c1a6ff25ae77443f425ca0430db77e2b846"
+    },
+    {
+      "path": "files/commands/008-diagnostics-polling.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/008-diagnostics-polling.stdout.log",
+      "size_bytes": 146,
+      "sha256": "951e3b6b9e2deb8fa254c1719751bdda0149d4576daffaee9aff9320db780c6e"
+    },
+    {
+      "path": "files/diagnostics.csv",
+      "size_bytes": 348220,
+      "sha256": "b53d8079019a58800fd439f8b74697646b3db65006fe2c4e5c312e394c5c73a3"
+    },
+    {
+      "path": "files/diagnostics.json",
+      "size_bytes": 2264849,
+      "sha256": "0119aa88e39452b07e0faf670a576623b5183b7cc9a55e3cff383e4010b88b16"
+    },
+    {
+      "path": "files/diagnostics.md",
+      "size_bytes": 14601,
+      "sha256": "e999ba987bf2dbbd5200bad77576a218018434e8ecc29b55bd4b9b2cd95e7cd5"
+    },
+    {
+      "path": "files/hol.json",
+      "size_bytes": 318404,
+      "sha256": "72819e14cb348e40b30c7992332e4b1ff597a0f24555c43686f341dcf3ac3682"
+    },
+    {
+      "path": "files/polling.json",
+      "size_bytes": 1972626,
+      "sha256": "c9c0c82291e799c8700cbc41ecdfeb429d4b8f03a925a7f91cec37088b97a514"
+    },
+    {
+      "path": "files/startup-100.json",
+      "size_bytes": 6041,
+      "sha256": "eed48afd95d9bf6a4f704fb11fba7d7d022f1518a73b2db2da2609f4008c2740"
+    },
+    {
+      "path": "files/startup-1000.json",
+      "size_bytes": 6066,
+      "sha256": "bd93fefa34b564ecb4bdcd33892a11b5dd2d388e2eecc6a7d378c686d99ca6d6"
+    },
+    {
+      "path": "files/startup-10000.json",
+      "size_bytes": 6094,
+      "sha256": "07153b2b2e4b32f544aa03f0be2651c75ad90636c206d0572cec381228ed3426"
+    },
+    {
+      "path": "files/startup-100000.json",
+      "size_bytes": 6117,
+      "sha256": "5136ab54f8286759865c0a11c93ef1e92e58a4e4a67061057c1e0f837604e89f"
+    },
+    {
+      "path": "files/status.json",
+      "size_bytes": 182,
+      "sha256": "944030eddfeaffe83ed551d393fdc1db0694908b303a7b4ce56bb46764e14b60"
+    },
+    {
+      "path": "files/summary.json",
+      "size_bytes": 10429,
+      "sha256": "92ef04cd886909ac0ac2195fb0de18f153b02eb69c3292a687530252075e151e"
+    }
+  ],
+  "archive_format": "ZIP; concatenate archive parts in numeric order when split",
+  "archive_parts": [
+    {
+      "path": "archive/evidence.zip",
+      "size_bytes": 121845,
+      "sha256": "05d991c1961bb2c716596dd4370d4f2bfb300921e4ce2d317530d2241d5727f4"
+    }
+  ],
+  "archive_total_bytes": 121845
+}
