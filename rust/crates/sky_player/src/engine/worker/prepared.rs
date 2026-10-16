@@ -218,6 +218,29 @@ impl PreparedDispatchStream {
         self.entries.len()
     }
 
+    #[cfg(feature = "test-support")]
+    pub(crate) fn r3_storage_evidence_for_test(&self) -> (usize, usize, usize, usize) {
+        let mut physical_count = 0usize;
+        let mut metadata_count = 0usize;
+        for entry in self.entries.iter() {
+            match entry {
+                PreparedDispatchEntry::Physical(_) => physical_count += 1,
+                PreparedDispatchEntry::Metadata { .. } => metadata_count += 1,
+            }
+        }
+        (
+            self.entries.len(),
+            physical_count,
+            metadata_count,
+            self.entries.len() * std::mem::size_of::<PreparedDispatchEntry>(),
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn r3_cancellation_ledger_bytes_for_test(&self) -> usize {
+        self.cancelled_generation_ids.len() * std::mem::size_of::<GenerationId>()
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn physical_count(&self) -> usize {
         self.entries

@@ -341,6 +341,7 @@ pub struct PreparedStalePacket {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", derive(Clone))]
 pub struct RuntimeDispatchCoordinator {
     pub schedule: RuntimeSchedule,
     pub min_hold_us: u64,
@@ -371,6 +372,16 @@ pub struct RuntimeDispatchCoordinator {
 mod tests;
 
 impl RuntimeDispatchCoordinator {
+    /// Approximate the coordinator-owned heap payload for test-support
+    /// characterization. This excludes allocator metadata and the schedule's
+    /// own backing vectors; it is not a process RSS measurement.
+    #[cfg(feature = "test-support")]
+    pub fn heap_payload_bytes_for_test_support(&self) -> usize {
+        self.batch_scheduled_ticks.len() * std::mem::size_of::<TimelineTicks>()
+            + self.generation_states.len() * std::mem::size_of::<GenerationStatus>()
+            + self.up_intent_locations.len() * std::mem::size_of::<Option<(usize, usize)>>()
+    }
+
     #[cfg(test)]
     pub fn new<F>(
         schedule: RuntimeSchedule,

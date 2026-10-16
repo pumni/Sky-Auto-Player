@@ -52,7 +52,8 @@ pub mod dispatch_primitives {
     pub use super::target::SessionTarget;
     pub use super::test_support::{
         PhysicalFloorEvidence, PreparedBoundaryEvidence, ProductionDispatchTestHarness,
-        RtR3CleanupCapture, RtR3FinalizeEvidence, RtR3TimingConfigEvidence,
+        RtR3CleanupCapture, RtR3FinalizeEvidence, RtR3PreparedStartupBuilder,
+        RtR3PreparedStartupEvidence, RtR3TimingConfigEvidence,
     };
     pub use super::worker::WaitObservation;
     pub use super::worker::dispatch::DispatchStep;
@@ -76,6 +77,7 @@ pub mod dispatch_primitives {
         super::config::CALIBRATION_MAX_STARTUP_BUDGET_US;
     pub const PRODUCTION_STARTUP_READINESS_RESERVE_US: u64 =
         super::config::STARTUP_READINESS_RESERVE_US;
+    pub const PRODUCTION_MIN_PREROLL_US: u64 = super::config::MIN_PRODUCTION_PREROLL_US;
     pub const LEGACY_ADAPTIVE_SPIN_FLOOR_US: u64 = 700;
 
     /// Apply the frozen production calibration policy to benchmark wake stats.

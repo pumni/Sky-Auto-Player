@@ -6,24 +6,74 @@
 
 use serde_json::{Value, json};
 use sky_dispatch_core::compile::compile_runtime_intents;
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::model::{
+    ActionKind, CompactIntent, CompiledBatch, CompiledPacket, KeyActionInput, RuntimeSchedule,
+};
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks, qpc_frequency_checked};
-use sky_dispatch_win32::input::{PhysicalPacket, SendEvidence};
+use sky_dispatch_win32::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, PhysicalPacket, SendEvidence};
 use sky_player::engine::dispatch_primitives::{
-    DispatchStep, ProductionDispatchTestHarness, RtR3CleanupCapture,
+    DispatchStep, PRODUCTION_MIN_PREROLL_US, PRODUCTION_STARTUP_READINESS_RESERVE_US,
+    ProductionDispatchTestHarness, RtR3CleanupCapture,
 };
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const HOLD_US: u64 = 17_167;
 const FRAME_US: u64 = 16_667;
 const MARGIN_US: u64 = 500;
 const WARMUP_DEFAULT: usize = 1_000;
 const MEASURED_DEFAULT: usize = 10_000;
+const P4_STARTUP_SEED: u64 = 0x5234_5034;
+const P4_STARTUP_HOLD_US: u64 = HOLD_US;
+const P4_DIAGNOSTIC_GENERATION_COUNTS: [usize; 4] = [100, 1_000, 10_000, 100_000];
+
+struct DiagnosticAllocator;
+
+static TRACK_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
+static TRACKED_ALLOCATION_CALLS: AtomicU64 = AtomicU64::new(0);
+static TRACKED_ALLOCATION_BYTES: AtomicU64 = AtomicU64::new(0);
+
+unsafe impl GlobalAlloc for DiagnosticAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let pointer = unsafe { System.alloc(layout) };
+        if TRACK_ALLOCATIONS.load(Ordering::Relaxed) && !pointer.is_null() {
+            TRACKED_ALLOCATION_CALLS.fetch_add(1, Ordering::Relaxed);
+            TRACKED_ALLOCATION_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
+        }
+        pointer
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let pointer = unsafe { System.alloc_zeroed(layout) };
+        if TRACK_ALLOCATIONS.load(Ordering::Relaxed) && !pointer.is_null() {
+            TRACKED_ALLOCATION_CALLS.fetch_add(1, Ordering::Relaxed);
+            TRACKED_ALLOCATION_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
+        }
+        pointer
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let replacement = unsafe { System.realloc(pointer, layout, new_size) };
+        if TRACK_ALLOCATIONS.load(Ordering::Relaxed) && !replacement.is_null() {
+            TRACKED_ALLOCATION_CALLS.fetch_add(1, Ordering::Relaxed);
+            TRACKED_ALLOCATION_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
+        }
+        replacement
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(pointer, layout) };
+    }
+}
+
+#[global_allocator]
+static DIAGNOSTIC_ALLOCATOR: DiagnosticAllocator = DiagnosticAllocator;
 
 #[derive(Clone, Copy)]
 struct Workload {
@@ -86,9 +136,19 @@ struct Arguments {
     measured: usize,
     seed: u64,
     run_index: usize,
+    generation_count: usize,
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--help") {
+        println!(
+            "Usage: rt_r3_probe --mode <contracts|precision|hol|startup|polling> --output <path> [options]\n\
+             Diagnostics modes: hol; startup --generation-count <100|1000|10000|100000>; polling.\n\
+             Other options: --load-mode <quiet|cpu_contention>, --workload <all|id>, --warmup <n>, --measured <n>, --seed <u64>, --run-index <n>.\n\
+             All diagnostics use test-support prepared paths or offline models; they do not emit real keyboard input."
+        );
+        return;
+    }
     if let Err(error) = run() {
         eprintln!("rt_r3_probe: {error}");
         std::process::exit(1);
@@ -176,15 +236,57 @@ fn run() -> Result<(), String> {
                     all_eligible,
                 )
             }
+            "hol" => {
+                let hol = run_hol_diagnostics()?;
+                (
+                    "fixed-hol-scenarios".to_string(),
+                    0,
+                    0,
+                    json!({"hol_scenarios": hol}),
+                    json!({}),
+                    json!({}),
+                    false,
+                )
+            }
+            "startup" => {
+                let startup = run_startup_case(arguments.generation_count, arguments.seed)?;
+                (
+                    format!("startup-{}-generations", arguments.generation_count),
+                    0,
+                    0,
+                    json!({"startup_case": startup}),
+                    json!({}),
+                    json!({}),
+                    false,
+                )
+            }
+            "polling" => {
+                let polling = run_frame_polling_model()?;
+                (
+                    "fixed-frame-polling-matrix".to_string(),
+                    0,
+                    0,
+                    json!({"frame_polling": polling}),
+                    json!({}),
+                    json!({}),
+                    false,
+                )
+            }
             other => {
                 return Err(format!(
-                    "unsupported mode {other:?}; use contracts or precision"
+                    "unsupported mode {other:?}; use contracts, precision, hol, startup, or polling"
                 ));
             }
         };
     let finished_at_ms = unix_ms()?;
     let qpc_source = if arguments.mode == "precision" {
         "host QueryPerformanceCounter"
+    } else if arguments.mode == "hol" {
+        "synthetic QPC at 1 MHz through ProductionDispatchTestHarness prepared dispatch"
+    } else if arguments.mode == "startup" {
+        "synthetic QPC at 1 MHz through production coordinator/prepared-stream construction"
+    } else if arguments.mode == "polling" {
+        "integer rational timebase; no QPC or OS/game receiver sampling"
     } else {
         "synthetic QPC ticks per vector frequency; top-level host frequency is metadata only"
     };
@@ -217,8 +319,8 @@ fn run() -> Result<(), String> {
         "distributions": distributions,
         "statistics_eligible": eligible,
         "qpc_source": qpc_source,
-        "measurement_boundary": "Precision sample-start QPC is sampled immediately before prepared-dispatch entry; the authoritative sender pre-call is sampled before the mock emitter; mock completion is sampled inside the emitter and its separate delta includes test-seam/QPC overhead",
-        "receipt_boundary": "deterministic mock transport; no Raw Input or game/audio receipt claim"
+        "measurement_boundary": "Precision sample-start QPC is sampled immediately before prepared-dispatch entry; the authoritative sender pre-call is sampled before the mock emitter; mock completion is sampled inside the emitter and its separate delta includes test-seam/QPC overhead. P4 startup preparation timings and allocation counters are scoped to the named test-support operations; polling is an offline model.",
+        "receipt_boundary": "deterministic mock transport for prepared dispatch; modeled polling only for receiver sampling; no game/audio receipt claim"
     });
     let encoded =
         serde_json::to_vec_pretty(&report).map_err(|error| format!("serialize JSON: {error}"))?;
@@ -248,6 +350,7 @@ fn parse_args() -> Result<Arguments, String> {
     let mut measured = MEASURED_DEFAULT;
     let mut seed = 0x5233_u64;
     let mut run_index = 1usize;
+    let mut generation_count = 100usize;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let value = args
@@ -266,6 +369,7 @@ fn parse_args() -> Result<Arguments, String> {
                     .map_err(|_| "seed must be a u64".to_string())?
             }
             "--run-index" => run_index = parse_usize(&value, "run-index")?,
+            "--generation-count" => generation_count = parse_usize(&value, "generation-count")?,
             _ => return Err(format!("unknown argument {flag}")),
         }
     }
@@ -273,8 +377,13 @@ fn parse_args() -> Result<Arguments, String> {
         return Err("warmup, measured, or run-index is outside its supported range".into());
     }
     let mode = mode.ok_or_else(|| "--mode is required".to_string())?;
-    if mode != "contracts" && mode != "precision" {
-        return Err("--mode must be contracts or precision".into());
+    if mode != "contracts"
+        && mode != "precision"
+        && mode != "hol"
+        && mode != "startup"
+        && mode != "polling"
+    {
+        return Err("--mode must be contracts, precision, hol, startup, or polling".into());
     }
     if load_mode != "quiet" && load_mode != "cpu_contention" {
         return Err("--load-mode must be quiet or cpu_contention".into());
@@ -289,6 +398,7 @@ fn parse_args() -> Result<Arguments, String> {
         measured,
         seed,
         run_index,
+        generation_count,
     })
 }
 
@@ -912,6 +1022,788 @@ fn run_hol_vector() -> Result<Value, String> {
         "sender_attempts": [packet_attempts(&packets,0)?.0,packet_attempts(&packets,1)?.0,packet_attempts(&packets,2)?.0],
         "no_reorder_or_catch_up_claim": true
     }))
+}
+
+fn make_diagnostic_action(
+    source_action_index: u32,
+    kind: ActionKind,
+    scheduled_us: u64,
+    scan_codes: &[u16],
+    reason: &'static str,
+) -> KeyActionInput {
+    KeyActionInput {
+        source_action_index,
+        kind,
+        scheduled_us,
+        scan_codes: scan_codes.iter().copied().collect(),
+        reason: reason.into(),
+    }
+}
+
+fn qpc_absolute_us(clock: QpcClock, qpc: QpcTicks) -> Result<u64, String> {
+    clock
+        .duration_to_us(DurationTicks::from_raw(qpc.as_u64()))
+        .map_err(|error| format!("diagnostic QPC to microseconds conversion: {error:?}"))
+}
+
+fn run_hol_case(
+    case_id: &str,
+    scenario: &str,
+    actions: Vec<KeyActionInput>,
+    sender_delays_us: &[u64],
+    frame_us: u64,
+    frame_base_hold_us: u64,
+    timing_margin_us: u64,
+    seed: u64,
+) -> Result<Value, String> {
+    let frequency_hz = 1_000_000;
+    let clock = QpcClock::from_frequency_hz(NonZeroU64::new(frequency_hz).expect("frequency"));
+    let mut harness = ProductionDispatchTestHarness::new_r3_diagnostics_sequence_for_test(
+        &actions,
+        frequency_hz,
+        frame_us,
+        frame_base_hold_us,
+        timing_margin_us,
+    )?;
+    let captured = harness.configure_r3_mock_packet_sender_for_test(sender_delays_us);
+    harness.prepare_prepared_stream_for_test();
+    harness.set_playback_epoch_qpc_for_test(QpcTicks::ZERO);
+
+    let expected_authored_targets: Vec<u64> = actions
+        .iter()
+        .map(|action| action.scheduled_us)
+        .fold(Vec::new(), |mut values, scheduled_us| {
+            if values.last().copied() != Some(scheduled_us) {
+                values.push(scheduled_us);
+            }
+            values
+        });
+    let expected_generations = actions
+        .iter()
+        .filter(|action| action.kind == ActionKind::Down)
+        .map(|action| action.scan_codes.len() as u64)
+        .sum::<u64>();
+    let mut rows = Vec::new();
+    let mut previous_completion: Option<QpcTicks> = None;
+    let mut previous_packet_mask = 0u16;
+    let mut active_mask = 0u16;
+    let mut down_replay = false;
+    let mut transport_attempts = 0u64;
+
+    for packet_index in 0..expected_authored_targets.len() {
+        let floor = harness.prepared_physical_floor_for_r3_probe()?;
+        let authored_target_qpc = floor.authored_target_qpc;
+        let production_plan = harness.plan_current_dispatch();
+        let ready_floor_qpc = harness
+            .physical_wait_target_for_test(&production_plan)?
+            .ok_or_else(|| {
+                format!("{case_id} packet {packet_index} has no production wait target")
+            })?;
+        let serialized_qpc = previous_completion.unwrap_or(QpcTicks::ZERO);
+        let actual_pre_qpc = ready_floor_qpc.max(serialized_qpc);
+        harness.set_r3_mock_sender_start_qpc_for_test(actual_pre_qpc);
+        let step = harness
+            .dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(
+                actual_pre_qpc,
+            );
+        if !matches!(step, DispatchStep::Dispatched) {
+            return Err(format!(
+                "{case_id} packet {packet_index} was not dispatched at the production wait target: {step:?}"
+            ));
+        }
+        let capture = captured
+            .lock()
+            .map_err(|_| "HOL packet capture lock poisoned".to_string())?;
+        let (packet, evidence) = capture
+            .get(packet_index)
+            .copied()
+            .ok_or_else(|| format!("{case_id} packet {packet_index} had no sender evidence"))?;
+        drop(capture);
+
+        let actual_pre_qpc = evidence
+            .started_ticks
+            .ok_or_else(|| format!("{case_id} packet {packet_index} has no pre-call QPC"))?;
+        let actual_complete_qpc = evidence
+            .completed_ticks
+            .ok_or_else(|| format!("{case_id} packet {packet_index} has no completion QPC"))?;
+        let actual_pre_us = qpc_absolute_us(clock, actual_pre_qpc)?;
+        let actual_complete_us = qpc_absolute_us(clock, actual_complete_qpc)?;
+        let authored_target_us = qpc_absolute_us(clock, authored_target_qpc)?;
+        let ready_floor_us = qpc_absolute_us(clock, ready_floor_qpc)?;
+        let sender_duration_us = clock
+            .duration_to_us(
+                actual_complete_qpc
+                    .checked_duration_since(actual_pre_qpc)
+                    .map_err(|error| format!("{case_id} sender duration order: {error:?}"))?,
+            )
+            .map_err(|error| format!("{case_id} sender duration conversion: {error:?}"))?;
+        let production_wait_target_below_guard_floor =
+            ready_floor_qpc < floor.packet_not_before_qpc;
+        let physical_floor_violation = production_wait_target_below_guard_floor
+            || actual_pre_qpc < floor.packet_not_before_qpc;
+        let earlier_packet_completed_after_ready =
+            previous_completion.is_some_and(|completion| completion > ready_floor_qpc);
+        let physical_block_mask = floor.hold_floor_mask | floor.release_floor_mask;
+        let (blocking_packet, blocking_keymask, blocking_reason) =
+            if earlier_packet_completed_after_ready {
+                (
+                    packet_index.checked_sub(1),
+                    previous_packet_mask,
+                    "serial_sender_completion",
+                )
+            } else if physical_block_mask != 0 {
+                let capture = captured
+                    .lock()
+                    .map_err(|_| "HOL packet capture lock poisoned".to_string())?;
+                let blocker = (0..packet_index).rev().find(|&prior_index| {
+                    capture.get(prior_index).is_some_and(|(prior_packet, _)| {
+                        (prior_packet.up_mask | prior_packet.down_mask) & physical_block_mask != 0
+                    })
+                });
+                drop(capture);
+                (blocker, physical_block_mask, "production_physical_floor")
+            } else {
+                (None, 0, "authored_target")
+            };
+        let delay_due_to_earlier_packet_us = if blocking_packet.is_some() {
+            actual_pre_us.saturating_sub(authored_target_us)
+        } else {
+            0
+        };
+        let serial_delay_after_ready_us = actual_pre_us.saturating_sub(ready_floor_us);
+        let packet_mask = packet.up_mask | packet.down_mask;
+        if packet.down_mask & active_mask != 0 {
+            down_replay = true;
+        }
+        active_mask = (active_mask & !packet.up_mask) | packet.down_mask;
+        let attempts = u64::from(evidence.attempts);
+        transport_attempts = transport_attempts.saturating_add(attempts);
+        rows.push(json!({
+            "case_id": case_id,
+            "scenario": scenario,
+            "seed": seed,
+            "packet_index": packet_index,
+            "authored_target_us": authored_target_us,
+            "ready_floor_us": ready_floor_us,
+            "actual_pre_us": actual_pre_us,
+            "actual_complete_us": actual_complete_us,
+            "configured_sender_delay_us": sender_delays_us.get(packet_index).copied().unwrap_or(0),
+            "actual_sender_duration_us": sender_duration_us,
+            "blocking_packet": blocking_packet,
+            "blocking_keymask": format!("0x{blocking_keymask:04x}"),
+            "blocking_reason": blocking_reason,
+            "delay_due_to_earlier_packet_us": delay_due_to_earlier_packet_us,
+            "physical_floor_delay_us": ready_floor_us.saturating_sub(authored_target_us),
+            "serial_delay_after_ready_us": serial_delay_after_ready_us,
+            "physical_floor_hold_keymask": format!("0x{:04x}", floor.hold_floor_mask),
+            "physical_floor_release_keymask": format!("0x{:04x}", floor.release_floor_mask),
+            "production_wait_target_below_guard_floor": production_wait_target_below_guard_floor,
+            "physical_floor_violation": physical_floor_violation,
+            "packet_up_keymask": format!("0x{:04x}", packet.up_mask),
+            "packet_down_keymask": format!("0x{:04x}", packet.down_mask),
+            "packet_keymask": format!("0x{packet_mask:04x}"),
+            "packet_kind": if packet.up_mask != 0 && packet.down_mask != 0 { "mixed" } else if packet.up_mask != 0 { "up_only" } else { "down_only" },
+            "packet_event_count": packet.event_count(),
+            "transport_attempts": attempts,
+            "down_replay_after_packet": down_replay,
+            "accounting": generation_accounting_json(&harness),
+            "prepared_cursor_after": harness.prepared_cursor_for_test()
+        }));
+        previous_completion = Some(actual_complete_qpc);
+        previous_packet_mask = packet_mask;
+    }
+
+    let accounting = harness.generation_accounting_for_test();
+    let release_obligation_mask = harness.release_obligation_mask_for_test();
+    let authored_targets_unchanged = rows.len() == expected_authored_targets.len()
+        && rows
+            .iter()
+            .zip(expected_authored_targets.iter())
+            .all(|(row, expected)| row["authored_target_us"].as_u64() == Some(*expected));
+    let down_packets = rows
+        .iter()
+        .filter(|row| row["packet_down_keymask"] != "0x0000")
+        .count();
+    let floor_violations = rows
+        .iter()
+        .filter(|row| row["physical_floor_violation"] == true)
+        .count();
+    let single_attempt_per_packet = rows
+        .iter()
+        .all(|row| row["transport_attempts"].as_u64() == Some(1));
+    let disposition = if floor_violations != 0 || down_replay {
+        "BLOCKED-DEFECT"
+    } else {
+        "CHARACTERIZATION_ONLY"
+    };
+    let summary = json!({
+        "case_id": case_id,
+        "scenario": scenario,
+        "status": disposition,
+        "seed": seed,
+        "qpc_frequency_hz": frequency_hz,
+        "frame_us": frame_us,
+        "frame_base_hold_us": frame_base_hold_us,
+        "timing_margin_us": timing_margin_us,
+        "effective_hold_h_us": frame_base_hold_us.saturating_add(timing_margin_us),
+        "authored_offsets_unchanged": authored_targets_unchanged,
+        "physical_floor_violation_count": floor_violations,
+        "down_replay": down_replay,
+        "expected_down_generations": expected_generations,
+        "actual_down_packets": down_packets,
+        "generation_accounting": generation_accounting_json(&harness),
+        "activated_generations": accounting.activated,
+        "released_generations": accounting.released,
+        "active_generations": accounting.active,
+        "release_obligation_mask": release_obligation_mask,
+        "total_transport_attempts": transport_attempts,
+        "single_attempt_per_packet": single_attempt_per_packet,
+        "configured_sender_delays_us": sender_delays_us,
+        "rows": rows
+    });
+    if disposition == "BLOCKED-DEFECT" {
+        return Err(format!(
+            "BLOCKED-DEFECT: {case_id} observed {floor_violations} physical floor violation(s), down_replay={down_replay}"
+        ));
+    }
+    if !authored_targets_unchanged
+        || accounting.activated != expected_generations
+        || accounting.active != 0
+        || release_obligation_mask != 0
+        || !single_attempt_per_packet
+    {
+        return Err(format!(
+            "{case_id} failed a characterization accounting/oracle check: {summary}"
+        ));
+    }
+    Ok(summary)
+}
+
+fn run_hol_diagnostics() -> Result<Value, String> {
+    let a = 0x15;
+    let b = 0x16;
+    let c = 0x17;
+    let d = 0x18;
+    let base_cases = [
+        (
+            "hol-a-up-floor-delays-b",
+            "D100000 completes110000; A Up authored117167 and is physically floored to127167; different-key B Down authored118000 follows serially.",
+            vec![
+                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "p4-hol-a-down"),
+                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "p4-hol-a-up"),
+                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "p4-hol-b-down"),
+                make_diagnostic_action(3, ActionKind::Up, 135_167, &[b], "p4-hol-b-up"),
+            ],
+            vec![10_000, 400, 200, 100],
+            16_667,
+            16_667,
+            500,
+        ),
+        (
+            "hol-mixed-up-a-down-b-one-syscall",
+            "Up A and Down B share one authored timestamp; the maximum per-key physical floor delays the atomic mixed packet.",
+            vec![
+                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "p4-mixed-a-down"),
+                make_diagnostic_action(1, ActionKind::Up, 118_000, &[a], "p4-mixed-a-up"),
+                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "p4-mixed-b-down"),
+                make_diagnostic_action(3, ActionKind::Up, 135_167, &[b], "p4-mixed-b-up"),
+            ],
+            vec![10_000, 600, 100],
+            16_667,
+            16_667,
+            500,
+        ),
+        (
+            "hol-overdue-down-burst-after-blocked-up",
+            "Three unrelated Down packets become overdue behind one floor-blocked Up; output spacing is the configured sender duration, while authored targets remain fixed.",
+            vec![
+                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "p4-burst-a-down"),
+                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "p4-burst-a-up"),
+                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "p4-burst-b-down"),
+                make_diagnostic_action(3, ActionKind::Down, 119_000, &[c], "p4-burst-c-down"),
+                make_diagnostic_action(4, ActionKind::Down, 120_000, &[d], "p4-burst-d-down"),
+                make_diagnostic_action(5, ActionKind::Up, 135_167, &[b], "p4-burst-b-up"),
+                make_diagnostic_action(6, ActionKind::Up, 136_167, &[c], "p4-burst-c-up"),
+                make_diagnostic_action(7, ActionKind::Up, 137_167, &[d], "p4-burst-d-up"),
+            ],
+            vec![10_000, 3_000, 80, 90, 100, 100, 100, 100],
+            16_667,
+            16_667,
+            500,
+        ),
+        (
+            "hol-same-key-repeated-note-serialization",
+            "The next same-key Down follows A Up and is checked against the production physical same-key frame floor and musical hold floor.",
+            vec![
+                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "p4-repeat-a-down-1"),
+                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "p4-repeat-a-up-1"),
+                make_diagnostic_action(2, ActionKind::Down, 135_000, &[a], "p4-repeat-a-down-2"),
+                make_diagnostic_action(3, ActionKind::Up, 152_167, &[a], "p4-repeat-a-up-2"),
+            ],
+            vec![10_000, 50, 50, 50],
+            16_667,
+            16_667,
+            500,
+        ),
+    ];
+    let base_case_count = base_cases.len();
+    let mut cases = Vec::new();
+    let mut rows = Vec::new();
+    for (case_id, scenario, actions, delays, frame, base_hold, margin) in base_cases {
+        let result = run_hol_case(
+            case_id,
+            scenario,
+            actions,
+            &delays,
+            frame,
+            base_hold,
+            margin,
+            P4_STARTUP_SEED,
+        )?;
+        rows.extend(result["rows"].as_array().cloned().unwrap_or_default());
+        cases.push(result);
+    }
+
+    let mut chord_case_count = 0usize;
+    for fps in [30u64, 60, 120, 240] {
+        let frame_us = 1_000_000u64.div_ceil(fps);
+        for margin_us in [0u64, 500, 3_000] {
+            for (hold_label, numerator, denominator) in
+                [("1", 1u64, 1u64), ("1.25", 5, 4), ("1.5", 3, 2)]
+            {
+                let frame_base_hold_us = (frame_us * numerator).div_ceil(denominator);
+                let effective_hold_us = frame_base_hold_us
+                    .checked_add(margin_us)
+                    .ok_or_else(|| "15-key chord effective hold overflow".to_string())?;
+                let chord = PHYSICAL_INSTRUMENT_SCAN_CODES;
+                let case_id = format!("hol-chord15-fps{fps}-margin{margin_us}-hold{hold_label}");
+                let actions = vec![
+                    make_diagnostic_action(0, ActionKind::Down, 100_000, &chord, "p4-chord15-down"),
+                    make_diagnostic_action(
+                        1,
+                        ActionKind::Up,
+                        100_000 + effective_hold_us,
+                        &chord,
+                        "p4-chord15-up",
+                    ),
+                ];
+                let result = run_hol_case(
+                    &case_id,
+                    "Maximum 15-key chord with fixed frame rate, margin, and authored hold-frame multiplier.",
+                    actions,
+                    &[150, 150],
+                    frame_us,
+                    frame_base_hold_us,
+                    margin_us,
+                    P4_STARTUP_SEED,
+                )?;
+                rows.extend(result["rows"].as_array().cloned().unwrap_or_default());
+                cases.push(result);
+                chord_case_count += 1;
+            }
+        }
+    }
+    let packet_count = rows.len();
+    Ok(json!({
+        "status":"CHARACTERIZATION_ONLY",
+        "scenario_id":"r3-p4-hol-fixed-v1",
+        "dataset_seed":P4_STARTUP_SEED,
+        "dispatch_path":"ProductionDispatchTestHarness -> prepared stream -> dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe -> existing prepared dispatch/coordinator admission",
+        "scheduler_duplicated":false,
+        "sender":"deterministic mock with per-packet configured delays; no SendInput call",
+        "base_scenario_count":base_case_count,
+        "maximum_chord_case_count":chord_case_count,
+        "physical_packet_row_count":packet_count,
+        "physical_floor_violation_count":rows.iter().filter(|row| row["physical_floor_violation"] == true).count(),
+        "down_replay_case_count":cases.iter().filter(|case| case["down_replay"] == true).count(),
+        "known_disposition":"Head-of-line delay and overdue bursts are characterized limitations. No schedule reorder, catch-up, packet splitting, replay, or scheduler redesign is proposed.",
+        "cases":cases,
+        "rows":rows
+    }))
+}
+
+fn measure_allocations_and_time<T>(operation: impl FnOnce() -> T) -> (T, u64, u64, u64) {
+    TRACK_ALLOCATIONS.store(false, Ordering::SeqCst);
+    TRACKED_ALLOCATION_CALLS.store(0, Ordering::SeqCst);
+    TRACKED_ALLOCATION_BYTES.store(0, Ordering::SeqCst);
+    TRACK_ALLOCATIONS.store(true, Ordering::SeqCst);
+    let started = Instant::now();
+    let value = operation();
+    let elapsed_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    TRACK_ALLOCATIONS.store(false, Ordering::SeqCst);
+    let allocation_calls = TRACKED_ALLOCATION_CALLS.load(Ordering::SeqCst);
+    let allocated_bytes = TRACKED_ALLOCATION_BYTES.load(Ordering::SeqCst);
+    (value, elapsed_us, allocation_calls, allocated_bytes)
+}
+
+fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String> {
+    if !P4_DIAGNOSTIC_GENERATION_COUNTS.contains(&generation_count) {
+        return Err(format!(
+            "unsupported startup generation_count {generation_count}; fixed dataset is {P4_DIAGNOSTIC_GENERATION_COUNTS:?}"
+        ));
+    }
+    if generation_count.saturating_mul(2) > sky_dispatch_core::compile::MAX_ACTIONS {
+        return Err("startup dataset exceeds the existing authored action limit".into());
+    }
+    let mut actions = Vec::with_capacity(generation_count * 2);
+    let first_slot = (seed % PHYSICAL_INSTRUMENT_SCAN_CODES.len() as u64) as usize;
+    for generation in 0..generation_count {
+        let slot = (first_slot + generation * 7) % PHYSICAL_INSTRUMENT_SCAN_CODES.len();
+        let scan_code = PHYSICAL_INSTRUMENT_SCAN_CODES[slot];
+        let down_us = (generation as u64)
+            .checked_mul(P4_STARTUP_HOLD_US.saturating_mul(2))
+            .ok_or_else(|| "startup fixture timestamp overflow".to_string())?;
+        let up_us = down_us
+            .checked_add(P4_STARTUP_HOLD_US)
+            .ok_or_else(|| "startup fixture Up timestamp overflow".to_string())?;
+        let down_index = u32::try_from(generation.saturating_mul(2))
+            .map_err(|_| "startup source action index overflow".to_string())?;
+        let up_index = down_index
+            .checked_add(1)
+            .ok_or_else(|| "startup Up source action index overflow".to_string())?;
+        actions.push(make_diagnostic_action(
+            down_index,
+            ActionKind::Down,
+            down_us,
+            &[scan_code],
+            "r3-p4-startup-down",
+        ));
+        actions.push(make_diagnostic_action(
+            up_index,
+            ActionKind::Up,
+            up_us,
+            &[scan_code],
+            "r3-p4-startup-up",
+        ));
+    }
+
+    let (compiled_result, compile_wall_us, compile_allocations, compile_allocated_bytes) =
+        measure_allocations_and_time(|| {
+            compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
+        });
+    let schedule: RuntimeSchedule = compiled_result
+        .map_err(|error| format!("fixed startup schedule compilation failed: {error:?}"))?;
+    let compiled_counts = json!({
+        "action_count":actions.len(),
+        "generation_count":schedule.generation_count,
+        "packet_count":schedule.packets.len(),
+        "batch_count":schedule.batches.len(),
+        "intent_count":schedule.intents.len(),
+        "packet_type_size_bytes":std::mem::size_of::<CompiledPacket>(),
+        "batch_type_size_bytes":std::mem::size_of::<CompiledBatch>(),
+        "intent_type_size_bytes":std::mem::size_of::<CompactIntent>(),
+        "runtime_schedule_type_size_bytes":std::mem::size_of::<RuntimeSchedule>(),
+        "schedule_vector_payload_bytes":schedule.packets.len() * std::mem::size_of::<CompiledPacket>()
+            + schedule.batches.len() * std::mem::size_of::<CompiledBatch>()
+            + schedule.intents.len() * std::mem::size_of::<CompactIntent>(),
+        "reason_text_bytes":schedule.reason_table.iter().map(String::len).sum::<usize>(),
+        "input_fixture_allocated_before_measurement":true
+    });
+
+    let (coordinator_schedule, clone_wall_us, clone_allocations, clone_allocated_bytes) =
+        measure_allocations_and_time(|| schedule.clone());
+    let (builder_result, coordinator_wall_us, coordinator_allocations, coordinator_allocated_bytes) =
+        measure_allocations_and_time(|| {
+            ProductionDispatchTestHarness::new_r3_prepared_startup_builder_for_test(
+                coordinator_schedule,
+                1_000_000,
+                P4_STARTUP_HOLD_US,
+            )
+        });
+    let builder = builder_result?;
+    let (
+        coordinator_clone,
+        coordinator_clone_wall_us,
+        coordinator_clone_allocations,
+        coordinator_clone_allocated_bytes,
+    ) = measure_allocations_and_time(|| builder.clone_coordinator_for_test());
+    drop(coordinator_clone);
+    let (prepared_result, prepared_build_wall_us, prepared_allocations, prepared_allocated_bytes) =
+        measure_allocations_and_time(|| builder.prepare());
+    let prepared = prepared_result?;
+    let available_startup_budget_us = PRODUCTION_MIN_PREROLL_US
+        .checked_sub(PRODUCTION_STARTUP_READINESS_RESERVE_US)
+        .ok_or_else(|| {
+            "fixed startup readiness reserve exceeds the minimum pre-roll".to_string()
+        })?;
+    let measured_worker_path_us = coordinator_wall_us.saturating_add(prepared_build_wall_us);
+    let prepared_path_admission_outcome = if measured_worker_path_us <= available_startup_budget_us
+    {
+        "WITHIN_SCOPED_MIN_PREROLL_BUDGET"
+    } else {
+        "EXCEEDS_SCOPED_MIN_PREROLL_BUDGET"
+    };
+
+    Ok(json!({
+        "status":"CHARACTERIZATION_ONLY",
+        "dataset_id":"r3-p4-startup-synthetic-v1",
+        "seed":seed,
+        "generation_count":generation_count,
+        "action_count":actions.len(),
+        "authored_schedule":"one Down/Up generation per row; H=17167us; start=i*34334us; Up=start+17167us; one of 15 canonical scan codes selected by (seed%15 + i*7)%15",
+        "below_existing_action_limit":actions.len() < sky_dispatch_core::compile::MAX_ACTIONS,
+        "action_limit":sky_dispatch_core::compile::MAX_ACTIONS,
+        "schedule_compile_and_materialize":{
+            "wall_us":compile_wall_us,
+            "allocation_calls":compile_allocations,
+            "requested_allocation_bytes":compile_allocated_bytes,
+            "storage":compiled_counts
+        },
+        "coordinator_input_schedule_clone":{
+            "wall_us":clone_wall_us,
+            "allocation_calls":clone_allocations,
+            "requested_allocation_bytes":clone_allocated_bytes,
+            "meaning":"RuntimeSchedule clone used to retain the compiled fixture while transferring its owned copy into coordinator preparation; RuntimeDispatchCoordinator itself does not implement Clone"
+        },
+        "coordinator_initialization":{
+            "wall_us":coordinator_wall_us,
+            "allocation_calls":coordinator_allocations,
+            "requested_allocation_bytes":coordinator_allocated_bytes
+        },
+        "coordinator_clone_for_characterization":{
+            "wall_us":coordinator_clone_wall_us,
+            "allocation_calls":coordinator_clone_allocations,
+            "requested_allocation_bytes":coordinator_clone_allocated_bytes,
+            "production_boot_uses_this_clone":false,
+            "meaning":"feature=test-support deep clone of the coordinator and owned RuntimeSchedule; measured separately from actual boot construction and not included in startup budget admission comparison"
+        },
+        "prepared_stream_build_and_coordinator_reset":{
+            "wall_us":prepared_build_wall_us,
+            "allocation_calls":prepared_allocations,
+            "requested_allocation_bytes":prepared_allocated_bytes,
+            "includes":"production PreparedDispatchStream::build simulation, frozen entry materialization, and the production coordinator reconstruction returned by that builder"
+        },
+        "prepared_storage":{
+            "prepared_entry_count":prepared.prepared_entry_count,
+            "physical_entry_count":prepared.physical_entry_count,
+            "metadata_entry_count":prepared.metadata_entry_count,
+            "prepared_entry_type_size_bytes":prepared.prepared_entry_type_size_bytes,
+            "prepared_entry_array_bytes":prepared.prepared_entry_array_bytes,
+            "cancellation_ledger_bytes":prepared.cancellation_ledger_bytes,
+            "rebuilt_coordinator_heap_payload_bytes":prepared.rebuilt_coordinator_heap_payload_bytes
+        },
+        "startup_budget":{
+            "minimum_production_preroll_us":PRODUCTION_MIN_PREROLL_US,
+            "readiness_reserve_us":PRODUCTION_STARTUP_READINESS_RESERVE_US,
+            "captured_available_startup_budget_us":available_startup_budget_us,
+            "measured_worker_path_us":measured_worker_path_us,
+            "prepared_path_admission_outcome":prepared_path_admission_outcome,
+            "comparison_scope":"coordinator initialization plus prepared-stream build/reset only; input generation and schedule compilation/materialization are separate because the worker receives a compiled RuntimeSchedule; excludes thread launch, target preflight, telemetry and other boot work"
+        },
+        "memory_boundary":{
+            "allocation_counter":"probe-process global allocator counts successful alloc, alloc_zeroed, and realloc requested bytes only during the named operation; deallocation is not subtracted; it is not RSS",
+            "structural_storage":"reported vector/entry payload estimates and type sizes exclude allocator metadata, nested control blocks and runtime/library memory",
+            "process_rss":"captured separately by the PowerShell runner as process working-set samples"
+        }
+    }))
+}
+
+fn simulate_polling_case(
+    fps: u64,
+    margin_us: u64,
+    hold_us_override: Option<u64>,
+    phase_units: u64,
+    phase_label: &str,
+    stall_frames: u64,
+    down_delivery_skew_us: u64,
+    up_delivery_skew_us: u64,
+    supplemental: bool,
+) -> Value {
+    // One frame is exactly 1,000,000 units where one unit is 1/fps microsecond.
+    let frame_units = 1_000_000u64;
+    let hold_units = hold_us_override
+        .map(|hold_us| hold_us.saturating_mul(fps))
+        .unwrap_or_else(|| frame_units.saturating_add(margin_us.saturating_mul(fps)));
+    let down_delivery_units = down_delivery_skew_us.saturating_mul(fps);
+    let up_delivery_units = hold_units.saturating_add(up_delivery_skew_us.saturating_mul(fps));
+    let stall_until_units = stall_frames.saturating_mul(frame_units);
+    let last_sample_units = up_delivery_units
+        .max(stall_until_units)
+        .saturating_add(frame_units.saturating_mul(2));
+    let mut sample_units = phase_units;
+    let mut poll_count = 0u32;
+    let mut skipped_poll_count = 0u32;
+    let mut down_state_observed = false;
+    let mut separating_up_state_observed = false;
+    while sample_units <= last_sample_units {
+        if sample_units < stall_until_units {
+            skipped_poll_count += 1;
+        } else {
+            poll_count += 1;
+            // Fixed tie ordering: apply all deliveries at this timestamp before
+            // sampling the receiver's current key state. Thus Down at a poll
+            // boundary is visible; Up at the same boundary is already released.
+            if sample_units >= down_delivery_units && sample_units < up_delivery_units {
+                down_state_observed = true;
+            } else if sample_units >= up_delivery_units {
+                separating_up_state_observed = true;
+            }
+        }
+        sample_units = sample_units.saturating_add(frame_units);
+    }
+    let hold_duration_units = up_delivery_units.saturating_sub(down_delivery_units);
+    let hold_duration_whole_us = hold_duration_units / fps;
+    let hold_duration_remainder = hold_duration_units % fps;
+    json!({
+        "case_id":format!("poll-fps{fps}-margin{margin_us}-phase{phase_label}-stall{stall_frames}-skew{down_delivery_skew_us}x{up_delivery_skew_us}"),
+        "scenario":"frame_polling",
+        "evidence_label":if supplemental { "MODELED_SHORT_HOLD_REFERENCE" } else { "MODELED_POLLING_ONLY" },
+        "fps":fps,
+        "frame_period_us_numerator":1_000_000,
+        "frame_period_us_denominator":fps,
+        "margin_us":margin_us,
+        "hold_policy":"H=T+margin",
+        "hold_us_override":hold_us_override,
+        "hold_duration_us_floor":hold_duration_whole_us,
+        "hold_duration_fraction_numerator":hold_duration_remainder,
+        "hold_duration_fraction_denominator":fps,
+        "poll_phase":phase_label,
+        "poll_phase_timebase_units":phase_units,
+        "receiver_stall_frames":stall_frames,
+        "receiver_stall_us_floor":stall_until_units / fps,
+        "down_delivery_skew_us":down_delivery_skew_us,
+        "up_delivery_skew_us":up_delivery_skew_us,
+        "poll_count":poll_count,
+        "skipped_poll_count_during_stall":skipped_poll_count,
+        "down_state_observed":down_state_observed,
+        "separating_up_state_observed":separating_up_state_observed,
+        "both_states_observed":down_state_observed && separating_up_state_observed,
+        "ordering":"event deliveries at equal timestamps are applied before receiver sampling; stall interval is [0, stall_duration), so a poll exactly at stall end is eligible",
+        "sky_consumption":"UNKNOWN"
+    })
+}
+
+fn run_frame_polling_model() -> Result<Value, String> {
+    let phases = [
+        (0, "0"),
+        (250_000, "T/4"),
+        (500_000, "T/2"),
+        (750_000, "3T/4"),
+        (1_000_000, "T_exact_boundary"),
+    ];
+    let mut rows = Vec::new();
+    for fps in [30u64, 60, 120, 240] {
+        for margin_us in [0u64, 500, 3_000] {
+            for (phase_units, phase_label) in phases {
+                for stall_frames in [0u64, 1, 2] {
+                    for delivery_skew_us in [0u64, 500, 2_000] {
+                        for up_delivery_skew_us in [0u64, 500, 2_000] {
+                            rows.push(simulate_polling_case(
+                                fps,
+                                margin_us,
+                                None,
+                                phase_units,
+                                phase_label,
+                                stall_frames,
+                                delivery_skew_us,
+                                up_delivery_skew_us,
+                                false,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (phase_units, phase_label) in [(0, "0"), (750_000, "3T/4"), (1_000_000, "T_exact_boundary")]
+    {
+        for stall_frames in [0, 1] {
+            rows.push(simulate_polling_case(
+                30,
+                0,
+                Some(HOLD_US),
+                phase_units,
+                phase_label,
+                stall_frames,
+                0,
+                0,
+                true,
+            ));
+        }
+    }
+    let expected_matrix_cases = 4 * 3 * 5 * 3 * 3 * 3;
+    let short_hold_misses = rows
+        .iter()
+        .filter(|row| {
+            row["evidence_label"] == "MODELED_SHORT_HOLD_REFERENCE"
+                && row["down_state_observed"] == false
+        })
+        .count();
+    if rows.len() != expected_matrix_cases + 6 || short_hold_misses == 0 {
+        return Err(format!(
+            "polling matrix has {} rows and {short_hold_misses} missed short-hold Downs; expected {} rows and visible misses",
+            rows.len(),
+            expected_matrix_cases + 6
+        ));
+    }
+    Ok(json!({
+        "status":"CHARACTERIZATION_ONLY",
+        "scenario_id":"r3-p4-frame-polling-fixed-v1",
+        "evidence_labels":{
+            "modeled_polling":"This deterministic offline state-sampling simulation.",
+            "actual_receive_only":"Separate published P1/P2 sink event evidence; not rerun in P4.",
+            "sky_consumption":"UNKNOWN; not observed or inferred from DWM/monitor refresh rate."
+        },
+        "polling_model":"periodic state sampler at declared FPS, fixed phase and receiver stall; event delivery skew is independently applied to Down and Up",
+        "matrix_case_count":expected_matrix_cases,
+        "supplemental_17_167us_reference_case_count":6,
+        "short_hold_missed_down_count":short_hold_misses,
+        "assertion_boundary":"Missed Down/Up states are visible outcomes, not failures. No oracle assumes a 17167us hold is observed under 30FPS polling or a 30ms receiver stall.",
+        "no_game_hook_or_input_injection":true,
+        "rows":rows
+    }))
+}
+
+#[cfg(test)]
+mod p4_diagnostics_tests {
+    use super::*;
+
+    #[test]
+    fn r3_p4_hol_rows_use_prepared_paths_and_attribute_sender_time() {
+        let report = run_hol_diagnostics().expect("fixed HOL diagnostics");
+        let cases = report["cases"].as_array().expect("case array");
+        let first = cases
+            .iter()
+            .find(|case| case["case_id"] == "hol-a-up-floor-delays-b")
+            .expect("first HOL case");
+        assert_eq!(first["rows"][1]["ready_floor_us"], 127_167);
+        assert_eq!(first["rows"][1]["actual_complete_us"], 127_567);
+        assert_eq!(first["rows"][2]["actual_pre_us"], 127_567);
+        assert_eq!(first["rows"][2]["blocking_packet"], 1);
+        assert_eq!(first["rows"][2]["blocking_keymask"], "0x0001");
+        assert_eq!(first["rows"][2]["delay_due_to_earlier_packet_us"], 9_567);
+
+        let mixed = cases
+            .iter()
+            .find(|case| case["case_id"] == "hol-mixed-up-a-down-b-one-syscall")
+            .expect("mixed HOL case");
+        assert_eq!(mixed["rows"][1]["packet_kind"], "mixed");
+        assert_eq!(mixed["rows"][1]["transport_attempts"], 1);
+        assert_eq!(mixed["rows"][1]["packet_event_count"], 2);
+        assert_eq!(report["physical_floor_violation_count"], 0);
+        assert_eq!(report["down_replay_case_count"], 0);
+    }
+
+    #[test]
+    fn r3_p4_short_hold_and_exact_boundary_can_miss_down_state() {
+        let short = simulate_polling_case(30, 0, Some(HOLD_US), 750_000, "3T/4", 0, 0, 0, true);
+        assert_eq!(short["down_state_observed"], false);
+        assert_eq!(short["separating_up_state_observed"], true);
+
+        let boundary =
+            simulate_polling_case(30, 0, None, 1_000_000, "T_exact_boundary", 0, 0, 0, false);
+        assert_eq!(boundary["down_state_observed"], false);
+        assert_eq!(boundary["separating_up_state_observed"], true);
+    }
+
+    #[test]
+    fn r3_p4_polling_matrix_keeps_missed_states_as_results() {
+        let report = run_frame_polling_model().expect("fixed polling dataset");
+        assert_eq!(report["matrix_case_count"], 1_620);
+        assert_eq!(report["rows"].as_array().unwrap().len(), 1_626);
+        assert_eq!(report["short_hold_missed_down_count"], 5);
+        assert_eq!(report["rows"][0]["evidence_label"], "MODELED_POLLING_ONLY");
+    }
 }
 
 fn run_focus_vectors() -> Result<Value, String> {

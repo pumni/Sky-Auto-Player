@@ -29,7 +29,7 @@ use sky_dispatch_core::clock::{PauseReason, PlaybackClockState};
 use sky_dispatch_core::coordinator::{
     CoordinatorError, GenerationAccounting, RuntimeDispatchCoordinator, physical_packet_kind,
 };
-use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind};
+use sky_dispatch_core::model::{ActionKind, KeyActionInput, PhysicalPacketKind, RuntimeSchedule};
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::event::OwnedEvent;
@@ -84,6 +84,54 @@ pub struct RtR3TimingConfigEvidence {
     pub native_admission_passed: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RtR3PreparedStartupEvidence {
+    pub prepared_entry_count: usize,
+    pub physical_entry_count: usize,
+    pub metadata_entry_count: usize,
+    pub prepared_entry_type_size_bytes: usize,
+    pub prepared_entry_array_bytes: usize,
+    pub cancellation_ledger_bytes: usize,
+    pub rebuilt_coordinator_heap_payload_bytes: usize,
+}
+
+pub struct RtR3PreparedStartupBuilder {
+    coordinator: RuntimeDispatchCoordinator,
+    qpc_clock: QpcClock,
+}
+
+impl RtR3PreparedStartupBuilder {
+    pub fn clone_coordinator_for_test(&self) -> Self {
+        Self {
+            coordinator: self.coordinator.clone(),
+            qpc_clock: self.qpc_clock,
+        }
+    }
+
+    pub fn prepare(self) -> Result<RtR3PreparedStartupEvidence, String> {
+        let probe = crate::engine::worker::DispatchPreparationProbe::default();
+        let profile = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
+        let (stream, coordinator) =
+            PreparedDispatchStream::build(self.coordinator, self.qpc_clock, &probe, &profile)?;
+        let (
+            prepared_entry_count,
+            physical_entry_count,
+            metadata_entry_count,
+            prepared_entry_array_bytes,
+        ) = stream.r3_storage_evidence_for_test();
+        Ok(RtR3PreparedStartupEvidence {
+            prepared_entry_count,
+            physical_entry_count,
+            metadata_entry_count,
+            prepared_entry_type_size_bytes: std::mem::size_of::<PreparedDispatchEntry>(),
+            prepared_entry_array_bytes,
+            cancellation_ledger_bytes: stream.r3_cancellation_ledger_bytes_for_test(),
+            rebuilt_coordinator_heap_payload_bytes: coordinator
+                .heap_payload_bytes_for_test_support(),
+        })
+    }
+}
+
 #[allow(dead_code)]
 pub struct ProductionDispatchTestHarness {
     pub(crate) config: WorkerConfig,
@@ -136,6 +184,57 @@ pub type RtR3CleanupCapture = Arc<Mutex<Vec<(Vec<u16>, bool)>>>;
 
 #[allow(dead_code)]
 impl ProductionDispatchTestHarness {
+    pub fn new_r3_diagnostics_sequence_for_test(
+        actions: &[KeyActionInput],
+        qpc_frequency_hz: u64,
+        frame_us: u64,
+        frame_base_hold_us: u64,
+        timing_margin_us: u64,
+    ) -> Result<Self, String> {
+        let frequency = std::num::NonZeroU64::new(qpc_frequency_hz)
+            .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
+        let qpc_clock = QpcClock::from_frequency_hz(frequency);
+        let effective_hold_us = frame_base_hold_us
+            .checked_add(timing_margin_us)
+            .ok_or_else(|| "diagnostic effective hold overflows".to_string())?;
+        let mut harness = Self::create_harness_with_clock(actions, effective_hold_us, qpc_clock);
+        harness.configure_r3_diagnostic_timing_for_test(
+            actions,
+            frame_us,
+            frame_base_hold_us,
+            timing_margin_us,
+        )?;
+        Ok(harness)
+    }
+
+    pub fn new_r3_prepared_startup_builder_for_test(
+        schedule: RuntimeSchedule,
+        qpc_frequency_hz: u64,
+        min_hold_us: u64,
+    ) -> Result<RtR3PreparedStartupBuilder, String> {
+        let frequency = std::num::NonZeroU64::new(qpc_frequency_hz)
+            .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
+        let qpc_clock = QpcClock::from_frequency_hz(frequency);
+        let min_hold_ticks = qpc_clock
+            .duration_from_us(min_hold_us)
+            .map_err(|error| format!("diagnostic startup hold conversion: {error:?}"))?;
+        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+            schedule,
+            min_hold_us,
+            min_hold_ticks,
+            |microseconds| {
+                qpc_clock
+                    .timeline_from_us(microseconds)
+                    .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
+            },
+        )
+        .map_err(|error| format!("diagnostic startup coordinator construction: {error}"))?;
+        Ok(RtR3PreparedStartupBuilder {
+            coordinator,
+            qpc_clock,
+        })
+    }
+
     pub fn new_down_only() -> Self {
         Self::create_harness(&[
             KeyActionInput {
@@ -330,21 +429,42 @@ impl ProductionDispatchTestHarness {
         &mut self,
         actions: &[KeyActionInput],
     ) -> Result<(), String> {
-        self.config.timing.min_hold_us = R3_EFFECTIVE_HOLD_US;
-        self.config.timing.min_release_gap_us = R3_RELEASE_GAP_US;
-        self.config.timing.frame_us = R3_FRAME_US;
-        self.config.timing.frame_base_hold_us = R3_FRAME_US;
-        self.config.timing.timing_margin_us = R3_MARGIN_US;
+        self.configure_r3_diagnostic_timing_for_test(
+            actions,
+            R3_FRAME_US,
+            R3_FRAME_US,
+            R3_MARGIN_US,
+        )
+    }
+
+    pub fn configure_r3_diagnostic_timing_for_test(
+        &mut self,
+        actions: &[KeyActionInput],
+        frame_us: u64,
+        frame_base_hold_us: u64,
+        timing_margin_us: u64,
+    ) -> Result<(), String> {
+        let effective_hold_us = frame_base_hold_us
+            .checked_add(timing_margin_us)
+            .ok_or_else(|| "R3 effective hold overflows".to_string())?;
+        let min_release_gap_us = frame_us
+            .checked_add(timing_margin_us)
+            .ok_or_else(|| "R3 minimum release gap overflows".to_string())?;
+        self.config.timing.min_hold_us = effective_hold_us;
+        self.config.timing.min_release_gap_us = min_release_gap_us;
+        self.config.timing.frame_us = frame_us;
+        self.config.timing.frame_base_hold_us = frame_base_hold_us;
+        self.config.timing.timing_margin_us = timing_margin_us;
 
         let clock = self.resources.clock;
         let hold_ticks = clock
-            .duration_from_us(R3_EFFECTIVE_HOLD_US)
+            .duration_from_us(effective_hold_us)
             .map_err(|error| format!("R3 effective hold conversion: {error:?}"))?;
         let frame_ticks = clock
-            .duration_from_us(R3_FRAME_US)
+            .duration_from_us(frame_us)
             .map_err(|error| format!("R3 frame conversion: {error:?}"))?;
         let margin_ticks = clock
-            .duration_from_us(R3_MARGIN_US)
+            .duration_from_us(timing_margin_us)
             .map_err(|error| format!("R3 margin conversion: {error:?}"))?;
         self.timing.timing_margin_ticks = margin_ticks;
         self.runtime
