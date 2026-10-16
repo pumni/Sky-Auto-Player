@@ -19,6 +19,7 @@ $controlWorktree = $null
 $controlWorktreeCreated = $false
 $script:blockedPerf = $false
 $script:blockedDefect = $false
+$script:assemblyAuditFailed = $false
 $p5GateResults = [System.Collections.Generic.List[object]]::new()
 $assemblyAuditResults = [System.Collections.Generic.List[object]]::new()
 
@@ -35,7 +36,8 @@ function Invoke-CapturedCommand {
         [Parameter(Mandatory)][string]$Label,
         [string]$WorkingDirectory = $repoRoot,
         [hashtable]$Environment = @{},
-        [switch]$CaptureWorkingSet
+        [switch]$CaptureWorkingSet,
+        [switch]$ContinueOnFailure
     )
 
     $index = $commandResults.Count + 1
@@ -119,7 +121,9 @@ function Invoke-CapturedCommand {
             $script:blockedDefect = $true
             throw "BLOCKED-DEFECT: child command '$Label' reported a physical invariant defect; see $($result.stderr_path)"
         }
-        throw "Child command '$Label' exited $($process.ExitCode); see $($result.stderr_path)"
+        if (-not $ContinueOnFailure) {
+            throw "Child command '$Label' exited $($process.ExitCode); see $($result.stderr_path)"
+        }
     }
     return $result
 }
@@ -1130,7 +1134,7 @@ try {
             receipt_boundary = 'Sink event observation does not prove Sky/game/audio receipt.'
         }
         Write-JsonFile (Join-Path $runDirectory 'summary.json') $summary
-        Write-JsonFile (Join-Path $runDirectory 'status.json') ([ordered]@{ status = 'COMPLETED_CHARACTERIZATION'; run_id = $runId; finished_utc = [DateTimeOffset]::UtcNow.ToString('O') })
+        Write-JsonFile (Join-Path $runDirectory 'status.json') ([ordered]@{ status = 'COMPLETED_CHARACTERIZATION'; qualification_status = if ($script:assemblyAuditFailed) { 'COORDINATOR_REVIEW_REQUIRED' } else { 'QUALIFIED' }; qualification_passed = -not $script:assemblyAuditFailed; run_id = $runId; finished_utc = [DateTimeOffset]::UtcNow.ToString('O') })
         $declaredFiles = [System.Collections.Generic.List[object]]::new()
         foreach ($file in Get-ChildItem -LiteralPath $runDirectory -File -Recurse | Sort-Object FullName) {
             if ($file.Name -eq 'runner-outputs.json') { continue }
@@ -1140,6 +1144,8 @@ try {
         $outputsManifest = [ordered]@{
             schema_version = 1
             status = 'COMPLETED_CHARACTERIZATION'
+            qualification_status = if ($script:assemblyAuditFailed) { 'COORDINATOR_REVIEW_REQUIRED' } else { 'QUALIFIED' }
+            qualification_passed = -not $script:assemblyAuditFailed
             stage = $Stage
             run_id = $runId
             source_revision = $headSha
@@ -1222,9 +1228,10 @@ try {
             Copy-Item -LiteralPath $win32AssemblyPath -Destination $win32AssemblyCopy
             $skyAssemblyHash = (Get-FileHash -LiteralPath $skyAssemblyPath -Algorithm SHA256).Hash.ToLowerInvariant()
             $win32AssemblyHash = (Get-FileHash -LiteralPath $win32AssemblyPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            $dispatchAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_dispatch_assembly.ps1', '-AssemblyPath', $skyAssemblyPath) -Label 'audit-dist-dispatch-assembly'
-            $preparedAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_prepared_normal_assembly.ps1', '-AssemblyPath', $skyAssemblyPath) -Label 'audit-dist-prepared-normal-assembly'
-            $modifierAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_modifier_guard_assembly.ps1', '-SkyPlayerAssemblyPath', $skyAssemblyPath, '-Win32AssemblyPath', $win32AssemblyPath) -Label 'audit-dist-modifier-lease-assembly'
+            $dispatchAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_dispatch_assembly.ps1', '-AssemblyPath', $skyAssemblyPath) -Label 'audit-dist-dispatch-assembly' -ContinueOnFailure
+            $preparedAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_prepared_normal_assembly.ps1', '-AssemblyPath', $skyAssemblyPath) -Label 'audit-dist-prepared-normal-assembly' -ContinueOnFailure
+            $modifierAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_modifier_guard_assembly.ps1', '-SkyPlayerAssemblyPath', $skyAssemblyPath, '-Win32AssemblyPath', $win32AssemblyPath) -Label 'audit-dist-modifier-lease-assembly' -ContinueOnFailure
+            $script:assemblyAuditFailed = $dispatchAudit.exit_code -ne 0 -or $preparedAudit.exit_code -ne 0 -or $modifierAudit.exit_code -ne 0
             $dispatchOutput = Get-Content -LiteralPath (Join-Path $runDirectory $dispatchAudit.stdout_path) -Raw
             $assemblyAuditResults.Add([ordered]@{
                 sky_player_assembly_path = $skyAssemblyPath
@@ -1233,10 +1240,18 @@ try {
                 win32_assembly_sha256 = $win32AssemblyHash
                 archived_sky_player_assembly_path = 'assembly/sky_player.s'
                 archived_win32_assembly_path = 'assembly/sky_dispatch_win32.s'
+                dispatch_audit_exit_code = $dispatchAudit.exit_code
+                dispatch_audit_status = if ($dispatchAudit.exit_code -eq 0) { 'PASS' } else { 'REVIEW_REQUIRED' }
+                prepared_normal_audit_exit_code = $preparedAudit.exit_code
+                prepared_normal_audit_status = if ($preparedAudit.exit_code -eq 0) { 'PASS' } else { 'FAIL' }
+                modifier_lease_audit_exit_code = $modifierAudit.exit_code
+                modifier_lease_audit_status = if ($modifierAudit.exit_code -eq 0) { 'PASS' } else { 'FAIL' }
+                production_changes_permitted_by_phase = $false
+                review_note = if ($dispatchAudit.exit_code -ne 0) { 'Broad dispatch audit reported a retained copy in dispatch_due_from_plan; raw optimized assembly and audit output are preserved for coordinator review. No production behavior was changed.' } else { $null }
                 dispatch_audit = $dispatchAudit.label
                 prepared_normal_audit = $preparedAudit.label
                 modifier_lease_audit = $modifierAudit.label
-                legacy_broad_symbol_audit_scope = 'report-only retained symbols may be inlined or not found; only required clean targets and scoped optimized audits count as gates'
+                legacy_broad_symbol_audit_scope = 'retained helper symbols may be inlined; any broad audit failure remains a coordinator review finding, while scoped optimized hot-path audits are separately reported'
                 report_only_symbol_rows = @($dispatchOutput -split "`r?`n" | Where-Object { $_ -match 'INLINED_OR_NOT_FOUND|report-only target' })
             })
         }
@@ -1553,6 +1568,8 @@ try {
         $summary = [ordered]@{
             schema_version = 1
             status = 'COMPLETED_CHARACTERIZATION'
+            qualification_status = if ($script:assemblyAuditFailed) { 'COORDINATOR_REVIEW_REQUIRED' } else { 'QUALIFIED' }
+            qualification_passed = -not $script:assemblyAuditFailed
             stage = $Stage
             run_id = $runId
             source_revision = $headSha
@@ -1631,7 +1648,7 @@ try {
             declared_outputs = @($declaredFiles)
         }
         Write-JsonFile (Join-Path $runDirectory 'runner-outputs.json') $outputsManifest
-        Write-Output (ConvertTo-Json -InputObject ([ordered]@{ status = $outputsManifest.status; run_id = $runId; run_directory = $runDirectory; source_revision = $headSha; runtime_revision = $runtimeRevision; control_revision = $controlRevision; precision_runs = $precisionRecords.Count; native_cases = $nativeResults.Count; native_events = $nativeObservedEventCount; child_commands = $commandResults.Count }) -Compress)
+        Write-Output (ConvertTo-Json -InputObject ([ordered]@{ status = $outputsManifest.status; qualification_status = $outputsManifest.qualification_status; run_id = $runId; run_directory = $runDirectory; source_revision = $headSha; runtime_revision = $runtimeRevision; control_revision = $controlRevision; precision_runs = $precisionRecords.Count; native_cases = $nativeResults.Count; native_events = $nativeObservedEventCount; child_commands = $commandResults.Count }) -Compress)
         return
     }
 
