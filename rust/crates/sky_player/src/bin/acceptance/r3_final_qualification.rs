@@ -242,40 +242,41 @@ pub(super) fn begin_delayed_watchdog_case(
     Ok((helper, hook.r3_watchdog_waiting()))
 }
 
-pub(super) fn attach_case_details(
-    object: &mut Map<String, Value>,
-    scenario: Scenario,
-    release_floor_cycles: &[Value],
-    watchdog_was_held: bool,
-    hook: Option<&StartupOrderingHook>,
-    final_gate_lease_expirations: u64,
-    terminal_error: Option<&str>,
-    helper_liveness_ticks: u64,
-) {
-    if scenario == Scenario::PauseResumeReleaseFloor {
+pub(super) struct CaseDetails<'a> {
+    pub(super) scenario: Scenario,
+    pub(super) release_floor_cycles: &'a [Value],
+    pub(super) watchdog_was_held: bool,
+    pub(super) hook: Option<&'a StartupOrderingHook>,
+    pub(super) final_gate_lease_expirations: u64,
+    pub(super) terminal_error: Option<&'a str>,
+    pub(super) helper_liveness_ticks: u64,
+}
+
+pub(super) fn attach_case_details(object: &mut Map<String, Value>, details: CaseDetails<'_>) {
+    if details.scenario == Scenario::PauseResumeReleaseFloor {
         object.insert(
             "r3_resume_release_floor_cycles".to_string(),
             json!({
                 "requested_cycle_count": 20,
-                "completed_cycle_count": release_floor_cycles.len(),
+                "completed_cycle_count": details.release_floor_cycles.len(),
                 "initial_worker_delay_us": 10_000,
                 "worker_test_hook": "feature-gated successful-Up barrier",
-                "cycles": release_floor_cycles
+                "cycles": details.release_floor_cycles
             }),
         );
     }
-    if scenario == Scenario::LeaseAgeWatchdogDelayed {
-        let hook = hook.expect("delayed-watchdog acceptance hook");
+    if details.scenario == Scenario::LeaseAgeWatchdogDelayed {
+        let hook = details.hook.expect("delayed-watchdog acceptance hook");
         object.insert(
             "r3_delayed_watchdog_lease_age".to_string(),
             json!({
-                "watchdog_held_before_age_check": watchdog_was_held,
+                "watchdog_held_before_age_check": details.watchdog_was_held,
                 "watchdog_hold_flag_at_report": hook.r3_watchdog_is_held(),
                 "watchdog_waiting_observed": hook.r3_watchdog_waiting(),
                 "down_sender_attempt_count": hook.r3_down_sender_attempt_count(),
-                "final_gate_lease_expirations": final_gate_lease_expirations,
-                "auxiliary_thread_liveness_ticks": helper_liveness_ticks,
-                "terminal_error": terminal_error
+                "final_gate_lease_expirations": details.final_gate_lease_expirations,
+                "auxiliary_thread_liveness_ticks": details.helper_liveness_ticks,
+                "terminal_error": details.terminal_error
             }),
         );
     }
@@ -307,46 +308,50 @@ pub(super) fn release_floor_failure(
     ))
 }
 
+pub(super) struct DelayedWatchdogOracle<'a> {
+    pub(super) watchdog_was_held: bool,
+    pub(super) down_sender_attempt_count: u64,
+    pub(super) final_gate_lease_expirations: u64,
+    pub(super) terminal_error: Option<&'a str>,
+    pub(super) final_release_obligation_mask: u16,
+    pub(super) sink_events_empty: bool,
+    pub(super) helper_liveness_ticks: u64,
+    pub(super) details: Value,
+}
+
 pub(super) fn finish_delayed_watchdog_case(
     args: &RunArgs,
     hook: &StartupOrderingHook,
-    watchdog_was_held: bool,
-    down_sender_attempt_count: u64,
-    final_gate_lease_expirations: u64,
-    terminal_error: Option<&str>,
-    final_release_obligation_mask: u16,
-    sink_events_empty: bool,
-    helper_liveness_ticks: u64,
-    details: Value,
+    oracle: DelayedWatchdogOracle<'_>,
 ) -> i32 {
-    if !watchdog_was_held {
+    if !oracle.watchdog_was_held {
         return write_report(
             args,
             Verdict::Fail,
             "CASE-NOT-EXERCISED: watchdog did not reach the controlled pre-check barrier",
-            details,
+            oracle.details,
         );
     }
     if !hook.r3_watchdog_is_held()
-        || down_sender_attempt_count != 0
-        || final_gate_lease_expirations == 0
-        || terminal_error != Some("supervisor_lease_expired")
-        || final_release_obligation_mask != 0
-        || !sink_events_empty
-        || helper_liveness_ticks == 0
+        || oracle.down_sender_attempt_count != 0
+        || oracle.final_gate_lease_expirations == 0
+        || oracle.terminal_error != Some("supervisor_lease_expired")
+        || oracle.final_release_obligation_mask != 0
+        || !oracle.sink_events_empty
+        || oracle.helper_liveness_ticks == 0
     {
         return write_report(
             args,
             Verdict::Fail,
             "delayed watchdog final Down lease-age oracle failed",
-            details,
+            oracle.details,
         );
     }
     write_report(
         args,
         Verdict::Pass,
         "watchdog stayed behind the test barrier; final Down lease-age proof rejected before the sender while the helper remained alive",
-        details,
+        oracle.details,
     )
 }
 

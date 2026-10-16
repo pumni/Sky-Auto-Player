@@ -6,6 +6,7 @@ mod acceptance {
 #[path = "snapshot_report.rs"] mod snapshot_report;
 #[path = "scenarios.rs"] mod scenarios;
 #[path = "acceptance_limits.rs"] mod acceptance_limits;
+#[path = "entrypoint.rs"] mod entrypoint;
 #[path = "modifier_guard.rs"] mod modifier_guard;
 #[path = "arguments.rs"] mod arguments;
 #[path = "owner_identity.rs"] mod owner_identity;
@@ -22,10 +23,11 @@ use lifecycle_wait::{wait_for_focus_pause, wait_for_resume, wait_for_startup_rea
 use lifecycle_wait::publish_foreground_focus_hint;
 #[cfg(windows)]
 use preterminal::{finish_preterminal, wait_for_sink_events};
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 use preterminal::{PreTerminalResult, wait_for_sink_events_with};
 use evidence_report::{Verdict, write_report};
 use acceptance_limits::*;
+pub(super) use entrypoint::main;
 use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
 use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, scenario_plan};
 use arguments::{ParsedCommand, RunArgs, Scenario};
@@ -54,7 +56,6 @@ use sky_dispatch_win32::input::FULL_INSTRUMENT_MASK;
 pub(super) use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_player::engine::NativeDispatchSession;
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -704,13 +705,15 @@ fn run_windows(args: RunArgs) -> i32 {
         }
         r3_final_qualification::attach_case_details(
             object,
-            args.scenario,
-            &r3_release_floor_cycles,
-            r3_watchdog_was_held,
-            r3_acceptance_hook.as_deref(),
-            snapshot.final_gate_lease_expirations,
-            snapshot.terminal_error.as_deref(),
-            independent_helper_liveness_ticks,
+            r3_final_qualification::CaseDetails {
+                scenario: args.scenario,
+                release_floor_cycles: &r3_release_floor_cycles,
+                watchdog_was_held: r3_watchdog_was_held,
+                hook: r3_acceptance_hook.as_deref(),
+                final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
+                terminal_error: snapshot.terminal_error.as_deref(),
+                helper_liveness_ticks: independent_helper_liveness_ticks,
+            },
         );
         object.insert(
             "focus_probe_event_count".to_string(),
@@ -772,16 +775,16 @@ fn run_windows(args: RunArgs) -> i32 {
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
-    if args.scenario == Scenario::PauseResumeReleaseFloor {
-        if let Some(code) = r3_final_qualification::release_floor_failure(
+    if args.scenario == Scenario::PauseResumeReleaseFloor
+        && let Some(code) = r3_final_qualification::release_floor_failure(
             &args,
             r3_release_floor_cycles.len(),
             snapshot.final_release_obligation_mask,
             snapshot.production_release_floor_violation_count,
             &details,
-        ) {
-            return code;
-        }
+        )
+    {
+        return code;
     }
     if args.scenario == Scenario::SuspendResume {
         let power = session.system_power_snapshot();
@@ -797,14 +800,16 @@ fn run_windows(args: RunArgs) -> i32 {
         return r3_final_qualification::finish_delayed_watchdog_case(
             &args,
             hook,
-            r3_watchdog_was_held,
-            hook.r3_down_sender_attempt_count(),
-            snapshot.final_gate_lease_expirations,
-            snapshot.terminal_error.as_deref(),
-            snapshot.final_release_obligation_mask,
-            sink_events.is_empty(),
-            independent_helper_liveness_ticks,
-            details,
+            r3_final_qualification::DelayedWatchdogOracle {
+                watchdog_was_held: r3_watchdog_was_held,
+                down_sender_attempt_count: hook.r3_down_sender_attempt_count(),
+                final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
+                terminal_error: snapshot.terminal_error.as_deref(),
+                final_release_obligation_mask: snapshot.final_release_obligation_mask,
+                sink_events_empty: sink_events.is_empty(),
+                helper_liveness_ticks: independent_helper_liveness_ticks,
+                details,
+            },
         );
     }
     if args.scenario == Scenario::SupervisorLeaseExpiry {
@@ -876,16 +881,6 @@ fn run_windows(args: RunArgs) -> i32 {
         "Windows-only qualification harness",
         json!({"physical_run": false}),
     )
-}
-pub fn main() {
-    match parse_args(env::args().skip(1)) {
-        Ok(ParsedCommand::Help) => println!("{}", usage()),
-        Ok(ParsedCommand::Run(args)) => std::process::exit(run_windows(*args)),
-        Err(error) => {
-            eprintln!("{error}\n{}", usage());
-            std::process::exit(2);
-        }
-    }
 }
 #[cfg(test)]
 #[path = "rt_native_acceptance_tests.rs"]
