@@ -1,0 +1,488 @@
+{
+  "schema_version": 1,
+  "phase": "P1",
+  "run_id": "r3-p1-20261016T111711630Z-df42d2fd",
+  "evidence_branch": "rt-r3/evidence/p1-b28f75126d09",
+  "source_revision": "b28f75126d091b86b40bb41926526a78bed0b73e",
+  "runtime_revision": "aa3c1a97c6a66c4036fed2c27617d0b3069773fd",
+  "head_sha": "b28f75126d091b86b40bb41926526a78bed0b73e",
+  "executable_sha256": "fb47ea1ca63787ace8849c9445d342103dc0322317ed5de183cb93521344e8ac",
+  "runner_outputs_sha256": "fa93fca6ca326a02dac9ec91411c49c5341c35994f3072ffef76c532b5f0d264",
+  "raw_output_count": 93,
+  "raw_outputs": [
+    {
+      "path": "files/commands/001-build-probe.stderr.log",
+      "size_bytes": 236,
+      "sha256": "829a4b88fe1e2387a79ec4b765b2cc4b214465d9cb1e1148c9e8b5595593e33f"
+    },
+    {
+      "path": "files/commands/001-build-probe.stdout.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/002-contracts.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/002-contracts.stdout.log",
+      "size_bytes": 141,
+      "sha256": "2aad0dc0bf9555f39fbb5b55f76bf62cb2428a5a0192056b9d9b88174abf88a5"
+    },
+    {
+      "path": "files/commands/003-build-native-acceptance.stderr.log",
+      "size_bytes": 141,
+      "sha256": "847265550454f6ee8f3159f8a92848ad9f1196dc161829c04d2768c83e28319b"
+    },
+    {
+      "path": "files/commands/003-build-native-acceptance.stdout.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/004-native-sink-selftest.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/004-native-sink-selftest.stdout.log",
+      "size_bytes": 48,
+      "sha256": "1e9d6ad18a8249be74fe95f8cd2e3f87b70f0de517acf2b5b37088e2558c582a"
+    },
+    {
+      "path": "files/commands/005-native-pause-resume.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/005-native-pause-resume.stdout.log",
+      "size_bytes": 163,
+      "sha256": "cfc517bf5ce831b4058d59f513c0d9a9577389832507573e6c3c7711db983817"
+    },
+    {
+      "path": "files/commands/006-native-suspend-resume.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/006-native-suspend-resume.stdout.log",
+      "size_bytes": 165,
+      "sha256": "9c3b29c13ee99555c8710489373ac9df8f7e1a6b6f4351f3238c4603406a1a55"
+    },
+    {
+      "path": "files/commands/007-native-focus-loss.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/007-native-focus-loss.stdout.log",
+      "size_bytes": 288,
+      "sha256": "f46e1b7a02729e65f4c8a5a8b328e5600e2d6e373b347847ee60879f4f9e6cc8"
+    },
+    {
+      "path": "files/commands/008-native-near-minimum-retrigger.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/008-native-near-minimum-retrigger.stdout.log",
+      "size_bytes": 173,
+      "sha256": "1168e803524ef1bf47274ee037c6fb0cc787107c74f7fd863a33451727ecb89c"
+    },
+    {
+      "path": "files/commands/009-native-mixed-up-down.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/009-native-mixed-up-down.stdout.log",
+      "size_bytes": 164,
+      "sha256": "2b399560faea9c9b61f855526e855b24b47bf209702891788af923bb06d7ed04"
+    },
+    {
+      "path": "files/commands/010-native-stop-cleanup.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/commands/010-native-stop-cleanup.stdout.log",
+      "size_bytes": 163,
+      "sha256": "8bc07ebc75de5a3d28a41eaa0b9549384fafbdb327b0f6b8107f2b41d4b3384a"
+    },
+    {
+      "path": "files/contracts.json",
+      "size_bytes": 28594,
+      "sha256": "61d381756eb3cf528337785d2a0681d9420d6ef801fd5258f4b8fc5651fcdd91"
+    },
+    {
+      "path": "files/native/focus-loss/focus-probe-events.jsonl",
+      "size_bytes": 285,
+      "sha256": "1a08e70d965f4591dc45417d41730ec3476f3cf7c060042b4849a4bd16eea3d0"
+    },
+    {
+      "path": "files/native/focus-loss/focus-probe-ready.json",
+      "size_bytes": 524,
+      "sha256": "9ee0469c977b4a9e2459d9ba52e543efd250062623819b394e4519cfcec1c86c"
+    },
+    {
+      "path": "files/native/focus-loss/focus-probe.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/native/focus-loss/focus-probe.stdout.log",
+      "size_bytes": 522,
+      "sha256": "672a40a2f1510fbc4cca226be059e7f6d1e879553aa39fb691cc55b124a411f1"
+    },
+    {
+      "path": "files/native/focus-loss/harness-output.log",
+      "size_bytes": 4573,
+      "sha256": "80028a018e246e37052bd61c8f64f24fe5d4b74a90088fa2d804f9a43036d4d1"
+    },
+    {
+      "path": "files/native/focus-loss/invocation.json",
+      "size_bytes": 952,
+      "sha256": "71ad7bbb077b2d77492d8915aa6d0dee56623051e1a44ff673b2837310350efe"
+    },
+    {
+      "path": "files/native/focus-loss/rt-native-acceptance.jsonl",
+      "size_bytes": 4572,
+      "sha256": "7aef516866d27e5217ec1d8fcf4b5a0d3faf175154c8dd723db6314480273416"
+    },
+    {
+      "path": "files/native/focus-loss/run-config.json",
+      "size_bytes": 1038,
+      "sha256": "32e5e52ce5f073df882919de830f3d0131a5ee7ef78a421c935fdeab94d6da65"
+    },
+    {
+      "path": "files/native/focus-loss/runner.ps1",
+      "size_bytes": 15192,
+      "sha256": "d1efa4b1bce308b49cdffa4ea352f4dc7351333f1f5aa11fb5f6df0db2fc71a2"
+    },
+    {
+      "path": "files/native/focus-loss/SHA256SUMS.txt",
+      "size_bytes": 1210,
+      "sha256": "42122891e0ad62b3f8b3f24eb525bb00cc29221ec3b54fabcfe0007999e630d3"
+    },
+    {
+      "path": "files/native/focus-loss/sink-event-window.json",
+      "size_bytes": 2008,
+      "sha256": "56d54e0649e1d1ada04e5f070da469c9fa5d6582b9a475dde48cd941f069aade"
+    },
+    {
+      "path": "files/native/focus-loss/sink-events.jsonl",
+      "size_bytes": 1415,
+      "sha256": "66a873e2258c2e2da593fce42ed63907c754f66e48109e751e9985781311c3ff"
+    },
+    {
+      "path": "files/native/focus-loss/sink-ready.json",
+      "size_bytes": 506,
+      "sha256": "f32a606d2a5c806cf04721b141e34fd7e6a663d59456710ac686b04f146fcb05"
+    },
+    {
+      "path": "files/native/focus-loss/sink.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/native/focus-loss/sink.stdout.log",
+      "size_bytes": 504,
+      "sha256": "3a17bab07fa2d0ffc4c3968be9e99229dd1d6a7d0289cea582f1c6991ffd09b2"
+    },
+    {
+      "path": "files/native/mixed-up-down/harness-output.log",
+      "size_bytes": 4528,
+      "sha256": "1dc0a1044b1c94af6f5f89417fb509489f47dc84bb6c4779335f16f7a6de8a49"
+    },
+    {
+      "path": "files/native/mixed-up-down/invocation.json",
+      "size_bytes": 955,
+      "sha256": "f12edca7004cc0798a54079a7f1fd965a7a722e74df59eaf11526798855a5af9"
+    },
+    {
+      "path": "files/native/mixed-up-down/rt-native-acceptance.jsonl",
+      "size_bytes": 4527,
+      "sha256": "e9db9077722d48ef287009475f9f115812ca14c404ec4ebf637c2f4ddddfcb10"
+    },
+    {
+      "path": "files/native/mixed-up-down/run-config.json",
+      "size_bytes": 1042,
+      "sha256": "72fec0915641b828c197cdbccc5c35b3b91f7ffb553606fc662a3008fd308d60"
+    },
+    {
+      "path": "files/native/mixed-up-down/runner.ps1",
+      "size_bytes": 15192,
+      "sha256": "d1efa4b1bce308b49cdffa4ea352f4dc7351333f1f5aa11fb5f6df0db2fc71a2"
+    },
+    {
+      "path": "files/native/mixed-up-down/SHA256SUMS.txt",
+      "size_bytes": 848,
+      "sha256": "22d14fdd61cfd88f89dd9a6ad3d997c63f3a4275407dcbcf4ca08513c86ba5a1"
+    },
+    {
+      "path": "files/native/mixed-up-down/sink-event-window.json",
+      "size_bytes": 2009,
+      "sha256": "a2450d18b7c0e5cccc80e3e3ca8926e19f55dc6e4c9f58de5d1ebbb742d28c10"
+    },
+    {
+      "path": "files/native/mixed-up-down/sink-events.jsonl",
+      "size_bytes": 1415,
+      "sha256": "395513ac7372a9d398e325a26a110375fa6863b5287c4b5c91a473638f0f4983"
+    },
+    {
+      "path": "files/native/mixed-up-down/sink-ready.json",
+      "size_bytes": 507,
+      "sha256": "8abfa1e82392b56c4f10c2fba4c43aab046ba1a9105a1eee2cfedec41ef47b35"
+    },
+    {
+      "path": "files/native/mixed-up-down/sink.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/native/mixed-up-down/sink.stdout.log",
+      "size_bytes": 505,
+      "sha256": "a364117efd0ee5e4ad5d654afc28bd7772eea0ff11cf5f91dcf0dc2a39977509"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/harness-output.log",
+      "size_bytes": 4819,
+      "sha256": "47845d13b164faac677f1e8965a3872720f4694014dab7cced7efe0a3e5faf32"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/invocation.json",
+      "size_bytes": 964,
+      "sha256": "e3cfe26896bf6fa91ad3c876d5a4e417c527a79860f181c7c00db3873a5df75c"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/rt-native-acceptance.jsonl",
+      "size_bytes": 4818,
+      "sha256": "7dae05f4444450c3da2942353de4bf4986dec96c886f89955d7b918b8bf2b64f"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/run-config.json",
+      "size_bytes": 1051,
+      "sha256": "f42b178d7dd12d0c66557e4fc5ff2ab14915166fb53caf1beed4bb4e7e6cdc7c"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/runner.ps1",
+      "size_bytes": 15192,
+      "sha256": "d1efa4b1bce308b49cdffa4ea352f4dc7351333f1f5aa11fb5f6df0db2fc71a2"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/SHA256SUMS.txt",
+      "size_bytes": 848,
+      "sha256": "85204e30eece87fa82335a9c65440c8919c2d0c1fb4bcdac65091296fcda665d"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/sink-event-window.json",
+      "size_bytes": 3583,
+      "sha256": "c90a9d20dece531767ffd32a2c76aaa316ef86f72ea3ad065b4b625d885baecd"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/sink-events.jsonl",
+      "size_bytes": 2549,
+      "sha256": "a59521ebe6b2c080d2fcfe022f62e6e18e1a8ab890e41122983118fcae90ff6e"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/sink-ready.json",
+      "size_bytes": 507,
+      "sha256": "1be6173cd31e818bd177cd9748b296d6d102ced7100a237362d53f193a1c1b24"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/sink.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/native/near-minimum-retrigger/sink.stdout.log",
+      "size_bytes": 505,
+      "sha256": "3be866383a497d9daa78c3bb30050a8a9a9e63c4de9f823f82c0e64e0aacb160"
+    },
+    {
+      "path": "files/native/pause-resume/harness-output.log",
+      "size_bytes": 4571,
+      "sha256": "6b912510e3e853a888c2105c6138e481369a69dee0c24c2f12834eb1f6e75acf"
+    },
+    {
+      "path": "files/native/pause-resume/invocation.json",
+      "size_bytes": 954,
+      "sha256": "ee67ff0ac5f90f1e7f8c0eeee1ae06cb22645fb3e6a8899969056af50b06b3f8"
+    },
+    {
+      "path": "files/native/pause-resume/rt-native-acceptance.jsonl",
+      "size_bytes": 4570,
+      "sha256": "e1ddc5cb9f97e71072eeaea76cdef6e2bf1a6f2533c2a875fd0abc24ce1a3e5c"
+    },
+    {
+      "path": "files/native/pause-resume/run-config.json",
+      "size_bytes": 1040,
+      "sha256": "6b346f29a1ea37aa5a0707c3f8baadbbf663aca27c2ee2dd806bb821a1388cab"
+    },
+    {
+      "path": "files/native/pause-resume/runner.ps1",
+      "size_bytes": 15192,
+      "sha256": "d1efa4b1bce308b49cdffa4ea352f4dc7351333f1f5aa11fb5f6df0db2fc71a2"
+    },
+    {
+      "path": "files/native/pause-resume/SHA256SUMS.txt",
+      "size_bytes": 848,
+      "sha256": "80d7009ee07e0ce1858e92eec5738f9f0f6d4441b00f84ec072109860e0f181f"
+    },
+    {
+      "path": "files/native/pause-resume/sink-event-window.json",
+      "size_bytes": 2008,
+      "sha256": "e88ab41eed0afbc83f7675ee31c9fe4b3e5dabf67e4f161ba9e66523d289b43f"
+    },
+    {
+      "path": "files/native/pause-resume/sink-events.jsonl",
+      "size_bytes": 1415,
+      "sha256": "37654c3c136e44b4f9a398fb1493436170d7b3e7c5e75d47ae8ef350f6d04716"
+    },
+    {
+      "path": "files/native/pause-resume/sink-ready.json",
+      "size_bytes": 506,
+      "sha256": "50f2a356366528c0991f54d71e13773d75724aae53ee6081393ccb7f0a1477bc"
+    },
+    {
+      "path": "files/native/pause-resume/sink.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/native/pause-resume/sink.stdout.log",
+      "size_bytes": 504,
+      "sha256": "a9f1198c6154c5cf7ee0e12a18b7479f256cbbe0334a809368c24d385c9d451e"
+    },
+    {
+      "path": "files/native/stop-cleanup/harness-output.log",
+      "size_bytes": 4462,
+      "sha256": "ad276d86c3605cc33ed2eb7bd44aaa4c2d7e94492847973c01ba8afd833b1661"
+    },
+    {
+      "path": "files/native/stop-cleanup/invocation.json",
+      "size_bytes": 954,
+      "sha256": "b561578b7157ef02b4ded00ba1296f1c16c6c548185b69e53cb25e2bc44db151"
+    },
+    {
+      "path": "files/native/stop-cleanup/rt-native-acceptance.jsonl",
+      "size_bytes": 4461,
+      "sha256": "7ddc4f1058c13867bf73bc17dd039978115db9af0221c185344500d90b5c1a00"
+    },
+    {
+      "path": "files/native/stop-cleanup/run-config.json",
+      "size_bytes": 1041,
+      "sha256": "ee8b6b87a9c7ece8bce144ff74f0eed83f6bab4fe045e84871c1f942831f8aa3"
+    },
+    {
+      "path": "files/native/stop-cleanup/runner.ps1",
+      "size_bytes": 15192,
+      "sha256": "d1efa4b1bce308b49cdffa4ea352f4dc7351333f1f5aa11fb5f6df0db2fc71a2"
+    },
+    {
+      "path": "files/native/stop-cleanup/SHA256SUMS.txt",
+      "size_bytes": 848,
+      "sha256": "42d9c7b5b1649888ab60287c0a53f09c92ab0034fc40a23b2ab5ce265a9fed26"
+    },
+    {
+      "path": "files/native/stop-cleanup/sink-event-window.json",
+      "size_bytes": 1222,
+      "sha256": "f95aec18c278f8a88bc25ef64dbe3c47ad2e2b927c3a88bdf7d664cb2272925d"
+    },
+    {
+      "path": "files/native/stop-cleanup/sink-events.jsonl",
+      "size_bytes": 848,
+      "sha256": "6278d388b64a19fdb57631e687d18e76c54ccf8d46e0b5ddd8222aaee54860d3"
+    },
+    {
+      "path": "files/native/stop-cleanup/sink-ready.json",
+      "size_bytes": 507,
+      "sha256": "ef51db2936ec86a1527ef88a45cdce7b49a13b7f80c1cba6dac7fdd4283e177e"
+    },
+    {
+      "path": "files/native/stop-cleanup/sink.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/native/stop-cleanup/sink.stdout.log",
+      "size_bytes": 505,
+      "sha256": "1f88c3473768a8ace944b0bcaa64e61444dfdf388af4eb7390b2106faa82e288"
+    },
+    {
+      "path": "files/native/suspend-resume/harness-output.log",
+      "size_bytes": 4579,
+      "sha256": "439443e63122d5f37ec0a83d6736d63492c6b6439ded1153efdc406dfa436fbe"
+    },
+    {
+      "path": "files/native/suspend-resume/invocation.json",
+      "size_bytes": 956,
+      "sha256": "8a85df04d9623cff0056806563dbb2f9e09d1c2ed161593cfc99bf1a3b877890"
+    },
+    {
+      "path": "files/native/suspend-resume/rt-native-acceptance.jsonl",
+      "size_bytes": 4578,
+      "sha256": "dc5e799640b704186d1eaf5d9e7d2d756da235551889ed7476d700ef2aedb5dc"
+    },
+    {
+      "path": "files/native/suspend-resume/run-config.json",
+      "size_bytes": 1043,
+      "sha256": "e23ef9fd2ca879b14036ba0fd6bd30324855e485c2e99e68dc801359341b1d4d"
+    },
+    {
+      "path": "files/native/suspend-resume/runner.ps1",
+      "size_bytes": 15192,
+      "sha256": "d1efa4b1bce308b49cdffa4ea352f4dc7351333f1f5aa11fb5f6df0db2fc71a2"
+    },
+    {
+      "path": "files/native/suspend-resume/SHA256SUMS.txt",
+      "size_bytes": 848,
+      "sha256": "4e1e1d01022cef56fd625a752d9815dee7ce29e40887f266bde9e66cff82789c"
+    },
+    {
+      "path": "files/native/suspend-resume/sink-event-window.json",
+      "size_bytes": 2400,
+      "sha256": "d3a2e8e3a65dc4846afc2008c5f9aab86f78a0851b5160696da3417c6749da33"
+    },
+    {
+      "path": "files/native/suspend-resume/sink-events.jsonl",
+      "size_bytes": 1699,
+      "sha256": "2bf853eaf6b48213c2cf6d812181f01fc9a1a5f2495b39b175bb369d1fdb5172"
+    },
+    {
+      "path": "files/native/suspend-resume/sink-ready.json",
+      "size_bytes": 507,
+      "sha256": "f02b28d7f18cabc96c7aa94ad8da549cb5e5eef457d56e0b8661233bd9496a38"
+    },
+    {
+      "path": "files/native/suspend-resume/sink.stderr.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "files/native/suspend-resume/sink.stdout.log",
+      "size_bytes": 505,
+      "sha256": "959081d744944f129897cae7316aad8498056b7acc76be8866a15a4190ecfd2c"
+    },
+    {
+      "path": "files/status.json",
+      "size_bytes": 155,
+      "sha256": "8f0a951a92349a62139f157d3e5c640d2d47728d4296921b2b679bcb7b8acbbf"
+    },
+    {
+      "path": "files/summary.json",
+      "size_bytes": 11132,
+      "sha256": "f9c19d960fb0622fa28bb703fb9845f02c652d13145980bb1446e4d9dde2c010"
+    }
+  ],
+  "archive_format": "ZIP; concatenate archive parts in numeric order when split",
+  "archive_parts": [
+    {
+      "path": "archive/evidence.zip",
+      "size_bytes": 97485,
+      "sha256": "ce3f3c5216708970a4f38f55571bb576489334d184fd8baf6d806e5a4d4f5b09"
+    }
+  ],
+  "archive_total_bytes": 97485
+}
