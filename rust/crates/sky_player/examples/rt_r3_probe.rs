@@ -1528,11 +1528,11 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
             "fixed startup readiness reserve exceeds the minimum pre-roll".to_string()
         })?;
     let measured_worker_path_us = coordinator_wall_us.saturating_add(prepared_build_wall_us);
-    let prepared_path_admission_outcome = if measured_worker_path_us <= available_startup_budget_us
-    {
-        "WITHIN_SCOPED_MIN_PREROLL_BUDGET"
+    let would_admit_prepared_path = measured_worker_path_us <= available_startup_budget_us;
+    let prepared_path_admission_outcome = if would_admit_prepared_path {
+        "WOULD_ADMIT_WITHIN_SCOPED_MIN_PREROLL_BUDGET"
     } else {
-        "EXCEEDS_SCOPED_MIN_PREROLL_BUDGET"
+        "WOULD_REJECT_SCOPED_MIN_PREROLL_BUDGET"
     };
 
     Ok(json!({
@@ -1588,7 +1588,10 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
             "readiness_reserve_us":PRODUCTION_STARTUP_READINESS_RESERVE_US,
             "captured_available_startup_budget_us":available_startup_budget_us,
             "measured_worker_path_us":measured_worker_path_us,
+            "would_admit_prepared_path":would_admit_prepared_path,
             "prepared_path_admission_outcome":prepared_path_admission_outcome,
+            "production_startup_attempted":false,
+            "production_startup_rejection_observed":false,
             "comparison_scope":"coordinator initialization plus prepared-stream build/reset only; input generation and schedule compilation/materialization are separate because the worker receives a compiled RuntimeSchedule; excludes thread launch, target preflight, telemetry and other boot work"
         },
         "memory_boundary":{

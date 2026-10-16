@@ -362,6 +362,9 @@ try {
             ) -Label "diagnostics-startup-$generationCount" -Environment $startupEnvironment -CaptureWorkingSet
             $startupReport = Get-Content -LiteralPath $startupPath -Raw | ConvertFrom-Json
             $startupCase = $startupReport.test_vectors.startup_case
+            $startupBudget = $startupCase.startup_budget
+            $expectedWouldAdmit = [long]$startupBudget.measured_worker_path_us -le [long]$startupBudget.captured_available_startup_budget_us
+            $expectedAdmissionOutcome = if ($expectedWouldAdmit) { 'WOULD_ADMIT_WITHIN_SCOPED_MIN_PREROLL_BUDGET' } else { 'WOULD_REJECT_SCOPED_MIN_PREROLL_BUDGET' }
             if ($startupReport.source_revision.ToLowerInvariant() -ne $headSha -or
                 $startupReport.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or
                 $startupReport.mode -ne 'startup' -or
@@ -369,6 +372,10 @@ try {
                 $startupCase.generation_count -ne $generationCount -or
                 $startupCase.action_count -ne (2 * $generationCount) -or
                 $startupCase.below_existing_action_limit -ne $true -or
+                $startupBudget.would_admit_prepared_path -ne $expectedWouldAdmit -or
+                $startupBudget.prepared_path_admission_outcome -ne $expectedAdmissionOutcome -or
+                $startupBudget.production_startup_attempted -ne $false -or
+                $startupBudget.production_startup_rejection_observed -ne $false -or
                 $startupCase.prepared_storage.prepared_entry_count -lt 1) {
                 throw "BLOCKED-DIAGNOSTICS: startup dataset or provenance mismatch at $generationCount generations"
             }
@@ -653,7 +660,7 @@ try {
         $markdownLines.Add('')
         $markdownLines.Add('## Startup and memory')
         $markdownLines.Add('')
-        $markdownLines.Add('| Generations | Actions | Compile/materialize (us) | Schedule clone (us) | Coordinator init (us) | Coordinator clone (us; test-support only) | Prepared build/reset (us) | Prepared entries | Build allocations (count / requested bytes) | Peak process working set (bytes) | Available budget (us) | Scoped admission |')
+        $markdownLines.Add('| Generations | Actions | Compile/materialize (us) | Schedule clone (us) | Coordinator init (us) | Coordinator clone (us; test-support only) | Prepared build/reset (us) | Prepared entries | Build allocations (count / requested bytes) | Peak process working set (bytes) | Available budget (us) | Prepared-path budget outcome |')
         $markdownLines.Add('| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |')
         foreach ($record in $startupRecords) {
             $case = $record.case
@@ -663,6 +670,7 @@ try {
         $markdownLines.Add('Allocation counts/bytes are successful allocation and realloc requests in the probe process during each named operation; they exclude deallocation and allocator metadata. Process working set is sampled separately by PowerShell every 5 ms and includes shared resident pages. Neither metric is inferred from the other. Schedule compile/materialize is separate from coordinator initialization and prepared-stream build. The scoped budget comparison includes coordinator initialization plus prepared build/reset, and excludes other worker startup work.')
         $markdownLines.Add('')
         $markdownLines.Add('The RuntimeSchedule clone that supplies the coordinator its owned schedule is measured separately. RuntimeDispatchCoordinator cloning exists only in test-support for characterization; the deep clone column is not part of production startup. Actual coordinator initialization and post-preparation reconstruction are measured in their own columns.')
+        $markdownLines.Add('The prepared-path budget outcome is a scoped characterization result: an out-of-budget measurement is labeled WOULD_REJECT. No production boot was attempted, so this does not claim an observed product rejection or model excluded startup work.')
         $markdownLines.Add('')
         $markdownLines.Add('## Offline receiver frame-polling model')
         $markdownLines.Add('')
