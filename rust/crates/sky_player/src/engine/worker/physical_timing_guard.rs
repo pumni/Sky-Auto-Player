@@ -13,7 +13,8 @@ const VALID_KEY_MASK: u16 = (1_u16 << MAX_KEYS) - 1;
 /// The immutable timing window derived for one prepared physical packet.
 ///
 /// hold_floor_mask and release_floor_mask identify packet keys whose stored
-/// physical floor is later than the authored target.
+/// physical floor, including a resumable lifecycle barrier for Downs, is later
+/// than the authored target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PhysicalTimingWindow {
     pub(crate) authored_target_qpc: QpcTicks,
@@ -41,6 +42,7 @@ pub(crate) enum PhysicalTimingGuardError {
 pub(crate) struct PhysicalTimingGuard {
     musical_up_not_before_qpc: [Option<QpcTicks>; MAX_KEYS],
     down_not_before_qpc: [Option<QpcTicks>; MAX_KEYS],
+    resume_down_not_before_qpc: Option<QpcTicks>,
     effective_min_hold_ticks: DurationTicks,
     frame_ticks: DurationTicks,
     valid: bool,
@@ -54,24 +56,44 @@ impl PhysicalTimingGuard {
         Self {
             musical_up_not_before_qpc: [None; MAX_KEYS],
             down_not_before_qpc: [None; MAX_KEYS],
+            resume_down_not_before_qpc: None,
             effective_min_hold_ticks,
             frame_ticks,
             valid: true,
         }
     }
 
-    /// Clear sender evidence and make the guard usable for a fresh lifecycle.
-    pub(super) fn reset(&mut self) {
-        self.musical_up_not_before_qpc = [None; MAX_KEYS];
-        self.down_not_before_qpc = [None; MAX_KEYS];
-        self.valid = true;
-    }
-
-    /// Clear sender evidence and make queries fail closed until reset.
+    /// Clear sender evidence and make queries fail closed until a verified
+    /// resumable cleanup establishes a fresh barrier or a new session creates
+    /// a new guard.
     pub(super) fn invalidate(&mut self) {
         self.musical_up_not_before_qpc = [None; MAX_KEYS];
         self.down_not_before_qpc = [None; MAX_KEYS];
         self.valid = false;
+    }
+
+    /// Reconcile canceled physical ownership after verified resumable cleanup.
+    ///
+    /// The caller supplies a fresh QPC sampled after cleanup returned. The
+    /// global Down barrier is absolute so later authored targets remain
+    /// unchanged and a successful Down for one key cannot clear it for others.
+    pub(super) fn establish_resume_down_barrier(
+        &mut self,
+        cleanup_completed_qpc: QpcTicks,
+    ) -> Result<(), PhysicalTimingGuardError> {
+        let barrier = match cleanup_completed_qpc.checked_add_duration(self.frame_ticks) {
+            Ok(barrier) => barrier,
+            Err(_) => {
+                self.invalidate();
+                return Err(PhysicalTimingGuardError::ArithmeticOverflow);
+            }
+        };
+
+        self.musical_up_not_before_qpc = [None; MAX_KEYS];
+        self.down_not_before_qpc = [None; MAX_KEYS];
+        self.resume_down_not_before_qpc = Some(barrier);
+        self.valid = true;
+        Ok(())
     }
 
     /// Record the completion of an already-successful canonical physical
@@ -150,8 +172,15 @@ impl PhysicalTimingGuard {
             up_mask,
             &self.musical_up_not_before_qpc,
         );
-        let (down_not_before_qpc, release_floor_mask) =
+        let (mut down_not_before_qpc, mut release_floor_mask) =
             Self::floor_for_mask(authored_target_qpc, down_mask, &self.down_not_before_qpc);
+        if down_mask != 0
+            && let Some(resume_barrier) = self.resume_down_not_before_qpc
+            && resume_barrier > authored_target_qpc
+        {
+            down_not_before_qpc = core::cmp::max(down_not_before_qpc, resume_barrier);
+            release_floor_mask |= down_mask;
+        }
         let packet_not_before_qpc = core::cmp::max(musical_up_not_before_qpc, down_not_before_qpc);
 
         Ok(PhysicalTimingWindow {
@@ -392,7 +421,7 @@ mod tests {
 
     #[test]
     fn query_includes_completion_floors_for_every_packet() {
-        let mut guard = guard();
+        let mut guard = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS);
         guard
             .observe_successful_packet(qpc(100), 0, bit(0))
             .unwrap();
@@ -453,7 +482,7 @@ mod tests {
 
     #[test]
     fn packet_query_uses_the_latest_relevant_per_key_floor() {
-        let mut guard = guard();
+        let mut guard = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS);
         guard
             .observe_successful_packet(qpc(100), 0, bit(0))
             .unwrap();
@@ -544,7 +573,83 @@ mod tests {
     }
 
     #[test]
-    fn observation_overflow_invalidates_all_floors_until_reset() {
+    fn r3_resume_barrier_covers_down_packets_and_preserves_other_floors() {
+        let mut guard = guard();
+        guard.establish_resume_down_barrier(qpc(100)).unwrap();
+        let barrier = qpc(112);
+
+        let one_key = guard.query(qpc(100), 0, bit(0)).unwrap();
+        assert_eq!(one_key.down_not_before_qpc, barrier);
+        assert_eq!(one_key.packet_not_before_qpc, barrier);
+        assert_eq!(one_key.release_floor_mask, bit(0));
+
+        let up_only = guard.query(qpc(100), bit(0), 0).unwrap();
+        assert_eq!(up_only.musical_up_not_before_qpc, qpc(100));
+        assert_eq!(up_only.packet_not_before_qpc, qpc(100));
+
+        let mixed = guard
+            .query(qpc(100), bit(0), VALID_KEY_MASK & !bit(0))
+            .unwrap();
+        assert_eq!(mixed.musical_up_not_before_qpc, qpc(100));
+        assert_eq!(mixed.down_not_before_qpc, barrier);
+        assert_eq!(mixed.packet_not_before_qpc, barrier);
+        assert_eq!(mixed.release_floor_mask, VALID_KEY_MASK & !bit(0));
+
+        guard.observe_successful_packet(barrier, 0, bit(1)).unwrap();
+        let other_key = guard.query(qpc(100), 0, bit(2)).unwrap();
+        assert_eq!(
+            other_key.down_not_before_qpc, barrier,
+            "a successful Down for one key must not clear the global barrier"
+        );
+
+        let authored_after_barrier = guard.query(qpc(120), 0, bit(3)).unwrap();
+        assert_eq!(authored_after_barrier.down_not_before_qpc, qpc(120));
+        assert_eq!(authored_after_barrier.release_floor_mask, 0);
+
+        guard.establish_resume_down_barrier(qpc(200)).unwrap();
+        assert_eq!(
+            guard
+                .query(qpc(100), 0, VALID_KEY_MASK)
+                .unwrap()
+                .down_not_before_qpc,
+            qpc(212),
+            "a repeated verified cleanup moves the absolute barrier forward"
+        );
+        assert_eq!(
+            guard
+                .query(qpc(300), 0, bit(0))
+                .unwrap()
+                .packet_not_before_qpc,
+            qpc(300),
+            "a long pause does not add delay after the absolute barrier passed"
+        );
+
+        let fresh_session = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS);
+        assert_eq!(
+            fresh_session
+                .query(qpc(100), 0, bit(0))
+                .unwrap()
+                .packet_not_before_qpc,
+            qpc(100),
+            "a new session starts without a prior session's barrier"
+        );
+    }
+
+    #[test]
+    fn r3_resume_barrier_overflow_invalidates_the_guard() {
+        let mut guard = guard();
+        assert_eq!(
+            guard.establish_resume_down_barrier(qpc(u64::MAX - 5)),
+            Err(PhysicalTimingGuardError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            guard.query(qpc(100), 0, bit(0)),
+            Err(PhysicalTimingGuardError::Invalidated)
+        );
+    }
+
+    #[test]
+    fn observation_overflow_invalidates_all_floors_until_new_guard() {
         let mut guard = guard();
         guard
             .observe_successful_packet(qpc(100), 0, bit(0))
@@ -562,7 +667,7 @@ mod tests {
             Err(PhysicalTimingGuardError::Invalidated)
         );
 
-        guard.reset();
+        let guard = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS);
         assert_eq!(
             guard
                 .query(qpc(100), bit(0), 0)
@@ -574,7 +679,7 @@ mod tests {
 
     #[test]
     fn release_floor_overflow_invalidates_guard_and_lifecycle_invalidate_is_fail_closed() {
-        let mut guard = guard();
+        let mut guard = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS);
         guard
             .observe_successful_packet(qpc(100), bit(0), 0)
             .unwrap();
@@ -587,7 +692,7 @@ mod tests {
             Err(PhysicalTimingGuardError::Invalidated)
         );
 
-        guard.reset();
+        let mut guard = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS);
         guard
             .observe_successful_packet(qpc(100), 0, bit(0))
             .unwrap();
@@ -596,7 +701,7 @@ mod tests {
             guard.query(qpc(100), bit(0), 0),
             Err(PhysicalTimingGuardError::Invalidated)
         );
-        guard.reset();
+        let guard = PhysicalTimingGuard::new(HOLD_TICKS, FRAME_TICKS);
         assert_eq!(
             guard
                 .query(qpc(100), bit(0), 0)

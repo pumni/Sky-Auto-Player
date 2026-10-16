@@ -55,13 +55,13 @@ evidence. `UnobservedBacklog` is not the normal classification for a late
 current Down; it must not be produced merely because the scheduler was late.
 
 After a complete successful musical packet with trustworthy sender completion
-QPC, the fixed-size `PhysicalTimingGuard` records only per-key not-before
-floors:
+QPC, the fixed-size `PhysicalTimingGuard` records per-key not-before floors:
 
 ```text
 musical_up_not_before[key] = successful_down_completion[key] + effective_min_hold
 down_not_before[key]        = successful_up_completion[key] + frame
-physical_wait_target       = max(authored_target, relevant floors)
+physical_wait_target       = max(authored_target, relevant per-key floors,
+                                  resume barrier for Down-bearing packets)
 ```
 
 where `effective_min_hold = frame_base_hold + timing_margin` is materialized
@@ -73,9 +73,17 @@ final gates pass. A matching Up waits for the Down completion floor, and the
 next same-key Down waits for the Up completion floor. A mixed packet waits for
 the maximum relevant floor and remains one atomic Up-before-Down packet.
 
-The guard is reset or invalidated at the existing lifecycle boundaries. A
-failed, partial, ambiguous, or untrustworthy transport result does not create
-completion evidence; the existing fail-closed cleanup policy applies.
+After verified resumable cleanup, the worker samples fresh QPC after the
+cleanup call returns and sets `resume_down_not_before = Q + frame`. Every
+later Down-bearing packet applies this global absolute floor alongside its
+authored target and per-key floors. A mixed packet waits as a whole; Up-only
+packets are unaffected. A successful Down does not clear the barrier for other
+keys, and an authored target later than the barrier remains unchanged. Once
+the barrier has passed it adds no delay. A new session constructs a clean
+guard. Unverified cleanup, QPC failure, or checked-add overflow leaves the
+guard fail-closed and prevents later Down dispatch. A failed, partial,
+ambiguous, or untrustworthy transport result does not create completion
+evidence; the existing terminal cleanup policy applies.
 
 ## Physical dispatch ordering
 

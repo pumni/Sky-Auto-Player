@@ -1845,6 +1845,353 @@ fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
 }
 
 #[test]
+fn r3_late_up_empty_pause_resume_preserves_release_floor() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    for (frequency_hz, odd_vector) in [(1_000_000, false), (10_000_000, false), (10_000_003, true)]
+    {
+        let clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(frequency_hz).unwrap());
+        let at_us = |us| {
+            QpcTicks::from_raw(
+                clock
+                    .duration_from_us(us)
+                    .expect("P0 vector QPC conversion")
+                    .as_u64(),
+            )
+        };
+        let mut harness = ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(
+            frequency_hz,
+            odd_vector,
+        )
+        .expect("P0 lifecycle vector admission");
+        let packets = harness.configure_r3_mock_packet_sender_for_test(&[0, 50, 0, 0]);
+        let cleanup = harness.configure_r3_mock_cleanup_emitter_for_test();
+        harness.prepare_prepared_stream_for_test();
+        harness
+            .reanchor_playback_clock_for_r3_probe(at_us(82_700))
+            .expect("P0 playback epoch");
+
+        let down_at = at_us(100_000);
+        harness.set_r3_mock_sender_start_qpc_for_test(down_at);
+        assert!(matches!(
+            harness
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(down_at)
+                .expect("P0 first Down due check"),
+            Some(super::worker::DispatchStep::Dispatched)
+        ));
+        let up_floor = harness
+            .prepared_physical_floor_for_r3_probe()
+            .expect("P0 authored Up floor");
+        let up_at = up_floor.packet_not_before_qpc;
+        let physical_hold_floor = at_us(100_000)
+            .checked_add_duration(clock.duration_from_us(17_167).expect("P0 hold conversion"))
+            .expect("P0 physical hold floor arithmetic");
+        assert_eq!(up_at, physical_hold_floor);
+        harness.set_r3_mock_sender_start_qpc_for_test(up_at);
+        assert!(matches!(
+            harness
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(up_at)
+                .expect("P0 authored Up due check"),
+            Some(super::worker::DispatchStep::Dispatched)
+        ));
+
+        let up_completion = packets
+            .lock()
+            .expect("P0 sender capture")
+            .get(1)
+            .and_then(|(_, evidence)| evidence.completed_ticks)
+            .expect("P0 Up completion QPC");
+        let completion_latency = clock.duration_from_us(50).expect("P0 latency conversion");
+        assert_eq!(
+            up_completion,
+            up_at.checked_add_duration(completion_latency).unwrap()
+        );
+        let frame_ticks = clock.duration_from_us(16_667).expect("P0 frame conversion");
+        let required_down_floor = up_completion
+            .checked_add_duration(frame_ticks)
+            .expect("P0 release floor arithmetic");
+
+        let frame_offsets_before_pause = harness.prepared_frame_offsets_for_test();
+        let pause_at = at_us(117_300);
+        let resume_at = at_us(118_300);
+        harness
+            .manual_pause_resume_for_r3_probe(pause_at, resume_at)
+            .expect("actual manual pause and verified cleanup lifecycle");
+        assert!(
+            cleanup.lock().expect("P0 cleanup capture").is_empty(),
+            "empty-ownership pause must not call the keyboard transport"
+        );
+        assert_eq!(
+            harness.prepared_frame_offsets_for_test(),
+            frame_offsets_before_pause,
+            "resume must preserve authored offsets"
+        );
+        assert_eq!(harness.prepared_cursor_for_test(), 2);
+        assert_eq!(packets.lock().expect("P0 sender capture").len(), 2);
+
+        harness.set_r3_mock_sender_start_qpc_for_test(resume_at);
+        assert!(
+            harness
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(resume_at)
+                .expect("P0 resumed Down due check")
+                .is_none(),
+            "resume must hold the next Down until the cleanup-relative frame barrier at {frequency_hz}Hz"
+        );
+        assert_eq!(harness.prepared_cursor_for_test(), 2);
+        assert_eq!(packets.lock().expect("P0 sender capture").len(), 2);
+        let resume_floor = harness
+            .prepared_physical_floor_for_r3_probe()
+            .expect("post-cleanup Down floor");
+        let expected_barrier = pause_at
+            .checked_add_duration(frame_ticks)
+            .expect("post-cleanup barrier arithmetic");
+        assert_eq!(resume_floor.down_not_before_qpc, expected_barrier);
+        harness.set_r3_mock_sender_start_qpc_for_test(resume_floor.packet_not_before_qpc);
+        assert!(matches!(
+            harness
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
+                    resume_floor.packet_not_before_qpc,
+                )
+                .expect("post-barrier resumed Down due check"),
+            Some(super::worker::DispatchStep::Dispatched)
+        ));
+        let next_down_pre_call = packets
+            .lock()
+            .expect("P0 sender capture")
+            .get(2)
+            .and_then(|(_, evidence)| evidence.started_ticks)
+            .expect("resumed Down pre-call QPC");
+        assert!(
+            next_down_pre_call >= required_down_floor,
+            "resumed Down at {next_down_pre_call:?} preceded last Up completion plus one frame {required_down_floor:?} at {frequency_hz}Hz"
+        );
+    }
+}
+
+#[test]
+fn r3_active_cleanup_barrier_starts_after_verified_safety_up() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use std::sync::atomic::AtomicU64;
+
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(10_000_000, false)
+            .expect("P0 lifecycle vector admission");
+    let packets = harness.configure_r3_mock_packet_sender_for_test(&[0, 0, 0, 0]);
+    let (cleanup, safety_up_completion) =
+        harness.configure_r3_mock_cleanup_emitter_with_completion_qpc_for_test();
+    harness.prepare_prepared_stream_for_test();
+    let down_at = harness.qpc_now_for_test().expect("active cleanup QPC");
+    harness
+        .reanchor_playback_clock_for_r3_probe(down_at)
+        .expect("active cleanup epoch");
+    harness.set_r3_mock_sender_start_qpc_for_test(down_at);
+    assert!(matches!(
+        harness
+            .dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(down_at,),
+        super::worker::DispatchStep::Dispatched
+    ));
+    assert_eq!(harness.backend_active_mask(), 1);
+
+    let qpc_clock = harness.resources.clock;
+    let safety_up_completion_for_sample = Arc::clone(&safety_up_completion);
+    let post_cleanup_sample = Arc::new(AtomicU64::new(0));
+    let sample_store = Arc::clone(&post_cleanup_sample);
+    harness
+        .apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(move || {
+            let q = qpc_clock
+                .now()
+                .map_err(|error| format!("active cleanup sample QPC: {error:?}"))?;
+            let up_completed = safety_up_completion_for_sample.load(Ordering::Acquire);
+            assert_ne!(up_completed, 0, "verified cleanup emitted the safety Up");
+            assert!(
+                q.as_u64() >= up_completed,
+                "post-cleanup QPC must be no earlier than the safety Up completion"
+            );
+            sample_store.store(q.as_u64(), Ordering::Release);
+            Ok(q)
+        })
+        .expect("verified active-key cleanup");
+
+    let cleanup_events = cleanup.lock().expect("safety cleanup capture");
+    assert_eq!(cleanup_events.as_slice(), &[(vec![0x15], true)]);
+    assert_eq!(harness.backend_active_mask(), 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(packets.lock().expect("packet capture").len(), 1);
+
+    let sample = QpcTicks::from_raw(post_cleanup_sample.load(Ordering::Acquire));
+    let frame_ticks = qpc_clock
+        .duration_from_us(16_667)
+        .expect("frame conversion");
+    let barrier = sample
+        .checked_add_duration(frame_ticks)
+        .expect("post-cleanup barrier arithmetic");
+    assert_eq!(
+        harness.r3_down_floor_for_test(QpcTicks::ZERO, 1),
+        Some(barrier),
+        "every later Down must start no earlier than fresh cleanup QPC plus one frame"
+    );
+}
+
+#[test]
+fn r3_cleanup_qpc_failure_and_overflow_leave_down_fail_closed() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    for overflow in [false, true] {
+        let mut harness =
+            ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(10_000_000, false)
+                .expect("P0 lifecycle vector admission");
+        let packets = harness.configure_r3_mock_packet_sender_for_test(&[0, 0, 0, 0]);
+        let cleanup = harness.configure_r3_mock_cleanup_emitter_for_test();
+        harness.prepare_prepared_stream_for_test();
+        harness
+            .reanchor_playback_clock_for_r3_probe(QpcTicks::ZERO)
+            .expect("P0 playback epoch");
+
+        let result = if overflow {
+            harness.apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+                Ok(QpcTicks::from_raw(u64::MAX - 5))
+            })
+        } else {
+            harness.apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+                Err("injected post-cleanup QPC failure".to_string())
+            })
+        };
+        assert!(result.is_err());
+        assert!(cleanup.lock().expect("empty cleanup capture").is_empty());
+        assert_eq!(
+            harness.r3_down_floor_for_test(QpcTicks::ZERO, 1),
+            None,
+            "{overflow}: invalid guard must not produce a Down floor"
+        );
+        assert!(
+            harness
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(QpcTicks::ZERO)
+                .is_err()
+        );
+        assert!(packets.lock().expect("packet capture").is_empty());
+    }
+}
+
+#[test]
+fn r3_inconclusive_cleanup_does_not_establish_or_bypass_barrier() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use std::sync::atomic::AtomicBool;
+
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(10_000_000, false)
+            .expect("P0 lifecycle vector admission");
+    let packets = harness.configure_r3_mock_packet_sender_for_test(&[0, 0, 0, 0]);
+    let cleanup = harness.configure_r3_mock_cleanup_emitter_for_test();
+    harness.prepare_prepared_stream_for_test();
+    harness
+        .reanchor_playback_clock_for_r3_probe(QpcTicks::ZERO)
+        .expect("P0 playback epoch");
+    harness.set_r3_mock_sender_start_qpc_for_test(QpcTicks::ZERO);
+    assert!(matches!(
+        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(
+            QpcTicks::ZERO,
+        ),
+        super::worker::DispatchStep::Dispatched
+    ));
+    harness
+        .resources
+        .backend
+        .set_probe(|_, _| sky_dispatch_win32::input::InstrumentPhysicalState::Inconclusive);
+
+    let post_cleanup_sampled = Arc::new(AtomicBool::new(false));
+    let sampled = Arc::clone(&post_cleanup_sampled);
+    let result =
+        harness.apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(move || {
+            sampled.store(true, Ordering::Release);
+            Ok(QpcTicks::from_raw(117_300))
+        });
+    assert!(result.is_err());
+    assert!(
+        !post_cleanup_sampled.load(Ordering::Acquire),
+        "an unverified cleanup cannot establish a resume barrier"
+    );
+    assert_eq!(cleanup.lock().expect("cleanup capture").len(), 1);
+    assert_eq!(packets.lock().expect("packet capture").len(), 1);
+    assert_eq!(
+        harness.r3_down_floor_for_test(QpcTicks::ZERO, 1),
+        None,
+        "unverified release leaves the guard invalid"
+    );
+    assert!(
+        harness
+            .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
+                QpcTicks::from_raw(200_000),
+            )
+            .is_err()
+    );
+    assert_eq!(packets.lock().expect("packet capture").len(), 1);
+}
+
+#[test]
+fn r3_focus_and_system_resume_keep_the_verified_cleanup_barrier() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut focus = ProductionDispatchTestHarness::new_down_only();
+    let qpc_clock = focus.resources.clock;
+    let focus_loss = qpc_clock.now().expect("focus loss QPC");
+    focus
+        .reanchor_playback_clock_for_r3_probe(focus_loss)
+        .expect("focus lifecycle epoch");
+    focus
+        .lose_focus_for_r3_probe(focus_loss)
+        .expect("focus loss transition");
+    let focus_restore = qpc_clock.now().expect("focus restore QPC");
+    focus
+        .restore_focus_for_r3_probe(focus_restore)
+        .expect("focus restore verified cleanup");
+    let frame_ticks = qpc_clock.duration_from_us(16_667).expect("frame ticks");
+    let focus_floor = focus
+        .r3_down_floor_for_test(QpcTicks::ZERO, 1)
+        .expect("focus restore barrier");
+    assert!(
+        focus_floor
+            >= focus_restore
+                .checked_add_duration(frame_ticks)
+                .expect("focus barrier arithmetic"),
+        "focus restoration must use the shared post-cleanup barrier"
+    );
+
+    let mut power = ProductionDispatchTestHarness::new_down_only();
+    let suspend_qpc = power.resources.clock.now().expect("suspend QPC");
+    power
+        .reanchor_playback_clock_for_r3_probe(suspend_qpc)
+        .expect("power lifecycle epoch");
+    assert!(power.notify_system_power_at_for_test(true, Some(suspend_qpc)));
+    assert_ne!(power.take_system_power_pending_for_test(), 0);
+    power
+        .apply_system_suspend_for_test(suspend_qpc)
+        .expect("verified system suspend cleanup");
+    let barrier_before_resume = power
+        .r3_down_floor_for_test(QpcTicks::ZERO, 1)
+        .expect("system suspend barrier");
+    assert!(power.notify_system_power_at_for_test(false, None));
+    assert_ne!(power.take_system_power_pending_for_test(), 0);
+    assert!(
+        power
+            .try_system_resume_for_test(DurationTicks::ZERO)
+            .expect("system resume transition")
+    );
+    let barrier_after_resume = power
+        .r3_down_floor_for_test(QpcTicks::ZERO, 1)
+        .expect("system resume barrier");
+    assert_eq!(barrier_after_resume, barrier_before_resume);
+    assert!(
+        !power.notify_system_power_at_for_test(false, None),
+        "stale duplicate resume callback is ignored"
+    );
+    assert_eq!(
+        power.r3_down_floor_for_test(QpcTicks::ZERO, 1),
+        Some(barrier_before_resume),
+        "resume callbacks must not reset the barrier"
+    );
+}
+
+#[test]
 fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pairing() {
     use super::test_support::ProductionDispatchTestHarness;
 
@@ -4804,7 +5151,9 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let send_deadline = Instant::now() + Duration::from_secs(3);
-    while send_call_count.load(Ordering::Acquire) < 2 {
+    // Restoration first sends the verified cleanup Up, then the resumed
+    // authored Down after the global release-spacing barrier expires.
+    while send_call_count.load(Ordering::Acquire) < 3 {
         let snapshot = session.snapshot_lite();
         assert!(
             !snapshot.is_finished,

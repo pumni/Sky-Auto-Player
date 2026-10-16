@@ -438,6 +438,7 @@ fn suspend_live_input_and_reconcile_prepared(
     runtime: &mut super::WorkerRuntime,
     effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
     target_hwnd: isize,
+    post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
     prepared_stream: Option<&mut PreparedDispatchStream>,
 ) -> Result<(), String> {
     let cancelled = suspend_live_input(
@@ -446,6 +447,7 @@ fn suspend_live_input_and_reconcile_prepared(
         runtime,
         effective_now_ticks,
         target_hwnd,
+        post_cleanup_qpc,
     )?;
     if let Some(stream) = prepared_stream {
         stream.reconcile_resumable_suspension(&cancelled)?;
@@ -461,6 +463,7 @@ pub(crate) fn apply_resumable_lifecycle_transition_for_test(
     runtime: &mut super::WorkerRuntime,
     effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
     target_hwnd: isize,
+    post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
     prepared_stream: Option<&mut PreparedDispatchStream>,
 ) -> Result<(), String> {
     suspend_live_input_and_reconcile_prepared(
@@ -469,6 +472,7 @@ pub(crate) fn apply_resumable_lifecycle_transition_for_test(
         runtime,
         effective_now_ticks,
         target_hwnd,
+        post_cleanup_qpc,
         prepared_stream,
     )
 }
@@ -483,6 +487,7 @@ pub(crate) fn apply_system_suspend_transition(
     now_ticks: sky_dispatch_win32::clock::QpcTicks,
     suspend_boundary_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     target_hwnd: isize,
+    post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
     prepared_stream: Option<&mut PreparedDispatchStream>,
 ) -> Result<(), String> {
     runtime.reset_wait_state_after_system_suspend();
@@ -497,12 +502,10 @@ pub(crate) fn apply_system_suspend_transition(
         runtime,
         effective_now,
         target_hwnd,
+        post_cleanup_qpc,
         prepared_stream,
     )?;
     runtime.manual_pause_suspension_pending = false;
-    if let Some(guard) = runtime.physical_timing_guard.as_mut() {
-        guard.reset();
-    }
     runtime
         .production_forensics
         .observe_lifecycle(super::dispatch::observation::ObserverLifecycle::ResetAll);
@@ -584,9 +587,6 @@ pub(crate) fn try_complete_system_resume_transition(
     system_power.clear_suspend_boundary();
     progress_clock.publish(playback);
     runtime.invalidate_down_authorization();
-    if let Some(guard) = runtime.physical_timing_guard.as_mut() {
-        guard.reset();
-    }
     *suspend_applied = false;
     *resume_pending = false;
     Ok(true)
@@ -709,6 +709,7 @@ pub(super) fn dispatch(
                     now_ticks,
                     system_power.suspend_boundary_qpc(),
                     target.hwnd_for_safety_release(),
+                    || qpc_clock.now().map_err(|error| format!("{error:?}")),
                     prepared_stream.as_mut(),
                 ) {
                     core.runtime.terminal_error =
@@ -831,6 +832,7 @@ pub(super) fn dispatch(
                             &mut core.runtime,
                             lifecycle_effective_now,
                             preflight_target.hwnd,
+                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
                             prepared_stream.as_mut(),
                         ) {
                             core.runtime.verified_target = None;
@@ -867,6 +869,7 @@ pub(super) fn dispatch(
                             &mut core.runtime,
                             lifecycle_effective_now,
                             preflight_target.hwnd,
+                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
                             prepared_stream.as_mut(),
                         ) {
                             core.runtime.verified_target = None;
@@ -950,6 +953,7 @@ pub(super) fn dispatch(
                         &mut core.runtime,
                         lifecycle_effective_now,
                         target.hwnd_for_safety_release(),
+                        || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         prepared_stream.as_mut(),
                     ) {
                         core.runtime.terminal_error =
@@ -1008,6 +1012,7 @@ pub(super) fn dispatch(
                             &mut core.runtime,
                             lifecycle_effective_now,
                             target.hwnd_for_safety_release(),
+                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
                             prepared_stream.as_mut(),
                         ) {
                             core.runtime.terminal_error =

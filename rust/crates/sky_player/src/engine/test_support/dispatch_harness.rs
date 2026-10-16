@@ -1931,12 +1931,25 @@ impl ProductionDispatchTestHarness {
     /// Exercise the dispatch-loop's shared resumable lifecycle transition
     /// owner used by manual pause, focus restoration, and target changes.
     pub fn apply_resumable_lifecycle_transition_for_test(&mut self) -> Result<(), String> {
+        let qpc_clock = self.resources.clock;
+        self.apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
+            qpc_clock
+                .now()
+                .map_err(|error| format!("test cleanup QPC: {error:?}"))
+        })
+    }
+
+    pub fn apply_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
+        &mut self,
+        post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
+    ) -> Result<(), String> {
         super::super::worker::apply_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
             &mut self.runtime,
             Ok(self.effective_now_ticks),
             self.target.hwnd_for_safety_release(),
+            post_cleanup_qpc,
             self.prepared_stream_for_test.as_mut(),
         )
     }
@@ -1948,12 +1961,18 @@ impl ProductionDispatchTestHarness {
     pub fn suspend_live_input_for_test(&mut self) -> Result<Vec<u64>, String> {
         let effective_now_ticks = self.effective_now_ticks;
         let target_hwnd = self.target.hwnd_for_safety_release();
+        let qpc_clock = self.resources.clock;
         let cancelled = super::super::worker::suspend_live_input(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
             &mut self.runtime,
             Ok(effective_now_ticks),
             target_hwnd,
+            || {
+                qpc_clock
+                    .now()
+                    .map_err(|error| format!("test cleanup QPC: {error:?}"))
+            },
         )?;
         if let Some(stream) = self.prepared_stream_for_test.as_mut() {
             stream.reconcile_resumable_suspension(&cancelled)?;
@@ -1962,8 +1981,9 @@ impl ProductionDispatchTestHarness {
     }
 
     /// Drive the same verified cleanup and playback-clock transitions used by
-    /// the dispatch loop's manual pause/resume branches. No timing guard is
-    /// reset directly by this probe seam.
+    /// the dispatch loop's manual pause/resume branches. The synthetic P0
+    /// timeline supplies a post-cleanup QPC from the callback after release
+    /// returns.
     pub fn manual_pause_resume_for_r3_probe(
         &mut self,
         pause_qpc: QpcTicks,
@@ -1981,6 +2001,7 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             Ok(effective_now),
             self.target.hwnd_for_safety_release(),
+            || Ok(pause_qpc),
             self.prepared_stream_for_test.as_mut(),
         )?;
         self.resources
@@ -2011,6 +2032,7 @@ impl ProductionDispatchTestHarness {
 
     pub fn restore_focus_for_r3_probe(&mut self, restore_qpc: QpcTicks) -> Result<(), String> {
         self.focus_active.store(true, Ordering::Release);
+        let qpc_clock = self.resources.clock;
         let effective_now = self
             .resources
             .playback
@@ -2022,6 +2044,11 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             Ok(effective_now),
             self.target.hwnd_for_safety_release(),
+            || {
+                qpc_clock
+                    .now()
+                    .map_err(|error| format!("focus restore cleanup QPC: {error:?}"))
+            },
             self.prepared_stream_for_test.as_mut(),
         )?;
         self.resources
@@ -2081,8 +2108,17 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn configure_r3_mock_cleanup_emitter_for_test(&mut self) -> RtR3CleanupCapture {
+        self.configure_r3_mock_cleanup_emitter_with_completion_qpc_for_test()
+            .0
+    }
+
+    pub fn configure_r3_mock_cleanup_emitter_with_completion_qpc_for_test(
+        &mut self,
+    ) -> (RtR3CleanupCapture, Arc<AtomicU64>) {
         let captured = Arc::new(Mutex::new(Vec::with_capacity(4)));
         let capture = Arc::clone(&captured);
+        let completion = Arc::new(AtomicU64::new(0));
+        let completion_store = Arc::clone(&completion);
         let clock = self.resources.clock;
         self.resources
             .backend
@@ -2092,6 +2128,7 @@ impl ProductionDispatchTestHarness {
                     .expect("P0 cleanup capture lock")
                     .push((scan_codes.to_vec(), key_up));
                 let now = clock.now().expect("P0 cleanup QPC");
+                completion_store.store(now.as_u64(), Ordering::Release);
                 PlatformSendResult {
                     requested: scan_codes.len() as u8,
                     inserted: scan_codes.len() as u8,
@@ -2101,7 +2138,25 @@ impl ProductionDispatchTestHarness {
                     timing_error: None,
                 }
             });
-        captured
+        (captured, completion)
+    }
+
+    pub fn r3_down_floor_for_test(
+        &self,
+        authored_target_qpc: QpcTicks,
+        down_mask: u16,
+    ) -> Option<QpcTicks> {
+        self.runtime
+            .physical_timing_window_for_test(authored_target_qpc, 0, down_mask)
+            .map(|window| window.down_not_before_qpc)
+    }
+
+    pub fn establish_r3_resume_barrier_for_test(
+        &mut self,
+        cleanup_completed_qpc: QpcTicks,
+    ) -> Result<(), String> {
+        self.runtime
+            .establish_resume_down_barrier_for_test(cleanup_completed_qpc)
     }
 
     pub fn configure_r3_precision_mock_sender_for_test(
@@ -2219,6 +2274,7 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn apply_system_suspend_for_test(&mut self, now_ticks: QpcTicks) -> Result<(), String> {
+        let qpc_clock = self.resources.clock;
         super::super::worker::apply_system_suspend_transition(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
@@ -2228,6 +2284,11 @@ impl ProductionDispatchTestHarness {
             now_ticks,
             self.system_power.suspend_boundary_qpc(),
             self.target.hwnd_for_safety_release(),
+            || {
+                qpc_clock
+                    .now()
+                    .map_err(|error| format!("system cleanup QPC: {error:?}"))
+            },
             None,
         )
     }

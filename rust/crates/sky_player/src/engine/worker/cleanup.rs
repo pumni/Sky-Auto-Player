@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::coordinator::GenerationAccounting;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-use sky_dispatch_win32::clock::{QpcClock, QpcError};
+use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::any::Any;
 use std::collections::HashMap;
@@ -405,6 +405,7 @@ pub(crate) fn suspend_live_input(
     runtime: &mut WorkerRuntime,
     effective_now_ticks: Result<TimelineTicks, String>,
     target_hwnd: isize,
+    post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
 ) -> Result<Vec<u64>, String> {
     runtime.invalidate_down_authorization();
     if let Some(guard) = runtime.physical_timing_guard.as_mut() {
@@ -422,6 +423,16 @@ pub(crate) fn suspend_live_input(
             describe_release_outcome(backend, &release)
         ));
     }
+
+    let cleanup_completed_qpc = post_cleanup_qpc()
+        .map_err(|error| format!("post-cleanup resume-barrier QPC failure: {error}"))?;
+    let guard = runtime
+        .physical_timing_guard
+        .as_mut()
+        .ok_or_else(|| "physical timing guard is not initialized after cleanup".to_string())?;
+    guard
+        .establish_resume_down_barrier(cleanup_completed_qpc)
+        .map_err(|error| format!("resume Down barrier establishment failed: {error:?}"))?;
 
     debug_assert!(release_state_verified(backend, &release));
     if let Some(pending) = runtime.pending_up_recovery.as_ref() {
@@ -455,9 +466,6 @@ pub(crate) fn suspend_live_input(
         .check_invariants()
         .map_err(|error| format!("coordinator invariant failure after suspension: {error}"))?;
     runtime.invalidate_down_authorization();
-    if let Some(guard) = runtime.physical_timing_guard.as_mut() {
-        guard.reset();
-    }
     runtime.pending_up_recovery = None;
     Ok(cancelled)
 }

@@ -60,6 +60,11 @@ public sealed class NativeKeyMessageData : EventArgs {
 
 public sealed class NativeAcceptanceSinkForm : Form {
     public event EventHandler<NativeKeyMessageData> NativeKeyMessage;
+    public bool PreventActivationOnShow { get; set; }
+
+    protected override bool ShowWithoutActivation {
+        get { return PreventActivationOnShow; }
+    }
 
     protected override void WndProc(ref Message message) {
         NativeKeyMessageData decoded = NativeKeyMessageData.DecodeKeyMessage(
@@ -145,6 +150,7 @@ $sinkKind = if ($isProbe) {
 $inputPolicy = "receives_only; benchmark must use SendInput"
 
 $form = New-Object NativeAcceptanceSinkForm
+$form.PreventActivationOnShow = $isProbe
 $form.Text = $title
 $form.Width = 620
 $form.Height = 240
@@ -233,9 +239,11 @@ $record = {
 # wrong-window delivery cannot disappear as an unobserved event.
 $form.Add_NativeKeyMessage({ param($Sender, $Event) & $record $Sender $Event })
 $form.Add_Shown({
-    $form.Activate()
-    $form.Focus()
-    [void][NativeAcceptanceSinkFocus]::SetForegroundWindow($form.Handle)
+    if (-not $isProbe) {
+        $form.Activate()
+        $form.Focus()
+        [void][NativeAcceptanceSinkFocus]::SetForegroundWindow($form.Handle)
+    }
 })
 $form.Add_FormClosed({
     if ($null -ne $eventWriter) {

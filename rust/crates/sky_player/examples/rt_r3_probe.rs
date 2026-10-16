@@ -1,4 +1,4 @@
-//! Executable P0 timing characterizations for Coordinator R3.
+//! Executable Coordinator R3 timing and lifecycle contracts.
 //!
 //! This example is compiled only with `test-support`. It calls the existing
 //! prepared worker dispatch path and labels deterministic transport evidence
@@ -343,7 +343,7 @@ fn contracts_report() -> Result<Value, String> {
             "vector_cases": vector_a,
             "malformed_duplicate_up_control": malformed_duplicate_up_control,
             "path_evidence": "test-support due seam recomputes the current production physical timing window for the current prepared packet on every call, accepts wall QPC only, and enters the unchanged prepared suffix only when due; manual pause/resume uses the dispatch-loop verified resumable cleanup transition",
-            "oracle": "no sender, cursor advance, or generation commit before the current packet_not_before_qpc; independently compare resumed Down against musical Up completion + one frame and report a reproduced baseline gap when below"
+            "oracle": "no sender, cursor advance, or generation commit before the current packet_not_before_qpc; resumed Down must satisfy musical Up completion plus one frame and the absolute post-cleanup global Down barrier"
         },
         "B_enabled_lease_watchdog_delayed": {
             "hypothesis_status": if lease_reproduced { "REPRODUCED" } else { "NO-REPRODUCTION" },
@@ -355,7 +355,7 @@ fn contracts_report() -> Result<Value, String> {
         "C_serial_HOL": run_hol_vector()?,
         "D_focus_loss_policy": run_focus_vectors()?,
         "E_empty_cleanup": run_empty_cleanup()?,
-        "scope": "characterization only; no production timing, lease, scheduler, or cleanup policy changed"
+        "scope": "D4 lifecycle release-barrier qualification plus retained lease, HOL, focus, and empty-cleanup characterizations; no H/G, scheduler, or cleanup transport policy changed"
     }))
 }
 
