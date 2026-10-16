@@ -94,7 +94,7 @@ fn test_session_options(
         timer_lifecycle_context: None,
         prepared_packet_ambiguity_mask: None,
         preflight_user_held_mask: None,
-        modifier_key_state_query_for_test: None,
+        modifier_key_state_query_for_test: Some(Arc::new(|_| 0)),
     }
 }
 
@@ -1660,10 +1660,12 @@ fn late_prepared_down_sends_each_unseen_boundary_without_catch_up() {
     );
     assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
     assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
-    assert!(matches!(
-        harness.dispatch_prepared_current_after_stall_ticks_for_test(DurationTicks::from_raw(1)),
-        super::worker::DispatchStep::Dispatched
-    ));
+    let later_step =
+        harness.dispatch_prepared_current_after_stall_ticks_for_test(DurationTicks::from_raw(1));
+    assert!(
+        matches!(later_step, super::worker::DispatchStep::Dispatched),
+        "later D dispatch step: {later_step:?}"
+    );
     assert_eq!(harness.playback_epoch_qpc_for_test(), initial_epoch);
     assert_eq!(
         *packets.lock().expect("causal packet capture"),
@@ -8388,10 +8390,10 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
         },
     );
     // This test asserts mixed-packet telemetry cardinality, not the production
-    // 500-us deadline policy.  Keep the real worker/QPC path, but give the
+    // 500-us deadline policy. Keep the real worker/QPC path, but give the
     // Windows test runner enough scheduling margin that host preemption does
     // not turn the telemetry assertion into an unrelated startup deadline
-    // failure.  Production configuration remains unchanged.
+    // failure. Production configuration remains unchanged.
     set_test_timing_margin(&mut options, 20_000);
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
