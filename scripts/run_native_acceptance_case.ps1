@@ -105,8 +105,10 @@ try {
 
     if ($Scenario -eq 'focus-loss') {
         $probeArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'InertFocusProbe', '-RunId', $runId, '-ReadyFile', $probeReadyPath, '-EventLog', $probeEventsPath)
-        $probeProcess = Start-Process -FilePath $pwshPath -ArgumentList $probeArgv -PassThru -WindowStyle Normal -RedirectStandardOutput (Join-Path $runDir 'focus-probe.stdout.log') -RedirectStandardError (Join-Path $runDir 'focus-probe.stderr.log')
+        $probeProcess = Start-Process -FilePath $pwshPath -ArgumentList $probeArgv -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runDir 'focus-probe.stdout.log') -RedirectStandardError (Join-Path $runDir 'focus-probe.stderr.log')
         $probe = Wait-ReadyRecord $probeReadyPath $probeProcess
+        Write-Output 'Focus the ReceiveOnly sink if needed. The inert probe does not activate on show; the focus-loss control starts in 15 seconds.'
+        Start-Sleep -Seconds 15
     }
 
     if ($CpuContention) {

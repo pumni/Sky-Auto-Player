@@ -446,6 +446,18 @@ impl WorkerRuntime {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn establish_resume_down_barrier_for_test(
+        &mut self,
+        cleanup_completed_qpc: QpcTicks,
+    ) -> Result<(), String> {
+        self.physical_timing_guard
+            .as_mut()
+            .ok_or_else(|| "physical timing guard is not initialized".to_string())?
+            .establish_resume_down_barrier(cleanup_completed_qpc)
+            .map_err(|error| format!("test resume Down barrier: {error:?}"))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn create_test_runtime(verified_target: Option<TargetStamp>) -> Self {
         Self {
             verified_target,

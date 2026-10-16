@@ -895,3 +895,68 @@ fn production_prepared_normal_frame_no_alloc() {
     assert!(matches!(step, DispatchStep::Dispatched));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn r3_resume_barrier_guard_query_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(10_000_000, false)
+            .expect("R3 lifecycle fixture");
+    harness.configure_r3_mock_packet_sender_for_test(&[0, 0, 0, 0]);
+    harness.prepare_prepared_stream_for_test();
+    let epoch = harness.qpc_now_for_test().expect("resume barrier epoch");
+    harness
+        .reanchor_playback_clock_for_r3_probe(epoch)
+        .expect("resume barrier playback epoch");
+    harness
+        .establish_r3_resume_barrier_for_test(epoch)
+        .expect("resume barrier test setup");
+    let before = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("Down physical floor");
+    assert!(before.down_not_before_qpc > before.authored_target_qpc);
+
+    enable_counting();
+    let queried = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("barrier query remains healthy");
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "resume barrier guard query allocated");
+    assert_eq!(queried.down_not_before_qpc, before.down_not_before_qpc);
+}
+
+#[test]
+fn r3_resume_barrier_healthy_down_dispatch_no_alloc() {
+    let _lock = TEST_LOCK.lock();
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(10_000_000, false)
+            .expect("R3 lifecycle fixture");
+    let packets = harness.configure_r3_mock_packet_sender_for_test(&[0, 0, 0, 0]);
+    harness.prepare_prepared_stream_for_test();
+    let epoch = harness.qpc_now_for_test().expect("resume barrier epoch");
+    harness
+        .reanchor_playback_clock_for_r3_probe(epoch)
+        .expect("resume barrier playback epoch");
+    harness
+        .establish_r3_resume_barrier_for_test(epoch)
+        .expect("resume barrier test setup");
+    let before = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("Down physical floor");
+    let barrier = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("barrier physical wait target")
+        .packet_not_before_qpc;
+    assert!(barrier > before.authored_target_qpc);
+    harness.set_r3_mock_sender_start_qpc_for_test(barrier);
+
+    enable_counting();
+    let step =
+        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(barrier);
+    let allocs = disable_counting();
+
+    assert_eq!(allocs, 0, "healthy Down with resume barrier allocated");
+    assert!(matches!(step, DispatchStep::Dispatched), "step={step:?}");
+    assert_eq!(packets.lock().expect("packet capture").len(), 1);
+}

@@ -221,14 +221,17 @@ try {
     $runnerManifest = Get-Content -LiteralPath $runnerManifestPath -Raw | ConvertFrom-Json
     if ($runnerManifest.status -ne 'COMPLETED_CHARACTERIZATION') { throw 'Runner output is not a completed characterization' }
     if ($runnerManifest.source_revision.ToLowerInvariant() -ne $headSha) { throw 'HeadSha does not match the runner source revision' }
-    if ($Phase -ne 'P0' -or $runnerManifest.stage -ne 'baseline') { throw 'This P0 publisher route accepts only a completed baseline run' }
+    $expectedStage = if ($Phase -eq 'P0') { 'baseline' } elseif ($Phase -eq 'P1') { 'phase' + '1' } else { $null }
+    if (-not $expectedStage -or $runnerManifest.stage -ne $expectedStage) { throw "This publisher route does not accept phase $Phase stage '$($runnerManifest.stage)'" }
     if ($runnerManifest.run_id -notmatch '^[A-Za-z0-9._-]+$') { throw 'Runner run_id contains unsafe path characters' }
     $runId = [string]$runnerManifest.run_id
-    $evidenceBranch = 'rt-r3/evidence/p0-' + $headSha.Substring(0, 12)
+    $phaseLabel = $Phase.ToLowerInvariant()
+    $evidenceBranch = 'rt-r3/evidence/' + $phaseLabel + '-' + $headSha.Substring(0, 12)
     $currentHead = (& git -C $repoRoot rev-parse --verify HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $currentHead.ToLowerInvariant() -ne $headSha) { throw 'Implementation worktree HEAD differs from HeadSha' }
     $currentBranch = (& git -C $repoRoot branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0 -or $currentBranch -ne 'rt-r3/p0-baseline') { throw 'P0 publishing requires the fixed implementation branch rt-r3/p0-baseline' }
+    $implementationBranch = if ($Phase -eq 'P0') { 'rt-r3/p0-baseline' } else { 'rt-r3/p1-lifecycle-release-barrier' }
+    if ($LASTEXITCODE -ne 0 -or $currentBranch -ne $implementationBranch) { throw "Phase $Phase publishing requires the fixed implementation branch $implementationBranch" }
     $trackedStatus = @(& git -C $repoRoot status --porcelain --untracked-files=all)
     if ($LASTEXITCODE -ne 0 -or $trackedStatus.Count -ne 0) { throw 'P0 publishing requires a clean implementation worktree' }
 
@@ -258,7 +261,7 @@ try {
         runtime_revision = $runnerManifest.runtime_revision
         head_sha = $headSha
         executable_sha256 = $runnerManifest.executable_sha256
-        transport_kind = 'deterministic-mock'
+        transport_kind = if ($Phase -eq 'P0') { 'deterministic-mock' } else { 'deterministic-mock contracts plus project-owned ReceiveOnly native sink' }
         declared_outputs = $innerFileManifest
     }
     Write-JsonFile (Join-Path $packageRoot 'manifest.json') $innerManifest

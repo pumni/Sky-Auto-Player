@@ -10,7 +10,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$runId = 'r3-p0-' + (Get-Date -AsUTC -Format 'yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+$runPrefix = if ($Stage -eq 'baseline') { 'r3-p0-' } elseif ($Stage -eq ('phase' + '1')) { 'r3-p1-' } else { 'r3-blocked-' }
+$runId = $runPrefix + (Get-Date -AsUTC -Format 'yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $commandResults = [System.Collections.Generic.List[object]]::new()
 $contentionProcesses = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $runDirectory = $null
@@ -136,7 +137,7 @@ try {
     if ($Stage -notin $allowedStages) {
         throw "BLOCKED-STAGE: stage '$Stage' is unsupported; no evidence or PASS result was generated"
     }
-    if ($Stage -ne 'baseline') {
+    if ($Stage -notin @('baseline', ('phase' + '1'))) {
         throw "BLOCKED-STAGE: stage '$Stage' is not implemented; no evidence or PASS result was generated"
     }
     if ($PSBoundParameters.ContainsKey('ControlRevision')) {
@@ -221,6 +222,180 @@ try {
         SKY_RT_R3_OS = $hostMetadata.os
         SKY_RT_R3_CPU = $hostMetadata.cpu
         SKY_RT_R3_POWER_STATE = $hostMetadata.power_state
+    }
+
+    if ($Stage -eq ('phase' + '1')) {
+        $contractPath = Join-Path $runDirectory 'contracts.json'
+        $contractRunId = "$runId-contracts"
+        $contractEnvironment = $environment.Clone()
+        $contractEnvironment.SKY_RT_R3_RUN_ID = $contractRunId
+        $contractEnvironment.SKY_RT_R3_CONTENTION_WORKERS = '0'
+        [void](Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'contracts', '--load-mode', 'quiet', '--output', $contractPath) -Label 'contracts' -Environment $contractEnvironment)
+        $contractReport = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
+        $vectorA = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume
+        $vectorCases = @($vectorA.vector_cases)
+        if ($contractReport.source_revision.ToLowerInvariant() -ne $headSha -or
+            $contractReport.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or
+            $contractReport.profile -ne 'release' -or
+            $contractReport.transport_kind -ne 'deterministic-mock' -or
+            $contractReport.run_id -ne $contractRunId -or
+            $vectorA.hypothesis_status -ne 'NO-REPRODUCTION' -or
+            $vectorA.characterization_integrity_passed -ne $true -or
+            $vectorA.normal_gap_contract_passed -ne $true -or
+            $vectorCases.Count -ne 3 -or
+            $contractReport.test_vectors.E_empty_cleanup.oracle_passed -ne $true -or
+            $contractReport.test_vectors.E_empty_cleanup.keyboard_transport_calls -ne 0) {
+            throw 'BLOCKED-CONTRACT: fixed lifecycle vector or empty-cleanup contract failed qualification'
+        }
+        $expectedFrequencies = @(1000000, 10000000, 10000003)
+        for ($caseIndex = 0; $caseIndex -lt $vectorCases.Count; $caseIndex++) {
+            $case = $vectorCases[$caseIndex]
+            $frequency = [long]$case.qpc_frequency_hz
+            $frameTicks = [long][Math]::Ceiling([double]$frequency * 16667 / 1000000)
+            $upCompletion = [long]$case.events.musical_up.completion.qpc_ticks
+            $pauseQpc = [long]$case.events.pause_qpc.qpc_ticks
+            $requiredDown = $upCompletion + $frameTicks
+            $postCleanupBarrier = $pauseQpc + $frameTicks
+            $downFloor = [long]$case.production_down_floor.qpc_ticks
+            if ($frequency -ne $expectedFrequencies[$caseIndex] -or
+                $case.normal_gap_contract_passed -ne $true -or
+                $case.below_completion_plus_frame -ne $false -or
+                $case.due_seam_integrity_passed -ne $true -or
+                $case.cleanup_transport_sends -ne 0 -or
+                $downFloor -lt $requiredDown -or
+                $downFloor -lt $postCleanupBarrier -or
+                [long]$case.lifecycle_snapshots.before_next_down.post_cleanup_recomputed_floor.qpc_ticks -ne $downFloor -or
+                [long]$case.events.redown.pre_call.qpc_ticks -ne $downFloor -or
+                $case.lifecycle_snapshots.before_next_down.dispatch_step_at_resume -ne 'None' -or
+                $case.lifecycle_snapshots.before_next_down.current_floor_was_due_at_resume -ne $false -or
+                $case.lifecycle_snapshots.before_next_down.not_due_without_send_or_advance -ne $true -or
+                $case.conversion.effective_hold_h_us -ne 17167 -or
+                $case.conversion.min_release_gap_us -ne 17167 -or
+                $case.conversion.authored_offsets_us.Count -ne 4 -or
+                $case.final_generation_accounting.activated -ne 2 -or
+                $case.final_generation_accounting.released -ne 2 -or
+                $case.final_release_obligation_mask -ne 0) {
+                throw "BLOCKED-CONTRACT: lifecycle vector failed at frequency $frequency"
+            }
+        }
+        if ($contractReport.test_vectors.C_serial_HOL.timing_config.native_admission -ne 'PASS' -or
+            $contractReport.test_vectors.C_serial_HOL.timing_config.frame_gap_g_us -ne 16667 -or
+            $contractReport.test_vectors.C_serial_HOL.timing_config.effective_hold_h_us -ne 17167 -or
+            $contractReport.test_vectors.C_serial_HOL.timing_config.min_release_gap_us -ne 17167 -or
+            $contractReport.test_vectors.D_focus_loss_policy.restore_path.release_on_restore -ne $true) {
+            throw 'BLOCKED-CONTRACT: retained H/G or focus-restoration controls failed qualification'
+        }
+
+        [void](Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--release', '--features', 'real-input-acceptance,test-support', '--bin', 'rt-native-acceptance') -Label 'build-native-acceptance')
+        [void](Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/native_acceptance_sink.ps1', '-SelfTest') -Label 'native-sink-selftest')
+        $nativeOutputRoot = Join-Path $repoRoot '.benchmarks\physical-native-cases'
+        $nativeResults = [System.Collections.Generic.List[object]]::new()
+        $nativeObservedEventCount = [long]0
+        foreach ($scenario in @('pause-resume', 'suspend-resume', 'focus-loss', 'near-minimum-retrigger', 'mixed-up-down', 'stop-cleanup')) {
+            $beforeNativeRuns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            if (Test-Path -LiteralPath $nativeOutputRoot -PathType Container) {
+                foreach ($directory in Get-ChildItem -LiteralPath $nativeOutputRoot -Directory) { [void]$beforeNativeRuns.Add($directory.FullName) }
+            }
+            $nativeCommand = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/run_native_acceptance_case.ps1', '-Scenario', $scenario, '-TimingMarginUs', '500') -Label "native-$scenario"
+            $newNativeRuns = @()
+            if (Test-Path -LiteralPath $nativeOutputRoot -PathType Container) {
+                $newNativeRuns = @(Get-ChildItem -LiteralPath $nativeOutputRoot -Directory | Where-Object { -not $beforeNativeRuns.Contains($_.FullName) })
+            }
+            if ($newNativeRuns.Count -ne 1) { throw "BLOCKED-NATIVE: could not identify one fresh $scenario evidence directory" }
+            $nativeRunDirectory = $newNativeRuns[0].FullName
+            $nativeConfig = Get-Content -LiteralPath (Join-Path $nativeRunDirectory 'run-config.json') -Raw | ConvertFrom-Json
+            $nativeInvocation = Get-Content -LiteralPath (Join-Path $nativeRunDirectory 'invocation.json') -Raw | ConvertFrom-Json
+            $nativeReportPath = Join-Path $nativeRunDirectory 'rt-native-acceptance.jsonl'
+            $nativeReportLines = @(Get-Content -LiteralPath $nativeReportPath)
+            if ($nativeReportLines.Count -ne 1) { throw "BLOCKED-NATIVE: $scenario did not emit one native report" }
+            $nativeReport = $nativeReportLines[0] | ConvertFrom-Json
+            if ($nativeCommand.exit_code -ne 0 -or
+                $nativeConfig.source_revision.ToLowerInvariant() -ne $headSha -or
+                $nativeConfig.source_tree_clean -ne $true -or
+                $nativeConfig.scenario -ne $scenario -or
+                $nativeConfig.timing_margin_us -ne 500 -or
+                $nativeInvocation.exit_code -ne 0 -or
+                $nativeInvocation.status -ne 'PASS' -or
+                $nativeReport.run_id -ne $nativeConfig.run_id -or
+                $nativeReport.scenario -ne $scenario -or
+                $nativeReport.timing_margin_us -ne 500 -or
+                $nativeReport.status -ne 'PASS') {
+                throw "BLOCKED-NATIVE: $scenario failed source, margin, or ReceiveOnly acceptance checks"
+            }
+            $nativeDestination = Join-Path (Join-Path $runDirectory 'native') $scenario
+            [System.IO.Directory]::CreateDirectory($nativeDestination) | Out-Null
+            foreach ($child in Get-ChildItem -LiteralPath $nativeRunDirectory -Force) {
+                Copy-Item -LiteralPath $child.FullName -Destination $nativeDestination -Recurse
+            }
+            $nativeObservedEventCount += [long]$nativeInvocation.observed_event_count
+            $nativeResults.Add([ordered]@{
+                scenario = $scenario
+                timing_margin_us = 500
+                status = $nativeReport.status
+                run_id = $nativeConfig.run_id
+                command_label = $nativeCommand.label
+                evidence_directory = "native/$scenario"
+                source_run_id = $newNativeRuns[0].Name
+                executable_sha256 = $nativeConfig.harness_sha256
+                observed_event_count = $nativeInvocation.observed_event_count
+                expected_event_count = $nativeInvocation.expected_event_count
+            })
+        }
+
+        $summary = [ordered]@{
+            schema_version = 1
+            status = 'COMPLETED_CHARACTERIZATION'
+            stage = $Stage
+            run_id = $runId
+            source_revision = $headSha
+            runtime_revision = $runtimeRevision
+            source_tree_clean = $sourceTreeClean
+            base_revision = $runtimeRevision
+            executable_sha256 = $probeHash
+            host = $hostMetadata
+            profile = 'release'
+            transport_kind = 'deterministic-mock contract plus real SendInput to the project-owned ReceiveOnly sink'
+            contracts = [ordered]@{
+                fixed_lifecycle_vector_status = $vectorA.hypothesis_status
+                fixed_lifecycle_vector_integrity = $vectorA.characterization_integrity_passed
+                fixed_lifecycle_normal_gap = $vectorA.normal_gap_contract_passed
+                qpc_frequencies_hz = $expectedFrequencies
+                empty_cleanup_oracle = $contractReport.test_vectors.E_empty_cleanup.oracle_passed
+                retained_H_us = 17167
+                retained_G_us = 16667
+            }
+            native_controls = @($nativeResults)
+            native_control_count = $nativeResults.Count
+            native_observed_event_count = $nativeObservedEventCount
+            native_sink_selftest = 'PASS'
+            child_command_count = $commandResults.Count
+            child_commands = @($commandResults)
+            precision_run_count = 0
+            statistical_sample_count = 0
+            measurement_boundary = 'Six native scenario controls use the project-owned ReceiveOnly sink. Their event counts qualify scenario outcomes and are not timing-distribution samples. Deterministic contracts use the release test-support probe and mock transport.'
+            receipt_boundary = 'Sink event observation does not prove Sky/game/audio receipt.'
+        }
+        Write-JsonFile (Join-Path $runDirectory 'summary.json') $summary
+        Write-JsonFile (Join-Path $runDirectory 'status.json') ([ordered]@{ status = 'COMPLETED_CHARACTERIZATION'; run_id = $runId; finished_utc = [DateTimeOffset]::UtcNow.ToString('O') })
+        $declaredFiles = [System.Collections.Generic.List[object]]::new()
+        foreach ($file in Get-ChildItem -LiteralPath $runDirectory -File -Recurse | Sort-Object FullName) {
+            if ($file.Name -eq 'runner-outputs.json') { continue }
+            $relative = [System.IO.Path]::GetRelativePath($runDirectory, $file.FullName).Replace('\', '/')
+            $declaredFiles.Add([ordered]@{ path = $relative; size_bytes = $file.Length; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() })
+        }
+        $outputsManifest = [ordered]@{
+            schema_version = 1
+            status = 'COMPLETED_CHARACTERIZATION'
+            stage = $Stage
+            run_id = $runId
+            source_revision = $headSha
+            runtime_revision = $runtimeRevision
+            executable_sha256 = $probeHash
+            declared_outputs = @($declaredFiles)
+        }
+        Write-JsonFile (Join-Path $runDirectory 'runner-outputs.json') $outputsManifest
+        Write-Output (ConvertTo-Json -InputObject ([ordered]@{ status = $outputsManifest.status; run_id = $runId; run_directory = $runDirectory; source_revision = $headSha; runtime_revision = $runtimeRevision; native_controls = $nativeResults.Count; native_events = $summary.native_observed_event_count; child_commands = $commandResults.Count }) -Compress)
+        return
     }
 
     $contractPath = Join-Path $runDirectory 'contracts.json'

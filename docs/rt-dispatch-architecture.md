@@ -63,15 +63,28 @@ QPC, the guard updates only the affected keys:
 ```text
 musical_up_not_before[key] = Down completion + effective_min_hold
 down_not_before[key]        = Up completion + frame_us
-packet_not_before           = max(authored_target, relevant floors)
+resume_down_not_before      = verified_cleanup_qpc + frame_us
+packet_not_before           = max(authored_target, relevant per-key floors,
+                                  resume barrier for Down-bearing packets)
 ```
 
 `effective_min_hold = frame_base_hold + timing_margin` is materialized at boot
 and passed into the guard; the guard does not recompute the sum. The guard is
 floor-only. It has no latest start, sender cutoff, or lateness rejection. The
 normal and strict/diagnostic completion paths share the same update helper.
-Transport failures do not create completion evidence. Lifecycle reset and
-invalidation clear stale floors.
+Transport failures do not create completion evidence.
+
+After verified resumable cleanup returns, the worker samples QPC and sets the
+global absolute Down barrier to that sample plus one frame. It clears canceled
+musical hold floors while retaining this barrier. Manual pause, focus restore,
+deferred manual suspension, and system suspend use the same cleanup operation;
+resume paths do not reset the barrier. It applies to every later Down-bearing
+packet, including all Down keys in a mixed packet, and never delays Up-only
+packets. A completed Down for one key does not clear it for other keys. Once
+the barrier time has passed it adds no delay, and authored targets later than
+the barrier are preserved. A new session constructs a clean guard. Failed or
+inconclusive cleanup, a failed post-cleanup QPC read, or barrier overflow keeps
+the guard invalid and Down dispatch fail-closed.
 
 For a physical plan the loop queries the guard before waiting. It waits to
 `packet_not_before_qpc`; metadata-only work waits to its authored target. Causal
@@ -128,9 +141,11 @@ injection evidence only.
 ## Lifecycle and diagnostics
 
 Focus loss pauses physical admission and retains existing fail-closed cleanup
-semantics. Pause, suspend, target-generation changes, and session reset clear
-stale prepared work and reset or invalidate floor evidence as required by the
-existing lifecycle state machine. Cleanup releases remain safety operations.
+semantics. Pause, suspend, and target-generation changes clear stale prepared
+work. Verified resumable cleanup clears canceled per-key floor evidence and
+establishes the absolute Down barrier above; failure paths invalidate the
+guard. A new session starts with a fresh guard. Cleanup releases remain safety
+operations.
 
 Musical generation accounting and physical cleanup obligations are separate.
 Only a matching musical Up produces a normal generation `Released` transition;
