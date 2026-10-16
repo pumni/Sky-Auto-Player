@@ -5,17 +5,17 @@ mod acceptance {
 #[path = "release_gap_stress.rs"] mod release_gap_stress;
 #[path = "snapshot_report.rs"] mod snapshot_report;
 #[path = "scenarios.rs"] mod scenarios;
-#[path = "../acceptance_limits.rs"] mod acceptance_limits;
+#[path = "acceptance_limits.rs"] mod acceptance_limits;
 #[path = "modifier_guard.rs"] mod modifier_guard;
 #[path = "arguments.rs"] mod arguments;
 #[path = "owner_identity.rs"] mod owner_identity;
 #[cfg(windows)]
 #[path = "r3_final_qualification.rs"] mod r3_final_qualification;
 #[cfg(windows)]
-#[path = "../lifecycle_wait.rs"] mod lifecycle_wait;
+#[path = "lifecycle_wait.rs"] mod lifecycle_wait;
 #[cfg(windows)]
-#[path = "../preterminal.rs"] mod preterminal;
-#[path = "../evidence_report.rs"] mod evidence_report;
+#[path = "preterminal.rs"] mod preterminal;
+#[path = "evidence_report.rs"] mod evidence_report;
 #[cfg(windows)]
 use lifecycle_wait::{wait_for_focus_pause, wait_for_resume, wait_for_startup_ready};
 #[cfg(windows)]
