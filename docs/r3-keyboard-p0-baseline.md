@@ -121,3 +121,62 @@ The measured source revision is 458ee68aa40ad48a9805b07b62afaec2e0ba58a5. This r
 P0 remains active for coordinator review. PR #437 remains Draft and unmerged; issue #431 remains open. No merge or P1 work is authorized.
 
 P0-T1 CORRECTION VERIFIED AND SUBMITTED FOR COORDINATOR REVIEW; P0 ACCEPTANCE PENDING; NEXT PHASE NOT STARTED
+
+## Post-PR #445 merge: upgraded-toolchain requalification — 2026-10-16
+
+PR #445 was merged normally at `4bd103c21a3fd8aad15eff281db15f8b10409493` with parents `1574aa267b8364b1930bd6abc7baa36636d33843` and `1794d359a871c1b6d86d6b7c79b2695a973a3127`. The P0 branch merged that `origin/main` commit without rebasing. The measured runtime/base is now `4bd103c21a3fd8aad15eff281db15f8b10409493`; the previous evidence above remains pinned to Rust/Cargo 1.98.1, source `458ee68aa40ad48a9805b07b62afaec2e0ba58a5`, and runtime `1574aa267b8364b1930bd6abc7baa36636d33843`.
+
+The refreshed characterization is a separate immutable run, not a relabeling of the earlier bundle:
+
+- Run: `r3-p0-20261016T093704647Z-487b5a4e`
+- Measured source: `0fe9987a554010eee441e4d738f6c77908578ddf`
+- Runtime/base: `4bd103c21a3fd8aad15eff281db15f8b10409493`
+- Release probe SHA-256: `ba1770b56ab8b94082d46e79a2c6239384d813dba543516175ae1ca36160c6e4` (the earlier probe hash remains `309de78a9f6847ad2097c5915052b99e130476259e1beac8980efb912666c22e`)
+- Evidence commit: `97b19290e0dd1332e8b1be0f9058e2096f5030e6`; [immutable run bundle](https://github.com/pumni/Sky-Auto-Player/tree/97b19290e0dd1332e8b1be0f9058e2096f5030e6/runs/r3-p0-20261016T093704647Z-487b5a4e)
+- Outer manifest SHA-256: `39dd9f3fa890868add2f0103ce9d9a15d1e15d10814754e855dc406f6708ba3c`
+- ZIP SHA-256: `417ac1653920a360f8ff487665d4519455399746061141ba7ea6a3b710983217` (1,037,184 bytes); 320 declared raw files total 54,779,394 bytes.
+
+### Environment and results
+
+- Windows 11 Pro build 26300, AMD Ryzen 5 5600 6-Core Processor, Balanced power scheme, host QPC 10,000,000 Hz.
+- Rust/Cargo 1.99.1, host `x86_64-pc-windows-msvc`; Bun 1.4.3; PowerShell 7.6.6; Git 2.55.0.windows.5; Playwright 1.64.1. The active MSVC environment resolved `cl.exe`/`link.exe` 19.44.35229.0/14.44.35229.0 and Windows SDK `10.0.26100.0`; a `cl /Bv` temporary-source smoke compile passed. Cargo-vet 0.10.2 was installed outside the repository at `C:\Users\pumni\AppData\Local\SkyAutoPlayerTools\cargo-vet-0.10.2`.
+- The baseline command produced 90 runs across nine workloads and two load modes: five runs per cell, each with 1,000 warmup and 10,000 measured samples. All 900,000 measured samples succeeded; all 18 cells were eligible; all 97 runner child commands exited zero.
+- Every cell's median run-level admission P99 converted to integer microseconds was `0 (0-0)`. This floor conversion is below one microsecond and does not mean the operation took zero time. The table also records the largest integer-microsecond admission sample across the five runs in each cell. Raw ticks, full quantiles, counters, and per-run reports remain in the bundle.
+
+| Workload | Quiet: median P99 (range) | CPU contention: median P99 (range) | Max admission µs (quiet / contention) |
+| --- | ---: | ---: | ---: |
+| down-1 | 0 (0-0) | 0 (0-0) | 50 / 6 |
+| down-5 | 0 (0-0) | 0 (0-0) | 22 / 6 |
+| down-15 | 0 (0-0) | 0 (0-0) | 2 / 37 |
+| mixed-1x1 | 0 (0-0) | 0 (0-0) | 4 / 5 |
+| mixed-2x3 | 0 (0-0) | 0 (0-0) | 14 / 42 |
+| mixed-7x8 | 0 (0-0) | 0 (0-0) | 6 / 1 |
+| up-only-1 | 0 (0-0) | 0 (0-0) | 27 / 6 |
+| up-only-5 | 0 (0-0) | 0 (0-0) | 3 / 3 |
+| up-only-15 | 0 (0-0) | 0 (0-0) | 5 / 3 |
+
+The precision transport remains a deterministic mock. These microsecond values do not measure `SendInput`, device timing, game receipt, or audio. The new probe binary hash differs from the old one, and the compiler/runtime dependency graph changed in PR #445, so the old timing bundle cannot qualify the upgraded candidate. This fresh characterization is tied only to the source/runtime/toolchain listed above.
+
+The three refreshed native controls used the project-owned ReceiveOnly sink, with identity, event-log ID, contiguous sequence, and report window verified:
+
+| Scenario | Run ID | Result | ReceiveOnly events |
+| --- | --- | --- | ---: |
+| canonical-single | `native-case-20261016T163750-6f50c31c` | PASS | 2 |
+| pause-resume | `native-case-20261016T163753-550a480f` | PASS | 4 |
+| supervisor-lease-expiry | `native-case-20261016T163755-03f13ee9` | PASS; watchdog expired | 0 |
+
+These event counts are harness/sink evidence, not game receipt. The supervisor expiry case emitted no authorized key events.
+
+### P0 verification on the merged candidate
+
+- `cargo fmt --manifest-path rust/Cargo.toml --all -- --check`: PASS.
+- Focused callback and native-monitor tests: PASS, 1/1 each.
+- Three predeclared unfiltered desktop suite runs at default libtest parallelism: PASS, 229/229 each.
+- `cargo xtask check static`: PASS with Cargo-vet 0.10.2 and 31 allowlisted architecture warnings. An initial invocation stopped at `cargo vet --version` because the executable was missing from this PowerShell PATH; the pinned tool was then installed outside the repository and the gate passed.
+- `cargo xtask check all`: PASS on the merged Rust 1.99.1/Bun 1.4.3 candidate, including workspace Clippy/tests, frozen desktop dependencies, TypeScript checks, Playwright E2E, and native desktop checks. No browser-skip setting was used.
+- `git diff --check`: PASS before this report append; rechecked on the final report tree for the P0 checkpoint.
+- The runner's first two preflight attempts produced no measurement: one refused an unclean status after tests rewrote generated TypeScript bindings byte-identically; the other detected its stale Rust 1.98.1/Bun 1.4.0 guard. The guard and emitted CI Bun metadata were updated to the merged 1.99.1/1.4.3 pins in source commit `0fe9987a554010eee441e4d738f6c77908578ddf`; the completed run above uses that committed source. No production scheduler, dispatch, `SendInput`, or timing policy changed in the P0 patch.
+
+P0 #431 remains open and unaccepted; PR #437 remains Draft and unmerged. P1–P5 remain WAITING. The dependency upgrade changes the native build inputs, and the refreshed evidence above is new qualification evidence for this toolchain. Coordinator review and acceptance are still required before any next phase.
+
+READY FOR COORDINATOR REVIEW; NEXT PHASE NOT STARTED
