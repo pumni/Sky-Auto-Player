@@ -20,6 +20,7 @@ Historical plans, audit reports, issue text, and obsolete work orders do not ove
 - [timing-principles.md](timing-principles.md) — Timing semantics, targets, measurement domains, and fail-closed behavior.
 - [hold-frame-model.md](hold-frame-model.md) — User-selected FPS and authored hold materialization.
 - [tuning-presets.md](tuning-presets.md) — Native settings, playback preferences, and runtime tuning boundaries.
+- [adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md](adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md) — Current lifecycle release barrier, final Down lease proof, timing domains, and evidence limits.
 - [library-v1-contract.md](library-v1-contract.md) — Native manifest, collection, and local import contract.
 
 ## Security, distribution, and toolchain
@@ -73,5 +74,6 @@ Packaging, Windows timing acceptance, release, and benchmark scripts are special
   - [adr/ADR-0015-prepared-down-validity-and-causal-admission.md](adr/ADR-0015-prepared-down-validity-and-causal-admission.md)
   - [adr/ADR-0016-causal-authorization-and-floor-only-physical-timing.md](adr/ADR-0016-causal-authorization-and-floor-only-physical-timing.md)
   - [adr/ADR-0017-current-down-continuity-and-physical-min-hold.md](adr/ADR-0017-current-down-continuity-and-physical-min-hold.md)
+  - [adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md](adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md)
 - `docs/releases/` — Release-specific qualification and acceptance records.
 - Completed experiments, past migration records, raw measurement evidence, and historical performance baselines have been retired from the active documentation tree and remain preserved in Git history (`git log`).
