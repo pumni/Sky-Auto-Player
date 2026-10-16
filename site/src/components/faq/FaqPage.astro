@@ -52,11 +52,9 @@ const structuredData = {
       <p class="kicker">Sky Auto Player · {isVi ? 'Tham khảo' : 'Reference'}</p>
       <h1 id="faq-title">{isVi ? 'Câu hỏi thường gặp' : 'Frequently asked questions'}</h1>
       <p class="faq-hero__copy">
-        {
-          isVi
-            ? 'Cài đặt, định dạng sheet, hỗ trợ Windows, giới hạn kỹ thuật và xử lý lỗi cho trình phát nhạc ưu tiên timing.'
-            : 'Setup, sheet formats, Windows support, technical boundaries and troubleshooting for the timing-first music player.'
-        }
+        {isVi
+          ? 'Cài đặt, định dạng sheet, hỗ trợ Windows, giới hạn kỹ thuật và xử lý lỗi cho trình phát nhạc ưu tiên timing.'
+          : 'Setup, sheet formats, Windows support, technical boundaries and troubleshooting for the timing-first music player.'}
       </p>
     </div>
   </section>
@@ -71,20 +69,18 @@ const structuredData = {
       <div>
         <h2 id="faq-cta-title">{isVi ? 'Sẵn sàng thử một sheet?' : 'Ready to try a sheet?'}</h2>
         <p>
-          {
-            isVi
-              ? 'Mở trang bản phát hành rồi mở Library khi bài hát của bạn đã sẵn sàng.'
-              : 'Browse the releases, then open the Library when your song is ready.'
-          }
+          {isVi
+            ? 'Mở trang bản phát hành rồi mở Library khi bài hát của bạn đã sẵn sàng.'
+            : 'Browse the releases, then open the Library when your song is ready.'}
         </p>
       </div>
       <div class="final-cta__actions">
-        <a class="button button--primary" href={SITE.releaseUrl}
-          >{isVi ? 'Xem bản phát hành' : 'Browse releases'}</a
-        >
-        <a class="button button--secondary" href={withBase(isVi ? '/vi/' : '/')}
-          >{isVi ? 'Về trang chủ' : 'Back to landing page'}</a
-        >
+        <a class="button button--primary" href={SITE.releaseUrl}>
+          {isVi ? 'Xem bản phát hành' : 'Browse releases'}
+        </a>
+        <a class="button button--secondary" href={withBase(isVi ? '/vi/' : '/')}>
+          {isVi ? 'Về trang chủ' : 'Back to landing page'}
+        </a>
       </div>
     </div>
   </section>

@@ -28,11 +28,17 @@ const { data, locale } = Astro.props;
       <p class="final-cta__description">{data.description}</p>
     </div>
     <div class="final-cta__actions">
-      <a class="button button--primary" href={SITE.releaseUrl}>{data.primaryCta}</a>
-      <a class="button button--secondary" href={SITE.repositoryUrl}>{data.secondaryCta}</a>
+      <a class="button button--primary" href={SITE.releaseUrl}>
+        {data.primaryCta}
+      </a>
+      <a class="button button--secondary" href={SITE.repositoryUrl}>
+        {data.secondaryCta}
+      </a>
       <span class="final-cta__metric">JSON · SKYSHEET · TXT / WINDOWS 10–11</span>
     </div>
-    <span class="final-cta__mark" aria-hidden="true"><BrandMark /></span>
+    <span class="final-cta__mark" aria-hidden="true">
+      <BrandMark />
+    </span>
   </div>
 </section>
 

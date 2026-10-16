@@ -17,12 +17,18 @@ const isVi = locale === 'vi';
     <li class="breadcrumb__item">
       <a href={withBase(isVi ? '/vi/' : '/')}>{isVi ? 'Trang chủ' : 'Home'}</a>
     </li>
-    <li class="breadcrumb__item breadcrumb__item--separator" aria-hidden="true">/</li>
+    <li class="breadcrumb__item breadcrumb__item--separator" aria-hidden="true">
+      /
+    </li>
     <li class="breadcrumb__item">
       <a href={withBase(isVi ? '/vi/guides/' : '/guides/')}>{isVi ? 'Hướng dẫn' : 'Guides'}</a>
     </li>
-    <li class="breadcrumb__item breadcrumb__item--separator" aria-hidden="true">/</li>
-    <li class="breadcrumb__item breadcrumb__item--current" aria-current="page">{guideTitle}</li>
+    <li class="breadcrumb__item breadcrumb__item--separator" aria-hidden="true">
+      /
+    </li>
+    <li class="breadcrumb__item breadcrumb__item--current" aria-current="page">
+      {guideTitle}
+    </li>
   </ol>
 </nav>
 

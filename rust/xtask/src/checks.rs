@@ -2408,8 +2408,8 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "needs: changes",
         "if: needs.changes.outputs.updater_required == 'true'",
         "runs-on: windows-latest",
-        "rustup toolchain install 1.98.1",
-        "bun-version: 1.4.0",
+        "rustup toolchain install 1.99.1",
+        "bun-version: 1.4.3",
         "bun install --frozen-lockfile",
         "scripts/test_v4_updater_key_rotation.ps1",
         "contents: read",
@@ -2585,7 +2585,7 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "needs: changes",
         "if: needs.changes.outputs.desktop_required == 'true'",
         "runs-on: ubuntu-latest",
-        "bun-version: 1.4.0",
+        "bun-version: 1.4.3",
         "bun install --frozen-lockfile",
         "bun run check",
         "desktop_e2e_required == 'true'",
@@ -5307,7 +5307,7 @@ jobs:
     if: needs.changes.outputs.updater_required == 'true'
     runs-on: windows-latest
     steps:
-      - run: rustup toolchain install 1.98.1
+      - run: rustup toolchain install 1.99.1
       - run: bun install --frozen-lockfile
       - run: scripts/test_v4_updater_key_rotation.ps1
   updater_e2e:

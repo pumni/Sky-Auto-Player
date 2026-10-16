@@ -22,14 +22,12 @@ const strip = data.proofStrip;
     </div>
 
     <ul class="proof-strip__capabilities" aria-label={isVi ? 'Tín hiệu chính' : 'Key signals'}>
-      {
-        strip.signals.map((signal) => (
-          <li>
-            <span class="proof-strip__node" aria-hidden="true" />
-            <span>{signal}</span>
-          </li>
-        ))
-      }
+      {strip.signals.map((signal) => (
+        <li>
+          <span class="proof-strip__node" aria-hidden="true" />
+          <span>{signal}</span>
+        </li>
+      ))}
     </ul>
   </div>
 </section>

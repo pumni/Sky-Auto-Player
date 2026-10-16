@@ -19,22 +19,23 @@ const { data } = Astro.props;
     <SectionIntro kicker={data.kicker} title={data.title} titleId="how-title" measure="narrow" />
     <div>
       <ol class="steps" aria-label={data.kicker}>
-        {
-          data.items.map((item, i) => (
-            <li class="step">
-              <span class="step__number" aria-hidden="true">
-                {String(i + 1).padStart(2, '0')}
-              </span>
-              <div class="step__copy">
-                <span class:list={['step__cue', `step__cue--${i + 1}`]} aria-hidden="true" />
-                <h3>{item.title}</h3>
-                <p>{item.description}</p>
-              </div>
-            </li>
-          ))
-        }
+        {data.items.map((item, i) => (
+          <li class="step">
+            <span class="step__number" aria-hidden="true">
+              {String(i + 1).padStart(2, '0')}
+            </span>
+            <div class="step__copy">
+              <span class:list={['step__cue', `step__cue--${i + 1}`]} aria-hidden="true" />
+              <h3>{item.title}</h3>
+              <p>{item.description}</p>
+            </div>
+          </li>
+        ))}
       </ol>
-      <p class="hotkey-note"><span>KEYBOARD STRIP</span>{data.hotkeyNote}</p>
+      <p class="hotkey-note">
+        <span>KEYBOARD STRIP</span>
+        {data.hotkeyNote}
+      </p>
     </div>
   </div>
 </section>

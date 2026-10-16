@@ -16,18 +16,17 @@ const isVi = locale === 'vi';
   </figcaption>
   <div class="console__topline">
     <span class="console__identity">{isVi ? 'BỘ ĐỊNH THỜI' : 'TIMING ENGINE'}</span>
-    <span class="console__status-label"
-      ><span class="console__status" aria-hidden="true"></span><span data-timing-ready
-        >{isVi ? 'SẴN SÀNG' : 'READY'}</span
-      ></span
-    >
+    <span class="console__status-label">
+      <span class="console__status" aria-hidden="true"></span>
+      <span data-timing-ready>{isVi ? 'SẴN SÀNG' : 'READY'}</span>
+    </span>
   </div>
   <div class="console__playhead">
     <span>{isVi ? 'VỊ TRÍ PHÁT' : 'PLAYHEAD'}</span>
     <span class="telemetry">00:13.066</span>
-    <span class="console__playhead-track" aria-hidden="true"
-      ><i class="console__playhead-marker"></i></span
-    >
+    <span class="console__playhead-track" aria-hidden="true">
+      <i class="console__playhead-marker"></i>
+    </span>
   </div>
   <ol
     class="timing-console__events"
@@ -40,9 +39,9 @@ const isVi = locale === 'vi';
       style="--event-index: 1"
     >
       <span class="timing-event__time telemetry">00:12.400</span>
-      <span class="timing-event__keys"
-        ><span class="timing-event__marker" aria-hidden="true"></span>A1 + B2 + C3</span
-      >
+      <span class="timing-event__keys">
+        <span class="timing-event__marker" aria-hidden="true"></span>A1 + B2 + C3
+      </span>
       <span class="timing-event__kind">{isVi ? 'HỢP ÂM' : 'CHORD'}</span>
     </li>
     <li
@@ -52,9 +51,9 @@ const isVi = locale === 'vi';
       style="--event-index: 2"
     >
       <span class="timing-event__time telemetry">00:12.733</span>
-      <span class="timing-event__keys"
-        ><span class="timing-event__marker" aria-hidden="true"></span>D2</span
-      >
+      <span class="timing-event__keys">
+        <span class="timing-event__marker" aria-hidden="true"></span>D2
+      </span>
       <span class="timing-event__kind">{isVi ? 'NỐT' : 'NOTE'}</span>
     </li>
     <li
@@ -65,32 +64,42 @@ const isVi = locale === 'vi';
       aria-current="step"
     >
       <span class="timing-event__time telemetry">00:13.066</span>
-      <span class="timing-event__keys"
-        ><span class="timing-event__marker" aria-hidden="true"></span>E3 <span
-          class="hold-line"
-          aria-hidden="true">━━━━━━━</span
-        ></span
-      >
+      <span class="timing-event__keys">
+        <span class="timing-event__marker" aria-hidden="true"></span>E3{' '}
+        <span class="hold-line" aria-hidden="true">
+          ━━━━━━━
+        </span>
+      </span>
       <span class="timing-event__kind">{isVi ? 'NỐT NGÂN' : 'HOLD'}</span>
     </li>
   </ol>
   {/* 15-key score grid: data-event must match event keys above (A1+B2+C3, D2, E3). */}
   <div class="instrument-grid" aria-hidden="true">
-    <span class="instrument-key" data-event="1">A1</span>
+    <span class="instrument-key" data-event="1">
+      A1
+    </span>
     <span class="instrument-key">B1</span>
     <span class="instrument-key">C1</span>
     <span class="instrument-key">D1</span>
     <span class="instrument-key">E1</span>
     <span class="instrument-key">A2</span>
-    <span class="instrument-key" data-event="1">B2</span>
+    <span class="instrument-key" data-event="1">
+      B2
+    </span>
     <span class="instrument-key">C2</span>
-    <span class="instrument-key" data-event="2">D2</span>
+    <span class="instrument-key" data-event="2">
+      D2
+    </span>
     <span class="instrument-key">E2</span>
     <span class="instrument-key">A3</span>
     <span class="instrument-key">B3</span>
-    <span class="instrument-key" data-event="1">C3</span>
+    <span class="instrument-key" data-event="1">
+      C3
+    </span>
     <span class="instrument-key">D3</span>
-    <span class="instrument-key is-active" data-event="3">E3</span>
+    <span class="instrument-key is-active" data-event="3">
+      E3
+    </span>
   </div>
   <button class="console__replay" type="button" data-timing-replay>
     {isVi ? 'Phát lại minh họa' : 'Replay illustration'}

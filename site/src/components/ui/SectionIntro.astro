@@ -17,6 +17,8 @@ const { title, kicker, description, titleId, measure = 'normal', align = 'start'
   class:list={['ui-section-intro', `ui-section-intro--${measure}`, `ui-section-intro--${align}`]}
 >
   {kicker && <Kicker>{kicker}</Kicker>}
-  <h2 id={titleId} class="ui-section-title">{title}</h2>
+  <h2 id={titleId} class="ui-section-title">
+    {title}
+  </h2>
   {description && <p class="ui-section-copy">{description}</p>}
 </div>

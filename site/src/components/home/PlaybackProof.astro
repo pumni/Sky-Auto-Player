@@ -25,16 +25,18 @@ const diagramLabels = isVi
         measure="narrow"
       />
       <ul class="proof-points" aria-label={isVi ? 'Năng lực phát nhạc' : 'Playback capabilities'}>
-        {data.points.map((point) => <li>{point}</li>)}
+        {data.points.map((point) => (
+          <li>{point}</li>
+        ))}
       </ul>
     </div>
 
     <div class="causal-diagram">
       <div class="causal-diagram__header">
         <span>{isVi ? 'MÔ HÌNH NGUYÊN NHÂN' : 'CAUSAL TIMING MODEL'}</span>
-        <span class="causal-diagram__status"
-          >{isVi ? 'MỘT LẦN / ỔN ĐỊNH' : 'ONE PASS / STABLE'}</span
-        >
+        <span class="causal-diagram__status">
+          {isVi ? 'MỘT LẦN / ỔN ĐỊNH' : 'ONE PASS / STABLE'}
+        </span>
       </div>
       <div class="causal-diagram__lane" aria-hidden="true">
         <span class="causal-diagram__line"></span>
@@ -46,29 +48,29 @@ const diagramLabels = isVi
         class="causal-steps"
         aria-label={isVi ? 'Các bước căn chỉnh timing' : 'Timing alignment steps'}
       >
-        {
-          diagramLabels.map((label, index) => (
-            <li>
-              <span class="causal-step__number">{String(index + 1).padStart(2, '0')}</span>
-              <span class="causal-step__label">{label}</span>
-              <span class="causal-step__value">
-                {index === 0
-                  ? 'A1 + B2 + C3'
-                  : index === 1
-                    ? '00:13.066'
-                    : isVi
-                      ? 'CÙNG BATCH GỬI'
-                      : 'SAME SEND BATCH'}
-              </span>
-            </li>
-          ))
-        }
+        {diagramLabels.map((label, index) => (
+          <li>
+            <span class="causal-step__number">{String(index + 1).padStart(2, '0')}</span>
+            <span class="causal-step__label">{label}</span>
+            <span class="causal-step__value">
+              {index === 0
+                ? 'A1 + B2 + C3'
+                : index === 1
+                  ? '00:13.066'
+                  : isVi
+                    ? 'CÙNG BATCH GỬI'
+                    : 'SAME SEND BATCH'}
+            </span>
+          </li>
+        ))}
       </ol>
       <div class="causal-events" aria-label={isVi ? 'Ví dụ trường độ' : 'Duration example'}>
         <span class="causal-events__caption">{isVi ? 'TRƯỜNG ĐỘ' : 'DURATION'}</span>
         <span class="causal-event causal-event--chord">A1+B2+C3</span>
         <span class="causal-event causal-event--note">D2</span>
-        <span class="causal-event causal-event--hold">E3 <i aria-hidden="true"></i></span>
+        <span class="causal-event causal-event--hold">
+          E3 <i aria-hidden="true"></i>
+        </span>
       </div>
     </div>
   </div>

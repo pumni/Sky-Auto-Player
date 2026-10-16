@@ -21,15 +21,13 @@ const guideBase = isVi ? '/vi/guides/' : '/guides/';
 <aside class="related-guides" aria-label={isVi ? 'Hướng dẫn liên quan' : 'Related guides'}>
   <h2 class="related-guides__title">{isVi ? 'Hướng dẫn liên quan' : 'Related guides'}</h2>
   <ul class="related-guides__list">
-    {
-      guides.map((guide) => (
-        <li>
-          <a class="related-guides__link" href={withBase(`${guideBase}${guide.slug}/`)}>
-            {guide.title}
-          </a>
-        </li>
-      ))
-    }
+    {guides.map((guide) => (
+      <li>
+        <a class="related-guides__link" href={withBase(`${guideBase}${guide.slug}/`)}>
+          {guide.title}
+        </a>
+      </li>
+    ))}
   </ul>
 </aside>
 

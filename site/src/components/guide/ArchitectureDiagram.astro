@@ -82,16 +82,19 @@ const descId = `${diagramId}-desc`;
       width="100"
       height="80"
       rx="6"
-      class="arch-diagram__box arch-diagram__box--input"></rect>
-    <text x="54" y="93" class="arch-diagram__label">{labels.step1.split('\n')[0]}</text>
-    {
-      labels.step1.split('\n')[1] && (
-        <text x="54" y="109" class="arch-diagram__label">
-          {labels.step1.split('\n')[1]}
-        </text>
-      )
-    }
-    <text x="54" y="127" class="arch-diagram__sublabel">{labels.step1sub}</text>
+      class="arch-diagram__box arch-diagram__box--input"
+    ></rect>
+    <text x="54" y="93" class="arch-diagram__label">
+      {labels.step1.split('\n')[0]}
+    </text>
+    {labels.step1.split('\n')[1] && (
+      <text x="54" y="109" class="arch-diagram__label">
+        {labels.step1.split('\n')[1]}
+      </text>
+    )}
+    <text x="54" y="127" class="arch-diagram__sublabel">
+      {labels.step1sub}
+    </text>
 
     <!-- Arrow 1→2 -->
     <line
@@ -100,7 +103,8 @@ const descId = `${diagramId}-desc`;
       x2="124"
       y2="100"
       class="arch-diagram__connector"
-      marker-end="url(#arrow)"></line>
+      marker-end="url(#arrow)"
+    ></line>
 
     <!-- Step 2: Parser -->
     <rect
@@ -109,9 +113,14 @@ const descId = `${diagramId}-desc`;
       width="90"
       height="64"
       rx="6"
-      class="arch-diagram__box arch-diagram__box--domain"></rect>
-    <text x="173" y="97" class="arch-diagram__label">{labels.step2}</text>
-    <text x="173" y="115" class="arch-diagram__sublabel">{labels.step2sub}</text>
+      class="arch-diagram__box arch-diagram__box--domain"
+    ></rect>
+    <text x="173" y="97" class="arch-diagram__label">
+      {labels.step2}
+    </text>
+    <text x="173" y="115" class="arch-diagram__sublabel">
+      {labels.step2sub}
+    </text>
 
     <!-- Arrow 2→3 -->
     <line
@@ -120,7 +129,8 @@ const descId = `${diagramId}-desc`;
       x2="238"
       y2="100"
       class="arch-diagram__connector"
-      marker-end="url(#arrow)"></line>
+      marker-end="url(#arrow)"
+    ></line>
 
     <!-- Step 3: Timing Model -->
     <rect
@@ -129,10 +139,17 @@ const descId = `${diagramId}-desc`;
       width="90"
       height="64"
       rx="6"
-      class="arch-diagram__box arch-diagram__box--domain"></rect>
-    <text x="287" y="93" class="arch-diagram__label">{labels.step3.split('\n')[0]}</text>
-    <text x="287" y="109" class="arch-diagram__label">{labels.step3.split('\n')[1]}</text>
-    <text x="287" y="123" class="arch-diagram__sublabel">{labels.step3sub}</text>
+      class="arch-diagram__box arch-diagram__box--domain"
+    ></rect>
+    <text x="287" y="93" class="arch-diagram__label">
+      {labels.step3.split('\n')[0]}
+    </text>
+    <text x="287" y="109" class="arch-diagram__label">
+      {labels.step3.split('\n')[1]}
+    </text>
+    <text x="287" y="123" class="arch-diagram__sublabel">
+      {labels.step3sub}
+    </text>
 
     <!-- Arrow 3→4 -->
     <line
@@ -141,7 +158,8 @@ const descId = `${diagramId}-desc`;
       x2="352"
       y2="100"
       class="arch-diagram__connector"
-      marker-end="url(#arrow)"></line>
+      marker-end="url(#arrow)"
+    ></line>
 
     <!-- Step 4: Rust Dispatch -->
     <rect
@@ -150,10 +168,17 @@ const descId = `${diagramId}-desc`;
       width="90"
       height="64"
       rx="6"
-      class="arch-diagram__box arch-diagram__box--infra"></rect>
-    <text x="401" y="93" class="arch-diagram__label">{labels.step4.split('\n')[0]}</text>
-    <text x="401" y="109" class="arch-diagram__label">{labels.step4.split('\n')[1]}</text>
-    <text x="401" y="123" class="arch-diagram__sublabel">{labels.step4sub}</text>
+      class="arch-diagram__box arch-diagram__box--infra"
+    ></rect>
+    <text x="401" y="93" class="arch-diagram__label">
+      {labels.step4.split('\n')[0]}
+    </text>
+    <text x="401" y="109" class="arch-diagram__label">
+      {labels.step4.split('\n')[1]}
+    </text>
+    <text x="401" y="123" class="arch-diagram__sublabel">
+      {labels.step4sub}
+    </text>
 
     <!-- Arrow 4→5 -->
     <line
@@ -162,7 +187,8 @@ const descId = `${diagramId}-desc`;
       x2="466"
       y2="100"
       class="arch-diagram__connector"
-      marker-end="url(#arrow)"></line>
+      marker-end="url(#arrow)"
+    ></line>
 
     <!-- Step 5: SendInput -->
     <rect
@@ -171,14 +197,27 @@ const descId = `${diagramId}-desc`;
       width="90"
       height="64"
       rx="6"
-      class="arch-diagram__box arch-diagram__box--platform"></rect>
-    <text x="515" y="97" class="arch-diagram__label">{labels.step5}</text>
-    <text x="515" y="113" class="arch-diagram__sublabel">{labels.step5sub}</text>
+      class="arch-diagram__box arch-diagram__box--platform"
+    ></rect>
+    <text x="515" y="97" class="arch-diagram__label">
+      {labels.step5}
+    </text>
+    <text x="515" y="113" class="arch-diagram__sublabel">
+      {labels.step5sub}
+    </text>
 
     <!-- Process boundary dashed line -->
-    <line x1="575" y1="20" x2="575" y2="180" class="arch-diagram__boundary" stroke-dasharray="4 3"
+    <line
+      x1="575"
+      y1="20"
+      x2="575"
+      y2="180"
+      class="arch-diagram__boundary"
+      stroke-dasharray="4 3"
     ></line>
-    <text x="578" y="18" class="arch-diagram__boundary-label">{labels.boundary}</text>
+    <text x="578" y="18" class="arch-diagram__boundary-label">
+      {labels.boundary}
+    </text>
 
     <!-- Arrow 5→6 -->
     <line
@@ -187,7 +226,8 @@ const descId = `${diagramId}-desc`;
       x2="592"
       y2="100"
       class="arch-diagram__connector"
-      marker-end="url(#arrow)"></line>
+      marker-end="url(#arrow)"
+    ></line>
 
     <!-- Step 6: Game -->
     <rect
@@ -196,9 +236,14 @@ const descId = `${diagramId}-desc`;
       width="90"
       height="64"
       rx="6"
-      class="arch-diagram__box arch-diagram__box--game"></rect>
-    <text x="641" y="97" class="arch-diagram__label">{labels.step6}</text>
-    <text x="641" y="113" class="arch-diagram__sublabel">{labels.step6sub}</text>
+      class="arch-diagram__box arch-diagram__box--game"
+    ></rect>
+    <text x="641" y="97" class="arch-diagram__label">
+      {labels.step6}
+    </text>
+    <text x="641" y="113" class="arch-diagram__sublabel">
+      {labels.step6sub}
+    </text>
   </svg>
 
   <!-- Text equivalent for screen readers and non-SVG environments -->
@@ -214,35 +259,27 @@ const descId = `${diagramId}-desc`;
       </li>
       <li>
         <strong>{isVi ? 'Timing Model' : 'Timing model'}</strong>
-        {
-          isVi
-            ? ' — lên lịch nốt nhạc theo timeline theo frame'
-            : ' — schedules notes on a frame-aligned timeline'
-        }
+        {isVi
+          ? ' — lên lịch nốt nhạc theo timeline theo frame'
+          : ' — schedules notes on a frame-aligned timeline'}
       </li>
       <li>
         <strong>{isVi ? 'Rust Dispatch' : 'Rust dispatch'}</strong>
-        {
-          isVi
-            ? ' — vòng lặp dispatch độ phân giải cao, MMCSS, đo telemetry'
-            : ' — high-res dispatch loop, MMCSS, telemetry'
-        }
+        {isVi
+          ? ' — vòng lặp dispatch độ phân giải cao, MMCSS, đo telemetry'
+          : ' — high-res dispatch loop, MMCSS, telemetry'}
       </li>
       <li>
         <strong>Windows SendInput</strong>
-        {
-          isVi
-            ? ' — phương thức input duy nhất, không hook, không inject'
-            : ' — only input mechanism, no hooks, no injection'
-        }
+        {isVi
+          ? ' — phương thức input duy nhất, không hook, không inject'
+          : ' — only input mechanism, no hooks, no injection'}
       </li>
       <li>
         <strong>{isVi ? 'Game' : 'Game'}</strong>
-        {
-          isVi
-            ? ' — nhận phím bình thường qua message queue Windows'
-            : ' — receives keys normally via Windows message queue'
-        }
+        {isVi
+          ? ' — nhận phím bình thường qua message queue Windows'
+          : ' — receives keys normally via Windows message queue'}
       </li>
     </ol>
   </figcaption>
