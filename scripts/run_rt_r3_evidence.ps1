@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$runPrefix = if ($Stage -eq 'baseline') { 'r3-p0-' } elseif ($Stage -eq ('phase' + '1')) { 'r3-p1-' } elseif ($Stage -eq ('phase' + '2')) { 'r3-p2-' } else { 'r3-blocked-' }
+$runPrefix = if ($Stage -eq 'baseline') { 'r3-p0-' } elseif ($Stage -eq ('phase' + '1')) { 'r3-p1-' } elseif ($Stage -eq ('phase' + '2')) { 'r3-p2-' } elseif ($Stage -eq 'diagnostics') { 'r3-p4-' } else { 'r3-blocked-' }
 $runId = $runPrefix + (Get-Date -AsUTC -Format 'yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $commandResults = [System.Collections.Generic.List[object]]::new()
 $contentionProcesses = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
@@ -18,6 +18,7 @@ $runDirectory = $null
 $controlWorktree = $null
 $controlWorktreeCreated = $false
 $script:blockedPerf = $false
+$script:blockedDefect = $false
 
 function Resolve-Executable([string]$Name) {
     $command = Get-Command $Name -ErrorAction Stop | Select-Object -First 1
@@ -31,7 +32,8 @@ function Invoke-CapturedCommand {
         [Parameter(Mandatory)][string[]]$Arguments,
         [Parameter(Mandatory)][string]$Label,
         [string]$WorkingDirectory = $repoRoot,
-        [hashtable]$Environment = @{}
+        [hashtable]$Environment = @{},
+        [switch]$CaptureWorkingSet
     )
 
     $index = $commandResults.Count + 1
@@ -56,7 +58,37 @@ function Invoke-CapturedCommand {
     if (-not $process.Start()) { throw "Could not start child process: $Name" }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
+    $workingSetStartBytes = $null
+    $peakWorkingSetBytes = $null
+    $workingSetSampleCount = 0
+    $workingSetSampleIntervalMs = $null
+    if ($CaptureWorkingSet) {
+        $workingSetSampleIntervalMs = 5
+        $process.Refresh()
+        try {
+            $workingSetStartBytes = [long]$process.WorkingSet64
+            $peakWorkingSetBytes = $workingSetStartBytes
+            $workingSetSampleCount++
+        } catch { }
+        while (-not $process.WaitForExit($workingSetSampleIntervalMs)) {
+            $process.Refresh()
+            try {
+                $sampleBytes = [long]$process.WorkingSet64
+                if ($null -eq $workingSetStartBytes) { $workingSetStartBytes = $sampleBytes }
+                if ($null -eq $peakWorkingSetBytes -or $sampleBytes -gt $peakWorkingSetBytes) { $peakWorkingSetBytes = $sampleBytes }
+                $workingSetSampleCount++
+            } catch { }
+        }
+        $process.Refresh()
+        try {
+            $finalWorkingSetBytes = [long]$process.WorkingSet64
+            if ($null -eq $workingSetStartBytes) { $workingSetStartBytes = $finalWorkingSetBytes }
+            if ($null -eq $peakWorkingSetBytes -or $finalWorkingSetBytes -gt $peakWorkingSetBytes) { $peakWorkingSetBytes = $finalWorkingSetBytes }
+            $workingSetSampleCount++
+        } catch { }
+    } else {
+        $process.WaitForExit()
+    }
     $stdoutText = $stdoutTask.GetAwaiter().GetResult()
     $stderrText = $stderrTask.GetAwaiter().GetResult()
     [System.IO.File]::WriteAllText($stdoutPath, $stdoutText, $utf8NoBom)
@@ -70,11 +102,21 @@ function Invoke-CapturedCommand {
         started_utc = $startedAt.ToString('O')
         finished_utc = [DateTimeOffset]::UtcNow.ToString('O')
         exit_code = $process.ExitCode
+        working_set_capture = [bool]$CaptureWorkingSet
+        working_set_start_bytes = $workingSetStartBytes
+        working_set_peak_bytes = $peakWorkingSetBytes
+        working_set_sample_count = $workingSetSampleCount
+        working_set_sample_interval_ms = $workingSetSampleIntervalMs
+        working_set_scope = if ($CaptureWorkingSet) { 'child-process working set sampled by the PowerShell parent; includes shared resident pages and probe/runtime memory; not allocator-requested bytes' } else { 'not captured' }
         stdout_path = [System.IO.Path]::GetRelativePath($runDirectory, $stdoutPath).Replace('\', '/')
         stderr_path = [System.IO.Path]::GetRelativePath($runDirectory, $stderrPath).Replace('\', '/')
     }
     $commandResults.Add($result)
     if ($process.ExitCode -ne 0) {
+        if ($stderrText -match 'BLOCKED-DEFECT') {
+            $script:blockedDefect = $true
+            throw "BLOCKED-DEFECT: child command '$Label' reported a physical invariant defect; see $($result.stderr_path)"
+        }
         throw "Child command '$Label' exited $($process.ExitCode); see $($result.stderr_path)"
     }
     return $result
@@ -169,10 +211,11 @@ try {
     if ($Stage -notin $allowedStages) {
         throw "BLOCKED-STAGE: stage '$Stage' is unsupported; no evidence or PASS result was generated"
     }
-    if ($Stage -notin @('baseline', ('phase' + '1'), ('phase' + '2'))) {
+    if ($Stage -notin @('baseline', ('phase' + '1'), ('phase' + '2'), 'diagnostics')) {
         throw "BLOCKED-STAGE: stage '$Stage' is not implemented; no evidence or PASS result was generated"
     }
     $isP2Comparison = $Stage -eq ('phase' + '2')
+    $isP4Diagnostics = $Stage -eq 'diagnostics'
     if ($isP2Comparison -and -not $PSBoundParameters.ContainsKey('ControlRevision')) {
         throw 'BLOCKED-STAGE: P2 requires the exact accepted-P1 ControlRevision'
     }
@@ -265,6 +308,447 @@ try {
         SKY_RT_R3_OS = $hostMetadata.os
         SKY_RT_R3_CPU = $hostMetadata.cpu
         SKY_RT_R3_POWER_STATE = $hostMetadata.power_state
+    }
+
+    if ($isP4Diagnostics) {
+        $helpEnvironment = $environment.Clone()
+        $helpEnvironment.SKY_RT_R3_RUN_ID = "$runId-help"
+        [void](Invoke-CapturedCommand -Name $probePath -Arguments @('--help') -Label 'diagnostics-probe-help' -Environment $helpEnvironment)
+        $helpPath = Join-Path $runDirectory $commandResults[$commandResults.Count - 1].stdout_path
+        $helpText = Get-Content -LiteralPath $helpPath -Raw
+        foreach ($requiredText in @('contracts|precision|hol|startup|polling', '--generation-count', '17167us', 'no real keyboard input')) {
+            if ($helpText -notmatch [regex]::Escape($requiredText)) { throw "BLOCKED-STAGE: diagnostics probe help does not declare '$requiredText'" }
+        }
+
+        $holPath = Join-Path $runDirectory 'hol.json'
+        $holEnvironment = $environment.Clone()
+        $holEnvironment.SKY_RT_R3_RUN_ID = "$runId-hol"
+        $holCommand = Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'hol', '--output', $holPath) -Label 'diagnostics-hol' -Environment $holEnvironment -CaptureWorkingSet
+        $holReport = Get-Content -LiteralPath $holPath -Raw | ConvertFrom-Json
+        $hol = $holReport.test_vectors.hol_scenarios
+        if ($holReport.source_revision.ToLowerInvariant() -ne $headSha -or
+            $holReport.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or
+            $holReport.mode -ne 'hol' -or
+            $hol.scenario_id -ne 'r3-p4-hol-fixed-v1' -or
+            $hol.scheduler_duplicated -ne $false -or
+            $hol.base_scenario_count -ne 4 -or
+            $hol.maximum_chord_case_count -ne 36 -or
+            $hol.physical_packet_row_count -ne 91) {
+            throw 'BLOCKED-DIAGNOSTICS: HOL scenario identity, count, provenance, or prepared-path declaration did not match the fixed dataset'
+        }
+        if ($hol.physical_floor_violation_count -ne 0 -or $hol.down_replay_case_count -ne 0) {
+            $script:blockedDefect = $true
+            throw "BLOCKED-DEFECT: P4 HOL diagnostics observed $($hol.physical_floor_violation_count) physical-floor violation(s) and $($hol.down_replay_case_count) Down replay case(s); production remains unchanged for coordinator review"
+        }
+        foreach ($case in $hol.cases) {
+            if ($case.authored_offsets_unchanged -ne $true -or
+                $case.single_attempt_per_packet -ne $true -or
+                $case.active_generations -ne 0 -or
+                $case.release_obligation_mask -ne 0) {
+                throw "BLOCKED-DIAGNOSTICS: HOL accounting/offset oracle failed for $($case.case_id)"
+            }
+        }
+
+        $startupRecords = [System.Collections.Generic.List[object]]::new()
+        foreach ($generationCount in @(100, 1000, 10000, 100000)) {
+            $startupPath = Join-Path $runDirectory ("startup-{0}.json" -f $generationCount)
+            $startupEnvironment = $environment.Clone()
+            $startupEnvironment.SKY_RT_R3_RUN_ID = "$runId-startup-$generationCount"
+            $startupCommand = Invoke-CapturedCommand -Name $probePath -Arguments @(
+                '--mode', 'startup',
+                '--generation-count', [string]$generationCount,
+                '--seed', '1379160116',
+                '--output', $startupPath
+            ) -Label "diagnostics-startup-$generationCount" -Environment $startupEnvironment -CaptureWorkingSet
+            $startupReport = Get-Content -LiteralPath $startupPath -Raw | ConvertFrom-Json
+            $startupCase = $startupReport.test_vectors.startup_case
+            $startupBudget = $startupCase.startup_budget
+            $expectedWouldAdmit = [long]$startupBudget.measured_worker_path_us -le [long]$startupBudget.captured_available_startup_budget_us
+            $expectedAdmissionOutcome = if ($expectedWouldAdmit) { 'WOULD_ADMIT_WITHIN_SCOPED_MIN_PREROLL_BUDGET' } else { 'WOULD_REJECT_SCOPED_MIN_PREROLL_BUDGET' }
+            if ($startupReport.source_revision.ToLowerInvariant() -ne $headSha -or
+                $startupReport.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or
+                $startupReport.mode -ne 'startup' -or
+                $startupCase.dataset_id -ne 'r3-p4-startup-synthetic-v1' -or
+                $startupCase.generation_count -ne $generationCount -or
+                $startupCase.action_count -ne (2 * $generationCount) -or
+                $startupCase.below_existing_action_limit -ne $true -or
+                $startupBudget.would_admit_prepared_path -ne $expectedWouldAdmit -or
+                $startupBudget.prepared_path_admission_outcome -ne $expectedAdmissionOutcome -or
+                $startupBudget.production_startup_attempted -ne $false -or
+                $startupBudget.production_startup_rejection_observed -ne $false -or
+                $startupCase.prepared_storage.prepared_entry_count -lt 1) {
+                throw "BLOCKED-DIAGNOSTICS: startup dataset or provenance mismatch at $generationCount generations"
+            }
+            $startupRecords.Add([ordered]@{
+                run_id = $startupReport.run_id
+                case = $startupCase
+                process_working_set = [ordered]@{
+                    start_bytes = $startupCommand.working_set_start_bytes
+                    peak_bytes = $startupCommand.working_set_peak_bytes
+                    sample_count = $startupCommand.working_set_sample_count
+                    sample_interval_ms = $startupCommand.working_set_sample_interval_ms
+                    scope = $startupCommand.working_set_scope
+                }
+                command_label = $startupCommand.label
+            })
+        }
+
+        $pollingPath = Join-Path $runDirectory 'polling.json'
+        $pollingEnvironment = $environment.Clone()
+        $pollingEnvironment.SKY_RT_R3_RUN_ID = "$runId-polling"
+        $pollingCommand = Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'polling', '--output', $pollingPath) -Label 'diagnostics-polling' -Environment $pollingEnvironment -CaptureWorkingSet
+        $pollingReport = Get-Content -LiteralPath $pollingPath -Raw | ConvertFrom-Json
+        $polling = $pollingReport.test_vectors.frame_polling
+        if ($pollingReport.source_revision.ToLowerInvariant() -ne $headSha -or
+            $pollingReport.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or
+            $pollingReport.mode -ne 'polling' -or
+            $polling.scenario_id -ne 'r3-p4-frame-polling-fixed-v1' -or
+            $polling.matrix_case_count -ne 1620 -or
+            $polling.supplemental_17_167us_reference_case_count -ne 6 -or
+            $polling.rows.Count -ne 1626 -or
+            $polling.short_hold_missed_down_count -lt 1) {
+            throw 'BLOCKED-DIAGNOSTICS: receiver polling fixed dataset, provenance, or missed-key visibility oracle failed'
+        }
+        if (@($polling.rows | Where-Object { $_.evidence_label -eq 'MODELED_POLLING_ONLY' -and ($_.sky_consumption -ne 'UNKNOWN') }).Count -ne 0) {
+            throw 'BLOCKED-DIAGNOSTICS: polling model mislabeled unknown Sky consumption'
+        }
+
+        $diagnosticsJson = [ordered]@{
+            schema_version = 1
+            status = 'COMPLETED_CHARACTERIZATION'
+            stage = 'diagnostics'
+            run_id = $runId
+            source_revision = $headSha
+            runtime_revision = $runtimeRevision
+            source_tree_clean = $sourceTreeClean
+            base_revision = $runtimeRevision
+            executable_sha256 = $probeHash
+            host = $hostMetadata
+            toolchain = [ordered]@{ rustc = $rustcVersion; cargo = $cargoVersion; bun = $bunVersion }
+            dataset = [ordered]@{
+                hol_id = $hol.scenario_id
+                startup_id = 'r3-p4-startup-synthetic-v1'
+                startup_seed = 1379160116
+                startup_generation_counts = @(100, 1000, 10000, 100000)
+                polling_id = $polling.scenario_id
+                polling_matrix_cases = $polling.matrix_case_count
+                short_hold_reference_cases = $polling.supplemental_17_167us_reference_case_count
+            }
+            hol = $hol
+            startup = @($startupRecords)
+            polling = $polling
+            process_working_set = [ordered]@{
+                hol = [ordered]@{ start_bytes = $holCommand.working_set_start_bytes; peak_bytes = $holCommand.working_set_peak_bytes; sample_count = $holCommand.working_set_sample_count; interval_ms = $holCommand.working_set_sample_interval_ms; scope = $holCommand.working_set_scope }
+                polling = [ordered]@{ start_bytes = $pollingCommand.working_set_start_bytes; peak_bytes = $pollingCommand.working_set_peak_bytes; sample_count = $pollingCommand.working_set_sample_count; interval_ms = $pollingCommand.working_set_sample_interval_ms; scope = $pollingCommand.working_set_scope }
+            }
+            native_full_rerun = $false
+            paired_ab_rerun = $false
+            command_count = $commandResults.Count
+            commands = @($commandResults)
+            disposition = 'HOL, startup cost, and receiver polling limits are reported as characterization findings; no scheduler/runtime policy change is authorized.'
+        }
+        $diagnosticsJsonPath = Join-Path $runDirectory 'diagnostics.json'
+        Write-JsonFile $diagnosticsJsonPath $diagnosticsJson
+
+        $csvRows = [System.Collections.Generic.List[object]]::new()
+        foreach ($case in $hol.cases) {
+            foreach ($row in $case.rows) {
+                $csvRows.Add([ordered]@{
+                    section = 'hol'
+                    case_id = $row.case_id
+                    scenario = $case.scenario
+                    packet_index = $row.packet_index
+                    authored_target_us = $row.authored_target_us
+                    ready_floor_us = $row.ready_floor_us
+                    actual_pre_us = $row.actual_pre_us
+                    actual_complete_us = $row.actual_complete_us
+                    blocking_packet = $row.blocking_packet
+                    blocking_keymask = $row.blocking_keymask
+                    blocking_reason = $row.blocking_reason
+                    delay_due_to_earlier_packet_us = $row.delay_due_to_earlier_packet_us
+                    sender_duration_us = $row.actual_sender_duration_us
+                    physical_floor_violation = $row.physical_floor_violation
+                    down_replay = $case.down_replay
+                    transport_attempts = $row.transport_attempts
+                    activated_generations = $row.accounting.activated
+                    released_generations = $row.accounting.released
+                    active_generations = $row.accounting.active
+                    release_obligation_mask = $case.release_obligation_mask
+                    generation_count = $null
+                    action_count = $null
+                    prepare_wall_us = $null
+                    allocation_calls = $null
+                    requested_allocation_bytes = $null
+                    compile_wall_us = $null
+                    compile_allocation_calls = $null
+                    compile_allocation_bytes = $null
+                    schedule_clone_wall_us = $null
+                    schedule_clone_allocation_calls = $null
+                    schedule_clone_allocation_bytes = $null
+                    coordinator_init_wall_us = $null
+                    coordinator_allocation_calls = $null
+                    coordinator_allocation_bytes = $null
+                    coordinator_clone_wall_us = $null
+                    coordinator_clone_allocation_calls = $null
+                    coordinator_clone_allocation_bytes = $null
+                    prepared_stream_wall_us = $null
+                    prepared_stream_allocation_calls = $null
+                    prepared_stream_allocation_bytes = $null
+                    prepared_entry_count = $null
+                    prepared_entry_array_bytes = $null
+                    rebuilt_coordinator_heap_payload_bytes = $null
+                    process_working_set_start_bytes = $null
+                    process_working_set_peak_bytes = $null
+                    startup_budget_us = $null
+                    admission_outcome = $null
+                    fps = $null
+                    margin_us = $null
+                    poll_phase = $null
+                    receiver_stall_frames = $null
+                    delivery_skew_down_us = $null
+                    delivery_skew_up_us = $null
+                    down_state_observed = $null
+                    separating_up_state_observed = $null
+                    evidence_label = 'DETERMINISTIC_PREPARED_DISPATCH_MOCK'
+                })
+            }
+        }
+        foreach ($record in $startupRecords) {
+            $case = $record.case
+            $csvRows.Add([ordered]@{
+                section = 'startup'
+                case_id = $case.dataset_id
+                scenario = 'fixed feasible generation schedule'
+                packet_index = $null
+                authored_target_us = $null
+                ready_floor_us = $null
+                actual_pre_us = $null
+                actual_complete_us = $null
+                blocking_packet = $null
+                blocking_keymask = $null
+                blocking_reason = $null
+                delay_due_to_earlier_packet_us = $null
+                sender_duration_us = $null
+                physical_floor_violation = $null
+                down_replay = $null
+                transport_attempts = $null
+                activated_generations = $null
+                released_generations = $null
+                active_generations = $null
+                release_obligation_mask = $null
+                generation_count = $case.generation_count
+                action_count = $case.action_count
+                prepare_wall_us = $case.prepared_stream_build_and_coordinator_reset.wall_us
+                allocation_calls = $case.prepared_stream_build_and_coordinator_reset.allocation_calls
+                requested_allocation_bytes = $case.prepared_stream_build_and_coordinator_reset.requested_allocation_bytes
+                compile_wall_us = $case.schedule_compile_and_materialize.wall_us
+                compile_allocation_calls = $case.schedule_compile_and_materialize.allocation_calls
+                compile_allocation_bytes = $case.schedule_compile_and_materialize.requested_allocation_bytes
+                schedule_clone_wall_us = $case.coordinator_input_schedule_clone.wall_us
+                schedule_clone_allocation_calls = $case.coordinator_input_schedule_clone.allocation_calls
+                schedule_clone_allocation_bytes = $case.coordinator_input_schedule_clone.requested_allocation_bytes
+                coordinator_init_wall_us = $case.coordinator_initialization.wall_us
+                coordinator_allocation_calls = $case.coordinator_initialization.allocation_calls
+                coordinator_allocation_bytes = $case.coordinator_initialization.requested_allocation_bytes
+                coordinator_clone_wall_us = $case.coordinator_clone_for_characterization.wall_us
+                coordinator_clone_allocation_calls = $case.coordinator_clone_for_characterization.allocation_calls
+                coordinator_clone_allocation_bytes = $case.coordinator_clone_for_characterization.requested_allocation_bytes
+                prepared_stream_wall_us = $case.prepared_stream_build_and_coordinator_reset.wall_us
+                prepared_stream_allocation_calls = $case.prepared_stream_build_and_coordinator_reset.allocation_calls
+                prepared_stream_allocation_bytes = $case.prepared_stream_build_and_coordinator_reset.requested_allocation_bytes
+                prepared_entry_count = $case.prepared_storage.prepared_entry_count
+                prepared_entry_array_bytes = $case.prepared_storage.prepared_entry_array_bytes
+                rebuilt_coordinator_heap_payload_bytes = $case.prepared_storage.rebuilt_coordinator_heap_payload_bytes
+                process_working_set_start_bytes = $record.process_working_set.start_bytes
+                process_working_set_peak_bytes = $record.process_working_set.peak_bytes
+                startup_budget_us = $case.startup_budget.captured_available_startup_budget_us
+                admission_outcome = $case.startup_budget.prepared_path_admission_outcome
+                fps = $null
+                margin_us = $null
+                poll_phase = $null
+                receiver_stall_frames = $null
+                delivery_skew_down_us = $null
+                delivery_skew_up_us = $null
+                down_state_observed = $null
+                separating_up_state_observed = $null
+                evidence_label = 'PROBE_ALLOCATOR_AND_RUNNER_WORKING_SET'
+            })
+        }
+        foreach ($row in $polling.rows) {
+            $csvRows.Add([ordered]@{
+                section = 'polling'
+                case_id = $row.case_id
+                scenario = $row.hold_policy
+                packet_index = $null
+                authored_target_us = $null
+                ready_floor_us = $null
+                actual_pre_us = $null
+                actual_complete_us = $null
+                blocking_packet = $null
+                blocking_keymask = $null
+                blocking_reason = $null
+                delay_due_to_earlier_packet_us = $null
+                sender_duration_us = $null
+                physical_floor_violation = $null
+                down_replay = $null
+                transport_attempts = $null
+                activated_generations = $null
+                released_generations = $null
+                active_generations = $null
+                release_obligation_mask = $null
+                generation_count = $null
+                action_count = $null
+                prepare_wall_us = $null
+                allocation_calls = $null
+                requested_allocation_bytes = $null
+                compile_wall_us = $null
+                compile_allocation_calls = $null
+                compile_allocation_bytes = $null
+                schedule_clone_wall_us = $null
+                schedule_clone_allocation_calls = $null
+                schedule_clone_allocation_bytes = $null
+                coordinator_init_wall_us = $null
+                coordinator_allocation_calls = $null
+                coordinator_allocation_bytes = $null
+                coordinator_clone_wall_us = $null
+                coordinator_clone_allocation_calls = $null
+                coordinator_clone_allocation_bytes = $null
+                prepared_stream_wall_us = $null
+                prepared_stream_allocation_calls = $null
+                prepared_stream_allocation_bytes = $null
+                prepared_entry_count = $null
+                prepared_entry_array_bytes = $null
+                rebuilt_coordinator_heap_payload_bytes = $null
+                process_working_set_start_bytes = $null
+                process_working_set_peak_bytes = $null
+                startup_budget_us = $null
+                admission_outcome = $null
+                fps = $row.fps
+                margin_us = $row.margin_us
+                poll_phase = $row.poll_phase
+                receiver_stall_frames = $row.receiver_stall_frames
+                delivery_skew_down_us = $row.down_delivery_skew_us
+                delivery_skew_up_us = $row.up_delivery_skew_us
+                down_state_observed = $row.down_state_observed
+                separating_up_state_observed = $row.separating_up_state_observed
+                evidence_label = $row.evidence_label
+            })
+        }
+        $csvPath = Join-Path $runDirectory 'diagnostics.csv'
+        $csvText = @($csvRows | ForEach-Object { [pscustomobject]$_ } | ConvertTo-Csv -NoTypeInformation)
+        [System.IO.File]::WriteAllText($csvPath, [string]::Join([Environment]::NewLine, [string[]]$csvText) + [Environment]::NewLine, $utf8NoBom)
+
+        $markdownLines = [System.Collections.Generic.List[string]]::new()
+        $markdownLines.Add('# R3 P4 diagnostics')
+        $markdownLines.Add('')
+        $markdownLines.Add("Run: $runId")
+        $markdownLines.Add("Source revision: $headSha")
+        $markdownLines.Add("Runtime/base revision: $runtimeRevision")
+        $markdownLines.Add("Toolchain: $rustcVersion; $cargoVersion; Bun $bunVersion")
+        $markdownLines.Add('Transport: deterministic test-support mock for HOL; no SendInput or game process.')
+        $markdownLines.Add('')
+        $markdownLines.Add('## Head-of-line and prepared packet scenarios')
+        $markdownLines.Add('')
+        $markdownLines.Add('| Scenario | Packet | Authored target (us) | Ready floor (us) | Actual pre-call (us) | Completion (us) | Sender duration (us) | Blocking packet/keymask | Delay due to earlier packet (us) | Floor violation | Attempts |')
+        $markdownLines.Add('| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- | ---: |')
+        foreach ($case in $hol.cases) {
+            foreach ($row in $case.rows) {
+                $blockerText = if ($null -eq $row.blocking_packet) { 'none' } else { "$($row.blocking_packet)/$($row.blocking_keymask)" }
+                $markdownLines.Add("| $($case.case_id) | $($row.packet_index) | $($row.authored_target_us) | $($row.ready_floor_us) | $($row.actual_pre_us) | $($row.actual_complete_us) | $($row.actual_sender_duration_us) | $blockerText | $($row.delay_due_to_earlier_packet_us) | $($row.physical_floor_violation) | $($row.transport_attempts) |")
+            }
+        }
+        $markdownLines.Add('')
+        $markdownLines.Add('## Startup and memory')
+        $markdownLines.Add('')
+        $markdownLines.Add('| Generations | Actions | Compile/materialize (us) | Schedule clone (us) | Coordinator init (us) | Coordinator clone (us; test-support only) | Prepared build/reset (us) | Prepared entries | Build allocations (count / requested bytes) | Peak process working set (bytes) | Available budget (us) | Prepared-path budget outcome |')
+        $markdownLines.Add('| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |')
+        foreach ($record in $startupRecords) {
+            $case = $record.case
+            $markdownLines.Add("| $($case.generation_count) | $($case.action_count) | $($case.schedule_compile_and_materialize.wall_us) | $($case.coordinator_input_schedule_clone.wall_us) | $($case.coordinator_initialization.wall_us) | $($case.coordinator_clone_for_characterization.wall_us) | $($case.prepared_stream_build_and_coordinator_reset.wall_us) | $($case.prepared_storage.prepared_entry_count) | $($case.prepared_stream_build_and_coordinator_reset.allocation_calls) / $($case.prepared_stream_build_and_coordinator_reset.requested_allocation_bytes) | $($record.process_working_set.peak_bytes) | $($case.startup_budget.captured_available_startup_budget_us) | $($case.startup_budget.prepared_path_admission_outcome) |")
+        }
+        $markdownLines.Add('')
+        $markdownLines.Add('Allocation counts/bytes are successful allocation and realloc requests in the probe process during each named operation; they exclude deallocation and allocator metadata. Process working set is sampled separately by PowerShell every 5 ms and includes shared resident pages. Neither metric is inferred from the other. Schedule compile/materialize is separate from coordinator initialization and prepared-stream build. The scoped budget comparison includes coordinator initialization plus prepared build/reset, and excludes other worker startup work.')
+        $markdownLines.Add('')
+        $markdownLines.Add('The RuntimeSchedule clone that supplies the coordinator its owned schedule is measured separately. RuntimeDispatchCoordinator cloning exists only in test-support for characterization; the deep clone column is not part of production startup. Actual coordinator initialization and post-preparation reconstruction are measured in their own columns.')
+        $markdownLines.Add('The prepared-path budget outcome is a scoped characterization result: an out-of-budget measurement is labeled WOULD_REJECT. No production boot was attempted, so this does not claim an observed product rejection or model excluded startup work.')
+        $markdownLines.Add('')
+        $markdownLines.Add('## Offline receiver frame-polling model')
+        $markdownLines.Add('')
+        $markdownLines.Add('| FPS | Margin (us) | Cases | Missed Down states | Missed separating Up states |')
+        $markdownLines.Add('| ---: | ---: | ---: | ---: | ---: |')
+        foreach ($fps in @(30, 60, 120, 240)) {
+            foreach ($margin in @(0, 500, 3000)) {
+                $group = @($polling.rows | Where-Object { $_.evidence_label -eq 'MODELED_POLLING_ONLY' -and $_.fps -eq $fps -and $_.margin_us -eq $margin })
+                $missedDown = @($group | Where-Object { -not $_.down_state_observed }).Count
+                $missedUp = @($group | Where-Object { -not $_.separating_up_state_observed }).Count
+                $markdownLines.Add("| $fps | $margin | $($group.Count) | $missedDown | $missedUp |")
+            }
+        }
+        $markdownLines.Add('')
+        $markdownLines.Add('### 17,167 us short-hold reference cases')
+        $markdownLines.Add('')
+        $markdownLines.Add('| Poll phase | Receiver stall (frames) | Down observed | Separating Up observed |')
+        $markdownLines.Add('| --- | ---: | --- | --- |')
+        foreach ($row in @($polling.rows | Where-Object { $_.evidence_label -eq 'MODELED_SHORT_HOLD_REFERENCE' })) {
+            $markdownLines.Add("| $($row.poll_phase) | $($row.receiver_stall_frames) | $($row.down_state_observed) | $($row.separating_up_state_observed) |")
+        }
+        $markdownLines.Add('')
+        $markdownLines.Add('The polling model is offline. It reports state samples for all fixed phases, stalls, and independent Down/Up delivery skews. Actual ReceiveOnly sink observations are a separate evidence layer; Sky consumption remains unknown. DWM or monitor refresh rate is not treated as game polling.')
+        $markdownLines.Add('')
+        $markdownLines.Add('## Fixed disposition')
+        $markdownLines.Add('')
+        $markdownLines.Add('Head-of-line blocking, overdue bursts, startup cost, and long-hold receiver limitations remain documented characterization findings. No scheduler rewrite, storage optimization, timing/policy change, or new receiver guarantee is proposed.')
+        $markdownPath = Join-Path $runDirectory 'diagnostics.md'
+        [System.IO.File]::WriteAllText($markdownPath, [string]::Join([Environment]::NewLine, [string[]]$markdownLines) + [Environment]::NewLine, $utf8NoBom)
+
+        $summary = [ordered]@{
+            schema_version = 1
+            status = 'COMPLETED_CHARACTERIZATION'
+            stage = 'diagnostics'
+            run_id = $runId
+            source_revision = $headSha
+            runtime_revision = $runtimeRevision
+            base_revision = $runtimeRevision
+            source_tree_clean = $sourceTreeClean
+            executable_sha256 = $probeHash
+            host = $hostMetadata
+            hol_case_count = $hol.cases.Count
+            hol_physical_packet_rows = $hol.rows.Count
+            hol_physical_floor_violation_count = $hol.physical_floor_violation_count
+            hol_down_replay_case_count = $hol.down_replay_case_count
+            startup_generation_counts = @($startupRecords | ForEach-Object { $_.case.generation_count })
+            startup_admission_outcomes = @($startupRecords | ForEach-Object { $_.case.startup_budget.prepared_path_admission_outcome })
+            polling_matrix_cases = $polling.matrix_case_count
+            short_hold_reference_cases = $polling.supplemental_17_167us_reference_case_count
+            short_hold_missed_down_count = $polling.short_hold_missed_down_count
+            native_full_rerun = $false
+            paired_ab_rerun = $false
+            output_files = @('diagnostics.json', 'diagnostics.csv', 'diagnostics.md', 'hol.json', 'polling.json', 'startup-100.json', 'startup-1000.json', 'startup-10000.json', 'startup-100000.json')
+            child_command_count = $commandResults.Count
+            child_commands = @($commandResults)
+            disposition = 'READY FOR COORDINATOR REVIEW; NEXT PHASE NOT STARTED'
+        }
+        Write-JsonFile (Join-Path $runDirectory 'summary.json') $summary
+        Write-JsonFile (Join-Path $runDirectory 'status.json') ([ordered]@{ status = 'COMPLETED_CHARACTERIZATION'; stage = 'diagnostics'; run_id = $runId; finished_utc = [DateTimeOffset]::UtcNow.ToString('O') })
+        $declaredFiles = [System.Collections.Generic.List[object]]::new()
+        foreach ($file in Get-ChildItem -LiteralPath $runDirectory -File -Recurse | Sort-Object FullName) {
+            if ($file.Name -eq 'runner-outputs.json') { continue }
+            $relative = [System.IO.Path]::GetRelativePath($runDirectory, $file.FullName).Replace('\', '/')
+            $declaredFiles.Add([ordered]@{ path = $relative; size_bytes = $file.Length; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() })
+        }
+        $outputsManifest = [ordered]@{
+            schema_version = 1
+            status = 'COMPLETED_CHARACTERIZATION'
+            stage = 'diagnostics'
+            run_id = $runId
+            source_revision = $headSha
+            runtime_revision = $runtimeRevision
+            executable_sha256 = $probeHash
+            declared_outputs = @($declaredFiles)
+        }
+        Write-JsonFile (Join-Path $runDirectory 'runner-outputs.json') $outputsManifest
+        Write-Output (ConvertTo-Json -InputObject ([ordered]@{ status = $outputsManifest.status; stage = 'diagnostics'; run_id = $runId; run_directory = $runDirectory; source_revision = $headSha; runtime_revision = $runtimeRevision; hol_rows = $hol.rows.Count; startup_cases = $startupRecords.Count; polling_cases = $polling.rows.Count; child_commands = $commandResults.Count }) -Compress)
+        return
     }
 
     $controlProbePath = $null
@@ -1085,7 +1569,7 @@ try {
     Stop-ContentionWorkers
     if ($runDirectory -and (Test-Path -LiteralPath $runDirectory)) {
         try {
-            $blockedStatus = if ($script:blockedPerf) { 'BLOCKED-PERF' } else { 'BLOCKED' }
+            $blockedStatus = if ($script:blockedDefect) { 'BLOCKED-DEFECT' } elseif ($script:blockedPerf) { 'BLOCKED-PERF' } else { 'BLOCKED' }
             Write-JsonFile (Join-Path $runDirectory 'status.json') ([ordered]@{ status = $blockedStatus; stage = $Stage; run_id = $runId; error = $_.Exception.Message; finished_utc = [DateTimeOffset]::UtcNow.ToString('O'); child_commands = @($commandResults) })
         } catch { }
     }

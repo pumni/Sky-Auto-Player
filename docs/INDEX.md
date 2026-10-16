@@ -55,6 +55,7 @@ Packaging, Windows timing acceptance, release, and benchmark scripts are special
 
 ## Decisions and bounded evidence
 
+- [r3-keyboard-diagnostics.md](r3-keyboard-diagnostics.md) — P4 prepared-dispatch HOL, startup/resource, and offline receiver-polling characterization with immutable evidence links.
 - [post-adr-0017-hardening-final-evidence.md](post-adr-0017-hardening-final-evidence.md) — merged-main P8/H4 authority, ownership, lifecycle, and native qualification checkpoint; pending coordinator review.
 - `docs/adr/` — Architecture Decision Records for specific structural choices:
   - [adr/ADR-0001-packetized-native-input-dispatch.md](adr/ADR-0001-packetized-native-input-dispatch.md)
