@@ -1,0 +1,182 @@
+# Coordinator R3 P0 Keyboard Baseline
+
+Refs [#431](https://github.com/pumni/Sky-Auto-Player/issues/431) and [#430](https://github.com/pumni/Sky-Auto-Player/issues/430).
+
+P0 is characterization only. No production timing, lease, scheduler, focus, or cleanup policy changed. No game process was opened. Native controls used the existing SendInput acceptance harness with its ReceiveOnly sink.
+
+## Pinned evidence
+
+- Run: r3-p0-20261005T024258505Z-700aaab7
+- Implementation/source revision: 458ee68aa40ad48a9805b07b62afaec2e0ba58a5
+- Runtime/base revision: 1574aa267b8364b1930bd6abc7baa36636d33843 (verified #439 merge on origin/main)
+- Release probe SHA-256: 309de78a9f6847ad2097c5915052b99e130476259e1beac8980efb912666c22e
+- Evidence commit: 596664e809b69318eb216d25b9bed680446641e3 on rt-r3/evidence/p0-458ee68aa40a
+- Outer manifest SHA-256: ca4904e3114d77f2a7abf769b3a3701954297a803629cd16f6768999a4aa5fbb
+- ZIP SHA-256: daaa6881c724a2319a43a24e469ea70d27c2472b263cd60a513421086a187e7c (1,170,232 bytes; one part)
+- runner-outputs.json SHA-256 inside the ZIP: 7277874d3eb4b8258d2dbd6db24c6e89beb7cb3fe926b0609ed8752f0bfa7b62
+- files/contracts.json SHA-256 inside the ZIP: 39179a62021b870bbe78e95182882ad66aeeff2476eb574f5a27e5b8b80ab1bd
+- files/summary.json SHA-256 inside the ZIP: 0a3c6b6ff0e2954dec6a48c0800b07d062c088fe4eb931c1519f136e68339b2c
+- Pinned run: [evidence directory](https://github.com/pumni/Sky-Auto-Player/tree/596664e809b69318eb216d25b9bed680446641e3/runs/r3-p0-20261005T024258505Z-700aaab7)
+- Pinned files: [outer manifest](https://github.com/pumni/Sky-Auto-Player/blob/596664e809b69318eb216d25b9bed680446641e3/runs/r3-p0-20261005T024258505Z-700aaab7/manifest.json), [SHA256SUMS.txt](https://github.com/pumni/Sky-Auto-Player/blob/596664e809b69318eb216d25b9bed680446641e3/runs/r3-p0-20261005T024258505Z-700aaab7/SHA256SUMS.txt), [evidence.zip](https://github.com/pumni/Sky-Auto-Player/blob/596664e809b69318eb216d25b9bed680446641e3/runs/r3-p0-20261005T024258505Z-700aaab7/archive/evidence.zip)
+
+The archive contains 320 declared raw files totaling 55,390,917 bytes. runner-outputs.json, files/contracts.json, files/summary.json, precision reports, and native control directories are entries inside evidence.zip; they are not separate GitHub blobs at this pinned commit. The publisher read and SHA-256 checked the committed manifest and archive blob bytes before pushing; the returned manifest hash is for the verified Git blob. This corrects the earlier nonexistent inner-file links and the newline-corrupted outer hash. The superseded run remains immutable at [its pinned commit](https://github.com/pumni/Sky-Auto-Player/tree/e8c49fac8ba5bebf02ef0b47c05f7908a4769a3d/runs/r3-p0-20261004T234223688Z-d88f1a19); its previously reported outer hash 296024e46c366457504373043825364d13c5b322bd11345695cd35c7d29bc38c was computed from CRLF working-tree bytes and does not match the normalized Git blob. Its ZIP and 320 raw files remain intact. The older bundle remains at [its separate pinned commit](https://github.com/pumni/Sky-Auto-Player/tree/5245909aeb6f204d8d6542f69f6f6ec3852e5d91/runs/r3-p0-20261004T185505507Z-0ab4da0e).
+
+## Host and run setup
+
+- Windows 11 Home build 26300, x86_64-pc-windows-msvc; AMD Ryzen 5 5500U with Radeon Graphics.
+- rustc and cargo 1.98.1, Bun 1.4.0, PowerShell 7.6.6, Git 2.55.0.windows.5; Balanced power scheme.
+- The source tree was clean at capture. The probe used the release profile. Host QPC was 10,000,000 Hz; contract vectors used synthetic QPC frequencies 1,000,000, 10,000,000, and 10,000,003 Hz.
+- Focus setup was test-support focus_active=true with a deterministic SessionTarget. No game process or foreground-window activation was used.
+- The precision transport was a deterministic mock, not a game/audio receipt measurement. Two hidden PowerShell busy workers were used for CPU-contention runs.
+- Command: pwsh -NoProfile -File scripts/run_rt_r3_evidence.ps1 -Stage baseline -OutputRoot .benchmarks/r3/p0. Bun 1.4.0 was prepended to that process PATH.
+- The runner recorded 97 child commands; all 97 exited zero. Unimplemented stages fail explicitly; phase1 returned BLOCKED-STAGE without producing evidence or PASS.
+
+## Review corrections R1-R5
+
+### R1: due-aware physical-floor gate
+
+The due-seam test helper accepts only synthetic wall QPC and recomputes the current production physical floor for the current prepared packet on every call. Before that floor it returns without entering the prepared suffix or changing sender attempts, cursor, generation accounting, or release obligations. It does not implement a second scheduler.
+
+The earlier R1 probe reused the pre-cleanup floor when checking the resume call. That input masked the required counterexample, so its claim that the resumed Down waited until 133,884 us is invalid. In the corrected run, the resume call is at 118,300 us. The seam recomputes the post-cleanup production floor (118,034 us at 1,000,000 and 10,000,000 Hz; 118,036 us at 10,000,003 Hz), so resume is due and the prepared suffix dispatches immediately at 118,300 us. The independent Up-completion-plus-frame requirement remains 133,884 us (1,338,840 ticks at 10 MHz; 1,338,844 ticks at 10,000,003 Hz). Thus the normal-gap contract is REPRODUCED/false while due-seam integrity is true at all three frequencies. The pre-cleanup floor remains evidence only. The no-pause negative control at 118,300 us is still not due at 133,884 us and leaves sender attempts, cursor, generation accounting, and release obligation unchanged. Final Up dispatches at its current legal production floor; accounting is 2 activated / 2 released, with zero obligation. This is characterization evidence; production timing and cleanup behavior are unchanged.
+
+### R2: native-admitted fixture configuration
+
+Every R3 fixture now materializes frame/base hold 16,667 us, timing margin 500 us, effective H 17,167 us, authored minimum release gap 17,167 us, and physical same-key G 16,667 us. Production validate_native_timing_contract and validate_native_schedule_timing_with_release_gap validators run before prepared-stream construction, including tick-domain admission. JSON records the actual config and converted ticks.
+
+A uses four valid authored events. The duplicate-Up vector is retained only as a rejected malformed-input control. The odd-frequency vector carries its required 1 us feasibility surplus. All A and C configuration/admission checks report PASS.
+
+### R3: enabled lease in precision measurements
+
+All precision workloads use an enabled 3,000,000 us lease, materialized as 30,000,000 QPC ticks at the 10,000,000 Hz host frequency. Fresh progress is published after setup and outside each measured interval. The watchdog is not started in the microbenchmark. The runner fails closed on missing or mismatched lease, timing, or progress metadata.
+
+The sample-start QPC is taken immediately before prepared-dispatch entry, before modifier/late admission. The backend samples the authoritative sender pre-call before entering the deterministic mock emitter. The mock samples completion inside that emitter, so the pre-call-to-completion delta includes test-seam/QPC overhead and does not measure SendInput execution, device receipt, or game/audio receipt.
+
+### R4: valid evidence URLs and hashes
+
+The report links only to paths present at the pinned evidence commit: the outer manifest, checksums file, and ZIP. Inner report files are identified by their archive entry names and hashes above. The large raw output bundle stays on the evidence branch; the earlier bundle has not been replaced.
+
+### R5: distinct B dispositions
+
+The delayed-watchdog vector used an enabled lease with last progress at 1,000,000 us, timeout 3,000,000 us, and dispatch at 4,000,001 us. With expiry not latched, the prepared Down was admitted in one sender attempt and is labeled STALE_LEASE_ACCEPTED. At exact equality, the result is AT_TIMEOUT_ALLOWED with one attempt. With fresh progress age 1 us, the result is FRESH_PROGRESS_ALLOWED with one attempt. The watchdog is deliberately unscheduled, so this is a final-gate characterization.
+
+## Contract vectors
+
+### C: serial head-of-line floor
+
+A Down completed at 110,000 us. Its authored Up target was 117,167 us, but the hold floor placed the Up pre-call at 127,167 us. B targeted 118,000 us; its earliest pre-call was 127,167 us, 9,167 us late. The prepared cursor advanced from 2 to 3. This records serial admission and makes no reorder or catch-up claim. Native and tick-domain admission passed.
+
+### D: focus loss and ownership cleanup
+
+While unfocused, the owned-key mask remained 1 and no cleanup send occurred. On modeled trustworthy restoration, the shared verified cleanup path sent one Up for scan code 21; the active mask and release obligation reached zero and one generation was cancelled. Terminal finalization while unfocused also emitted one ownership-scoped Up.
+
+The focus-grace scheduler itself was not exercised by the deterministic probe. Restoration is modeled through the existing test-support transition and cleanup/reconciliation path. Native controls are separate evidence.
+
+### E: empty cleanup
+
+Requested and attempted masks were zero, with zero keyboard transport calls and no transport anomaly. The oracle passed.
+
+## Precision baseline
+
+Nine workloads ran five times in each of two load modes. Each run had 1,000 warmup and 10,000 measured samples: 90 runs, 90,000 warmup samples, and 900,000 measured samples. All 18 workload/load cells were eligible, each with five clean runs. The table reports the median of the five run-level admission P99 values and their min-max range, in integer microseconds.
+
+| Workload | Quiet: median P99 (range) | CPU contention: median P99 (range) |
+| --- | ---: | ---: |
+| down-1 | 4 (4-4) | 4 (4-7) |
+| down-5 | 3 (3-4) | 4 (4-4) |
+| down-15 | 4 (3-5) | 5 (4-11) |
+| mixed-1x1 | 3 (3-3) | 4 (3-4) |
+| mixed-2x3 | 3 (3-4) | 4 (4-21) |
+| mixed-7x8 | 4 (3-4) | 3 (3-4) |
+| up-only-1 | 0 (0-0) | 0 (0-0) |
+| up-only-5 | 0 (0-0) | 0 (0-0) |
+| up-only-15 | 0 (0-0) | 0 (0-0) |
+
+Microsecond values are integer conversions of raw QPC ticks; zero-valued quantiles do not mean a precisely zero-duration operation. Raw tick samples, p50/p95/max, per-run details, counters, and eligibility are in the pinned archive. P0 contains baseline runs only; paired AB/BA comparison is reserved for P2. No P2 performance acceptance is claimed.
+
+## Native ReceiveOnly controls
+
+The release harness and sink self-test passed. Each control reported matching ReceiveOnly identity, event log ID, contiguous sequence, and report window.
+
+| Scenario | Run ID | Result | Sink events |
+| --- | --- | --- | ---: |
+| canonical-single | native-case-20261005T094407-0f097726 | PASS, finished | 2 |
+| pause-resume | native-case-20261005T094411-7d4e2a91 | PASS, finished | 4 |
+| supervisor-lease-expiry | native-case-20261005T094416-1bdfe690 | PASS, watchdog expired | 0 |
+
+The zero-event supervisor case verifies its rejection/cleanup control path. These controls do not replace A/B vectors or prove game/audio receipt.
+
+## Verification and checkpoint
+
+- Focused Rust suites: `sky_dispatch_core` PASS (73); `sky_dispatch_win32 --features test-support` PASS (248 passed, 1 ignored); `sky_player --features test-support --lib` PASS (371); `rt_dispatch_no_alloc` PASS (23). The final due-seam assertion was also covered by both successful workspace Rust stages inside `check all`.
+- `cargo xtask check static` PASS, with 31 allowlisted architecture warnings. `cargo fmt --manifest-path rust/Cargo.toml --all -- --check`, `git diff --check`, and PowerShell parser validation for the runner and publisher PASS.
+- Temporary publisher tests with `core.autocrlf=true` and `false` plus `* text=auto` verified byte-identical committed manifest, checksum, and archive contents. The final publisher also verified the committed outer manifest and archive blob bytes before push and returned the manifest SHA from that verified blob.
+- Final baseline run `r3-p0-20261005T024258505Z-700aaab7`: 97/97 child commands exited zero, 90 precision runs yielded 900,000 samples with no failed samples and 18/18 eligible cells, and all three native ReceiveOnly controls passed. The earlier unpublished native attempt stopped when the exact sink HWND lost foreground; the user confirmed an accidental focus change, then the fresh run passed. An earlier publisher attempt was blocked before push and is not part of the pinned evidence.
+- Historical pre-T1 local `cargo xtask check all` failures remain recorded: two runs exited 1 in `sky_desktop_shell_lib`, with 228 tests passing and `power_lifecycle::tests::stable_callback_context_routes_current_epoch_and_ignores_retired_epoch` failing at `desktop/src-tauri/src/power_lifecycle.rs:861:9` on `!resumed.suspended && resumed.down_blocked`. Those outputs did not include the observed flag values. A targeted standalone callback test passed once. These historical failures are not relabeled as passes, and they do not establish the exact failing interleaving.
+- P0-T1's one bounded deterministic experiment used the retained callback context and an unrelated unarmed `MockTest` session. It completed in 1.009 seconds under a 120-second limit. With the shared process singleton, the callback snapshot changed from `{ suspended: true, down_blocked: true, suspend_notifications: 1, resume_notifications: 0, duplicate_notifications: 0 }` before peer creation to all-false/zero after peer initialization; retirement and callback resume left it all-false/zero. With a private peer endpoint, initialization and retirement preserved the original suspended snapshot, and legitimate callback resume produced `{ suspended: false, down_blocked: true, suspend_notifications: 1, resume_notifications: 1, duplicate_notifications: 0 }`. This establishes deterministic shared-endpoint fixture interference, but not the historical failure's exact interleaving. No gameplay keyboard input was used.
+- The scoped test-only correction gives the existing mock monitor test its own `SystemPowerEndpoint::new()` and adds snapshot diagnostics to the callback assertion. The callback test continues to use the retained process singleton; its assertion predicate, resume-notification count, and retired-epoch checks are unchanged. No production dispatch behavior changed.
+- P0-T1 verification on Windows 11 x64/MSVC, Rust/Cargo 1.98.1, Bun 1.4.0, PowerShell 7.6.6, `cargo-vet 0.10.2`, and Playwright 1.62.1: formatting PASS; both focused desktop tests PASS; the three predeclared parallel unfiltered desktop suite runs each PASS (229/229, default libtest parallelism); `cargo xtask check static` PASS (31 allowlisted architecture warnings); canonical `cargo xtask check all` PASS; `git diff --check` PASS. The initially missing Playwright browser was installed using `node node_modules/playwright/cli.js install chromium`; the repository-pinned CLI reported version 1.62.1. No browser-skip setting was used.
+
+The measured source revision is 458ee68aa40ad48a9805b07b62afaec2e0ba58a5. This report update is separate from that measurement; the source SHA and release binary SHA above identify the code that produced the evidence. [GitHub CI run 37256459701](https://github.com/pumni/Sky-Auto-Player/actions/runs/37256459701) for the measured source revision completed successfully, including the required CI gate. The historical pre-T1 local `check all` failures above remain part of the record. After the test-fixture correction and installation of the repository-pinned Playwright browser, the corrected candidate passed the full local canonical check.
+
+P0 remains active for coordinator review. PR #437 remains Draft and unmerged; issue #431 remains open. No merge or P1 work is authorized.
+
+P0-T1 CORRECTION VERIFIED AND SUBMITTED FOR COORDINATOR REVIEW; P0 ACCEPTANCE PENDING; NEXT PHASE NOT STARTED
+
+## Post-PR #445 merge: upgraded-toolchain requalification — 2026-10-16
+
+PR #445 was merged normally at `4bd103c21a3fd8aad15eff281db15f8b10409493` with parents `1574aa267b8364b1930bd6abc7baa36636d33843` and `1794d359a871c1b6d86d6b7c79b2695a973a3127`. The P0 branch merged that `origin/main` commit without rebasing. The measured runtime/base is now `4bd103c21a3fd8aad15eff281db15f8b10409493`; the previous evidence above remains pinned to Rust/Cargo 1.98.1, source `458ee68aa40ad48a9805b07b62afaec2e0ba58a5`, and runtime `1574aa267b8364b1930bd6abc7baa36636d33843`.
+
+The refreshed characterization is a separate immutable run, not a relabeling of the earlier bundle:
+
+- Run: `r3-p0-20261016T093704647Z-487b5a4e`
+- Measured source: `0fe9987a554010eee441e4d738f6c77908578ddf`
+- Runtime/base: `4bd103c21a3fd8aad15eff281db15f8b10409493`
+- Release probe SHA-256: `ba1770b56ab8b94082d46e79a2c6239384d813dba543516175ae1ca36160c6e4` (the earlier probe hash remains `309de78a9f6847ad2097c5915052b99e130476259e1beac8980efb912666c22e`)
+- Evidence commit: `97b19290e0dd1332e8b1be0f9058e2096f5030e6`; [immutable run bundle](https://github.com/pumni/Sky-Auto-Player/tree/97b19290e0dd1332e8b1be0f9058e2096f5030e6/runs/r3-p0-20261016T093704647Z-487b5a4e)
+- Outer manifest SHA-256: `39dd9f3fa890868add2f0103ce9d9a15d1e15d10814754e855dc406f6708ba3c`
+- ZIP SHA-256: `417ac1653920a360f8ff487665d4519455399746061141ba7ea6a3b710983217` (1,037,184 bytes); 320 declared raw files total 54,779,394 bytes.
+
+### Environment and results
+
+- Windows 11 Pro build 26300, AMD Ryzen 5 5600 6-Core Processor, Balanced power scheme, host QPC 10,000,000 Hz.
+- Rust/Cargo 1.99.1, host `x86_64-pc-windows-msvc`; Bun 1.4.3; PowerShell 7.6.6; Git 2.55.0.windows.5; Playwright 1.64.1. The active MSVC environment resolved `cl.exe`/`link.exe` 19.44.35229.0/14.44.35229.0 and Windows SDK `10.0.26100.0`; a `cl /Bv` temporary-source smoke compile passed. Cargo-vet 0.10.2 was installed outside the repository at `C:\Users\pumni\AppData\Local\SkyAutoPlayerTools\cargo-vet-0.10.2`.
+- The baseline command produced 90 runs across nine workloads and two load modes: five runs per cell, each with 1,000 warmup and 10,000 measured samples. All 900,000 measured samples succeeded; all 18 cells were eligible; all 97 runner child commands exited zero.
+- Every cell's median run-level admission P99 converted to integer microseconds was `0 (0-0)`. This floor conversion is below one microsecond and does not mean the operation took zero time. The table also records the largest integer-microsecond admission sample across the five runs in each cell. Raw ticks, full quantiles, counters, and per-run reports remain in the bundle.
+
+| Workload | Quiet: median P99 (range) | CPU contention: median P99 (range) | Max admission µs (quiet / contention) |
+| --- | ---: | ---: | ---: |
+| down-1 | 0 (0-0) | 0 (0-0) | 50 / 6 |
+| down-5 | 0 (0-0) | 0 (0-0) | 22 / 6 |
+| down-15 | 0 (0-0) | 0 (0-0) | 2 / 37 |
+| mixed-1x1 | 0 (0-0) | 0 (0-0) | 4 / 5 |
+| mixed-2x3 | 0 (0-0) | 0 (0-0) | 14 / 42 |
+| mixed-7x8 | 0 (0-0) | 0 (0-0) | 6 / 1 |
+| up-only-1 | 0 (0-0) | 0 (0-0) | 27 / 6 |
+| up-only-5 | 0 (0-0) | 0 (0-0) | 3 / 3 |
+| up-only-15 | 0 (0-0) | 0 (0-0) | 5 / 3 |
+
+The precision transport remains a deterministic mock. These microsecond values do not measure `SendInput`, device timing, game receipt, or audio. The new probe binary hash differs from the old one, and the compiler/runtime dependency graph changed in PR #445, so the old timing bundle cannot qualify the upgraded candidate. This fresh characterization is tied only to the source/runtime/toolchain listed above.
+
+The three refreshed native controls used the project-owned ReceiveOnly sink, with identity, event-log ID, contiguous sequence, and report window verified:
+
+| Scenario | Run ID | Result | ReceiveOnly events |
+| --- | --- | --- | ---: |
+| canonical-single | `native-case-20261016T163750-6f50c31c` | PASS | 2 |
+| pause-resume | `native-case-20261016T163753-550a480f` | PASS | 4 |
+| supervisor-lease-expiry | `native-case-20261016T163755-03f13ee9` | PASS; watchdog expired | 0 |
+
+These event counts are harness/sink evidence, not game receipt. The supervisor expiry case emitted no authorized key events.
+
+### P0 verification on the merged candidate
+
+- `cargo fmt --manifest-path rust/Cargo.toml --all -- --check`: PASS.
+- Focused callback and native-monitor tests: PASS, 1/1 each.
+- Three predeclared unfiltered desktop suite runs at default libtest parallelism: PASS, 229/229 each.
+- `cargo xtask check static`: PASS with Cargo-vet 0.10.2 and 31 allowlisted architecture warnings. An initial invocation stopped at `cargo vet --version` because the executable was missing from this PowerShell PATH; the pinned tool was then installed outside the repository and the gate passed.
+- `cargo xtask check all`: PASS on the merged Rust 1.99.1/Bun 1.4.3 candidate, including workspace Clippy/tests, frozen desktop dependencies, TypeScript checks, Playwright E2E, and native desktop checks. No browser-skip setting was used.
+- `git diff --check`: PASS before this report append; rechecked on the final report tree for the P0 checkpoint.
+- The runner's first two preflight attempts produced no measurement: one refused an unclean status after tests rewrote generated TypeScript bindings byte-identically; the other detected its stale Rust 1.98.1/Bun 1.4.0 guard. The guard and emitted CI Bun metadata were updated to the merged 1.99.1/1.4.3 pins in source commit `0fe9987a554010eee441e4d738f6c77908578ddf`; the completed run above uses that committed source. No production scheduler, dispatch, `SendInput`, or timing policy changed in the P0 patch.
+
+P0 #431 remains open and unaccepted; PR #437 remains Draft and unmerged. P1–P5 remain WAITING. The dependency upgrade changes the native build inputs, and the refreshed evidence above is new qualification evidence for this toolchain. Coordinator review and acceptance are still required before any next phase.
+
+READY FOR COORDINATOR REVIEW; NEXT PHASE NOT STARTED
