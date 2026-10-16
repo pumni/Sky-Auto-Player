@@ -858,7 +858,10 @@ mod tests {
             0
         );
         let resumed = next_session.system_power_snapshot();
-        assert!(!resumed.suspended && resumed.down_blocked);
+        assert!(
+            !resumed.suspended && resumed.down_blocked,
+            "expected callback resume to clear suspension while retaining Down block; snapshot: {resumed:?}"
+        );
         assert_eq!(resumed.resume_notifications, 1);
 
         next_session.deactivate_system_power();

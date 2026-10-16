@@ -6695,7 +6695,8 @@ mod tests {
                     prepared_packet_ambiguity_mask: None,
                     preflight_user_held_mask: None,
                 },
-                super::system_power_endpoint().expect("system power endpoint"),
+                sky_player::engine::SystemPowerEndpoint::new()
+                    .expect("isolated monitor test power endpoint"),
             )
             .expect("mock native session"),
         );
