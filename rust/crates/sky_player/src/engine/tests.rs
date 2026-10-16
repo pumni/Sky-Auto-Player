@@ -1845,6 +1845,301 @@ fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
 }
 
 #[test]
+fn r3_supervisor_lease_down_proof_is_bounded_and_fails_closed() {
+    use super::shared::{SupervisorLeaseAdmission, SupervisorLeaseState};
+
+    let timeout = DurationTicks::from_raw(100);
+    let expired = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let expired_proof = expired.prove_down_age(QpcTicks::from_raw(1_101), timeout);
+    assert_eq!(expired_proof.admission, SupervisorLeaseAdmission::Expired);
+    assert_eq!(expired_proof.state_loads, 1);
+    assert_eq!(expired_proof.compare_exchanges, 1);
+    assert!(expired.is_expired());
+
+    let equality = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let equality_proof = equality.prove_down_age(QpcTicks::from_raw(1_100), timeout);
+    assert_eq!(equality_proof.admission, SupervisorLeaseAdmission::Fresh);
+    assert_eq!(equality_proof.state_loads, 1);
+    assert_eq!(equality_proof.compare_exchanges, 0);
+
+    let future = SupervisorLeaseState::new(QpcTicks::from_raw(1_101));
+    assert_eq!(
+        future
+            .prove_down_age(QpcTicks::from_raw(1_100), timeout)
+            .admission,
+        SupervisorLeaseAdmission::Fresh,
+        "newer-than-Q progress is fresh and must not underflow"
+    );
+
+    let missing = SupervisorLeaseState::new(QpcTicks::from_raw(0));
+    let missing_proof = missing.prove_down_age(QpcTicks::from_raw(1_000), timeout);
+    assert_eq!(missing_proof.admission, SupervisorLeaseAdmission::Unproven);
+    assert_eq!(missing_proof.state_loads, 1);
+    assert_eq!(missing_proof.compare_exchanges, 0);
+
+    let disabled = SupervisorLeaseState::new(QpcTicks::from_raw(0));
+    let disabled_proof =
+        disabled.prove_down_age(QpcTicks::from_raw(1_000_000), DurationTicks::ZERO);
+    assert_eq!(disabled_proof.admission, SupervisorLeaseAdmission::Fresh);
+    assert_eq!(disabled_proof.state_loads, 0);
+    assert_eq!(disabled_proof.compare_exchanges, 0);
+
+    let raced_fresh = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    raced_fresh.force_down_proof_cas_failure_for_test(Some(QpcTicks::from_raw(1_150)), false);
+    let fresh_replacement = raced_fresh.prove_down_age(QpcTicks::from_raw(1_201), timeout);
+    assert_eq!(fresh_replacement.admission, SupervisorLeaseAdmission::Fresh);
+    assert_eq!(fresh_replacement.state_loads, 2);
+    assert_eq!(fresh_replacement.compare_exchanges, 1);
+
+    let raced_expired = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    raced_expired.force_down_proof_cas_failure_for_test(None, true);
+    let expired_replacement = raced_expired.prove_down_age(QpcTicks::from_raw(1_201), timeout);
+    assert_eq!(
+        expired_replacement.admission,
+        SupervisorLeaseAdmission::Expired
+    );
+    assert_eq!(expired_replacement.state_loads, 2);
+    assert_eq!(expired_replacement.compare_exchanges, 1);
+
+    let raced_aged = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    raced_aged.force_down_proof_cas_failure_for_test(Some(QpcTicks::from_raw(900)), false);
+    let aged_replacement = raced_aged.prove_down_age(QpcTicks::from_raw(1_201), timeout);
+    assert_eq!(
+        aged_replacement.admission,
+        SupervisorLeaseAdmission::Unproven
+    );
+    assert_eq!(aged_replacement.state_loads, 2);
+    assert_eq!(aged_replacement.compare_exchanges, 1);
+    assert!(!raced_aged.is_expired(), "Unproven does not claim expiry");
+
+    let raced_missing = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    raced_missing.force_down_proof_cas_failure_for_test(None, false);
+    let missing_replacement = raced_missing.prove_down_age(QpcTicks::from_raw(1_201), timeout);
+    assert_eq!(
+        missing_replacement.admission,
+        SupervisorLeaseAdmission::Unproven
+    );
+    assert_eq!(missing_replacement.state_loads, 2);
+    assert_eq!(missing_replacement.compare_exchanges, 1);
+}
+
+#[test]
+fn r3_final_down_lease_sample_is_single_and_clock_failure_is_distinct() {
+    use super::shared::{SupervisorLeaseAdmission, SupervisorLeaseState};
+
+    let lease = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(1_000_000).unwrap());
+    let mut sample_count = 0;
+    let mut sample_override = Some(Err(sky_dispatch_win32::clock::QpcError::CounterUnavailable));
+    let result = super::worker::final_down_lease_age_proof(
+        &lease,
+        DurationTicks::from_raw(100),
+        clock,
+        &mut sample_count,
+        &mut sample_override,
+    );
+    assert_eq!(
+        result,
+        Err(sky_dispatch_win32::clock::QpcError::CounterUnavailable)
+    );
+    assert_eq!(sample_count, 1);
+
+    let mut disabled_sample_count = 0;
+    let mut disabled_override = Some(Err(sky_dispatch_win32::clock::QpcError::CounterUnavailable));
+    let proof = super::worker::final_down_lease_age_proof(
+        &lease,
+        DurationTicks::ZERO,
+        clock,
+        &mut disabled_sample_count,
+        &mut disabled_override,
+    )
+    .expect("disabled diagnostic lease takes no age sample");
+    assert_eq!(proof.admission, SupervisorLeaseAdmission::Fresh);
+    assert_eq!(disabled_sample_count, 0);
+    assert!(disabled_override.is_some());
+}
+
+#[test]
+fn r3_overdue_unlatched_lease_blocks_prepared_down() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 17_167)
+            .expect("prepared Down lease fixture");
+    harness
+        .set_supervisor_lease_timeout_for_r3_probe(100)
+        .expect("enabled supervisor lease timeout");
+
+    let now = harness.qpc_now_for_test().expect("lease fixture QPC");
+    let timeout = harness
+        .qpc_duration_from_us_for_test(100)
+        .expect("lease timeout conversion");
+    assert!(now.as_u64() > timeout.as_u64() + 1);
+    let stale_stamp = QpcTicks::from_raw(now.as_u64() - timeout.as_u64() - 1);
+    harness.set_supervisor_heartbeat_for_test(stale_stamp);
+    assert!(
+        !harness.supervisor_expired.is_expired(),
+        "the watchdog and publisher remain delayed; only the final Down gate can observe age"
+    );
+
+    harness.prepare_prepared_stream_for_test();
+    let send_calls = harness.configure_prepared_zero_progress_sender_for_test();
+    let cursor_before = harness.prepared_cursor_for_test();
+    let accounting_before = harness.generation_accounting_for_test();
+    let due = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("prepared Down floor")
+        .packet_not_before_qpc;
+    let step =
+        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(due);
+
+    assert_eq!(
+        send_calls.load(Ordering::SeqCst),
+        0,
+        "an overdue unlatched lease must be rejected before the prepared sender"
+    );
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::TerminateStatic("supervisor_lease_expired")
+    ));
+    assert_eq!(harness.final_lease_qpc_sample_count_for_test(), 1);
+    assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
+    assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+}
+
+#[test]
+fn r3_unproven_lease_blocks_prepared_down_without_latching_expiry() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 17_167)
+            .expect("prepared Down lease fixture");
+    harness
+        .set_supervisor_lease_timeout_for_r3_probe(100)
+        .expect("enabled supervisor lease timeout");
+    harness.set_supervisor_heartbeat_for_test(QpcTicks::from_raw(0));
+    assert!(!harness.supervisor_expired.is_expired());
+    harness.prepare_prepared_stream_for_test();
+    let send_calls = harness.configure_prepared_zero_progress_sender_for_test();
+    let cursor_before = harness.prepared_cursor_for_test();
+    let accounting_before = harness.generation_accounting_for_test();
+    let due = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("prepared Down floor")
+        .packet_not_before_qpc;
+
+    let step =
+        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(due);
+
+    assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::TerminateStatic("supervisor_lease_unproven")
+    ));
+    assert!(!harness.supervisor_expired.is_expired());
+    assert_eq!(harness.final_lease_qpc_sample_count_for_test(), 1);
+    assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
+    assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+}
+
+#[test]
+fn r3_overdue_lease_after_modifier_stage_blocks_prepared_down() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 17_167)
+            .expect("prepared Down lease fixture");
+    harness
+        .set_supervisor_lease_timeout_for_r3_probe(100)
+        .expect("enabled supervisor lease timeout");
+    harness.set_supervisor_heartbeat_for_test(harness.qpc_now_for_test().expect("fresh lease"));
+    harness.set_final_lease_age_hook_for_test(|lease| {
+        lease.reset(QpcTicks::from_raw(1));
+    });
+    harness.prepare_prepared_stream_for_test();
+    let send_calls = harness.configure_prepared_zero_progress_sender_for_test();
+    let due = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("prepared Down floor")
+        .packet_not_before_qpc;
+
+    let step =
+        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(due);
+
+    assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::TerminateStatic("supervisor_lease_expired")
+    ));
+    assert_eq!(harness.final_lease_qpc_sample_count_for_test(), 1);
+}
+
+#[test]
+fn r3_prepared_down_qpc_failure_terminates_before_sender() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 17_167)
+            .expect("prepared Down lease fixture");
+    harness
+        .set_supervisor_lease_timeout_for_r3_probe(100)
+        .expect("enabled supervisor lease timeout");
+    harness.set_supervisor_heartbeat_for_test(harness.qpc_now_for_test().expect("fresh lease"));
+    harness.set_final_lease_qpc_sample_override_for_test(Err(
+        sky_dispatch_win32::clock::QpcError::CounterUnavailable,
+    ));
+    harness.prepare_prepared_stream_for_test();
+    let send_calls = harness.configure_prepared_zero_progress_sender_for_test();
+    let due = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("prepared Down floor")
+        .packet_not_before_qpc;
+
+    let step =
+        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(due);
+
+    assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        step,
+        super::worker::DispatchStep::TerminateStatic("prepared_down_qpc_failure")
+    ));
+    assert_eq!(harness.final_lease_qpc_sample_count_for_test(), 1);
+}
+
+#[test]
+fn r3_prepared_uponly_does_not_take_lease_age_sample() {
+    use super::test_support::ProductionDispatchTestHarness;
+
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 17_167)
+            .expect("prepared Down and UpOnly lease fixture");
+    harness
+        .set_supervisor_lease_timeout_for_r3_probe(1_000_000)
+        .expect("enabled supervisor lease timeout");
+    harness.set_supervisor_heartbeat_for_test(harness.qpc_now_for_test().expect("fresh lease"));
+    harness.prepare_prepared_stream_for_test();
+    let calls = harness.configure_send_counter();
+    let down_due = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("prepared Down floor")
+        .packet_not_before_qpc;
+    let down_step = harness
+        .dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(down_due);
+    assert!(matches!(down_step, super::worker::DispatchStep::Dispatched));
+    assert_eq!(harness.final_lease_qpc_sample_count_for_test(), 1);
+
+    let up_due = harness
+        .prepared_physical_floor_for_r3_probe()
+        .expect("prepared UpOnly floor")
+        .packet_not_before_qpc;
+    let up_step =
+        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(up_due);
+    assert!(matches!(up_step, super::worker::DispatchStep::Dispatched));
+    assert_eq!(harness.final_lease_qpc_sample_count_for_test(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn r3_late_up_empty_pause_resume_preserves_release_floor() {
     use super::test_support::ProductionDispatchTestHarness;
 

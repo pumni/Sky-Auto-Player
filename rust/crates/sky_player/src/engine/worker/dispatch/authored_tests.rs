@@ -94,7 +94,8 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
     assert!(!finalizer_body.contains("foreground_window_matches"));
     assert!(!finalizer_body.contains("focus_matches_hwnd"));
     assert!(!finalizer_body.contains("supervisor_lease_expired"));
-    assert!(!finalizer_body.contains("lease_timeout_ticks"));
+    assert!(finalizer_body.contains("lease_timeout_ticks"));
+    assert!(finalizer_body.contains("qpc_clock, lease_timeout_ticks"));
     assert!(!finalizer_body.contains("supervisor_heartbeat_ticks"));
 
     let admission = include_str!("../admission.rs");
@@ -108,11 +109,15 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
     let post_modifier_authority = modifier_guard
         .find("final_down_atomic_revalidation")
         .expect("post-modifier target/owner revalidation");
+    let lease_proof = modifier_guard
+        .find("final_down_lease_age_proof")
+        .expect("bounded final lease-age proof");
     let final_control = modifier_guard
         .find("final_control_precheck")
         .expect("post-modifier control revalidation");
     assert!(modifier < post_modifier_authority);
-    assert!(post_modifier_authority < final_control);
+    assert!(post_modifier_authority < lease_proof);
+    assert!(lease_proof < final_control);
 
     let target_admission = admission
         .split("pub(crate) fn final_down_target_admission")
