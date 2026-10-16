@@ -45,6 +45,7 @@ use std::sync::{Arc, Mutex};
 const R3_FRAME_US: u64 = 16_667;
 const R3_MARGIN_US: u64 = 500;
 const R3_EFFECTIVE_HOLD_US: u64 = R3_FRAME_US + R3_MARGIN_US;
+#[cfg(test)]
 const R3_RELEASE_GAP_US: u64 = R3_FRAME_US + R3_MARGIN_US;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

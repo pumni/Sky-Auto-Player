@@ -144,6 +144,7 @@ fn main() {
         println!(
             "Usage: rt_r3_probe --mode <contracts|precision|hol|startup|polling> --output <path> [options]\n\
              Diagnostics modes: hol; startup --generation-count <100|1000|10000|100000>; polling.\n\
+             Polling includes the fixed 17167us short-hold reference.\n\
              Other options: --load-mode <quiet|cpu_contention>, --workload <all|id>, --warmup <n>, --measured <n>, --seed <u64>, --run-index <n>.\n\
              All diagnostics use test-support prepared paths or offline models; they do not emit real keyboard input."
         );
