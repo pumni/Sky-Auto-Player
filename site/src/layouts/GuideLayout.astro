@@ -100,9 +100,7 @@ const structuredData = [
   structuredData={structuredData}
 >
   <article class="guide-page" aria-labelledby="guide-title">
-    <div
-      class="guide-page__header section-shell section-shell--feature section-shell--after-header"
-    >
+    <div class="guide-page__header section-shell section-shell--feature section-shell--after-header">
       <div class="container">
         <GuideBreadcrumb locale={locale} guideTitle={guide.title} guideSlug={guide.slug} />
         <p class="guide-page__category kicker">{guide.category.replace(/-/g, ' ')}</p>
@@ -118,28 +116,26 @@ const structuredData = [
       <div class="guide-page__content">
         <slot />
 
-        {
-          guide.evidence.length > 0 && (
-            <aside
-              class="guide-page__evidence"
-              aria-label={isVi ? 'Nguồn kỹ thuật' : 'Technical evidence'}
-            >
-              <h2 class="guide-page__evidence-title">
-                {isVi ? 'Nguồn kỹ thuật' : 'Technical evidence'}
-              </h2>
-              <ul class="guide-page__evidence-list">
-                {guide.evidence.map((src) => (
-                  <li>
-                    <span class="guide-page__evidence-category">{src.category}</span>
-                    <a href={src.url} class="guide-page__evidence-link">
-                      {src.label}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </aside>
-          )
-        }
+        {guide.evidence.length > 0 && (
+          <aside
+            class="guide-page__evidence"
+            aria-label={isVi ? 'Nguồn kỹ thuật' : 'Technical evidence'}
+          >
+            <h2 class="guide-page__evidence-title">
+              {isVi ? 'Nguồn kỹ thuật' : 'Technical evidence'}
+            </h2>
+            <ul class="guide-page__evidence-list">
+              {guide.evidence.map((src) => (
+                <li>
+                  <span class="guide-page__evidence-category">{src.category}</span>
+                  <a href={src.url} class="guide-page__evidence-link">
+                    {src.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </aside>
+        )}
       </div>
 
       {relatedGuides.length > 0 && <RelatedGuides locale={locale} guides={relatedGuides} />}
@@ -151,15 +147,11 @@ const structuredData = [
     >
       <div class="container guide-page__cta-layout">
         <div>
-          <h2 id="guide-cta-title">
-            {isVi ? 'Sẵn sàng thử chưa?' : 'Ready to try it?'}
-          </h2>
+          <h2 id="guide-cta-title">{isVi ? 'Sẵn sàng thử chưa?' : 'Ready to try it?'}</h2>
           <p>
-            {
-              isVi
-                ? `Tải Sky Auto Player v${APP_VERSION} và bắt đầu phát nhạc trên Windows.`
-                : `Download Sky Auto Player v${APP_VERSION} and start playing on Windows.`
-            }
+            {isVi
+              ? `Tải Sky Auto Player v${APP_VERSION} và bắt đầu phát nhạc trên Windows.`
+              : `Download Sky Auto Player v${APP_VERSION} and start playing on Windows.`}
           </p>
         </div>
         <div class="guide-page__cta-actions">

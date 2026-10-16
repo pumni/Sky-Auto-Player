@@ -26,20 +26,18 @@ const { data, locale } = Astro.props;
     />
     <div>
       <dl class="technical-ledger">
-        {
-          data.ledger.map((item) => (
-            <div class="ledger-row">
-              <dt>
-                <span class="ledger-row__marker" aria-hidden="true" />
-                {item.term}
-              </dt>
-              <dd>{item.definition}</dd>
-              <dd class:list={['ledger-row__state', `ledger-row__state--${item.state}`]}>
-                {item.state === 'yes' ? 'YES' : item.state === 'no' ? 'NO' : 'INFO'}
-              </dd>
-            </div>
-          ))
-        }
+        {data.ledger.map((item) => (
+          <div class="ledger-row">
+            <dt>
+              <span class="ledger-row__marker" aria-hidden="true" />
+              {item.term}
+            </dt>
+            <dd>{item.definition}</dd>
+            <dd class:list={['ledger-row__state', `ledger-row__state--${item.state}`]}>
+              {item.state === 'yes' ? 'YES' : item.state === 'no' ? 'NO' : 'INFO'}
+            </dd>
+          </div>
+        ))}
       </dl>
       <p class="notice">
         <span class="notice__label">{locale === 'vi' ? 'LƯU Ý' : 'NOTICE'}</span>

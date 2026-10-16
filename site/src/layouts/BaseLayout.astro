@@ -105,11 +105,9 @@ const structuredDataJson = structuredData ? JSON.stringify(structuredData) : nul
     <meta name="twitter:image" content={ogImage} />
     <meta name="twitter:image:alt" content={ogImageAlt} />
 
-    {
-      structuredDataJson && (
-        <script is:inline type="application/ld+json" set:html={structuredDataJson} />
-      )
-    }
+    {structuredDataJson && (
+      <script is:inline type="application/ld+json" set:html={structuredDataJson} />
+    )}
   </head>
   <body class={`page-layout page-layout--${locale}`}>
     <a class="skip-link" href="#main-content">

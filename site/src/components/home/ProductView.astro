@@ -25,9 +25,11 @@ const { data, locale } = Astro.props;
       <a
         class="screenshot-link"
         href={withBase('/assets/images/library-real-tauri.png')}
-        aria-label={locale === 'vi'
-          ? 'Mở ảnh giao diện desktop kích thước lớn'
-          : 'Open desktop GUI screenshot at full size'}
+        aria-label={
+          locale === 'vi'
+            ? 'Mở ảnh giao diện desktop kích thước lớn'
+            : 'Open desktop GUI screenshot at full size'
+        }
       >
         <picture>
           <source
@@ -38,18 +40,20 @@ const { data, locale } = Astro.props;
           />
           <img
             src={withBase('/assets/images/library-real-tauri.png')}
-            alt={locale === 'vi'
-              ? 'Giao diện Library desktop của Sky Auto Player'
-              : 'Sky Auto Player desktop Library'}
+            alt={
+              locale === 'vi'
+                ? 'Giao diện Library desktop của Sky Auto Player'
+                : 'Sky Auto Player desktop Library'
+            }
             width="1214"
             height="798"
           />
         </picture>
       </a>
       <figcaption>
-        <span
-          >{locale === 'vi' ? 'Giao diện desktop chính thức' : 'Canonical desktop interface'}</span
-        >
+        <span>
+          {locale === 'vi' ? 'Giao diện desktop chính thức' : 'Canonical desktop interface'}
+        </span>
         <span class="screenshot-frame__caption-meta">PNG · REAL TAURI WINDOW</span>
       </figcaption>
     </figure>
@@ -66,16 +70,14 @@ const { data, locale } = Astro.props;
         class="annotations"
         aria-label={locale === 'vi' ? 'Điểm nổi bật trong sản phẩm' : 'Product annotations'}
       >
-        {
-          data.annotations.map((ann, i) => (
-            <li>
-              <span class="anno-num" aria-hidden="true">
-                {String(i + 1).padStart(2, '0')}
-              </span>
-              <span>{ann}</span>
-            </li>
-          ))
-        }
+        {data.annotations.map((ann, i) => (
+          <li>
+            <span class="anno-num" aria-hidden="true">
+              {String(i + 1).padStart(2, '0')}
+            </span>
+            <span>{ann}</span>
+          </li>
+        ))}
       </ol>
     </div>
   </div>

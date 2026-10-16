@@ -13,13 +13,11 @@ const { locale, faqs } = Astro.props;
 <nav class="faq-toc" aria-label={locale === 'vi' ? 'Mục FAQ' : 'FAQ sections'}>
   <p class="faq-toc__label">{locale === 'vi' ? 'Trong trang này' : 'On this page'}</p>
   <ul>
-    {
-      faqs.map((faq) => (
-        <li>
-          <a href={`#${faq.data.key}`}>{faq.data.question}</a>
-        </li>
-      ))
-    }
+    {faqs.map((faq) => (
+      <li>
+        <a href={`#${faq.data.key}`}>{faq.data.question}</a>
+      </li>
+    ))}
   </ul>
 </nav>
 

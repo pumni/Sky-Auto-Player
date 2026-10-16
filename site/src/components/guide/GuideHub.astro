@@ -59,30 +59,28 @@ const byCategory = Object.fromEntries(
 ---
 
 <div class="guide-hub">
-  {
-    categoryOrder
-      .filter((cat) => byCategory[cat].length > 0)
-      .map((cat) => (
-        <section class="guide-hub__category" aria-labelledby={`cat-${cat}`}>
-          <div class="guide-hub__category-header">
-            <h2 id={`cat-${cat}`} class="guide-hub__category-title">
-              {categoryConfig[cat].label}
-            </h2>
-            <p class="guide-hub__category-desc">{categoryConfig[cat].description}</p>
-          </div>
-          <ul class="guide-hub__list">
-            {byCategory[cat].map((guide) => (
-              <li class="guide-hub__item">
-                <a class="guide-hub__link" href={withBase(`${guideBase}${guide.data.slug}/`)}>
-                  <span class="guide-hub__link-title">{guide.data.title}</span>
-                  <span class="guide-hub__link-summary">{guide.data.summary}</span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))
-  }
+  {categoryOrder
+    .filter((cat) => byCategory[cat].length > 0)
+    .map((cat) => (
+      <section class="guide-hub__category" aria-labelledby={`cat-${cat}`}>
+        <div class="guide-hub__category-header">
+          <h2 id={`cat-${cat}`} class="guide-hub__category-title">
+            {categoryConfig[cat].label}
+          </h2>
+          <p class="guide-hub__category-desc">{categoryConfig[cat].description}</p>
+        </div>
+        <ul class="guide-hub__list">
+          {byCategory[cat].map((guide) => (
+            <li class="guide-hub__item">
+              <a class="guide-hub__link" href={withBase(`${guideBase}${guide.data.slug}/`)}>
+                <span class="guide-hub__link-title">{guide.data.title}</span>
+                <span class="guide-hub__link-summary">{guide.data.summary}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))}
 </div>
 
 <style>
