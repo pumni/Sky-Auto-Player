@@ -204,6 +204,7 @@ fn canonical_and_w4_expectations_are_physical() {
         "stop-cleanup",
         "skip-cleanup",
         "supervisor-lease-expiry",
+        "lease-age-watchdog-delayed",
         "timing-margin-sweep",
     ] {
         assert!(
@@ -263,6 +264,7 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
         Scenario::OwnerQueryFailure,
         Scenario::OwnerProcessTermination,
         Scenario::SupervisorLeaseExpiry,
+        Scenario::LeaseAgeWatchdogDelayed,
     ] {
         let plan = scenario_plan(scenario, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
         assert!(plan.expected_down_slots.is_empty(), "{scenario:?} Down");
@@ -271,6 +273,16 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
         assert!(plan.expected_safety_up_slots.is_empty(), "{scenario:?} safety Up");
         assert!(plan.allow_unpaired_cleanup_ups);
     }
+
+    let delayed = scenario_plan(
+        Scenario::LeaseAgeWatchdogDelayed,
+        ACCEPTANCE_TIMING_MARGIN_US,
+    )
+    .unwrap();
+    assert_eq!(delayed.schedule.packets[0].down_mask, 1);
+    assert!(delayed.schedule.packets[0].scheduled_us > 3_000_000);
+    assert!(delayed.expected_down_slots.is_empty());
+    assert!(delayed.expected_up_slots.is_empty());
 }
 #[test]
 fn processkey_correct_scan_passes_and_wrong_scan_fails() {

@@ -373,8 +373,10 @@ pub(super) fn scenario_plan(
                         ),
                     ],
                     None,
-                    vec![0],
-                    vec![0],
+                    // The lease-age oracle must reject the authored Down before
+                    // SendInput. Its accepted physical event window is empty.
+                    vec![],
+                    vec![],
                     true,
                 )
             }
