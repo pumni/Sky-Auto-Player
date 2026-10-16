@@ -43,25 +43,33 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       <a href={withBase(isVi ? '/vi/#technical' : '/#technical')}>{nav.technical}</a>
       <a
         href={withBase(isVi ? '/vi/guides/' : '/guides/')}
-        aria-current={isGuide ? 'page' : undefined}>{nav.guides}</a
+        aria-current={isGuide ? 'page' : undefined}
       >
-      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')} aria-current={isFaq ? 'page' : undefined}
-        >{nav.faq}</a
-      >
+        {nav.guides}
+      </a>
+      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')} aria-current={isFaq ? 'page' : undefined}>
+        {nav.faq}
+      </a>
       <a href={SITE.repositoryUrl}>{nav.github}</a>
-      <a class="nav-download" href={SITE.releaseUrl}>{isVi ? 'Tải xuống' : 'Download'}</a>
+      <a class="nav-download" href={SITE.releaseUrl}>
+        {isVi ? 'Tải xuống' : 'Download'}
+      </a>
 
       <span class="locale-switch" aria-label={isVi ? 'Chọn ngôn ngữ' : 'Choose language'}>
         <a
           class="locale-switch__option"
           href={isVi ? otherLocalePath : currentPath}
-          aria-current={!isVi ? 'page' : undefined}>EN</a
+          aria-current={!isVi ? 'page' : undefined}
         >
+          EN
+        </a>
         <a
           class="locale-switch__option"
           href={isVi ? currentPath : otherLocalePath}
-          aria-current={isVi ? 'page' : undefined}>VI</a
+          aria-current={isVi ? 'page' : undefined}
         >
+          VI
+        </a>
       </span>
     </nav>
 

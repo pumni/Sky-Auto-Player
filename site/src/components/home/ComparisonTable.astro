@@ -24,11 +24,9 @@ const { data, locale } = Astro.props;
     <div class="comparison-wrap">
       <table class="comparison-table">
         <caption class="sr-only">
-          {
-            locale === 'vi'
-              ? 'So sánh macro thông thường với Sky Auto Player'
-              : 'Comparison of a generic macro and Sky Auto Player'
-          }
+          {locale === 'vi'
+            ? 'So sánh macro thông thường với Sky Auto Player'
+            : 'Comparison of a generic macro and Sky Auto Player'}
         </caption>
         <thead>
           <tr>
@@ -37,17 +35,15 @@ const { data, locale } = Astro.props;
           </tr>
         </thead>
         <tbody>
-          {
-            data.rows.map((row) => (
-              <tr>
-                <td data-label={data.macroHeader}>{row.macro}</td>
-                <td class="comparison-table__player" data-label={data.playerHeader}>
-                  <span class="comparison-table__node" aria-hidden="true" />
-                  {row.player}
-                </td>
-              </tr>
-            ))
-          }
+          {data.rows.map((row) => (
+            <tr>
+              <td data-label={data.macroHeader}>{row.macro}</td>
+              <td class="comparison-table__player" data-label={data.playerHeader}>
+                <span class="comparison-table__node" aria-hidden="true" />
+                {row.player}
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>

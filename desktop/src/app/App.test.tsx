@@ -102,10 +102,10 @@ describe('desktop application shell', () => {
 
     fireEvent.change(search, { target: { value: 'Moonlit' } });
 
-    await waitFor(() =>
-      expect(screen.getByRole('row', { name: /Moonlit Village/ })).toBeInTheDocument(),
-    );
-    expect(screen.queryByRole('row', { name: /Aurora Landing/ })).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByRole('row', { name: /Moonlit Village/ })).toBeInTheDocument();
+      expect(screen.queryByRole('row', { name: /Aurora Landing/ })).toBeNull();
+    });
   });
 
   it('loads and selects a keyboard destination on an unloaded virtualized page', async () => {

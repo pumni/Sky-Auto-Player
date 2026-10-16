@@ -1086,6 +1086,10 @@ impl ProductionDispatchTestHarness {
         let mut backend = TrackedKeyState::with_qpc_clock(qpc_clock);
         backend.set_test_emitters();
         backend.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+        // Keep generic mock dispatch tests independent from the host user's
+        // physical modifier state. Guard-specific tests install explicit
+        // observations through `set_modifier_key_state_query_for_test`.
+        backend.set_modifier_key_state_query_for_test(|_| 0);
         let waiter = HybridWaiter::new();
         let test_margin = qpc_clock
             .duration_from_us(500_000)

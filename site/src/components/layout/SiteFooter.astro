@@ -19,11 +19,9 @@ const isVi = locale === 'vi';
         <span>Sky Auto Player</span>
       </span>
       <p>
-        {
-          isVi
-            ? 'Sky Auto Player · Mã nguồn mở theo GNU GPL v3.0 · Xây dựng cho cộng đồng âm nhạc Sky'
-            : 'Sky Auto Player · Open source under GNU GPL v3.0 · Built for the Sky music community'
-        }
+        {isVi
+          ? 'Sky Auto Player · Mã nguồn mở theo GNU GPL v3.0 · Xây dựng cho cộng đồng âm nhạc Sky'
+          : 'Sky Auto Player · Open source under GNU GPL v3.0 · Built for the Sky music community'}
       </p>
     </div>
     <nav class="site-footer__links" aria-label={isVi ? 'Chân trang' : 'Footer'}>

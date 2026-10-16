@@ -18,7 +18,9 @@ const { data, locale } = Astro.props;
   aria-labelledby="hero-title"
 >
   <div class="container hero__layout">
-    <span class="hero__timestamp" aria-hidden="true">00:13.066</span>
+    <span class="hero__timestamp" aria-hidden="true">
+      00:13.066
+    </span>
     <span class="hero__score-spine ui-score-line" aria-hidden="true">
       <i class="ui-score-node"></i>
       <i class="ui-score-node ui-score-node--info"></i>
@@ -32,33 +34,40 @@ const { data, locale } = Astro.props;
       </h1>
       <p class="hero__description">{data.description}</p>
       <div class="hero__actions">
-        <a class="button button--primary" href={SITE.releaseUrl}>{data.primaryCta}</a>
+        <a class="button button--primary" href={SITE.releaseUrl}>
+          {data.primaryCta}
+        </a>
         <a
           class="button button--secondary"
           href={withBase(locale === 'vi' ? '/vi/#how-it-works' : '/#how-it-works')}
-          >{data.secondaryCta}</a
         >
+          {data.secondaryCta}
+        </a>
       </div>
       <div
         class="hero__meta"
-        aria-label={locale === 'vi'
-          ? 'Định dạng và thuộc tính đóng gói'
-          : 'Formats and packaging attributes'}
+        aria-label={
+          locale === 'vi' ? 'Định dạng và thuộc tính đóng gói' : 'Formats and packaging attributes'
+        }
       >
-        {data.metadata.map((item) => <span>{item}</span>)}
+        {data.metadata.map((item) => (
+          <span>{item}</span>
+        ))}
       </div>
       <p class="risk-note">
         {data.riskNote}{' '}
-        <a href={withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#account-safety')}
-          >{data.riskNoteLink}</a
-        >
+        <a href={withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#account-safety')}>
+          {data.riskNoteLink}
+        </a>
       </p>
       <p class="affiliation-note">{data.affiliationDisclaimer}</p>
     </div>
 
     <div class="hero__visual">
       <span class="hero__score-lines" aria-hidden="true"></span>
-      <span class="hero__brand-mark" aria-hidden="true"><BrandMark /></span>
+      <span class="hero__brand-mark" aria-hidden="true">
+        <BrandMark />
+      </span>
       <TimingConsole locale={locale} />
     </div>
   </div>
