@@ -1047,16 +1047,28 @@ fn qpc_absolute_us(clock: QpcClock, qpc: QpcTicks) -> Result<u64, String> {
         .map_err(|error| format!("diagnostic QPC to microseconds conversion: {error:?}"))
 }
 
-fn run_hol_case(
-    case_id: &str,
-    scenario: &str,
+struct HolCaseConfig {
+    case_id: String,
+    scenario: String,
     actions: Vec<KeyActionInput>,
-    sender_delays_us: &[u64],
+    sender_delays_us: Vec<u64>,
     frame_us: u64,
     frame_base_hold_us: u64,
     timing_margin_us: u64,
     seed: u64,
-) -> Result<Value, String> {
+}
+
+fn run_hol_case(config: HolCaseConfig) -> Result<Value, String> {
+    let HolCaseConfig {
+        case_id,
+        scenario,
+        actions,
+        sender_delays_us,
+        frame_us,
+        frame_base_hold_us,
+        timing_margin_us,
+        seed,
+    } = config;
     let frequency_hz = 1_000_000;
     let clock = QpcClock::from_frequency_hz(NonZeroU64::new(frequency_hz).expect("frequency"));
     let mut harness = ProductionDispatchTestHarness::new_r3_diagnostics_sequence_for_test(
@@ -1066,7 +1078,7 @@ fn run_hol_case(
         frame_base_hold_us,
         timing_margin_us,
     )?;
-    let captured = harness.configure_r3_mock_packet_sender_for_test(sender_delays_us);
+    let captured = harness.configure_r3_mock_packet_sender_for_test(&sender_delays_us);
     harness.prepare_prepared_stream_for_test();
     harness.set_playback_epoch_qpc_for_test(QpcTicks::ZERO);
 
@@ -1351,16 +1363,16 @@ fn run_hol_diagnostics() -> Result<Value, String> {
     let mut cases = Vec::new();
     let mut rows = Vec::new();
     for (case_id, scenario, actions, delays, frame, base_hold, margin) in base_cases {
-        let result = run_hol_case(
-            case_id,
-            scenario,
+        let result = run_hol_case(HolCaseConfig {
+            case_id: case_id.into(),
+            scenario: scenario.into(),
             actions,
-            &delays,
-            frame,
-            base_hold,
-            margin,
-            P4_STARTUP_SEED,
-        )?;
+            sender_delays_us: delays,
+            frame_us: frame,
+            frame_base_hold_us: base_hold,
+            timing_margin_us: margin,
+            seed: P4_STARTUP_SEED,
+        })?;
         rows.extend(result["rows"].as_array().cloned().unwrap_or_default());
         cases.push(result);
     }
@@ -1388,16 +1400,16 @@ fn run_hol_diagnostics() -> Result<Value, String> {
                         "p4-chord15-up",
                     ),
                 ];
-                let result = run_hol_case(
-                    &case_id,
-                    "Maximum 15-key chord with fixed frame rate, margin, and authored hold-frame multiplier.",
+                let result = run_hol_case(HolCaseConfig {
+                    case_id,
+                    scenario: "Maximum 15-key chord with fixed frame rate, margin, and authored hold-frame multiplier.".into(),
                     actions,
-                    &[150, 150],
+                    sender_delays_us: vec![150, 150],
                     frame_us,
                     frame_base_hold_us,
-                    margin_us,
-                    P4_STARTUP_SEED,
-                )?;
+                    timing_margin_us: margin_us,
+                    seed: P4_STARTUP_SEED,
+                })?;
                 rows.extend(result["rows"].as_array().cloned().unwrap_or_default());
                 cases.push(result);
                 chord_case_count += 1;
@@ -1602,17 +1614,30 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
     }))
 }
 
-fn simulate_polling_case(
+struct PollingCaseConfig {
     fps: u64,
     margin_us: u64,
     hold_us_override: Option<u64>,
     phase_units: u64,
-    phase_label: &str,
+    phase_label: &'static str,
     stall_frames: u64,
     down_delivery_skew_us: u64,
     up_delivery_skew_us: u64,
     supplemental: bool,
-) -> Value {
+}
+
+fn simulate_polling_case(config: PollingCaseConfig) -> Value {
+    let PollingCaseConfig {
+        fps,
+        margin_us,
+        hold_us_override,
+        phase_units,
+        phase_label,
+        stall_frames,
+        down_delivery_skew_us,
+        up_delivery_skew_us,
+        supplemental,
+    } = config;
     // One frame is exactly 1,000,000 units where one unit is 1/fps microsecond.
     let frame_units = 1_000_000u64;
     let hold_units = hold_us_override
@@ -1692,17 +1717,17 @@ fn run_frame_polling_model() -> Result<Value, String> {
                 for stall_frames in [0u64, 1, 2] {
                     for delivery_skew_us in [0u64, 500, 2_000] {
                         for up_delivery_skew_us in [0u64, 500, 2_000] {
-                            rows.push(simulate_polling_case(
+                            rows.push(simulate_polling_case(PollingCaseConfig {
                                 fps,
                                 margin_us,
-                                None,
+                                hold_us_override: None,
                                 phase_units,
                                 phase_label,
                                 stall_frames,
-                                delivery_skew_us,
+                                down_delivery_skew_us: delivery_skew_us,
                                 up_delivery_skew_us,
-                                false,
-                            ));
+                                supplemental: false,
+                            }));
                         }
                     }
                 }
@@ -1712,17 +1737,17 @@ fn run_frame_polling_model() -> Result<Value, String> {
     for (phase_units, phase_label) in [(0, "0"), (750_000, "3T/4"), (1_000_000, "T_exact_boundary")]
     {
         for stall_frames in [0, 1] {
-            rows.push(simulate_polling_case(
-                30,
-                0,
-                Some(HOLD_US),
+            rows.push(simulate_polling_case(PollingCaseConfig {
+                fps: 30,
+                margin_us: 0,
+                hold_us_override: Some(HOLD_US),
                 phase_units,
                 phase_label,
                 stall_frames,
-                0,
-                0,
-                true,
-            ));
+                down_delivery_skew_us: 0,
+                up_delivery_skew_us: 0,
+                supplemental: true,
+            }));
         }
     }
     let expected_matrix_cases = 4 * 3 * 5 * 3 * 3 * 3;
@@ -1790,12 +1815,31 @@ mod p4_diagnostics_tests {
 
     #[test]
     fn r3_p4_short_hold_and_exact_boundary_can_miss_down_state() {
-        let short = simulate_polling_case(30, 0, Some(HOLD_US), 750_000, "3T/4", 0, 0, 0, true);
+        let short = simulate_polling_case(PollingCaseConfig {
+            fps: 30,
+            margin_us: 0,
+            hold_us_override: Some(HOLD_US),
+            phase_units: 750_000,
+            phase_label: "3T/4",
+            stall_frames: 0,
+            down_delivery_skew_us: 0,
+            up_delivery_skew_us: 0,
+            supplemental: true,
+        });
         assert_eq!(short["down_state_observed"], false);
         assert_eq!(short["separating_up_state_observed"], true);
 
-        let boundary =
-            simulate_polling_case(30, 0, None, 1_000_000, "T_exact_boundary", 0, 0, 0, false);
+        let boundary = simulate_polling_case(PollingCaseConfig {
+            fps: 30,
+            margin_us: 0,
+            hold_us_override: None,
+            phase_units: 1_000_000,
+            phase_label: "T_exact_boundary",
+            stall_frames: 0,
+            down_delivery_skew_us: 0,
+            up_delivery_skew_us: 0,
+            supplemental: false,
+        });
         assert_eq!(boundary["down_state_observed"], false);
         assert_eq!(boundary["separating_up_state_observed"], true);
     }
