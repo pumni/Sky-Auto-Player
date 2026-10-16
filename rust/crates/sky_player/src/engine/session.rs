@@ -99,6 +99,33 @@ fn supervisor_watchdog_loop(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+fn wait_for_r3_watchdog_release_or_completion(
+    shared: &Arc<SessionShared>,
+    hook: Option<&super::config::StartupOrderingHook>,
+) {
+    let Some(hook) = hook else { return };
+    hook.hold_watchdog_before_check();
+    if !hook.r3_watchdog_is_held() {
+        return;
+    }
+
+    let (done_lock, done_cv) = &shared.lifecycle.completed;
+    let Ok(mut done) = done_lock.lock() else {
+        signal_supervisor_expiry(shared);
+        return;
+    };
+    while hook.r3_watchdog_is_held() && !*done {
+        match done_cv.wait_timeout(done, Duration::from_millis(1)) {
+            Ok((next_done, _)) => done = next_done,
+            Err(_) => {
+                signal_supervisor_expiry(shared);
+                return;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_native_schedule_timing(
     schedule: &sky_dispatch_core::model::RuntimeSchedule,
@@ -370,6 +397,8 @@ impl NativeDispatchSession {
 
         #[cfg(any(test, feature = "test-support"))]
         let timer_lifecycle_context = config.options.timer_lifecycle_context.clone();
+        #[cfg(any(test, feature = "test-support"))]
+        let watchdog_test_hook = config.options.startup_ordering_hook.clone();
 
         self.shared.commands.supervisor_expired.reset(arm_qpc);
         self.supervisor_lease_timeout_ticks
@@ -380,6 +409,11 @@ impl NativeDispatchSession {
             match std::thread::Builder::new()
                 .name("sky-supervisor-watchdog".to_string())
                 .spawn(move || {
+                    #[cfg(any(test, feature = "test-support"))]
+                    wait_for_r3_watchdog_release_or_completion(
+                        &watchdog_shared,
+                        watchdog_test_hook.as_deref(),
+                    );
                     supervisor_watchdog_loop(watchdog_shared, qpc_clock, lease_timeout_ticks)
                 }) {
                 Ok(handle) => Some(handle),

@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$runPrefix = if ($Stage -eq 'baseline') { 'r3-p0-' } elseif ($Stage -eq ('phase' + '1')) { 'r3-p1-' } elseif ($Stage -eq ('phase' + '2')) { 'r3-p2-' } elseif ($Stage -eq 'diagnostics') { 'r3-p4-' } else { 'r3-blocked-' }
+$runPrefix = if ($Stage -eq 'baseline') { 'r3-p0-' } elseif ($Stage -eq ('phase' + '1')) { 'r3-p1-' } elseif ($Stage -eq ('phase' + '2')) { 'r3-p2-' } elseif ($Stage -eq 'diagnostics') { 'r3-p4-' } elseif ($Stage -eq 'final') { 'r3-p5-' } else { 'r3-blocked-' }
 $runId = $runPrefix + (Get-Date -AsUTC -Format 'yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $commandResults = [System.Collections.Generic.List[object]]::new()
 $contentionProcesses = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
@@ -19,6 +19,8 @@ $controlWorktree = $null
 $controlWorktreeCreated = $false
 $script:blockedPerf = $false
 $script:blockedDefect = $false
+$p5GateResults = [System.Collections.Generic.List[object]]::new()
+$assemblyAuditResults = [System.Collections.Generic.List[object]]::new()
 
 function Resolve-Executable([string]$Name) {
     $command = Get-Command $Name -ErrorAction Stop | Select-Object -First 1
@@ -178,6 +180,165 @@ function Write-JsonFile([string]$Path, [object]$Value) {
     [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8NoBom)
 }
 
+function Get-GitBlobBytes([string]$RepositoryRoot, [string]$Revision, [string]$Path) {
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = Resolve-Executable 'git.exe'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    [void]$startInfo.ArgumentList.Add('-C')
+    [void]$startInfo.ArgumentList.Add($RepositoryRoot)
+    [void]$startInfo.ArgumentList.Add('cat-file')
+    [void]$startInfo.ArgumentList.Add('blob')
+    [void]$startInfo.ArgumentList.Add("${Revision}:$Path")
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw "Could not read Git blob: $Revision`:$Path" }
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $memory = [System.IO.MemoryStream]::new()
+    try {
+        $process.StandardOutput.BaseStream.CopyTo($memory)
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "Could not read Git blob $Revision`:$Path`: $($stderrTask.GetAwaiter().GetResult().Trim())"
+        }
+        return ,$memory.ToArray()
+    } finally {
+        $memory.Dispose()
+        $process.Dispose()
+    }
+}
+
+function Get-ByteArraySha256([byte[]]$Bytes) {
+    return [BitConverter]::ToString([System.Security.Cryptography.SHA256]::HashData($Bytes)).Replace('-', '').ToLowerInvariant()
+}
+
+function Get-ZipEntryBytes([System.IO.Compression.ZipArchiveEntry]$Entry) {
+    $entryStream = $Entry.Open()
+    $memory = [System.IO.MemoryStream]::new()
+    try {
+        $entryStream.CopyTo($memory)
+        return ,$memory.ToArray()
+    } finally {
+        $entryStream.Dispose()
+        $memory.Dispose()
+    }
+}
+
+function Get-P4Provenance([string]$RepositoryRoot) {
+    $evidenceCommit = '5c0445a7d5965fd2320856df60e260372586f341'
+    $expectedManifestSha256 = 'b11bbb81732edc6ec6b7c61fe878e7df6621c99c25efcefa2a56435eac11d028'
+    $expectedArchiveSha256 = '86b2c2262f4f3233f82b52ce1a347762502227f63b98e3e88362a3fb16e0105f'
+    $evidenceRoot = 'runs/r3-p4-20261016T145957238Z-be3ec0ab'
+    [void](Invoke-CapturedCommand -Name 'git.exe' -Arguments @('-C', $RepositoryRoot, 'fetch', '--no-tags', 'origin', $evidenceCommit) -Label 'fetch-p4-evidence-for-provenance')
+
+    $manifestPath = "$evidenceRoot/manifest.json"
+    $manifestBytes = Get-GitBlobBytes $RepositoryRoot $evidenceCommit $manifestPath
+    $manifestSha256 = Get-ByteArraySha256 $manifestBytes
+    if ($manifestSha256 -ne $expectedManifestSha256) {
+        throw "BLOCKED-P4-PROVENANCE: immutable P4 manifest SHA-256 changed: $manifestSha256"
+    }
+    $manifest = [System.Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
+    if ($manifest.schema_version -ne 1 -or
+        $manifest.phase -ne 'P4' -or
+        $manifest.run_id -ne 'r3-p4-20261016T145957238Z-be3ec0ab' -or
+        $manifest.evidence_branch -ne 'rt-r3/evidence/p4-3a96be29eb2e' -or
+        $manifest.source_revision -ne '3a96be29eb2e9ceff03db9ab659b073cd7547c17' -or
+        $manifest.runtime_revision -ne 'b012b0a1c135a9176cfc7c6aa8696fa0be29a481' -or
+        $manifest.executable_sha256 -notmatch '^[0-9a-f]{64}$' -or
+        $manifest.runner_outputs_sha256 -ne 'cf54adcaeb5ec49e09ed7907b33224adef943b3598cd39b60b8b1a9f1630197f' -or
+        $manifest.raw_output_count -ne 27 -or
+        @($manifest.raw_outputs).Count -ne 27 -or
+        $manifest.archive_format -ne 'ZIP; concatenate archive parts in numeric order when split' -or
+        @($manifest.archive_parts).Count -ne 1 -or
+        $manifest.archive_total_bytes -ne 121828 -or
+        $manifest.archive_parts[0].path -ne 'archive/evidence.zip' -or
+        $manifest.archive_parts[0].size_bytes -ne 121828 -or
+        $manifest.archive_parts[0].sha256 -ne $expectedArchiveSha256) {
+        throw 'BLOCKED-P4-PROVENANCE: archived P4 manifest schema or pinned run identity did not match'
+    }
+
+    $seenPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($rawOutput in $manifest.raw_outputs) {
+        if ([string]$rawOutput.path -notmatch '^files/[A-Za-z0-9._/-]+$' -or
+            [string]$rawOutput.path -match '(^|/)\.\.?(/|$)' -or
+            -not $seenPaths.Add([string]$rawOutput.path) -or
+            [long]$rawOutput.size_bytes -lt 0 -or
+            [string]$rawOutput.sha256 -notmatch '^[0-9a-f]{64}$') {
+            throw "BLOCKED-P4-PROVENANCE: invalid or duplicate P4 raw-output declaration '$($rawOutput.path)'"
+        }
+    }
+
+    $archivePath = "$evidenceRoot/archive/evidence.zip"
+    $archiveBytes = Get-GitBlobBytes $RepositoryRoot $evidenceCommit $archivePath
+    $archiveSha256 = Get-ByteArraySha256 $archiveBytes
+    if ($archiveBytes.Length -ne 121828 -or $archiveSha256 -ne $expectedArchiveSha256) {
+        throw "BLOCKED-P4-PROVENANCE: immutable P4 archive SHA-256 or size changed: size=$($archiveBytes.Length) sha256=$archiveSha256"
+    }
+
+    $archiveStream = [System.IO.MemoryStream]::new([byte[]]$archiveBytes)
+    $archive = [System.IO.Compression.ZipArchive]::new($archiveStream, [System.IO.Compression.ZipArchiveMode]::Read)
+    try {
+        foreach ($rawOutput in $manifest.raw_outputs) {
+            $entry = $archive.GetEntry([string]$rawOutput.path)
+            if ($null -eq $entry -or $entry.Length -ne [long]$rawOutput.size_bytes) {
+                throw "BLOCKED-P4-PROVENANCE: P4 archive omitted or changed '$($rawOutput.path)'"
+            }
+            $entrySha256 = Get-ByteArraySha256 (Get-ZipEntryBytes $entry)
+            if ($entrySha256 -ne [string]$rawOutput.sha256) {
+                throw "BLOCKED-P4-PROVENANCE: P4 archive content hash mismatch for '$($rawOutput.path)'"
+            }
+        }
+        $runnerEntry = $archive.GetEntry('runner-outputs.json')
+        if ($null -eq $runnerEntry) { throw 'BLOCKED-P4-PROVENANCE: P4 archive omitted runner-outputs.json' }
+        $runnerBytes = Get-ZipEntryBytes $runnerEntry
+        if ((Get-ByteArraySha256 $runnerBytes) -ne [string]$manifest.runner_outputs_sha256) {
+            throw 'BLOCKED-P4-PROVENANCE: P4 runner-outputs.json hash did not match the immutable outer manifest'
+        }
+        $runnerManifest = [System.Text.Encoding]::UTF8.GetString($runnerBytes) | ConvertFrom-Json
+        if ($runnerManifest.schema_version -ne 1 -or
+            $runnerManifest.status -ne 'COMPLETED_CHARACTERIZATION' -or
+            $runnerManifest.stage -ne 'diagnostics' -or
+            $runnerManifest.run_id -ne $manifest.run_id -or
+            $runnerManifest.source_revision -ne $manifest.source_revision -or
+            $runnerManifest.runtime_revision -ne $manifest.runtime_revision -or
+            $runnerManifest.executable_sha256 -ne $manifest.executable_sha256 -or
+            @($runnerManifest.declared_outputs).Count -ne 27) {
+            throw 'BLOCKED-P4-PROVENANCE: archived runner output manifest schema/provenance did not match the outer manifest'
+        }
+        foreach ($declared in $runnerManifest.declared_outputs) {
+            $outer = @($manifest.raw_outputs | Where-Object { $_.path -eq "files/$($declared.path)" })
+            if ($outer.Count -ne 1 -or
+                [long]$declared.size_bytes -ne [long]$outer[0].size_bytes -or
+                [string]$declared.sha256 -ne [string]$outer[0].sha256) {
+                throw "BLOCKED-P4-PROVENANCE: P4 runner output does not match the immutable publication entry '$($declared.path)'"
+            }
+        }
+    } finally {
+        $archive.Dispose()
+        $archiveStream.Dispose()
+    }
+
+    return [ordered]@{
+        phase = 'P4'
+        evidence_commit = $evidenceCommit
+        evidence_branch = $manifest.evidence_branch
+        manifest_path = "$evidenceCommit`:$manifestPath"
+        manifest_sha256 = $manifestSha256
+        archive_path = "$evidenceCommit`:$archivePath"
+        archive_sha256 = $archiveSha256
+        run_id = $manifest.run_id
+        source_revision = $manifest.source_revision
+        runtime_revision = $manifest.runtime_revision
+        executable_sha256 = $manifest.executable_sha256
+        runner_outputs_sha256 = $manifest.runner_outputs_sha256
+        raw_output_count = $manifest.raw_output_count
+        raw_output_hashes_verified = $seenPaths.Count
+        runner_manifest_schema_verified = $true
+    }
+}
+
 function Get-PrecisionRunStats([string]$Root, [object]$Record) {
     $report = Get-Content -LiteralPath (Join-Path $Root $Record.report_path) -Raw | ConvertFrom-Json
     $run = $report.test_vectors.precision_runs[0]
@@ -211,16 +372,17 @@ try {
     if ($Stage -notin $allowedStages) {
         throw "BLOCKED-STAGE: stage '$Stage' is unsupported; no evidence or PASS result was generated"
     }
-    if ($Stage -notin @('baseline', ('phase' + '1'), ('phase' + '2'), 'diagnostics')) {
+    if ($Stage -notin @('baseline', ('phase' + '1'), ('phase' + '2'), 'diagnostics', 'final')) {
         throw "BLOCKED-STAGE: stage '$Stage' is not implemented; no evidence or PASS result was generated"
     }
     $isP2Comparison = $Stage -eq ('phase' + '2')
+    $isP5Final = $Stage -eq 'final'
     $isP4Diagnostics = $Stage -eq 'diagnostics'
-    if ($isP2Comparison -and -not $PSBoundParameters.ContainsKey('ControlRevision')) {
-        throw 'BLOCKED-STAGE: P2 requires the exact accepted-P1 ControlRevision'
+    if (($isP2Comparison -or $isP5Final) -and -not $PSBoundParameters.ContainsKey('ControlRevision')) {
+        throw 'BLOCKED-STAGE: comparison stages require the exact accepted-P1 ControlRevision'
     }
-    if (-not $isP2Comparison -and $PSBoundParameters.ContainsKey('ControlRevision')) {
-        throw 'ControlRevision is reserved for the future comparison stage, which is not implemented'
+    if (-not ($isP2Comparison -or $isP5Final) -and $PSBoundParameters.ContainsKey('ControlRevision')) {
+        throw 'ControlRevision is reserved for P2/P5 comparison stages'
     }
 
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -238,11 +400,27 @@ try {
     if ($LASTEXITCODE -ne 0 -or $headSha -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the full source revision' }
     $runtimeRevision = (& git -C $repoRoot merge-base HEAD refs/remotes/origin/main).Trim()
     if ($LASTEXITCODE -ne 0 -or $runtimeRevision -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the baseline runtime revision' }
-    if ($isP2Comparison) {
+    if ($isP2Comparison -or $isP5Final) {
         $controlRevision = $ControlRevision.ToLowerInvariant()
+        if ($isP5Final) {
+            [void](Invoke-CapturedCommand -Name 'git.exe' -Arguments @('-C', $repoRoot, 'fetch', '--no-tags', 'origin', 'refs/heads/main:refs/remotes/origin/main') -Label 'refresh-origin-main')
+            $runtimeRevision = (& git -C $repoRoot merge-base HEAD refs/remotes/origin/main).Trim()
+            if ($LASTEXITCODE -ne 0 -or $runtimeRevision -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the freshly fetched P5 base revision' }
+        }
         $originMain = (& git -C $repoRoot rev-parse --verify refs/remotes/origin/main).Trim()
-        if ($LASTEXITCODE -ne 0 -or $originMain.ToLowerInvariant() -ne $controlRevision -or $runtimeRevision -ne $controlRevision) {
-            throw "BLOCKED-CONTROL: ControlRevision $controlRevision must exactly match both origin/main ($originMain) and the P2 merge base ($runtimeRevision)"
+        if ($isP2Comparison) {
+            if ($LASTEXITCODE -ne 0 -or $originMain.ToLowerInvariant() -ne $controlRevision -or $runtimeRevision -ne $controlRevision) {
+                throw "BLOCKED-CONTROL: ControlRevision $controlRevision must exactly match both origin/main ($originMain) and the P2 merge base ($runtimeRevision)"
+            }
+        } else {
+            $expectedP1Control = 'b3324655c1b4be82849fc9b2d858541505d69963'
+            $expectedP4Base = 'bf5af844aa9e98f94b6cea8b81b3edb9a1d066ed'
+            if ($LASTEXITCODE -ne 0 -or $controlRevision -ne $expectedP1Control -or
+                $originMain.ToLowerInvariant() -ne $expectedP4Base -or $runtimeRevision -ne $expectedP4Base) {
+                throw "BLOCKED-CONTROL: final qualification requires P1 control $expectedP1Control and P4 base $expectedP4Base; found control=$controlRevision origin/main=$originMain merge-base=$runtimeRevision"
+            }
+            & git -C $repoRoot merge-base --is-ancestor $controlRevision $originMain
+            if ($LASTEXITCODE -ne 0) { throw 'BLOCKED-CONTROL: accepted P1 merge is not in origin/main ancestry' }
         }
     }
     $statusLines = @(& git -C $repoRoot status --porcelain --untracked-files=all)
@@ -308,6 +486,35 @@ try {
         SKY_RT_R3_OS = $hostMetadata.os
         SKY_RT_R3_CPU = $hostMetadata.cpu
         SKY_RT_R3_POWER_STATE = $hostMetadata.power_state
+    }
+    $p4Provenance = $null
+    if ($isP5Final) {
+        $p4Provenance = Get-P4Provenance $repoRoot
+        Write-JsonFile (Join-Path $runDirectory 'p4-provenance.json') $p4Provenance
+
+        $p5GatePlan = @(
+            [ordered]@{ label = 'r3-regressions'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'test-support', '--lib', 'r3_') },
+            [ordered]@{ label = 'dispatch-core-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_dispatch_core') },
+            [ordered]@{ label = 'win32-test-support'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_dispatch_win32', '--features', 'test-support') },
+            [ordered]@{ label = 'player-test-support-lib'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'test-support', '--lib') },
+            [ordered]@{ label = 'player-no-allocation'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'test-support', '--test', 'rt_dispatch_no_alloc') },
+            [ordered]@{ label = 'native-acceptance-unit-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'real-input-acceptance,test-support', '--bin', 'rt-native-acceptance') },
+            [ordered]@{ label = 'desktop-native-runtime-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'desktop/src-tauri/Cargo.toml', '--no-default-features', '--features', 'tauri-test', 'native_runtime') },
+            [ordered]@{ label = 'desktop-power-lifecycle-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'desktop/src-tauri/Cargo.toml', '--no-default-features', '--features', 'tauri-test', 'power_lifecycle') },
+            [ordered]@{ label = 'canonical-static'; executable = 'cargo.exe'; arguments = @('xtask', 'check', 'static') },
+            [ordered]@{ label = 'canonical-all'; executable = 'cargo.exe'; arguments = @('xtask', 'check', 'all') },
+            [ordered]@{ label = 'git-diff-check'; executable = 'git.exe'; arguments = @('-C', $repoRoot, 'diff', '--check') }
+        )
+        foreach ($gate in $p5GatePlan) {
+            Write-Host ("P5 gate: {0}" -f $gate.label)
+            $gateResult = Invoke-CapturedCommand -Name $gate.executable -Arguments $gate.arguments -Label $gate.label
+            $p5GateResults.Add([ordered]@{
+                label = $gate.label
+                exit_code = $gateResult.exit_code
+                stdout_path = $gateResult.stdout_path
+                stderr_path = $gateResult.stderr_path
+            })
+        }
     }
 
     if ($isP4Diagnostics) {
@@ -753,8 +960,9 @@ try {
 
     $controlProbePath = $null
     $controlProbeHash = $null
-    if ($isP2Comparison) {
-        $controlWorktree = Join-Path $env:TEMP ('rt-r3-p2-control-' + [guid]::NewGuid().ToString('N'))
+    if ($isP2Comparison -or $isP5Final) {
+        $controlPrefix = if ($isP5Final) { 'rt-r3-p5-p1-control-' } else { 'rt-r3-p2-control-' }
+        $controlWorktree = Join-Path $env:TEMP ($controlPrefix + [guid]::NewGuid().ToString('N'))
         [void](Invoke-CapturedCommand -Name 'git.exe' -Arguments @('-C', $repoRoot, 'worktree', 'add', '--detach', $controlWorktree, $controlRevision) -Label 'create-control-worktree')
         $controlWorktreeCreated = $true
         $controlTarget = Join-Path $controlWorktree 'rust\target'
@@ -944,7 +1152,7 @@ try {
         return
     }
 
-    if ($isP2Comparison) {
+    if ($isP2Comparison -or $isP5Final) {
         $controlContractPath = Join-Path $runDirectory 'control-contracts.json'
         $candidateContractPath = Join-Path $runDirectory 'candidate-contracts.json'
         $controlContractEnvironment = $environment.Clone()
@@ -995,16 +1203,128 @@ try {
             throw 'BLOCKED-CONTRACT: candidate final lease-age vector or retained P1 lifecycle contract failed qualification'
         }
 
+        if ($isP5Final) {
+            [void](Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('rustc', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--profile', 'dist', '--lib', '--', '--emit=asm') -Label 'build-dist-sky-player-assembly')
+            [void](Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('rustc', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_dispatch_win32', '--profile', 'dist', '--lib', '--', '--emit=asm') -Label 'build-dist-win32-assembly')
+            $assemblyDirectory = Join-Path $repoRoot 'rust\target\dist\deps'
+            $skyAssemblyCandidates = @(Get-ChildItem -LiteralPath $assemblyDirectory -Filter 'sky_player*.s' -File | Where-Object { $_.Name -match '^sky_player(?:-[0-9a-f]+)?\.s$' })
+            $win32AssemblyCandidates = @(Get-ChildItem -LiteralPath $assemblyDirectory -Filter 'sky_dispatch_win32*.s' -File | Where-Object { $_.Name -match '^sky_dispatch_win32(?:-[0-9a-f]+)?\.s$' })
+            if ($skyAssemblyCandidates.Count -ne 1 -or $win32AssemblyCandidates.Count -ne 1) {
+                throw "BLOCKED-ASSEMBLY: expected one exact dist assembly per shipping crate, found sky_player=$($skyAssemblyCandidates.Count), sky_dispatch_win32=$($win32AssemblyCandidates.Count)"
+            }
+            $skyAssemblyPath = $skyAssemblyCandidates[0].FullName
+            $win32AssemblyPath = $win32AssemblyCandidates[0].FullName
+            $assemblyEvidenceDirectory = Join-Path $runDirectory 'assembly'
+            [System.IO.Directory]::CreateDirectory($assemblyEvidenceDirectory) | Out-Null
+            $skyAssemblyCopy = Join-Path $assemblyEvidenceDirectory 'sky_player.s'
+            $win32AssemblyCopy = Join-Path $assemblyEvidenceDirectory 'sky_dispatch_win32.s'
+            Copy-Item -LiteralPath $skyAssemblyPath -Destination $skyAssemblyCopy
+            Copy-Item -LiteralPath $win32AssemblyPath -Destination $win32AssemblyCopy
+            $skyAssemblyHash = (Get-FileHash -LiteralPath $skyAssemblyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $win32AssemblyHash = (Get-FileHash -LiteralPath $win32AssemblyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $dispatchAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_dispatch_assembly.ps1', '-AssemblyPath', $skyAssemblyPath) -Label 'audit-dist-dispatch-assembly'
+            $preparedAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_prepared_normal_assembly.ps1', '-AssemblyPath', $skyAssemblyPath) -Label 'audit-dist-prepared-normal-assembly'
+            $modifierAudit = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/audit_modifier_guard_assembly.ps1', '-SkyPlayerAssemblyPath', $skyAssemblyPath, '-Win32AssemblyPath', $win32AssemblyPath) -Label 'audit-dist-modifier-lease-assembly'
+            $dispatchOutput = Get-Content -LiteralPath (Join-Path $runDirectory $dispatchAudit.stdout_path) -Raw
+            $assemblyAuditResults.Add([ordered]@{
+                sky_player_assembly_path = $skyAssemblyPath
+                sky_player_assembly_sha256 = $skyAssemblyHash
+                win32_assembly_path = $win32AssemblyPath
+                win32_assembly_sha256 = $win32AssemblyHash
+                archived_sky_player_assembly_path = 'assembly/sky_player.s'
+                archived_win32_assembly_path = 'assembly/sky_dispatch_win32.s'
+                dispatch_audit = $dispatchAudit.label
+                prepared_normal_audit = $preparedAudit.label
+                modifier_lease_audit = $modifierAudit.label
+                legacy_broad_symbol_audit_scope = 'report-only retained symbols may be inlined or not found; only required clean targets and scoped optimized audits count as gates'
+                report_only_symbol_rows = @($dispatchOutput -split "`r?`n" | Where-Object { $_ -match 'INLINED_OR_NOT_FOUND|report-only target' })
+            })
+        }
+
         [void](Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--release', '--features', 'real-input-acceptance,test-support', '--bin', 'rt-native-acceptance') -Label 'build-native-acceptance')
         [void](Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/native_acceptance_sink.ps1', '-SelfTest') -Label 'native-sink-selftest')
+        $nativeHarnessPath = Join-Path $repoRoot 'rust\target\release\rt-native-acceptance.exe'
+        if (-not (Test-Path -LiteralPath $nativeHarnessPath -PathType Leaf)) { throw 'BLOCKED-NATIVE: release native acceptance harness was not produced' }
+        $nativeHarnessHash = (Get-FileHash -LiteralPath $nativeHarnessPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $nativeRunnerPath = Join-Path $repoRoot 'scripts\run_native_acceptance_case.ps1'
+        $nativeRunnerHash = (Get-FileHash -LiteralPath $nativeRunnerPath -Algorithm SHA256).Hash.ToLowerInvariant()
         $nativeOutputRoot = Join-Path $repoRoot '.benchmarks\physical-native-cases'
         $nativeResults = [System.Collections.Generic.List[object]]::new()
-        foreach ($scenario in @('supervisor-lease-expiry', 'hold', 'canonical-max-chord', 'mixed-up-down', 'modifier-held-after-owned')) {
+        $nativeObservedEventCount = [long]0
+        $nativeCasePlan = [System.Collections.Generic.List[object]]::new()
+        if ($isP5Final) {
+            $fixedScenarios = @(
+                'canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold',
+                'long-single-sequence', 'dense-alternating', 'chord-sweep',
+                'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress',
+                'mixed-up-down', 'ambiguous-packet', 'preflight-user-held',
+                'modifier-held-final-boundary', 'modifier-held-after-owned',
+                'cleanup-full-release', 'focus-loss', 'target-hwnd-change',
+                'owner-mismatch', 'owner-query-failure', 'owner-process-termination',
+                'pause-resume', 'pause-resume-release-floor', 'suspend-resume',
+                'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
+                'lease-age-watchdog-delayed', 'w4-noncanonical', 'timing-margin-sweep'
+            )
+            foreach ($scenario in $fixedScenarios) {
+                $nativeCasePlan.Add([ordered]@{
+                    scenario = $scenario
+                    timing_margin_us = 500
+                    cpu_contention = $false
+                    replicate = 1
+                    destination = "native/margin-500/$scenario"
+                })
+            }
+            foreach ($scenario in @('canonical-single', 'hold', 'near-minimum-retrigger', 'release-gap-stress', 'mixed-up-down', 'pause-resume')) {
+                foreach ($margin in @(0, 100, 3000)) {
+                    $nativeCasePlan.Add([ordered]@{
+                        scenario = $scenario
+                        timing_margin_us = $margin
+                        cpu_contention = $false
+                        replicate = 1
+                        destination = "native/margin-$margin/$scenario"
+                    })
+                }
+            }
+            foreach ($scenario in @('dense-alternating', 'canonical-max-chord')) {
+                for ($replicate = 1; $replicate -le 3; $replicate++) {
+                    $nativeCasePlan.Add([ordered]@{
+                        scenario = $scenario
+                        timing_margin_us = 500
+                        cpu_contention = $true
+                        replicate = $replicate
+                        destination = "native/contention-500/$scenario/run-$replicate"
+                    })
+                }
+            }
+        } else {
+            foreach ($scenario in @('supervisor-lease-expiry', 'hold', 'canonical-max-chord', 'mixed-up-down', 'modifier-held-after-owned')) {
+                $nativeCasePlan.Add([ordered]@{
+                    scenario = $scenario
+                    timing_margin_us = 500
+                    cpu_contention = $false
+                    replicate = 1
+                    destination = "native/$scenario"
+                })
+            }
+        }
+
+        foreach ($nativeCase in $nativeCasePlan) {
+            $scenario = [string]$nativeCase.scenario
+            $timingMargin = [int]$nativeCase.timing_margin_us
+            $contention = [bool]$nativeCase.cpu_contention
+            $replicate = [int]$nativeCase.replicate
+            Write-Host ("P5 native acceptance: $scenario margin=$timingMargin contention=$contention replicate=$replicate")
+            if ($scenario -eq 'focus-loss') {
+                Write-Host 'Both acceptance windows are present. Click the visible ReceiveOnly sink; the inert probe is non-activating. The 15-second focus window starts now.'
+            }
             $beforeNativeRuns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             if (Test-Path -LiteralPath $nativeOutputRoot -PathType Container) {
                 foreach ($directory in Get-ChildItem -LiteralPath $nativeOutputRoot -Directory) { [void]$beforeNativeRuns.Add($directory.FullName) }
             }
-            $nativeCommand = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments @('-NoProfile', '-File', 'scripts/run_native_acceptance_case.ps1', '-Scenario', $scenario, '-TimingMarginUs', '500') -Label "native-$scenario"
+            $nativeArguments = @('-NoProfile', '-File', 'scripts/run_native_acceptance_case.ps1', '-Scenario', $scenario, '-TimingMarginUs', [string]$timingMargin)
+            if ($contention) { $nativeArguments += '-CpuContention' }
+            $label = "native-$scenario-margin-$timingMargin-contention-$contention-run-$replicate"
+            $nativeCommand = Invoke-CapturedCommand -Name 'pwsh.exe' -Arguments $nativeArguments -Label $label
             $newNativeRuns = @()
             if (Test-Path -LiteralPath $nativeOutputRoot -PathType Container) {
                 $newNativeRuns = @(Get-ChildItem -LiteralPath $nativeOutputRoot -Directory | Where-Object { -not $beforeNativeRuns.Contains($_.FullName) })
@@ -1021,31 +1341,42 @@ try {
                 $nativeConfig.source_revision.ToLowerInvariant() -ne $headSha -or
                 $nativeConfig.source_tree_clean -ne $true -or
                 $nativeConfig.scenario -ne $scenario -or
-                $nativeConfig.timing_margin_us -ne 500 -or
+                $nativeConfig.timing_margin_us -ne $timingMargin -or
+                $nativeConfig.harness_sha256.ToLowerInvariant() -ne $nativeHarnessHash -or
+                $nativeConfig.runner_sha256.ToLowerInvariant() -ne $nativeRunnerHash -or
+                $nativeConfig.cpu_contention -ne $contention -or
+                $nativeConfig.cpu_contention_processes -ne $(if ($contention) { 2 } else { 0 }) -or
                 $nativeInvocation.exit_code -ne 0 -or
                 $nativeInvocation.status -ne 'PASS' -or
+                $nativeInvocation.report_window_match -ne $true -or
+                $nativeInvocation.observed_event_count -ne $nativeInvocation.expected_event_count -or
                 $nativeReport.run_id -ne $nativeConfig.run_id -or
                 $nativeReport.scenario -ne $scenario -or
-                $nativeReport.timing_margin_us -ne 500 -or
+                $nativeReport.timing_margin_us -ne $timingMargin -or
                 $nativeReport.status -ne 'PASS') {
                 throw "BLOCKED-NATIVE: $scenario failed source, margin, or ReceiveOnly acceptance checks"
             }
-            $nativeDestination = Join-Path (Join-Path $runDirectory 'native') $scenario
+            $nativeObservedEventCount += [long]$nativeInvocation.observed_event_count
+            $nativeDestination = Join-Path $runDirectory ($nativeCase.destination.Replace('/', '\\'))
             [System.IO.Directory]::CreateDirectory($nativeDestination) | Out-Null
             foreach ($child in Get-ChildItem -LiteralPath $nativeRunDirectory -Force) {
                 Copy-Item -LiteralPath $child.FullName -Destination $nativeDestination -Recurse
             }
             $nativeResults.Add([ordered]@{
                 scenario = $scenario
-                timing_margin_us = 500
+                timing_margin_us = $timingMargin
+                cpu_contention = $contention
+                replicate = $replicate
                 status = $nativeReport.status
                 run_id = $nativeConfig.run_id
                 command_label = $nativeCommand.label
-                evidence_directory = "native/$scenario"
+                evidence_directory = $nativeCase.destination
                 source_run_id = $newNativeRuns[0].Name
                 executable_sha256 = $nativeConfig.harness_sha256
+                runner_sha256 = $nativeConfig.runner_sha256
                 observed_event_count = $nativeInvocation.observed_event_count
                 expected_event_count = $nativeInvocation.expected_event_count
+                run_manifest_path = "$($nativeCase.destination)/run-config.json"
             })
         }
 
@@ -1198,12 +1529,16 @@ try {
                 stage = $Stage
                 run_id = $runId
                 source_revision = $headSha
-                runtime_revision = $controlRevision
-                base_revision = $controlRevision
+                runtime_revision = $runtimeRevision
+                base_revision = $runtimeRevision
+                control_revision = $controlRevision
                 candidate_revision = $headSha
                 source_tree_clean = $sourceTreeClean
                 control_executable_sha256 = $controlProbeHash
                 candidate_executable_sha256 = $probeHash
+                prior_p4_evidence = $p4Provenance
+                qualification_gates = @($p5GateResults)
+                assembly_audits = @($assemblyAuditResults)
                 host = $hostMetadata
                 paired_precision_rounds = @($precisionRounds)
                 native_controls = @($nativeResults)
@@ -1221,8 +1556,9 @@ try {
             stage = $Stage
             run_id = $runId
             source_revision = $headSha
-            runtime_revision = $controlRevision
-            base_revision = $controlRevision
+            runtime_revision = $runtimeRevision
+            base_revision = $runtimeRevision
+            control_revision = $controlRevision
             candidate_revision = $headSha
             source_tree_clean = $sourceTreeClean
             control_executable_sha256 = $controlProbeHash
@@ -1246,8 +1582,13 @@ try {
                 lifecycle_vector = $candidateLifecycle.hypothesis_status
                 empty_cleanup = $candidateContractReport.test_vectors.E_empty_cleanup.oracle_passed
             }
+            prior_p4_evidence = $p4Provenance
+            qualification_gates = @($p5GateResults)
+            assembly_audits = @($assemblyAuditResults)
             native_controls = @($nativeResults)
             native_control_count = $nativeResults.Count
+            native_case_plan_count = $nativeCasePlan.Count
+            native_observed_event_count = $nativeObservedEventCount
             native_sink_selftest = 'PASS'
             paired_precision_rounds = @($precisionRounds)
             paired_ab_disposition = if ($precisionRounds.Count -eq 1) { 'PASS on first five-pair matrix per workload/mode' } else { 'PASS after one complete paired matrix repeat; initial matrix retained' }
@@ -1283,13 +1624,14 @@ try {
             stage = $Stage
             run_id = $runId
             source_revision = $headSha
-            runtime_revision = $controlRevision
+            runtime_revision = $runtimeRevision
+            control_revision = $controlRevision
             executable_sha256 = $probeHash
             control_executable_sha256 = $controlProbeHash
             declared_outputs = @($declaredFiles)
         }
         Write-JsonFile (Join-Path $runDirectory 'runner-outputs.json') $outputsManifest
-        Write-Output (ConvertTo-Json -InputObject ([ordered]@{ status = $outputsManifest.status; run_id = $runId; run_directory = $runDirectory; source_revision = $headSha; control_revision = $controlRevision; precision_runs = $precisionRecords.Count; native_controls = $nativeResults.Count; child_commands = $commandResults.Count }) -Compress)
+        Write-Output (ConvertTo-Json -InputObject ([ordered]@{ status = $outputsManifest.status; run_id = $runId; run_directory = $runDirectory; source_revision = $headSha; runtime_revision = $runtimeRevision; control_revision = $controlRevision; precision_runs = $precisionRecords.Count; native_cases = $nativeResults.Count; native_events = $nativeObservedEventCount; child_commands = $commandResults.Count }) -Compress)
         return
     }
 
@@ -1581,7 +1923,8 @@ try {
         $controlTempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
         $controlFullPath = [System.IO.Path]::GetFullPath($controlWorktree)
         if ($controlFullPath.StartsWith($controlTempRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
-            [System.IO.Path]::GetFileName($controlFullPath).StartsWith('rt-r3-p2-control-', [System.StringComparison]::Ordinal)) {
+            ([System.IO.Path]::GetFileName($controlFullPath).StartsWith('rt-r3-p2-control-', [System.StringComparison]::Ordinal) -or
+             [System.IO.Path]::GetFileName($controlFullPath).StartsWith('rt-r3-p5-p1-control-', [System.StringComparison]::Ordinal))) {
             $removeOutput = & git -C $repoRoot worktree remove --force $controlFullPath 2>&1
             if ($LASTEXITCODE -ne 0) { Write-Warning ('Could not remove temporary P1 control worktree: ' + ($removeOutput -join ' ')) }
         }

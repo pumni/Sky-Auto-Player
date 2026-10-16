@@ -426,6 +426,10 @@ pub(crate) fn suspend_live_input(
 
     let cleanup_completed_qpc = post_cleanup_qpc()
         .map_err(|error| format!("post-cleanup resume-barrier QPC failure: {error}"))?;
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+        hook.record_r3_resume_cleanup_qpc(cleanup_completed_qpc.as_u64());
+    }
     let guard = runtime
         .physical_timing_guard
         .as_mut()
