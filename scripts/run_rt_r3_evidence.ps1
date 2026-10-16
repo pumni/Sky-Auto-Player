@@ -181,11 +181,11 @@ try {
     if (-not [Environment]::UserInteractive) { throw 'BLOCKED-ENV: Windows interactive desktop is unavailable' }
     if ($target -ne 'x86_64-pc-windows-msvc') { throw "BLOCKED-ENV: expected x86_64-pc-windows-msvc, found $target" }
     if ($osInfo.Caption -notmatch 'Windows 11') { throw "BLOCKED-ENV: expected Windows 11, found $($osInfo.Caption)" }
-    if ($rustcVersion -notmatch '^rustc 1\.98\.1(?:\s|$)' -or $cargoVersion -notmatch '^cargo 1\.98\.1(?:\s|$)') {
-        throw "BLOCKED-ENV: expected Rust/Cargo 1.98.1; found '$rustcVersion' / '$cargoVersion'"
+    if ($rustcVersion -notmatch '^rustc 1\.99\.1(?:\s|$)' -or $cargoVersion -notmatch '^cargo 1\.99\.1(?:\s|$)') {
+        throw "BLOCKED-ENV: expected Rust/Cargo 1.99.1; found '$rustcVersion' / '$cargoVersion'"
     }
-    if ($bunVersion -ne '1.4.0') {
-        throw "BLOCKED-ENV: expected Bun 1.4.0; found '$bunVersion'"
+    if ($bunVersion -ne '1.4.3') {
+        throw "BLOCKED-ENV: expected Bun 1.4.3; found '$bunVersion'"
     }
     $hostMetadata = [ordered]@{
         rustc = $rustcVersion
@@ -465,8 +465,8 @@ try {
         precision = @($precisionSummary)
         native_controls = @($nativeResults)
         native_sink_selftest = 'PASS'
-        bun_version_expected_by_ci = '1.4.0'
-        bun_version_matches_ci = ($bunVersion -eq '1.4.0')
+        bun_version_expected_by_ci = '1.4.3'
+        bun_version_matches_ci = ($bunVersion -eq '1.4.3')
         child_command_count = $commandResults.Count
         child_commands = @($commandResults)
         precision_run_count = $precisionRecords.Count
