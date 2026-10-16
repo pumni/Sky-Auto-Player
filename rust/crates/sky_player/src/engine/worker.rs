@@ -27,10 +27,10 @@ pub(crate) use admission::invoke_final_gate_race_hook;
 pub(crate) use admission::{
     DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
     FinalTargetSignals, TargetStamp, ensure_preflight_for_target, enter_focus_pause,
-    final_control_precheck, final_down_atomic_revalidation, final_down_target_admission,
-    focus_matches, focus_matches_hwnd, handle_final_focus_loss, load_target_stamp,
-    modifier_guard_rejection_step, record_final_gate_rejection, target_stamp_still_current,
-    trace_kind_for_packet_kind,
+    final_control_precheck, final_down_atomic_revalidation, final_down_lease_age_proof,
+    final_down_target_admission, focus_matches, focus_matches_hwnd, handle_final_focus_loss,
+    load_target_stamp, modifier_guard_rejection_step, record_final_gate_rejection,
+    target_stamp_still_current, trace_kind_for_packet_kind,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
@@ -379,6 +379,10 @@ pub struct PreparationCounts {
 /// This state deliberately lives outside the panic boundary so the worker's
 /// backend, coordinator, and telemetry can still be finalized after an
 /// injected or unexpected panic.
+#[cfg(test)]
+pub(crate) type FinalLeaseAgeHook =
+    Arc<dyn Fn(&crate::engine::shared::SupervisorLeaseState) + Send + Sync>;
+
 #[derive(Default)]
 pub(crate) struct WorkerRuntime {
     pub(crate) preparation_probe: DispatchPreparationProbe,
@@ -397,6 +401,13 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_modifier_race_hook: Option<super::config::FinalGateRaceHook>,
+    #[cfg(test)]
+    pub(crate) final_lease_qpc_sample_count_for_test: u64,
+    #[cfg(test)]
+    pub(crate) final_lease_qpc_sample_override_for_test:
+        Option<Result<QpcTicks, sky_dispatch_win32::clock::QpcError>>,
+    #[cfg(test)]
+    pub(crate) final_lease_age_hook_for_test: Option<FinalLeaseAgeHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     /// Musical Down admission state. Up-only safety sends never mutate this

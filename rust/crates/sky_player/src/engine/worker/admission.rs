@@ -3,13 +3,17 @@ use super::dispatch::DispatchStep;
 use super::{TrackedKeyState, WorkerConfig, WorkerRuntime, focus_gate_matches};
 #[cfg(any(test, feature = "test-support"))]
 use crate::engine::shared::SystemPowerState;
-use crate::engine::shared::{SessionTarget, SharedProgressClock, SupervisorLeaseState};
+use crate::engine::shared::{
+    SessionTarget, SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseAgeProof,
+    SupervisorLeaseState,
+};
 use crate::engine::target::OwnerIdentityStatus;
 use crate::engine::telemetry::{
     TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP, WorkerMetricsLocal,
 };
 use sky_dispatch_core::clock::PauseReason;
-use sky_dispatch_win32::clock::QpcTicks;
+use sky_dispatch_core::time::DurationTicks;
+use sky_dispatch_win32::clock::{QpcError, QpcTicks};
 use sky_dispatch_win32::input::{ModifierKeyObservation, ModifierMask, PhysicalKeyPreflightError};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,6 +28,35 @@ pub(crate) enum FinalGateRejection {
     Control,
     Target,
     Focus,
+    LeaseExpired,
+}
+
+/// Take the single enabled-lease age sample for eligible Down traffic and
+/// apply the bounded supervisor proof. A disabled timeout preserves the
+/// existing diagnostic-only behavior without reading QPC or lease state.
+#[inline(always)]
+pub(crate) fn final_down_lease_age_proof(
+    lease: &SupervisorLeaseState,
+    timeout_ticks: DurationTicks,
+    qpc_clock: QpcClock,
+    #[cfg(test)] qpc_sample_count: &mut u64,
+    #[cfg(test)] qpc_sample_override: &mut Option<Result<QpcTicks, QpcError>>,
+) -> Result<SupervisorLeaseAgeProof, QpcError> {
+    if timeout_ticks == DurationTicks::ZERO {
+        return Ok(lease.prove_down_age(QpcTicks::from_raw(0), timeout_ticks));
+    }
+
+    #[cfg(test)]
+    let now = {
+        *qpc_sample_count = qpc_sample_count.saturating_add(1);
+        qpc_sample_override
+            .take()
+            .unwrap_or_else(|| qpc_clock.now())?
+    };
+    #[cfg(not(test))]
+    let now = qpc_clock.now()?;
+
+    Ok(lease.prove_down_age(now, timeout_ticks))
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -68,6 +101,10 @@ pub(crate) fn record_final_gate_rejection(
         FinalGateRejection::Focus => {
             local_metrics.final_gate_focus_losses =
                 local_metrics.final_gate_focus_losses.saturating_add(1)
+        }
+        FinalGateRejection::LeaseExpired => {
+            local_metrics.final_gate_lease_expirations =
+                local_metrics.final_gate_lease_expirations.saturating_add(1)
         }
     }
 }
@@ -314,6 +351,7 @@ pub(super) fn modifier_guard_and_final_revalidation(
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
     qpc_clock: QpcClock,
+    lease_timeout_ticks: DurationTicks,
     clock_state: &mut PlaybackClockState,
     progress_clock: &SharedProgressClock,
 ) -> Result<Option<super::dispatch::AdmissionOutcome>, DispatchStep> {
@@ -369,6 +407,34 @@ pub(super) fn modifier_guard_and_final_revalidation(
             ));
         }
     }
+    #[cfg(test)]
+    if let Some(hook) = runtime.final_lease_age_hook_for_test.as_deref() {
+        hook(control_signals.supervisor_expired);
+    }
+    let lease_proof = final_down_lease_age_proof(
+        control_signals.supervisor_expired,
+        lease_timeout_ticks,
+        qpc_clock,
+        #[cfg(test)]
+        &mut runtime.final_lease_qpc_sample_count_for_test,
+        #[cfg(test)]
+        &mut runtime.final_lease_qpc_sample_override_for_test,
+    )
+    .map_err(|_| DispatchStep::TerminateStatic("authored_down_qpc_failure"))?;
+    match lease_proof.admission {
+        SupervisorLeaseAdmission::Fresh => {}
+        SupervisorLeaseAdmission::Expired => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, FinalGateRejection::LeaseExpired);
+            return Err(DispatchStep::TerminateStatic("supervisor_lease_expired"));
+        }
+        SupervisorLeaseAdmission::Unproven => {
+            runtime.verified_target = None;
+            runtime.invalidate_down_authorization();
+            return Err(DispatchStep::TerminateStatic("supervisor_lease_unproven"));
+        }
+    }
     if !matches!(
         final_control_precheck(control_signals),
         FinalControlAdmission::Allowed
@@ -403,6 +469,9 @@ pub(crate) fn enter_focus_pause(
     Ok(true)
 }
 
+// Keep the failure-only QPC sample out of the prepared Down admission body so
+// its single eligible lease-age sample remains directly auditable.
+#[inline(never)]
 pub(crate) fn handle_final_focus_loss(
     qpc_clock: QpcClock,
     clock_state: &mut PlaybackClockState,

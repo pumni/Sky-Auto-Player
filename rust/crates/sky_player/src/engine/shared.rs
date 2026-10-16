@@ -159,6 +159,22 @@ pub(super) struct SessionCommands {
 /// remaining bits retain the last accepted progress stamp.
 pub(crate) struct SupervisorLeaseState {
     state: AtomicU64,
+    #[cfg(test)]
+    force_down_proof_state_before_cas_for_test: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SupervisorLeaseAdmission {
+    Fresh,
+    Expired,
+    Unproven,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SupervisorLeaseAgeProof {
+    pub(crate) admission: SupervisorLeaseAdmission,
+    pub(crate) state_loads: u8,
+    pub(crate) compare_exchanges: u8,
 }
 
 impl SupervisorLeaseState {
@@ -173,6 +189,8 @@ impl SupervisorLeaseState {
             } else {
                 ticks | Self::EXPIRED_BIT
             }),
+            #[cfg(test)]
+            force_down_proof_state_before_cas_for_test: AtomicU64::new(u64::MAX),
         }
     }
 
@@ -231,6 +249,108 @@ impl SupervisorLeaseState {
                 return true;
             }
         }
+    }
+
+    /// Bounded final-admission proof for a musical Down. Unlike the watchdog
+    /// path this never retries: a CAS race gets one reload and any state that
+    /// cannot be proved fresh fails closed as Unproven.
+    #[inline(always)]
+    pub(crate) fn prove_down_age(
+        &self,
+        now: QpcTicks,
+        timeout: DurationTicks,
+    ) -> SupervisorLeaseAgeProof {
+        if timeout == DurationTicks::ZERO {
+            return SupervisorLeaseAgeProof {
+                admission: SupervisorLeaseAdmission::Fresh,
+                state_loads: 0,
+                compare_exchanges: 0,
+            };
+        }
+
+        let now = now.as_u64();
+        let state = self.state.load(Ordering::Acquire);
+        let mut state_loads = 1;
+        if state & Self::EXPIRED_BIT != 0 {
+            return SupervisorLeaseAgeProof {
+                admission: SupervisorLeaseAdmission::Expired,
+                state_loads,
+                compare_exchanges: 0,
+            };
+        }
+
+        let previous = state & Self::TICKS_MASK;
+        if previous == 0 {
+            return SupervisorLeaseAgeProof {
+                admission: SupervisorLeaseAdmission::Unproven,
+                state_loads,
+                compare_exchanges: 0,
+            };
+        }
+        if now < previous || now - previous <= timeout.as_u64() {
+            return SupervisorLeaseAgeProof {
+                admission: SupervisorLeaseAdmission::Fresh,
+                state_loads,
+                compare_exchanges: 0,
+            };
+        }
+
+        #[cfg(test)]
+        {
+            let replacement = self
+                .force_down_proof_state_before_cas_for_test
+                .swap(u64::MAX, Ordering::Relaxed);
+            if replacement != u64::MAX {
+                self.state.store(replacement, Ordering::Release);
+            }
+        }
+
+        match self.state.compare_exchange(
+            state,
+            state | Self::EXPIRED_BIT,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => SupervisorLeaseAgeProof {
+                admission: SupervisorLeaseAdmission::Expired,
+                state_loads,
+                compare_exchanges: 1,
+            },
+            Err(_) => {
+                let replacement = self.state.load(Ordering::Acquire);
+                state_loads += 1;
+                let admission = if replacement & Self::EXPIRED_BIT != 0 {
+                    SupervisorLeaseAdmission::Expired
+                } else {
+                    let progress = replacement & Self::TICKS_MASK;
+                    if progress == 0 {
+                        SupervisorLeaseAdmission::Unproven
+                    } else if now < progress || now - progress <= timeout.as_u64() {
+                        SupervisorLeaseAdmission::Fresh
+                    } else {
+                        SupervisorLeaseAdmission::Unproven
+                    }
+                };
+                SupervisorLeaseAgeProof {
+                    admission,
+                    state_loads,
+                    compare_exchanges: 1,
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_down_proof_cas_failure_for_test(
+        &self,
+        replacement_progress: Option<QpcTicks>,
+        expired: bool,
+    ) {
+        let progress = replacement_progress.map_or(0, QpcTicks::as_u64) & Self::TICKS_MASK;
+        self.force_down_proof_state_before_cas_for_test.store(
+            progress | if expired { Self::EXPIRED_BIT } else { 0 },
+            Ordering::Release,
+        );
     }
 
     pub(crate) fn publish_progress(&self, now: QpcTicks, timeout: DurationTicks) -> bool {

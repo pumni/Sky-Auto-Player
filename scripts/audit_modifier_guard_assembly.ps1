@@ -100,6 +100,7 @@ $win32Lines = [IO.File]::ReadAllLines($win32Assembly)
 $queryBody = Find-FunctionBody $skyLines 'modifier_guard26observe_modifier_keys_with.*:$'
 $admissionBody = Find-FunctionBody $skyLines 'admission37modifier_guard_and_final_revalidation:$'
 $preparedBody = Find-FunctionBody $skyLines 'prepared30dispatch_prepared_normal_frame:$'
+$authoredDispatchBody = Find-FunctionBody $skyLines '\.seh_proc _.*authored24dispatch_authored_packet$'
 $win32QueryBody = Find-FunctionBody $win32Lines 'physical21query_async_key_state:$'
 
 Assert-FiveModifierQueries $queryBody 'compiled fixed modifier observer'
@@ -124,6 +125,45 @@ $preparedSenderCalls = @(
 if ($preparedProbeCalls.Count -ne 1 -or $preparedSenderCalls.Count -ne 1) {
     throw "prepared Down assembly expected one modifier probe and one sender transaction; found probe=$($preparedProbeCalls.Count), sender=$($preparedSenderCalls.Count)"
 }
+$preparedModifierIndex = -1
+$preparedLateControlIndex = -1
+$preparedQpcIndices = [System.Collections.Generic.List[int]]::new()
+for ($index = 0; $index -lt $preparedBody.Count; $index++) {
+    if ($preparedBody[$index] -match 'callq.*(?:modifier_guard|observe_current_modifier_keys)') { $preparedModifierIndex = $index }
+    if ($preparedBody[$index] -match 'callq.*final_control_precheck') { $preparedLateControlIndex = $index }
+    if ($preparedBody[$index] -match 'callq.*QpcClock.*3now') { $preparedQpcIndices.Add($index) }
+}
+$preparedLeaseAgeQpcIndices = @(
+    $preparedQpcIndices | Where-Object { $_ -gt $preparedModifierIndex -and $_ -lt $preparedLateControlIndex }
+)
+if ($preparedModifierIndex -lt 0 -or $preparedLateControlIndex -le $preparedModifierIndex -or
+    $preparedQpcIndices.Count -ne 1 -or $preparedLeaseAgeQpcIndices.Count -ne 1) {
+    throw "prepared Down assembly must contain exactly one post-modifier, pre-control lease-age QPC call; total=$($preparedQpcIndices.Count), lease_age=$($preparedLeaseAgeQpcIndices.Count)"
+}
+
+$authoredModifierIndices = @(
+    for ($index = 0; $index -lt $admissionBody.Count; $index++) {
+        if ($admissionBody[$index] -match 'callq.*query_async_key_state') { $index }
+    }
+)
+$authoredAgeQpcIndices = @(
+    for ($index = 0; $index -lt $admissionBody.Count; $index++) {
+        if ($admissionBody[$index] -match 'callq.*QpcClock.*3now') { $index }
+    }
+)
+$authoredControlIndices = @(
+    for ($index = 0; $index -lt $admissionBody.Count; $index++) {
+        if ($admissionBody[$index] -match 'callq.*final_control_precheck') { $index }
+    }
+)
+$authoredDispatchQpcCalls = @($authoredDispatchBody | Where-Object { $_ -match 'callq.*QpcClock.*3now' })
+if ($authoredModifierIndices.Count -ne 5 -or $authoredAgeQpcIndices.Count -ne 1 -or
+    $authoredControlIndices.Count -lt 1 -or
+    $authoredAgeQpcIndices[0] -le $authoredModifierIndices[-1] -or
+    $authoredAgeQpcIndices[0] -ge $authoredControlIndices[-1] -or
+    $authoredDispatchQpcCalls.Count -ne 1) {
+    throw "authored Down assembly must retain one post-modifier, pre-control lease-age QPC sample and one existing final-policy sample; modifiers=$($authoredModifierIndices.Count), lease_age=$($authoredAgeQpcIndices.Count), final_policy=$($authoredDispatchQpcCalls.Count)"
+}
 
 $getAsyncCalls = @($win32QueryBody | Where-Object { $_ -match 'callq\s+\*__imp_GetAsyncKeyState' })
 $win32Calls = @($win32QueryBody | Where-Object { $_ -match '\bcallq\b' })
@@ -138,6 +178,10 @@ Write-Output "compiled_observer_GetAsyncKeyState_calls=$($queryCalls.Count)"
 Write-Output "compiled_authored_admission_modifier_calls=$(@($admissionBody | Where-Object { $_ -match 'callq.*query_async_key_state' }).Count)"
 Write-Output "prepared_dispatch_modifier_probe_calls=$($preparedProbeCalls.Count)"
 Write-Output "prepared_sender_transactions=$($preparedSenderCalls.Count)"
+Write-Output "prepared_boundary_qpc_clock_calls=$($preparedQpcIndices.Count)"
+Write-Output "post_modifier_pre_control_lease_age_qpc_calls=$($preparedLeaseAgeQpcIndices.Count)"
+Write-Output "authored_admission_lease_age_qpc_calls=$($authoredAgeQpcIndices.Count)"
+Write-Output "authored_dispatch_final_policy_qpc_calls=$($authoredDispatchQpcCalls.Count)"
 Write-Output "GetAsyncKeyState_import_calls_per_query_async_wrapper=$($getAsyncCalls.Count)"
-Write-Output 'modifier probe allocation/mapping/foreground/process/QPC/lock/log calls=0'
+Write-Output 'fixed modifier probe allocation/mapping/foreground/process/QPC/lock/log calls=0'
 Write-Output 'optimized modifier guard assembly audit: PASS'

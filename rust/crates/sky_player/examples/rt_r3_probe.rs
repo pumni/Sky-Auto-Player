@@ -319,14 +319,7 @@ fn contracts_report() -> Result<Value, String> {
     {
         vector_a.push(run_lifecycle_vector(frequency_hz, odd_vector)?);
     }
-    let expired_without_watchdog = run_lease_case("expired-no-watchdog", 1_000_000, 4_000_001)?;
-    let timeout_equality = run_lease_case("equality", 1_000_000, 4_000_000)?;
-    let prior_fresh_progress = run_lease_case("fresh-progress", 3_999_999, 4_000_000)?;
-    let lease_reproduced = expired_without_watchdog["dispatch_was_allowed"].as_bool() == Some(true)
-        && expired_without_watchdog["musical_sender_attempts"]
-            .as_u64()
-            .unwrap_or(0)
-            == 1;
+    let final_lease_age_proof = run_final_lease_age_proof_contract()?;
     let lifecycle_counterexample_reproduced = vector_a.len() == 3
         && vector_a
             .iter()
@@ -345,18 +338,126 @@ fn contracts_report() -> Result<Value, String> {
             "path_evidence": "test-support due seam recomputes the current production physical timing window for the current prepared packet on every call, accepts wall QPC only, and enters the unchanged prepared suffix only when due; manual pause/resume uses the dispatch-loop verified resumable cleanup transition",
             "oracle": "no sender, cursor advance, or generation commit before the current packet_not_before_qpc; resumed Down must satisfy musical Up completion plus one frame and the absolute post-cleanup global Down barrier"
         },
-        "B_enabled_lease_watchdog_delayed": {
-            "hypothesis_status": if lease_reproduced { "REPRODUCED" } else { "NO-REPRODUCTION" },
-            "expired_without_watchdog": expired_without_watchdog,
-            "timeout_equality": timeout_equality,
-            "prior_fresh_progress": prior_fresh_progress,
-            "path_evidence": "prepared normal final Down admission; watchdog is not started by the test-support worker harness"
-        },
+        "F_final_lease_age_proof": final_lease_age_proof,
         "C_serial_HOL": run_hol_vector()?,
         "D_focus_loss_policy": run_focus_vectors()?,
         "E_empty_cleanup": run_empty_cleanup()?,
         "scope": "D4 lifecycle release-barrier qualification plus retained lease, HOL, focus, and empty-cleanup characterizations; no H/G, scheduler, or cleanup transport policy changed"
     }))
+}
+
+fn run_final_lease_age_proof_contract() -> Result<Value, String> {
+    let timeout_ticks = duration_ticks(
+        QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?,
+        3_000_000,
+    )?;
+    let overdue = run_final_lease_age_case("overdue_unlatched", 1)?;
+    let unproven = run_final_lease_age_case("missing_progress_unproven", -2)?;
+    let fresh = run_final_lease_age_case("fresh_progress", -1)?;
+    let overdue_passed = overdue["dispatch_step"]
+        == "TerminateStatic(\"supervisor_lease_expired\")"
+        && overdue["elapsed_ticks"].as_u64() > overdue["timeout_ticks"].as_u64()
+        && overdue["sender_attempts"].as_u64() == Some(0)
+        && overdue["expired_latched_after"].as_bool() == Some(true)
+        && overdue["cursor_unchanged"].as_bool() == Some(true)
+        && overdue["generation_accounting_unchanged"].as_bool() == Some(true);
+    let unproven_passed = unproven["dispatch_step"]
+        == "TerminateStatic(\"supervisor_lease_unproven\")"
+        && unproven["sender_attempts"].as_u64() == Some(0)
+        && unproven["expired_latched_after"].as_bool() == Some(false)
+        && unproven["cursor_unchanged"].as_bool() == Some(true)
+        && unproven["generation_accounting_unchanged"].as_bool() == Some(true);
+    let fresh_passed = fresh["dispatch_step"] == "Dispatched"
+        && fresh["sender_attempts"].as_u64() == Some(1)
+        && fresh["cursor_advanced_once"].as_bool() == Some(true);
+    Ok(json!({
+        "status": if overdue_passed && unproven_passed && fresh_passed { "PASS" } else { "FAIL" },
+        "timeout_ticks": timeout_ticks.as_u64(),
+        "overdue_unlatched": overdue,
+        "missing_progress_unproven": unproven,
+        "fresh_progress": fresh,
+        "overdue_passed": overdue_passed,
+        "unproven_passed": unproven_passed,
+        "fresh_passed": fresh_passed,
+        "oracle": "final eligible Down proves lease age from a fresh QPC sample; Expired and Unproven terminate before sender without cursor or generation advance; fresh progress remains eligible; no watchdog is started"
+    }))
+}
+
+fn run_final_lease_age_case(name: &str, age_us: i64) -> Result<Value, String> {
+    let clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
+    let timeout = duration_ticks(clock, 3_000_000)?.as_u64();
+    let mut harness =
+        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 20_000)?;
+    let packets = harness.configure_r3_mock_packet_sender_for_test(&[0]);
+    harness.prepare_prepared_stream_for_test();
+    harness.set_playback_epoch_qpc_for_test(QpcTicks::ZERO);
+    harness.set_supervisor_lease_timeout_for_r3_probe(3_000_000)?;
+    let sample = harness.qpc_now_for_test()?;
+    let progress = if age_us == -1 {
+        sample
+    } else if age_us == -2 {
+        QpcTicks::ZERO
+    } else {
+        let age = duration_ticks(clock, age_us as u64)?.as_u64();
+        QpcTicks::from_raw(
+            sample
+                .as_u64()
+                .checked_sub(timeout.saturating_add(age))
+                .ok_or_else(|| format!("{name} QPC underflow"))?,
+        )
+    };
+    harness.set_supervisor_heartbeat_for_test(progress);
+    harness.set_r3_mock_sender_start_qpc_for_test(sample);
+    let elapsed_ticks = sample
+        .checked_duration_since(progress)
+        .map_err(|error| format!("{name} fixture age order: {error:?}"))?;
+    let cursor_before = harness.prepared_cursor_for_test();
+    let accounting_before =
+        generation_accounting_signature(harness.generation_accounting_for_test());
+    let step =
+        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(sample);
+    let sender_attempts = packets
+        .lock()
+        .map_err(|_| "lease-age packet capture lock poisoned".to_string())?
+        .iter()
+        .map(|(_, evidence)| u64::from(evidence.attempts))
+        .sum::<u64>();
+    let cursor_after = harness.prepared_cursor_for_test();
+    let accounting_after =
+        generation_accounting_signature(harness.generation_accounting_for_test());
+    Ok(json!({
+        "case": name,
+        "progress_qpc_ticks": progress.as_u64(),
+        "sample_qpc_ticks": sample.as_u64(),
+        "elapsed_ticks": elapsed_ticks.as_u64(),
+        "timeout_ticks": timeout,
+        "dispatch_step": format!("{step:?}"),
+        "sender_attempts": sender_attempts,
+        "expired_latched_after": harness.supervisor_lease_expired_for_r3_probe(),
+        "cursor_before": cursor_before,
+        "cursor_after": cursor_after,
+        "cursor_unchanged": cursor_after == cursor_before,
+        "cursor_advanced_once": cursor_after == cursor_before + 1,
+        "generation_accounting_before": accounting_before,
+        "generation_accounting_after": accounting_after,
+        "generation_accounting_unchanged": accounting_after == accounting_before
+    }))
+}
+
+fn generation_accounting_signature(
+    accounting: sky_dispatch_core::coordinator::GenerationAccounting,
+) -> Value {
+    json!({
+        "total": accounting.total,
+        "activated": accounting.activated,
+        "scheduled": accounting.scheduled,
+        "active": accounting.active,
+        "released": accounting.released,
+        "dropped_conflict": accounting.dropped_conflict,
+        "dropped_backend": accounting.dropped_backend,
+        "dropped_expired": accounting.dropped_expired,
+        "cancelled": accounting.cancelled
+    })
 }
 
 fn validate_duplicate_up_tail() -> Value {
@@ -752,60 +853,6 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         "final_release_obligation_mask": final_obligation,
         "due_seam_integrity_passed": due_seam_integrity_passed,
         "disposition": if normal_gap_contract_passed { "NOT_REPRODUCED" } else { "REPRODUCED" }
-    }))
-}
-
-fn run_lease_case(name: &str, last_progress_us: u64, now_us: u64) -> Result<Value, String> {
-    let clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
-    let mut harness =
-        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 20_000)?;
-    let packets = harness.configure_r3_mock_packet_sender_for_test(&[0]);
-    harness.prepare_prepared_stream_for_test();
-    harness.set_playback_epoch_qpc_for_test(QpcTicks::ZERO);
-    harness.set_supervisor_lease_timeout_for_r3_probe(3_000_000)?;
-    let last_progress = ticks_at_us(clock, last_progress_us)?;
-    let age_us = now_us.saturating_sub(last_progress_us);
-    let age_ticks = duration_ticks(clock, age_us)?;
-    let now = last_progress
-        .checked_add_duration(age_ticks)
-        .map_err(|error| format!("lease probe QPC overflow: {error}"))?;
-    let timeout_ticks = duration_ticks(clock, 3_000_000)?;
-    let elapsed_ticks = now
-        .checked_duration_since(last_progress)
-        .map_err(|error| format!("lease probe elapsed QPC: {error}"))?;
-    let elapsed_us = clock
-        .duration_to_us(elapsed_ticks)
-        .map_err(|error| format!("lease probe elapsed conversion: {error:?}"))?;
-    harness.set_supervisor_heartbeat_for_test(last_progress);
-    harness.set_r3_mock_sender_start_qpc_for_test(now);
-    let step =
-        harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(now);
-    let packet_count = packets
-        .lock()
-        .map_err(|_| "lease capture lock poisoned".to_string())?
-        .len();
-    let (attempts, packet) = if packet_count == 0 {
-        (0, None)
-    } else {
-        let (attempts, packet) = packet_attempts(&packets, 0)?;
-        (attempts, Some(packet_json(packet)))
-    };
-    Ok(json!({
-        "case": name,
-        "lease_timeout_us": 3_000_000,
-        "lease_timeout_ticks": timeout_ticks.as_u64(),
-        "lease_enabled": true,
-        "last_progress_us": last_progress_us,
-        "now_us": now_us,
-        "elapsed_us": elapsed_us,
-        "elapsed_ticks": elapsed_ticks.as_u64(),
-        "timeout_boundary": if elapsed_ticks > timeout_ticks { "STALE" } else if elapsed_ticks == timeout_ticks { "EQUALITY" } else { "FRESH" },
-        "expired_latch_before": false,
-        "dispatch_step": format!("{step:?}"),
-        "musical_sender_attempts": attempts,
-        "packet": packet,
-        "dispatch_was_allowed": matches!(step, DispatchStep::Dispatched),
-        "disposition": if !matches!(step, DispatchStep::Dispatched) { "BLOCKED" } else if elapsed_ticks > timeout_ticks { "STALE_LEASE_ACCEPTED" } else if elapsed_ticks == timeout_ticks { "AT_TIMEOUT_ALLOWED" } else { "FRESH_PROGRESS_ALLOWED" }
     }))
 }
 
@@ -1313,10 +1360,6 @@ fn evidence_completion(
         .get(index)
         .and_then(|(_, evidence)| evidence.completed_ticks)
         .ok_or_else(|| format!("missing sender completion evidence {index}"))
-}
-
-fn packet_json(packet: PhysicalPacket) -> Value {
-    json!({"up_mask":packet.up_mask,"down_mask":packet.down_mask,"event_count":packet.event_count()})
 }
 
 fn cleanup_sends_json(captured: &RtR3CleanupCapture) -> Result<Vec<Value>, String> {

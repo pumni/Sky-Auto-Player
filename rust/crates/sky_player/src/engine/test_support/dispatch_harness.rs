@@ -2347,6 +2347,31 @@ impl ProductionDispatchTestHarness {
         self.supervisor_expired.reset(ticks);
     }
 
+    pub fn supervisor_lease_expired_for_r3_probe(&self) -> bool {
+        self.supervisor_expired.is_expired()
+    }
+
+    #[cfg(test)]
+    pub fn set_final_lease_qpc_sample_override_for_test(
+        &mut self,
+        sample: Result<QpcTicks, sky_dispatch_win32::clock::QpcError>,
+    ) {
+        self.runtime.final_lease_qpc_sample_override_for_test = Some(sample);
+    }
+
+    #[cfg(test)]
+    pub fn final_lease_qpc_sample_count_for_test(&self) -> u64 {
+        self.runtime.final_lease_qpc_sample_count_for_test
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_final_lease_age_hook_for_test<F>(&mut self, hook: F)
+    where
+        F: Fn(&SupervisorLeaseState) + Send + Sync + 'static,
+    {
+        self.runtime.final_lease_age_hook_for_test = Some(Arc::new(hook));
+    }
+
     pub fn set_supervisor_lease_timeout_for_r3_probe(
         &mut self,
         timeout_us: u64,

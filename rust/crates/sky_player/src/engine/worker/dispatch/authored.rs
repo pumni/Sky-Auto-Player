@@ -171,6 +171,7 @@ fn commit_down_send_outcome(
         view,
         config,
         qpc_clock,
+        timing.lease_timeout_ticks,
         clock_state,
         runtime,
         local_metrics,
@@ -394,6 +395,7 @@ fn finalize_authored_down_admission(
     view: &AuthoredBatchView,
     config: &WorkerConfig,
     qpc_clock: QpcClock,
+    lease_timeout_ticks: sky_dispatch_core::time::DurationTicks,
     clock_state: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
@@ -543,7 +545,7 @@ fn finalize_authored_down_admission(
         #[cfg(any(test, feature = "test-support"))] panic_requested,
         #[cfg(any(test, feature = "test-support"))] desired_pause,
         #[cfg(any(test, feature = "test-support"))] system_power,
-        runtime, local_metrics, qpc_clock, clock_state, progress_clock,
+        runtime, local_metrics, qpc_clock, lease_timeout_ticks, clock_state, progress_clock,
     )? { return Ok(rejection); }
     #[cfg(any(test, feature = "test-support"))]
     let final_policy_qpc = if test_direct_boundary {
