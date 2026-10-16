@@ -273,7 +273,7 @@ try {
         $controlWorktree = Join-Path $env:TEMP ('rt-r3-p2-control-' + [guid]::NewGuid().ToString('N'))
         [void](Invoke-CapturedCommand -Name 'git.exe' -Arguments @('-C', $repoRoot, 'worktree', 'add', '--detach', $controlWorktree, $controlRevision) -Label 'create-control-worktree')
         $controlWorktreeCreated = $true
-        $controlTarget = Join-Path $controlWorktree 'target'
+        $controlTarget = Join-Path $controlWorktree 'rust\target'
         $controlBuildEnvironment = @{
             CARGO_TARGET_DIR = $controlTarget
             SKY_RT_R3_RUNTIME_REVISION = $controlRevision
