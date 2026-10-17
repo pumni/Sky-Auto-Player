@@ -70,6 +70,22 @@ The site action's current warm observations were: install 0.23 s, version sync 0
 
 Latest available pre-task CI observations (run IDs `38995126825` and `38924347012`) were classification 11–12 s, Windows validate 7:54–8:46, desktop web 42–44 s, static 52–67 s, and supply-chain about 25 s. sccache reported 86.04–86.42% hits. No post-change CI run was triggered because the workflow is external and the branch was not published. Its job graph and critical-path configuration are unchanged; post-change timings are unavailable. Agent wall time and per-process CPU were not instrumented.
 
+## Coordinator correction and focused follow-up
+
+The coordinator reviewed HEAD `dbd5493e6c2bb184df9f91a267975b9e5eeed9ee`, accepted the naming work, and found that the test-speed objective was not met. The catalog verification reuse removes a sub-second duplicate read/parse, while aggregate timings vary by tens of seconds. No overall speedup is claimed.
+
+The Playwright inventory is 51 tests: 48 in `desktop/tests/e2e/library.spec.ts` and three in `desktop/tests/e2e/palette-appearance.spec.ts`. `playwright.config.ts` does not set a worker count or `fullyParallel`; a focused library run reported one worker. The library spec's `beforeEach` navigates to `/`, clears local storage, and reloads. Thirty test bodies also navigated to `/` as their initial setup. Twenty-nine redundant body navigations were removed; the route navigation in the multi-viewport transport test remains. Query-specific navigations, the per-test storage reset, reload/persistence checks, and every scenario remain. `mockBridge.ts` still creates 500 song rows, which the virtualized-library tests exercise.
+
+Focused runner record: `bun run test:e2e -- tests/e2e/library.spec.ts`; base HEAD `dbd5493e6c2bb184df9f91a267975b9e5eeed9ee`, input `desktop/tests/e2e/library.spec.ts` SHA-256 `7F6F2316F961C893D72D271661427BABFFE2601FC29F5AE363AEA8CBBAF44748`; exit 0, 48/48 tests, one worker, 139.24 s. The earlier 143.69 s measurement covered all 51 tests, so these timings are not a comparable before/after pair. This cleanup removes duplicate page setup but does not establish an aggregate speedup. The longest individual cases in this run were status/recovery scenarios (16.2–16.3 s each), the viewport lifecycle case (8.9 s), and Shuffle traversal (6.7 s). Those waits validate playback/recovery transitions and were kept intact.
+
+The two spec files are independent browser contexts and can be scheduled as files, but the 48-test library file itself ran on one worker. Splitting it to increase parallelism could add CPU contention to viewport, accessibility, and playback timing checks. There are no per-test historical traces or evidence of spare CPU capacity, so worker count and suite selection were not changed. The 500-row fixture remains because it covers real virtualized-list behavior.
+
+Rust serialization remains `RUST_TEST_THREADS=1`. The inspected shared state includes process-wide foreground test overrides in `sky_player` (guarded by `lock_foreground_window_for_test`), observer artificial-cost hooks (guarded by `observer_test_hook_guard`), environment overrides in `sky_native_adapters/src/paths.rs` (guarded by a resolver lock and RAII restoration), and the `install_root_contract` test's scoped environment overrides. The no-allocation integration binary has a global counting allocator/counter and uses `TEST_LOCK` to serialize its measurement windows. This inspection is not a complete workspace-wide proof that all test binaries are isolated, so no concurrency setting changed. Future isolation work must inventory every reader and writer in each test executable and add deterministic shared guards or separate processes before increasing concurrency.
+
+The existing full-gate results belong to the reviewed HEAD above. This correction changes test code and validation documentation, so one `cargo xtask check all` against the resulting exact HEAD remains required before merge. It is intentionally deferred here; this correction ran only the focused Playwright spec, then relevant static/document checks and diff checks. Full cold/warm baselines, native acceptance, individual contained Rust/desktop gates, and remote CI were not repeated.
+
+Known baseline failures remain separate: website `format:check` reports 112 existing files, while RustSec exits nonzero on three `zip 4.6.1` advisories already present at baseline. Neither was changed or remediated in this task.
+
 ## Equivalence evidence and current findings
 
 - The baseline workspace test inventory contained 1,142 entries; the current list contains 1,149. The exact-name diff had 25 prior identifiers removed and 32 added: 23 regression names were migrated, two former broad naming-audit tests were replaced by seven targeted positive/negative cases, and two check-session tests were added. Net coverage grew by seven tests; no behavior regression case was dropped.
@@ -84,7 +100,7 @@ Latest available pre-task CI observations (run IDs `38995126825` and `3892434701
 ## Unresolved bottlenecks and non-passing baseline checks
 
 - Full Rust tests are serialized and take about two minutes warm; parallelizing them remains unjustified without deterministic isolation of shared fixtures.
-- Desktop E2E takes about 2.4 minutes and remains the largest measured local browser lane. Its scenarios are functional coverage, so none was removed.
+- Desktop E2E remains the largest measured local browser lane: the prior 51-test run took 143.69 s; the focused 48-test library run after removing duplicate navigation took 139.24 s. These are not comparable samples. Three status/recovery scenarios each took about 16 s in the focused run, so transition waits dominate the sampled cases; no scenario or wait condition was removed.
 - The site formatter reports 112 unchanged files. This branch did not reformat unrelated website content.
 - The locked Rust dependency graph contains the three current zip 4.6.1 advisories. Updating or suppressing them requires a separate dependency/security decision; neither was done here.
 - One catalog validation reuse removes a duplicate read/parse walk from check all, but its subsecond cost is below aggregate measurement noise. Measured full-gate wall times do not demonstrate a stable overall speedup.

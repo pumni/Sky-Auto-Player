@@ -60,20 +60,20 @@ direct tests, active docs, and repository checks as the evidence system.
 1. Branch from `main` and keep the change focused on one outcome. An issue is useful for product
    discussion or genuinely ambiguous semantics, but it is not mandatory ceremony for ordinary
    implementation work.
-2. During development, run the smallest relevant repository verification group:
-
-   ```powershell
-   cargo xtask check static
-   cargo xtask check rust
-   cargo xtask check desktop
-   ```
-
-3. Before completion, run `cargo xtask check all` for the normal gate. Run specialized Windows timing,
-   package, updater, release, or benchmark evidence when
-   the changed boundary requires it.
-4. Keep secrets and `.env` out of commits. Do not bypass CI or weaken a security/release gate merely
+2. During editing, run focused tests for the changed boundary. Avoid running every broad group after
+   each edit.
+3. Before review, run `cargo xtask check all` once against the final relevant source state. It
+   includes the static, Rust, desktop, and native desktop groups; do not automatically run those
+   groups individually and then repeat them through `check all`. Repeat a passed gate only if a
+   later change invalidates its inputs or coverage.
+4. Do not repeat full cold/warm performance baselines or native acceptance without a new behavior or
+   performance change. Run specialized package, updater, release, Windows timing, or benchmark
+   evidence when the changed boundary requires it.
+5. Record the exact command, HEAD and relevant input identity, exit code, and coverage. Report only
+   checks actually run, and explicitly identify checks that were skipped.
+6. Keep secrets and `.env` out of commits. Do not bypass CI or weaken a security/release gate merely
    to make a change pass.
-5. In the PR, report the checks/evidence actually run and any relevant residual risk.
+7. In the PR, report the checks/evidence actually run and any relevant residual risk.
 
 A refactor and a behavior change may live in the same PR when they form one inseparable, reviewable
 outcome and the tests make the behavior change explicit. Avoid unrelated cleanup.
