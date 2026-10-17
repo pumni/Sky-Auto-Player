@@ -1,0 +1,90 @@
+# Maintenance naming and test pipeline report
+
+This report records the semantic-name migration and the validation pipeline review for the maintenance branch. Source, tests, and canonical CI workflows remain authoritative; local measurements are not release qualification evidence.
+
+## Naming migration
+
+| Old path or name | New path or name | References updated | Retained exceptions |
+| --- | --- | --- | --- |
+| rt_r3_probe.rs / Cargo example rt_r3_probe | rt_dispatch_probe.rs / rt_dispatch_probe | Evidence runner, Cargo target declaration, help/argument contracts, docs, and path classifier tests | Immutable run IDs still identify old probe outputs. |
+| r3_final_qualification.rs | lifecycle_lease_qualification.rs | Native acceptance module, scenario wiring, and lifecycle helpers | Published evidence IDs P0–P5 remain external records. |
+| run_rt_r3_evidence.ps1, publish_rt_r3_evidence.ps1 | run_rt_dispatch_evidence.ps1, publish_rt_dispatch_evidence.ps1 | All callers, evidence mode/publication contracts, CI classifier fixtures, and docs | Historical branch names, P0–P5 IDs, and immutable P4 provenance remain. |
+| p7a_cpu_contention.ps1, qualify_p7a_physical_key_study.ps1, p7a-physical-key-study-method.md | cpu_contention_load.ps1, qualify_physical_key_study.ps1, physical-key-study-method.md | Script references and documentation router | Archived logs keep their original names. |
+| wave2_fixtures.rs, wave3_song_fixtures.rs | settings_catalog_update_fixtures.rs, song_planning_fixtures.rs | Integration test target names and every fixture caller | The fixture string C:\Wave2\Songs remains because path-derived song IDs use it. |
+| tests/fixtures/wave2/{settings,catalog,update}.json | tests/fixtures/{settings/compatibility_cases,catalog/search_cases,update/policy_cases}.json | Rust, Tauri, native-adapter, runner, and audit fixtures | Fixture contents and golden outputs are unchanged. |
+| tests/fixtures/wave3/song_planning.json | tests/fixtures/song_planning/oracle_cases.json | Rust and Tauri fixture callers | Fixture bytes are unchanged. |
+
+Representative identifier migrations include r3_storage_evidence_for_test to prepared_storage_evidence_for_test, phase_a_benchmark_boundary_for_test to dispatch_at_benchmark_boundary_for_test, SKY_RT_R3_* to SKY_RT_DISPATCH_*, and RT_HANDOFF_P7A_* to RT_HANDOFF_PHYSICAL_STUDY_*. W4 profile names now describe the supported profile domain. The evidence runner uses its validated RunnerStage throughout later branches and report metadata; positive mode routing and legacy rejection are covered by its contract self-test.
+
+AGENTS.md and CONTRIBUTING.md now require responsibility-based durable names. The durable-name audit scans active Rust, TypeScript/JavaScript, PowerShell, YAML, Cargo, test, workflow, and support paths. Exceptions are exact and narrow: external P0–P5 identifiers, immutable P4 provenance, a versioned updater contract key, the path-derived Wave2 fixture literal, and real domain uses such as polling phases. Positive detection tests and negative cases cover percentiles, registers, runtime lifecycle terms, version identifiers, and unrelated historical text.
+
+No phase-name wrapper or alias remains. Historical evidence documents, archived logs, commit hashes, run IDs, version/schema keys, and ADR numbering remain unchanged to preserve provenance.
+
+## Validation coverage and gates
+
+| Command or lane | Responsibility and oracle | Main code or data scope | CI job | Cost and valid reuse |
+| --- | --- | --- | --- | --- |
+| cargo xtask check static | Documentation integrity, durable names, architecture boundaries, forbidden security APIs, Tauri feature contract, cargo-vet unless delegated, branding and bundle freshness, built-in catalog integrity, updater trust material, CI/release contracts, and packaged CI contract | rust/xtask/src/audits, rust/xtask/src/checks.rs, Cargo/Tauri manifests, workflows, updater metadata | static; CI also runs supply_chain | Short relative to builds. Catalog verification may be reused only in one successful check all invocation. |
+| cargo xtask check rust | cargo fmt --all --check; workspace Clippy for all targets and features with warnings denied; locked all-feature workspace tests serialized with RUST_TEST_THREADS=1 and TS-RS export directory set | All Rust crates and integration tests, including security, no-allocation, lifecycle, timing, and fixture tests | Windows validate | Dominated by compile/tests. Results are not reused across separate requested commands. RUST_TEST_THREADS=1 remains unchanged. |
+| cargo xtask check desktop | Frozen Bun install; TypeScript, ESLint, Prettier, Vitest, web build; Playwright E2E unless SKY_DESKTOP_SKIP_BROWSER is set; then native checks | desktop/src, desktop/scripts, package lock, browser tests | desktop_web plus native checks in Windows validate | Browser E2E is the longest local desktop portion. CI bundle smoke reuses the existing web build. |
+| cargo xtask check desktop-native | Three separate Tauri checks: no-default-features with desktop-runtime, default features, and all-features; generated binding tests | desktop/src-tauri, Rust shell dependencies, feature contract | Windows validate | Native compile/link work. All three configurations remain separate because they cover different products. |
+| Site validation action | Frozen install, version sync, Astro check, ESLint, Prettier check, static build, dist/route and SEO contracts, Chromium functional/accessibility E2E | site/, site/bun.lock, generated site/dist | site (Website validation); dist is the Pages artifact | Build and E2E are separate oracles. This branch changes no site source. |
+| RustSec audit | cargo audit --file rust/Cargo.lock against current RustSec advisories | rust/Cargo.lock | supply_chain | Network/advisory-data dependent. No allowlist or lockfile change was made. |
+| OSV scan | Pinned OSV Scanner 2.5.0 against desktop/bun.lock | Desktop lockfile | supply_chain | Network/advisory-data dependent; no lockfile or cache trust changes. |
+| Cargo-vet | cargo vet --manifest-path rust/Cargo.toml --locked | Rust dependencies and vet policy | supply_chain; included in local static | A policy check, not a substitute for RustSec or OSV. CI cache remains read-only for pull requests; writes remain limited to trusted events. |
+| Classifier and required aggregate | Path classifier self-tests, current-candidate and updater bridge contracts; status requires relevant jobs to pass or be skipped according to classifier output | .github/workflows/ci.yml, classifier scripts, rust/xtask/src/checks.rs contracts | changes, static, required status | Lightweight. Sensitive files still select stricter lanes; no required job became optional. |
+| No-allocation and benchmark contracts | rt_dispatch_no_alloc, benchmark harness contracts, evidence runner argument fixtures | sky_player test-support targets, probe examples, scripts/test_evidence_contracts.ps1 | Specialized RT evidence workflow/manual lane | Focused tests supplement workspace tests. |
+| Optimized assembly audits | Dist-profile Rust assembly inspected by dispatch, prepared-normal, and modifier-guard audits | sky_player and sky_dispatch_win32 optimized libraries | Final native qualification lane | Specialized release-profile compilation. Scoped hot-path audits remain required; the broad report-only symbol audit is tracked below. |
+| Native Windows acceptance and RT evidence | ReceiveOnly sink scenarios, lifecycle/lease qualification, timing distributions, immutable run manifests and output hashes | scripts/run_rt_dispatch_evidence.ps1, native acceptance binaries, evidence contracts | Dedicated acceptance/release lane; not ordinary check all | Hardware and provenance matter. Diagnostics is offline/synthetic; final qualification requires its accepted control revision and human focus action. |
+| Updater, NSIS packaging, signing, provenance, release | Candidate built once and consumed by package/updater checks; signer, SBOM, artifact hashes, release state-machine oracles | scripts/v4_*, packaging workflow, updater bridge, release workflows and keys | candidate, updater_bridge, updater_contract, updater_e2e, packaged, release_contract, release-v4.yml, rehearse-v4.yml | Specialized and externally scoped. No release, signing, publication, or remote mutation ran for this local branch. Static release-control contracts and negative fixtures did run. |
+
+The CI classifier, required aggregate, candidate artifact reuse, pull-request cache trust boundary, Cargo.lock, toolchain pins, desktop feature matrix, security jobs, and release qualification rules were not weakened or changed. check all now carries a small in-process validation session: the read-only catalog check runs once in static, and rust reuses that success. Standalone static and rust commands create fresh sessions. A failed check never marks the session complete.
+
+## Performance measurements
+
+Wall-clock values are local Windows observations. The cold-target Rust and all runs used fresh Cargo target directories; registry/download caches were already warm. Warm runs reused normal task-worktree artifacts. Browser, CPU, filesystem, and background-process variation make single full-gate samples poor speedup evidence. CPU utilization was not captured. Do not interpret the aggregate difference as an optimization percentage.
+
+| Gate | Earlier baseline observations | Before reuse on this branch | After reuse | Observation |
+| --- | --- | ---: | ---: | --- |
+| cargo xtask check static | Initial 17.39 s attempt failed because cargo-vet was not on PATH; then 6.38, 6.37, and 6.30 s warm passes with cargo-vet available | Included in 440.21 s passing aggregate | Direct warm passes 7.56 and 9.82 s; also included in passing aggregates | Static still runs all its own checks. |
+| cargo xtask check rust | 259.05 s cold-target; 115.17 s warm | Included in 440.21 s passing aggregate | Cold-target 294.92 s; direct warm passes 146.52 and 140.89 s; all four warm aggregates also passed | Cold Rust result used a fresh target and warm registry/download cache. All features and serialized tests retained. |
+| cargo xtask check desktop | 245.10 s and 168.23 s after Rust artifacts were warm | Included in 440.21 s passing aggregate | Direct warm passes 169.27 and 186.05 s; also included in passing aggregates | Includes frontend checks, browser E2E, and native variants. |
+| cargo xtask check desktop-native | 2.44 s warm | Included in aggregate | Direct warm pass 19.51 s; also included in passing aggregates | The fresh-target aggregate compiled three separate Tauri configurations. |
+| cargo xtask check all | 285.11 s with cargo-vet; separate --skip-supply-chain run was 322.64 s | 440.21 s, pass | Cold-target 565.88 s, pass; warm 332.20 / 287.72 / 288.63 / 286.76 s, all pass | One cold-target and four warm samples. Run-to-run E2E/host variation dominates the subsecond catalog walk; no speedup percentage is claimed. |
+
+The final direct runs passed: `cargo xtask check static` (exit 0, 9.82 s), `cargo xtask check rust` (exit 0, 140.89 s), `cargo xtask check desktop` (exit 0, 186.05 s), and `cargo xtask check all` (exit 0, 286.76 s). The report-only timing amendment is followed by final reruns of static and all; those cover the updated documentation, while rust and desktop do not consume this report. The final aggregate output showed one catalog verification and one in-session reuse. `git diff --check` and baseline-to-HEAD `git diff --check` both exited 0.
+
+Three warm desktop frontend samples (seconds including process startup) were collected before and after. Baseline values are from the initial repository run; after values were recorded after the full aggregate. Each Vitest sample ran 22 files and 226 tests.
+
+| Command | Baseline warm samples | After warm samples |
+| --- | --- | --- |
+| bun install --frozen-lockfile | 0.12 / 0.04 / 0.04 | 0.07 / 0.04 / 0.04 |
+| bun run typecheck | 0.43 / 0.43 / 0.41 | 0.47 / 0.44 / 0.45 |
+| bun run lint | 4.04 / 3.73 / 3.68 | 4.34 / 4.00 / 4.02 |
+| bun run format:check | 2.16 / 2.13 / 2.13 | 2.33 / 2.29 / 2.31 |
+| bun run test | 9.54 / 8.73 / 8.86 | 9.84 / 8.82 / 8.83 |
+| bun run build:web | 1.89 / 1.76 / 1.75 | 2.01 / 1.86 / 1.86 |
+| Desktop Playwright E2E | 145.56 s, 51 tests | 143.69 s, 51 tests |
+
+The site action's current warm observations were: install 0.23 s, version sync 0.14 s, Astro check 7.30 s, lint 1.31 s, formatter 1.50 s (exit 1, 112 existing files), build 2.51 s, dist verification 0.08 s, SEO 0.06 s, and functional E2E 11.63 s (59 tests). Earlier observations were 3.25 s, 7.06 s, 1.27 s, 1.67 s (same formatter failure), 2.55 s, 0.09 s, 0.08 s, and 8.71 s respectively. The site tree was not modified; these differences are not attributed to this change.
+
+Latest available pre-task CI observations (run IDs `38995126825` and `38924347012`) were classification 11–12 s, Windows validate 7:54–8:46, desktop web 42–44 s, static 52–67 s, and supply-chain about 25 s. sccache reported 86.04–86.42% hits. No post-change CI run was triggered because the workflow is external and the branch was not published. Its job graph and critical-path configuration are unchanged; post-change timings are unavailable. Agent wall time and per-process CPU were not instrumented.
+
+## Equivalence evidence and current findings
+
+- The baseline workspace test inventory contained 1,142 entries; the current list contains 1,149. The exact-name diff had 25 prior identifiers removed and 32 added: 23 regression names were migrated, two former broad naming-audit tests were replaced by seven targeted positive/negative cases, and two check-session tests were added. Net coverage grew by seven tests; no behavior regression case was dropped.
+- The unchanged desktop E2E suite remains 51 scenarios, the unchanged site suite remains 59, and the desktop unit suite remains 226 tests. Default, no-default, and all-features Tauri lanes remain required. RUST_TEST_THREADS=1 is unchanged.
+- check all passed before and after the verified reuse change. Post-change output shows one catalog verification and one explicit reuse line. Naming guard, CI classifier, evidence runner/publication contracts, no-allocation tests, benchmark harness tests, and PowerShell parser checks passed.
+- The renamed runner passed a clean-tree diagnostics-mode execution: run ID dispatch-diagnostics-20261017T042827487Z-fa9f1fd8, 91 head-of-line rows, four startup cases, and 1,626 polling cases. It used the baseline runtime revision and produced fresh output under the task temp directory; it is offline characterization, not physical acceptance evidence.
+- The security source audit passed. Cargo-vet passed. OSV 2.5.0 found no issues in desktop/bun.lock. RustSec currently exits 1 on three zip 4.6.1 advisories (RUSTSEC-2026-0367/0368/0369) and reports two existing warnings. The same findings were present at baseline; the lockfile and audit policy were not changed.
+- Dist-profile sky_player assembly is byte-for-byte identical to baseline. Win32 assembly differs in the profile-validation diagnostic string and formatting constants after W4 wording was replaced by a semantic profile description; validation branches and the accepted scan-code set are unchanged. Prepared-normal and modifier-guard assembly audits pass on both baseline and task builds.
+- The broad legacy dispatch assembly audit exits 1 on both baseline and task builds because ThinLTO inlines or removes recover_missed_down_boundary; its caller report remains report-only. This existing limitation is not represented as a pass or a new regression.
+- No scheduler, lifecycle, lease, timing policy, packet semantics, production dispatch logic, SendInput boundary, or release behavior changed. No workflow, cache trust setting, Cargo.lock entry, immutable evidence, signing key, or remote project state changed.
+
+## Unresolved bottlenecks and non-passing baseline checks
+
+- Full Rust tests are serialized and take about two minutes warm; parallelizing them remains unjustified without deterministic isolation of shared fixtures.
+- Desktop E2E takes about 2.4 minutes and remains the largest measured local browser lane. Its scenarios are functional coverage, so none was removed.
+- The site formatter reports 112 unchanged files. This branch did not reformat unrelated website content.
+- The locked Rust dependency graph contains the three current zip 4.6.1 advisories. Updating or suppressing them requires a separate dependency/security decision; neither was done here.
+- One catalog validation reuse removes a duplicate read/parse walk from check all, but its subsecond cost is below aggregate measurement noise. Measured full-gate wall times do not demonstrate a stable overall speedup.

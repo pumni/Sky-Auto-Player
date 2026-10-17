@@ -53,6 +53,8 @@ cargo xtask check desktop
 
 Packaging, Windows timing acceptance, release, and benchmark scripts are specialized evidence paths used when a change touches those boundaries.
 
+- [maintenance-test-pipeline-report.md](maintenance-test-pipeline-report.md) — Durable naming policy,
+  validation gate coverage, and measured local test pipeline costs.
 - [physical-key-study-method.md](physical-key-study-method.md) — Current receive-only physical-key
   observation method and its deterministic cases.
 
