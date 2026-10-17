@@ -58,6 +58,15 @@ impl TrackedKeyState {
                 transport_confirmed_mask,
                 physical_state,
             );
+            // The cleanup FSM is an ownership boundary: malformed empty
+            // residuals cannot discharge a nonempty request. Normalize them
+            // before mutating any conservative backend mask.
+            let reconciled = match reconciled {
+                ReconciledRelease::Held(0) | ReconciledRelease::Inconclusive(0) => {
+                    ReconciledRelease::Inconclusive(previous_unresolved)
+                }
+                verdict => verdict,
+            };
 
             final_verification = Some(match reconciled {
                 ReconciledRelease::VerifiedAllUp => CleanupVerification::AllUp,
@@ -98,22 +107,6 @@ impl TrackedKeyState {
                 }
                 ReconciledRelease::Inconclusive(unconfirmed_mask) => {
                     unresolved_mask = unconfirmed_mask;
-                    if unconfirmed_mask == 0 {
-                        self.last_error = Some(match scope {
-                            ReleaseScope::Tracked => "tracked release unverified".to_string(),
-                            ReleaseScope::FullInstrument => {
-                                "full-instrument release unverified".to_string()
-                            }
-                        });
-                        return ReleaseAllOutcome {
-                            attempted_mask: requested_mask,
-                            transport_anomaly,
-                            released_successfully: false,
-                            stuck_mask: 0,
-                            verification_inconclusive: true,
-                            attempts: (attempt_idx + 1) as u8,
-                        };
-                    }
                 }
             }
         }

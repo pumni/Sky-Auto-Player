@@ -1,7 +1,23 @@
 #![cfg(any(test, feature = "test-support"))]
 
+use sky_dispatch_win32::input::PhysicalPacket;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MockSendInputCapture {
+    Packet {
+        packet: PhysicalPacket,
+        status: sky_dispatch_win32::input::SendTransactionStatus,
+        confirmed_mask: u16,
+        attempts: u8,
+    },
+    SingleEmitter {
+        scan_codes: Vec<u16>,
+        key_up: bool,
+    },
+}
 
 /// Outcome injected for a single mock-backend `SendInput` call (identified by
 /// call index, zero-based, counting both Down and Up calls in order).
@@ -52,6 +68,8 @@ pub struct FaultInjectionScript {
     pub force_inconclusive_probe: Option<Arc<AtomicBool>>,
     /// Shared test-only count of mock physical send invocations.
     pub send_call_count: Option<Arc<AtomicU64>>,
+    /// Optional test-only capture of exact physical send calls in send order.
+    pub send_input_capture: Option<Arc<Mutex<Vec<MockSendInputCapture>>>>,
     /// Shared test-only count of full-instrument cleanup calls.
     pub full_instrument_release_calls: Option<Arc<AtomicU64>>,
     /// Makes mock preflight fail closed when set.

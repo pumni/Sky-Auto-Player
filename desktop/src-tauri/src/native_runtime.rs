@@ -4758,7 +4758,7 @@ impl NativePlaybackService {
                 },
                 telemetry: TelemetryOptions {
                     mode: TelemetryMode::Ring,
-                    // Keep fixed-width schema 18 records inside the bounded
+                    // Keep fixed-width schema 19 records inside the bounded
                     // sender-trace capture budget before export.
                     capacity: SENDER_TRACE_CAPTURE_CAPACITY,
                 },
@@ -7557,7 +7557,7 @@ mod tests {
     fn sender_trace_export_includes_session_identity_and_frozen_policy() {
         let active = active_for_control_with_physical(PlaybackSessionState::Finished, None, true);
         let telemetry = serde_json::json!({
-            "schema_version": 18,
+            "schema_version": 19,
             "qpc_frequency_hz": 10_000_000,
             "records": [],
             "attempted": 0,

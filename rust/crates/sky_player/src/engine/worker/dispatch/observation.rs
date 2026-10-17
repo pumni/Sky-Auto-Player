@@ -57,7 +57,6 @@ pub enum DispatchObservation {
 pub struct StaleMetadataObservation {
     pub source_action_index: u32,
     pub effective_scheduled_ticks: TimelineTicks,
-    pub effective_now_ticks: TimelineTicks,
     pub suppressed_intent_count: usize,
 }
 
@@ -67,7 +66,6 @@ pub struct BlockedUnfocusedObservation {
     pub compiled_packet_index: Option<u64>,
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
-    pub effective_now_ticks: TimelineTicks,
     pub physical_target_qpc: QpcTicks,
     pub observed_qpc: QpcTicks,
     pub polyphony: usize,
@@ -91,7 +89,6 @@ pub struct DownMissObservation {
     pub compiled_packet_index: Option<u64>,
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
-    pub wake_ticks: TimelineTicks,
     pub(crate) timing_evidence: DownMissTimingEvidence,
     pub observed_qpc: QpcTicks,
     pub up_mask: u16,
@@ -117,7 +114,6 @@ impl DownMissObservation {
             compiled_packet_index: None,
             authored_ticks: TimelineTicks::from_raw(n),
             effective_deadline_ticks: TimelineTicks::from_raw(n),
-            wake_ticks: TimelineTicks::from_raw(n),
             timing_evidence: DownMissTimingEvidence::Physical(PhysicalTimingWindow {
                 authored_target_qpc,
                 musical_up_not_before_qpc: authored_target_qpc,
@@ -366,7 +362,6 @@ pub struct UpTraceObservation {
     pub authored_ticks: TimelineTicks,
     pub effective_deadline_ticks: TimelineTicks,
     pub wake_ticks: TimelineTicks,
-    pub final_policy_ticks: Option<TimelineTicks>,
     pub sendinput_completion_ticks: Option<TimelineTicks>,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,

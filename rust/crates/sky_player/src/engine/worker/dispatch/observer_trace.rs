@@ -261,7 +261,6 @@ mod tests {
             compiled_packet_index: Some(52),
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
-            wake_ticks: TimelineTicks::from_raw(20),
             timing_evidence: DownMissTimingEvidence::Physical(physical_window(
                 1_000, 1_000, 1_000, 1_000, 0, 0,
             )),

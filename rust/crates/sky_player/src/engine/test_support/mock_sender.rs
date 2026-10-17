@@ -1,6 +1,6 @@
 #![cfg(any(test, feature = "test-support"))]
 
-use super::fault_injection::{FaultInjectionScript, InjectedSendOutcome};
+use super::fault_injection::{FaultInjectionScript, InjectedSendOutcome, MockSendInputCapture};
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks};
 use sky_dispatch_win32::input::{
@@ -22,13 +22,22 @@ pub(crate) fn create_mock_backend(
     let script = Arc::new(fault_script);
     let call_index = Arc::new(AtomicU64::new(0));
     let send_call_count = script.send_call_count.clone();
+    let send_input_capture = script.send_input_capture.clone();
     let script_emitter = Arc::clone(&script);
     let call_index_emitter = Arc::clone(&call_index);
     let mut backend =
         TrackedKeyState::with_qpc_clock_and_profile(qpc_clock, instrument_key_profile);
-    backend.set_emitter(move |codes, _key_up| {
+    backend.set_emitter(move |codes, key_up| {
         if let Some(counter) = &send_call_count {
             counter.fetch_add(1, Ordering::SeqCst);
+        }
+        if let Some(capture) = &send_input_capture {
+            capture.lock().expect("send input capture lock").push(
+                MockSendInputCapture::SingleEmitter {
+                    scan_codes: codes.to_vec(),
+                    key_up,
+                },
+            );
         }
         let idx = call_index_emitter.fetch_add(1, Ordering::Relaxed) as usize;
 
@@ -145,19 +154,32 @@ pub(crate) fn create_mock_backend(
     let script_packet = Arc::clone(&script);
     let call_index_packet = Arc::clone(&call_index);
     let send_call_count_packet = script.send_call_count.clone();
+    let send_input_capture_packet = script.send_input_capture.clone();
     backend.set_packet_emitter(move |packet| {
         if let Some(counter) = &send_call_count_packet {
             counter.fetch_add(1, Ordering::SeqCst);
         }
         let idx = call_index_packet.fetch_add(1, Ordering::Relaxed) as usize;
-        physical_packet_outcome(
+        let outcome = physical_packet_outcome(
             qpc_clock,
             &script_packet,
             idx,
             packet,
             latency_base_us,
             latency_per_key_us,
-        )
+        );
+        if let Some(capture) = &send_input_capture_packet {
+            capture
+                .lock()
+                .expect("send input capture lock")
+                .push(MockSendInputCapture::Packet {
+                    packet,
+                    status: outcome.status,
+                    confirmed_mask: outcome.evidence.confirmed_mask,
+                    attempts: outcome.evidence.attempts,
+                });
+        }
+        outcome
     });
     // The mock has no real keyboard, so a deterministic physical probe mirrors
     // transport confirmation: keys the transport confirmed as released read as

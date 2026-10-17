@@ -136,13 +136,12 @@ pub(crate) fn reconcile_release_observation(
             ReconciledRelease::Inconclusive(requested_mask & !transport_confirmed_mask)
         }
         InstrumentPhysicalState::Held(held_keys) => {
-            let held_mask = mask_for_scan_codes(&held_keys).unwrap_or(0);
-            ReconciledRelease::Held(held_mask & requested_mask)
+            let Some(held_mask) = mask_for_scan_codes(&held_keys) else {
+                return ReconciledRelease::Inconclusive(requested_mask);
+            };
+            reconcile_held_release_observation(requested_mask, transport_confirmed_mask, held_mask)
         }
-        InstrumentPhysicalState::Inconclusive => {
-            let unresolved = requested_mask & !transport_confirmed_mask;
-            ReconciledRelease::Inconclusive(unresolved)
-        }
+        InstrumentPhysicalState::Inconclusive => ReconciledRelease::Inconclusive(requested_mask),
     }
 }
 
@@ -161,13 +160,30 @@ pub(crate) fn reconcile_logical_release_observation(
             ReconciledRelease::Inconclusive(requested_mask & !transport_confirmed_mask)
         }
         LogicalInstrumentPhysicalState::Held(held_mask) => {
-            ReconciledRelease::Held(held_mask & requested_mask)
+            if held_mask & !FULL_INSTRUMENT_MASK != 0 {
+                return ReconciledRelease::Inconclusive(requested_mask);
+            }
+            reconcile_held_release_observation(requested_mask, transport_confirmed_mask, held_mask)
         }
         LogicalInstrumentPhysicalState::Inconclusive => {
-            let unresolved = requested_mask & !transport_confirmed_mask;
-            ReconciledRelease::Inconclusive(unresolved)
+            ReconciledRelease::Inconclusive(requested_mask)
         }
     }
+}
+
+/// A key remains an obligation when the probe saw it held or the Up event was
+/// not transport-confirmed. A contradictory empty Held result is treated as
+/// inconclusive instead of clearing keys without an AllUp verdict.
+fn reconcile_held_release_observation(
+    requested_mask: u16,
+    transport_confirmed_mask: u16,
+    held_mask: u16,
+) -> ReconciledRelease {
+    if requested_mask != 0 && (held_mask == 0 || held_mask & !requested_mask != 0) {
+        return ReconciledRelease::Inconclusive(requested_mask);
+    }
+    let unresolved = requested_mask & (held_mask | !transport_confirmed_mask);
+    ReconciledRelease::Held(unresolved)
 }
 
 #[cfg(test)]

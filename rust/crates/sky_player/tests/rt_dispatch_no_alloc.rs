@@ -137,7 +137,6 @@ fn up_observation(n: u64) -> DispatchObservation {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: TimelineTicks::ZERO,
-            final_policy_ticks: Some(TimelineTicks::ZERO),
             sendinput_completion_ticks: Some(TimelineTicks::ZERO),
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,

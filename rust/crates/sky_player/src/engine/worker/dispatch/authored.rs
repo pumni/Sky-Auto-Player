@@ -154,7 +154,6 @@ fn commit_down_send_outcome(
         desired_pause,
         system_power,
         progress_clock,
-        effective_now_ticks,
         now_ticks,
         physical_target_qpc,
         has_conflicts,
@@ -205,7 +204,6 @@ fn commit_down_send_outcome(
             clock_state,
             physical_timing_window,
             now_ticks,
-            effective_now_ticks,
             match down_admission {
                 DownBoundaryAdmission::UnobservedBacklog => DownMissReason::UnobservedBacklog,
                 DownBoundaryAdmission::Authorized => {
@@ -295,7 +293,6 @@ fn admit_authored_down(
     desired_pause: &AtomicBool,
     system_power: &SystemPowerState,
     progress_clock: &SharedProgressClock,
-    effective_now_ticks: TimelineTicks,
     now_ticks: QpcTicks,
     physical_target_qpc: QpcTicks,
     has_conflicts: bool,
@@ -320,7 +317,6 @@ fn admit_authored_down(
                         compiled_packet_index: u64::try_from(view.prepared_batch.packet_index).ok(),
                         authored_ticks: view.authored_batch_scheduled_ticks,
                         effective_deadline_ticks: view.batch_scheduled_ticks,
-                        effective_now_ticks,
                         physical_target_qpc,
                         observed_qpc: now_ticks,
                         polyphony: view.batch_intent_count,

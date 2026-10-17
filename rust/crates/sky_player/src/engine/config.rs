@@ -236,8 +236,11 @@ pub enum StartupCheckpoint {
     BeforeReady = 3,
     ReadyToArmed = 4,
     EpochPrepared = 5,
+    #[cfg(any(test, feature = "test-support"))]
     ArmedPublished = 6,
+    #[cfg(any(test, feature = "test-support"))]
     InitialWait = 7,
+    #[cfg(any(test, feature = "test-support"))]
     FirstDownAdmission = 8,
     StreamMaterialization = 9,
 }
