@@ -478,6 +478,7 @@ pub(crate) struct SharedMetrics {
     pub(crate) effective_wait_policy: Mutex<String>,
     pub(crate) wait_strategy_acquired: Mutex<String>,
     pub(crate) terminal_error: Mutex<Option<String>>,
+    pub(crate) terminal_trigger_reason: Mutex<Option<String>>,
     pub(crate) secondary_errors: Mutex<Vec<String>>,
     pub(crate) generation_status_counts: Mutex<HashMap<String, u64>>,
     #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
@@ -485,6 +486,7 @@ pub(crate) struct SharedMetrics {
     pub(crate) abort_counts_by_reason: Mutex<HashMap<String, u64>>,
     pub(crate) terminal_release_outcome: Mutex<Option<ReleaseAllOutcome>>,
     pub(crate) terminal_release_obligation_mask: AtomicU32,
+    pub(crate) terminal_release_attempts_total: AtomicU64,
     #[cfg(test)]
     pub(crate) publish_count: AtomicU64,
 }

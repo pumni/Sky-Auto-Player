@@ -1,10 +1,11 @@
 use super::{
     OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED, RuntimeDispatchCoordinator,
-    TrackedKeyState, WorkerMetricsLocal, WorkerRuntime, WorkerSchedulingGuards,
+    TerminalTrigger, TrackedKeyState, WorkerMetricsLocal, WorkerRuntime, WorkerSchedulingGuards,
     current_process_cpu_time_us, current_thread_cpu_time_us, publish_backend_metrics,
 };
 use crate::engine::shared::SessionTarget;
 use crate::engine::shared::SharedProgressClock;
+use crate::engine::shared::SupervisorLeaseState;
 use crate::engine::telemetry::{
     NativeTelemetryOutput, SharedMetrics, TelemetryCollector, publish_terminal_metrics,
 };
@@ -37,12 +38,15 @@ pub(super) struct FinalizeState {
     pub(super) terminal_error: Option<String>,
     pub(super) secondary_errors: Vec<String>,
     pub(super) last_published_error: Option<String>,
+    pub(super) terminal_trigger: Option<TerminalTrigger>,
 }
 
 pub(super) struct FinalizeSignals<'a> {
     pub(super) target: &'a SessionTarget,
     pub(super) skip_requested: &'a AtomicBool,
     pub(super) quit_requested: &'a AtomicBool,
+    pub(super) panic_requested: &'a AtomicBool,
+    pub(super) supervisor_expired: &'a SupervisorLeaseState,
 }
 
 pub(super) struct FinalizePublication<'a> {
@@ -77,7 +81,16 @@ pub(crate) struct FinalizeTestObservation {
     pub(crate) failed_release_mask: u16,
     pub(crate) in_flight_mask: u16,
     pub(crate) attempted_mask: u16,
+    pub(crate) terminal_release_attempts: u8,
+    pub(crate) total_release_attempts: u64,
+    pub(crate) cleanup_outcome: Option<ReleaseAllOutcome>,
     pub(crate) generation_accounting: sky_dispatch_core::coordinator::GenerationAccounting,
+    pub(crate) pre_cancel_generation_accounting:
+        sky_dispatch_core::coordinator::GenerationAccounting,
+    pub(crate) terminal_trigger_reason: Option<String>,
+    pub(crate) terminal_error: Option<String>,
+    pub(crate) secondary_errors: Vec<String>,
+    pub(crate) operation_trace: Option<Arc<Mutex<Vec<&'static str>>>>,
 }
 
 pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
@@ -88,7 +101,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         publication,
         timing,
         #[cfg(any(test, feature = "test-support"))]
-        cleanup_observation,
+        mut cleanup_observation,
     } = context;
     let FinalizeResources {
         mut backend,
@@ -106,11 +119,14 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         mut terminal_error,
         mut secondary_errors,
         mut last_published_error,
+        mut terminal_trigger,
     } = state;
     let FinalizeSignals {
         target,
         skip_requested,
         quit_requested,
+        panic_requested,
+        supervisor_expired,
     } = signals;
     let FinalizePublication {
         metrics,
@@ -123,35 +139,43 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         start_thread_cpu_us,
         start_process_cpu_us,
     } = timing;
-    // Capture the dispatch worker's final CPU sample before cleanup and
-    // observer shutdown.  Publication happens later, but the value must not
-    // include release/rollback work owned by finalization.
+    let worker_panicked = worker_result.is_err();
+    #[cfg(any(test, feature = "test-support"))]
+    let operation_trace = cleanup_observation
+        .as_ref()
+        .and_then(|observation| observation.operation_trace.clone());
+
+    if terminal_trigger.is_none() {
+        terminal_trigger = if supervisor_expired.is_expired() {
+            Some(TerminalTrigger::SupervisorLeaseExpired)
+        } else if skip_requested.load(Ordering::Acquire) {
+            Some(TerminalTrigger::Skip)
+        } else if quit_requested.load(Ordering::Acquire) {
+            Some(TerminalTrigger::Quit)
+        } else if panic_requested.load(Ordering::Acquire) {
+            Some(if supervisor_expired.is_expired() {
+                TerminalTrigger::SupervisorLeaseExpired
+            } else {
+                TerminalTrigger::PanicReleaseRequested
+            })
+        } else if worker_result.is_err() {
+            Some(TerminalTrigger::WorkerPanic)
+        } else {
+            None
+        };
+    }
+
+    // This scalar sample does not traverse state or delay release; keeping it
+    // before cleanup excludes terminal work from the dispatch-worker metric.
     let final_worker_cpu_time_us = current_thread_cpu_time_us().saturating_sub(start_thread_cpu_us);
-
-    // Validate before either cleanup operation can erase the evidence of a
-    // coordinator mismatch. The first failure remains primary; later cleanup
-    // and accounting failures are retained as secondary diagnostics.
-    if let Err(error) = coordinator.check_invariants() {
-        record_termination_error(
-            &mut terminal_error,
-            &mut secondary_errors,
-            format!("coordinator pre-cleanup invariant failure: {error}"),
-        );
-    }
-
-    if worker_result.is_err() {
-        record_termination_error(
-            &mut terminal_error,
-            &mut secondary_errors,
-            "worker panicked before terminal cleanup".to_string(),
-        );
-    }
 
     // This cleanup sits outside the contained loop so it also runs when an
     // unexpected panic crosses the orchestration/backend seam. It always
     // releases the persistent backend's tracked obligations, including any
-    // bounded in-flight packet mask. A second cleanup FSM is never chained,
-    // so cleanup latency is bounded to a single FSM invocation.
+    // bounded in-flight packet mask. This is the single terminal release
+    // owner; resumable cleanup remains a separate lifecycle operation.
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "terminal_release_started");
     let release_scope = sky_dispatch_win32::input::ReleaseScope::Tracked;
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
         backend.release_scope(release_scope, target.hwnd_for_safety_release())
@@ -175,13 +199,18 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             "terminal backend cleanup panicked".to_string(),
         );
     }
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "terminal_release_returned");
     metrics.terminal_release_obligation_mask.store(
         u32::from(backend.release_obligation_mask()),
         Ordering::Release,
     );
+    metrics
+        .terminal_release_attempts_total
+        .store(backend.release_attempts_total, Ordering::Release);
 
     #[cfg(any(test, feature = "test-support"))]
-    if let Some(observation) = cleanup_observation {
+    if let Some(observation) = cleanup_observation.as_deref_mut() {
         observation.release_obligation_mask = backend.release_obligation_mask();
         observation.active_mask = backend.active_mask;
         observation.possibly_active_mask = backend.possibly_active_mask;
@@ -191,9 +220,51 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             .as_ref()
             .ok()
             .map_or(0, |outcome| outcome.attempted_mask);
+        observation.terminal_release_attempts = cleanup_result
+            .as_ref()
+            .ok()
+            .map_or(0, |outcome| outcome.attempts);
+        observation.total_release_attempts = backend.release_attempts_total;
+        observation.cleanup_outcome = cleanup_result.as_ref().ok().cloned();
+    }
+
+    // Preserve the pre-cancel ledger evidence, but only after the first
+    // physical release has been attempted from the backend obligation mask.
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "pre_cancel_ledger_audit");
+    if let Err(error) = coordinator.check_invariants() {
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("coordinator pre-cancel invariant failure: {error}"),
+        );
+    }
+
+    if let Err(payload) = &worker_result {
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|value| (*value).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "native worker panicked".to_string());
+        record_termination_error(
+            &mut terminal_error,
+            &mut secondary_errors,
+            format!("worker panicked before terminal cleanup: {message}"),
+        );
+    }
+
+    if let Some(trigger) = terminal_trigger {
+        *metrics.terminal_trigger_reason.lock() = Some(trigger.as_str().to_string());
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(observation) = cleanup_observation.as_deref_mut() {
+        observation.pre_cancel_generation_accounting = coordinator.generation_accounting();
+        observation.terminal_trigger_reason =
+            terminal_trigger.map(|trigger| trigger.as_str().to_string());
     }
 
     if terminal_error.is_none()
+        && terminal_trigger.is_none()
         && !skip_requested.load(Ordering::Acquire)
         && !quit_requested.load(Ordering::Acquire)
         && !clean_completion_proven(&coordinator, &backend)
@@ -204,6 +275,8 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         );
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "coordinator_cancellation");
     if let Err(error) = coordinator.cancel_all() {
         record_termination_error(
             &mut terminal_error,
@@ -211,6 +284,8 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             format!("coordinator cancellation failure: {error}"),
         );
     }
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "post_cleanup_ledger_audit");
     if let Err(error) = coordinator.check_post_cleanup_invariants() {
         record_termination_error(
             &mut terminal_error,
@@ -218,6 +293,8 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             format!("coordinator post-cleanup invariant failure: {error}"),
         );
     }
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "observer_shutdown");
     if let Some(observer_runtime) = observer.take() {
         let observer_output = observer_runtime.stop();
         local_metrics.merge_observer(&observer_output.metrics);
@@ -249,23 +326,43 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if let Ok(terminal_ticks) = end_ticks {
         progress_clock.publish_terminal(&playback, terminal_ticks);
     }
-    let terminal_abort_reason =
-        if worker_result.is_err() || cleanup_result.is_err() || terminal_error.is_some() {
-            "error"
-        } else if skip_requested.load(Ordering::Acquire) {
-            "skipped"
-        } else if quit_requested.load(Ordering::Acquire) {
-            "quit"
-        } else {
-            "finished"
-        };
+    if matches!(
+        terminal_trigger,
+        Some(TerminalTrigger::PanicReleaseRequested | TerminalTrigger::SupervisorLeaseExpired)
+    ) {
+        *abort_counts.entry("panic").or_insert(0) += 1;
+    }
+    let terminal_abort_reason = if worker_panicked
+        || cleanup_result.is_err()
+        || terminal_error.is_some()
+        || terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
+    {
+        "error"
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::Skip))
+        || skip_requested.load(Ordering::Acquire)
+    {
+        "skipped"
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::Quit))
+        || quit_requested.load(Ordering::Acquire)
+    {
+        "quit"
+    } else {
+        "finished"
+    };
     *abort_counts.entry(terminal_abort_reason).or_insert(0) += 1;
     *metrics.abort_counts_by_reason.lock() = abort_counts
         .into_iter()
         .map(|(reason, count)| (reason.to_string(), count))
         .collect();
     *metrics.terminal_error.lock() = terminal_error.clone();
-    *metrics.secondary_errors.lock() = secondary_errors;
+    *metrics.secondary_errors.lock() = secondary_errors.clone();
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(observation) = cleanup_observation {
+        observation.terminal_error = terminal_error.clone();
+        observation.secondary_errors = secondary_errors.clone();
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "generation_metrics_export");
     *metrics.generation_status_counts.lock() = coordinator.generation_status_counts();
     #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
     {
@@ -299,37 +396,43 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if telemetry.output.observer_queue_dropped > 0 {
         telemetry.output.truncated = true;
     }
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "telemetry_export");
     *telemetry_output.lock() = Some(std::mem::take(&mut telemetry.output));
     drop(scheduling);
     *priority_acquired.lock() = "off".to_string();
     local_metrics.power_throttling_disabled = false;
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "terminal_metrics_publication");
     publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
+    let cleanup_panicked = cleanup_result.is_err();
     match (worker_result, cleanup_result) {
         (Err(payload), _) | (Ok(_), Err(payload)) => resume_unwind(payload),
         (Ok(_), Ok(_)) => {}
     }
-    if terminal_error.is_some() {
+    if terminal_error.is_some()
+        || cleanup_panicked
+        || worker_panicked
+        || terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
+    {
         OUTCOME_ERROR
-    } else if skip_requested.load(Ordering::Acquire) {
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::Skip))
+        || skip_requested.load(Ordering::Acquire)
+    {
         OUTCOME_SKIPPED
-    } else if quit_requested.load(Ordering::Acquire) {
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::Quit))
+        || quit_requested.load(Ordering::Acquire)
+    {
         OUTCOME_QUIT
     } else {
         OUTCOME_FINISHED
     }
 }
 
-pub(crate) fn cancel_coordinator_or_terminal(
-    coordinator: &mut RuntimeDispatchCoordinator,
-    terminal_error: &mut Option<String>,
-    secondary_errors: &mut Vec<String>,
-) {
-    if let Err(error) = coordinator.cancel_all() {
-        record_termination_error(
-            terminal_error,
-            secondary_errors,
-            format!("coordinator cancellation failure: {error}"),
-        );
+#[cfg(any(test, feature = "test-support"))]
+fn record_finalization_event(trace: &Option<Arc<Mutex<Vec<&'static str>>>>, event: &'static str) {
+    if let Some(trace) = trace {
+        trace.lock().push(event);
     }
 }
 

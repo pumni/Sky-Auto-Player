@@ -2034,20 +2034,12 @@ impl ProductionDispatchTestHarness {
     /// Exercise the production command-control owner used by the worker loop.
     /// The wrapper only supplies test-owned scratch diagnostics.
     pub fn process_command_control_for_test(&mut self) -> bool {
-        let mut last_published_error = None;
         super::super::worker::process_command_control_for_test(
-            self.resources.clock,
-            &mut self.resources.backend,
-            &mut self.resources.coordinator,
-            &mut self.runtime.terminal_error,
+            &mut self.runtime.terminal_trigger,
             &self.quit_requested,
             &self.skip_requested,
             &self.panic_requested,
             &self.supervisor_expired,
-            &self.target,
-            &mut self.local_metrics,
-            &self.metrics,
-            &mut last_published_error,
         )
     }
 
@@ -2377,9 +2369,12 @@ impl ProductionDispatchTestHarness {
     ) -> u8 {
         let ProductionDispatchTestHarness {
             resources,
+            runtime,
             target,
             quit_requested,
             skip_requested,
+            panic_requested,
+            supervisor_expired,
             metrics,
             progress_clock,
             ..
@@ -2389,9 +2384,13 @@ impl ProductionDispatchTestHarness {
             &target,
             &skip_requested,
             &quit_requested,
+            &panic_requested,
+            &supervisor_expired,
             &metrics,
             &progress_clock,
             worker_panicked,
+            runtime.terminal_trigger,
+            runtime.terminal_error,
             cleanup_observation,
         )
     }

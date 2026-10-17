@@ -34,17 +34,19 @@ pub(crate) use admission::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
+#[cfg(test)]
+pub(crate) use cleanup::record_termination_error;
 use cleanup::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
     FinalizeTiming, finalize_worker,
 };
 pub(crate) use cleanup::{
-    cancel_coordinator_or_terminal, describe_release_outcome, record_termination_error,
-    release_runtime_outcome, release_state_verified, suspend_live_input,
+    describe_release_outcome, release_runtime_outcome, release_state_verified, suspend_live_input,
 };
+pub(crate) use control::TerminalTrigger;
 use control::{
-    CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
-    CommandControlRuntime, CommandControlSignals, process_command_control,
+    CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
+    process_command_control,
 };
 pub(crate) use dispatch::ObserverRuntime;
 #[cfg(any(test, feature = "test-support"))]
@@ -130,43 +132,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn process_command_control_for_test(
-    qpc_clock: QpcClock,
-    backend: &mut TrackedKeyState,
-    coordinator: &mut RuntimeDispatchCoordinator,
-    terminal_error: &mut Option<String>,
+    terminal_trigger: &mut Option<TerminalTrigger>,
     quit_requested: &AtomicBool,
     skip_requested: &AtomicBool,
     panic_requested: &AtomicBool,
     supervisor_expired: &crate::engine::shared::SupervisorLeaseState,
-    target: &crate::engine::shared::SessionTarget,
-    local_metrics: &mut WorkerMetricsLocal,
-    metrics: &SharedMetrics,
-    last_published_error: &mut Option<String>,
 ) -> bool {
-    let mut secondary_errors = Vec::new();
-    let mut abort_counts = HashMap::new();
     matches!(
         process_command_control(CommandControlInput {
-            clock: CommandControlClock { qpc_clock },
             signals: CommandControlSignals {
                 quit_requested,
                 skip_requested,
                 panic_requested,
                 supervisor_expired,
-                target,
             },
-            runtime: CommandControlRuntime {
-                backend,
-                coordinator,
-                terminal_error,
-                secondary_errors: &mut secondary_errors,
-                abort_counts: &mut abort_counts,
-            },
-            metrics: CommandControlMetrics {
-                local_metrics,
-                metrics,
-                last_published_error,
-            },
+            runtime: CommandControlRuntime { terminal_trigger },
         }),
         CommandControl::Exit
     )
@@ -179,9 +159,13 @@ pub(crate) fn finalize_worker_for_test(
     target: &crate::engine::shared::SessionTarget,
     skip_requested: &AtomicBool,
     quit_requested: &AtomicBool,
+    panic_requested: &AtomicBool,
+    supervisor_expired: &crate::engine::shared::SupervisorLeaseState,
     metrics: &SharedMetrics,
     progress_clock: &super::shared::SharedProgressClock,
     worker_panicked: bool,
+    terminal_trigger: Option<TerminalTrigger>,
+    terminal_error: Option<String>,
     cleanup_observation: &mut cleanup::FinalizeTestObservation,
 ) -> u8 {
     let telemetry_output = parking_lot::Mutex::new(None);
@@ -205,14 +189,17 @@ pub(crate) fn finalize_worker_for_test(
                 },
                 local_metrics: WorkerMetricsLocal::default(),
                 abort_counts: HashMap::new(),
-                terminal_error: None,
+                terminal_error,
                 secondary_errors: Vec::new(),
                 last_published_error: None,
+                terminal_trigger,
             },
             signals: FinalizeSignals {
                 target,
                 skip_requested,
                 quit_requested,
+                panic_requested,
+                supervisor_expired,
             },
             publication: FinalizePublication {
                 metrics,
@@ -419,6 +406,7 @@ pub(crate) struct WorkerRuntime {
     future_physical_wait_target_qpc: Option<QpcTicks>,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) terminal_error: Option<String>,
+    pub(crate) terminal_trigger: Option<TerminalTrigger>,
     focus_loss_fault_injected: bool,
     pub(crate) manual_pause_suspension_pending: bool,
     /// True only after the first successful authored musical commit. A

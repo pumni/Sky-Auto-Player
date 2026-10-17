@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use sky_player::engine::EngineSnapshot;
 use sky_dispatch_win32::input::FULL_INSTRUMENT_MASK;
+use sky_dispatch_win32::input::ReleaseAllOutcome;
 use super::{EventRecord, PhysicalExpectation, Verdict};
 
 pub(super) fn cleanup_evidence_clean(full_mask_required: bool, attempted_mask: u16, attempts: u8, released: bool, stuck_mask: u16, verification_inconclusive: bool, transport_anomaly: bool) -> bool {
@@ -24,7 +25,7 @@ fn empty_successful_cleanup(snapshot: &EngineSnapshot) -> bool {
 }
 pub(super) fn target_change_cleanup_exception(snapshot: &EngineSnapshot) -> bool { target_change_preflight_error(snapshot) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && empty_successful_cleanup(snapshot) }
 pub(super) fn preflight_user_held_cleanup_exception(snapshot: &EngineSnapshot) -> bool { snapshot.outcome.as_deref() == Some("finished") && snapshot.last_error.as_deref().is_some_and(|error| error.contains("instrument key preflight failed during preroll") && error.contains("physically held before playback")) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.failed_release_count == 0 && snapshot.final_release_obligation_mask == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.release_outcome.as_ref().is_none_or(|outcome| outcome.attempted_mask == 0 && outcome.attempts == 0 && outcome.released_successfully && outcome.stuck_mask == 0 && !outcome.verification_inconclusive && !outcome.transport_anomaly) }
-pub(super) fn supervisor_expiry_cleanup_exception(snapshot: &EngineSnapshot) -> bool { snapshot.terminal_error.as_deref() == Some("supervisor_lease_expired") && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.timeline_rebase_count == 0 && empty_successful_cleanup(snapshot) }
+pub(super) fn supervisor_expiry_cleanup_exception(snapshot: &EngineSnapshot) -> bool { snapshot.terminal_trigger_reason.as_deref() == Some("supervisor_lease_expired") && snapshot.terminal_error.is_none() && snapshot.secondary_errors.is_empty() && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.timeline_rebase_count == 0 && empty_successful_cleanup(snapshot) }
 
 pub(super) fn ambiguous_packet_event_sequence_matches(events: &[EventRecord], first: PhysicalExpectation, second: PhysicalExpectation) -> bool {
     let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", first), ("key_release", second)];
@@ -64,18 +65,8 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         .release_outcome
         .as_ref()
         .map_or(0, |outcome| u64::from(outcome.stuck_mask.count_ones()));
-    let release = snapshot.release_outcome.as_ref().map(|outcome| {
-        json!({
-            "attempted_mask": outcome.attempted_mask,
-            "transport_anomaly": outcome.transport_anomaly,
-            "released_successfully": outcome.released_successfully,
-            "stuck_mask": outcome.stuck_mask,
-            "verification_inconclusive": outcome.verification_inconclusive,
-            "attempts": outcome.attempts,
-        })
-    });
 
-    json!({
+    let mut report = json!({
         "status": snapshot.status,
         "outcome": snapshot.outcome,
         "last_error": snapshot.last_error,
@@ -159,6 +150,69 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "production_forensics_anomaly_count": snapshot.production_forensics_anomaly_count,
         "production_structural_anomaly_count": snapshot.production_structural_anomaly_count,
         "production_timing_diagnostic_count": snapshot.production_timing_diagnostic_count,
+    });
+    if let Value::Object(object) = &mut report {
+        object.extend(
+            release_accounting_json(
+                snapshot.release_attempts_total,
+                snapshot.release_outcome.as_ref(),
+            )
+            .as_object()
+            .expect("release accounting report object")
+            .clone(),
+        );
+        object.insert(
+            "terminal_trigger_reason".to_string(),
+            snapshot
+                .terminal_trigger_reason
+                .clone()
+                .map_or(Value::Null, Value::String),
+        );
+    }
+    report
+}
+
+fn release_accounting_json(
+    release_attempts_total: u64,
+    release_outcome: Option<&ReleaseAllOutcome>,
+) -> Value {
+    let release = release_outcome.map(|outcome| {
+        json!({
+            "attempted_mask": outcome.attempted_mask,
+            "transport_anomaly": outcome.transport_anomaly,
+            "released_successfully": outcome.released_successfully,
+            "stuck_mask": outcome.stuck_mask,
+            "verification_inconclusive": outcome.verification_inconclusive,
+            "attempts": outcome.attempts,
+        })
+    });
+    json!({
+        "release_attempts_total": release_attempts_total,
         "release_outcome": release,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::release_accounting_json;
+    use sky_dispatch_win32::input::ReleaseAllOutcome;
+
+    #[test]
+    fn acceptance_report_separates_cumulative_and_terminal_release_attempts() {
+        // Four attempts from resumable cleanup precede this four-attempt
+        // terminal invocation; acceptance output must retain both scopes.
+        let terminal_invocation = ReleaseAllOutcome {
+            attempted_mask: 0b1,
+            transport_anomaly: false,
+            released_successfully: true,
+            stuck_mask: 0,
+            verification_inconclusive: false,
+            attempts: 4,
+        };
+
+        let report = release_accounting_json(8, Some(&terminal_invocation));
+        assert_eq!(report["release_attempts_total"], 8);
+        assert_eq!(report["release_outcome"]["attempts"], 4);
+        assert_eq!(report["release_outcome"]["released_successfully"], true);
+    }
 }

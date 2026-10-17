@@ -47,7 +47,7 @@ pub use tracked::{ReleaseScope, TrackedKeyState};
 #[cfg(any(test, feature = "test-support"))]
 pub use physical::InstrumentPhysicalState;
 #[cfg(any(test, feature = "test-support"))]
-pub use tracked::{CustomEmitterFn, CustomPacketEmitterFn, CustomProbeFn};
+pub use tracked::{CustomEmitterFn, CustomPacketEmitterFn, CustomProbeFn, PreparedSendPanicPoint};
 pub use up_transaction::{emit_up, emit_up_with};
 
 #[cfg(test)]

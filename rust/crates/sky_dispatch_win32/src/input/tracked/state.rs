@@ -19,6 +19,7 @@ impl fmt::Debug for TrackedKeyState {
             .field("possibly_active_mask", &self.possibly_active_mask)
             .field("failed_release_mask", &self.failed_release_mask)
             .field("in_flight_mask", &self.in_flight_mask)
+            .field("release_attempts_total", &self.release_attempts_total)
             .field("last_error", &self.last_error)
             .field("keys_dropped", &self.keys_dropped)
             .field("chord_split_events", &self.chord_split_events)
@@ -64,11 +65,19 @@ impl TrackedKeyState {
         observe_current_modifier_keys()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn panic_if_prepared_send_at(&self, point: super::PreparedSendPanicPoint) {
         if self.prepared_send_panic_point == Some(point) {
             panic!("test hook: prepared sender panic at {point:?}");
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_prepared_send_panic_point_for_test(
+        &mut self,
+        point: Option<super::PreparedSendPanicPoint>,
+    ) {
+        self.prepared_send_panic_point = point;
     }
 
     #[cfg(any(test, feature = "test-support"))]

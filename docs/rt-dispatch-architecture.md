@@ -167,6 +167,55 @@ release_obligation_mask = active_mask | possibly_active_mask | failed_release_ma
 Partial, ambiguous, or clock-uncertain Downs retain conservative obligations
 and are not replayed.
 
+### Terminal release ownership and ordering
+
+Command control observes quit, skip, panic-release, and supervisor-lease
+signals, latches the first terminal trigger, and exits the dispatch loop. It
+does not release keys, walk or cancel the generation ledger, stop observers,
+or export diagnostics. The worker finalizer is the sole terminal release owner
+for an admitted session. Before any full-ledger audit, cancellation,
+diagnostic aggregation, observer shutdown, or export, it invokes the tracked
+release state machine on the obligation union above. The first physical Up
+attempt therefore precedes those potentially expensive operations. The
+release remains bounded by the tracked cleanup state machine's four send
+rounds per invocation and uses `SendInput` only.
+
+After that first terminal release call returns or panics, finalization records
+the result and residual obligation mask, checks and cancels the coordinator,
+checks post-cleanup ledger invariants, stops the observer, and exports
+generation, terminal metrics, and telemetry. Trigger identity is preserved
+separately from `terminal_error` and secondary cleanup failures. Quit and skip
+retain their distinct outcomes. Panic requests, worker panic, lease expiry,
+release uncertainty, and cleanup failures cannot produce `Finished`.
+
+The frequent engine progress snapshot publishes a typed terminal outcome
+separately from `has_terminal_error`, which reports diagnostic failure
+provenance. `Error`, `Panicked`, `Poisoned`, and invalid terminal states map to
+error playback and backend health even when tracked release is verified and
+`terminal_error` is empty. `Finished`, `Quit`, and `Skipped` are not errors by
+themselves. The full engine snapshot and native acceptance JSON retain the
+trigger reason and cleanup details. Acceptance output reports
+`release_attempts_total` across resumable and terminal cleanup; nested
+`release_outcome.attempts` counts only the represented terminal invocation.
+
+Admission failures after backend construction have one startup/admission
+cleanup owner and use the same tracked release state machine. Schedule or QPC
+failures before backend construction have no input backend or outstanding
+physical obligations to release. If an admission cleanup panics or cannot
+verify release, startup remains failed and the residual mask, cumulative
+release attempt count, primary admission cause, and cleanup failure are
+preserved.
+
+Resumable lifecycle release remains a separate operation because it must
+verify cleanup before establishing the resume Down barrier. If it fails, the
+terminal finalizer may perform its one terminal cleanup transaction. The
+backend's cumulative release attempt count spans both operations; it is not a
+second retry budget. Each state-machine invocation retains its own bounded
+retry behavior, and failed or ambiguous obligations remain visible for later
+cleanup attempts. A panic after sender return or state commit keeps the key in
+the conservative in-flight or active obligation union until tracked cleanup
+resolves it.
+
 Production diagnostics use bounded worker-local scalars and fixed-size state.
 Strict/diagnostic observations use a bounded queue and cannot authorize,
 reorder, retry, or split input. Useful output includes authored target,
