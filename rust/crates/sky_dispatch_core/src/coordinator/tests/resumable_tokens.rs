@@ -83,6 +83,20 @@ fn all_fifteen_cancelled_ups_keep_exact_identity_and_reconcile_once() {
             TimelineTicks::from_raw(100),
         )
         .expect("all exact tokens reconcile");
+    assert!(
+        coordinator
+            .validate_frozen_authored_commit(&authored_up)
+            .is_err()
+    );
+    assert!(
+        coordinator
+            .commit_prepared_authored_frame_success_frozen(
+                &authored_up,
+                TimelineTicks::from_raw(100),
+                TimelineTicks::from_raw(100),
+            )
+            .is_err()
+    );
     assert!(coordinator.cancelled_up_by_slot.iter().all(Option::is_none));
     assert_eq!(
         coordinator.generation_accounting().released,
