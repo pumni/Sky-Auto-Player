@@ -465,13 +465,6 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
                     eprintln!("failed to refresh native Windows icons: {error}");
                 }
             }
-            #[cfg(windows)]
-            tauri::WindowEvent::Destroyed => {
-                if let Err(error) = windows_caption::uninstall_window(window) {
-                    eprintln!("failed to remove native maximize hit target: {error}");
-                }
-                windows_icon::release_native_window_icons(window);
-            }
             _ => {}
         })
         .run(tauri::generate_context!());

@@ -18,6 +18,7 @@ fn dirty_worktree() -> bool {
 
 fn main() {
     println!("cargo:rerun-if-changed=src/ipc_contract.rs");
+    println!("cargo:rerun-if-changed=windows-app.manifest");
     git_metadata::emit_git_metadata_rerun_if_changed("../../rust/build_support/git_metadata.rs");
     println!("cargo:rerun-if-env-changed=SKY_CI_SOURCE_SHA");
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
@@ -52,8 +53,11 @@ fn main() {
         // packaged-assets feature, which owns tauri/custom-protocol.
         println!("cargo:rustc-env=TAURI_CONFIG={{\"build\":{{\"frontendDist\":null}}}}");
     }
+    let windows =
+        tauri_build::WindowsAttributes::new().app_manifest(include_str!("windows-app.manifest"));
     tauri_build::try_build(
         tauri_build::Attributes::new()
+            .windows_attributes(windows)
             .app_manifest(tauri_build::AppManifest::new().commands(ipc_contract::TAURI_COMMANDS)),
     )
     .expect("failed to configure Tauri application command permissions");
