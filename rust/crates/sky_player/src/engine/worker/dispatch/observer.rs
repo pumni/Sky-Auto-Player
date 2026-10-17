@@ -159,7 +159,6 @@ pub(crate) fn dispatch_stale_packet(
     observer: Option<&PendingObservationQueue>,
     dropped_samples: &mut u64,
     queue_high_watermark: &mut u64,
-    effective_now_ticks: TimelineTicks,
 ) -> DispatchStep {
     if let Err(error) = coordinator.commit_stale_packet(prepared) {
         return DispatchStep::Terminate(format!(
@@ -171,7 +170,6 @@ pub(crate) fn dispatch_stale_packet(
             DispatchObservation::StaleMetadata(StaleMetadataObservation {
                 source_action_index: prepared.source_action_index,
                 effective_scheduled_ticks: prepared.effective_scheduled_ticks,
-                effective_now_ticks,
                 suppressed_intent_count: prepared.suppressed_intent_count,
             }),
             dropped_samples,

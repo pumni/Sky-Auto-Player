@@ -11,15 +11,16 @@ use super::{
     FinalTargetSignals, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
     NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
     RtTraceRecord, SharedMetrics, StartupOrderingHook, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
-    TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimestampProvenance,
-    TimingOptions, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions,
-    WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
-    anchored_dispatch_target_ticks, cpu_metrics_sample_due, deadline_target_ticks,
-    derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
-    final_control_precheck, final_down_target_admission, focus_gate_matches, focus_matches,
-    focus_matches_hwnd, record_input_path_health, record_termination_error,
-    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
-    target_stamp_still_current, trace_outcome_code, try_publish_metrics, wake_lateness_ticks,
+    TRACE_SEND_STATUS_NOT_ATTEMPTED, TargetStamp, TelemetryCollector, TelemetryMode,
+    TelemetryOptions, TimestampProvenance, TimingOptions, TraceContext, TraceDelivery, TraceTiming,
+    TrackedKeyState, WaitOptions, WakeErrorStats, Worker, WorkerMetricsLocal,
+    adjust_spin_threshold, anchored_dispatch_target_ticks, cpu_metrics_sample_due,
+    deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
+    exact_sender_durations, final_control_precheck, final_down_target_admission,
+    focus_gate_matches, focus_matches, focus_matches_hwnd, record_input_path_health,
+    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
+    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code,
+    trace_send_status_code, try_publish_metrics, wake_lateness_ticks,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_dispatch_core::clock::PauseReason;
@@ -6362,6 +6363,8 @@ fn fresh_focus_rejection_preserves_current_frame_and_miss_lifecycle_state() {
 
 #[test]
 fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
+    use super::test_support::MockSendInputCapture;
+
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_override_reset = FocusOverrideResetGuard;
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
@@ -6386,14 +6389,16 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Up,
-                scheduled_us: 3_000_000,
+                // Keep the session live until the test explicitly requests
+                // quit after observing the restored Down's completed send.
+                scheduled_us: 60_000_000,
                 scan_codes: smallvec::smallvec![0x15],
                 reason: "same-frame-restore-first-up".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
-                scheduled_us: 4_000_000,
+                scheduled_us: 61_000_000,
                 scan_codes: smallvec::smallvec![0x16],
                 reason: "same-frame-restore-current-up".into(),
             },
@@ -6402,9 +6407,13 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
     )
     .expect("same-frame restore schedule");
     let send_call_count = Arc::new(AtomicU64::new(0));
+    let send_input_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
     let restore_reconcile_count = Arc::new(AtomicU64::new(0));
+    let startup_ordering_hook = Arc::new(StartupOrderingHook::default());
+    startup_ordering_hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownAdmission, 2);
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    fault_script.send_input_capture = Some(Arc::clone(&send_input_capture));
     let mut options = test_session_options(
         schedule,
         2,
@@ -6414,10 +6423,15 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
             fault_script,
         },
     );
+    // The diagnostic profile intentionally bypasses the worker-owned prepared
+    // stream. Exercise the normal prepared path while retaining its observer
+    // trace so this regression covers the immutable frame and telemetry.
+    options.profile = DispatchProfile::MockTest;
     options.focus.require_focus = true;
     // The production lifecycle remains intact; a zero test grace keeps the
     // frozen current frame inside this deterministic proof's sender window.
     options.focus.focus_restore_grace_us = 0;
+    options.startup_ordering_hook = Some(Arc::clone(&startup_ordering_hook));
     options.restore_race_hook = Some({
         let restore_reconcile_count = Arc::clone(&restore_reconcile_count);
         Arc::new(move |_, _| {
@@ -6428,7 +6442,7 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
     let session = NativeDispatchSession::new(options).expect("same-frame session admission");
     session.set_target_hwnd(123);
     session.set_focus_hint(true);
-    start_with_test_wall_clock_slack(&session);
+    session.arm(0).expect("worker arm without test preroll");
 
     let first_deadline = Instant::now() + Duration::from_secs(3);
     while send_call_count.load(Ordering::Acquire) < 1 {
@@ -6444,10 +6458,18 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
         std::thread::sleep(Duration::from_millis(1));
     }
 
+    // Stop the worker at the second Down's final-admission checkpoint so the
+    // foreground loss cannot race ahead of the frozen frame. The worker has
+    // already returned from the first sender and committed that Down.
+    assert!(
+        startup_ordering_hook.wait_for_startup_checkpoint(Duration::from_secs(3)),
+        "current frame did not reach its final-admission checkpoint"
+    );
     // Keep the published focus hint true. The next prepared frame is rejected
     // only by the fresh foreground proof, which must leave the frozen cursor
     // and normal miss/expiry counters untouched.
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    startup_ordering_hook.release_startup_checkpoint();
     let pause_deadline = Instant::now() + Duration::from_secs(3);
     while !session.snapshot_lite().is_paused {
         let snapshot = session.snapshot_lite();
@@ -6472,6 +6494,19 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
     );
     assert_eq!(send_call_count.load(Ordering::Acquire), 1);
     assert_eq!(
+        send_input_capture
+            .lock()
+            .expect("captured paused send inputs")
+            .as_slice(),
+        [MockSendInputCapture::Packet {
+            packet: PhysicalPacket::new(0, 1 << 0),
+            status: SendTransactionStatus::Complete,
+            confirmed_mask: 1 << 0,
+            attempts: 1,
+        }],
+        "the foreground-rejected current frame must not reach the sender"
+    );
+    assert_eq!(
         paused
             .generation_status_counts
             .get("dropped_expired")
@@ -6485,6 +6520,7 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
     // The normal focus-restore path invalidates the old Down authorization,
     // reconciles the still-current prepared frame, reacquires a fresh target
     // proof, and only then exits the pause.
+    startup_ordering_hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownAdmission, 1);
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
     let restore_deadline = Instant::now() + Duration::from_secs(3);
@@ -6503,18 +6539,58 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
             .expect("heartbeat during normal focus restore");
         std::thread::sleep(Duration::from_millis(1));
     }
+    assert!(
+        startup_ordering_hook.wait_for_startup_checkpoint(Duration::from_secs(3)),
+        "restored current frame did not reach its final-admission checkpoint"
+    );
+    assert_eq!(restore_reconcile_count.load(Ordering::Acquire), 1);
+    startup_ordering_hook.release_startup_checkpoint();
     let send_deadline = Instant::now() + Duration::from_secs(3);
     // Restoration first sends the verified cleanup Up, then the resumed
-    // authored Down after the global release-spacing barrier expires.
-    while send_call_count.load(Ordering::Acquire) < 3 {
+    // authored Down after the global release-spacing barrier expires. The
+    // sender-call counter increments at mock call entry, so require the exact
+    // completed packet capture as well before issuing quit. The worker commits
+    // the synchronous send result before it can observe and finalize that
+    // queued quit request.
+    loop {
+        let restored_packet_completed = send_input_capture
+            .lock()
+            .expect("captured restored send inputs")
+            .iter()
+            .any(|capture| match capture {
+                MockSendInputCapture::Packet {
+                    packet,
+                    status,
+                    confirmed_mask,
+                    attempts,
+                } => {
+                    *packet == PhysicalPacket::new(0, 1 << 1)
+                        && *status == SendTransactionStatus::Complete
+                        && *confirmed_mask == 1 << 1
+                        && *attempts == 1
+                }
+                MockSendInputCapture::SingleEmitter { .. } => false,
+            });
         let snapshot = session.snapshot_lite();
+        if send_call_count.load(Ordering::Acquire) >= 3 && restored_packet_completed {
+            break;
+        }
         assert!(
             !snapshot.is_finished,
             "same current frame was not readmitted: {snapshot:?}"
         );
         assert!(
             Instant::now() < send_deadline,
-            "same current prepared frame did not send"
+            "same current prepared frame did not complete and commit: snapshot={snapshot:?}, calls={}, captures={:?}, down_window={:?}, sender_attempts={}, sender_start_qpc={}, now_qpc={:?}",
+            send_call_count.load(Ordering::Acquire),
+            send_input_capture
+                .lock()
+                .expect("captured failed restore send inputs")
+                .as_slice(),
+            startup_ordering_hook.last_down_window(),
+            startup_ordering_hook.down_sender_attempt_count(),
+            startup_ordering_hook.last_down_sender_start_qpc_ticks(),
+            QpcClock::initialize().and_then(QpcClock::now)
         );
         session
             .publish_supervisor_progress()
@@ -6534,12 +6610,18 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
     assert_eq!(restored.missed_unobserved_backlog_boundaries, 0);
     assert_eq!(restored.final_sender_window_expirations, 0);
     assert_eq!(restored.timeline_rebase_count, 0);
-
     session.quit().expect("quit same-frame restore session");
     assert!(
         session
             .join(Duration::from_secs(5))
             .expect("same-frame worker join")
+    );
+    assert!(session.snapshot_lite().is_finished);
+    assert_eq!(
+        session.terminal_outcome(),
+        Some("quit"),
+        "focus restore terminal state: {:?}",
+        session.snapshot()
     );
     let telemetry: serde_json::Value = serde_json::from_str(
         &session
@@ -6550,13 +6632,124 @@ fn same_frozen_prepared_frame_is_readmitted_after_normal_focus_restore() {
     let records = telemetry["records"]
         .as_array()
         .expect("same-frame records array");
-    for event_index in [0, 1] {
-        let record = records
-            .iter()
-            .find(|record| record["event_index"].as_u64() == Some(event_index))
-            .unwrap_or_else(|| panic!("missing same-frame event {event_index}"));
-        assert_eq!(record["sent_count"].as_u64(), Some(1));
+    assert_eq!(telemetry["accepted"].as_u64(), Some(records.len() as u64));
+    assert_eq!(telemetry["dropped"].as_u64(), Some(0));
+    assert_eq!(telemetry["observer_queue_dropped"].as_u64(), Some(0));
+    assert_eq!(telemetry["truncated"].as_bool(), Some(false));
+    for (index, record) in records.iter().enumerate() {
+        assert_eq!(
+            record["trace_record_index"].as_u64(),
+            Some(index as u64),
+            "observer drain must export the complete ordered trace: {records:#?}"
+        );
     }
+    let send_inputs = send_input_capture
+        .lock()
+        .expect("captured send inputs")
+        .clone();
+    assert_eq!(
+        send_call_count.load(Ordering::Acquire),
+        4,
+        "mock sender calls"
+    );
+    assert_eq!(
+        send_inputs,
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket::new(0, 1 << 0),
+                status: SendTransactionStatus::Complete,
+                confirmed_mask: 1 << 0,
+                attempts: 1,
+            },
+            MockSendInputCapture::SingleEmitter {
+                scan_codes: vec![0x15],
+                key_up: true,
+            },
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket::new(0, 1 << 1),
+                status: SendTransactionStatus::Complete,
+                confirmed_mask: 1 << 1,
+                attempts: 1,
+            },
+            MockSendInputCapture::SingleEmitter {
+                scan_codes: vec![0x16],
+                key_up: true,
+            },
+        ],
+        "initial authored Down, verified focus cleanup Up, same frozen authored Down, and terminal cleanup Up"
+    );
+    let authored_records = |source_action_index| {
+        records
+            .iter()
+            .filter(|record| {
+                record["source_action_index"].as_u64() == Some(source_action_index)
+                    && record["down_mask"].as_u64().unwrap_or_default() != 0
+            })
+            .collect::<Vec<_>>()
+    };
+    let current_lifecycle_records = authored_records(1);
+    assert!(
+        !current_lifecycle_records.is_empty(),
+        "missing current frame trace records: {records:#?}"
+    );
+    for record in &current_lifecycle_records {
+        if record["sent_count"].as_u64() == Some(0) {
+            assert_eq!(record["send_attempts"].as_u64(), Some(0));
+            assert_eq!(
+                record["send_status"].as_u64(),
+                Some(u64::from(TRACE_SEND_STATUS_NOT_ATTEMPTED))
+            );
+        }
+    }
+    let sent_records = |source_action_index| {
+        authored_records(source_action_index)
+            .into_iter()
+            .filter(|record| {
+                record["outcome"].as_u64() == Some(trace_outcome_code("sent") as u64)
+                    && record["sent_count"].as_u64() == Some(1)
+                    && record["send_attempts"].as_u64() == Some(1)
+                    && record["send_status"].as_u64()
+                        == Some(u64::from(trace_send_status_code(
+                            SendTransactionStatus::Complete,
+                        )))
+            })
+            .collect::<Vec<_>>()
+    };
+    let first_down = sent_records(0);
+    assert_eq!(
+        first_down.len(),
+        1,
+        "first authored Down trace: {records:#?}"
+    );
+    let current_down = sent_records(1);
+    assert_eq!(
+        current_down.len(),
+        1,
+        "restored authored Down trace: {records:#?}"
+    );
+    assert_eq!(
+        first_down[0]["compiled_packet_index"].as_u64(),
+        Some(0),
+        "the first authored packet identity must remain intact"
+    );
+    assert!(
+        current_down[0]["trace_record_index"].as_u64()
+            > first_down[0]["trace_record_index"].as_u64(),
+        "the restored current packet must follow the first authored packet: {records:#?}"
+    );
+    assert!(
+        current_lifecycle_records
+            .iter()
+            .filter_map(|record| record["trace_record_index"].as_u64())
+            .filter(|index| *index != current_down[0]["trace_record_index"].as_u64().unwrap())
+            .all(|index| index < current_down[0]["trace_record_index"].as_u64().unwrap()),
+        "the successful readmission trace must follow any earlier no-send observation: {records:#?}"
+    );
+    assert_eq!(
+        current_down[0]["compiled_packet_index"].as_u64(),
+        Some(1),
+        "the same frozen compiled packet must be readmitted"
+    );
 }
 
 #[test]

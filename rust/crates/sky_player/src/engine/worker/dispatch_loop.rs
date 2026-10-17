@@ -178,22 +178,6 @@ pub(crate) fn preflight_prepared_plan(
     Ok(true)
 }
 
-/// Project the current QPC into playback time for stale metadata diagnostics.
-///
-/// A pre-epoch startup projection is intentionally zero, but once playback has
-/// begun this reports the real elapsed timeline. This never enables or mutates
-/// the physical pre-epoch startup admission path.
-fn stale_metadata_effective_now(
-    playback: &sky_dispatch_core::clock::PlaybackClockState,
-    now_qpc: sky_dispatch_win32::clock::QpcTicks,
-) -> Result<TimelineTicks, sky_dispatch_core::time::TimeArithmeticError> {
-    if now_qpc < playback.epoch {
-        Ok(TimelineTicks::ZERO)
-    } else {
-        playback.get_elapsed_allow_pre_epoch(now_qpc, false)
-    }
-}
-
 /// Dispatch the work represented by one immutable plan. This helper is used
 /// for both an already-due plan and a successful direct target wake, so a
 /// normal timer wake never re-enters general orchestration before transport.
@@ -398,7 +382,6 @@ pub(crate) fn dispatch_due_from_plan(
             &physical.authored_view,
             local_metrics,
             observer,
-            effective_now_ticks,
             window,
             now_ticks,
             reason,
@@ -1469,23 +1452,12 @@ pub(super) fn dispatch(
             // phase, so every control/focus/pause/lease gate is re-admitted.
             match resources.coordinator.prepare_current_stale_packet() {
                 Ok(Some(prepared)) => {
-                    let stale_now =
-                        match stale_metadata_effective_now(&resources.playback, now_ticks) {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                core.runtime.terminal_error = Some(format!(
-                                    "stale metadata clock projection failure: {error}"
-                                ));
-                                break;
-                            }
-                        };
                     match super::dispatch_stale_packet(
                         prepared,
                         &mut resources.coordinator,
                         core.observer.pending.as_ref(),
                         &mut core.metrics.observer_dropped_samples,
                         &mut core.metrics.observer_queue_high_watermark,
-                        stale_now,
                     ) {
                         super::DispatchStep::Dispatched => {
                             #[cfg(any(test, feature = "test-support"))]

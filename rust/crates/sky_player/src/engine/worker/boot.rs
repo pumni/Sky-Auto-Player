@@ -526,7 +526,9 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     // Scheduling changes happen only after all large schedule and telemetry
     // allocations are complete. The guards are acquired and later dropped on
     // this worker thread.
-    let mut scheduling = WorkerSchedulingGuards::acquire(config.priority.mode);
+    let scheduling = WorkerSchedulingGuards::acquire(config.priority.mode);
+    #[cfg(any(test, feature = "test-support"))]
+    let mut scheduling = scheduling;
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
         hook.record_scheduling_guard_acquired();

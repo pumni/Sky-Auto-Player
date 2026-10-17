@@ -47,6 +47,7 @@ impl PreparedDispatchStream {
     /// built alongside the simulator.
     pub(crate) const MAX_PREPARED_STREAM_BYTES: usize = 512 * 1024 * 1024;
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn build(
         simulator: RuntimeDispatchCoordinator,
         qpc_clock: QpcClock,

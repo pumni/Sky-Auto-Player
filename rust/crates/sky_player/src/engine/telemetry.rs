@@ -662,6 +662,7 @@ impl NativeTelemetryOutput {
         })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn new(mode: TelemetryMode, capacity: usize) -> Self {
         Self {
             schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
@@ -716,6 +717,7 @@ impl TelemetryCollector {
         })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn new(mode: TelemetryMode, capacity: usize) -> Self {
         Self {
             mode,

@@ -1,4 +1,12 @@
-import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import { App } from './App';
@@ -30,8 +38,11 @@ describe('desktop application shell', () => {
     expect(screen.getByText('Medium timing risk')).toBeInTheDocument();
 
     const settingsButton = screen.getByRole('button', { name: 'Open settings' });
-    fireEvent.click(settingsButton);
-    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(settingsButton);
+      await vi.dynamicImportSettled();
+    });
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     expect(screen.getByLabelText('Color palette')).toHaveValue('aurora');
     fireEvent.click(screen.getByRole('button', { name: 'About' }));
