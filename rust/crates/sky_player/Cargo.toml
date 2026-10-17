@@ -36,7 +36,7 @@ name = "rt_handoff_bench"
 required-features = ["test-support"]
 
 [[example]]
-name = "rt_r3_probe"
+name = "rt_dispatch_probe"
 required-features = ["test-support"]
 
 [[bin]]

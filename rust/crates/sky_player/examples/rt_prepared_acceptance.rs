@@ -1,4 +1,4 @@
-//! Deterministic prepared-input acceptance counters for the active phase.
+//! Deterministic prepared-input acceptance counters for prepared dispatch qualification.
 
 #![cfg(feature = "test-support")]
 
@@ -76,7 +76,7 @@ fn main() -> Result<(), String> {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "phase": "3",
+            "qualification": "prepared_dispatch",
             "acceptance_clean": acceptance_clean,
             "prepared_physical_boundaries": prepared_physical_boundaries,
             "successful_full_sends": successful_full_sends,

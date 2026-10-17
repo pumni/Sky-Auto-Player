@@ -10,19 +10,19 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub(super) struct R3AcceptanceHookCleanup(Option<Arc<StartupOrderingHook>>);
+pub(super) struct AcceptanceHookCleanup(Option<Arc<StartupOrderingHook>>);
 
-impl R3AcceptanceHookCleanup {
+impl AcceptanceHookCleanup {
     pub(super) fn new(hook: Option<Arc<StartupOrderingHook>>) -> Self {
         Self(hook)
     }
 }
 
-impl Drop for R3AcceptanceHookCleanup {
+impl Drop for AcceptanceHookCleanup {
     fn drop(&mut self) {
         if let Some(hook) = self.0.as_ref() {
-            hook.r3_release_completed_up_through(u64::MAX);
-            hook.release_r3_watchdog();
+            hook.release_completed_up_through(u64::MAX);
+            hook.release_watchdog();
         }
     }
 }
@@ -31,12 +31,12 @@ pub(super) fn hook_for_scenario(scenario: Scenario) -> Option<Arc<StartupOrderin
     match scenario {
         Scenario::PauseResumeReleaseFloor => {
             let hook = Arc::new(StartupOrderingHook::default());
-            hook.enable_r3_release_floor_control(10_000);
+            hook.enable_release_floor_control(10_000);
             Some(hook)
         }
         Scenario::LeaseAgeWatchdogDelayed => {
             let hook = Arc::new(StartupOrderingHook::default());
-            hook.hold_r3_watchdog();
+            hook.hold_watchdog();
             Some(hook)
         }
         _ => None,
@@ -59,7 +59,7 @@ pub(super) fn run_release_floor_case(
     match run_release_floor_cycles(session, hook) {
         Ok(cycles) => Ok(cycles),
         Err(error) => {
-            hook.r3_release_completed_up_through(u64::MAX);
+            hook.release_completed_up_through(u64::MAX);
             let _ = session.quit();
             let _ = session.join(Duration::from_secs(5));
             let verdict = if error.starts_with("CASE-NOT-EXERCISED:")
@@ -86,7 +86,7 @@ fn wait_for_up_count(
 ) -> bool {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if hook.r3_completed_up_count() >= required_count {
+        if hook.completed_up_count() >= required_count {
             return true;
         }
         if session.snapshot().is_finished || Instant::now() >= deadline {
@@ -121,18 +121,18 @@ fn run_release_floor_cycles(
         // frame floor even at the 500us acceptance margin. This stays inside
         // the test fixture and makes the native oracle exercise the barrier.
         thread::sleep(Duration::from_millis(4));
-        hook.r3_clear_pause_ack_qpc();
+        hook.clear_pause_ack_qpc();
         session
             .pause()
             .map_err(|error| format!("manual pause request failed at cycle {cycle}: {error}"))?;
-        hook.r3_release_completed_up_through(cycle);
+        hook.release_completed_up_through(cycle);
         if !wait_for_focus_pause(session) {
             return Err(format!("manual pause did not acknowledge at cycle {cycle}"));
         }
 
         let ack_deadline = Instant::now() + Duration::from_secs(1);
         let acknowledgment_qpc = loop {
-            let ticks = hook.r3_pause_ack_qpc_ticks();
+            let ticks = hook.pause_ack_qpc_ticks();
             if ticks != 0 {
                 break ticks;
             }
@@ -143,7 +143,7 @@ fn run_release_floor_cycles(
             }
             thread::sleep(Duration::from_micros(100));
         };
-        let cleanup_qpc = hook.r3_resume_cleanup_qpc_ticks();
+        let cleanup_qpc = hook.resume_cleanup_qpc_ticks();
         if cleanup_qpc == 0 || acknowledgment_qpc < cleanup_qpc {
             return Err(format!(
                 "post-cleanup QPC provenance is missing or unordered at cycle {cycle}"
@@ -191,9 +191,9 @@ fn run_release_floor_cycles(
             ));
         }
 
-        let (authored_target_qpc, down_not_before_qpc) = hook.r3_last_down_window();
-        let down_sender_start_qpc = hook.r3_last_down_sender_start_qpc_ticks();
-        let down_sender_attempt_count = hook.r3_down_sender_attempt_count();
+        let (authored_target_qpc, down_not_before_qpc) = hook.last_down_window();
+        let down_sender_start_qpc = hook.last_down_sender_start_qpc_ticks();
+        let down_sender_attempt_count = hook.down_sender_attempt_count();
         if authored_target_qpc == 0 || authored_target_qpc >= barrier_qpc {
             return Err(format!(
                 "CASE-NOT-EXERCISED: resumed authored Down target {authored_target_qpc} was not before release floor {barrier_qpc} at cycle {cycle} (cleanup QPC {cleanup_qpc})"
@@ -223,7 +223,7 @@ fn run_release_floor_cycles(
         }));
     }
 
-    hook.r3_release_completed_up_through(u64::MAX);
+    hook.release_completed_up_through(u64::MAX);
     Ok(evidence)
 }
 
@@ -240,10 +240,10 @@ pub(super) fn begin_delayed_watchdog_case(
     let helper = super::release_gap_stress::IndependentHelperLivenessProbe::start()
         .map_err(|error| format!("could not start independent helper liveness probe: {error}"))?;
     let deadline = Instant::now() + Duration::from_secs(1);
-    while !hook.r3_watchdog_waiting() && Instant::now() < deadline {
+    while !hook.watchdog_waiting() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(1));
     }
-    Ok((helper, hook.r3_watchdog_waiting()))
+    Ok((helper, hook.watchdog_waiting()))
 }
 
 pub(super) struct CaseDetails<'a> {
@@ -259,7 +259,7 @@ pub(super) struct CaseDetails<'a> {
 pub(super) fn attach_case_details(object: &mut Map<String, Value>, details: CaseDetails<'_>) {
     if details.scenario == Scenario::PauseResumeReleaseFloor {
         object.insert(
-            "r3_resume_release_floor_cycles".to_string(),
+            "resume_release_floor_cycles".to_string(),
             json!({
                 "requested_cycle_count": 20,
                 "completed_cycle_count": details.release_floor_cycles.len(),
@@ -272,12 +272,12 @@ pub(super) fn attach_case_details(object: &mut Map<String, Value>, details: Case
     if details.scenario == Scenario::LeaseAgeWatchdogDelayed {
         let hook = details.hook.expect("delayed-watchdog acceptance hook");
         object.insert(
-            "r3_delayed_watchdog_lease_age".to_string(),
+            "delayed_watchdog_lease_age".to_string(),
             json!({
                 "watchdog_held_before_age_check": details.watchdog_was_held,
-                "watchdog_hold_flag_at_report": hook.r3_watchdog_is_held(),
-                "watchdog_waiting_observed": hook.r3_watchdog_waiting(),
-                "down_sender_attempt_count": hook.r3_down_sender_attempt_count(),
+                "watchdog_hold_flag_at_report": hook.watchdog_is_held(),
+                "watchdog_waiting_observed": hook.watchdog_waiting(),
+                "down_sender_attempt_count": hook.down_sender_attempt_count(),
                 "final_gate_lease_expirations": details.final_gate_lease_expirations,
                 "auxiliary_thread_liveness_ticks": details.helper_liveness_ticks,
                 "terminal_error": details.terminal_error
@@ -336,7 +336,7 @@ pub(super) fn finish_delayed_watchdog_case(
             oracle.details,
         );
     }
-    if !hook.r3_watchdog_is_held()
+    if !hook.watchdog_is_held()
         || oracle.down_sender_attempt_count != 0
         || oracle.final_gate_lease_expirations == 0
         || oracle.terminal_error != Some("supervisor_lease_expired")

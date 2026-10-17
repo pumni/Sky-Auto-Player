@@ -88,7 +88,7 @@ pub struct WorkerMetricsLocal {
     /// Deprecated compatibility counter; physical-window rejection is retired
     /// and this remains zero in production.
     pub missed_physical_window_boundaries: u64,
-    /// Phase 3 prepared-normal acceptance counters. These are distinct from
+    /// Prepared-normal acceptance counters. These are distinct from
     /// authored/dynamic recovery counters so the deterministic report can
     /// prove the prepared miss resolver did not enter dynamic policy.
     pub prepared_up_prefix_recovery_sends: u64,

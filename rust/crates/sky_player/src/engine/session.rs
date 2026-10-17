@@ -100,13 +100,13 @@ fn supervisor_watchdog_loop(
 }
 
 #[cfg(any(test, feature = "test-support"))]
-fn wait_for_r3_watchdog_release_or_completion(
+fn wait_for_watchdog_release_or_completion(
     shared: &Arc<SessionShared>,
     hook: Option<&super::config::StartupOrderingHook>,
 ) {
     let Some(hook) = hook else { return };
     hook.hold_watchdog_before_check();
-    if !hook.r3_watchdog_is_held() {
+    if !hook.watchdog_is_held() {
         return;
     }
 
@@ -115,7 +115,7 @@ fn wait_for_r3_watchdog_release_or_completion(
         signal_supervisor_expiry(shared);
         return;
     };
-    while hook.r3_watchdog_is_held() && !*done {
+    while hook.watchdog_is_held() && !*done {
         match done_cv.wait_timeout(done, Duration::from_millis(1)) {
             Ok((next_done, _)) => done = next_done,
             Err(_) => {
@@ -410,7 +410,7 @@ impl NativeDispatchSession {
                 .name("sky-supervisor-watchdog".to_string())
                 .spawn(move || {
                     #[cfg(any(test, feature = "test-support"))]
-                    wait_for_r3_watchdog_release_or_completion(
+                    wait_for_watchdog_release_or_completion(
                         &watchdog_shared,
                         watchdog_test_hook.as_deref(),
                     );
@@ -778,7 +778,7 @@ impl NativeDispatchSession {
         }
     }
 
-    /// Publish a fresh P5 target generation after control-plane revalidation,
+    /// Publish a fresh release-barrier target generation after control-plane revalidation,
     /// including when the numeric HWND was reused for a new window lifetime.
     pub fn republish_target_generation_for_revalidation(&self, hwnd: isize) -> bool {
         let published = self.shared.target.republish_same_hwnd(hwnd);

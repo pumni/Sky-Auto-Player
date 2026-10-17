@@ -135,7 +135,7 @@ pub(crate) struct AuthoredPacketContext<'a> {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) test_direct_boundary: bool,
     /// Test-only control for whether the sender receives an injected start
-    /// timestamp. The Phase-A acceptance boundary keeps direct admission but
+    /// timestamp. The production-path acceptance boundary keeps direct admission but
     /// leaves this false so the production target-crossing sender owns QPC
     /// sampling.
     #[cfg(any(test, feature = "test-support"))]

@@ -37,7 +37,7 @@ pub(super) fn action(
     }
 }
 
-pub(crate) fn w4_profile_spec() -> InstrumentKeyProfileSpec {
+pub(crate) fn noncanonical_profile_spec() -> InstrumentKeyProfileSpec {
     let mut spec = InstrumentKeyProfileSpec::canonical();
     spec.keys[0] = PhysicalKey {
         scan_code: 0x02,
@@ -52,12 +52,12 @@ pub(super) fn scenario_plan(
 ) -> Result<ScenarioPlan, String> {
     let (actions, profile, expected_down_slots, expected_up_slots, allow_unpaired_cleanup_ups) =
         match scenario {
-            Scenario::CanonicalSingle | Scenario::W4Noncanonical => (
+            Scenario::CanonicalSingle | Scenario::NoncanonicalProfile => (
                 vec![
                     action(0, ActionKind::Down, 50_000, &[0]),
                     action(1, ActionKind::Up, 80_000, &[0]),
                 ],
-                (scenario == Scenario::W4Noncanonical).then_some(w4_profile_spec()),
+                (scenario == Scenario::NoncanonicalProfile).then_some(noncanonical_profile_spec()),
                 vec![0],
                 vec![0],
                 false,

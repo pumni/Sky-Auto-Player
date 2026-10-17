@@ -51,9 +51,9 @@ pub mod dispatch_primitives {
     //! Do not use in production code.
     pub use super::target::SessionTarget;
     pub use super::test_support::{
-        PhysicalFloorEvidence, PreparedBoundaryEvidence, ProductionDispatchTestHarness,
-        RtR3CleanupCapture, RtR3FinalizeEvidence, RtR3PreparedStartupBuilder,
-        RtR3PreparedStartupEvidence, RtR3TimingConfigEvidence,
+        CleanupCapture, DispatchTimingConfigEvidence, FinalizeEvidence, PhysicalFloorEvidence,
+        PreparedBoundaryEvidence, PreparedStartupBuilder, PreparedStartupEvidence,
+        ProductionDispatchTestHarness,
     };
     pub use super::worker::WaitObservation;
     pub use super::worker::dispatch::DispatchStep;

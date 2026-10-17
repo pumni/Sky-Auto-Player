@@ -216,7 +216,7 @@ fn send_prepared_normal_precision_frame(
 
     // The prepared payload and Win32 call metadata are fully resolved by the
     // sender before its authoritative pre-call QPC boundary.
-    // P7a's test-support benchmark records the final admission-to-SendInput
+    // physical study's test-support benchmark records the final admission-to-SendInput
     // suffix without adding a QPC read to the production path.
     #[cfg(any(test, feature = "test-support"))]
     let final_policy_qpc = backend.physical_study_final_policy_qpc_for_test();
@@ -368,7 +368,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
     let has_down_events = view.packet_masks.down_mask != 0;
     #[cfg(any(test, feature = "test-support"))]
     if has_down_events && let Some(hook) = runtime.startup_ordering_hook.as_ref() {
-        hook.record_r3_down_window(
+        hook.record_down_window(
             physical_timing_window.authored_target_qpc.as_u64(),
             physical_timing_window.packet_not_before_qpc.as_u64(),
         );
@@ -450,7 +450,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
         && result.is_success()
         && let Some(hook) = runtime.startup_ordering_hook.as_ref()
     {
-        hook.wait_after_r3_successful_up();
+        hook.wait_after_successful_up();
     }
     let (result, prepared_final_policy_qpc) =
         match finish_prepared_normal_precision_result(precision_result, runtime, local_metrics) {
@@ -519,9 +519,7 @@ pub(super) fn record_down_send_result(
         && result.evidence.attempts != 0
         && let Some(hook) = runtime.startup_ordering_hook.as_ref()
     {
-        hook.record_r3_down_sender_attempt(
-            result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
-        );
+        hook.record_down_sender_attempt(result.evidence.started_ticks.map(|ticks| ticks.as_u64()));
     }
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(

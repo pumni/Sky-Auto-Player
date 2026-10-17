@@ -42,7 +42,7 @@ const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
     "Win32::Media",
     "Win32::UI::Input",
     "Win32::System::Performance",
-    // W4 playback lifecycle request and explicit suspend/resume notification boundary.
+    // Playback lifecycle requests and explicit suspend/resume notification boundaries.
     "Win32::System::Power",
     "Win32::System::LibraryLoader",
     "Win32::System::SystemInformation",
@@ -2904,7 +2904,7 @@ fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
         "scripts/ci_tauri_update_e2e.ps1",
         "scripts/v4_release_pipeline.ps1",
         "scripts/ci_v4_release_latest_guard.ps1",
-        "tests/fixtures/wave2/settings.json",
+        "tests/fixtures/settings/compatibility_cases.json",
     ];
     for relative in current_v4_surfaces {
         let path = root.join(relative);
@@ -3810,15 +3810,15 @@ fn load_architecture_allowlist(root: &Path) -> Result<BTreeMap<(String, String),
             .and_then(Value::as_str)
             .ok_or("architecture allowlist reason missing")?;
         let expires = object
-            .get("expires_phase")
+            .get("review_trigger")
             .and_then(Value::as_str)
-            .ok_or("architecture allowlist expiry missing")?;
+            .ok_or("architecture allowlist review trigger missing")?;
         if !root.join(path).is_file() {
             return Err(format!("architecture allowlist path does not exist: {path}").into());
         }
         result.insert(
             (path.replace('\\', "/"), rule.to_owned()),
-            format!("{reason} (expires {expires})"),
+            format!("{reason} ({expires})"),
         );
     }
     Ok(result)
@@ -4493,6 +4493,33 @@ pub(crate) fn should_skip_supply_chain(flag: bool, env_val: Option<&str>) -> boo
     flag || env_val.map(|v| v.trim()) == Some("1")
 }
 
+#[derive(Default)]
+struct CheckSession {
+    builtin_catalog_verified: bool,
+}
+
+fn run_once_per_check_session(
+    completed: &mut bool,
+    check: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    if *completed {
+        return Ok(false);
+    }
+    check()?;
+    *completed = true;
+    Ok(true)
+}
+
+fn verify_builtin_catalog(root: &Path, session: &mut CheckSession) -> Result<()> {
+    let ran = run_once_per_check_session(&mut session.builtin_catalog_verified, || {
+        builtin_catalog::run(root, "verify", &[])
+    })?;
+    if !ran {
+        println!("Built-in catalog verification: PASS (reused in this check session)");
+    }
+    Ok(())
+}
+
 fn check_desktop_native(root: &Path) -> Result<()> {
     const NATIVE_TAURI_CONFIG: &str = r#"{"build":{"frontendDist":null}}"#;
     let native_env = [("TAURI_CONFIG", NATIVE_TAURI_CONFIG)];
@@ -4545,6 +4572,14 @@ fn check_desktop_native(root: &Path) -> Result<()> {
 }
 
 pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
+    run_with_session(group, skip_supply_chain, &mut CheckSession::default())
+}
+
+fn run_with_session(
+    group: &str,
+    skip_supply_chain: bool,
+    session: &mut CheckSession,
+) -> Result<()> {
     let root = repo::root();
     let env_val = std::env::var("SKY_CHECK_SKIP_SUPPLY_CHAIN").ok();
     let skip_supply_chain = should_skip_supply_chain(skip_supply_chain, env_val.as_deref());
@@ -4565,7 +4600,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             branding::validate(&root)?;
             tauri_bundle::validate_config(&root)?;
             tauri_build_freshness_contract(&root)?;
-            builtin_catalog::run(&root, "verify", &[])?;
+            verify_builtin_catalog(&root, session)?;
             v4_trust_material_contract(&root)?;
             ci_control_plane_contract(&root)?;
             release_metadata_contract(&root)?;
@@ -4575,7 +4610,7 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             v4_legacy_updater_retirement(&root)?;
         }
         "rust" => {
-            builtin_catalog::run(&root, "verify", &[])?;
+            verify_builtin_catalog(&root, session)?;
             // The canonical Windows qualification runs workspace tests in a
             // restricted environment.  Keep process-global test fixtures
             // deterministic there; this does not change product concurrency.
@@ -4651,9 +4686,9 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
             check_desktop_native(&root)?;
         }
         "all" => {
-            run("static", skip_supply_chain)?;
-            run("rust", skip_supply_chain)?;
-            run("desktop", skip_supply_chain)?;
+            run_with_session("static", skip_supply_chain, session)?;
+            run_with_session("rust", skip_supply_chain, session)?;
+            run_with_session("desktop", skip_supply_chain, session)?;
         }
         other => return Err(format!("unknown check group: {other}").into()),
     }
@@ -4664,6 +4699,51 @@ pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_session_reuses_only_a_successful_verification() {
+        let mut completed = false;
+        let attempts = std::cell::Cell::new(0);
+
+        assert!(
+            run_once_per_check_session(&mut completed, || {
+                attempts.set(attempts.get() + 1);
+                Ok(())
+            })
+            .unwrap()
+        );
+        assert!(
+            !run_once_per_check_session(&mut completed, || {
+                attempts.set(attempts.get() + 1);
+                Ok(())
+            })
+            .unwrap()
+        );
+        assert_eq!(attempts.get(), 1);
+
+        let mut independent_session = CheckSession::default();
+        assert!(
+            run_once_per_check_session(&mut independent_session.builtin_catalog_verified, || {
+                attempts.set(attempts.get() + 1);
+                Ok(())
+            })
+            .unwrap()
+        );
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    fn failed_check_session_verification_is_retried() {
+        let mut completed = false;
+        let failed = run_once_per_check_session(&mut completed, || {
+            Err(std::io::Error::other("fixture failure").into())
+        });
+        assert!(failed.is_err());
+        assert!(!completed);
+
+        assert!(run_once_per_check_session(&mut completed, || Ok(())).unwrap());
+        assert!(completed);
+    }
 
     const VALID_TAURI_FEATURE_MANIFEST: &str = r#"
 [dependencies]

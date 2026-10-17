@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$Stage,
+    [string]$EvidenceMode,
     [Parameter(Mandatory)]
     [string]$OutputRoot,
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
@@ -9,8 +9,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$runnerContractPath = Join-Path $PSScriptRoot 'lib/evidence_runner_contract.ps1'
+. $runnerContractPath
+$evidenceModeContract = Get-EvidenceRunnerContract -EvidenceMode $EvidenceMode -HasControlRevision $PSBoundParameters.ContainsKey('ControlRevision')
+$runnerStage = $evidenceModeContract.RunnerStage
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$runPrefix = if ($Stage -eq 'baseline') { 'r3-p0-' } elseif ($Stage -eq ('phase' + '1')) { 'r3-p1-' } elseif ($Stage -eq ('phase' + '2')) { 'r3-p2-' } elseif ($Stage -eq 'diagnostics') { 'r3-p4-' } elseif ($Stage -eq 'final') { 'r3-p5-' } else { 'r3-blocked-' }
+$runPrefix = $evidenceModeContract.RunIdPrefix
 $runId = $runPrefix + (Get-Date -AsUTC -Format 'yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $commandResults = [System.Collections.Generic.List[object]]::new()
 $contentionProcesses = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
@@ -20,7 +24,7 @@ $controlWorktreeCreated = $false
 $script:blockedPerf = $false
 $script:blockedDefect = $false
 $script:assemblyAuditFailed = $false
-$p5GateResults = [System.Collections.Generic.List[object]]::new()
+$qualificationGateResults = [System.Collections.Generic.List[object]]::new()
 $assemblyAuditResults = [System.Collections.Generic.List[object]]::new()
 
 function Resolve-Executable([string]$Name) {
@@ -230,18 +234,18 @@ function Get-ZipEntryBytes([System.IO.Compression.ZipArchiveEntry]$Entry) {
     }
 }
 
-function Get-P4Provenance([string]$RepositoryRoot) {
+function Get-PriorDiagnosticsProvenance([string]$RepositoryRoot) {
     $evidenceCommit = '5c0445a7d5965fd2320856df60e260372586f341'
     $expectedManifestSha256 = 'b11bbb81732edc6ec6b7c61fe878e7df6621c99c25efcefa2a56435eac11d028'
     $expectedArchiveSha256 = '86b2c2262f4f3233f82b52ce1a347762502227f63b98e3e88362a3fb16e0105f'
     $evidenceRoot = 'runs/r3-p4-20261016T145957238Z-be3ec0ab'
-    [void](Invoke-CapturedCommand -Name 'git.exe' -Arguments @('-C', $RepositoryRoot, 'fetch', '--no-tags', 'origin', $evidenceCommit) -Label 'fetch-p4-evidence-for-provenance')
+    [void](Invoke-CapturedCommand -Name 'git.exe' -Arguments @('-C', $RepositoryRoot, 'fetch', '--no-tags', 'origin', $evidenceCommit) -Label 'fetch-prior-diagnostics-evidence-for-provenance')
 
     $manifestPath = "$evidenceRoot/manifest.json"
     $manifestBytes = Get-GitBlobBytes $RepositoryRoot $evidenceCommit $manifestPath
     $manifestSha256 = Get-ByteArraySha256 $manifestBytes
     if ($manifestSha256 -ne $expectedManifestSha256) {
-        throw "BLOCKED-P4-PROVENANCE: immutable P4 manifest SHA-256 changed: $manifestSha256"
+        throw "BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: immutable P4 manifest SHA-256 changed: $manifestSha256"
     }
     $manifest = [System.Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
     if ($manifest.schema_version -ne 1 -or
@@ -260,7 +264,7 @@ function Get-P4Provenance([string]$RepositoryRoot) {
         $manifest.archive_parts[0].path -ne 'archive/evidence.zip' -or
         $manifest.archive_parts[0].size_bytes -ne 121828 -or
         $manifest.archive_parts[0].sha256 -ne $expectedArchiveSha256) {
-        throw 'BLOCKED-P4-PROVENANCE: archived P4 manifest schema or pinned run identity did not match'
+        throw 'BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: archived P4 manifest schema or pinned run identity did not match'
     }
 
     $seenPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
@@ -270,7 +274,7 @@ function Get-P4Provenance([string]$RepositoryRoot) {
             -not $seenPaths.Add([string]$rawOutput.path) -or
             [long]$rawOutput.size_bytes -lt 0 -or
             [string]$rawOutput.sha256 -notmatch '^[0-9a-f]{64}$') {
-            throw "BLOCKED-P4-PROVENANCE: invalid or duplicate P4 raw-output declaration '$($rawOutput.path)'"
+            throw "BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: invalid or duplicate P4 raw-output declaration '$($rawOutput.path)'"
         }
     }
 
@@ -278,7 +282,7 @@ function Get-P4Provenance([string]$RepositoryRoot) {
     $archiveBytes = Get-GitBlobBytes $RepositoryRoot $evidenceCommit $archivePath
     $archiveSha256 = Get-ByteArraySha256 $archiveBytes
     if ($archiveBytes.Length -ne 121828 -or $archiveSha256 -ne $expectedArchiveSha256) {
-        throw "BLOCKED-P4-PROVENANCE: immutable P4 archive SHA-256 or size changed: size=$($archiveBytes.Length) sha256=$archiveSha256"
+        throw "BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: immutable P4 archive SHA-256 or size changed: size=$($archiveBytes.Length) sha256=$archiveSha256"
     }
 
     $archiveStream = [System.IO.MemoryStream]::new([byte[]]$archiveBytes)
@@ -287,18 +291,18 @@ function Get-P4Provenance([string]$RepositoryRoot) {
         foreach ($rawOutput in $manifest.raw_outputs) {
             $entry = $archive.GetEntry([string]$rawOutput.path)
             if ($null -eq $entry -or $entry.Length -ne [long]$rawOutput.size_bytes) {
-                throw "BLOCKED-P4-PROVENANCE: P4 archive omitted or changed '$($rawOutput.path)'"
+                throw "BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: P4 archive omitted or changed '$($rawOutput.path)'"
             }
             $entrySha256 = Get-ByteArraySha256 (Get-ZipEntryBytes $entry)
             if ($entrySha256 -ne [string]$rawOutput.sha256) {
-                throw "BLOCKED-P4-PROVENANCE: P4 archive content hash mismatch for '$($rawOutput.path)'"
+                throw "BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: P4 archive content hash mismatch for '$($rawOutput.path)'"
             }
         }
         $runnerEntry = $archive.GetEntry('runner-outputs.json')
-        if ($null -eq $runnerEntry) { throw 'BLOCKED-P4-PROVENANCE: P4 archive omitted runner-outputs.json' }
+        if ($null -eq $runnerEntry) { throw 'BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: P4 archive omitted runner-outputs.json' }
         $runnerBytes = Get-ZipEntryBytes $runnerEntry
         if ((Get-ByteArraySha256 $runnerBytes) -ne [string]$manifest.runner_outputs_sha256) {
-            throw 'BLOCKED-P4-PROVENANCE: P4 runner-outputs.json hash did not match the immutable outer manifest'
+            throw 'BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: P4 runner-outputs.json hash did not match the immutable outer manifest'
         }
         $runnerManifest = [System.Text.Encoding]::UTF8.GetString($runnerBytes) | ConvertFrom-Json
         if ($runnerManifest.schema_version -ne 1 -or
@@ -309,14 +313,14 @@ function Get-P4Provenance([string]$RepositoryRoot) {
             $runnerManifest.runtime_revision -ne $manifest.runtime_revision -or
             $runnerManifest.executable_sha256 -ne $manifest.executable_sha256 -or
             @($runnerManifest.declared_outputs).Count -ne 27) {
-            throw 'BLOCKED-P4-PROVENANCE: archived runner output manifest schema/provenance did not match the outer manifest'
+            throw 'BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: archived runner output manifest schema/provenance did not match the outer manifest'
         }
         foreach ($declared in $runnerManifest.declared_outputs) {
             $outer = @($manifest.raw_outputs | Where-Object { $_.path -eq "files/$($declared.path)" })
             if ($outer.Count -ne 1 -or
                 [long]$declared.size_bytes -ne [long]$outer[0].size_bytes -or
                 [string]$declared.sha256 -ne [string]$outer[0].sha256) {
-                throw "BLOCKED-P4-PROVENANCE: P4 runner output does not match the immutable publication entry '$($declared.path)'"
+                throw "BLOCKED-PRIOR-DIAGNOSTICS-PROVENANCE: P4 runner output does not match the immutable publication entry '$($declared.path)'"
             }
         }
     } finally {
@@ -371,23 +375,9 @@ function Get-PrecisionRunStats([string]$Root, [object]$Record) {
 }
 
 try {
-    # These are runtime runner inputs, not durable artifact or release names.
-    $allowedStages = @('baseline', ('phase' + '1'), ('phase' + '2'), 'diagnostics', 'final')
-    if ($Stage -notin $allowedStages) {
-        throw "BLOCKED-STAGE: stage '$Stage' is unsupported; no evidence or PASS result was generated"
-    }
-    if ($Stage -notin @('baseline', ('phase' + '1'), ('phase' + '2'), 'diagnostics', 'final')) {
-        throw "BLOCKED-STAGE: stage '$Stage' is not implemented; no evidence or PASS result was generated"
-    }
-    $isP2Comparison = $Stage -eq ('phase' + '2')
-    $isP5Final = $Stage -eq 'final'
-    $isP4Diagnostics = $Stage -eq 'diagnostics'
-    if (($isP2Comparison -or $isP5Final) -and -not $PSBoundParameters.ContainsKey('ControlRevision')) {
-        throw 'BLOCKED-STAGE: comparison stages require the exact accepted-P1 ControlRevision'
-    }
-    if (-not ($isP2Comparison -or $isP5Final) -and $PSBoundParameters.ContainsKey('ControlRevision')) {
-        throw 'ControlRevision is reserved for P2/P5 comparison stages'
-    }
+    $isLeaseAgeComparison = $evidenceModeContract.IsLeaseAgeComparison
+    $isFinalQualification = $evidenceModeContract.IsFinalQualification
+    $isDiagnosticsRun = $evidenceModeContract.IsDiagnostics
 
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
     $outputBase = if ([System.IO.Path]::IsPathRooted($OutputRoot)) {
@@ -404,27 +394,27 @@ try {
     if ($LASTEXITCODE -ne 0 -or $headSha -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the full source revision' }
     $runtimeRevision = (& git -C $repoRoot merge-base HEAD refs/remotes/origin/main).Trim()
     if ($LASTEXITCODE -ne 0 -or $runtimeRevision -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the baseline runtime revision' }
-    if ($isP2Comparison -or $isP5Final) {
+    if ($isLeaseAgeComparison -or $isFinalQualification) {
         $controlRevision = $ControlRevision.ToLowerInvariant()
-        if ($isP5Final) {
+        if ($isFinalQualification) {
             [void](Invoke-CapturedCommand -Name 'git.exe' -Arguments @('-C', $repoRoot, 'fetch', '--no-tags', 'origin', 'refs/heads/main:refs/remotes/origin/main') -Label 'refresh-origin-main')
             $runtimeRevision = (& git -C $repoRoot merge-base HEAD refs/remotes/origin/main).Trim()
-            if ($LASTEXITCODE -ne 0 -or $runtimeRevision -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the freshly fetched P5 base revision' }
+            if ($LASTEXITCODE -ne 0 -or $runtimeRevision -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the freshly fetched final qualification base revision' }
         }
         $originMain = (& git -C $repoRoot rev-parse --verify refs/remotes/origin/main).Trim()
-        if ($isP2Comparison) {
+        if ($isLeaseAgeComparison) {
             if ($LASTEXITCODE -ne 0 -or $originMain.ToLowerInvariant() -ne $controlRevision -or $runtimeRevision -ne $controlRevision) {
-                throw "BLOCKED-CONTROL: ControlRevision $controlRevision must exactly match both origin/main ($originMain) and the P2 merge base ($runtimeRevision)"
+                throw "BLOCKED-CONTROL: ControlRevision $controlRevision must exactly match both origin/main ($originMain) and the lease-age merge base ($runtimeRevision)"
             }
         } else {
-            $expectedP1Control = 'b3324655c1b4be82849fc9b2d858541505d69963'
-            $expectedP4Base = 'bf5af844aa9e98f94b6cea8b81b3edb9a1d066ed'
-            if ($LASTEXITCODE -ne 0 -or $controlRevision -ne $expectedP1Control -or
-                $originMain.ToLowerInvariant() -ne $expectedP4Base -or $runtimeRevision -ne $expectedP4Base) {
-                throw "BLOCKED-CONTROL: final qualification requires P1 control $expectedP1Control and P4 base $expectedP4Base; found control=$controlRevision origin/main=$originMain merge-base=$runtimeRevision"
+            $expectedReleaseBarrierControl = 'b3324655c1b4be82849fc9b2d858541505d69963'
+            $expectedPriorDiagnosticsBase = 'bf5af844aa9e98f94b6cea8b81b3edb9a1d066ed'
+            if ($LASTEXITCODE -ne 0 -or $controlRevision -ne $expectedReleaseBarrierControl -or
+                $originMain.ToLowerInvariant() -ne $expectedPriorDiagnosticsBase -or $runtimeRevision -ne $expectedPriorDiagnosticsBase) {
+                throw "BLOCKED-CONTROL: final qualification requires accepted release-barrier control $expectedReleaseBarrierControl and prior diagnostics baseline $expectedPriorDiagnosticsBase; found control=$controlRevision origin/main=$originMain merge-base=$runtimeRevision"
             }
             & git -C $repoRoot merge-base --is-ancestor $controlRevision $originMain
-            if ($LASTEXITCODE -ne 0) { throw 'BLOCKED-CONTROL: accepted P1 merge is not in origin/main ancestry' }
+            if ($LASTEXITCODE -ne 0) { throw 'BLOCKED-CONTROL: accepted release-barrier merge is not in origin/main ancestry' }
         }
     }
     $statusLines = @(& git -C $repoRoot status --porcelain --untracked-files=all)
@@ -475,29 +465,29 @@ try {
 
     $commandsDirectory = Join-Path $runDirectory 'commands'
     [System.IO.Directory]::CreateDirectory($commandsDirectory) | Out-Null
-    $build = Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--release', '--features', 'test-support', '--example', 'rt_r3_probe') -Label 'build-probe'
-    $probePath = Join-Path $repoRoot 'rust\target\release\examples\rt_r3_probe.exe'
+    $build = Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--release', '--features', 'test-support', '--example', 'rt_dispatch_probe') -Label 'build-probe'
+    $probePath = Join-Path $repoRoot 'rust\target\release\examples\rt_dispatch_probe.exe'
     if (-not (Test-Path -LiteralPath $probePath -PathType Leaf)) { throw 'Release probe binary was not produced' }
     $probeHash = (Get-FileHash -LiteralPath $probePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $environment = @{
-        SKY_RT_R3_RUNTIME_REVISION = $runtimeRevision
-        SKY_RT_R3_RUSTC_VERSION = $rustcVersion
-        SKY_RT_R3_CARGO_VERSION = $cargoVersion
-        SKY_RT_R3_BUN_VERSION = $bunVersion
-        SKY_RT_R3_PWSH_VERSION = $pwshVersion
-        SKY_RT_R3_GIT_VERSION = $gitVersion
-        SKY_RT_R3_TARGET = $target
-        SKY_RT_R3_OS = $hostMetadata.os
-        SKY_RT_R3_CPU = $hostMetadata.cpu
-        SKY_RT_R3_POWER_STATE = $hostMetadata.power_state
+        SKY_RT_DISPATCH_RUNTIME_REVISION = $runtimeRevision
+        SKY_RT_DISPATCH_RUSTC_VERSION = $rustcVersion
+        SKY_RT_DISPATCH_CARGO_VERSION = $cargoVersion
+        SKY_RT_DISPATCH_BUN_VERSION = $bunVersion
+        SKY_RT_DISPATCH_PWSH_VERSION = $pwshVersion
+        SKY_RT_DISPATCH_GIT_VERSION = $gitVersion
+        SKY_RT_DISPATCH_TARGET = $target
+        SKY_RT_DISPATCH_OS = $hostMetadata.os
+        SKY_RT_DISPATCH_CPU = $hostMetadata.cpu
+        SKY_RT_DISPATCH_POWER_STATE = $hostMetadata.power_state
     }
-    $p4Provenance = $null
-    if ($isP5Final) {
-        $p4Provenance = Get-P4Provenance $repoRoot
-        Write-JsonFile (Join-Path $runDirectory 'p4-provenance.json') $p4Provenance
+    $priorDiagnosticsProvenance = $null
+    if ($isFinalQualification) {
+        $priorDiagnosticsProvenance = Get-PriorDiagnosticsProvenance $repoRoot
+        Write-JsonFile (Join-Path $runDirectory 'prior-diagnostics-provenance.json') $priorDiagnosticsProvenance
 
-        $p5GatePlan = @(
-            [ordered]@{ label = 'r3-regressions'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'test-support', '--lib', 'r3_') },
+        $qualificationGatePlan = @(
+            [ordered]@{ label = 'lifecycle-regressions'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'test-support', '--lib', 'lifecycle_') },
             [ordered]@{ label = 'dispatch-core-tests'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_dispatch_core') },
             [ordered]@{ label = 'win32-test-support'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_dispatch_win32', '--features', 'test-support') },
             [ordered]@{ label = 'player-test-support-lib'; executable = 'cargo.exe'; arguments = @('test', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--features', 'test-support', '--lib') },
@@ -509,10 +499,10 @@ try {
             [ordered]@{ label = 'canonical-all'; executable = 'cargo.exe'; arguments = @('xtask', 'check', 'all') },
             [ordered]@{ label = 'git-diff-check'; executable = 'git.exe'; arguments = @('-C', $repoRoot, 'diff', '--check') }
         )
-        foreach ($gate in $p5GatePlan) {
-            Write-Host ("P5 gate: {0}" -f $gate.label)
+        foreach ($gate in $qualificationGatePlan) {
+            Write-Host ("qualification gate: {0}" -f $gate.label)
             $gateResult = Invoke-CapturedCommand -Name $gate.executable -Arguments $gate.arguments -Label $gate.label
-            $p5GateResults.Add([ordered]@{
+            $qualificationGateResults.Add([ordered]@{
                 label = $gate.label
                 exit_code = $gateResult.exit_code
                 stdout_path = $gateResult.stdout_path
@@ -521,9 +511,9 @@ try {
         }
     }
 
-    if ($isP4Diagnostics) {
+    if ($isDiagnosticsRun) {
         $helpEnvironment = $environment.Clone()
-        $helpEnvironment.SKY_RT_R3_RUN_ID = "$runId-help"
+        $helpEnvironment.SKY_RT_DISPATCH_RUN_ID = "$runId-help"
         [void](Invoke-CapturedCommand -Name $probePath -Arguments @('--help') -Label 'diagnostics-probe-help' -Environment $helpEnvironment)
         $helpPath = Join-Path $runDirectory $commandResults[$commandResults.Count - 1].stdout_path
         $helpText = Get-Content -LiteralPath $helpPath -Raw
@@ -533,14 +523,14 @@ try {
 
         $holPath = Join-Path $runDirectory 'hol.json'
         $holEnvironment = $environment.Clone()
-        $holEnvironment.SKY_RT_R3_RUN_ID = "$runId-hol"
+        $holEnvironment.SKY_RT_DISPATCH_RUN_ID = "$runId-hol"
         $holCommand = Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'hol', '--output', $holPath) -Label 'diagnostics-hol' -Environment $holEnvironment -CaptureWorkingSet
         $holReport = Get-Content -LiteralPath $holPath -Raw | ConvertFrom-Json
         $hol = $holReport.test_vectors.hol_scenarios
         if ($holReport.source_revision.ToLowerInvariant() -ne $headSha -or
             $holReport.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or
             $holReport.mode -ne 'hol' -or
-            $hol.scenario_id -ne 'r3-p4-hol-fixed-v1' -or
+            $hol.scenario_id -ne 'head-of-line-fixed-v1' -or
             $hol.scheduler_duplicated -ne $false -or
             $hol.base_scenario_count -ne 4 -or
             $hol.maximum_chord_case_count -ne 36 -or
@@ -549,7 +539,7 @@ try {
         }
         if ($hol.physical_floor_violation_count -ne 0 -or $hol.down_replay_case_count -ne 0) {
             $script:blockedDefect = $true
-            throw "BLOCKED-DEFECT: P4 HOL diagnostics observed $($hol.physical_floor_violation_count) physical-floor violation(s) and $($hol.down_replay_case_count) Down replay case(s); production remains unchanged for coordinator review"
+            throw "BLOCKED-DEFECT: head-of-line diagnostics observed $($hol.physical_floor_violation_count) physical-floor violation(s) and $($hol.down_replay_case_count) Down replay case(s); production remains unchanged for coordinator review"
         }
         foreach ($case in $hol.cases) {
             if ($case.authored_offsets_unchanged -ne $true -or
@@ -564,7 +554,7 @@ try {
         foreach ($generationCount in @(100, 1000, 10000, 100000)) {
             $startupPath = Join-Path $runDirectory ("startup-{0}.json" -f $generationCount)
             $startupEnvironment = $environment.Clone()
-            $startupEnvironment.SKY_RT_R3_RUN_ID = "$runId-startup-$generationCount"
+            $startupEnvironment.SKY_RT_DISPATCH_RUN_ID = "$runId-startup-$generationCount"
             $startupCommand = Invoke-CapturedCommand -Name $probePath -Arguments @(
                 '--mode', 'startup',
                 '--generation-count', [string]$generationCount,
@@ -579,7 +569,7 @@ try {
             if ($startupReport.source_revision.ToLowerInvariant() -ne $headSha -or
                 $startupReport.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or
                 $startupReport.mode -ne 'startup' -or
-                $startupCase.dataset_id -ne 'r3-p4-startup-synthetic-v1' -or
+                $startupCase.dataset_id -ne 'startup-synthetic-v1' -or
                 $startupCase.generation_count -ne $generationCount -or
                 $startupCase.action_count -ne (2 * $generationCount) -or
                 $startupCase.below_existing_action_limit -ne $true -or
@@ -606,14 +596,14 @@ try {
 
         $pollingPath = Join-Path $runDirectory 'polling.json'
         $pollingEnvironment = $environment.Clone()
-        $pollingEnvironment.SKY_RT_R3_RUN_ID = "$runId-polling"
+        $pollingEnvironment.SKY_RT_DISPATCH_RUN_ID = "$runId-polling"
         $pollingCommand = Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'polling', '--output', $pollingPath) -Label 'diagnostics-polling' -Environment $pollingEnvironment -CaptureWorkingSet
         $pollingReport = Get-Content -LiteralPath $pollingPath -Raw | ConvertFrom-Json
         $polling = $pollingReport.test_vectors.frame_polling
         if ($pollingReport.source_revision.ToLowerInvariant() -ne $headSha -or
             $pollingReport.runtime_revision.ToLowerInvariant() -ne $runtimeRevision -or
             $pollingReport.mode -ne 'polling' -or
-            $polling.scenario_id -ne 'r3-p4-frame-polling-fixed-v1' -or
+            $polling.scenario_id -ne 'frame-polling-fixed-v1' -or
             $polling.matrix_case_count -ne 1620 -or
             $polling.supplemental_17_167us_reference_case_count -ne 6 -or
             $polling.rows.Count -ne 1626 -or
@@ -638,7 +628,7 @@ try {
             toolchain = [ordered]@{ rustc = $rustcVersion; cargo = $cargoVersion; bun = $bunVersion }
             dataset = [ordered]@{
                 hol_id = $hol.scenario_id
-                startup_id = 'r3-p4-startup-synthetic-v1'
+                startup_dataset_id = 'startup-synthetic-v1'
                 startup_seed = 1379160116
                 startup_generation_counts = @(100, 1000, 10000, 100000)
                 polling_id = $polling.scenario_id
@@ -850,7 +840,7 @@ try {
         [System.IO.File]::WriteAllText($csvPath, [string]::Join([Environment]::NewLine, [string[]]$csvText) + [Environment]::NewLine, $utf8NoBom)
 
         $markdownLines = [System.Collections.Generic.List[string]]::new()
-        $markdownLines.Add('# R3 P4 diagnostics')
+        $markdownLines.Add('# Dispatch diagnostics')
         $markdownLines.Add('')
         $markdownLines.Add("Run: $runId")
         $markdownLines.Add("Source revision: $headSha")
@@ -964,30 +954,30 @@ try {
 
     $controlProbePath = $null
     $controlProbeHash = $null
-    if ($isP2Comparison -or $isP5Final) {
-        $controlPrefix = if ($isP5Final) { 'rt-r3-p5-p1-control-' } else { 'rt-r3-p2-control-' }
+    if ($isLeaseAgeComparison -or $isFinalQualification) {
+        $controlPrefix = if ($isFinalQualification) { 'final-qualification-release-barrier-control-' } else { 'lease-age-control-' }
         $controlWorktree = Join-Path $env:TEMP ($controlPrefix + [guid]::NewGuid().ToString('N'))
         [void](Invoke-CapturedCommand -Name 'git.exe' -Arguments @('-C', $repoRoot, 'worktree', 'add', '--detach', $controlWorktree, $controlRevision) -Label 'create-control-worktree')
         $controlWorktreeCreated = $true
         $controlTarget = Join-Path $controlWorktree 'rust\target'
         $controlBuildEnvironment = @{
             CARGO_TARGET_DIR = $controlTarget
-            SKY_RT_R3_RUNTIME_REVISION = $controlRevision
+            SKY_RT_DISPATCH_RUNTIME_REVISION = $controlRevision
         }
-        [void](Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--release', '--features', 'test-support', '--example', 'rt_r3_probe') -Label 'build-p1-control-probe' -WorkingDirectory $controlWorktree -Environment $controlBuildEnvironment)
+        [void](Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--release', '--features', 'test-support', '--example', 'rt_dispatch_probe') -Label 'build-control-probe' -WorkingDirectory $controlWorktree -Environment $controlBuildEnvironment)
         $controlStatus = @(& git -C $controlWorktree status --porcelain --untracked-files=all)
-        if ($LASTEXITCODE -ne 0 -or $controlStatus.Count -ne 0) { throw 'BLOCKED-CONTROL: accepted P1 control worktree was not clean after its build' }
-        $controlProbePath = Join-Path $controlTarget 'release\examples\rt_r3_probe.exe'
-        if (-not (Test-Path -LiteralPath $controlProbePath -PathType Leaf)) { throw 'BLOCKED-CONTROL: accepted P1 release probe binary was not produced' }
+        if ($LASTEXITCODE -ne 0 -or $controlStatus.Count -ne 0) { throw 'BLOCKED-CONTROL: accepted release-barrier control worktree was not clean after its build' }
+        $controlProbePath = Join-Path $controlTarget 'release\examples\rt_dispatch_probe.exe'
+        if (-not (Test-Path -LiteralPath $controlProbePath -PathType Leaf)) { throw 'BLOCKED-CONTROL: accepted accepted release-barrier probe binary was not produced' }
         $controlProbeHash = (Get-FileHash -LiteralPath $controlProbePath -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 
-    if ($Stage -eq ('phase' + '1')) {
+    if ($runnerStage -eq 'release-barrier') {
         $contractPath = Join-Path $runDirectory 'contracts.json'
         $contractRunId = "$runId-contracts"
         $contractEnvironment = $environment.Clone()
-        $contractEnvironment.SKY_RT_R3_RUN_ID = $contractRunId
-        $contractEnvironment.SKY_RT_R3_CONTENTION_WORKERS = '0'
+        $contractEnvironment.SKY_RT_DISPATCH_RUN_ID = $contractRunId
+        $contractEnvironment.SKY_RT_DISPATCH_CONTENTION_WORKERS = '0'
         [void](Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'contracts', '--load-mode', 'quiet', '--output', $contractPath) -Label 'contracts' -Environment $contractEnvironment)
         $contractReport = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
         $vectorA = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume
@@ -1103,7 +1093,7 @@ try {
         $summary = [ordered]@{
             schema_version = 1
             status = 'COMPLETED_CHARACTERIZATION'
-            stage = $Stage
+            stage = $runnerStage
             run_id = $runId
             source_revision = $headSha
             runtime_revision = $runtimeRevision
@@ -1146,7 +1136,7 @@ try {
             status = 'COMPLETED_CHARACTERIZATION'
             qualification_status = if ($script:assemblyAuditFailed) { 'COORDINATOR_REVIEW_REQUIRED' } else { 'QUALIFIED' }
             qualification_passed = -not $script:assemblyAuditFailed
-            stage = $Stage
+            stage = $runnerStage
             run_id = $runId
             source_revision = $headSha
             runtime_revision = $runtimeRevision
@@ -1158,19 +1148,19 @@ try {
         return
     }
 
-    if ($isP2Comparison -or $isP5Final) {
+    if ($isLeaseAgeComparison -or $isFinalQualification) {
         $controlContractPath = Join-Path $runDirectory 'control-contracts.json'
         $candidateContractPath = Join-Path $runDirectory 'candidate-contracts.json'
         $controlContractEnvironment = $environment.Clone()
-        $controlContractEnvironment.SKY_RT_R3_RUNTIME_REVISION = $controlRevision
-        $controlContractEnvironment.SKY_RT_R3_RUN_ID = "$runId-control-contracts"
-        $controlContractEnvironment.SKY_RT_R3_CONTENTION_WORKERS = '0'
+        $controlContractEnvironment.SKY_RT_DISPATCH_RUNTIME_REVISION = $controlRevision
+        $controlContractEnvironment.SKY_RT_DISPATCH_RUN_ID = "$runId-control-contracts"
+        $controlContractEnvironment.SKY_RT_DISPATCH_CONTENTION_WORKERS = '0'
         [void](Invoke-CapturedCommand -Name $controlProbePath -Arguments @('--mode', 'contracts', '--load-mode', 'quiet', '--output', $controlContractPath) -Label 'control-contracts' -WorkingDirectory $controlWorktree -Environment $controlContractEnvironment)
         $controlContractReport = Get-Content -LiteralPath $controlContractPath -Raw | ConvertFrom-Json
         $candidateContractEnvironment = $environment.Clone()
-        $candidateContractEnvironment.SKY_RT_R3_RUNTIME_REVISION = $headSha
-        $candidateContractEnvironment.SKY_RT_R3_RUN_ID = "$runId-candidate-contracts"
-        $candidateContractEnvironment.SKY_RT_R3_CONTENTION_WORKERS = '0'
+        $candidateContractEnvironment.SKY_RT_DISPATCH_RUNTIME_REVISION = $headSha
+        $candidateContractEnvironment.SKY_RT_DISPATCH_RUN_ID = "$runId-candidate-contracts"
+        $candidateContractEnvironment.SKY_RT_DISPATCH_CONTENTION_WORKERS = '0'
         [void](Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'contracts', '--load-mode', 'quiet', '--output', $candidateContractPath) -Label 'candidate-contracts' -Environment $candidateContractEnvironment)
         $candidateContractReport = Get-Content -LiteralPath $candidateContractPath -Raw | ConvertFrom-Json
         $controlLifecycle = $controlContractReport.test_vectors.A_same_key_physical_floor_pause_resume
@@ -1190,7 +1180,7 @@ try {
             $controlLifecycle.hypothesis_status -ne 'NO-REPRODUCTION' -or
             $controlLifecycle.characterization_integrity_passed -ne $true -or
             $controlLifecycle.normal_gap_contract_passed -ne $true) {
-            throw 'BLOCKED-CONTROL: accepted P1 control did not reproduce the unlatched overdue lease or preserve the merged P1 lifecycle floor'
+            throw 'BLOCKED-CONTROL: accepted release-barrier control did not reproduce the unlatched overdue lease or preserve the merged release-barrier floor'
         }
         if ($candidateContractReport.source_revision.ToLowerInvariant() -ne $headSha -or
             $candidateContractReport.runtime_revision.ToLowerInvariant() -ne $headSha -or
@@ -1206,10 +1196,10 @@ try {
             $candidateLeaseAge.unproven_passed -ne $true -or
             $candidateLeaseAge.fresh_passed -ne $true -or
             $candidateContractReport.test_vectors.E_empty_cleanup.oracle_passed -ne $true) {
-            throw 'BLOCKED-CONTRACT: candidate final lease-age vector or retained P1 lifecycle contract failed qualification'
+            throw 'BLOCKED-CONTRACT: candidate final lease-age vector or retained release-barrier contract failed qualification'
         }
 
-        if ($isP5Final) {
+        if ($isFinalQualification) {
             [void](Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('rustc', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_player', '--profile', 'dist', '--lib', '--', '--emit=asm') -Label 'build-dist-sky-player-assembly')
             [void](Invoke-CapturedCommand -Name 'cargo.exe' -Arguments @('rustc', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'sky_dispatch_win32', '--profile', 'dist', '--lib', '--', '--emit=asm') -Label 'build-dist-win32-assembly')
             $assemblyDirectory = Join-Path $repoRoot 'rust\target\dist\deps'
@@ -1246,7 +1236,7 @@ try {
                 prepared_normal_audit_status = if ($preparedAudit.exit_code -eq 0) { 'PASS' } else { 'FAIL' }
                 modifier_lease_audit_exit_code = $modifierAudit.exit_code
                 modifier_lease_audit_status = if ($modifierAudit.exit_code -eq 0) { 'PASS' } else { 'FAIL' }
-                production_changes_permitted_by_phase = $false
+                production_changes_permitted_by_evidence_mode = $false
                 review_note = if ($dispatchAudit.exit_code -ne 0) { 'Broad dispatch audit reported a retained copy in dispatch_due_from_plan; raw optimized assembly and audit output are preserved for coordinator review. No production behavior was changed.' } else { $null }
                 dispatch_audit = $dispatchAudit.label
                 prepared_normal_audit = $preparedAudit.label
@@ -1267,7 +1257,7 @@ try {
         $nativeResults = [System.Collections.Generic.List[object]]::new()
         $nativeObservedEventCount = [long]0
         $nativeCasePlan = [System.Collections.Generic.List[object]]::new()
-        if ($isP5Final) {
+        if ($isFinalQualification) {
             $fixedScenarios = @(
                 'canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold',
                 'long-single-sequence', 'dense-alternating', 'chord-sweep',
@@ -1278,7 +1268,7 @@ try {
                 'owner-mismatch', 'owner-query-failure', 'owner-process-termination',
                 'pause-resume', 'pause-resume-release-floor', 'suspend-resume',
                 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
-                'lease-age-watchdog-delayed', 'w4-noncanonical', 'timing-margin-sweep'
+                'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep'
             )
             foreach ($scenario in $fixedScenarios) {
                 $nativeCasePlan.Add([ordered]@{
@@ -1328,7 +1318,7 @@ try {
             $timingMargin = [int]$nativeCase.timing_margin_us
             $contention = [bool]$nativeCase.cpu_contention
             $replicate = [int]$nativeCase.replicate
-            Write-Host ("P5 native acceptance: $scenario margin=$timingMargin contention=$contention replicate=$replicate")
+            Write-Host ("final native acceptance: $scenario margin=$timingMargin contention=$contention replicate=$replicate")
             if ($scenario -eq 'focus-loss') {
                 Write-Host 'Both acceptance windows are present. Click the visible ReceiveOnly sink; the inert probe is non-activating. The 15-second focus window starts now.'
             }
@@ -1424,10 +1414,10 @@ try {
                                 $reportPath = Join-Path $runDirectory $relativePath
                                 $childRunId = "$runId-round$roundIndex-$workload-$loadMode-p$pairIndex-$armCode"
                                 $runEnvironment = $environment.Clone()
-                                $runEnvironment.SKY_RT_R3_RUNTIME_REVISION = $armRevision
-                                $runEnvironment.SKY_RT_R3_RUN_ID = $childRunId
-                                $runEnvironment.SKY_RT_R3_LOAD_MODE = $loadMode
-                                $runEnvironment.SKY_RT_R3_CONTENTION_WORKERS = if ($loadMode -eq 'cpu_contention') { '2' } else { '0' }
+                                $runEnvironment.SKY_RT_DISPATCH_RUNTIME_REVISION = $armRevision
+                                $runEnvironment.SKY_RT_DISPATCH_RUN_ID = $childRunId
+                                $runEnvironment.SKY_RT_DISPATCH_LOAD_MODE = $loadMode
+                                $runEnvironment.SKY_RT_DISPATCH_CONTENTION_WORKERS = if ($loadMode -eq 'cpu_contention') { '2' } else { '0' }
                                 $arguments = @('--mode', 'precision', '--load-mode', $loadMode, '--workload', $workload, '--warmup', '1000', '--measured', '10000', '--seed', '1073', '--run-index', [string]$pairIndex, '--output', $reportPath)
                                 $command = Invoke-CapturedCommand -Name $armProbe -Arguments $arguments -Label "r$roundIndex-$workload-$loadMode-p$pairIndex-$armCode" -WorkingDirectory $armWorkingDirectory -Environment $runEnvironment
                                 $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
@@ -1446,17 +1436,17 @@ try {
                                     $report.load_mode -ne $loadMode -or
                                     $report.contention_workers -ne $(if ($loadMode -eq 'cpu_contention') { 2 } else { 0 }) -or
                                     $report.warmup_count -ne 1000 -or $report.measured_count -ne 10000 -or
-                                    $precisionRun.r3_timing_config.frame_gap_g_us -ne 16667 -or
-                                    $precisionRun.r3_timing_config.frame_gap_g_ticks -ne $expectedFrameTicks -or
-                                    $precisionRun.r3_timing_config.frame_base_hold_us -ne 16667 -or
-                                    $precisionRun.r3_timing_config.timing_margin_us -ne 500 -or
-                                    $precisionRun.r3_timing_config.timing_margin_ticks -ne $expectedMarginTicks -or
-                                    $precisionRun.r3_timing_config.effective_hold_h_us -ne 17167 -or
-                                    $precisionRun.r3_timing_config.effective_hold_h_ticks -ne $expectedHoldTicks -or
-                                    $precisionRun.r3_timing_config.min_release_gap_us -ne 17167 -or
-                                    $precisionRun.r3_timing_config.min_release_gap_ticks -ne $expectedHoldTicks -or
-                                    $precisionRun.r3_timing_config.native_admission -ne 'PASS' -or
-                                    $precisionRun.r3_timing_config.tick_domain_admission -ne 'PASS' -or
+                                    $precisionRun.dispatch_timing_config.frame_gap_g_us -ne 16667 -or
+                                    $precisionRun.dispatch_timing_config.frame_gap_g_ticks -ne $expectedFrameTicks -or
+                                    $precisionRun.dispatch_timing_config.frame_base_hold_us -ne 16667 -or
+                                    $precisionRun.dispatch_timing_config.timing_margin_us -ne 500 -or
+                                    $precisionRun.dispatch_timing_config.timing_margin_ticks -ne $expectedMarginTicks -or
+                                    $precisionRun.dispatch_timing_config.effective_hold_h_us -ne 17167 -or
+                                    $precisionRun.dispatch_timing_config.effective_hold_h_ticks -ne $expectedHoldTicks -or
+                                    $precisionRun.dispatch_timing_config.min_release_gap_us -ne 17167 -or
+                                    $precisionRun.dispatch_timing_config.min_release_gap_ticks -ne $expectedHoldTicks -or
+                                    $precisionRun.dispatch_timing_config.native_admission -ne 'PASS' -or
+                                    $precisionRun.dispatch_timing_config.tick_domain_admission -ne 'PASS' -or
                                     $precisionRun.lease.enabled -ne $true -or $precisionRun.lease.timeout_us -ne 3000000 -or
                                     $precisionRun.lease.timeout_ticks -ne $expectedLeaseTicks -or
                                     $precisionRun.lease.progress_state -ne 'fresh_progress_before_each_sample' -or
@@ -1541,7 +1531,7 @@ try {
             $blockedSummary = [ordered]@{
                 schema_version = 1
                 status = 'BLOCKED-PERF'
-                stage = $Stage
+                stage = $runnerStage
                 run_id = $runId
                 source_revision = $headSha
                 runtime_revision = $runtimeRevision
@@ -1551,8 +1541,8 @@ try {
                 source_tree_clean = $sourceTreeClean
                 control_executable_sha256 = $controlProbeHash
                 candidate_executable_sha256 = $probeHash
-                prior_p4_evidence = $p4Provenance
-                qualification_gates = @($p5GateResults)
+                prior_diagnostics_evidence = $priorDiagnosticsProvenance
+                qualification_gates = @($qualificationGateResults)
                 assembly_audits = @($assemblyAuditResults)
                 host = $hostMetadata
                 paired_precision_rounds = @($precisionRounds)
@@ -1570,7 +1560,7 @@ try {
             status = 'COMPLETED_CHARACTERIZATION'
             qualification_status = if ($script:assemblyAuditFailed) { 'COORDINATOR_REVIEW_REQUIRED' } else { 'QUALIFIED' }
             qualification_passed = -not $script:assemblyAuditFailed
-            stage = $Stage
+            stage = $runnerStage
             run_id = $runId
             source_revision = $headSha
             runtime_revision = $runtimeRevision
@@ -1599,8 +1589,8 @@ try {
                 lifecycle_vector = $candidateLifecycle.hypothesis_status
                 empty_cleanup = $candidateContractReport.test_vectors.E_empty_cleanup.oracle_passed
             }
-            prior_p4_evidence = $p4Provenance
-            qualification_gates = @($p5GateResults)
+            prior_diagnostics_evidence = $priorDiagnosticsProvenance
+            qualification_gates = @($qualificationGateResults)
             assembly_audits = @($assemblyAuditResults)
             native_controls = @($nativeResults)
             native_control_count = $nativeResults.Count
@@ -1638,7 +1628,7 @@ try {
         $outputsManifest = [ordered]@{
             schema_version = 1
             status = 'COMPLETED_CHARACTERIZATION'
-            stage = $Stage
+            stage = $runnerStage
             run_id = $runId
             source_revision = $headSha
             runtime_revision = $runtimeRevision
@@ -1655,8 +1645,8 @@ try {
     $contractPath = Join-Path $runDirectory 'contracts.json'
     $contractRunId = "$runId-contracts"
     $contractEnvironment = $environment.Clone()
-    $contractEnvironment.SKY_RT_R3_RUN_ID = $contractRunId
-    $contractEnvironment.SKY_RT_R3_CONTENTION_WORKERS = '0'
+    $contractEnvironment.SKY_RT_DISPATCH_RUN_ID = $contractRunId
+    $contractEnvironment.SKY_RT_DISPATCH_CONTENTION_WORKERS = '0'
     [void](Invoke-CapturedCommand -Name $probePath -Arguments @('--mode', 'contracts', '--load-mode', 'quiet', '--output', $contractPath) -Label 'contracts' -Environment $contractEnvironment)
     $contractReport = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
     $vectorA = $contractReport.test_vectors.A_same_key_physical_floor_pause_resume
@@ -1715,7 +1705,7 @@ try {
         $vectorD.restore_path.release_on_restore -ne $true -or
         $vectorD.terminal_cleanup_while_unfocused.ownership_scoped_terminal_release -ne $true -or
         $contractReport.test_vectors.E_empty_cleanup.oracle_passed -ne $true) {
-        throw 'BLOCKED-CONTRACT: lifecycle/lease/cleanup probe results did not satisfy the P0 characterization contract'
+        throw 'BLOCKED-CONTRACT: lifecycle/lease/cleanup probe results did not satisfy the baseline characterization contract'
     }
 
     $workloads = @('down-1', 'down-5', 'down-15', 'mixed-1x1', 'mixed-2x3', 'mixed-7x8', 'up-only-1', 'up-only-5', 'up-only-15')
@@ -1736,9 +1726,9 @@ try {
                     $reportPath = Join-Path $runDirectory $relativePath
                     $childRunId = "$runId-$workload-$loadMode-r$runIndex"
                     $runEnvironment = $environment.Clone()
-                    $runEnvironment.SKY_RT_R3_RUN_ID = $childRunId
-                    $runEnvironment.SKY_RT_R3_LOAD_MODE = $loadMode
-                    $runEnvironment.SKY_RT_R3_CONTENTION_WORKERS = if ($loadMode -eq 'cpu_contention') { '2' } else { '0' }
+                    $runEnvironment.SKY_RT_DISPATCH_RUN_ID = $childRunId
+                    $runEnvironment.SKY_RT_DISPATCH_LOAD_MODE = $loadMode
+                    $runEnvironment.SKY_RT_DISPATCH_CONTENTION_WORKERS = if ($loadMode -eq 'cpu_contention') { '2' } else { '0' }
                     $arguments = @(
                         '--mode', 'precision', '--load-mode', $loadMode, '--workload', $workload,
                         '--warmup', '1000', '--measured', '10000', '--seed', '1073',
@@ -1758,17 +1748,17 @@ try {
                         $report.mode -ne 'precision' -or $report.load_mode -ne $loadMode -or
                         $report.contention_workers -ne $(if ($loadMode -eq 'cpu_contention') { 2 } else { 0 }) -or
                         $report.warmup_count -ne 1000 -or $report.measured_count -ne 10000 -or
-                        $precisionRun.r3_timing_config.frame_gap_g_us -ne 16667 -or
-                        $precisionRun.r3_timing_config.frame_gap_g_ticks -ne $expectedFrameTicks -or
-                        $precisionRun.r3_timing_config.frame_base_hold_us -ne 16667 -or
-                        $precisionRun.r3_timing_config.timing_margin_us -ne 500 -or
-                        $precisionRun.r3_timing_config.timing_margin_ticks -ne $expectedMarginTicks -or
-                        $precisionRun.r3_timing_config.effective_hold_h_us -ne 17167 -or
-                        $precisionRun.r3_timing_config.effective_hold_h_ticks -ne $expectedHoldTicks -or
-                        $precisionRun.r3_timing_config.min_release_gap_us -ne 17167 -or
-                        $precisionRun.r3_timing_config.min_release_gap_ticks -ne $expectedHoldTicks -or
-                        $precisionRun.r3_timing_config.native_admission -ne 'PASS' -or
-                        $precisionRun.r3_timing_config.tick_domain_admission -ne 'PASS' -or
+                        $precisionRun.dispatch_timing_config.frame_gap_g_us -ne 16667 -or
+                        $precisionRun.dispatch_timing_config.frame_gap_g_ticks -ne $expectedFrameTicks -or
+                        $precisionRun.dispatch_timing_config.frame_base_hold_us -ne 16667 -or
+                        $precisionRun.dispatch_timing_config.timing_margin_us -ne 500 -or
+                        $precisionRun.dispatch_timing_config.timing_margin_ticks -ne $expectedMarginTicks -or
+                        $precisionRun.dispatch_timing_config.effective_hold_h_us -ne 17167 -or
+                        $precisionRun.dispatch_timing_config.effective_hold_h_ticks -ne $expectedHoldTicks -or
+                        $precisionRun.dispatch_timing_config.min_release_gap_us -ne 17167 -or
+                        $precisionRun.dispatch_timing_config.min_release_gap_ticks -ne $expectedHoldTicks -or
+                        $precisionRun.dispatch_timing_config.native_admission -ne 'PASS' -or
+                        $precisionRun.dispatch_timing_config.tick_domain_admission -ne 'PASS' -or
                         $precisionRun.lease.enabled -ne $true -or $precisionRun.lease.timeout_us -ne 3000000 -or
                         $precisionRun.lease.timeout_ticks -ne $expectedLeaseTicks -or
                         $precisionRun.lease.progress_state -ne 'fresh_progress_before_each_sample' -or
@@ -1865,7 +1855,7 @@ try {
     $summary = [ordered]@{
         schema_version = 1
         status = 'COMPLETED_CHARACTERIZATION'
-        stage = $Stage
+        stage = $runnerStage
         run_id = $runId
         source_revision = $headSha
         runtime_revision = $runtimeRevision
@@ -1899,7 +1889,7 @@ try {
         child_command_count = $commandResults.Count
         child_commands = @($commandResults)
         precision_run_count = $precisionRecords.Count
-        paired_ab_disposition = 'P0 records baseline runs only; paired A/B execution is reserved for the comparison phase and currently fails explicitly.'
+        paired_ab_disposition = 'Baseline evidence records baseline runs only; paired A/B execution is reserved for comparison runs and currently fails explicitly.'
         timing_boundary = 'Sample-start QPC immediately before prepared-dispatch entry through the mock sender authoritative pre-call QPC. Mock emitter completion is sampled inside the deterministic mock; any delta includes test-seam/QPC overhead and does not measure SendInput cost or device/game receipt.'
         focus_setup = 'test-support focus_active=true with deterministic SessionTarget; no game process or foreground-window activation.'
     }
@@ -1915,7 +1905,7 @@ try {
     $outputsManifest = [ordered]@{
         schema_version = 1
         status = 'COMPLETED_CHARACTERIZATION'
-        stage = $Stage
+        stage = $runnerStage
         run_id = $runId
         source_revision = $headSha
         runtime_revision = $runtimeRevision
@@ -1929,7 +1919,7 @@ try {
     if ($runDirectory -and (Test-Path -LiteralPath $runDirectory)) {
         try {
             $blockedStatus = if ($script:blockedDefect) { 'BLOCKED-DEFECT' } elseif ($script:blockedPerf) { 'BLOCKED-PERF' } else { 'BLOCKED' }
-            Write-JsonFile (Join-Path $runDirectory 'status.json') ([ordered]@{ status = $blockedStatus; stage = $Stage; run_id = $runId; error = $_.Exception.Message; finished_utc = [DateTimeOffset]::UtcNow.ToString('O'); child_commands = @($commandResults) })
+            Write-JsonFile (Join-Path $runDirectory 'status.json') ([ordered]@{ status = $blockedStatus; stage = $runnerStage; run_id = $runId; error = $_.Exception.Message; finished_utc = [DateTimeOffset]::UtcNow.ToString('O'); child_commands = @($commandResults) })
         } catch { }
     }
     Write-Error $_
@@ -1940,10 +1930,10 @@ try {
         $controlTempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
         $controlFullPath = [System.IO.Path]::GetFullPath($controlWorktree)
         if ($controlFullPath.StartsWith($controlTempRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
-            ([System.IO.Path]::GetFileName($controlFullPath).StartsWith('rt-r3-p2-control-', [System.StringComparison]::Ordinal) -or
-             [System.IO.Path]::GetFileName($controlFullPath).StartsWith('rt-r3-p5-p1-control-', [System.StringComparison]::Ordinal))) {
+            ([System.IO.Path]::GetFileName($controlFullPath).StartsWith('lease-age-control-', [System.StringComparison]::Ordinal) -or
+             [System.IO.Path]::GetFileName($controlFullPath).StartsWith('final-qualification-release-barrier-control-', [System.StringComparison]::Ordinal))) {
             $removeOutput = & git -C $repoRoot worktree remove --force $controlFullPath 2>&1
-            if ($LASTEXITCODE -ne 0) { Write-Warning ('Could not remove temporary P1 control worktree: ' + ($removeOutput -join ' ')) }
+            if ($LASTEXITCODE -ne 0) { Write-Warning ('Could not remove temporary accepted release-barrier control worktree: ' + ($removeOutput -join ' ')) }
         }
     }
 }

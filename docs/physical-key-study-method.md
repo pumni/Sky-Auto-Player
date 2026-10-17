@@ -1,10 +1,10 @@
-# P7a physical-key study
+# Physical key study
 
-P7a is an evidence-only study. Its optional probe and packet hook compile only
+physical study is an evidence-only study. Its optional probe and packet hook compile only
 with `test-support`; no production admission, release, timing, or scheduling
-policy changes in this phase.
+policy changes in this study.
 
-This method records the P7a baseline and candidate comparisons. P7b later added
+This method records the physical study baseline and candidate comparisons. P7b later added
 a production modifier guard for Down-bearing traffic. The final sender now
 samples the five supported modifier VKs on Down-bearing packets, but it still
 does not re-sample instrument-note VKs after cached preflight. Candidate A is
@@ -54,7 +54,7 @@ game:
 
 ## Candidate definitions
 
-- **A:** P7a note-key baseline: cached preflight only, with no final-boundary
+- **A:** physical study note-key baseline: cached preflight only, with no final-boundary
   instrument-note query. Current production retains this note-key behavior and
   separately applies the P7b modifier guard to Down-bearing packets.
 - **B:** query only the mapped VKs for the packet's pending Down mask.
@@ -87,12 +87,12 @@ list](https://support.microsoft.com/en-au/accessibility/windows/keyboard-shortcu
 
 ## Reproducible Windows benchmark
 
-Run `scripts/qualify_p7a_physical_key_study.ps1` from an interactive Windows
+Run `scripts/qualify_physical_key_study.ps1` from an interactive Windows
 session with the benchmark host in the foreground. It builds the optimized
 test-support example and runs A/B/C/D in two rotated orders under quiet and
 single-process low-priority CPU contention. The default is 300 samples per
 workload/run, a 5 ms wait target, and 30 same-key retrigger samples per run.
-The reports are written beneath `.benchmarks/p7a-physical-key-study/`; they
+The reports are written beneath `.benchmarks/physical-key-study/`; they
 record the exact source SHA, mapped VKs, query counts, probe durations, and
 timing distributions. Transport is deterministic mock transport. The study
 samples physical state but sends no physical input.

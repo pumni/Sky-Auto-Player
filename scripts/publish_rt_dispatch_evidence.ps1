@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('P0', 'P1', 'P2', 'P3', 'P4', 'P5')]
-    [string]$Phase,
+    [ValidateSet('baseline', 'lifecycle_release_barrier', 'lease_age_comparison', 'supplemental_characterization', 'timing_diagnostics', 'final_qualification')]
+    [string]$EvidenceKind,
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$HeadSha,
@@ -11,10 +11,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/evidence_publication_contract.ps1')
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
-$publisherTemp = Join-Path $tempRoot ('rt-r3-publisher-' + [guid]::NewGuid().ToString('N'))
+$publisherTemp = Join-Path $tempRoot ('sky-evidence-publisher-' + [guid]::NewGuid().ToString('N'))
 $tempRepo = Join-Path $publisherTemp 'repo'
 $packageRoot = Join-Path $publisherTemp 'package'
 $stagingRoot = Join-Path $publisherTemp 'staging'
@@ -209,6 +210,12 @@ function Split-Archive([string]$ArchivePath, [string]$DestinationDirectory, [lon
 }
 
 try {
+    $publicationProfile = Get-EvidencePublicationProfile -EvidenceKind $EvidenceKind
+    if (-not $publicationProfile.RunnerStage) {
+        throw "This publisher route does not accept evidence kind $EvidenceKind"
+    }
+    $externalEvidenceId = $publicationProfile.ExternalEvidenceId
+    $expectedStage = $publicationProfile.RunnerStage
     $headSha = $HeadSha.ToLowerInvariant()
     $rootPath = if ([System.IO.Path]::IsPathRooted($EvidenceRoot)) {
         [System.IO.Path]::GetFullPath($EvidenceRoot)
@@ -221,19 +228,18 @@ try {
     $runnerManifest = Get-Content -LiteralPath $runnerManifestPath -Raw | ConvertFrom-Json
     if ($runnerManifest.status -ne 'COMPLETED_CHARACTERIZATION') { throw 'Runner output is not a completed characterization' }
     if ($runnerManifest.source_revision.ToLowerInvariant() -ne $headSha) { throw 'HeadSha does not match the runner source revision' }
-    $expectedStage = if ($Phase -eq 'P0') { 'baseline' } elseif ($Phase -eq 'P1') { 'phase' + '1' } elseif ($Phase -eq 'P2') { 'phase' + '2' } elseif ($Phase -eq 'P4') { 'diagnostics' } elseif ($Phase -eq 'P5') { 'final' } else { $null }
-    if (-not $expectedStage -or $runnerManifest.stage -ne $expectedStage) { throw "This publisher route does not accept phase $Phase stage '$($runnerManifest.stage)'" }
+    if ($runnerManifest.stage -ne $expectedStage) { throw "Evidence kind $EvidenceKind does not accept runner stage '$($runnerManifest.stage)'" }
     if ($runnerManifest.run_id -notmatch '^[A-Za-z0-9._-]+$') { throw 'Runner run_id contains unsafe path characters' }
     $runId = [string]$runnerManifest.run_id
-    $phaseLabel = $Phase.ToLowerInvariant()
-    $evidenceBranch = 'rt-r3/evidence/' + $phaseLabel + '-' + $headSha.Substring(0, 12)
+    $evidenceIdLabel = $externalEvidenceId.ToLowerInvariant()
+    $evidenceBranch = 'rt-r3/evidence/' + $evidenceIdLabel + '-' + $headSha.Substring(0, 12)
     $currentHead = (& git -C $repoRoot rev-parse --verify HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $currentHead.ToLowerInvariant() -ne $headSha) { throw 'Implementation worktree HEAD differs from HeadSha' }
     $currentBranch = (& git -C $repoRoot branch --show-current).Trim()
-    $implementationBranch = if ($Phase -eq 'P0') { 'rt-r3/p0-baseline' } elseif ($Phase -eq 'P1') { 'rt-r3/p1-lifecycle-release-barrier' } elseif ($Phase -eq 'P2') { 'rt-r3/p2-final-lease-age' } elseif ($Phase -eq 'P4') { 'rt-r3/p4-diagnostics' } elseif ($Phase -eq 'P5') { 'rt-r3/p5-final-qualification' } else { $null }
-    if ($LASTEXITCODE -ne 0 -or $currentBranch -ne $implementationBranch) { throw "Phase $Phase publishing requires the fixed implementation branch $implementationBranch" }
+    $implementationBranch = $publicationProfile.ImplementationBranch
+    if ($LASTEXITCODE -ne 0 -or $currentBranch -ne $implementationBranch) { throw "Evidence kind $EvidenceKind publishing requires the fixed implementation branch $implementationBranch" }
     $trackedStatus = @(& git -C $repoRoot status --porcelain --untracked-files=all)
-    if ($LASTEXITCODE -ne 0 -or $trackedStatus.Count -ne 0) { throw "$Phase publishing requires a clean implementation worktree" }
+    if ($LASTEXITCODE -ne 0 -or $trackedStatus.Count -ne 0) { throw "$EvidenceKind publishing requires a clean implementation worktree" }
 
     $originUrl = (& git -C $repoRoot remote get-url origin).Trim()
     if ($LASTEXITCODE -ne 0 -or $originUrl -notmatch '(github\.com[:/]pumni/Sky-Auto-Player)(\.git)?$') { throw 'Origin is not pumni/Sky-Auto-Player on GitHub' }
@@ -255,13 +261,13 @@ try {
     $innerFileManifest = @($declared | ForEach-Object { [ordered]@{ path = "files/$($_.relative_path)"; size_bytes = $_.size_bytes; sha256 = $_.sha256 } })
     $innerManifest = [ordered]@{
         schema_version = 1
-        phase = $Phase
+        phase = $externalEvidenceId
         run_id = $runId
         source_revision = $runnerManifest.source_revision
         runtime_revision = $runnerManifest.runtime_revision
         head_sha = $headSha
         executable_sha256 = $runnerManifest.executable_sha256
-        transport_kind = if ($Phase -eq 'P0') { 'deterministic-mock' } elseif ($Phase -eq 'P1') { 'deterministic-mock contracts plus project-owned ReceiveOnly native sink' } elseif ($Phase -eq 'P2') { 'paired accepted-P1/candidate deterministic-mock precision runs plus project-owned ReceiveOnly native sink' } elseif ($Phase -eq 'P4') { 'deterministic-mock prepared dispatch and startup builder plus offline modeled receiver polling; no native rerun' } else { 'final paired accepted-P1/candidate qualification, native ReceiveOnly acceptance, and bounded lease/lifecycle proofs' }
+        transport_kind = if ($externalEvidenceId -eq 'P0') { 'deterministic-mock' } elseif ($externalEvidenceId -eq 'P1') { 'deterministic-mock contracts plus project-owned ReceiveOnly native sink' } elseif ($externalEvidenceId -eq 'P2') { 'paired accepted lifecycle-control/candidate deterministic-mock precision runs plus project-owned ReceiveOnly native sink' } elseif ($externalEvidenceId -eq 'P4') { 'deterministic-mock prepared dispatch and startup builder plus offline modeled receiver polling; no native rerun' } else { 'final paired lifecycle-control/candidate qualification, native ReceiveOnly acceptance, and bounded lease/lifecycle proofs' }
         declared_outputs = $innerFileManifest
     }
     Write-JsonFile (Join-Path $packageRoot 'manifest.json') $innerManifest
@@ -276,7 +282,7 @@ try {
     $archiveParts = @(Split-Archive -ArchivePath $archivePath -DestinationDirectory $archiveDestination -MaximumBytes (8MB))
     $outerManifest = [ordered]@{
         schema_version = 1
-        phase = $Phase
+        phase = $externalEvidenceId
         run_id = $runId
         evidence_branch = $evidenceBranch
         source_revision = $runnerManifest.source_revision
@@ -310,7 +316,7 @@ try {
     [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($destinationRun)) | Out-Null
     Move-Item -LiteralPath $evidenceRunDirectory -Destination $destinationRun
     [void](Invoke-GitQuiet -WorkingDirectory $tempRepo -Arguments @('add', '--', "runs/$runId"))
-    [void](Invoke-GitQuiet -WorkingDirectory $tempRepo -Arguments @('commit', '--quiet', '-m', "docs(rt): publish $Phase evidence $runId"))
+    [void](Invoke-GitQuiet -WorkingDirectory $tempRepo -Arguments @('commit', '--quiet', '-m', "docs(rt): publish $EvidenceKind evidence $runId"))
     $evidenceCommit = (@(Invoke-GitQuiet -WorkingDirectory $tempRepo -Arguments @('rev-parse', '--verify', 'HEAD')) | Select-Object -First 1).Trim()
     if ($evidenceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Evidence commit could not be resolved before push' }
     $verifiedManifestSha256 = Assert-CommittedEvidenceBytes `
@@ -324,7 +330,7 @@ try {
 
     $result = [ordered]@{
         status = 'PUBLISHED'
-        phase = $Phase
+        phase = $externalEvidenceId
         run_id = $runId
         evidence_branch = $evidenceBranch
         evidence_commit = $evidenceCommit
@@ -342,7 +348,7 @@ try {
 } finally {
     $publisherFull = [System.IO.Path]::GetFullPath($publisherTemp)
     $tempRootFull = [System.IO.Path]::GetFullPath($tempRoot).TrimEnd('\') + '\'
-    if ($publisherFull.StartsWith($tempRootFull, [System.StringComparison]::OrdinalIgnoreCase) -and [System.IO.Path]::GetFileName($publisherFull).StartsWith('rt-r3-publisher-', [System.StringComparison]::Ordinal)) {
+    if ($publisherFull.StartsWith($tempRootFull, [System.StringComparison]::OrdinalIgnoreCase) -and [System.IO.Path]::GetFileName($publisherFull).StartsWith('sky-evidence-publisher-', [System.StringComparison]::Ordinal)) {
         Remove-Item -LiteralPath $publisherFull -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

@@ -207,7 +207,6 @@ async function startSelectedSong(page: Page) {
 }
 
 test('mock desktop vertical slice can search and inspect a song', async ({ page }) => {
-  await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
   const search = page.getByLabel('Search library');
   await search.focus();
@@ -220,7 +219,6 @@ test('mock desktop vertical slice can search and inspect a song', async ({ page 
 });
 
 test('virtualized library pages beyond the first 200 songs', async ({ page }) => {
-  await page.goto('/');
   const list = page.locator('.track-table');
   await expect(page.getByText('500 songs')).toBeVisible();
   await list.evaluate((element) => {
@@ -236,7 +234,6 @@ test('virtualized library pages beyond the first 200 songs', async ({ page }) =>
 });
 
 test('All Songs clears search while retaining the catalog count', async ({ page }) => {
-  await page.goto('/');
   const navigatorItem = page.getByRole('button', { name: 'All Songs' });
   await expect(navigatorItem).toContainText('500');
   await page.getByLabel('Search library').fill('Moonlit');
@@ -249,7 +246,6 @@ test('All Songs clears search while retaining the catalog count', async ({ page 
 });
 
 test('keeps slash local to the New Playlist name field', async ({ page }) => {
-  await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: 'Create playlist' }).click();
 
@@ -269,7 +265,6 @@ test('keeps slash local to the New Playlist name field', async ({ page }) => {
 });
 
 test('Liked Songs is a real source with Player Bar save behavior', async ({ page }) => {
-  await page.goto('/');
   const song = page.getByRole('row', { name: /Aurora Landing/ });
   await song.click();
   const likeButton = page.getByRole('button', { name: 'Add to Liked Songs' });
@@ -289,7 +284,6 @@ test('Liked Songs is a real source with Player Bar save behavior', async ({ page
 });
 
 test('Playlists support create, rename, delete, and membership actions', async ({ page }) => {
-  await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: 'Create playlist' }).click();
 
@@ -328,7 +322,6 @@ test('Playlists support create, rename, delete, and membership actions', async (
 });
 
 test('Add songs keeps local imports inside the selected playlist', async ({ page }) => {
-  await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
 
   await navigator.getByRole('button', { name: 'Create playlist' }).click();
@@ -485,7 +478,6 @@ test('desktop workbench fits the supported viewport matrix', async ({ page }) =>
     { width: 1920, height: 1080 },
   ]) {
     await page.setViewportSize(viewport);
-    await page.goto('/');
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
     await expect(page.locator('.app-titlebar')).toBeVisible();
@@ -1388,7 +1380,6 @@ test('Library separator resizes by pointer and persists after reload', async ({ 
 });
 
 test('selected Song Detail has no serious accessibility violations', async ({ page }) => {
-  await page.goto('/');
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByRole('heading', { name: 'Aurora Landing' })).toBeVisible();
@@ -1656,7 +1647,6 @@ test('Diagnostics utility separator follows pointer and keyboard direction', asy
 });
 
 test('all supported palettes round-trip through the settings surface', async ({ page }) => {
-  await page.goto('/');
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
   await settingsButton.click();
   await page.getByRole('button', { name: 'Appearance' }).click();

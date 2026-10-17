@@ -30,7 +30,7 @@ pub(super) enum Scenario {
     SkipCleanup,
     SupervisorLeaseExpiry,
     LeaseAgeWatchdogDelayed,
-    W4Noncanonical,
+    NoncanonicalProfile,
     TimingMarginSweep,
 }
 
@@ -65,7 +65,7 @@ impl Scenario {
             "skip-cleanup" => Ok(Self::SkipCleanup),
             "supervisor-lease-expiry" => Ok(Self::SupervisorLeaseExpiry),
             "lease-age-watchdog-delayed" => Ok(Self::LeaseAgeWatchdogDelayed),
-            "w4-noncanonical" => Ok(Self::W4Noncanonical),
+            "noncanonical-profile" => Ok(Self::NoncanonicalProfile),
             "timing-margin-sweep" => Ok(Self::TimingMarginSweep),
             _ => Err(format!("unsupported scenario: {value}")),
         }
@@ -101,7 +101,7 @@ impl Scenario {
             Self::SkipCleanup => "skip-cleanup",
             Self::SupervisorLeaseExpiry => "supervisor-lease-expiry",
             Self::LeaseAgeWatchdogDelayed => "lease-age-watchdog-delayed",
-            Self::W4Noncanonical => "w4-noncanonical",
+            Self::NoncanonicalProfile => "noncanonical-profile",
             Self::TimingMarginSweep => "timing-margin-sweep",
         }
     }

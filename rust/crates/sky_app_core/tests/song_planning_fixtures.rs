@@ -6,9 +6,9 @@ use sky_app_core::timing::MaterializedTimingPolicy;
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
-        "../../../../tests/fixtures/wave3/song_planning.json"
+        "../../../../tests/fixtures/song_planning/oracle_cases.json"
     ))
-    .expect("valid committed Wave 3 song fixture")
+    .expect("valid committed song-planning oracle fixture")
 }
 
 #[test]

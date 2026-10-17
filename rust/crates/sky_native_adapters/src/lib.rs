@@ -1,4 +1,4 @@
-//! Outer adapters for Wave 2 application services.
+//! Outer adapters for application services.
 //!
 //! This crate owns filesystem enumeration and persisted config compatibility.
 //! It does not contain Tauri delivery policy, Python transport, realtime
@@ -1779,7 +1779,7 @@ mod tests {
 
     #[test]
     fn settings_store_preserves_unknown_keys_and_writes_atomically() {
-        let root = std::env::temp_dir().join(format!("sky-w2-settings-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("sky-settings-{}", std::process::id()));
         let path = root.join("config.json");
         fs::create_dir_all(&root).expect("temp root");
         fs::write(
@@ -1808,10 +1808,8 @@ mod tests {
 
     #[test]
     fn settings_store_drops_retired_update_fields_while_preserving_unknown_data() {
-        let root = std::env::temp_dir().join(format!(
-            "sky-w4-retired-update-fields-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("sky-retired-update-fields-{}", std::process::id()));
         let path = root.join("config.json");
         fs::create_dir_all(&root).expect("temp root");
         fs::write(
@@ -1875,14 +1873,14 @@ mod tests {
 
     #[test]
     fn catalog_source_handles_missing_directory_as_empty() {
-        let source = FileCatalogSource::new(std::env::temp_dir().join("sky-w2-no-such-directory"));
+        let source =
+            FileCatalogSource::new(std::env::temp_dir().join("sky-missing-catalog-directory"));
         assert!(source.entries().expect("missing root").is_empty());
     }
 
     #[test]
     fn settings_store_reads_legacy_timing_profile_and_preserves_unknown_data() {
-        let root =
-            std::env::temp_dir().join(format!("sky-w2-legacy-settings-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("sky-legacy-settings-{}", std::process::id()));
         let path = root.join("config.json");
         fs::create_dir_all(&root).expect("temp root");
         fs::write(
@@ -1912,10 +1910,8 @@ mod tests {
 
     #[test]
     fn settings_store_round_trips_exact_timing_margin() {
-        let root = std::env::temp_dir().join(format!(
-            "sky-w3-timing-margin-settings-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("sky-timing-margin-settings-{}", std::process::id()));
         let path = root.join("config.json");
         fs::create_dir_all(&root).expect("temp root");
         fs::write(
@@ -2089,7 +2085,7 @@ mod tests {
     #[test]
     fn calibration_resolution_accepts_only_publishable_current_cache() {
         let root =
-            std::env::temp_dir().join(format!("sky-w3-calibration-{}-{}", std::process::id(), 1));
+            std::env::temp_dir().join(format!("sky-calibration-{}-{}", std::process::id(), 1));
         fs::create_dir_all(root.parent().expect("temp parent")).expect("temp parent");
         let path = root.with_extension("json");
         fs::write(&path, valid_calibration_cache(677).to_string()).expect("cache");
@@ -2107,7 +2103,7 @@ mod tests {
     #[test]
     fn calibration_resolution_fails_closed_for_invalid_and_unhealthy_cache() {
         let path = std::env::temp_dir().join(format!(
-            "sky-w3-invalid-calibration-{}.json",
+            "sky-invalid-calibration-{}.json",
             std::process::id()
         ));
         fs::write(&path, b"{not-json").expect("cache");
@@ -2235,7 +2231,7 @@ mod tests {
 
     #[test]
     fn catalog_source_rejects_non_directory_and_ignores_unsupported_files() {
-        let root = std::env::temp_dir().join(format!("sky-w2-catalog-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("sky-catalog-{}", std::process::id()));
         fs::create_dir_all(&root).expect("temp root");
         fs::write(root.join("song.txt"), "notes").expect("song");
         fs::write(root.join("ignored.csv"), "ignored").expect("ignored");

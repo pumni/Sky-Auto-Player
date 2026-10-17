@@ -17,8 +17,8 @@ packaged-assets = [
     "tauri/compression",
 ]
 # Local, signed updater fixture used only by the packaged previous-v4 to
-# candidate-v4 qualification. WO-04 owns the production metadata contract;
-# WO-05 owns the production updater trust root.
+# candidate-v4 qualification. Release policy owns the production metadata and
+# updater trust contracts.
 tauri-update-fixture = []
 tauri-test = ["tauri/test", "sky_player/test-support"]
 
@@ -40,7 +40,7 @@ serde_json = "1"
 tauri = { version = "=2.12.4", default-features = false, features = [] }
 tauri-plugin-dialog = "=2.8.3"
 tauri-plugin-process = "=2.4.0"
-tauri-plugin-updater = "=2.14.0"
+tauri-plugin-updater = { version = "=2.14.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-window-state = "=2.5.0"
 sky_dispatch_win32 = { path = "../../rust/crates/sky_dispatch_win32" }
 sky_player = { path = "../../rust/crates/sky_player" }

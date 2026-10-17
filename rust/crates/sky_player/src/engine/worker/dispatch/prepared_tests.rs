@@ -73,13 +73,13 @@ fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
         .collect::<Vec<_>>();
     let target = helper
         .find("final_down_target_admission")
-        .expect("P5/P6 foreground and owner proof");
+        .expect("modifier guard foreground and owner proof");
     let modifier = helper
         .find("observe_modifiers_before_down")
         .expect("fixed modifier guard");
     let final_authority = helper
         .find("final_down_atomic_revalidation")
-        .expect("post-modifier P5/P6 revalidation");
+        .expect("post-modifier guard revalidation");
     let lease_age_proof = helper
         .find("final_down_lease_age_proof")
         .expect("bounded final Down lease-age proof");

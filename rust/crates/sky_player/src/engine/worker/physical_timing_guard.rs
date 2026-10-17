@@ -573,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn r3_resume_barrier_covers_down_packets_and_preserves_other_floors() {
+    fn resume_barrier_covers_down_packets_and_preserves_other_floors() {
         let mut guard = guard();
         guard.establish_resume_down_barrier(qpc(100)).unwrap();
         let barrier = qpc(112);
@@ -636,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn r3_resume_barrier_overflow_invalidates_the_guard() {
+    fn resume_barrier_overflow_invalidates_the_guard() {
         let mut guard = guard();
         assert_eq!(
             guard.establish_resume_down_barrier(qpc(u64::MAX - 5)),

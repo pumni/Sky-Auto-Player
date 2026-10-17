@@ -1090,14 +1090,14 @@ pub(super) fn dispatch(
             }
 
             #[cfg(any(test, feature = "test-support"))]
-            let r3_pause_ack_pending = core
+            let pause_ack_pending = core
                 .runtime
                 .startup_ordering_hook
                 .as_ref()
-                .is_some_and(|hook| hook.r3_pause_ack_pending());
+                .is_some_and(|hook| hook.pause_ack_pending());
             #[cfg(any(test, feature = "test-support"))]
             if resources.playback.has_pause_reason(PauseReason::Manual)
-                && (command_timing.needs_acknowledgment() || r3_pause_ack_pending)
+                && (command_timing.needs_acknowledgment() || pause_ack_pending)
             {
                 let acknowledged_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
@@ -1111,7 +1111,7 @@ pub(super) fn dispatch(
                     command_timing.acknowledge_pause(acknowledged_ticks);
                 }
                 if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                    hook.record_r3_pause_ack_qpc(acknowledged_ticks.as_u64());
+                    hook.record_pause_ack_qpc(acknowledged_ticks.as_u64());
                 }
             }
 
@@ -2549,18 +2549,18 @@ mod tests {
             let first_down_evidence = harness
                 .prepared_boundary_evidence_for_test(&first_down)
                 .expect("first Down evidence");
-            assert_dispatched(harness.dispatch_at_phase_a_benchmark_boundary_for_test(
-                &first_down,
-                first_completion_delay_us,
-            ));
+            assert_dispatched(
+                harness.dispatch_at_benchmark_boundary_for_test(
+                    &first_down,
+                    first_completion_delay_us,
+                ),
+            );
 
             let first_up = harness.plan_current_dispatch();
             let first_up_evidence = harness
                 .prepared_boundary_evidence_for_test(&first_up)
                 .expect("first Up evidence");
-            assert_dispatched(
-                harness.dispatch_at_phase_a_benchmark_boundary_for_test(&first_up, 0),
-            );
+            assert_dispatched(harness.dispatch_at_benchmark_boundary_for_test(&first_up, 0));
 
             let second_down = harness.plan_current_dispatch();
             let second_down_evidence = harness
@@ -2583,9 +2583,7 @@ mod tests {
                 second_down_wait_target,
                 second_down_evidence.physical_target_qpc
             );
-            assert_dispatched(
-                harness.dispatch_at_phase_a_benchmark_boundary_for_test(&second_down, 0),
-            );
+            assert_dispatched(harness.dispatch_at_benchmark_boundary_for_test(&second_down, 0));
             assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
 
             (
