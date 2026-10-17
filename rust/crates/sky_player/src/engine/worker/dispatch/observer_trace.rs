@@ -3,12 +3,12 @@ use super::observation::{
     BlockedUnfocusedObservation, DownMissObservation, DownMissTimingEvidence,
     StaleMetadataObservation,
 };
-use crate::engine::worker::timing::signed_timeline_delta_ticks;
 use crate::engine::{
     RtTraceRecord, TRACE_FLAG_ANOMALY, TRACE_KIND_DOWN, TRACE_KIND_MIXED, TRACE_KIND_UP,
     TRACE_SEND_STATUS_NOT_ATTEMPTED, TelemetryCollector, TraceContext, TraceDelivery, TraceTiming,
     trace_outcome_code,
 };
+#[cfg(test)]
 use sky_dispatch_core::time::TimelineTicks;
 
 pub(super) fn drain_stale_metadata_observation(
@@ -33,23 +33,27 @@ pub(super) fn drain_stale_metadata_observation(
             TraceTiming {
                 authored_ticks: observation.effective_scheduled_ticks,
                 effective_deadline_ticks: observation.effective_scheduled_ticks,
-                wake_ticks: observation.effective_now_ticks,
+                wake_ticks: None,
+                wake_qpc_ticks: None,
+                target_crossing_qpc_ticks: None,
                 physical_target_qpc_ticks: None,
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
                 release_floor_qpc_ticks: None,
+                previous_sendinput_completion_qpc_ticks: None,
+                previous_sender_completion_known: false,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
+                final_policy_qpc_ticks: None,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
+                post_send_qpc_ticks: None,
                 observation_qpc_ticks: None,
-                final_policy_ticks: None,
                 pre_call_ticks: None,
                 sendinput_completion_ticks: None,
                 completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
-                dispatch_start_error_ticks: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
             },
@@ -89,15 +93,6 @@ pub(super) fn drain_down_miss(
             window.release_floor_mask,
         ),
     };
-    let dispatch_start_error_ticks = signed_timeline_delta_ticks(
-        TimelineTicks::from_raw(observation.observed_qpc.as_u64()),
-        TimelineTicks::from_raw(physical_target_qpc.as_u64()),
-    )
-    .map_err(|error| {
-        DispatchStep::Terminate(format!(
-            "Down-miss trace QPC delta conversion failure: {error}"
-        ))
-    })?;
     let down_count = observation.down_mask.count_ones() as usize;
     let kind = match (observation.up_mask != 0, observation.down_mask != 0) {
         (true, false) => TRACE_KIND_UP,
@@ -128,23 +123,27 @@ pub(super) fn drain_down_miss(
             TraceTiming {
                 authored_ticks: observation.authored_ticks,
                 effective_deadline_ticks: observation.effective_deadline_ticks,
-                wake_ticks: observation.wake_ticks,
+                wake_ticks: None,
+                wake_qpc_ticks: None,
+                target_crossing_qpc_ticks: None,
                 physical_target_qpc_ticks: Some(physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: physical_not_before_qpc.map(|ticks| ticks.as_u64()),
                 hold_floor_qpc_ticks: hold_floor_qpc.map(|ticks| ticks.as_u64()),
                 release_floor_qpc_ticks: release_floor_qpc.map(|ticks| ticks.as_u64()),
+                previous_sendinput_completion_qpc_ticks: None,
+                previous_sender_completion_known: false,
                 hold_floor_mask,
                 release_floor_mask,
+                final_policy_qpc_ticks: None,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
+                post_send_qpc_ticks: None,
                 observation_qpc_ticks: Some(observation.observed_qpc.as_u64()),
-                final_policy_ticks: None,
                 pre_call_ticks: None,
                 sendinput_completion_ticks: None,
                 completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
-                dispatch_start_error_ticks,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
             },
@@ -191,23 +190,27 @@ pub(super) fn drain_blocked_unfocused_observation(
             TraceTiming {
                 authored_ticks: observation.authored_ticks,
                 effective_deadline_ticks: observation.effective_deadline_ticks,
-                wake_ticks: observation.effective_now_ticks,
+                wake_ticks: None,
+                wake_qpc_ticks: None,
+                target_crossing_qpc_ticks: None,
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
                 release_floor_qpc_ticks: None,
+                previous_sendinput_completion_qpc_ticks: None,
+                previous_sender_completion_known: false,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
+                final_policy_qpc_ticks: None,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
+                post_send_qpc_ticks: None,
                 observation_qpc_ticks: Some(observation.observed_qpc.as_u64()),
-                final_policy_ticks: None,
                 pre_call_ticks: None,
                 sendinput_completion_ticks: None,
                 completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
-                dispatch_start_error_ticks: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
             },
@@ -281,7 +284,7 @@ mod tests {
             trace_outcome_code("down_unobserved_backlog")
         );
         assert_eq!(record.send_status, TRACE_SEND_STATUS_NOT_ATTEMPTED);
-        assert_eq!(record.authored_target_qpc_ticks, 1_000);
+        assert_eq!(record.authored_offset_ticks, 10);
         assert!(!record.pre_call_qpc_available);
         assert!(!record.sendinput_completion_qpc_available);
         assert!(record.observation_qpc_available);

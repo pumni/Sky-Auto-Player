@@ -14,6 +14,7 @@ use crate::engine::shared::SessionTarget;
 use crate::engine::shared::{
     SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseState, SystemPowerState,
 };
+use crate::engine::telemetry::metrics::PrecisionPacketTimingObservation;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{ModifierKeyObservation, ModifierMask, SendTransactionOutcome};
 use std::sync::atomic::AtomicBool;
@@ -517,6 +518,25 @@ pub(super) fn record_down_send_result(
     {
         hook.record_down_sender_attempt(result.evidence.started_ticks.map(|ticks| ticks.as_u64()));
     }
+    if result.evidence.attempts != 0 {
+        local_metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
+            authored_target_qpc: physical_timing_window.authored_target_qpc.as_u64(),
+            packet_not_before_qpc: physical_timing_window.packet_not_before_qpc.as_u64(),
+            pre_call_qpc: result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
+            sendinput_completion_qpc: result.evidence.completed_ticks.map(|ticks| ticks.as_u64()),
+            previous_sendinput_completion_qpc: runtime
+                .last_physical_send_completion_qpc
+                .map(|ticks| ticks.as_u64()),
+            previous_sender_completion_known: runtime.last_physical_send_completion_qpc.is_some(),
+            transport_anomaly: result.status
+                != sky_dispatch_win32::input::SendTransactionStatus::Complete
+                || result.evidence.last_win32_error.is_some()
+                || result.evidence.skipped_mask != 0
+                || result.evidence.attempts != 1,
+        });
+    } else if result.status != sky_dispatch_win32::input::SendTransactionStatus::Complete {
+        local_metrics.transport_anomalies = local_metrics.transport_anomalies.saturating_add(1);
+    }
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(
             physical_target_qpc,
@@ -527,6 +547,8 @@ pub(super) fn record_down_send_result(
     {
         return DispatchStep::Terminate(error);
     }
+    runtime.previous_sendinput_completion_qpc = runtime.last_physical_send_completion_qpc;
+    runtime.previous_sender_completion_known = runtime.last_physical_send_completion_qpc.is_some();
     if let Some(error) = backend.timing_error.take() {
         if result.evidence.attempts != 0
             && let Some(guard) = runtime.physical_timing_guard.as_mut()
@@ -538,6 +560,9 @@ pub(super) fn record_down_send_result(
     let result_success = result.is_success();
     let result_started_ticks = result.evidence.started_ticks;
     let result_completed_ticks = result.evidence.completed_ticks;
+    if result_success {
+        runtime.last_physical_send_completion_qpc = result_completed_ticks;
+    }
     let result_confirmed_mask = result.evidence.confirmed_mask;
     let result_skipped_mask = result.evidence.skipped_mask;
     let result_send_attempts = result.evidence.attempts;
@@ -573,9 +598,7 @@ pub(super) fn record_down_send_result(
     {
         return step;
     }
-    let final_policy_qpc = prepared_final_policy_qpc
-        .or(result_started_ticks)
-        .unwrap_or(physical_target_qpc);
+    let final_policy_qpc = prepared_final_policy_qpc;
     super::authored::finalize_down_send_outcome(
         view,
         config,

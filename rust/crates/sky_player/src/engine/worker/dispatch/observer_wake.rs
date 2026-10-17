@@ -1,10 +1,7 @@
 use super::super::WorkerRuntime;
 use sky_dispatch_win32::clock::QpcTicks;
 
-pub(crate) fn take_deadline_wake_qpc(
-    runtime: &mut WorkerRuntime,
-    _final_policy_qpc: QpcTicks,
-) -> Option<QpcTicks> {
+pub(crate) fn take_deadline_wake_qpc(runtime: &mut WorkerRuntime) -> Option<QpcTicks> {
     runtime.last_dispatch_deadline_wake_qpc.take()
 }
 
@@ -21,12 +18,9 @@ mod tests {
             ..WorkerRuntime::default()
         };
         assert_eq!(
-            take_deadline_wake_qpc(&mut runtime, QpcTicks::from_raw(125)),
+            take_deadline_wake_qpc(&mut runtime),
             Some(QpcTicks::from_raw(100))
         );
-        assert_eq!(
-            take_deadline_wake_qpc(&mut runtime, QpcTicks::from_raw(150)),
-            None
-        );
+        assert_eq!(take_deadline_wake_qpc(&mut runtime), None);
     }
 }

@@ -11,15 +11,15 @@ use super::{
     FinalTargetSignals, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
     NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
     RtTraceRecord, SharedMetrics, StartupOrderingHook, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
-    TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
-    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
-    WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
-    cpu_metrics_sample_due, deadline_target_ticks, derive_spin_threshold_us,
-    ensure_preflight_for_target, exact_sender_durations, final_control_precheck,
-    final_down_target_admission, focus_gate_matches, focus_matches, focus_matches_hwnd,
-    record_input_path_health, record_termination_error, release_runtime_outcome,
-    signed_timeline_delta_ticks, supervisor_lease_expired, target_stamp_still_current,
-    trace_outcome_code, try_publish_metrics, wake_lateness_ticks,
+    TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimestampProvenance,
+    TimingOptions, TraceContext, TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions,
+    WakeErrorStats, Worker, WorkerMetricsLocal, adjust_spin_threshold,
+    anchored_dispatch_target_ticks, cpu_metrics_sample_due, deadline_target_ticks,
+    derive_spin_threshold_us, ensure_preflight_for_target, exact_sender_durations,
+    final_control_precheck, final_down_target_admission, focus_gate_matches, focus_matches,
+    focus_matches_hwnd, record_input_path_health, record_termination_error,
+    release_runtime_outcome, signed_timeline_delta_ticks, supervisor_lease_expired,
+    target_stamp_still_current, trace_outcome_code, try_publish_metrics, wake_lateness_ticks,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_dispatch_core::clock::PauseReason;
@@ -2140,6 +2140,55 @@ fn prepared_normal_down_lateness_matrix_keeps_one_transport_attempt() {
         assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
         assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
+    }
+}
+
+#[test]
+fn prepared_normal_timing_scalars_survive_diagnostics_and_trace_off_modes() {
+    for diagnostics_enabled in [true, false] {
+        let mut harness =
+            ProductionDispatchTestHarness::new_prepared_zero_slack_down_up_for_test(17_167);
+        let (packets, evidence) =
+            harness.configure_prepared_packet_capture_with_evidence_for_test();
+        harness.set_live_diagnostics_enabled_for_test(diagnostics_enabled);
+        *harness.resources.telemetry.lock() = super::telemetry::TelemetryCollector::new(
+            if diagnostics_enabled {
+                TelemetryMode::Ring
+            } else {
+                TelemetryMode::Off
+            },
+            64,
+        );
+        harness.prepare_prepared_stream_for_test();
+        harness
+            .align_prepared_current_to_benchmark_margin_for_test(10_000)
+            .expect("future authored boundary alignment");
+        assert!(matches!(
+            harness.dispatch_prepared_current_after_stall_for_test(500),
+            super::worker::DispatchStep::Dispatched
+        ));
+        assert_eq!(
+            *packets.lock().expect("packet capture"),
+            [sky_dispatch_win32::input::PhysicalPacket::new(0, 1)]
+        );
+        assert_eq!(evidence.lock().expect("transport evidence")[0].attempts, 1);
+        assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
+        assert_eq!(harness.local_metrics.authored_lateness_samples, 1);
+        assert_eq!(harness.local_metrics.physical_floor_displacement_samples, 1);
+        assert_eq!(harness.local_metrics.residual_lateness_samples, 1);
+        assert_eq!(harness.local_metrics.sendinput_envelope_samples, 1);
+
+        while harness.pending_observation_count() != 0 {
+            harness
+                .drain_observer()
+                .expect("drain prepared timing observation");
+        }
+        let records = harness.telemetry_records_for_test();
+        assert_eq!(
+            records.len(),
+            usize::from(diagnostics_enabled),
+            "trace mode must follow the selected diagnostic mode"
+        );
     }
 }
 
@@ -4291,7 +4340,11 @@ fn midstream_stale_packet_is_metadata_not_physical_work() {
     assert_eq!(stale["sent_count"].as_u64(), Some(0));
     assert_eq!(stale["send_attempts"].as_u64(), Some(0));
     assert_eq!(stale["applied_lead_ticks"].as_u64(), Some(0));
-    assert!(stale["wake_ticks"].as_u64().is_some_and(|ticks| ticks > 0));
+    assert_eq!(stale["wake_offset_available"].as_bool(), Some(false));
+    assert_eq!(
+        stale["wake_offset_provenance"].as_str(),
+        Some("unavailable")
+    );
     assert_eq!(
         records
             .iter()
@@ -4802,6 +4855,64 @@ fn progress_idle_gap_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
         &[0x15],
     )
     .expect("valid progress idle-gap schedule")
+}
+
+#[test]
+fn engine_snapshots_project_always_on_timing_with_trace_on_and_off() {
+    for telemetry_mode in [TelemetryMode::Ring, TelemetryMode::Off] {
+        let mut options = test_session_options(
+            startup_boundary_schedule(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        );
+        options.profile = DispatchProfile::MockTest;
+        options.telemetry.mode = telemetry_mode;
+        let session = NativeDispatchSession::new(options).expect("production-normal test session");
+        session.arm(0).expect("zero-count-in arm");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !session.poll_state().status.is_terminal() {
+            assert!(Instant::now() < deadline, "prepared session did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+        let lite = session.snapshot_lite();
+        let full = session.snapshot();
+        assert_eq!(lite.precision_packet_attempts, 2);
+        assert_eq!(full.precision_packet_attempts, 2);
+        assert_eq!(lite.authored_lateness_samples, 2);
+        assert_eq!(full.authored_lateness_samples, 2);
+        assert_eq!(lite.physical_floor_displacement_samples, 2);
+        assert_eq!(full.physical_floor_displacement_samples, 2);
+        assert_eq!(lite.sendinput_envelope_samples, 2);
+        assert_eq!(full.sendinput_envelope_samples, 2);
+        assert_eq!(full.pre_call_qpc_unavailable_attempts, 0);
+        assert_eq!(full.sendinput_completion_qpc_unavailable_attempts, 0);
+
+        let telemetry: serde_json::Value =
+            serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
+                .expect("valid telemetry JSON");
+        let records = telemetry["records"].as_array().expect("trace records");
+        if telemetry_mode == TelemetryMode::Ring {
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0]["down_mask"].as_u64(), Some(1));
+            assert_eq!(records[0]["up_mask"].as_u64(), Some(0));
+            assert_eq!(records[1]["down_mask"].as_u64(), Some(0));
+            assert_eq!(records[1]["up_mask"].as_u64(), Some(1));
+            assert!(
+                records
+                    .iter()
+                    .all(|record| record["send_attempts"].as_u64() == Some(1))
+            );
+        } else {
+            assert!(records.is_empty());
+        }
+    }
 }
 
 #[test]
@@ -5396,39 +5507,11 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
                 send_status: 0,
                 up_mask: 0,
                 down_mask: 1,
-                authored_ticks: 0,
-                effective_deadline_ticks: 0,
-                wake_ticks: 0,
-                authored_target_qpc_ticks: 0,
-                authored_target_qpc_available: false,
-                physical_not_before_qpc_ticks: 0,
-                physical_not_before_qpc_available: false,
-                hold_floor_qpc_ticks: 0,
-                hold_floor_qpc_available: false,
-                release_floor_qpc_ticks: 0,
-                release_floor_qpc_available: false,
-                hold_floor_mask: 0,
-                release_floor_mask: 0,
-                pre_call_qpc_ticks: 0,
-                pre_call_qpc_available: false,
-                sendinput_completion_qpc_ticks: 0,
-                sendinput_completion_qpc_available: false,
-                observation_qpc_ticks: 0,
-                observation_qpc_available: false,
-                send_started_ticks: 0,
-                send_completed_ticks: 0,
-                dispatch_cost_us: 0,
-                core_post_send_duration_us: 0,
-                post_send_metrics_available: false,
-                dispatch_start_error_ticks: 0,
-                completion_error_ticks: 0,
-                authored_completion_error_ticks: 0,
-                applied_lead_ticks: 0,
-                win32_error: 0,
                 requested_count: 1,
                 sent_count: 1,
                 skipped_count: 0,
                 send_attempts: 1,
+                ..RtTraceRecord::default()
             })
         })
         .unwrap();
@@ -8866,23 +8949,27 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
         TraceTiming {
             authored_ticks: TimelineTicks::from_raw(10),
             effective_deadline_ticks: TimelineTicks::from_raw(12),
-            wake_ticks: TimelineTicks::from_raw(13),
+            wake_ticks: Some(TimelineTicks::from_raw(13)),
+            wake_qpc_ticks: Some(114),
+            target_crossing_qpc_ticks: Some(106),
             physical_target_qpc_ticks: Some(100),
             physical_not_before_qpc_ticks: Some(105),
             hold_floor_qpc_ticks: Some(103),
             release_floor_qpc_ticks: Some(105),
+            previous_sendinput_completion_qpc_ticks: Some(110),
+            previous_sender_completion_known: true,
             hold_floor_mask: 1,
             release_floor_mask: 2,
+            final_policy_qpc_ticks: Some(118),
             pre_call_qpc_ticks: Some(120),
             sendinput_completion_qpc_ticks: Some(125),
+            post_send_qpc_ticks: Some(130),
             observation_qpc_ticks: None,
-            final_policy_ticks: Some(TimelineTicks::from_raw(20)),
             pre_call_ticks: Some(TimelineTicks::from_raw(22)),
             sendinput_completion_ticks: Some(TimelineTicks::from_raw(25)),
             completion_residual_us: 5,
             core_post_send_duration_us: 4,
             post_send_metrics_available: true,
-            dispatch_start_error_ticks: 8,
             completion_error_ticks: 1,
             authored_completion_error_ticks: 2,
         },
@@ -8901,12 +8988,28 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(record.send_attempts, 2);
     assert_eq!(record.send_started_ticks, 22);
     assert_eq!(record.send_completed_ticks, 25);
-    assert_eq!(record.authored_target_qpc_ticks, 100);
-    assert!(record.authored_target_qpc_available);
-    assert_eq!(record.physical_not_before_qpc_ticks, 105);
-    assert!(record.physical_not_before_qpc_available);
-    assert_eq!(record.hold_floor_qpc_ticks, 103);
-    assert_eq!(record.release_floor_qpc_ticks, 105);
+    assert_eq!(record.authored_offset_ticks, 10);
+    assert_eq!(record.physical_floor_displacement_ticks, 5);
+    assert_eq!(record.hold_floor_displacement_ticks, 3);
+    assert_eq!(record.release_floor_displacement_ticks, 5);
+    assert_eq!(record.residual_lateness_ticks, 15);
+    assert_eq!(record.hol_delay_lower_bound_ticks, 5);
+    assert_eq!(record.unattributed_lateness_ticks, 10);
+    assert_eq!(record.sendinput_envelope_ticks, 5);
+    assert_eq!(record.authored_lateness_ticks, 20);
+    assert!(record.authored_target_overdue);
+    assert!(record.transport_anomaly);
+    assert_eq!(record.wake_qpc_ticks, 114);
+    assert_eq!(record.target_crossing_qpc_ticks, 106);
+    assert_eq!(
+        record.final_policy_qpc_provenance,
+        TimestampProvenance::Measured
+    );
+    assert_eq!(record.wake_qpc_provenance, TimestampProvenance::Measured);
+    assert_eq!(
+        record.send_started_ticks_provenance,
+        TimestampProvenance::DerivedFromPreCall
+    );
     assert_eq!(record.hold_floor_mask, 1);
     assert_eq!(record.release_floor_mask, 2);
     assert_eq!(record.pre_call_qpc_ticks, 120);
@@ -8921,6 +9024,20 @@ fn native_trace_counts_are_semantic_and_summary_uses_them() {
     assert_eq!(summary.requested_key_count, 3);
     assert_eq!(summary.sent_key_count, 2);
     assert_eq!(summary.skipped_key_count, 1);
+    assert_eq!(summary.authored_lateness_samples, 1);
+    assert_eq!(summary.max_authored_lateness_ticks, 20);
+    assert_eq!(summary.overdue_packet_count, 1);
+    assert_eq!(summary.floor_displacement_samples, 1);
+    assert_eq!(summary.max_physical_floor_displacement_ticks, 5);
+    assert_eq!(summary.residual_lateness_samples, 1);
+    assert_eq!(summary.max_residual_lateness_ticks, 15);
+    assert_eq!(summary.hol_delay_samples, 1);
+    assert_eq!(summary.max_hol_delay_lower_bound_ticks, 5);
+    assert_eq!(summary.unattributed_lateness_samples, 1);
+    assert_eq!(summary.max_unattributed_lateness_ticks, 10);
+    assert_eq!(summary.sender_envelope_samples, 1);
+    assert_eq!(summary.max_sendinput_envelope_ticks, 5);
+    assert_eq!(summary.transport_anomaly_count, 1);
 }
 
 #[test]
@@ -8942,7 +9059,7 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
         TraceTiming {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
-            wake_ticks: TimelineTicks::ZERO,
+            wake_ticks: None,
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
@@ -8952,15 +9069,14 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             pre_call_qpc_ticks: None,
             sendinput_completion_qpc_ticks: None,
             observation_qpc_ticks: None,
-            final_policy_ticks: None,
             pre_call_ticks: None,
             sendinput_completion_ticks: None,
             completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
-            dispatch_start_error_ticks: 0,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
+            ..TraceTiming::default()
         },
         TraceDelivery {
             requested: 1,
@@ -8994,7 +9110,7 @@ fn native_summary_ignores_non_backend_trace() {
         TraceTiming {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
-            wake_ticks: TimelineTicks::ZERO,
+            wake_ticks: None,
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
@@ -9004,15 +9120,14 @@ fn native_summary_ignores_non_backend_trace() {
             pre_call_qpc_ticks: None,
             sendinput_completion_qpc_ticks: None,
             observation_qpc_ticks: None,
-            final_policy_ticks: None,
             pre_call_ticks: None,
             sendinput_completion_ticks: None,
             completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
-            dispatch_start_error_ticks: 0,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
+            ..TraceTiming::default()
         },
         TraceDelivery {
             requested: 0,
@@ -10771,7 +10886,7 @@ fn slow_observer_defers_when_slack_is_insufficient() {
         .iter()
         .find(|r| r["event_index"].as_u64() == Some(2))
         .expect("B-down record");
-    let authored = b_down["authored_ticks"].as_u64().expect("authored");
+    let authored = b_down["authored_offset_ticks"].as_u64().expect("authored");
     let started = b_down["send_started_ticks"].as_u64().expect("started");
     let clock = QpcClock::initialize().expect("QPC");
     let expected_authored = clock
@@ -10891,7 +11006,7 @@ fn slow_observer_drains_in_ample_slack_without_rebase() {
         .expect("900ms ticks")
         .as_u64();
     assert_eq!(
-        b_down["authored_ticks"].as_u64().expect("authored"),
+        b_down["authored_offset_ticks"].as_u64().expect("authored"),
         expected_authored,
         "B authored timestamp must stay at 900ms"
     );

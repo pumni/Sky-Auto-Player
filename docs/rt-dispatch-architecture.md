@@ -305,6 +305,13 @@ physical floor delay, sender pre-call and completion timing, transport
 anomalies, final-gate rejections, late Down attempts, missing expected Down
 count, generation accounting, and final release obligation state.
 
+Version 18 traces pair absolute QPC timestamps with explicit availability and
+provenance. Production-normal leaves the final-policy timestamp unavailable
+instead of inserting a nearby sample or schedule value. Always-on timing
+snapshot counts and maxima are worker-local and independent of trace mode.
+See [real-time timing evidence](rt-dispatch-timing-evidence.md) for field
+boundaries, lower-bound semantics, bounded drops, and the offline risk model.
+
 These compatibility counters may remain in snapshots and UI DTOs:
 
 - `final_sender_window_expirations`;
@@ -313,9 +320,10 @@ These compatibility counters may remain in snapshots and UI DTOs:
 - `release_floor_infeasible_boundaries`.
 
 They are deprecated, remain zero in production, and do not control execution.
-Native telemetry schema version 17 contains the authored target and physical
-floor fields without a latest-start field. Legacy deadline-rejection outcomes
-are historical terminology and are not active runtime outcomes.
+Native telemetry schema version 18 reports authored and physical-floor
+differences, not absolute authored/floor QPC targets, and contains no
+latest-start field. Legacy deadline-rejection outcomes are historical
+terminology and are not active runtime outcomes.
 
 ## Security and verification
 

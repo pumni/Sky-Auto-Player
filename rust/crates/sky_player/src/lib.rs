@@ -54,3 +54,4 @@ pub mod adapter_support {
 }
 
 pub mod engine;
+pub mod timing_model;
