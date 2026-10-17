@@ -383,6 +383,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.getByRole('button', { name: 'Collapse library navigator' }).click();
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
@@ -406,6 +407,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
 
 test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   await expect(page.getByRole('grid', { name: 'Songs' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
@@ -440,6 +442,7 @@ test('minimum viewport keeps an open utility pane inside the actual client recta
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.locator('.utility-workbench-pane')).toBeVisible();
@@ -459,6 +462,7 @@ test('browser resilience margin does not clip the workbench below the native min
   page,
 }) => {
   await page.setViewportSize({ width: 780, height: 540 });
+  await page.goto('/');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.locator('.utility-workbench-pane')).toBeVisible();
   await expectWorkbenchWithinBounds(page, 420, 0);
@@ -502,6 +506,7 @@ test('Player Bar communicates the no-selection state without actionable playback
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const primary = player.getByRole('button', { name: 'Play', exact: true });
   const labels = player.locator('.player-timeline-labels');
@@ -588,6 +593,7 @@ test('enabled dock and transport controls brighten without boxes or layout movem
   page,
 }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
+  await page.goto('/');
   const player = await startSelectedSong(page);
 
   const measureStyle = (locator: Locator) =>
@@ -703,6 +709,7 @@ test('enabled dock and transport controls brighten without boxes or layout movem
 
 test('Player transport geometry stays fixed when song timing labels appear', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const measure = async () => {
     const playBox = await player.getByRole('button', { name: 'Play', exact: true }).boundingBox();
@@ -1002,6 +1009,7 @@ test('Auto Play dock toggle mirrors Settings and stays outside the compact profi
   page,
 }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
+  await page.goto('/');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const dockAutoPlay = player.getByRole('button', { name: 'Auto Play' });
   await expect(dockAutoPlay).toHaveAttribute('aria-pressed', 'true');
@@ -1153,6 +1161,7 @@ test('Titlebar search and Player primary control share the application center ax
   page,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto('/');
   const viewportCenter = 1920 / 2;
   const searchBox = await page.getByLabel('Search library').boundingBox();
   const idleBox = await page.getByRole('button', { name: 'Play', exact: true }).boundingBox();
@@ -1296,6 +1305,7 @@ test('Player Bar keeps a centered controls row and separate timeline at supporte
 
 test('Playback Profile works through the narrow popover with focus restore', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
   const trigger = page.getByRole('button', { name: 'Configure playback profile' });
   const popover = page.getByRole('dialog', { name: 'Playback profile' });
 
@@ -1351,6 +1361,7 @@ test('Playback Profile works through the narrow popover with focus restore', asy
 
 test('Library separator resizes by pointer and persists after reload', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
   const separator = page.getByRole('separator', { name: 'Resize library navigator' });
   const initial = Number(await separator.getAttribute('aria-valuenow'));
   const box = await separator.boundingBox();
@@ -1458,6 +1469,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
   await settingsButton.click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
@@ -1559,6 +1571,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
 
 test('Playback Behavior stays usable in a compact Settings viewport', async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 448 });
+  await page.goto('/');
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   const row = dialog.getByRole('switch', { name: 'Auto Play' });
@@ -1590,6 +1603,7 @@ test('Playback Behavior stays usable in a compact Settings viewport', async ({ p
 
 test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await page.getByRole('tab', { name: 'Runtime' }).click();
   const panel = page.getByRole('region', { name: 'Utility: Diagnostics' });
@@ -1612,6 +1626,7 @@ test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
 
 test('Diagnostics utility separator follows pointer and keyboard direction', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await page.getByRole('tab', { name: 'Runtime' }).click();
   const separator = page.getByRole('separator', { name: 'Resize utility pane' });
@@ -1651,6 +1666,7 @@ test('all supported palettes round-trip through the settings surface', async ({ 
 
 test('update indicator and typed update dialog expose safe install states', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   const indicator = page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ });
   await expect(indicator).toBeVisible();
   await indicator.press('Enter');
@@ -1664,6 +1680,7 @@ test('update indicator and typed update dialog expose safe install states', asyn
 
 test('Diagnostics drawer is bounded and accessible at the minimum viewport', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   const trigger = page.getByRole('button', { name: 'Open utility panel' });
   await trigger.click();
   const drawer = page.getByRole('region', { name: 'Utility: Song Details' });
@@ -1692,6 +1709,7 @@ test('long sheet titles remain contained in the Track Browser, Utility, and Play
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   const list = page.locator('.track-table');
   await list.evaluate((element) => {
     element.scrollTop = 495 * 46;
@@ -1726,6 +1744,7 @@ test('long sheet titles remain contained in the Track Browser, Utility, and Play
 
 test('Calibration dialog exposes safe running and terminal states', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Advanced' }).click();
   await page.getByRole('button', { name: 'Open calibration' }).click();
