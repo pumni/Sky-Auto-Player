@@ -23,32 +23,105 @@ pub(crate) struct PreparedDispatchFrame {
 }
 
 #[derive(Debug)]
+// Inline entries keep the pre-reserved stream contiguous and avoid one heap
+// allocation per authored boundary during startup preparation.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum PreparedDispatchEntry {
-    Physical(Box<PreparedDispatchFrame>),
+    Physical(PreparedDispatchFrame),
     Metadata {
         offset_ticks: TimelineTicks,
-        commit: Box<PreparedAuthoredCommit>,
+        commit: PreparedAuthoredCommit,
     },
 }
 
 #[derive(Debug)]
 pub(crate) struct PreparedDispatchStream {
-    entries: Box<[PreparedDispatchEntry]>,
+    entries: Vec<PreparedDispatchEntry>,
     cursor: usize,
-    cancelled_generation_ids: Box<[GenerationId]>,
+    cancelled_generation_ids: Vec<GenerationId>,
     cancelled_generation_count: usize,
 }
 
 impl PreparedDispatchStream {
+    /// Bound the additional worker-owned storage used while constructing the
+    /// immutable dispatch stream and its reset coordinator.  The estimate is
+    /// conservative: it reserves one maximum-sized stream entry per authored
+    /// batch and accounts for both coordinator ledgers while the reset is
+    /// built alongside the simulator.
+    pub(crate) const MAX_PREPARED_STREAM_BYTES: usize = 512 * 1024 * 1024;
+
     pub(crate) fn build(
-        mut simulator: RuntimeDispatchCoordinator,
+        simulator: RuntimeDispatchCoordinator,
         qpc_clock: QpcClock,
         preparation_probe: &DispatchPreparationProbe,
         instrument_key_profile: &MaterializedInstrumentKeyProfile,
     ) -> Result<(Self, RuntimeDispatchCoordinator), String> {
-        let mut entries = Vec::new();
+        Self::build_with_checkpoints(
+            simulator,
+            qpc_clock,
+            preparation_probe,
+            instrument_key_profile,
+            || Ok(()),
+            || Ok(()),
+        )
+    }
 
+    pub(crate) fn build_with_checkpoints<C, R>(
+        mut simulator: RuntimeDispatchCoordinator,
+        qpc_clock: QpcClock,
+        preparation_probe: &DispatchPreparationProbe,
+        instrument_key_profile: &MaterializedInstrumentKeyProfile,
+        mut stream_checkpoint: C,
+        mut coordinator_checkpoint: R,
+    ) -> Result<(Self, RuntimeDispatchCoordinator), String>
+    where
+        C: FnMut() -> Result<(), String>,
+        R: FnMut() -> Result<(), String>,
+    {
+        let entry_capacity = simulator.schedule.batches.len();
+        let cancellation_capacity = usize::try_from(simulator.schedule.generation_count)
+            .map_err(|_| "normal prepared stream generation ledger is too large".to_string())?;
+        let coordinator_bytes = entry_capacity
+            .checked_mul(std::mem::size_of::<TimelineTicks>())
+            .and_then(|bytes| {
+                cancellation_capacity
+                    .checked_mul(
+                        std::mem::size_of::<sky_dispatch_core::coordinator::GenerationStatus>()
+                            + std::mem::size_of::<Option<(usize, usize)>>(),
+                    )
+                    .and_then(|ledger| bytes.checked_add(ledger))
+            })
+            .ok_or_else(|| "normal prepared stream memory estimate overflowed".to_string())?;
+        let estimated_bytes = entry_capacity
+            .checked_mul(std::mem::size_of::<PreparedDispatchEntry>())
+            .and_then(|bytes| {
+                cancellation_capacity
+                    .checked_mul(std::mem::size_of::<GenerationId>())
+                    .and_then(|ledger| bytes.checked_add(ledger))
+            })
+            .and_then(|bytes| {
+                coordinator_bytes
+                    .checked_mul(2)
+                    .and_then(|both| bytes.checked_add(both))
+            })
+            .ok_or_else(|| "normal prepared stream memory estimate overflowed".to_string())?;
+        if estimated_bytes > Self::MAX_PREPARED_STREAM_BYTES {
+            return Err(format!(
+                "normal prepared stream requires an estimated {estimated_bytes} bytes, exceeding the {} byte admission bound",
+                Self::MAX_PREPARED_STREAM_BYTES
+            ));
+        }
+
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(entry_capacity)
+            .map_err(|error| format!("normal prepared stream allocation failed: {error}"))?;
+
+        let mut visited_batches = 0usize;
         while simulator.cursor < simulator.schedule.batches.len() {
+            if visited_batches.is_multiple_of(64) {
+                stream_checkpoint()?;
+            }
             let mut plan = NextDispatchPlan::default();
             plan_next_dispatch_projected(
                 PlanningInput {
@@ -77,7 +150,7 @@ impl PreparedDispatchStream {
                         })?;
                     entries.push(PreparedDispatchEntry::Metadata {
                         offset_ticks,
-                        commit: Box::new(metadata.commit),
+                        commit: metadata.commit,
                     });
                 }
                 NextDispatchPlan::Physical(physical) => {
@@ -105,9 +178,10 @@ impl PreparedDispatchStream {
                         ));
                     }
                     let offset_ticks = view.prepared_batch.effective_scheduled_ticks;
-                    entries.push(PreparedDispatchEntry::Physical(Box::new(
-                        PreparedDispatchFrame { offset_ticks, view },
-                    )));
+                    entries.push(PreparedDispatchEntry::Physical(PreparedDispatchFrame {
+                        offset_ticks,
+                        view,
+                    }));
                     simulator
                         .commit_prepared_authored_frame_success_frozen(
                             &commit,
@@ -119,6 +193,7 @@ impl PreparedDispatchStream {
                         })?;
                 }
             }
+            visited_batches = visited_batches.saturating_add(1);
         }
 
         if simulator.earliest_pending_release_ticks().is_some() {
@@ -128,13 +203,18 @@ impl PreparedDispatchStream {
             );
         }
 
+        coordinator_checkpoint()?;
         let schedule = simulator.schedule;
-        let cancellation_capacity = usize::try_from(schedule.generation_count)
-            .map_err(|_| "normal prepared stream generation ledger is too large".to_string())?;
-        let cancelled_generation_ids = vec![0; cancellation_capacity].into_boxed_slice();
+        let mut cancelled_generation_ids = Vec::new();
+        cancelled_generation_ids
+            .try_reserve_exact(cancellation_capacity)
+            .map_err(|error| {
+                format!("normal prepared stream cancellation ledger allocation failed: {error}")
+            })?;
+        cancelled_generation_ids.resize(cancellation_capacity, 0);
         let min_hold_us = simulator.min_hold_us;
         let min_hold_ticks = simulator.min_hold_ticks;
-        let coordinator = RuntimeDispatchCoordinator::try_new_ticks(
+        let coordinator = RuntimeDispatchCoordinator::try_new_ticks_with_checkpoint(
             schedule,
             min_hold_us,
             min_hold_ticks,
@@ -143,11 +223,12 @@ impl PreparedDispatchStream {
                     .timeline_from_us(microseconds)
                     .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
             },
+            || coordinator_checkpoint().map_err(|_| CoordinatorError::PreparationCancelled),
         )
         .map_err(|error| format!("normal prepared stream coordinator reset failed: {error}"))?;
         Ok((
             Self {
-                entries: entries.into_boxed_slice(),
+                entries,
                 cursor: 0,
                 cancelled_generation_ids,
                 cancelled_generation_count: 0,

@@ -12,6 +12,10 @@ pub(crate) enum TerminalTrigger {
     Skip,
     PanicReleaseRequested,
     SupervisorLeaseExpired,
+    SystemSuspend,
+    FocusAuthorityInvalidated,
+    TargetAuthorityInvalidated,
+    OwnerAuthorityInvalidated,
     WorkerPanic,
 }
 
@@ -22,6 +26,10 @@ impl TerminalTrigger {
             Self::Skip => "skipped",
             Self::PanicReleaseRequested => "panic_release_requested",
             Self::SupervisorLeaseExpired => "supervisor_lease_expired",
+            Self::SystemSuspend => "system_suspend_during_preparation",
+            Self::FocusAuthorityInvalidated => "focus_authority_invalidated_during_preparation",
+            Self::TargetAuthorityInvalidated => "target_authority_invalidated_during_preparation",
+            Self::OwnerAuthorityInvalidated => "owner_authority_invalidated_during_preparation",
             Self::WorkerPanic => "worker_panic",
         }
     }
@@ -29,7 +37,13 @@ impl TerminalTrigger {
     pub(crate) const fn requires_error_outcome(self) -> bool {
         matches!(
             self,
-            Self::PanicReleaseRequested | Self::SupervisorLeaseExpired | Self::WorkerPanic
+            Self::PanicReleaseRequested
+                | Self::SupervisorLeaseExpired
+                | Self::SystemSuspend
+                | Self::FocusAuthorityInvalidated
+                | Self::TargetAuthorityInvalidated
+                | Self::OwnerAuthorityInvalidated
+                | Self::WorkerPanic
         )
     }
 }

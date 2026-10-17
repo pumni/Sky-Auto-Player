@@ -14,9 +14,22 @@ pub(crate) struct WorkerSchedulingGuards {
     pub(crate) power: PowerThrottlingGuard,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) drop_probe: Option<Arc<AtomicUsize>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) startup_ordering_hook: Option<Arc<super::super::config::StartupOrderingHook>>,
 }
 
 impl WorkerSchedulingGuards {
+    pub(crate) fn acquire(priority_mode: PriorityMode) -> Self {
+        Self {
+            priority: MmcssGuard::acquire(priority_mode),
+            power: PowerThrottlingGuard::disable_current_thread(),
+            #[cfg(any(test, feature = "test-support"))]
+            drop_probe: None,
+            #[cfg(any(test, feature = "test-support"))]
+            startup_ordering_hook: None,
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn is_priority_active(&self) -> bool {
         self.priority.is_active()
@@ -38,6 +51,7 @@ impl WorkerSchedulingGuards {
             priority: MmcssGuard::acquire(PriorityMode::Off),
             power: PowerThrottlingGuard::disable_current_thread(),
             drop_probe: None,
+            startup_ordering_hook: None,
         }
     }
 }
@@ -48,13 +62,14 @@ impl Drop for WorkerSchedulingGuards {
         if let Some(probe) = &self.drop_probe {
             probe.fetch_add(1, Ordering::SeqCst);
         }
+        if let Some(hook) = &self.startup_ordering_hook {
+            hook.record_scheduling_guard_dropped();
+        }
     }
 }
 
 pub(super) struct StartupResources {
-    pub(super) scheduling: WorkerSchedulingGuards,
     pub(super) waiter: HybridWaiter,
-    pub(super) power_throttling_disabled: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -68,16 +83,7 @@ pub(super) fn initialize_startup(
     priority_acquired: &Mutex<String>,
     metrics: &SharedMetrics,
 ) -> StartupResources {
-    let power = PowerThrottlingGuard::disable_current_thread();
-    let priority = MmcssGuard::acquire(priority_mode);
-    let scheduling = WorkerSchedulingGuards {
-        priority,
-        power,
-        #[cfg(any(test, feature = "test-support"))]
-        drop_probe: None,
-    };
-    let power_throttling_disabled = scheduling.is_power_active();
-    *priority_acquired.lock() = scheduling.priority_label().to_string();
+    *priority_acquired.lock() = "pending".to_string();
     *metrics.requested_priority_mode.lock() = priority_mode.requested_label().to_string();
     *metrics.requested_wait_policy.lock() = requested_wait_policy.to_string();
     *metrics.effective_wait_policy.lock() = effective_wait_policy.to_string();
@@ -87,9 +93,5 @@ pub(super) fn initialize_startup(
         HybridWaiter::with_options(enable_waitable_timer, enable_event_wait)
     };
     *metrics.wait_strategy_acquired.lock() = waiter.mode().to_string();
-    StartupResources {
-        scheduling,
-        waiter,
-        power_throttling_disabled,
-    }
+    StartupResources { waiter }
 }

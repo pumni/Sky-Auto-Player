@@ -25,6 +25,16 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
 
     let exit_code = boot::initialize(worker, wait_fault);
     if exit_code != 0 {
+        if let Some(observer) = worker.core.observer.runtime.take() {
+            let output = observer.stop();
+            if let Some(error) = output.terminal_error {
+                let metrics = &worker.shared.publication.metrics;
+                let mut secondary = metrics.secondary_errors.lock();
+                if !secondary.contains(&error) {
+                    secondary.push(error);
+                }
+            }
+        }
         return exit_code;
     }
     let worker_result = dispatch_loop::dispatch(worker, focus_loss_fault);

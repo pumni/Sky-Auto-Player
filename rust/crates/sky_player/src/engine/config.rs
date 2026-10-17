@@ -86,7 +86,7 @@ pub(crate) fn validate_timing_constants() -> Result<(), String> {
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
 use super::FaultInjectionScript;
@@ -213,10 +213,167 @@ pub struct StartupOrderingHook {
     down_sender_attempt_count: AtomicU64,
     watchdog_hold: AtomicBool,
     watchdog_waiting: AtomicBool,
+    startup_checkpoint: AtomicU8,
+    startup_checkpoint_occurrence: AtomicUsize,
+    startup_checkpoint_reached: AtomicBool,
+    startup_checkpoint_released: AtomicBool,
+    startup_checkpoint_lock: std::sync::Mutex<()>,
+    startup_checkpoint_cv: std::sync::Condvar,
+    panic_startup_checkpoint: AtomicU8,
+    fail_worker_spawn: AtomicBool,
+    fail_watchdog_spawn: AtomicBool,
+    fail_observer_spawn: AtomicBool,
+    fail_startup_epoch_conversion: AtomicBool,
+    scheduling_threads:
+        std::sync::Mutex<(Option<std::thread::ThreadId>, Option<std::thread::ThreadId>)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum StartupCheckpoint {
+    StreamBuild = 1,
+    CoordinatorReset = 2,
+    BeforeReady = 3,
+    ReadyToArmed = 4,
+    EpochPrepared = 5,
+    ArmedPublished = 6,
+    InitialWait = 7,
+    FirstDownAdmission = 8,
+    StreamMaterialization = 9,
 }
 
 #[cfg(any(test, feature = "test-support"))]
 impl StartupOrderingHook {
+    pub fn fail_next_worker_spawn(&self) {
+        self.fail_worker_spawn.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn take_worker_spawn_failure(&self) -> bool {
+        self.fail_worker_spawn.swap(false, Ordering::AcqRel)
+    }
+
+    pub fn fail_next_watchdog_spawn(&self) {
+        self.fail_watchdog_spawn.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn take_watchdog_spawn_failure(&self) -> bool {
+        self.fail_watchdog_spawn.swap(false, Ordering::AcqRel)
+    }
+
+    pub fn fail_next_observer_spawn(&self) {
+        self.fail_observer_spawn.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn take_observer_spawn_failure(&self) -> bool {
+        self.fail_observer_spawn.swap(false, Ordering::AcqRel)
+    }
+
+    pub fn fail_next_startup_epoch_conversion(&self) {
+        self.fail_startup_epoch_conversion
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn take_startup_epoch_conversion_failure(&self) -> bool {
+        self.fail_startup_epoch_conversion
+            .swap(false, Ordering::AcqRel)
+    }
+
+    pub(crate) fn record_scheduling_guard_acquired(&self) {
+        if let Ok(mut threads) = self.scheduling_threads.lock() {
+            threads.0 = Some(std::thread::current().id());
+        }
+    }
+
+    pub(crate) fn record_scheduling_guard_dropped(&self) {
+        if let Ok(mut threads) = self.scheduling_threads.lock() {
+            threads.1 = Some(std::thread::current().id());
+        }
+    }
+
+    pub fn scheduling_guard_threads(
+        &self,
+    ) -> Option<(std::thread::ThreadId, std::thread::ThreadId)> {
+        self.scheduling_threads
+            .lock()
+            .ok()
+            .and_then(|threads| Some((threads.0?, threads.1?)))
+    }
+
+    pub fn arm_startup_checkpoint(&self, checkpoint: StartupCheckpoint, occurrence: usize) {
+        self.startup_checkpoint_reached
+            .store(false, Ordering::Release);
+        self.startup_checkpoint_released
+            .store(false, Ordering::Release);
+        self.startup_checkpoint_occurrence
+            .store(occurrence.max(1), Ordering::Release);
+        self.startup_checkpoint
+            .store(checkpoint as u8, Ordering::Release);
+    }
+
+    pub fn panic_at_startup_checkpoint(&self, checkpoint: StartupCheckpoint) {
+        self.panic_startup_checkpoint
+            .store(checkpoint as u8, Ordering::Release);
+    }
+
+    pub fn wait_for_startup_checkpoint(&self, timeout: std::time::Duration) -> bool {
+        let Ok(lock) = self.startup_checkpoint_lock.lock() else {
+            return false;
+        };
+        let Ok((_guard, _result)) =
+            self.startup_checkpoint_cv
+                .wait_timeout_while(lock, timeout, |_| {
+                    !self.startup_checkpoint_reached.load(Ordering::Acquire)
+                })
+        else {
+            return false;
+        };
+        self.startup_checkpoint_reached.load(Ordering::Acquire)
+    }
+
+    pub fn release_startup_checkpoint(&self) {
+        self.startup_checkpoint_released
+            .store(true, Ordering::Release);
+        self.startup_checkpoint_cv.notify_all();
+    }
+
+    pub(crate) fn visit_startup_checkpoint(&self, checkpoint: StartupCheckpoint) {
+        if self
+            .panic_startup_checkpoint
+            .compare_exchange(checkpoint as u8, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            panic!("injected worker panic at startup checkpoint {checkpoint:?}");
+        }
+        if self.startup_checkpoint.load(Ordering::Acquire) != checkpoint as u8 {
+            return;
+        }
+        let remaining = self.startup_checkpoint_occurrence.load(Ordering::Acquire);
+        if remaining > 1 {
+            self.startup_checkpoint_occurrence
+                .fetch_sub(1, Ordering::AcqRel);
+            return;
+        }
+        if self
+            .startup_checkpoint
+            .compare_exchange(checkpoint as u8, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        self.startup_checkpoint_reached
+            .store(true, Ordering::Release);
+        self.startup_checkpoint_cv.notify_all();
+        let Ok(mut guard) = self.startup_checkpoint_lock.lock() else {
+            return;
+        };
+        while !self.startup_checkpoint_released.load(Ordering::Acquire) {
+            match self.startup_checkpoint_cv.wait(guard) {
+                Ok(next) => guard = next,
+                Err(_) => return,
+            }
+        }
+    }
+
     fn next_sequence(&self) -> u64 {
         self.sequence.fetch_add(1, Ordering::SeqCst) + 1
     }
@@ -318,23 +475,17 @@ impl StartupOrderingHook {
     }
 
     pub(crate) fn record_down_window(&self, authored_target: u64, not_before: u64) {
-        if self.release_floor_control_enabled.load(Ordering::Acquire) {
-            self.down_authored_target_qpc_ticks
-                .store(authored_target, Ordering::Release);
-            self.down_not_before_qpc_ticks
-                .store(not_before, Ordering::Release);
-        }
+        self.down_authored_target_qpc_ticks
+            .store(authored_target, Ordering::Release);
+        self.down_not_before_qpc_ticks
+            .store(not_before, Ordering::Release);
     }
 
     pub(crate) fn record_down_sender_attempt(&self, started_qpc_ticks: Option<u64>) {
-        if self.release_floor_control_enabled.load(Ordering::Acquire)
-            || self.watchdog_hold.load(Ordering::Acquire)
-        {
-            self.down_sender_attempt_count
-                .fetch_add(1, Ordering::AcqRel);
-            self.down_sender_start_qpc_ticks
-                .store(started_qpc_ticks.unwrap_or(0), Ordering::Release);
-        }
+        self.down_sender_attempt_count
+            .fetch_add(1, Ordering::AcqRel);
+        self.down_sender_start_qpc_ticks
+            .store(started_qpc_ticks.unwrap_or(0), Ordering::Release);
     }
 
     pub(crate) fn wait_after_successful_up(&self) {

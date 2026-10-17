@@ -247,7 +247,7 @@ impl ObserverRuntime {
         telemetry: Arc<parking_lot::Mutex<TelemetryCollector>>,
         timing: WorkerTimingState,
         health_options: DispatchHealthOptions,
-    ) -> Self {
+    ) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let consumer_queue = pending.clone();
@@ -306,12 +306,11 @@ impl ObserverRuntime {
                     metrics: local_metrics,
                     terminal_error,
                 }
-            })
-            .expect("observer thread must start");
-        Self {
+            })?;
+        Ok(Self {
             stop,
             handle: Some(handle),
-        }
+        })
     }
 
     pub(crate) fn stop(mut self) -> ObserverOutput {
@@ -324,6 +323,15 @@ impl ObserverRuntime {
                 metrics: WorkerMetricsLocal::default(),
                 terminal_error: Some("observer consumer panicked".to_string()),
             })
+    }
+}
+
+impl Drop for ObserverRuntime {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 #[cfg(any(test, feature = "test-support"))]

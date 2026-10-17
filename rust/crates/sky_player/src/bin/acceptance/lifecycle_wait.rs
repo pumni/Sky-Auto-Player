@@ -11,11 +11,11 @@ pub(super) fn publish_foreground_focus_hint(
     focused
 }
 
-pub(super) fn wait_for_startup_ready(session: &NativeDispatchSession) -> bool {
+pub(super) fn wait_for_startup_armed(session: &NativeDispatchSession) -> bool {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let snapshot = session.snapshot();
-        if snapshot.startup_ready {
+        if snapshot.startup_armed {
             return true;
         }
         if snapshot.is_finished || Instant::now() >= deadline {

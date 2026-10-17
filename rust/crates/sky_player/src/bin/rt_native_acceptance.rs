@@ -18,7 +18,7 @@ mod acceptance {
 #[path = "preterminal.rs"] mod preterminal;
 #[path = "evidence_report.rs"] mod evidence_report;
 #[cfg(windows)]
-use lifecycle_wait::{wait_for_focus_pause, wait_for_resume, wait_for_startup_ready};
+use lifecycle_wait::{wait_for_focus_pause, wait_for_resume, wait_for_startup_armed};
 #[cfg(windows)]
 use lifecycle_wait::publish_foreground_focus_hint;
 #[cfg(windows)]
@@ -539,10 +539,10 @@ fn run_windows(args: RunArgs) -> i32 {
     let mut watchdog_was_held = false;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
-        if !wait_for_startup_ready(&session) {
+        if !wait_for_startup_armed(&session) {
             let _ = session.quit();
             let _ = session.join(Duration::from_secs(5));
-            inconclusive!("production session did not reach startup_ready before focus challenge", json!({}));
+            inconclusive!("production session did not reach Armed publication before focus challenge", json!({}));
         }
         let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]);
         if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; }
@@ -593,12 +593,12 @@ fn run_windows(args: RunArgs) -> i32 {
         }
         observed
     } else if args.scenario == Scenario::CleanupFullRelease {
-        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before cleanup proof", json!({})); }
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before cleanup proof", json!({})); }
         if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &expected_down, &[])) { return code; }
         let _ = session.quit();
         false
     } else if args.scenario == Scenario::SuspendResume {
-        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before suspend/resume proof", json!({})); }
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before suspend/resume proof", json!({})); }
         let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]);
         if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; }
         first_physical_commit_observed = true;
@@ -609,7 +609,7 @@ fn run_windows(args: RunArgs) -> i32 {
         resume_requested = wait_for_resume(&session);
         false
     } else if args.scenario == Scenario::PauseResume {
-        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
     } else if args.scenario == Scenario::PauseResumeReleaseFloor {
         let hook = acceptance_hook.as_deref().expect("release-floor acceptance hook");
         match lifecycle_lease_qualification::run_release_floor_case(&args, &session, hook) {
@@ -623,9 +623,9 @@ fn run_windows(args: RunArgs) -> i32 {
         }
         false
     } else if args.scenario == Scenario::TargetHwndChange {
-        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
     } else if args.scenario == Scenario::SupervisorLeaseExpiry {
-        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before supervisor-lease proof", json!({})); }
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before supervisor-lease proof", json!({})); }
         // This native case isolates the session lease/watchdog. It seeds a
         // session-level progress point directly; the desktop monitor runtime
         // is exercised by the tauri-test regression instead.
@@ -654,9 +654,9 @@ fn run_windows(args: RunArgs) -> i32 {
         }
         false
     } else if args.scenario == Scenario::StopCleanup {
-        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before stop proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.quit() { inconclusive!(&error, json!({})); }; stop_requested = true; false
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before stop proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.quit() { inconclusive!(&error, json!({})); }; stop_requested = true; false
     } else if args.scenario == Scenario::SkipCleanup {
-        if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before skip proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.skip() { inconclusive!(&error, json!({})); }; skip_requested = true; false
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before skip proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.skip() { inconclusive!(&error, json!({})); }; skip_requested = true; false
     } else {
         false
     };

@@ -153,6 +153,16 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
     });
     if let Value::Object(object) = &mut report {
         object.extend(
+            startup_evidence_json(
+                snapshot.startup_ready,
+                snapshot.startup_armed,
+                snapshot.startup_latency_us,
+            )
+            .as_object()
+            .expect("startup evidence report object")
+            .clone(),
+        );
+        object.extend(
             release_accounting_json(
                 snapshot.release_attempts_total,
                 snapshot.release_outcome.as_ref(),
@@ -170,6 +180,14 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         );
     }
     report
+}
+
+fn startup_evidence_json(startup_ready: bool, startup_armed: bool, startup_latency_us: Option<u64>) -> Value {
+    json!({
+        "startup_ready": startup_ready,
+        "startup_armed": startup_armed,
+        "startup_latency_us": startup_latency_us,
+    })
 }
 
 fn release_accounting_json(
@@ -194,7 +212,7 @@ fn release_accounting_json(
 
 #[cfg(test)]
 mod tests {
-    use super::release_accounting_json;
+    use super::{release_accounting_json, startup_evidence_json};
     use sky_dispatch_win32::input::ReleaseAllOutcome;
 
     #[test]
@@ -214,5 +232,13 @@ mod tests {
         assert_eq!(report["release_attempts_total"], 8);
         assert_eq!(report["release_outcome"]["attempts"], 4);
         assert_eq!(report["release_outcome"]["released_successfully"], true);
+    }
+
+    #[test]
+    fn acceptance_report_distinguishes_ready_from_armed_publication() {
+        let report = startup_evidence_json(true, false, Some(75_000));
+        assert_eq!(report["startup_ready"], true);
+        assert_eq!(report["startup_armed"], false);
+        assert_eq!(report["startup_latency_us"], 75_000);
     }
 }

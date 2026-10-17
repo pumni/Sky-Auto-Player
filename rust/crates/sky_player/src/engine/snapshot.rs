@@ -9,6 +9,7 @@ use sky_dispatch_core::coordinator::GenerationAccounting;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum EnginePollStatus {
     Ready,
+    Preparing,
     Preroll,
     Playing,
     Paused,
@@ -25,6 +26,7 @@ impl EnginePollStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ready => "ready",
+            Self::Preparing => "preparing",
             Self::Preroll => "preroll",
             Self::Playing => "playing",
             Self::Paused => "paused",
@@ -262,6 +264,8 @@ pub struct EngineSnapshot {
     pub abort_counts_by_reason: HashMap<String, u64>,
     pub release_outcome: Option<ReleaseAllOutcome>,
     pub release_attempts_total: u64,
+    /// True only after the worker's Ready-to-Armed transition committed.
+    pub startup_armed: bool,
     pub startup_ready: bool,
     pub startup_latency_us: Option<u64>,
 }

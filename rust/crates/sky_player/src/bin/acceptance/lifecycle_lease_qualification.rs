@@ -1,6 +1,6 @@
 use super::{
     ACCEPTANCE_FRAME_US, NativeDispatchSession, RunArgs, Scenario, Value,
-    Verdict, wait_for_focus_pause, wait_for_resume, wait_for_startup_ready, write_report,
+    Verdict, wait_for_focus_pause, wait_for_resume, wait_for_startup_armed, write_report,
 };
 use serde_json::{Map, json};
 use sky_dispatch_core::time::DurationTicks;
@@ -48,11 +48,11 @@ pub(super) fn run_release_floor_case(
     session: &NativeDispatchSession,
     hook: &StartupOrderingHook,
 ) -> Result<Vec<Value>, i32> {
-    if !wait_for_startup_ready(session) {
+    if !wait_for_startup_armed(session) {
         return Err(write_report(
             args,
             Verdict::Inconclusive,
-            "production session did not reach startup_ready before release-floor cycles",
+            "production session did not reach Armed publication before release-floor cycles",
             json!({}),
         ));
     }
@@ -231,8 +231,8 @@ pub(super) fn begin_delayed_watchdog_case(
     session: &NativeDispatchSession,
     hook: &StartupOrderingHook,
 ) -> Result<(super::release_gap_stress::IndependentHelperLivenessProbe, bool), String> {
-    if !wait_for_startup_ready(session) {
-        return Err("production session did not reach startup_ready before delayed-watchdog proof".to_string());
+    if !wait_for_startup_armed(session) {
+        return Err("production session did not reach Armed publication before delayed-watchdog proof".to_string());
     }
     session
         .publish_supervisor_progress()

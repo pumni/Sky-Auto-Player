@@ -107,6 +107,10 @@ pub enum CoordinatorError {
     InvalidKeySlot { slot: KeySlot },
     #[error("generation count does not fit in usize")]
     GenerationCountOverflow,
+    #[error("coordinator allocation failed: {0}")]
+    Allocation(String),
+    #[error("coordinator preparation was cancelled")]
+    PreparationCancelled,
     #[error("time conversion failed: {0}")]
     TimeConversion(String),
     #[error(
@@ -412,19 +416,69 @@ impl RuntimeDispatchCoordinator {
     where
         F: Fn(u64) -> Result<TimelineTicks, CoordinatorError>,
     {
+        Self::try_new_ticks_with_checkpoint(
+            schedule,
+            min_hold_us,
+            min_hold_ticks,
+            us_to_ticks,
+            || Ok(()),
+        )
+    }
+
+    /// Construct the coordinator while periodically allowing a caller to
+    /// cancel long schedule scans.  The callback is checked at bounded
+    /// intervals during every allocation-populating traversal.
+    pub fn try_new_ticks_with_checkpoint<F, C>(
+        schedule: RuntimeSchedule,
+        min_hold_us: u64,
+        min_hold_ticks: DurationTicks,
+        us_to_ticks: F,
+        mut checkpoint: C,
+    ) -> Result<Self, CoordinatorError>
+    where
+        F: Fn(u64) -> Result<TimelineTicks, CoordinatorError>,
+        C: FnMut() -> Result<(), CoordinatorError>,
+    {
         let generation_count = schedule.generation_count;
         let generation_count_usize = usize::try_from(generation_count)
             .map_err(|_| CoordinatorError::GenerationCountOverflow)?;
-        let generation_states =
-            vec![GenerationStatus::Scheduled; generation_count_usize].into_boxed_slice();
-        let batch_scheduled_ticks = schedule
-            .batches
-            .iter()
-            .map(|b| us_to_ticks(b.scheduled_us))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_boxed_slice();
-        let mut up_intent_locations = vec![None; generation_count_usize];
+        let mut generation_states = Vec::new();
+        generation_states
+            .try_reserve_exact(generation_count_usize)
+            .map_err(|error| CoordinatorError::Allocation(error.to_string()))?;
+        for index in 0..generation_count_usize {
+            if index % 16_384 == 0 {
+                checkpoint()?;
+            }
+            generation_states.push(GenerationStatus::Scheduled);
+        }
+
+        let mut batch_scheduled_ticks = Vec::new();
+        batch_scheduled_ticks
+            .try_reserve_exact(schedule.batches.len())
+            .map_err(|error| CoordinatorError::Allocation(error.to_string()))?;
+        for (index, batch) in schedule.batches.iter().enumerate() {
+            if index % 128 == 0 {
+                checkpoint()?;
+            }
+            batch_scheduled_ticks.push(us_to_ticks(batch.scheduled_us)?);
+        }
+
+        let mut up_intent_locations = Vec::new();
+        up_intent_locations
+            .try_reserve_exact(generation_count_usize)
+            .map_err(|error| CoordinatorError::Allocation(error.to_string()))?;
+        for index in 0..generation_count_usize {
+            if index % 16_384 == 0 {
+                checkpoint()?;
+            }
+            up_intent_locations.push(None);
+        }
+        let mut visited_intents = 0usize;
         for (packet_index, packet) in schedule.packets.iter().enumerate() {
+            if packet_index % 128 == 0 {
+                checkpoint()?;
+            }
             let start = packet.up_intent_start as usize;
             let end = start.checked_add(usize::from(packet.up_intent_len)).ok_or(
                 CoordinatorError::Schedule(RuntimeScheduleError::InvalidPacketIntentRange {
@@ -440,6 +494,10 @@ impl RuntimeDispatchCoordinator {
                     },
                 ))?;
             for (offset, compact) in intents.iter().enumerate() {
+                visited_intents = visited_intents.saturating_add(1);
+                if visited_intents.is_multiple_of(256) {
+                    checkpoint()?;
+                }
                 let generation_id = compact.generation_id();
                 if generation_id == NO_GENERATION_ID {
                     continue;
@@ -470,14 +528,14 @@ impl RuntimeDispatchCoordinator {
             schedule,
             min_hold_us,
             min_hold_ticks,
-            batch_scheduled_ticks,
+            batch_scheduled_ticks: batch_scheduled_ticks.into_boxed_slice(),
             cursor: 0,
             active_by_slot: std::array::from_fn(|_| None),
             active_mask: 0,
             blocked_mask: 0,
             counters: GenerationCounters::default(),
             activated_generation_count: 0,
-            generation_states,
+            generation_states: generation_states.into_boxed_slice(),
             generation_count,
             up_intent_locations: up_intent_locations.into_boxed_slice(),
             pending_release_by_slot: [None; MAX_KEYS],

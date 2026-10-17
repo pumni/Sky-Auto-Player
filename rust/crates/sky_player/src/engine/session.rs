@@ -1,7 +1,7 @@
 use super::config::{AdmittedNativeSessionOptions, DispatchProfile, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
-    SupervisorLeaseState, SystemPowerEndpoint,
+    StartupAbortReason, StartupPhase, SupervisorLeaseState, SystemPowerEndpoint,
 };
 use super::worker::Worker;
 use super::*;
@@ -37,6 +37,10 @@ fn last_missed_down_reason(valid: bool, reason_code: u8) -> Option<String> {
 }
 
 fn signal_supervisor_expiry(shared: &SessionShared) {
+    shared
+        .commands
+        .system_power
+        .cancel_prearm(StartupAbortReason::SupervisorLeaseExpired);
     shared.commands.supervisor_expired.latch_expired();
     shared
         .commands
@@ -197,6 +201,7 @@ pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<
 pub struct NativeDispatchSession {
     config: Mutex<Option<AdmittedNativeSessionOptions>>,
     profile: DispatchProfile,
+    focus_required: bool,
     generation_count: u64,
     shared: Arc<SessionShared>,
     supervisor_lease_timeout_us: u64,
@@ -217,6 +222,13 @@ pub struct SystemPowerSnapshot {
 }
 
 impl NativeDispatchSession {
+    fn startup_active(&self) -> bool {
+        matches!(
+            self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
+            LIFECYCLE_STARTING | LIFECYCLE_RUNNING
+        )
+    }
+
     pub fn new(options: NativeSessionOptions) -> Result<Self, String> {
         let endpoint = SystemPowerEndpoint::new()?;
         Self::new_with_power_endpoint(options, endpoint)
@@ -306,10 +318,8 @@ impl NativeDispatchSession {
                 startup_requested_ticks: AtomicU64::new(0),
                 epoch_qpc: AtomicU64::new(0),
                 pre_roll_us: AtomicU64::new(0),
-                armed: AtomicBool::new(false),
                 startup_ready_ticks: AtomicU64::new(0),
                 startup_latency_us: AtomicU64::new(0),
-                startup_ready: AtomicBool::new(false),
             },
         });
         let admitted_options = AdmittedNativeSessionOptions {
@@ -318,6 +328,7 @@ impl NativeDispatchSession {
         };
         Ok(Self {
             profile: admitted_options.options.profile,
+            focus_required: admitted_options.options.focus.require_focus,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
             shared,
@@ -329,7 +340,8 @@ impl NativeDispatchSession {
         })
     }
 
-    fn live_projection(&self) -> ((u64, bool), u64) {
+    fn live_projection(&self) -> (((u64, bool), u64), super::shared::StartupSnapshot) {
+        let startup = self.shared.commands.system_power.startup_snapshot();
         let metrics_paused = self
             .shared
             .publication
@@ -340,17 +352,23 @@ impl NativeDispatchSession {
         let exposed_paused = anchor
             .map(|value| value.paused && !value.frozen)
             .unwrap_or(metrics_paused);
+        if !startup.armed_published {
+            return (((0, exposed_paused), 0), startup);
+        }
         let Ok(qpc_clock) = QpcClock::initialize() else {
-            return ((0, exposed_paused), 0);
+            return (((0, exposed_paused), 0), startup);
         };
         let Ok(now_qpc) = qpc_clock.now() else {
-            return ((0, exposed_paused), 0);
+            return (((0, exposed_paused), 0), startup);
         };
         let elapsed_us = anchor
             .map(|value| value.elapsed_us(now_qpc, qpc_clock))
             .unwrap_or_default();
         let pre_roll_remaining_us = self.pre_roll_remaining_at(now_qpc, qpc_clock);
-        ((elapsed_us, exposed_paused), pre_roll_remaining_us)
+        (
+            ((elapsed_us, exposed_paused), pre_roll_remaining_us),
+            startup,
+        )
     }
 
     pub fn arm(&self, requested_pre_roll_us: u64) -> Result<(), String> {
@@ -358,16 +376,12 @@ impl NativeDispatchSession {
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC arm admission failed: {error:?}"))?;
         let effective_pre_roll_us = requested_pre_roll_us.max(MIN_PRODUCTION_PREROLL_US);
-        let arm_qpc = qpc_clock
+        qpc_clock
+            .duration_from_us(effective_pre_roll_us)
+            .map_err(|error| format!("pre-roll conversion failed: {error:?}"))?;
+        let requested_qpc = qpc_clock
             .now()
             .map_err(|error| format!("QPC arm sample failed: {error:?}"))?;
-        let epoch_qpc = arm_qpc
-            .checked_add_duration(
-                qpc_clock
-                    .duration_from_us(effective_pre_roll_us)
-                    .map_err(|error| format!("pre-roll conversion failed: {error:?}"))?,
-            )
-            .map_err(|error| format!("pre-roll epoch arithmetic failed: {error}"))?;
         let lease_timeout_ticks = qpc_clock
             .duration_from_us(self.supervisor_lease_timeout_us)
             .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
@@ -377,7 +391,7 @@ impl NativeDispatchSession {
             .lifecycle
             .compare_exchange(
                 LIFECYCLE_NEW,
-                LIFECYCLE_RUNNING,
+                LIFECYCLE_STARTING,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
@@ -399,29 +413,78 @@ impl NativeDispatchSession {
         let timer_lifecycle_context = config.options.timer_lifecycle_context.clone();
         #[cfg(any(test, feature = "test-support"))]
         let watchdog_test_hook = config.options.startup_ordering_hook.clone();
+        #[cfg(any(test, feature = "test-support"))]
+        let fail_watchdog_spawn = config
+            .options
+            .startup_ordering_hook
+            .as_ref()
+            .is_some_and(|hook| hook.take_watchdog_spawn_failure());
+        #[cfg(any(test, feature = "test-support"))]
+        let fail_worker_spawn = config
+            .options
+            .startup_ordering_hook
+            .as_ref()
+            .is_some_and(|hook| hook.take_worker_spawn_failure());
 
-        self.shared.commands.supervisor_expired.reset(arm_qpc);
+        self.shared.commands.supervisor_expired.reset(requested_qpc);
         self.supervisor_lease_timeout_ticks
             .store(lease_timeout_ticks.as_u64(), Ordering::Release);
 
         let watchdog_handle = if lease_timeout_ticks != DurationTicks::ZERO {
             let watchdog_shared = Arc::clone(&self.shared);
-            match std::thread::Builder::new()
+            let watchdog_thread = move || {
+                #[cfg(any(test, feature = "test-support"))]
+                wait_for_watchdog_release_or_completion(
+                    &watchdog_shared,
+                    watchdog_test_hook.as_deref(),
+                );
+                supervisor_watchdog_loop(watchdog_shared, qpc_clock, lease_timeout_ticks)
+            };
+            #[cfg(any(test, feature = "test-support"))]
+            let watchdog_spawn_result = if fail_watchdog_spawn {
+                drop(watchdog_thread);
+                Err(std::io::Error::other(
+                    "injected watchdog thread spawn failure",
+                ))
+            } else {
+                std::thread::Builder::new()
+                    .name("sky-supervisor-watchdog".to_string())
+                    .spawn(watchdog_thread)
+            };
+            #[cfg(not(any(test, feature = "test-support")))]
+            let watchdog_spawn_result = std::thread::Builder::new()
                 .name("sky-supervisor-watchdog".to_string())
-                .spawn(move || {
-                    #[cfg(any(test, feature = "test-support"))]
-                    wait_for_watchdog_release_or_completion(
-                        &watchdog_shared,
-                        watchdog_test_hook.as_deref(),
-                    );
-                    supervisor_watchdog_loop(watchdog_shared, qpc_clock, lease_timeout_ticks)
-                }) {
+                .spawn(watchdog_thread);
+            match watchdog_spawn_result {
                 Ok(handle) => Some(handle),
                 Err(error) => {
                     self.shared
+                        .commands
+                        .system_power
+                        .fail_startup(StartupAbortReason::WorkerFailure);
+                    let error_message = format!("failed to spawn supervisor watchdog: {error}");
+                    *self.shared.publication.metrics.last_error.lock() =
+                        Some(error_message.clone());
+                    self.shared
+                        .publication
+                        .metrics
+                        .terminal_error
+                        .lock()
+                        .replace(error_message);
+                    *self
+                        .shared
+                        .publication
+                        .metrics
+                        .terminal_trigger_reason
+                        .lock() = Some("startup_watchdog_spawn_failure".to_string());
+                    self.shared
+                        .lifecycle
+                        .terminal_outcome
+                        .store(OUTCOME_ERROR, Ordering::Release);
+                    self.shared
                         .lifecycle
                         .lifecycle
-                        .store(LIFECYCLE_POISONED, Ordering::Release);
+                        .store(LIFECYCLE_FINISHED, Ordering::Release);
                     let (done_lock, done_cv) = &self.shared.lifecycle.completed;
                     if let Ok(mut done) = done_lock.lock() {
                         *done = true;
@@ -438,95 +501,111 @@ impl NativeDispatchSession {
         self.shared
             .publication
             .startup_requested_ticks
-            .store(arm_qpc.as_u64(), Ordering::Release);
-        self.shared
-            .publication
-            .epoch_qpc
-            .store(epoch_qpc.as_u64(), Ordering::Release);
+            .store(requested_qpc.as_u64(), Ordering::Release);
         self.shared
             .publication
             .pre_roll_us
             .store(effective_pre_roll_us, Ordering::Release);
-        self.shared.publication.armed.store(true, Ordering::Release);
+        self.shared
+            .lifecycle
+            .lifecycle
+            .store(LIFECYCLE_RUNNING, Ordering::Release);
 
-        let spawn_result = std::thread::Builder::new()
-            .name("sky-native-dispatch".to_string())
-            .spawn(move || {
-                #[cfg(any(test, feature = "test-support"))]
-                let worker_result = if let Some(context) = timer_lifecycle_context {
-                    sky_dispatch_win32::timer::test_support::with_context(&context, || {
-                        catch_unwind(AssertUnwindSafe(|| {
-                            Worker::new(config, shared.as_ref(), epoch_qpc).run()
-                        }))
-                    })
-                } else {
+        let worker_thread = move || {
+            #[cfg(any(test, feature = "test-support"))]
+            let worker_result = if let Some(context) = timer_lifecycle_context {
+                sky_dispatch_win32::timer::test_support::with_context(&context, || {
                     catch_unwind(AssertUnwindSafe(|| {
-                        Worker::new(config, shared.as_ref(), epoch_qpc).run()
+                        Worker::new(config, shared.as_ref()).run()
                     }))
-                };
-                #[cfg(not(any(test, feature = "test-support")))]
-                let worker_result = catch_unwind(AssertUnwindSafe(|| {
-                    Worker::new(config, shared.as_ref(), epoch_qpc).run()
-                }));
-                let (worker_outcome, panic_message) = match worker_result {
-                    Ok(outcome) => (outcome, None),
-                    Err(payload) => {
-                        let message = payload
-                            .downcast_ref::<&str>()
-                            .map(|value| (*value).to_string())
-                            .or_else(|| payload.downcast_ref::<String>().cloned())
-                            .unwrap_or_else(|| "native worker panicked".to_string());
-                        (OUTCOME_ERROR, Some(message))
-                    }
-                };
-                let panicked = panic_message.is_some();
-                if let Some(message) = panic_message {
-                    let metrics = &shared.publication.metrics;
-                    let mut terminal_error = metrics.terminal_error.lock();
-                    if terminal_error.is_none() {
-                        *terminal_error = Some(message.clone());
-                    } else if !terminal_error
-                        .as_deref()
-                        .is_some_and(|error| error.contains(&message))
-                    {
-                        let panic_error = format!("worker panic: {message}");
-                        let mut secondary_errors = metrics.secondary_errors.lock();
-                        if !secondary_errors.contains(&panic_error) {
-                            secondary_errors.push(panic_error);
-                        }
-                    }
-                    drop(terminal_error);
-                    let mut trigger_reason = metrics.terminal_trigger_reason.lock();
-                    trigger_reason.get_or_insert_with(|| "worker_panic".to_string());
+                })
+            } else {
+                catch_unwind(AssertUnwindSafe(|| {
+                    Worker::new(config, shared.as_ref()).run()
+                }))
+            };
+            #[cfg(not(any(test, feature = "test-support")))]
+            let worker_result = catch_unwind(AssertUnwindSafe(|| {
+                Worker::new(config, shared.as_ref()).run()
+            }));
+            let (worker_outcome, panic_message) = match worker_result {
+                Ok(outcome) => (outcome, None),
+                Err(payload) => {
+                    let message = payload
+                        .downcast_ref::<&str>()
+                        .map(|value| (*value).to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "native worker panicked".to_string());
+                    (OUTCOME_ERROR, Some(message))
                 }
+            };
+            let panicked = panic_message.is_some();
+            if let Some(message) = panic_message {
+                shared
+                    .commands
+                    .system_power
+                    .fail_startup(StartupAbortReason::WorkerFailure);
+                let metrics = &shared.publication.metrics;
+                let mut terminal_error = metrics.terminal_error.lock();
+                if terminal_error.is_none() {
+                    *terminal_error = Some(message.clone());
+                } else if !terminal_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains(&message))
+                {
+                    let panic_error = format!("worker panic: {message}");
+                    let mut secondary_errors = metrics.secondary_errors.lock();
+                    if !secondary_errors.contains(&panic_error) {
+                        secondary_errors.push(panic_error);
+                    }
+                }
+                drop(terminal_error);
+                let mut trigger_reason = metrics.terminal_trigger_reason.lock();
+                trigger_reason.get_or_insert_with(|| "worker_panic".to_string());
+            }
+            shared
+                .lifecycle
+                .terminal_outcome
+                .store(worker_outcome, Ordering::Release);
+            shared
+                .publication
+                .metrics
+                .panicked
+                .store(panicked, Ordering::Release);
+            if panicked {
                 shared
                     .lifecycle
-                    .terminal_outcome
-                    .store(worker_outcome, Ordering::Release);
-                shared
-                    .publication
-                    .metrics
-                    .panicked
-                    .store(panicked, Ordering::Release);
-                if panicked {
-                    shared
-                        .lifecycle
-                        .lifecycle
-                        .store(LIFECYCLE_POISONED, Ordering::Release);
-                } else {
-                    let _ = shared.lifecycle.lifecycle.compare_exchange(
-                        LIFECYCLE_RUNNING,
-                        LIFECYCLE_FINISHED,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    );
-                }
-                let (done_lock, done_cv) = &shared.lifecycle.completed;
-                if let Ok(mut done) = done_lock.lock() {
-                    *done = true;
-                    done_cv.notify_all();
-                }
-            });
+                    .lifecycle
+                    .store(LIFECYCLE_POISONED, Ordering::Release);
+            } else {
+                let _ = shared.lifecycle.lifecycle.compare_exchange(
+                    LIFECYCLE_RUNNING,
+                    LIFECYCLE_FINISHED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            }
+            let (done_lock, done_cv) = &shared.lifecycle.completed;
+            if let Ok(mut done) = done_lock.lock() {
+                *done = true;
+                done_cv.notify_all();
+            }
+        };
+        #[cfg(any(test, feature = "test-support"))]
+        let spawn_result = if fail_worker_spawn {
+            drop(worker_thread);
+            Err(std::io::Error::other(
+                "injected worker thread spawn failure",
+            ))
+        } else {
+            std::thread::Builder::new()
+                .name("sky-native-dispatch".to_string())
+                .spawn(worker_thread)
+        };
+        #[cfg(not(any(test, feature = "test-support")))]
+        let spawn_result = std::thread::Builder::new()
+            .name("sky-native-dispatch".to_string())
+            .spawn(worker_thread);
 
         match spawn_result {
             Ok(handle) => {
@@ -536,9 +615,31 @@ impl NativeDispatchSession {
             }
             Err(error) => {
                 self.shared
+                    .commands
+                    .system_power
+                    .fail_startup(StartupAbortReason::WorkerFailure);
+                let error_message = format!("failed to spawn native dispatch worker: {error}");
+                *self.shared.publication.metrics.last_error.lock() = Some(error_message.clone());
+                self.shared
+                    .publication
+                    .metrics
+                    .terminal_error
+                    .lock()
+                    .replace(error_message);
+                *self
+                    .shared
+                    .publication
+                    .metrics
+                    .terminal_trigger_reason
+                    .lock() = Some("startup_worker_spawn_failure".to_string());
+                self.shared
+                    .lifecycle
+                    .terminal_outcome
+                    .store(OUTCOME_ERROR, Ordering::Release);
+                self.shared
                     .lifecycle
                     .lifecycle
-                    .store(LIFECYCLE_POISONED, Ordering::Release);
+                    .store(LIFECYCLE_FINISHED, Ordering::Release);
                 let (done_lock, done_cv) = &self.shared.lifecycle.completed;
                 if let Ok(mut done) = done_lock.lock() {
                     *done = true;
@@ -559,11 +660,29 @@ impl NativeDispatchSession {
 
     #[cfg(test)]
     pub(crate) fn epoch_qpc_for_test(&self) -> QpcTicks {
+        if !self
+            .shared
+            .commands
+            .system_power
+            .startup_snapshot()
+            .armed_published
+        {
+            return QpcTicks::ZERO;
+        }
         QpcTicks::from_raw(self.shared.publication.epoch_qpc.load(Ordering::Acquire))
     }
 
     #[cfg(test)]
     pub(crate) fn pre_roll_us_for_test(&self) -> u64 {
+        if !self
+            .shared
+            .commands
+            .system_power
+            .startup_snapshot()
+            .armed_published
+        {
+            return 0;
+        }
         self.shared.publication.pre_roll_us.load(Ordering::Acquire)
     }
 
@@ -600,7 +719,7 @@ impl NativeDispatchSession {
     fn signal_worker(&self) -> Result<(), String> {
         if !matches!(
             self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
-            LIFECYCLE_RUNNING | LIFECYCLE_POISONED
+            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
@@ -693,10 +812,14 @@ impl NativeDispatchSession {
     pub fn skip(&self) -> Result<(), String> {
         if !matches!(
             self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
-            LIFECYCLE_RUNNING | LIFECYCLE_POISONED
+            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
+        self.shared
+            .commands
+            .system_power
+            .cancel_prearm(StartupAbortReason::Skip);
         self.shared
             .commands
             .skip_requested
@@ -707,10 +830,14 @@ impl NativeDispatchSession {
     pub fn quit(&self) -> Result<(), String> {
         if !matches!(
             self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
-            LIFECYCLE_RUNNING | LIFECYCLE_POISONED
+            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
+        self.shared
+            .commands
+            .system_power
+            .cancel_prearm(StartupAbortReason::Quit);
         self.shared
             .commands
             .quit_requested
@@ -721,10 +848,14 @@ impl NativeDispatchSession {
     pub fn panic_release(&self) -> Result<(), String> {
         if !matches!(
             self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
-            LIFECYCLE_RUNNING | LIFECYCLE_POISONED
+            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
+        self.shared
+            .commands
+            .system_power
+            .cancel_prearm(StartupAbortReason::PanicRelease);
         self.shared
             .commands
             .panic_requested
@@ -767,6 +898,18 @@ impl NativeDispatchSession {
     }
 
     pub fn set_target_hwnd(&self, hwnd: isize) {
+        if self.startup_active()
+            && !self
+                .shared
+                .target
+                .load_stable()
+                .is_some_and(|(current, _)| current == hwnd)
+        {
+            self.shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::TargetInvalidated);
+        }
         if self.shared.target.publish(hwnd) {
             #[cfg(feature = "test-support")]
             {
@@ -792,6 +935,12 @@ impl NativeDispatchSession {
     /// Publish a fresh release-barrier target generation after control-plane revalidation,
     /// including when the numeric HWND was reused for a new window lifetime.
     pub fn republish_target_generation_for_revalidation(&self, hwnd: isize) -> bool {
+        if self.startup_active() {
+            self.shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::TargetInvalidated);
+        }
         let published = self.shared.target.republish_same_hwnd(hwnd);
         if published {
             let _ = self.shared.commands.interrupt.signal();
@@ -849,6 +998,12 @@ impl NativeDispatchSession {
 
     #[cfg(feature = "test-support")]
     pub fn invalidate_window_identity_authority_for_test(&self) {
+        if self.startup_active() {
+            self.shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::OwnerInvalidated);
+        }
         self.shared.target.invalidate_owner_identity();
     }
 
@@ -861,10 +1016,22 @@ impl NativeDispatchSession {
                 == super::target::OwnerIdentityStatus::NotRequired;
         };
         let Some(target) = self.shared.target.load_stable() else {
+            if self.startup_active() {
+                self.shared
+                    .commands
+                    .system_power
+                    .cancel_prearm(StartupAbortReason::OwnerInvalidated);
+            }
             self.shared.target.invalidate_owner_identity();
             return false;
         };
         if target != (authority.identity().hwnd, *bound_generation) {
+            if self.startup_active() {
+                self.shared
+                    .commands
+                    .system_power
+                    .cancel_prearm(StartupAbortReason::OwnerInvalidated);
+            }
             return false;
         }
         let failure = match authority.continuity() {
@@ -885,6 +1052,12 @@ impl NativeDispatchSession {
                 OwnerIdentityFailure::QueryUnavailable
             }
         };
+        if self.startup_active() {
+            self.shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::OwnerInvalidated);
+        }
         self.shared.target.invalidate_owner_identity_with(failure);
         false
     }
@@ -892,6 +1065,12 @@ impl NativeDispatchSession {
     /// Release the retained process object exactly once at terminal session
     /// teardown. The caller joins the worker/supervisor before closing it.
     pub fn close_window_identity_authority(&self) {
+        if self.startup_active() {
+            self.shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::OwnerInvalidated);
+        }
         self.window_identity_authority.lock().take();
         self.shared.target.invalidate_owner_identity();
     }
@@ -899,6 +1078,12 @@ impl NativeDispatchSession {
     /// Publish a transition-only supervisor focus hint. This wakes the worker
     /// for prompt coarse-gate handling, but never authorizes physical input.
     pub fn set_focus_hint(&self, active: bool) {
+        if self.startup_active() && self.focus_required && !active {
+            self.shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::FocusInvalidated);
+        }
         publish_focus_hint(
             &self.shared.commands.focus_active,
             &self.shared.commands.interrupt,
@@ -959,15 +1144,17 @@ impl NativeDispatchSession {
         lifecycle: u8,
         paused: bool,
         pre_roll_remaining_us: u64,
+        startup: super::shared::StartupSnapshot,
     ) -> EnginePollStatus {
         match lifecycle {
             LIFECYCLE_NEW => EnginePollStatus::Ready,
+            LIFECYCLE_STARTING => EnginePollStatus::Preparing,
             LIFECYCLE_RUNNING
-                if self.shared.publication.armed.load(Ordering::Acquire)
-                    && pre_roll_remaining_us > 0 =>
+                if startup.phase != StartupPhase::Armed || !startup.armed_published =>
             {
-                EnginePollStatus::Preroll
+                EnginePollStatus::Preparing
             }
+            LIFECYCLE_RUNNING if pre_roll_remaining_us > 0 => EnginePollStatus::Preroll,
             LIFECYCLE_RUNNING if paused => EnginePollStatus::Paused,
             LIFECYCLE_RUNNING => EnginePollStatus::Playing,
             LIFECYCLE_FINISHED => match self
@@ -1003,20 +1190,20 @@ impl NativeDispatchSession {
     /// HUD snapshot and terminal report paths.
     pub fn poll_state(&self) -> EnginePollSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let ((elapsed_us, paused), pre_roll_remaining_us) = self.live_projection();
+        let (((elapsed_us, paused), pre_roll_remaining_us), startup) = self.live_projection();
         EnginePollSnapshot {
             elapsed_us,
             pre_roll_remaining_us,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
-            status: self.poll_status(lifecycle, paused, pre_roll_remaining_us),
+            status: self.poll_status(lifecycle, paused, pre_roll_remaining_us, startup),
         }
     }
 
     pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let ((elapsed_us, paused), pre_roll_remaining_us) = self.live_projection();
-        let poll_status = self.poll_status(lifecycle, paused, pre_roll_remaining_us);
+        let (((elapsed_us, paused), pre_roll_remaining_us), startup) = self.live_projection();
+        let poll_status = self.poll_status(lifecycle, paused, pre_roll_remaining_us, startup);
         let status = poll_status.as_str();
         let local = self.shared.publication.metrics.snapshot.load();
         EngineProgressSnapshot {
@@ -1149,16 +1336,13 @@ impl NativeDispatchSession {
 
     pub fn snapshot(&self) -> EngineSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let ((elapsed_us, paused), pre_roll_remaining_us) = self.live_projection();
+        let (((elapsed_us, paused), pre_roll_remaining_us), startup) = self.live_projection();
         let status = self
-            .poll_status(lifecycle, paused, pre_roll_remaining_us)
+            .poll_status(lifecycle, paused, pre_roll_remaining_us, startup)
             .as_str();
         let local = self.shared.publication.metrics.snapshot.load();
-        let startup_ready = self
-            .shared
-            .publication
-            .startup_ready
-            .load(Ordering::Acquire);
+        let startup_armed = startup.armed_published;
+        let startup_ready = startup.ready_published;
         EngineSnapshot {
             elapsed_us,
             total_us: local.total_us,
@@ -1424,6 +1608,7 @@ impl NativeDispatchSession {
                 .metrics
                 .terminal_release_attempts_total
                 .load(Ordering::Acquire),
+            startup_armed,
             startup_ready,
             startup_latency_us: startup_ready.then(|| {
                 self.shared
@@ -1557,7 +1742,7 @@ mod tests {
         assert!(source.contains("watchdog_handle"));
 
         let heartbeat_store = source
-            .find(".supervisor_expired.reset(arm_qpc)")
+            .find(".supervisor_expired.reset(requested_qpc)")
             .expect("arm supervisor lease publication");
         let watchdog_spawn = source
             .find(".name(\"sky-supervisor-watchdog\".to_string())")
