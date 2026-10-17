@@ -35,10 +35,10 @@ use std::time::Instant;
 const DEFAULT_ITERATIONS: usize = 10_000;
 const DUE_US: u64 = 10_000;
 const SYNTHETIC_TRANSPORT_COMPLETION_US: u64 = 8;
-const P7A_DURATION_HISTOGRAM_BINS: usize = 4_096;
+const PHYSICAL_STUDY_DURATION_HISTOGRAM_BINS: usize = 4_096;
 
-fn p7a_retrigger_iterations() -> usize {
-    std::env::var("RT_HANDOFF_P7A_RETRIGGER_ITERATIONS")
+fn physical_study_retrigger_iterations() -> usize {
+    std::env::var("RT_HANDOFF_PHYSICAL_STUDY_RETRIGGER_ITERATIONS")
         .ok()
         .and_then(|value| value.parse().ok())
         .filter(|value: &usize| (1..=100_000).contains(value))
@@ -165,9 +165,9 @@ struct WaitMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BenchmarkMode {
     RealWait,
-    PhaseASyntheticTargetPlusOneTick,
-    PhaseASenderOnly,
-    PhaseAProductionBoundary,
+    SyntheticTargetPlusOneTick,
+    SenderOnly,
+    ProductionBoundary,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,15 +175,32 @@ enum BenchmarkScope {
     Full,
     Baseline,
     RealWaitCore,
-    PhaseASenderOnly,
-    PhaseAProductionMatrix,
-    PhaseASparseGap,
-    PhaseBB0,
+    SenderOnly,
+    ProductionDispatchMatrix,
+    SparseGap,
+    InterleavedSpinThreshold,
     RealForegroundFocus,
-    P7aPhysicalStudy,
+    PhysicalKeyStudy,
 }
 
 impl BenchmarkScope {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "full" => Ok(Self::Full),
+            "baseline" => Ok(Self::Baseline),
+            "real_wait_core" => Ok(Self::RealWaitCore),
+            "sender_only" => Ok(Self::SenderOnly),
+            "production_dispatch_matrix" => Ok(Self::ProductionDispatchMatrix),
+            "sparse_gap" => Ok(Self::SparseGap),
+            "interleaved_spin_threshold" => Ok(Self::InterleavedSpinThreshold),
+            "real_foreground_focus" => Ok(Self::RealForegroundFocus),
+            "physical_key_study" => Ok(Self::PhysicalKeyStudy),
+            value => Err(format!(
+                "scope must be full, baseline, real_wait_core, sender_only, production_dispatch_matrix, sparse_gap, interleaved_spin_threshold, real_foreground_focus, or physical_key_study, got {value:?}"
+            )),
+        }
+    }
+
     fn from_env_or_args() -> Result<Self, String> {
         let args: Vec<String> = std::env::args().collect();
         let arg_val = args
@@ -204,20 +221,7 @@ impl BenchmarkScope {
             }
         };
 
-        match scope_str.as_str() {
-            "full" => Ok(Self::Full),
-            "baseline" => Ok(Self::Baseline),
-            "real_wait_core" => Ok(Self::RealWaitCore),
-            "phase_a_sender_only" => Ok(Self::PhaseASenderOnly),
-            "phase_a_production_matrix" => Ok(Self::PhaseAProductionMatrix),
-            "phase_a_sparse_gap" => Ok(Self::PhaseASparseGap),
-            "phase_b0" => Ok(Self::PhaseBB0),
-            "real_foreground_focus" => Ok(Self::RealForegroundFocus),
-            "p7a_physical_study" => Ok(Self::P7aPhysicalStudy),
-            value => Err(format!(
-                "scope must be full, baseline, real_wait_core, phase_a_sender_only, phase_a_production_matrix, phase_a_sparse_gap, phase_b0, real_foreground_focus, or p7a_physical_study, got {value:?}"
-            )),
-        }
+        Self::parse(&scope_str)
     }
 
     const fn name(self) -> &'static str {
@@ -225,17 +229,17 @@ impl BenchmarkScope {
             Self::Full => "full",
             Self::Baseline => "baseline",
             Self::RealWaitCore => "real_wait_core",
-            Self::PhaseASenderOnly => "phase_a_sender_only",
-            Self::PhaseAProductionMatrix => "phase_a_production_matrix",
-            Self::PhaseASparseGap => "phase_a_sparse_gap",
-            Self::PhaseBB0 => "phase_b0",
+            Self::SenderOnly => "sender_only",
+            Self::ProductionDispatchMatrix => "production_dispatch_matrix",
+            Self::SparseGap => "sparse_gap",
+            Self::InterleavedSpinThreshold => "interleaved_spin_threshold",
             Self::RealForegroundFocus => "real_foreground_focus",
-            Self::P7aPhysicalStudy => "p7a_physical_study",
+            Self::PhysicalKeyStudy => "physical_key_study",
         }
     }
 }
 
-struct P7aProbeStats {
+struct PhysicalStudyProbeStats {
     packets: AtomicU64,
     queries: AtomicU64,
     held_observed: AtomicU64,
@@ -245,10 +249,10 @@ struct P7aProbeStats {
     held_modifier_union: AtomicU64,
     timing_errors: AtomicU64,
     max_duration_us: AtomicU64,
-    duration_histogram: [AtomicU64; P7A_DURATION_HISTOGRAM_BINS],
+    duration_histogram: [AtomicU64; PHYSICAL_STUDY_DURATION_HISTOGRAM_BINS],
 }
 
-impl Default for P7aProbeStats {
+impl Default for PhysicalStudyProbeStats {
     fn default() -> Self {
         Self {
             packets: AtomicU64::new(0),
@@ -265,7 +269,7 @@ impl Default for P7aProbeStats {
     }
 }
 
-impl P7aProbeStats {
+impl PhysicalStudyProbeStats {
     fn record(
         &self,
         evidence: Option<PhysicalStudyEvidence>,
@@ -299,14 +303,18 @@ impl P7aProbeStats {
                 .fetch_max(duration_us, Ordering::Relaxed);
             let bucket = usize::try_from(duration_us)
                 .unwrap_or(usize::MAX)
-                .min(P7A_DURATION_HISTOGRAM_BINS - 1);
+                .min(PHYSICAL_STUDY_DURATION_HISTOGRAM_BINS - 1);
             self.duration_histogram[bucket].fetch_add(1, Ordering::Relaxed);
         } else {
             self.timing_errors.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    fn install_hook(&self, harness: &mut ProductionDispatchTestHarness, setup: P7aHookSetup) {
+    fn install_hook(
+        &self,
+        harness: &mut ProductionDispatchTestHarness,
+        setup: PhysicalStudyHookSetup,
+    ) {
         let stats = Arc::clone(&setup.stats);
         harness.set_physical_study_hook_for_test(move |pending_down_mask| {
             let started = setup.clock.now().ok();
@@ -327,8 +335,8 @@ impl P7aProbeStats {
         let mut overflow_samples = 0u64;
         for (bucket, value) in self.duration_histogram.iter().enumerate() {
             let bucket_count = value.load(Ordering::Relaxed);
-            let output_bucket = bucket.min(P7A_DURATION_HISTOGRAM_BINS - 1);
-            if output_bucket == P7A_DURATION_HISTOGRAM_BINS - 1 {
+            let output_bucket = bucket.min(PHYSICAL_STUDY_DURATION_HISTOGRAM_BINS - 1);
+            if output_bucket == PHYSICAL_STUDY_DURATION_HISTOGRAM_BINS - 1 {
                 overflow_samples = bucket_count;
             }
             durations.extend(std::iter::repeat_n(
@@ -358,7 +366,7 @@ impl P7aProbeStats {
             },
             "probe_duration_us_including_measurement_bracket": duration_summary,
             "probe_duration_histogram_resolution_us": 1,
-            "probe_duration_histogram_overflow_bin_us": P7A_DURATION_HISTOGRAM_BINS - 1,
+            "probe_duration_histogram_overflow_bin_us": PHYSICAL_STUDY_DURATION_HISTOGRAM_BINS - 1,
             "probe_duration_overflow_samples": overflow_samples,
             "probe_duration_max_exact_us": self.max_duration_us.load(Ordering::Relaxed),
             "qpc_bracket_errors": self.timing_errors.load(Ordering::Relaxed),
@@ -367,14 +375,26 @@ impl P7aProbeStats {
 }
 
 #[derive(Clone)]
-struct P7aHookSetup {
+struct PhysicalStudyHookSetup {
     candidate: PhysicalStudyCandidate,
     plan: PhysicalStudyPlan,
     clock: QpcClock,
-    stats: Arc<P7aProbeStats>,
+    stats: Arc<PhysicalStudyProbeStats>,
 }
 
 impl BenchmarkMode {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "real_wait" => Ok(Self::RealWait),
+            "synthetic_target_plus_one_tick" => Ok(Self::SyntheticTargetPlusOneTick),
+            "sender_only" => Ok(Self::SenderOnly),
+            "production_boundary" => Ok(Self::ProductionBoundary),
+            value => Err(format!(
+                "mode must be real_wait, synthetic_target_plus_one_tick, sender_only, or production_boundary, got {value:?}"
+            )),
+        }
+    }
+
     fn from_env_or_args() -> Result<Self, String> {
         let args: Vec<String> = std::env::args().collect();
         let arg_val = args
@@ -393,23 +413,15 @@ impl BenchmarkMode {
             (None, Err(error)) => return Err(format!("RT_HANDOFF_BENCH_MODE is invalid: {error}")),
         };
 
-        match mode_str.as_str() {
-            "real_wait" => Ok(Self::RealWait),
-            "phase_a_synthetic_target_plus_one_tick" => Ok(Self::PhaseASyntheticTargetPlusOneTick),
-            "phase_a_sender_only" => Ok(Self::PhaseASenderOnly),
-            "phase_a_production_boundary" => Ok(Self::PhaseAProductionBoundary),
-            value => Err(format!(
-                "mode must be real_wait, phase_a_synthetic_target_plus_one_tick, phase_a_sender_only, or phase_a_production_boundary, got {value:?}"
-            )),
-        }
+        Self::parse(&mode_str)
     }
 
     const fn name(self) -> &'static str {
         match self {
             Self::RealWait => "real_wait",
-            Self::PhaseASyntheticTargetPlusOneTick => "phase_a_synthetic_target_plus_one_tick",
-            Self::PhaseASenderOnly => "phase_a_sender_only",
-            Self::PhaseAProductionBoundary => "phase_a_production_boundary",
+            Self::SyntheticTargetPlusOneTick => "synthetic_target_plus_one_tick",
+            Self::SenderOnly => "sender_only",
+            Self::ProductionBoundary => "production_boundary",
         }
     }
 
@@ -1708,23 +1720,20 @@ fn wait_and_dispatch_or_record(
             record_wait_evidence(samples, harness)?;
             step
         }
-        BenchmarkMode::PhaseASyntheticTargetPlusOneTick => {
+        BenchmarkMode::SyntheticTargetPlusOneTick => {
             if harness.physical_target_qpc_for_test(plan).is_none() {
                 return Err("synthetic benchmark plan has no physical target".to_string());
             }
-            harness.dispatch_at_phase_a_benchmark_boundary_for_test(
-                plan,
-                SYNTHETIC_TRANSPORT_COMPLETION_US,
-            )
+            harness.dispatch_at_benchmark_boundary_for_test(plan, SYNTHETIC_TRANSPORT_COMPLETION_US)
         }
-        BenchmarkMode::PhaseASenderOnly => {
-            return Err("phase_a_sender_only does not use coordinator dispatch".to_string());
+        BenchmarkMode::SenderOnly => {
+            return Err("sender_only does not use coordinator dispatch".to_string());
         }
-        BenchmarkMode::PhaseAProductionBoundary => {
+        BenchmarkMode::ProductionBoundary => {
             if harness.physical_target_qpc_for_test(plan).is_none() {
                 return Err("production-boundary benchmark plan has no physical target".to_string());
             }
-            harness.dispatch_at_phase_a_production_boundary_for_test(plan)
+            harness.dispatch_at_production_boundary_for_test(plan)
         }
     };
     samples
@@ -1886,7 +1895,7 @@ fn run_down_iteration(
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
     configure_focus_for_benchmark(&mut harness)?;
     harness.enable_dispatch_ready_timing_for_benchmark();
-    let alignment_margin_us = if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+    let alignment_margin_us = if matches!(benchmark_mode, BenchmarkMode::ProductionBoundary) {
         0
     } else {
         gap_us
@@ -1933,7 +1942,7 @@ fn run_prepared_down_iteration_with_study(
     key_count: usize,
     mode: WaitMode,
     gap_us: u64,
-    study: Option<&P7aHookSetup>,
+    study: Option<&PhysicalStudyHookSetup>,
 ) -> Result<(), String> {
     let iteration_started = Instant::now();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(key_count, gap_us);
@@ -1946,7 +1955,7 @@ fn run_prepared_down_iteration_with_study(
     if let Some(study) = study {
         study.stats.install_hook(&mut harness, study.clone());
     }
-    configure_p7a_sender_clock(&mut harness);
+    configure_physical_study_sender_clock(&mut harness);
     sky_dispatch_win32::focus::reset_foreground_query_count();
     let step = harness.wait_and_dispatch_prepared_current_for_test()?;
     samples
@@ -2015,7 +2024,7 @@ fn run_up_with_study(
     key_count: usize,
     mode: WaitMode,
     benchmark_mode: BenchmarkMode,
-    study: Option<&P7aHookSetup>,
+    study: Option<&PhysicalStudyHookSetup>,
 ) -> Result<Samples, String> {
     let mut samples = new_samples();
     for _ in 0..iterations() {
@@ -2037,7 +2046,7 @@ fn run_up_with_study(
         harness.enable_dispatch_ready_timing_for_benchmark();
         harness.configure_production_wait_policy(mode.effective_spin_threshold_us)?;
         while harness.pop_observation().is_some() {}
-        if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+        if matches!(benchmark_mode, BenchmarkMode::ProductionBoundary) {
             harness.align_next_plan_to_benchmark_margin_for_test(0);
         }
         assert_eq!(
@@ -2050,7 +2059,7 @@ fn run_up_with_study(
         if let Some(study) = study {
             study.stats.install_hook(&mut harness, study.clone());
         }
-        configure_p7a_sender_clock(&mut harness);
+        configure_physical_study_sender_clock(&mut harness);
         harness.reset_preparation_counts_for_test();
         let mut plan = NextDispatchPlan::default();
         let plan_started = Instant::now();
@@ -2090,7 +2099,7 @@ fn run_mixed_with_study(
     event_count: usize,
     mode: WaitMode,
     benchmark_mode: BenchmarkMode,
-    study: Option<&P7aHookSetup>,
+    study: Option<&PhysicalStudyHookSetup>,
 ) -> Result<Samples, String> {
     let mut samples = new_samples();
     for _ in 0..iterations() {
@@ -2115,8 +2124,8 @@ fn run_mixed_with_study(
         if let Some(study) = study {
             study.stats.install_hook(&mut harness, study.clone());
         }
-        configure_p7a_sender_clock(&mut harness);
-        if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+        configure_physical_study_sender_clock(&mut harness);
+        if matches!(benchmark_mode, BenchmarkMode::ProductionBoundary) {
             harness.align_next_plan_to_benchmark_margin_for_test(0);
         }
         harness.reset_preparation_counts_for_test();
@@ -2158,7 +2167,7 @@ fn run_dense_alternating_with_study(
     event_count: usize,
     mode: WaitMode,
     benchmark_mode: BenchmarkMode,
-    study: Option<&P7aHookSetup>,
+    study: Option<&PhysicalStudyHookSetup>,
 ) -> Result<Samples, String> {
     let mut samples = new_samples();
     for _ in 0..iterations() {
@@ -2174,9 +2183,9 @@ fn run_dense_alternating_with_study(
         if let Some(study) = study {
             study.stats.install_hook(&mut harness, study.clone());
         }
-        configure_p7a_sender_clock(&mut harness);
+        configure_physical_study_sender_clock(&mut harness);
         while harness.pop_observation().is_some() {}
-        if matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary) {
+        if matches!(benchmark_mode, BenchmarkMode::ProductionBoundary) {
             harness.align_next_plan_to_benchmark_margin_for_test(0);
         }
         harness.reset_preparation_counts_for_test();
@@ -2209,10 +2218,10 @@ fn run_dense_alternating_with_study(
 
 fn run_same_key_retrigger_with_study(
     mode: WaitMode,
-    study: Option<&P7aHookSetup>,
+    study: Option<&PhysicalStudyHookSetup>,
 ) -> Result<Samples, String> {
     let mut samples = new_samples();
-    for _ in 0..p7a_retrigger_iterations() {
+    for _ in 0..physical_study_retrigger_iterations() {
         let iteration_started = Instant::now();
         let mut harness =
             ProductionDispatchTestHarness::new_same_key_retrigger_with_gap_for_test(20_000);
@@ -2231,7 +2240,7 @@ fn run_same_key_retrigger_with_study(
         if let Some(study) = study {
             study.stats.install_hook(&mut harness, study.clone());
         }
-        configure_p7a_sender_clock(&mut harness);
+        configure_physical_study_sender_clock(&mut harness);
         harness.reset_preparation_counts_for_test();
         let mut plan = NextDispatchPlan::default();
         let plan_started = Instant::now();
@@ -2261,19 +2270,19 @@ fn run_same_key_retrigger_with_study(
     Ok(samples)
 }
 
-fn configure_p7a_sender_clock(harness: &mut ProductionDispatchTestHarness) {
-    if std::env::var_os("RT_HANDOFF_P7A_CANDIDATE").is_some() {
+fn configure_physical_study_sender_clock(harness: &mut ProductionDispatchTestHarness) {
+    if std::env::var_os("RT_HANDOFF_PHYSICAL_STUDY_CANDIDATE").is_some() {
         harness.use_actual_pre_call_clock_for_physical_study_for_test();
     }
 }
 
-fn p7a_candidate_name() -> String {
-    std::env::var("RT_HANDOFF_P7A_CANDIDATE")
-        .unwrap_or_else(|error| panic!("RT_HANDOFF_P7A_CANDIDATE is required: {error}"))
+fn physical_study_candidate_name() -> String {
+    std::env::var("RT_HANDOFF_PHYSICAL_STUDY_CANDIDATE")
+        .unwrap_or_else(|error| panic!("RT_HANDOFF_PHYSICAL_STUDY_CANDIDATE is required: {error}"))
         .to_ascii_uppercase()
 }
 
-fn p7a_expected_queries(candidate: &str, workload: &str) -> u8 {
+fn physical_study_expected_queries(candidate: &str, workload: &str) -> u8 {
     let pending_down_keys = match workload {
         "down_only_1" => 1,
         "down_only_5" => 5,
@@ -2281,7 +2290,7 @@ fn p7a_expected_queries(candidate: &str, workload: &str) -> u8 {
         "mixed_14" => 7,
         "dense_alternating_14" | "same_key_retrigger" => 1,
         "up_only_1" | "up_only_5" | "up_only_15" => 0,
-        _ => panic!("unknown P7a workload: {workload}"),
+        _ => panic!("unknown physical study workload: {workload}"),
     };
     match candidate {
         "A" | "D" => 0,
@@ -2293,25 +2302,25 @@ fn p7a_expected_queries(candidate: &str, workload: &str) -> u8 {
                 pending_down_keys + MODIFIER_GUARD_VKS.len() as u8
             }
         }
-        _ => panic!("P7a candidate must be A, B, C, or D, got {candidate:?}"),
+        _ => panic!("physical study candidate must be A, B, C, or D, got {candidate:?}"),
     }
 }
 
-fn p7a_physical_workload(
+fn physical_study_workload(
     candidate: &str,
     workload: &str,
     mode: WaitMode,
     plan: PhysicalStudyPlan,
     clock: QpcClock,
 ) -> serde_json::Value {
-    let stats = Arc::new(P7aProbeStats::default());
+    let stats = Arc::new(PhysicalStudyProbeStats::default());
     let candidate_kind = match candidate {
         "A" => None,
         "B" => Some(PhysicalStudyCandidate::PendingDownOnly),
         "C" | "D" => Some(PhysicalStudyCandidate::PendingDownAndModifiers),
-        _ => panic!("P7a candidate must be A, B, C, or D, got {candidate:?}"),
+        _ => panic!("physical study candidate must be A, B, C, or D, got {candidate:?}"),
     };
-    let hook = candidate_kind.map(|candidate| P7aHookSetup {
+    let hook = candidate_kind.map(|candidate| PhysicalStudyHookSetup {
         candidate,
         plan,
         clock,
@@ -2328,7 +2337,7 @@ fn p7a_physical_workload(
                     due_us(),
                     hook.as_ref(),
                 )
-                .unwrap_or_else(|error| panic!("P7a {workload}: {error}"));
+                .unwrap_or_else(|error| panic!("physical study {workload}: {error}"));
             }
             samples
         }
@@ -2343,18 +2352,18 @@ fn p7a_physical_workload(
                     due_us(),
                     hook.as_ref(),
                 )
-                .unwrap_or_else(|error| panic!("P7a {workload}: {error}"));
+                .unwrap_or_else(|error| panic!("physical study {workload}: {error}"));
             }
             samples
         }
         "mixed_14" => run_mixed_with_study(14, mode, BenchmarkMode::RealWait, hook.as_ref())
-            .unwrap_or_else(|error| panic!("P7a {workload}: {error}")),
+            .unwrap_or_else(|error| panic!("physical study {workload}: {error}")),
         "dense_alternating_14" => {
             run_dense_alternating_with_study(14, mode, BenchmarkMode::RealWait, hook.as_ref())
-                .unwrap_or_else(|error| panic!("P7a {workload}: {error}"))
+                .unwrap_or_else(|error| panic!("physical study {workload}: {error}"))
         }
         "same_key_retrigger" => run_same_key_retrigger_with_study(mode, hook.as_ref())
-            .unwrap_or_else(|error| panic!("P7a {workload}: {error}")),
+            .unwrap_or_else(|error| panic!("physical study {workload}: {error}")),
         "up_only_1" | "up_only_5" | "up_only_15" => {
             let key_count = match workload {
                 "up_only_1" => 1,
@@ -2362,16 +2371,16 @@ fn p7a_physical_workload(
                 _ => 15,
             };
             run_up_with_study(key_count, mode, BenchmarkMode::RealWait, hook.as_ref())
-                .unwrap_or_else(|error| panic!("P7a {workload}: {error}"))
+                .unwrap_or_else(|error| panic!("physical study {workload}: {error}"))
         }
-        _ => panic!("unknown P7a workload: {workload}"),
+        _ => panic!("unknown physical study workload: {workload}"),
     };
     json!({
-        "expected_query_count_per_packet": p7a_expected_queries(candidate, workload),
+        "expected_query_count_per_packet": physical_study_expected_queries(candidate, workload),
         "timing": summarize_for_attempts(
             samples,
             if workload == "same_key_retrigger" {
-                p7a_retrigger_iterations()
+                physical_study_retrigger_iterations()
             } else {
                 iterations()
             },
@@ -2380,17 +2389,19 @@ fn p7a_physical_workload(
     })
 }
 
-fn p7a_physical_study_report(target_hwnd: isize) -> serde_json::Value {
-    let candidate = p7a_candidate_name();
-    let load = std::env::var("RT_HANDOFF_P7A_LOAD")
-        .unwrap_or_else(|error| panic!("RT_HANDOFF_P7A_LOAD is required: {error}"));
+fn physical_key_study_report(target_hwnd: isize) -> serde_json::Value {
+    let candidate = physical_study_candidate_name();
+    let load = std::env::var("RT_HANDOFF_PHYSICAL_STUDY_LOAD")
+        .unwrap_or_else(|error| panic!("RT_HANDOFF_PHYSICAL_STUDY_LOAD is required: {error}"));
     assert!(matches!(load.as_str(), "quiet" | "cpu_contention"));
     assert!(matches!(candidate.as_str(), "A" | "B" | "C" | "D"));
     let profile = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
     let plan = PhysicalStudyPlan::materialize(target_hwnd, &profile).unwrap_or_else(|| {
-        panic!("P7a VK/context materialization was inconclusive for HWND {target_hwnd:#x}")
+        panic!(
+            "physical study VK/context materialization was inconclusive for HWND {target_hwnd:#x}"
+        )
     });
-    let qpc_clock = QpcClock::initialize().expect("P7a QPC initialization");
+    let qpc_clock = QpcClock::initialize().expect("physical study QPC initialization");
     let mode = build_wait_mode("production_adaptive_spin", true, true, true);
     let workloads: &[&str] = if candidate == "D" {
         &["up_only_1", "up_only_5", "up_only_15"]
@@ -2408,7 +2419,7 @@ fn p7a_physical_study_report(target_hwnd: isize) -> serde_json::Value {
     for &workload in workloads {
         workload_reports.insert(
             workload.to_string(),
-            p7a_physical_workload(candidate.as_str(), workload, mode, plan, qpc_clock),
+            physical_study_workload(candidate.as_str(), workload, mode, plan, qpc_clock),
         );
     }
     let mapped_notes: Vec<serde_json::Value> = (0..sky_dispatch_core::model::MAX_KEYS)
@@ -2429,17 +2440,17 @@ fn p7a_physical_study_report(target_hwnd: isize) -> serde_json::Value {
         .collect();
     json!({
         "benchmark": "rt_handoff_bench",
-        "scope": "p7a_physical_study",
-        "phase": "P7a evidence-only",
+        "scope": "physical_key_study",
+        "study_kind": "physical_key_observation",
         "candidate": candidate,
         "load": load,
         "rust_version": rust_version(),
         "os_version": std::env::var("OS_VERSION").ok(),
         "logical_processors": std::thread::available_parallelism().ok().map(usize::from),
         "iterations_per_workload": iterations(),
-        "same_key_retrigger_iterations": p7a_retrigger_iterations(),
+        "same_key_retrigger_iterations": physical_study_retrigger_iterations(),
         "due_us": due_us(),
-        "qpc_frequency": qpc_frequency_checked().expect("P7a QPC frequency"),
+        "qpc_frequency": qpc_frequency_checked().expect("physical study QPC frequency"),
         "wait_policy": mode.name,
         "transport": "deterministic_mock; physical-state queries only; no physical input is sent",
         "target_hwnd": format!("{target_hwnd:#x}"),
@@ -2497,23 +2508,23 @@ fn add_sender_only_sample(
     }
 }
 
-fn run_phase_a_sender_only(packet: PhysicalPacket) -> Result<Samples, String> {
+fn run_sender_only(packet: PhysicalPacket) -> Result<Samples, String> {
     let mut samples = new_samples();
     let mut harness = ProductionDispatchTestHarness::new_down_chord_with_gap(1, due_us());
     let prepared = PreparedPhysicalPacket::try_new(packet).expect("prepared sender-only packet");
     let clock = QpcClock::initialize().expect("QPC");
     for _ in 0..iterations() {
-        let (target, outcome) = harness.send_prepared_phase_a_packet_for_test(&prepared);
+        let (target, outcome) = harness.send_prepared_packet_for_test(&prepared);
         add_sender_only_sample(&mut samples, target, outcome, clock);
     }
     Ok(samples)
 }
 
-fn phase_a_sender_only_report() -> serde_json::Value {
+fn sender_only_report() -> serde_json::Value {
     let scenarios = serde_json::json!({
-        "down_only_15": summarize(run_phase_a_sender_only(PhysicalPacket::new(0, 0x7fff)).unwrap_or_else(|error| panic!("{error}"))),
-        "up_only_15": summarize(run_phase_a_sender_only(PhysicalPacket::new(0x7fff, 0)).unwrap_or_else(|error| panic!("{error}"))),
-        "mixed_2": summarize(run_phase_a_sender_only(PhysicalPacket::new(0b01, 0b10)).unwrap_or_else(|error| panic!("{error}"))),
+        "down_only_15": summarize(run_sender_only(PhysicalPacket::new(0, 0x7fff)).unwrap_or_else(|error| panic!("{error}"))),
+        "up_only_15": summarize(run_sender_only(PhysicalPacket::new(0x7fff, 0)).unwrap_or_else(|error| panic!("{error}"))),
+        "mixed_2": summarize(run_sender_only(PhysicalPacket::new(0b01, 0b10)).unwrap_or_else(|error| panic!("{error}"))),
     });
     serde_json::json!({
         "scope": "sender-only; prepared packet and tracked-state reconciliation retained; waiter/coordinator excluded",
@@ -2527,9 +2538,9 @@ fn phase_a_sender_only_report() -> serde_json::Value {
     })
 }
 
-fn phase_a_production_matrix_report() -> serde_json::Value {
+fn production_dispatch_matrix_report() -> serde_json::Value {
     let mode = build_wait_mode("production_boundary", true, true, true);
-    let benchmark_mode = BenchmarkMode::PhaseAProductionBoundary;
+    let benchmark_mode = BenchmarkMode::ProductionBoundary;
     let mode_started = Instant::now();
     let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     let mut scenarios = serde_json::Map::new();
@@ -2567,7 +2578,7 @@ fn phase_a_production_matrix_report() -> serde_json::Value {
     );
     let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     serde_json::json!({
-        "scope": "Phase-A acceptance production dispatch/admission/commit path with a deterministic direct crossing and mock transport; waiter scheduling excluded; includes dense alternating Up/Down boundaries",
+        "scope": "production-path acceptance production dispatch/admission/commit path with a deterministic direct crossing and mock transport; waiter scheduling excluded; includes dense alternating Up/Down boundaries",
         "waitable_timer_enabled": mode.waitable_timer_enabled,
         "event_wait_enabled": mode.event_wait_enabled,
         "adaptive_spin_enabled": mode.adaptive_spin_enabled,
@@ -2666,8 +2677,8 @@ fn real_foreground_focus_report() -> serde_json::Value {
     })
 }
 
-fn phase_a_sparse_gap_report() -> serde_json::Value {
-    let mode = build_wait_mode("phase_a_sparse_gap", true, true, true);
+fn sparse_gap_report() -> serde_json::Value {
+    let mode = build_wait_mode("sparse_gap", true, true, true);
     let benchmark_mode = BenchmarkMode::RealWait;
     let mode_started = Instant::now();
     let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
@@ -2687,7 +2698,7 @@ fn phase_a_sparse_gap_report() -> serde_json::Value {
     }
     let cpu_finished_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     serde_json::json!({
-        "scope": "Phase-A sparse-gap real HybridWaiter evidence; authored targets and wait policy are unchanged",
+        "scope": "production-path sparse-gap real HybridWaiter evidence; authored targets and wait policy are unchanged",
         "waitable_timer_enabled": mode.waitable_timer_enabled,
         "event_wait_enabled": mode.event_wait_enabled,
         "adaptive_spin_enabled": mode.adaptive_spin_enabled,
@@ -2708,7 +2719,7 @@ fn phase_a_sparse_gap_report() -> serde_json::Value {
     })
 }
 
-fn phase_b0_wait_modes() -> Vec<WaitMode> {
+fn interleaved_spin_threshold_wait_modes() -> Vec<WaitMode> {
     vec![
         build_wait_mode("production_calibrated", true, true, true),
         build_fixed_wait_mode("fixed_spin_500us", 500),
@@ -2719,7 +2730,7 @@ fn phase_b0_wait_modes() -> Vec<WaitMode> {
     ]
 }
 
-fn run_phase_b0_interleaved_scenario(
+fn run_interleaved_spin_threshold_interleaved_scenario(
     key_count: usize,
     gap_us: u64,
     scenario_index: usize,
@@ -2742,8 +2753,8 @@ fn run_phase_b0_interleaved_scenario(
     Ok(samples)
 }
 
-fn phase_b0_report() -> serde_json::Value {
-    let modes = phase_b0_wait_modes();
+fn interleaved_spin_threshold_report() -> serde_json::Value {
+    let modes = interleaved_spin_threshold_wait_modes();
     let benchmark_started = Instant::now();
     let cpu_started_us = sky_dispatch_win32::cpu::current_process_cpu_time_us();
     let timing_margin_us = ProductionDispatchTestHarness::new_down_chord_with_gap(1, 0)
@@ -2757,9 +2768,13 @@ fn phase_b0_report() -> serde_json::Value {
     let mut scenario_index = 0;
     for gap_us in gaps_us {
         for key_count in key_counts {
-            let scenario_samples =
-                run_phase_b0_interleaved_scenario(key_count, gap_us, scenario_index, &modes)
-                    .unwrap_or_else(|error| panic!("{error}"));
+            let scenario_samples = run_interleaved_spin_threshold_interleaved_scenario(
+                key_count,
+                gap_us,
+                scenario_index,
+                &modes,
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
             let scenario_name = format!("down_only_{key_count}_gap_{gap_us}us");
             for (mode_index, samples) in scenario_samples.into_iter().enumerate() {
                 scenarios_by_mode[mode_index]
@@ -2800,7 +2815,7 @@ fn phase_b0_report() -> serde_json::Value {
         })
         .collect::<serde_json::Map<_, _>>();
     json!({
-        "scope": "Phase-B0 benchmark-only interleaved real HybridWaiter qualification; production wait behavior is unchanged",
+        "scope": "interleaved spin-threshold benchmark-only interleaved real HybridWaiter qualification; production wait behavior is unchanged",
         "waitable_timer_enabled": true,
         "event_wait_enabled": true,
         "waiter_constructor": "HybridWaiter::production",
@@ -3513,30 +3528,30 @@ fn main() {
         BenchmarkMode::from_env_or_args().unwrap_or_else(|error| panic!("{error}"));
     let benchmark_scope =
         BenchmarkScope::from_env_or_args().unwrap_or_else(|error| panic!("{error}"));
-    if matches!(benchmark_scope, BenchmarkScope::PhaseASenderOnly)
-        && !matches!(benchmark_mode, BenchmarkMode::PhaseASenderOnly)
+    if matches!(benchmark_scope, BenchmarkScope::SenderOnly)
+        && !matches!(benchmark_mode, BenchmarkMode::SenderOnly)
     {
-        panic!("phase_a_sender_only requires phase_a_sender_only benchmark mode");
+        panic!("sender_only requires sender_only benchmark mode");
     }
     if matches!(benchmark_scope, BenchmarkScope::Baseline)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
     {
         panic!("baseline requires real_wait benchmark mode");
     }
-    if matches!(benchmark_scope, BenchmarkScope::PhaseAProductionMatrix)
-        && !matches!(benchmark_mode, BenchmarkMode::PhaseAProductionBoundary)
+    if matches!(benchmark_scope, BenchmarkScope::ProductionDispatchMatrix)
+        && !matches!(benchmark_mode, BenchmarkMode::ProductionBoundary)
     {
-        panic!("phase_a_production_matrix requires phase_a_production_boundary benchmark mode");
+        panic!("production_dispatch_matrix requires production_boundary benchmark mode");
     }
-    if matches!(benchmark_scope, BenchmarkScope::PhaseASparseGap)
+    if matches!(benchmark_scope, BenchmarkScope::SparseGap)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
     {
-        panic!("phase_a_sparse_gap requires real_wait benchmark mode");
+        panic!("sparse_gap requires real_wait benchmark mode");
     }
-    if matches!(benchmark_scope, BenchmarkScope::PhaseBB0)
+    if matches!(benchmark_scope, BenchmarkScope::InterleavedSpinThreshold)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
     {
-        panic!("phase_b0 requires real_wait benchmark mode");
+        panic!("interleaved_spin_threshold requires real_wait benchmark mode");
     }
     if matches!(benchmark_scope, BenchmarkScope::RealForegroundFocus)
         && !matches!(benchmark_mode, BenchmarkMode::RealWait)
@@ -3559,20 +3574,21 @@ fn main() {
     } else {
         None
     };
-    if matches!(benchmark_scope, BenchmarkScope::P7aPhysicalStudy) {
+    if matches!(benchmark_scope, BenchmarkScope::PhysicalKeyStudy) {
         if !matches!(benchmark_mode, BenchmarkMode::RealWait) {
-            panic!("p7a_physical_study requires real_wait benchmark mode");
+            panic!("physical_key_study requires real_wait benchmark mode");
         }
         if !require_focus || !real_foreground_mode {
             panic!(
-                "p7a_physical_study requires RT_HANDOFF_BENCH_REQUIRE_FOCUS=1 and RT_HANDOFF_BENCH_REAL_FOREGROUND=1"
+                "physical_key_study requires RT_HANDOFF_BENCH_REQUIRE_FOCUS=1 and RT_HANDOFF_BENCH_REAL_FOREGROUND=1"
             );
         }
-        let target_hwnd = sampled_foreground_hwnd.expect("P7a foreground target sampled");
-        let output = serde_json::to_string_pretty(&p7a_physical_study_report(target_hwnd))
-            .expect("serialize P7a physical study output");
+        let target_hwnd =
+            sampled_foreground_hwnd.expect("physical study foreground target sampled");
+        let output = serde_json::to_string_pretty(&physical_key_study_report(target_hwnd))
+            .expect("serialize physical study physical study output");
         if let Some(path) = std::env::args_os().nth(1) {
-            std::fs::write(path, &output).expect("write P7a physical study output");
+            std::fs::write(path, &output).expect("write physical study physical study output");
         }
         println!("{output}");
         return;
@@ -3683,28 +3699,25 @@ fn main() {
         }
     } else if matches!(benchmark_scope, BenchmarkScope::Baseline) {
         mode_reports.insert("baseline".to_string(), baseline_report());
-    } else if matches!(benchmark_scope, BenchmarkScope::PhaseAProductionMatrix) {
+    } else if matches!(benchmark_scope, BenchmarkScope::ProductionDispatchMatrix) {
         mode_reports.insert(
-            "phase_a_production_boundary".to_string(),
-            phase_a_production_matrix_report(),
+            "production_boundary".to_string(),
+            production_dispatch_matrix_report(),
         );
-    } else if matches!(benchmark_scope, BenchmarkScope::PhaseASparseGap) {
+    } else if matches!(benchmark_scope, BenchmarkScope::SparseGap) {
+        mode_reports.insert("sparse_gap".to_string(), sparse_gap_report());
+    } else if matches!(benchmark_scope, BenchmarkScope::InterleavedSpinThreshold) {
         mode_reports.insert(
-            "phase_a_sparse_gap".to_string(),
-            phase_a_sparse_gap_report(),
+            "interleaved_spin_threshold".to_string(),
+            interleaved_spin_threshold_report(),
         );
-    } else if matches!(benchmark_scope, BenchmarkScope::PhaseBB0) {
-        mode_reports.insert("phase_b0".to_string(), phase_b0_report());
     } else if matches!(benchmark_scope, BenchmarkScope::RealForegroundFocus) {
         mode_reports.insert(
             "real_foreground_focus".to_string(),
             real_foreground_focus_report(),
         );
     } else {
-        mode_reports.insert(
-            "phase_a_sender_only".to_string(),
-            phase_a_sender_only_report(),
-        );
+        mode_reports.insert("sender_only".to_string(), sender_only_report());
     }
     let observation_enqueue_ab = observation_enqueue_ab();
     let acceptance_clean = all_scenarios_clean(&mode_reports);
@@ -3712,8 +3725,8 @@ fn main() {
     let sender_cutoff_exercised = matches!(
         benchmark_mode,
         BenchmarkMode::RealWait
-            | BenchmarkMode::PhaseASyntheticTargetPlusOneTick
-            | BenchmarkMode::PhaseAProductionBoundary
+            | BenchmarkMode::SyntheticTargetPlusOneTick
+            | BenchmarkMode::ProductionBoundary
     );
     let output = serde_json::to_string_pretty(&json!({
         "benchmark": "rt_handoff_bench",
@@ -3743,25 +3756,25 @@ fn main() {
         "waiter_metrics_valid": benchmark_mode.uses_real_waiter(),
         "synthetic_transport_completion_us": matches!(
             benchmark_mode,
-            BenchmarkMode::PhaseASyntheticTargetPlusOneTick
+            BenchmarkMode::SyntheticTargetPlusOneTick
         )
         .then_some(SYNTHETIC_TRANSPORT_COMPLETION_US),
         "evidence_scope": match (benchmark_scope, benchmark_mode) {
             (BenchmarkScope::Baseline, BenchmarkMode::RealWait) => "prepared absolute-frame normal dispatch through the production test-support path, deterministic semantic non-send/drop classification, completion no-feedback evidence, and a host real HybridWaiter probe; physical timing floors and wait policy are unchanged; not Raw Input or game-observed latency",
             (BenchmarkScope::Baseline, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, BenchmarkMode::RealWait) => "Rust handoff timing with deterministic mock transport and real HybridWaiter; test-support sender cutoff seam is exercised but production SendInput cutoff qualification is separate; not Raw Input or game-observed latency",
-            (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, _) => "Phase-A coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
-            (BenchmarkScope::PhaseASenderOnly, BenchmarkMode::PhaseASenderOnly) => "Phase-A sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
-            (BenchmarkScope::PhaseASenderOnly, _) => "invalid benchmark scope/mode combination",
-            (BenchmarkScope::PhaseAProductionMatrix, BenchmarkMode::PhaseAProductionBoundary) => "Phase-A acceptance A/B through the full coordinator dispatch/admission/commit path; a test-only direct boundary supplies the frozen crossing QPC and the mock transport records an immediate sender-boundary QPC; waiter scheduling and the real SendInput syscall are excluded; not Raw Input or game-observed latency",
-            (BenchmarkScope::PhaseAProductionMatrix, _) => "invalid benchmark scope/mode combination",
-            (BenchmarkScope::PhaseASparseGap, BenchmarkMode::RealWait) => "Phase-A sparse-gap evidence through the production coordinator and real HybridWaiter with deterministic mock transport; no playback wait policy or authored target is changed; not Raw Input or game-observed latency",
-            (BenchmarkScope::PhaseASparseGap, _) => "invalid benchmark scope/mode combination",
-            (BenchmarkScope::PhaseBB0, BenchmarkMode::RealWait) => "Phase-B0 benchmark-only interleaved spin-threshold qualification through the production coordinator and real HybridWaiter with deterministic mock transport; no production wait policy or authored target is changed; not Raw Input or game-observed latency",
-            (BenchmarkScope::PhaseBB0, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::Full | BenchmarkScope::RealWaitCore, _) => "production-path coordinator A/B with deterministic mock transport and a frozen target plus one synthetic QPC tick; waiter scheduling is intentionally excluded; not Raw Input or game-observed latency",
+            (BenchmarkScope::SenderOnly, BenchmarkMode::SenderOnly) => "production-path sender-only A/B with prepared packets and tracked-state reconciliation; target is sampled immediately before the sender call; waiter/coordinator scheduling is intentionally excluded; not Raw Input or game-observed latency",
+            (BenchmarkScope::SenderOnly, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::ProductionDispatchMatrix, BenchmarkMode::ProductionBoundary) => "production-path acceptance A/B through the full coordinator dispatch/admission/commit path; a test-only direct boundary supplies the frozen crossing QPC and the mock transport records an immediate sender-boundary QPC; waiter scheduling and the real SendInput syscall are excluded; not Raw Input or game-observed latency",
+            (BenchmarkScope::ProductionDispatchMatrix, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::SparseGap, BenchmarkMode::RealWait) => "production-path sparse-gap evidence through the production coordinator and real HybridWaiter with deterministic mock transport; no playback wait policy or authored target is changed; not Raw Input or game-observed latency",
+            (BenchmarkScope::SparseGap, _) => "invalid benchmark scope/mode combination",
+            (BenchmarkScope::InterleavedSpinThreshold, BenchmarkMode::RealWait) => "benchmark-only interleaved spin-threshold qualification through the production coordinator and real HybridWaiter with deterministic mock transport; no production wait policy or authored target is changed; not Raw Input or game-observed latency",
+            (BenchmarkScope::InterleavedSpinThreshold, _) => "invalid benchmark scope/mode combination",
             (BenchmarkScope::RealForegroundFocus, BenchmarkMode::RealWait) => "Focused real HybridWaiter A/B with require_focus enabled on the exact prepared base and foreground-proof head; real foreground setup is outside timed admission and the head's foreground proof uses actual GetForegroundWindow; deterministic mock transport; not Raw Input or game-observed latency",
             (BenchmarkScope::RealForegroundFocus, _) => "invalid benchmark scope/mode combination",
-            (BenchmarkScope::P7aPhysicalStudy, _) => "P7a is emitted by the evidence-only physical-key study runner",
+            (BenchmarkScope::PhysicalKeyStudy, _) => "physical study is emitted by the evidence-only physical-key study runner",
         },
         "rust_version": rust_version(),
         "qpc_frequency": qpc_frequency,
@@ -3784,4 +3797,57 @@ fn main() {
         std::fs::write(path, &output).expect("write benchmark output");
     }
     println!("{output}");
+}
+
+#[cfg(test)]
+mod argument_contract_tests {
+    use super::{BenchmarkMode, BenchmarkScope};
+
+    #[test]
+    fn semantic_scope_and_mode_arguments_round_trip() {
+        for scope in [
+            BenchmarkScope::Full,
+            BenchmarkScope::Baseline,
+            BenchmarkScope::RealWaitCore,
+            BenchmarkScope::SenderOnly,
+            BenchmarkScope::ProductionDispatchMatrix,
+            BenchmarkScope::SparseGap,
+            BenchmarkScope::InterleavedSpinThreshold,
+            BenchmarkScope::RealForegroundFocus,
+            BenchmarkScope::PhysicalKeyStudy,
+        ] {
+            assert_eq!(BenchmarkScope::parse(scope.name()), Ok(scope));
+        }
+
+        for mode in [
+            BenchmarkMode::RealWait,
+            BenchmarkMode::SyntheticTargetPlusOneTick,
+            BenchmarkMode::SenderOnly,
+            BenchmarkMode::ProductionBoundary,
+        ] {
+            assert_eq!(BenchmarkMode::parse(mode.name()), Ok(mode));
+        }
+    }
+
+    #[test]
+    fn former_wave_scope_and_mode_arguments_are_rejected() {
+        let former_scopes = [
+            concat!("phase", "_a_sender_only"),
+            concat!("phase", "_a_production_matrix"),
+            concat!("phase", "_a_sparse_gap"),
+            concat!("phase", "_b0"),
+            concat!("p", "7a_physical_study"),
+        ];
+        for scope in former_scopes {
+            assert!(BenchmarkScope::parse(scope).is_err(), "{scope}");
+        }
+
+        for mode in [
+            concat!("phase", "_a_synthetic_target_plus_one_tick"),
+            concat!("phase", "_a_sender_only"),
+            concat!("phase", "_a_production_boundary"),
+        ] {
+            assert!(BenchmarkMode::parse(mode).is_err(), "{mode}");
+        }
+    }
 }

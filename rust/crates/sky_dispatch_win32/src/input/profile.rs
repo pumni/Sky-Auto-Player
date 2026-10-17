@@ -3,8 +3,8 @@ use smallvec::SmallVec;
 
 /// A physical keyboard identity at the Win32 input boundary.
 ///
-/// W4 accepts only non-extended Set-1 make codes, but the flag is retained in
-/// the value so a future extended-key work order cannot infer semantics from a
+/// The profile accepts only non-extended Set-1 make codes, but the flag is retained in
+/// the value so a future extended-key support cannot infer semantics from a
 /// scan-code number or keyboard layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PhysicalKey {
@@ -12,7 +12,7 @@ pub struct PhysicalKey {
     pub extended: bool,
 }
 
-/// The finite W4 domain: ordinary non-extended main-key Set-1 make codes.
+/// The supported profile domain: ordinary non-extended main-key Set-1 make codes.
 /// Control, modifier, lock, function, keypad, navigation, and E0/E1 keys are
 /// intentionally outside this first profile contract.
 pub const SUPPORTED_NON_EXTENDED_SCAN_CODES: &[u16] = &[
@@ -46,7 +46,7 @@ pub enum InstrumentKeyProfileError {
     #[error("instrument profile uses an E0/E1 prefix at logical slot {slot}: {scan_code:#x}")]
     ExtendedPrefix { slot: usize, scan_code: u16 },
     #[error(
-        "instrument profile scan code is outside the W4 supported domain at logical slot {slot}: {scan_code:#x}"
+        "instrument profile scan code is outside the supported profile domain at logical slot {slot}: {scan_code:#x}"
     )]
     UnsupportedScanCode { slot: usize, scan_code: u16 },
     #[error(

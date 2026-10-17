@@ -1,4 +1,4 @@
-//! Lightweight statistics collector for the P3.4 coordinator benchmark.
+//! Lightweight statistics collector for the coordinator commit-scaling benchmark.
 //!
 //! No external dependencies — uses only `std`.  All computations are done
 //! eagerly on the collected sample vectors at report time.

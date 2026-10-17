@@ -42,11 +42,11 @@ use sky_dispatch_win32::wait::HybridWaiter;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-const R3_FRAME_US: u64 = 16_667;
-const R3_MARGIN_US: u64 = 500;
-const R3_EFFECTIVE_HOLD_US: u64 = R3_FRAME_US + R3_MARGIN_US;
+const DISPATCH_FRAME_US: u64 = 16_667;
+const DISPATCH_MARGIN_US: u64 = 500;
+const DISPATCH_EFFECTIVE_HOLD_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
 #[cfg(test)]
-const R3_RELEASE_GAP_US: u64 = R3_FRAME_US + R3_MARGIN_US;
+const DISPATCH_RELEASE_GAP_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedBoundaryEvidence {
@@ -69,7 +69,7 @@ pub struct PhysicalFloorEvidence {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RtR3TimingConfigEvidence {
+pub struct DispatchTimingConfigEvidence {
     pub frame_us: u64,
     pub frame_ticks: u64,
     pub frame_base_hold_us: u64,
@@ -86,7 +86,7 @@ pub struct RtR3TimingConfigEvidence {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RtR3PreparedStartupEvidence {
+pub struct PreparedStartupEvidence {
     pub prepared_entry_count: usize,
     pub physical_entry_count: usize,
     pub metadata_entry_count: usize,
@@ -96,12 +96,12 @@ pub struct RtR3PreparedStartupEvidence {
     pub rebuilt_coordinator_heap_payload_bytes: usize,
 }
 
-pub struct RtR3PreparedStartupBuilder {
+pub struct PreparedStartupBuilder {
     coordinator: RuntimeDispatchCoordinator,
     qpc_clock: QpcClock,
 }
 
-impl RtR3PreparedStartupBuilder {
+impl PreparedStartupBuilder {
     pub fn clone_coordinator_for_test(&self) -> Self {
         Self {
             coordinator: self.coordinator.clone(),
@@ -109,7 +109,7 @@ impl RtR3PreparedStartupBuilder {
         }
     }
 
-    pub fn prepare(self) -> Result<RtR3PreparedStartupEvidence, String> {
+    pub fn prepare(self) -> Result<PreparedStartupEvidence, String> {
         let probe = crate::engine::worker::DispatchPreparationProbe::default();
         let profile = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
         let (stream, coordinator) =
@@ -119,14 +119,14 @@ impl RtR3PreparedStartupBuilder {
             physical_entry_count,
             metadata_entry_count,
             prepared_entry_array_bytes,
-        ) = stream.r3_storage_evidence_for_test();
-        Ok(RtR3PreparedStartupEvidence {
+        ) = stream.prepared_storage_evidence_for_test();
+        Ok(PreparedStartupEvidence {
             prepared_entry_count,
             physical_entry_count,
             metadata_entry_count,
             prepared_entry_type_size_bytes: std::mem::size_of::<PreparedDispatchEntry>(),
             prepared_entry_array_bytes,
-            cancellation_ledger_bytes: stream.r3_cancellation_ledger_bytes_for_test(),
+            cancellation_ledger_bytes: stream.cancellation_ledger_bytes_for_test(),
             rebuilt_coordinator_heap_payload_bytes: coordinator
                 .heap_payload_bytes_for_test_support(),
         })
@@ -162,12 +162,12 @@ pub struct ProductionDispatchTestHarness {
     prepared_alignment_qpc: Option<QpcTicks>,
     prepared_target_qpc: Option<QpcTicks>,
     prepared_wait_entry_qpc: Option<QpcTicks>,
-    r3_mock_sender_start_qpc: Arc<AtomicU64>,
-    r3_native_admission_passed: bool,
+    mock_sender_start_qpc: Arc<AtomicU64>,
+    native_admission_passed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct RtR3FinalizeEvidence {
+pub struct FinalizeEvidence {
     pub outcome_code: u8,
     pub attempted_mask: u16,
     pub release_obligation_mask: u16,
@@ -181,11 +181,11 @@ pub struct RtR3FinalizeEvidence {
     pub active_generations: u64,
 }
 
-pub type RtR3CleanupCapture = Arc<Mutex<Vec<(Vec<u16>, bool)>>>;
+pub type CleanupCapture = Arc<Mutex<Vec<(Vec<u16>, bool)>>>;
 
 #[allow(dead_code)]
 impl ProductionDispatchTestHarness {
-    pub fn new_r3_diagnostics_sequence_for_test(
+    pub fn new_diagnostics_sequence_for_test(
         actions: &[KeyActionInput],
         qpc_frequency_hz: u64,
         frame_us: u64,
@@ -199,7 +199,7 @@ impl ProductionDispatchTestHarness {
             .checked_add(timing_margin_us)
             .ok_or_else(|| "diagnostic effective hold overflows".to_string())?;
         let mut harness = Self::create_harness_with_clock(actions, effective_hold_us, qpc_clock);
-        harness.configure_r3_diagnostic_timing_for_test(
+        harness.configure_diagnostic_timing_for_test(
             actions,
             frame_us,
             frame_base_hold_us,
@@ -208,11 +208,11 @@ impl ProductionDispatchTestHarness {
         Ok(harness)
     }
 
-    pub fn new_r3_prepared_startup_builder_for_test(
+    pub fn new_prepared_startup_builder_for_test(
         schedule: RuntimeSchedule,
         qpc_frequency_hz: u64,
         min_hold_us: u64,
-    ) -> Result<RtR3PreparedStartupBuilder, String> {
+    ) -> Result<PreparedStartupBuilder, String> {
         let frequency = std::num::NonZeroU64::new(qpc_frequency_hz)
             .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
         let qpc_clock = QpcClock::from_frequency_hz(frequency);
@@ -230,7 +230,7 @@ impl ProductionDispatchTestHarness {
             },
         )
         .map_err(|error| format!("diagnostic startup coordinator construction: {error}"))?;
-        Ok(RtR3PreparedStartupBuilder {
+        Ok(PreparedStartupBuilder {
             coordinator,
             qpc_clock,
         })
@@ -255,10 +255,10 @@ impl ProductionDispatchTestHarness {
         ])
     }
 
-    /// Valid four-event P0 lifecycle sequence. The malformed duplicate-Up
+    /// Valid four-event lifecycle sequence. The malformed duplicate-Up
     /// control is validated separately by the probe. The supplied QPC
     /// frequency controls each authored and guard conversion.
-    pub fn new_r3_lifecycle_sequence_for_test(
+    pub fn new_lifecycle_sequence_for_test(
         qpc_frequency_hz: u64,
         odd_frequency_vector: bool,
     ) -> Result<Self, String> {
@@ -276,37 +276,37 @@ impl ProductionDispatchTestHarness {
                 kind: ActionKind::Down,
                 scheduled_us: offsets[0],
                 scan_codes: vec![0x15].into(),
-                reason: "r3-p0-vector-a-down-0".into(),
+                reason: "vector-a-down-0".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: offsets[1],
                 scan_codes: vec![0x15].into(),
-                reason: "r3-p0-vector-a-up-17167".into(),
+                reason: "vector-a-up-17167".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: offsets[2],
                 scan_codes: vec![0x15].into(),
-                reason: "r3-p0-vector-a-down-34334".into(),
+                reason: "vector-a-down-34334".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
                 scheduled_us: offsets[3],
                 scan_codes: vec![0x15].into(),
-                reason: "r3-p0-vector-a-up-51501".into(),
+                reason: "vector-a-up-51501".into(),
             },
         ];
         let mut harness =
-            Self::create_harness_with_clock(&actions, R3_EFFECTIVE_HOLD_US, qpc_clock);
-        harness.configure_r3_native_admission_for_test(&actions)?;
+            Self::create_harness_with_clock(&actions, DISPATCH_EFFECTIVE_HOLD_US, qpc_clock);
+        harness.configure_native_admission_for_test(&actions)?;
         Ok(harness)
     }
 
-    pub fn new_r3_hol_sequence_for_test(qpc_frequency_hz: u64) -> Result<Self, String> {
+    pub fn new_hol_sequence_for_test(qpc_frequency_hz: u64) -> Result<Self, String> {
         let frequency = std::num::NonZeroU64::new(qpc_frequency_hz)
             .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
         let qpc_clock = QpcClock::from_frequency_hz(frequency);
@@ -316,46 +316,46 @@ impl ProductionDispatchTestHarness {
                 kind: ActionKind::Down,
                 scheduled_us: 100_000,
                 scan_codes: vec![0x15].into(),
-                reason: "r3-p0-hol-a-down".into(),
+                reason: "head-of-line-a-down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 117_167,
                 scan_codes: vec![0x15].into(),
-                reason: "r3-p0-hol-a-up".into(),
+                reason: "head-of-line-a-up".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 118_000,
                 scan_codes: vec![0x16].into(),
-                reason: "r3-p0-hol-b-down".into(),
+                reason: "head-of-line-b-down".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
                 scheduled_us: 135_167,
                 scan_codes: vec![0x16].into(),
-                reason: "r3-p0-hol-b-up".into(),
+                reason: "head-of-line-b-up".into(),
             },
         ];
         let mut harness =
-            Self::create_harness_with_clock(&actions, R3_EFFECTIVE_HOLD_US, qpc_clock);
-        harness.configure_r3_native_admission_for_test(&actions)?;
+            Self::create_harness_with_clock(&actions, DISPATCH_EFFECTIVE_HOLD_US, qpc_clock);
+        harness.configure_native_admission_for_test(&actions)?;
         Ok(harness)
     }
 
-    /// Prepared Down, UpOnly, or Mixed workload fixtures for the P0 precision
+    /// Prepared Down, UpOnly, or Mixed workload fixtures for the precision
     /// probe. Setup packets are separate prepared frames and are dispatched
     /// outside the probe's timed admission interval.
-    pub fn new_r3_prepared_mixed_for_test(
+    pub fn new_prepared_mixed_for_test(
         up_count: usize,
         down_count: usize,
         gap_us: u64,
     ) -> Result<Self, String> {
         if up_count == 0 || down_count == 0 || up_count + down_count > 15 {
-            return Err("P0 Mixed fixture requires 1..15 disjoint keys".to_string());
+            return Err("Mixed fixture requires 1..15 disjoint keys".to_string());
         }
         let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES;
         let up_codes = scan_codes[..up_count].to_vec();
@@ -366,42 +366,43 @@ impl ProductionDispatchTestHarness {
                 kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: up_codes.clone().into(),
-                reason: "r3-p0-mixed-setup-down".into(),
+                reason: "mixed-setup-down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: gap_us,
                 scan_codes: up_codes.into(),
-                reason: "r3-p0-mixed-up".into(),
+                reason: "mixed-up".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: gap_us,
                 scan_codes: down_codes.clone().into(),
-                reason: "r3-p0-mixed-down".into(),
+                reason: "mixed-down".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
                 scheduled_us: gap_us.saturating_mul(2),
                 scan_codes: down_codes.into(),
-                reason: "r3-p0-mixed-cleanup".into(),
+                reason: "mixed-cleanup".into(),
             },
         ];
         let clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
-        let mut harness = Self::create_harness_with_clock(&actions, R3_EFFECTIVE_HOLD_US, clock);
-        harness.configure_r3_native_admission_for_test(&actions)?;
+        let mut harness =
+            Self::create_harness_with_clock(&actions, DISPATCH_EFFECTIVE_HOLD_US, clock);
+        harness.configure_native_admission_for_test(&actions)?;
         Ok(harness)
     }
 
-    pub fn new_r3_prepared_down_or_uponly_for_test(
+    pub fn new_prepared_down_or_uponly_for_test(
         key_count: usize,
         gap_us: u64,
     ) -> Result<Self, String> {
         if !(1..=15).contains(&key_count) {
-            return Err("P0 Down/UpOnly fixture requires 1..=15 keys".to_string());
+            return Err("Down/UpOnly fixture requires 1..=15 keys".to_string());
         }
         let scan_codes = PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count].to_vec();
         let actions = [
@@ -410,35 +411,36 @@ impl ProductionDispatchTestHarness {
                 kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: scan_codes.clone().into(),
-                reason: "r3-p0-down-or-uponly-setup".into(),
+                reason: "down-or-up-only-setup".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: gap_us,
                 scan_codes: scan_codes.into(),
-                reason: "r3-p0-down-or-uponly-release".into(),
+                reason: "down-or-up-only-release".into(),
             },
         ];
         let clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
-        let mut harness = Self::create_harness_with_clock(&actions, R3_EFFECTIVE_HOLD_US, clock);
-        harness.configure_r3_native_admission_for_test(&actions)?;
+        let mut harness =
+            Self::create_harness_with_clock(&actions, DISPATCH_EFFECTIVE_HOLD_US, clock);
+        harness.configure_native_admission_for_test(&actions)?;
         Ok(harness)
     }
 
-    fn configure_r3_native_admission_for_test(
+    fn configure_native_admission_for_test(
         &mut self,
         actions: &[KeyActionInput],
     ) -> Result<(), String> {
-        self.configure_r3_diagnostic_timing_for_test(
+        self.configure_diagnostic_timing_for_test(
             actions,
-            R3_FRAME_US,
-            R3_FRAME_US,
-            R3_MARGIN_US,
+            DISPATCH_FRAME_US,
+            DISPATCH_FRAME_US,
+            DISPATCH_MARGIN_US,
         )
     }
 
-    pub fn configure_r3_diagnostic_timing_for_test(
+    pub fn configure_diagnostic_timing_for_test(
         &mut self,
         actions: &[KeyActionInput],
         frame_us: u64,
@@ -447,10 +449,10 @@ impl ProductionDispatchTestHarness {
     ) -> Result<(), String> {
         let effective_hold_us = frame_base_hold_us
             .checked_add(timing_margin_us)
-            .ok_or_else(|| "R3 effective hold overflows".to_string())?;
+            .ok_or_else(|| "dispatch effective hold overflows".to_string())?;
         let min_release_gap_us = frame_us
             .checked_add(timing_margin_us)
-            .ok_or_else(|| "R3 minimum release gap overflows".to_string())?;
+            .ok_or_else(|| "dispatch minimum release gap overflows".to_string())?;
         self.config.timing.min_hold_us = effective_hold_us;
         self.config.timing.min_release_gap_us = min_release_gap_us;
         self.config.timing.frame_us = frame_us;
@@ -460,13 +462,13 @@ impl ProductionDispatchTestHarness {
         let clock = self.resources.clock;
         let hold_ticks = clock
             .duration_from_us(effective_hold_us)
-            .map_err(|error| format!("R3 effective hold conversion: {error:?}"))?;
+            .map_err(|error| format!("dispatch effective hold conversion: {error:?}"))?;
         let frame_ticks = clock
             .duration_from_us(frame_us)
-            .map_err(|error| format!("R3 frame conversion: {error:?}"))?;
+            .map_err(|error| format!("dispatch frame conversion: {error:?}"))?;
         let margin_ticks = clock
             .duration_from_us(timing_margin_us)
-            .map_err(|error| format!("R3 margin conversion: {error:?}"))?;
+            .map_err(|error| format!("dispatch margin conversion: {error:?}"))?;
         self.timing.timing_margin_ticks = margin_ticks;
         self.runtime
             .set_physical_timing_guard_for_test(hold_ticks, frame_ticks);
@@ -478,7 +480,7 @@ impl ProductionDispatchTestHarness {
         scan_codes.sort_unstable();
         scan_codes.dedup();
         let schedule = sky_dispatch_core::compile::compile_runtime_intents(actions, &scan_codes)
-            .map_err(|error| format!("R3 fixture compilation failed: {error:?}"))?;
+            .map_err(|error| format!("dispatch fixture compilation failed: {error:?}"))?;
         super::super::session::validate_native_timing_contract(&self.config.timing)?;
         super::super::session::validate_native_schedule_timing_with_release_gap(
             &schedule,
@@ -486,25 +488,25 @@ impl ProductionDispatchTestHarness {
             self.config.timing.min_release_gap_us,
             clock,
         )?;
-        self.r3_native_admission_passed = true;
+        self.native_admission_passed = true;
         Ok(())
     }
 
-    pub fn r3_timing_config_for_test(&self) -> Result<RtR3TimingConfigEvidence, String> {
+    pub fn dispatch_timing_config_for_test(&self) -> Result<DispatchTimingConfigEvidence, String> {
         let clock = self.resources.clock;
         let frame_ticks = clock
             .duration_from_us(self.config.timing.frame_us)
-            .map_err(|error| format!("R3 frame metadata conversion: {error:?}"))?;
+            .map_err(|error| format!("dispatch frame metadata conversion: {error:?}"))?;
         let margin_ticks = clock
             .duration_from_us(self.config.timing.timing_margin_us)
-            .map_err(|error| format!("R3 margin metadata conversion: {error:?}"))?;
+            .map_err(|error| format!("dispatch margin metadata conversion: {error:?}"))?;
         let hold_ticks = clock
             .duration_from_us(self.config.timing.min_hold_us)
-            .map_err(|error| format!("R3 hold metadata conversion: {error:?}"))?;
+            .map_err(|error| format!("dispatch hold metadata conversion: {error:?}"))?;
         let release_gap_ticks = clock
             .duration_from_us(self.config.timing.min_release_gap_us)
-            .map_err(|error| format!("R3 release-gap metadata conversion: {error:?}"))?;
-        Ok(RtR3TimingConfigEvidence {
+            .map_err(|error| format!("dispatch release-gap metadata conversion: {error:?}"))?;
+        Ok(DispatchTimingConfigEvidence {
             frame_us: self.config.timing.frame_us,
             frame_ticks: frame_ticks.as_u64(),
             frame_base_hold_us: self.config.timing.frame_base_hold_us,
@@ -517,7 +519,7 @@ impl ProductionDispatchTestHarness {
             lease_enabled: self.config.wait.supervisor_lease_timeout_us != 0,
             lease_timeout_us: self.config.wait.supervisor_lease_timeout_us,
             lease_timeout_ticks: self.timing.lease_timeout_ticks.as_u64(),
-            native_admission_passed: self.r3_native_admission_passed,
+            native_admission_passed: self.native_admission_passed,
         })
     }
 
@@ -1347,7 +1349,7 @@ impl ProductionDispatchTestHarness {
     /// Build a dense alternating suffix: each future boundary releases the
     /// prior key while pressing the next key. The initial Down is committed
     /// during setup so the measured boundary exercises the production
-    /// coordinator path used by the other Phase-A matrix scenarios.
+    /// coordinator path used by the other production-path matrix scenarios.
     pub fn try_new_dense_alternating_with_gap_for_test(
         event_count: usize,
         gap_us: u64,
@@ -1595,8 +1597,8 @@ impl ProductionDispatchTestHarness {
             prepared_alignment_qpc: None,
             prepared_target_qpc: None,
             prepared_wait_entry_qpc: None,
-            r3_mock_sender_start_qpc: Arc::new(AtomicU64::new(0)),
-            r3_native_admission_passed: false,
+            mock_sender_start_qpc: Arc::new(AtomicU64::new(0)),
+            native_admission_passed: false,
         }
     }
 
@@ -1760,9 +1762,9 @@ impl ProductionDispatchTestHarness {
         self.resources.playback.epoch = epoch;
     }
 
-    pub fn reanchor_playback_clock_for_r3_probe(&mut self, epoch: QpcTicks) -> Result<(), String> {
+    pub fn reanchor_playback_clock_for_test(&mut self, epoch: QpcTicks) -> Result<(), String> {
         self.resources.playback = PlaybackClockState::new(epoch, DurationTicks::ZERO)
-            .map_err(|error| format!("P0 playback clock anchor: {error}"))?;
+            .map_err(|error| format!("playback clock anchor: {error}"))?;
         self.progress_clock.publish(&self.resources.playback);
         Ok(())
     }
@@ -2102,10 +2104,10 @@ impl ProductionDispatchTestHarness {
     }
 
     /// Drive the same verified cleanup and playback-clock transitions used by
-    /// the dispatch loop's manual pause/resume branches. The synthetic P0
-    /// timeline supplies a post-cleanup QPC from the callback after release
+    /// the dispatch loop's manual pause/resume branches. The synthetic
+    /// monitor-progress timeline supplies a post-cleanup QPC from the callback after release
     /// returns.
-    pub fn manual_pause_resume_for_r3_probe(
+    pub fn manual_pause_resume_for_test(
         &mut self,
         pause_qpc: QpcTicks,
         resume_qpc: QpcTicks,
@@ -2140,7 +2142,7 @@ impl ProductionDispatchTestHarness {
 
     /// Enter the production focus-pause transition without releasing an owned
     /// key. Restoration uses the dispatch loop's shared verified cleanup path.
-    pub fn lose_focus_for_r3_probe(&mut self, focus_qpc: QpcTicks) -> Result<(), String> {
+    pub fn lose_focus_for_test(&mut self, focus_qpc: QpcTicks) -> Result<(), String> {
         self.focus_active.store(false, Ordering::Release);
         super::super::worker::enter_focus_pause(
             &mut self.resources.playback,
@@ -2151,7 +2153,7 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
-    pub fn restore_focus_for_r3_probe(&mut self, restore_qpc: QpcTicks) -> Result<(), String> {
+    pub fn restore_focus_for_test(&mut self, restore_qpc: QpcTicks) -> Result<(), String> {
         self.focus_active.store(true, Ordering::Release);
         let qpc_clock = self.resources.clock;
         let effective_now = self
@@ -2180,13 +2182,13 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
-    pub fn configure_r3_mock_packet_sender_for_test(
+    pub fn configure_mock_packet_sender_for_test(
         &mut self,
         latency_us: &[u64],
     ) -> Arc<Mutex<Vec<(PhysicalPacket, SendEvidence)>>> {
         let captured = Arc::new(Mutex::new(Vec::with_capacity(8)));
         let capture = Arc::clone(&captured);
-        let sender_start = Arc::clone(&self.r3_mock_sender_start_qpc);
+        let sender_start = Arc::clone(&self.mock_sender_start_qpc);
         let latencies = Arc::new(latency_us.to_vec());
         let next_latency = Arc::new(AtomicUsize::new(0));
         let clock = self.resources.clock;
@@ -2198,9 +2200,9 @@ impl ProductionDispatchTestHarness {
                 .checked_add_duration(
                     clock
                         .duration_from_us(latency_us)
-                        .expect("P0 mock transport latency conversion"),
+                        .expect("mock transport latency conversion"),
                 )
-                .expect("P0 mock transport completion arithmetic");
+                .expect("mock transport completion arithmetic");
             let requested_mask = packet.up_mask | packet.down_mask;
             let evidence = SendEvidence {
                 requested_mask,
@@ -2218,7 +2220,7 @@ impl ProductionDispatchTestHarness {
             };
             capture
                 .lock()
-                .expect("P0 packet capture lock")
+                .expect("packet capture lock")
                 .push((packet, evidence));
             SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
@@ -2228,14 +2230,14 @@ impl ProductionDispatchTestHarness {
         captured
     }
 
-    pub fn configure_r3_mock_cleanup_emitter_for_test(&mut self) -> RtR3CleanupCapture {
-        self.configure_r3_mock_cleanup_emitter_with_completion_qpc_for_test()
+    pub fn configure_mock_cleanup_emitter_for_test(&mut self) -> CleanupCapture {
+        self.configure_mock_cleanup_emitter_with_completion_qpc_for_test()
             .0
     }
 
-    pub fn configure_r3_mock_cleanup_emitter_with_completion_qpc_for_test(
+    pub fn configure_mock_cleanup_emitter_with_completion_qpc_for_test(
         &mut self,
-    ) -> (RtR3CleanupCapture, Arc<AtomicU64>) {
+    ) -> (CleanupCapture, Arc<AtomicU64>) {
         let captured = Arc::new(Mutex::new(Vec::with_capacity(4)));
         let capture = Arc::clone(&captured);
         let completion = Arc::new(AtomicU64::new(0));
@@ -2246,9 +2248,9 @@ impl ProductionDispatchTestHarness {
             .set_emitter(move |scan_codes, key_up| {
                 capture
                     .lock()
-                    .expect("P0 cleanup capture lock")
+                    .expect("cleanup capture lock")
                     .push((scan_codes.to_vec(), key_up));
-                let now = clock.now().expect("P0 cleanup QPC");
+                let now = clock.now().expect("cleanup QPC");
                 completion_store.store(now.as_u64(), Ordering::Release);
                 PlatformSendResult {
                     requested: scan_codes.len() as u8,
@@ -2262,7 +2264,7 @@ impl ProductionDispatchTestHarness {
         (captured, completion)
     }
 
-    pub fn r3_down_floor_for_test(
+    pub fn down_floor_for_test(
         &self,
         authored_target_qpc: QpcTicks,
         down_mask: u16,
@@ -2272,7 +2274,7 @@ impl ProductionDispatchTestHarness {
             .map(|window| window.down_not_before_qpc)
     }
 
-    pub fn establish_r3_resume_barrier_for_test(
+    pub fn establish_resume_barrier_for_test(
         &mut self,
         cleanup_completed_qpc: QpcTicks,
     ) -> Result<(), String> {
@@ -2280,14 +2282,14 @@ impl ProductionDispatchTestHarness {
             .establish_resume_down_barrier_for_test(cleanup_completed_qpc)
     }
 
-    pub fn configure_r3_precision_mock_sender_for_test(
+    pub fn configure_precision_mock_sender_for_test(
         &mut self,
     ) -> Arc<Mutex<Vec<(PhysicalPacket, SendEvidence)>>> {
         let captured = Arc::new(Mutex::new(Vec::with_capacity(8)));
         let capture = Arc::clone(&captured);
         let clock = self.resources.clock;
         self.resources.backend.set_packet_emitter(move |packet| {
-            let started_ticks = clock.now().expect("P0 precision mock pre-call QPC");
+            let started_ticks = clock.now().expect("precision mock pre-call QPC");
             let requested_mask = packet.up_mask | packet.down_mask;
             let evidence = SendEvidence {
                 requested_mask,
@@ -2309,7 +2311,7 @@ impl ProductionDispatchTestHarness {
             };
             capture
                 .lock()
-                .expect("P0 precision packet capture lock")
+                .expect("precision packet capture lock")
                 .push((packet, evidence));
             SendTransactionOutcome {
                 status: SendTransactionStatus::Complete,
@@ -2319,12 +2321,12 @@ impl ProductionDispatchTestHarness {
         captured
     }
 
-    pub fn set_r3_mock_sender_start_qpc_for_test(&self, start_qpc: QpcTicks) {
-        self.r3_mock_sender_start_qpc
+    pub fn set_mock_sender_start_qpc_for_test(&self, start_qpc: QpcTicks) {
+        self.mock_sender_start_qpc
             .store(start_qpc.as_u64(), Ordering::Release);
     }
 
-    pub fn pop_r3_send_observation_for_test(
+    pub fn pop_send_observation_for_test(
         &mut self,
     ) -> Option<(PhysicalPacket, QpcTicks, QpcTicks, u8)> {
         match self.observer.pop_front()? {
@@ -2344,16 +2346,16 @@ impl ProductionDispatchTestHarness {
         }
     }
 
-    pub fn release_all_for_r3_probe(&mut self) -> sky_dispatch_win32::input::ReleaseAllOutcome {
+    pub fn release_all_for_test(&mut self) -> sky_dispatch_win32::input::ReleaseAllOutcome {
         self.resources
             .backend
             .release_all(self.target.hwnd_for_safety_release())
     }
 
-    pub fn finalize_for_r3_probe(self) -> RtR3FinalizeEvidence {
+    pub fn finalize_for_test(self) -> FinalizeEvidence {
         let mut observation = super::super::worker::FinalizeTestObservation::default();
         let outcome_code = self.finalize_worker_for_test(false, &mut observation);
-        RtR3FinalizeEvidence {
+        FinalizeEvidence {
             outcome_code,
             attempted_mask: observation.attempted_mask,
             release_obligation_mask: observation.release_obligation_mask,
@@ -2468,7 +2470,7 @@ impl ProductionDispatchTestHarness {
         self.supervisor_expired.reset(ticks);
     }
 
-    pub fn supervisor_lease_expired_for_r3_probe(&self) -> bool {
+    pub fn supervisor_lease_expired_for_test(&self) -> bool {
         self.supervisor_expired.is_expired()
     }
 
@@ -2493,16 +2495,13 @@ impl ProductionDispatchTestHarness {
         self.runtime.final_lease_age_hook_for_test = Some(Arc::new(hook));
     }
 
-    pub fn set_supervisor_lease_timeout_for_r3_probe(
-        &mut self,
-        timeout_us: u64,
-    ) -> Result<(), String> {
+    pub fn set_supervisor_lease_timeout_for_test(&mut self, timeout_us: u64) -> Result<(), String> {
         self.config.wait.supervisor_lease_timeout_us = timeout_us;
         let timeout_ticks = self
             .resources
             .clock
             .duration_from_us(timeout_us)
-            .map_err(|error| format!("P0 lease timeout conversion: {error:?}"))?;
+            .map_err(|error| format!("lease timeout conversion: {error:?}"))?;
         self.timing.lease_timeout_ticks = DurationTicks::from_raw(timeout_ticks.as_u64());
         Ok(())
     }
@@ -2993,24 +2992,24 @@ impl ProductionDispatchTestHarness {
         self.dispatch_prepared_current_at_synthetic_wall_qpc_inner_for_test(wall_now, true)
     }
 
-    pub fn prepared_physical_floor_for_r3_probe(&self) -> Result<PhysicalFloorEvidence, String> {
+    pub fn prepared_physical_floor_for_test(&self) -> Result<PhysicalFloorEvidence, String> {
         let stream = self
             .prepared_stream_for_test
             .as_ref()
-            .ok_or_else(|| "R3 prepared stream has not been built".to_string())?;
+            .ok_or_else(|| "dispatch prepared stream has not been built".to_string())?;
         let frame = match stream.current() {
             Some(PreparedDispatchEntry::Physical(frame)) => frame,
             Some(PreparedDispatchEntry::Metadata { .. }) => {
-                return Err("R3 physical-floor query reached a metadata entry".to_string());
+                return Err("dispatch physical-floor query reached a metadata entry".to_string());
             }
-            None => return Err("R3 prepared stream is exhausted".to_string()),
+            None => return Err("dispatch prepared stream is exhausted".to_string()),
         };
         let authored_target_qpc = self
             .resources
             .playback
             .epoch
             .checked_add_duration(DurationTicks::from_raw(frame.offset_ticks.as_u64()))
-            .map_err(|error| format!("R3 physical target overflow: {error}"))?;
+            .map_err(|error| format!("dispatch physical target overflow: {error}"))?;
         let window = self
             .runtime
             .physical_timing_window_for_test(
@@ -3018,7 +3017,9 @@ impl ProductionDispatchTestHarness {
                 frame.view.packet_masks.up_mask,
                 frame.view.packet_masks.down_mask,
             )
-            .ok_or_else(|| "R3 production physical timing window is unavailable".to_string())?;
+            .ok_or_else(|| {
+                "dispatch production physical timing window is unavailable".to_string()
+            })?;
         Ok(PhysicalFloorEvidence {
             authored_target_qpc: window.authored_target_qpc,
             musical_up_not_before_qpc: window.musical_up_not_before_qpc,
@@ -3033,11 +3034,11 @@ impl ProductionDispatchTestHarness {
     /// production timing window for the current prepared packet on every call,
     /// leaves the cursor and sender untouched before that floor, and enters
     /// the existing suffix only once the synthetic QPC is due.
-    pub fn dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
+    pub fn dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(
         &mut self,
         wall_now: QpcTicks,
     ) -> Result<Option<DispatchStep>, String> {
-        let physical_floor = self.prepared_physical_floor_for_r3_probe()?;
+        let physical_floor = self.prepared_physical_floor_for_test()?;
         if wall_now < physical_floor.packet_not_before_qpc {
             return Ok(None);
         }
@@ -3942,7 +3943,7 @@ impl ProductionDispatchTestHarness {
             .map_err(|error| format!("test QPC duration conversion: {error:?}"))
     }
 
-    pub fn send_phase_a_packet_for_test(
+    pub fn send_packet_for_test(
         &mut self,
         packet: PhysicalPacket,
     ) -> (QpcTicks, SendTransactionOutcome) {
@@ -3951,10 +3952,10 @@ impl ProductionDispatchTestHarness {
             self.resources.backend.instrument_key_profile(),
         )
         .expect("prepared benchmark packet");
-        self.send_prepared_phase_a_packet_for_test(&prepared)
+        self.send_prepared_packet_for_test(&prepared)
     }
 
-    pub fn send_prepared_phase_a_packet_for_test(
+    pub fn send_prepared_packet_for_test(
         &mut self,
         prepared: &PreparedPhysicalPacket,
     ) -> (QpcTicks, SendTransactionOutcome) {
@@ -3966,36 +3967,36 @@ impl ProductionDispatchTestHarness {
         (target, outcome)
     }
 
-    /// Invoke the frozen Phase-A sender boundary with a deterministic first
+    /// Invoke the frozen production-path sender boundary with a deterministic first
     /// sample one QPC tick after the target and a deterministic completion
     /// delay. This keeps baseline and candidate A/B runs on the same sender
     /// path without waiting on wall-clock time.
-    pub fn dispatch_at_phase_a_benchmark_boundary_for_test(
+    pub fn dispatch_at_benchmark_boundary_for_test(
         &mut self,
         plan: &NextDispatchPlan,
         completion_delay_us: u64,
     ) -> DispatchStep {
         let authored_target = plan
             .physical_target_qpc()
-            .expect("plan target required for Phase-A benchmark boundary");
+            .expect("plan target required for production-path benchmark boundary");
         let physical_wait_target = self
             .physical_wait_target_for_test(plan)
-            .expect("Phase-A physical timing window")
+            .expect("production-path physical timing window")
             .unwrap_or(authored_target);
         let benchmark_now = physical_wait_target
             .checked_add_duration(DurationTicks::from_raw(1))
-            .expect("Phase-A benchmark boundary arithmetic");
+            .expect("production-path benchmark boundary arithmetic");
         let deadline = plan
             .deadline_ticks()
-            .expect("plan deadline required for Phase-A benchmark boundary");
+            .expect("plan deadline required for production-path benchmark boundary");
         let completion_delay = self
             .resources
             .clock
             .duration_from_us(completion_delay_us)
-            .expect("Phase-A benchmark completion delay conversion");
+            .expect("production-path benchmark completion delay conversion");
         let completed_ticks = benchmark_now
             .checked_add_duration(completion_delay)
-            .expect("Phase-A benchmark completion boundary arithmetic");
+            .expect("production-path benchmark completion boundary arithmetic");
         self.resources.backend.set_packet_emitter(move |packet| {
             let requested_mask = packet.up_mask | packet.down_mask;
             SendTransactionOutcome {
@@ -4024,16 +4025,16 @@ impl ProductionDispatchTestHarness {
     /// Invoke the coordinator dispatch boundary at a frozen crossing. The
     /// test transport records its own immediate QPC sample for sender timing;
     /// production builds take that sample inside the native sender.
-    pub fn dispatch_at_phase_a_production_boundary_for_test(
+    pub fn dispatch_at_production_boundary_for_test(
         &mut self,
         plan: &NextDispatchPlan,
     ) -> DispatchStep {
         let target = plan
             .physical_target_qpc()
-            .expect("plan target required for Phase-A production boundary");
+            .expect("plan target required for production-path production boundary");
         let deadline = plan
             .deadline_ticks()
-            .expect("plan deadline required for Phase-A production boundary");
+            .expect("plan deadline required for production-path production boundary");
         let clock = self.resources.clock;
         self.resources.backend.set_packet_emitter(move |packet| {
             let requested_mask = packet.up_mask | packet.down_mask;
@@ -4340,48 +4341,48 @@ impl ProductionDispatchTestHarness {
 }
 
 #[cfg(test)]
-mod r3_p0_tests {
+mod lifecycle_dispatch_tests {
     use super::*;
     use std::num::NonZeroU64;
 
-    fn r3_qpc_at(clock: QpcClock, microseconds: u64) -> QpcTicks {
+    fn qpc_at(clock: QpcClock, microseconds: u64) -> QpcTicks {
         QpcTicks::from_raw(
             clock
                 .duration_from_us(microseconds)
-                .expect("R3 test QPC conversion")
+                .expect("dispatch test QPC conversion")
                 .as_u64(),
         )
     }
 
     #[test]
-    fn r3_fixture_admission_and_config_metadata_match_native_contract() {
+    fn lifecycle_fixture_admission_and_config_metadata_match_native_contract() {
         let mut fixtures = vec![
-            ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(10_000_000, false)
+            ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(10_000_000, false)
                 .expect("lifecycle fixture admission"),
-            ProductionDispatchTestHarness::new_r3_hol_sequence_for_test(10_000_000)
+            ProductionDispatchTestHarness::new_hol_sequence_for_test(10_000_000)
                 .expect("HOL fixture admission"),
-            ProductionDispatchTestHarness::new_r3_prepared_mixed_for_test(1, 1, 20_000)
+            ProductionDispatchTestHarness::new_prepared_mixed_for_test(1, 1, 20_000)
                 .expect("Mixed fixture admission"),
-            ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 20_000)
+            ProductionDispatchTestHarness::new_prepared_down_or_uponly_for_test(1, 20_000)
                 .expect("Down/UpOnly fixture admission"),
         ];
 
         for fixture in &mut fixtures {
             let config = fixture
-                .r3_timing_config_for_test()
-                .expect("R3 timing metadata");
+                .dispatch_timing_config_for_test()
+                .expect("dispatch timing metadata");
             assert!(config.native_admission_passed);
-            assert_eq!(config.frame_us, R3_FRAME_US);
-            assert_eq!(config.frame_base_hold_us, R3_FRAME_US);
-            assert_eq!(config.timing_margin_us, R3_MARGIN_US);
-            assert_eq!(config.effective_hold_us, R3_EFFECTIVE_HOLD_US);
-            assert_eq!(config.min_release_gap_us, R3_RELEASE_GAP_US);
+            assert_eq!(config.frame_us, DISPATCH_FRAME_US);
+            assert_eq!(config.frame_base_hold_us, DISPATCH_FRAME_US);
+            assert_eq!(config.timing_margin_us, DISPATCH_MARGIN_US);
+            assert_eq!(config.effective_hold_us, DISPATCH_EFFECTIVE_HOLD_US);
+            assert_eq!(config.min_release_gap_us, DISPATCH_RELEASE_GAP_US);
             assert_eq!(
                 config.frame_ticks,
                 fixture
                     .resources
                     .clock
-                    .duration_from_us(R3_FRAME_US)
+                    .duration_from_us(DISPATCH_FRAME_US)
                     .unwrap()
                     .as_u64()
             );
@@ -4390,7 +4391,7 @@ mod r3_p0_tests {
                 fixture
                     .resources
                     .clock
-                    .duration_from_us(R3_EFFECTIVE_HOLD_US)
+                    .duration_from_us(DISPATCH_EFFECTIVE_HOLD_US)
                     .unwrap()
                     .as_u64()
             );
@@ -4398,36 +4399,36 @@ mod r3_p0_tests {
     }
 
     #[test]
-    fn r3_not_due_dispatch_preserves_sender_cursor_and_generation_until_floor() {
+    fn lifecycle_not_due_dispatch_preserves_sender_cursor_and_generation_until_floor() {
         let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
         let mut harness =
-            ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(10_000_000, false)
+            ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(10_000_000, false)
                 .expect("lifecycle fixture admission");
-        let packets = harness.configure_r3_mock_packet_sender_for_test(&[0, 50, 0, 0]);
+        let packets = harness.configure_mock_packet_sender_for_test(&[0, 50, 0, 0]);
         harness.prepare_prepared_stream_for_test();
         harness
-            .reanchor_playback_clock_for_r3_probe(r3_qpc_at(clock, 82_700))
+            .reanchor_playback_clock_for_test(qpc_at(clock, 82_700))
             .expect("playback epoch");
 
-        let down_at = r3_qpc_at(clock, 100_000);
+        let down_at = qpc_at(clock, 100_000);
         let down_floor = harness
-            .prepared_physical_floor_for_r3_probe()
+            .prepared_physical_floor_for_test()
             .expect("initial Down floor");
         assert!(down_at >= down_floor.packet_not_before_qpc);
-        harness.set_r3_mock_sender_start_qpc_for_test(down_at);
+        harness.set_mock_sender_start_qpc_for_test(down_at);
         assert!(matches!(
             harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(down_at,)
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(down_at,)
                 .expect("due initial Down"),
             Some(DispatchStep::Dispatched)
         ));
         let up_floor = harness
-            .prepared_physical_floor_for_r3_probe()
+            .prepared_physical_floor_for_test()
             .expect("musical Up floor");
-        harness.set_r3_mock_sender_start_qpc_for_test(up_floor.packet_not_before_qpc);
+        harness.set_mock_sender_start_qpc_for_test(up_floor.packet_not_before_qpc);
         assert!(matches!(
             harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(
                     up_floor.packet_not_before_qpc,
                 )
                 .expect("due musical Up"),
@@ -4436,23 +4437,23 @@ mod r3_p0_tests {
 
         let released_at = evidence_completion_for_harness(&packets, 1);
         let expected_floor = released_at
-            .checked_add_duration(clock.duration_from_us(R3_FRAME_US).unwrap())
+            .checked_add_duration(clock.duration_from_us(DISPATCH_FRAME_US).unwrap())
             .expect("release floor");
         let floor_evidence = harness
-            .prepared_physical_floor_for_r3_probe()
+            .prepared_physical_floor_for_test()
             .expect("next Down floor");
         let floor = floor_evidence.packet_not_before_qpc;
         assert_eq!(floor, expected_floor);
 
-        let early = r3_qpc_at(clock, 118_300);
+        let early = qpc_at(clock, 118_300);
         let cursor_before = harness.prepared_cursor_for_test();
         let attempts_before = packets.lock().unwrap().len();
         let accounting_before = harness.generation_accounting_for_test();
         let obligation_before = harness.release_obligation_mask_for_test();
-        harness.set_r3_mock_sender_start_qpc_for_test(early);
+        harness.set_mock_sender_start_qpc_for_test(early);
         assert!(
             harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(early,)
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(early,)
                 .expect("not-due check")
                 .is_none()
         );
@@ -4467,10 +4468,10 @@ mod r3_p0_tests {
             obligation_before
         );
 
-        harness.set_r3_mock_sender_start_qpc_for_test(floor);
+        harness.set_mock_sender_start_qpc_for_test(floor);
         assert!(matches!(
             harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(floor,)
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(floor,)
                 .expect("due next Down"),
             Some(DispatchStep::Dispatched)
         ));
@@ -4479,16 +4480,16 @@ mod r3_p0_tests {
     }
 
     #[test]
-    fn r3_precision_fixture_lease_config_materializes_qpc_timeout() {
+    fn lifecycle_precision_fixture_lease_config_materializes_qpc_timeout() {
         let mut harness =
-            ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 20_000)
+            ProductionDispatchTestHarness::new_prepared_down_or_uponly_for_test(1, 20_000)
                 .expect("precision fixture admission");
         harness
-            .set_supervisor_lease_timeout_for_r3_probe(3_000_000)
+            .set_supervisor_lease_timeout_for_test(3_000_000)
             .expect("lease timeout conversion");
         let config = harness
-            .r3_timing_config_for_test()
-            .expect("R3 timing metadata");
+            .dispatch_timing_config_for_test()
+            .expect("dispatch timing metadata");
         assert!(config.native_admission_passed);
         assert!(config.lease_enabled);
         assert_eq!(config.lease_timeout_us, 3_000_000);

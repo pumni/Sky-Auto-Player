@@ -9988,7 +9988,7 @@ mod tests {
     #[test]
     fn native_detail_matches_python_tempo_oracle_corpus() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/wave3/song_planning.json"
+            "../../../tests/fixtures/song_planning/oracle_cases.json"
         ))
         .expect("tempo fixture");
         let cases = fixture["detail_tempo_cases"]

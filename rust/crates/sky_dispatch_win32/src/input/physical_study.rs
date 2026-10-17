@@ -1,4 +1,4 @@
-//! P7a-only physical-key probes for benchmark and deterministic study builds.
+//! Physical-key probes for benchmark and deterministic study builds.
 //!
 //! This module is compiled only with `test-support`. It records evidence and
 //! never makes an admission decision.

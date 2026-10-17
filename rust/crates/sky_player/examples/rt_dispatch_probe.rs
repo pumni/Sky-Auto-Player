@@ -1,4 +1,4 @@
-//! Executable Coordinator R3 timing and lifecycle contracts.
+//! Executable Coordinator dispatch timing and lifecycle contracts.
 //!
 //! This example is compiled only with `test-support`. It calls the existing
 //! prepared worker dispatch path and labels deterministic transport evidence
@@ -13,8 +13,8 @@ use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, PhysicalPacket, SendEvidence};
 use sky_player::engine::dispatch_primitives::{
-    DispatchStep, PRODUCTION_MIN_PREROLL_US, PRODUCTION_STARTUP_READINESS_RESERVE_US,
-    ProductionDispatchTestHarness, RtR3CleanupCapture,
+    CleanupCapture, DispatchStep, PRODUCTION_MIN_PREROLL_US,
+    PRODUCTION_STARTUP_READINESS_RESERVE_US, ProductionDispatchTestHarness,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::num::NonZeroU64;
@@ -29,9 +29,9 @@ const FRAME_US: u64 = 16_667;
 const MARGIN_US: u64 = 500;
 const WARMUP_DEFAULT: usize = 1_000;
 const MEASURED_DEFAULT: usize = 10_000;
-const P4_STARTUP_SEED: u64 = 0x5234_5034;
-const P4_STARTUP_HOLD_US: u64 = HOLD_US;
-const P4_DIAGNOSTIC_GENERATION_COUNTS: [usize; 4] = [100, 1_000, 10_000, 100_000];
+const STARTUP_DIAGNOSTIC_DATASET_SEED: u64 = 0x5234_5034;
+const STARTUP_DIAGNOSTIC_HOLD_US: u64 = HOLD_US;
+const SUPPORTED_DIAGNOSTIC_GENERATION_COUNTS: [usize; 4] = [100, 1_000, 10_000, 100_000];
 
 struct DiagnosticAllocator;
 
@@ -142,7 +142,7 @@ struct Arguments {
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--help") {
         println!(
-            "Usage: rt_r3_probe --mode <contracts|precision|hol|startup|polling> --output <path> [options]\n\
+            "Usage: rt_dispatch_probe --mode <contracts|precision|hol|startup|polling> --output <path> [options]\n\
              Diagnostics modes: hol; startup --generation-count <100|1000|10000|100000>; polling.\n\
              Polling includes the fixed 17167us short-hold reference.\n\
              Other options: --load-mode <quiet|cpu_contention>, --workload <all|id>, --warmup <n>, --measured <n>, --seed <u64>, --run-index <n>.\n\
@@ -151,7 +151,7 @@ fn main() {
         return;
     }
     if let Err(error) = run() {
-        eprintln!("rt_r3_probe: {error}");
+        eprintln!("rt_dispatch_probe: {error}");
         std::process::exit(1);
     }
 }
@@ -160,19 +160,19 @@ fn run() -> Result<(), String> {
     let arguments = parse_args()?;
     let started_at_ms = unix_ms()?;
     let source_revision = git_revision()?;
-    let runtime_revision =
-        std::env::var("SKY_RT_R3_RUNTIME_REVISION").unwrap_or_else(|_| source_revision.clone());
+    let runtime_revision = std::env::var("SKY_RT_DISPATCH_RUNTIME_REVISION")
+        .unwrap_or_else(|_| source_revision.clone());
     let executable_sha256 = executable_sha256()?;
     let (target, toolchain, os, cpu) = host_metadata();
     let frequency_hz =
         qpc_frequency_checked().map_err(|error| format!("QPC frequency: {error:?}"))?;
-    let run_id = std::env::var("SKY_RT_R3_RUN_ID").unwrap_or_else(|_| generated_run_id());
-    let contention_workers = std::env::var("SKY_RT_R3_CONTENTION_WORKERS")
+    let run_id = std::env::var("SKY_RT_DISPATCH_RUN_ID").unwrap_or_else(|_| generated_run_id());
+    let contention_workers = std::env::var("SKY_RT_DISPATCH_CONTENTION_WORKERS")
         .ok()
         .map(|value| {
             value
                 .parse::<usize>()
-                .map_err(|_| "SKY_RT_R3_CONTENTION_WORKERS must be an integer".to_string())
+                .map_err(|_| "SKY_RT_DISPATCH_CONTENTION_WORKERS must be an integer".to_string())
         })
         .transpose()?
         .unwrap_or(0);
@@ -300,7 +300,7 @@ fn run() -> Result<(), String> {
         "target": target,
         "os": os,
         "cpu": cpu,
-        "power_state": std::env::var("SKY_RT_R3_POWER_STATE").unwrap_or_else(|_| "not-provided".to_string()),
+        "power_state": std::env::var("SKY_RT_DISPATCH_POWER_STATE").unwrap_or_else(|_| "not-provided".to_string()),
         "focus_setup": "test-support focus_active=true with deterministic SessionTarget; no game process or foreground-window activation",
         "qpc_frequency_hz": frequency_hz,
         "profile": "release",
@@ -320,7 +320,7 @@ fn run() -> Result<(), String> {
         "distributions": distributions,
         "statistics_eligible": eligible,
         "qpc_source": qpc_source,
-        "measurement_boundary": "Precision sample-start QPC is sampled immediately before prepared-dispatch entry; the authoritative sender pre-call is sampled before the mock emitter; mock completion is sampled inside the emitter and its separate delta includes test-seam/QPC overhead. P4 startup preparation timings and allocation counters are scoped to the named test-support operations; polling is an offline model.",
+        "measurement_boundary": "Precision sample-start QPC is sampled immediately before prepared-dispatch entry; the authoritative sender pre-call is sampled before the mock emitter; mock completion is sampled inside the emitter and its separate delta includes test-seam/QPC overhead. Startup diagnostic preparation timings and allocation counters are scoped to the named test-support operations; polling is an offline model.",
         "receipt_boundary": "deterministic mock transport for prepared dispatch; modeled polling only for receiver sampling; no game/audio receipt claim"
     });
     let encoded =
@@ -498,11 +498,11 @@ fn run_final_lease_age_case(name: &str, age_us: i64) -> Result<Value, String> {
     let clock = QpcClock::initialize().map_err(|error| format!("QPC: {error:?}"))?;
     let timeout = duration_ticks(clock, 3_000_000)?.as_u64();
     let mut harness =
-        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 20_000)?;
-    let packets = harness.configure_r3_mock_packet_sender_for_test(&[0]);
+        ProductionDispatchTestHarness::new_prepared_down_or_uponly_for_test(1, 20_000)?;
+    let packets = harness.configure_mock_packet_sender_for_test(&[0]);
     harness.prepare_prepared_stream_for_test();
     harness.set_playback_epoch_qpc_for_test(QpcTicks::ZERO);
-    harness.set_supervisor_lease_timeout_for_r3_probe(3_000_000)?;
+    harness.set_supervisor_lease_timeout_for_test(3_000_000)?;
     let sample = harness.qpc_now_for_test()?;
     let progress = if age_us == -1 {
         sample
@@ -518,7 +518,7 @@ fn run_final_lease_age_case(name: &str, age_us: i64) -> Result<Value, String> {
         )
     };
     harness.set_supervisor_heartbeat_for_test(progress);
-    harness.set_r3_mock_sender_start_qpc_for_test(sample);
+    harness.set_mock_sender_start_qpc_for_test(sample);
     let elapsed_ticks = sample
         .checked_duration_since(progress)
         .map_err(|error| format!("{name} fixture age order: {error:?}"))?;
@@ -544,7 +544,7 @@ fn run_final_lease_age_case(name: &str, age_us: i64) -> Result<Value, String> {
         "timeout_ticks": timeout,
         "dispatch_step": format!("{step:?}"),
         "sender_attempts": sender_attempts,
-        "expired_latched_after": harness.supervisor_lease_expired_for_r3_probe(),
+        "expired_latched_after": harness.supervisor_lease_expired_for_test(),
         "cursor_before": cursor_before,
         "cursor_after": cursor_after,
         "cursor_unchanged": cursor_after == cursor_before,
@@ -578,35 +578,35 @@ fn validate_duplicate_up_tail() -> Value {
             kind: ActionKind::Down,
             scheduled_us: 0,
             scan_codes: vec![0x15].into(),
-            reason: "r3-p0-exact-vector-down".into(),
+            reason: "lifecycle-vector-down".into(),
         },
         KeyActionInput {
             source_action_index: 1,
             kind: ActionKind::Up,
             scheduled_us: 17_167,
             scan_codes: vec![0x15].into(),
-            reason: "r3-p0-exact-vector-up".into(),
+            reason: "lifecycle-vector-up".into(),
         },
         KeyActionInput {
             source_action_index: 2,
             kind: ActionKind::Down,
             scheduled_us: 34_334,
             scan_codes: vec![0x15].into(),
-            reason: "r3-p0-exact-vector-redown".into(),
+            reason: "lifecycle-vector-redown".into(),
         },
         KeyActionInput {
             source_action_index: 3,
             kind: ActionKind::Up,
             scheduled_us: 51_501,
             scan_codes: vec![0x15].into(),
-            reason: "r3-p0-exact-vector-up-a".into(),
+            reason: "lifecycle-vector-up-a".into(),
         },
         KeyActionInput {
             source_action_index: 4,
             kind: ActionKind::Up,
             scheduled_us: 51_501,
             scan_codes: vec![0x15].into(),
-            reason: "r3-p0-exact-vector-up-b".into(),
+            reason: "lifecycle-vector-up-b".into(),
         },
     ];
     match compile_runtime_intents(&actions, &[0x15]) {
@@ -631,32 +631,30 @@ struct LifecyclePrefix {
 fn run_lifecycle_prefix(frequency_hz: u64, odd_vector: bool) -> Result<LifecyclePrefix, String> {
     let frequency = NonZeroU64::new(frequency_hz).ok_or("zero QPC frequency")?;
     let clock = QpcClock::from_frequency_hz(frequency);
-    let mut harness = ProductionDispatchTestHarness::new_r3_lifecycle_sequence_for_test(
-        frequency_hz,
-        odd_vector,
-    )?;
-    let packets = harness.configure_r3_mock_packet_sender_for_test(&[0, 50, 0, 0]);
+    let mut harness =
+        ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(frequency_hz, odd_vector)?;
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 50, 0, 0]);
     harness.prepare_prepared_stream_for_test();
     let epoch = ticks_at_us(clock, 82_700)?;
-    harness.reanchor_playback_clock_for_r3_probe(epoch)?;
+    harness.reanchor_playback_clock_for_test(epoch)?;
 
     let down_at = ticks_at_us(clock, 100_000)?;
-    let down_floor = harness.prepared_physical_floor_for_r3_probe()?;
-    harness.set_r3_mock_sender_start_qpc_for_test(down_at);
+    let down_floor = harness.prepared_physical_floor_for_test()?;
+    harness.set_mock_sender_start_qpc_for_test(down_at);
     let first_step = harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(down_at)?
+        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(down_at)?
         .ok_or("first lifecycle Down was unexpectedly before its physical floor")?;
-    let first_observation = harness.pop_r3_send_observation_for_test().is_some();
+    let first_observation = harness.pop_send_observation_for_test().is_some();
     let down_completion = evidence_completion(&packets, 0)?;
 
-    let up_floor = harness.prepared_physical_floor_for_r3_probe()?;
-    harness.set_r3_mock_sender_start_qpc_for_test(up_floor.packet_not_before_qpc);
+    let up_floor = harness.prepared_physical_floor_for_test()?;
+    harness.set_mock_sender_start_qpc_for_test(up_floor.packet_not_before_qpc);
     let up_step = harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
+        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(
             up_floor.packet_not_before_qpc,
         )?
         .ok_or("musical Up was unexpectedly before its physical floor")?;
-    let up_observation = harness.pop_r3_send_observation_for_test().is_some();
+    let up_observation = harness.pop_send_observation_for_test().is_some();
     let up_completion = evidence_completion(&packets, 1)?;
 
     if down_floor.packet_not_before_qpc > down_at {
@@ -689,7 +687,7 @@ fn captured_packet_count(
     packets
         .lock()
         .map(|capture| capture.len())
-        .map_err(|_| "P0 packet capture lock poisoned".to_string())
+        .map_err(|_| "packet capture lock poisoned".to_string())
 }
 
 fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, String> {
@@ -705,7 +703,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     // The negative control observes the same prepared next Down without a
     // pause transition and must hold at 118,300 us until its physical floor.
     let mut no_pause = run_lifecycle_prefix(frequency_hz, odd_vector)?;
-    let no_pause_floor = no_pause.harness.prepared_physical_floor_for_r3_probe()?;
+    let no_pause_floor = no_pause.harness.prepared_physical_floor_for_test()?;
     let no_pause_at = ticks_at_us(clock, 118_300)?;
     let no_pause_cursor_before = no_pause.harness.prepared_cursor_for_test();
     let no_pause_attempts_before = captured_packet_count(&no_pause.packets)?;
@@ -713,10 +711,10 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let no_pause_obligation_before = no_pause.harness.release_obligation_mask_for_test();
     no_pause
         .harness
-        .set_r3_mock_sender_start_qpc_for_test(no_pause_at);
+        .set_mock_sender_start_qpc_for_test(no_pause_at);
     let no_pause_step = no_pause
         .harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(no_pause_at)?;
+        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(no_pause_at)?;
     let no_pause_attempts_after = captured_packet_count(&no_pause.packets)?;
     let no_pause_cursor_after = no_pause.harness.prepared_cursor_for_test();
     let no_pause_accounting_after = generation_accounting_json(&no_pause.harness);
@@ -728,7 +726,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
 
     // Repeat the prefix and perform the real manual pause/resume transition.
     let mut lifecycle = run_lifecycle_prefix(frequency_hz, odd_vector)?;
-    let before_cleanup_floor = lifecycle.harness.prepared_physical_floor_for_r3_probe()?;
+    let before_cleanup_floor = lifecycle.harness.prepared_physical_floor_for_test()?;
     let before_cleanup = json!({
         "floor": tick_json(clock, before_cleanup_floor.packet_not_before_qpc)?,
         "cursor": lifecycle.harness.prepared_cursor_for_test(),
@@ -740,8 +738,8 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let resume_at = ticks_at_us(clock, 118_300)?;
     lifecycle
         .harness
-        .manual_pause_resume_for_r3_probe(pause_at, resume_at)?;
-    let after_cleanup_floor = lifecycle.harness.prepared_physical_floor_for_r3_probe()?;
+        .manual_pause_resume_for_test(pause_at, resume_at)?;
+    let after_cleanup_floor = lifecycle.harness.prepared_physical_floor_for_test()?;
     let after_cleanup_attempts = captured_packet_count(&lifecycle.packets)?;
     let after_cleanup_cursor = lifecycle.harness.prepared_cursor_for_test();
     let after_cleanup_accounting = generation_accounting_json(&lifecycle.harness);
@@ -764,10 +762,10 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
     let resume_gate_was_due = resume_at >= after_cleanup_floor.packet_not_before_qpc;
     lifecycle
         .harness
-        .set_r3_mock_sender_start_qpc_for_test(resume_at);
+        .set_mock_sender_start_qpc_for_test(resume_at);
     let resume_step = lifecycle
         .harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(resume_at)?;
+        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(resume_at)?;
     let resume_step_label = format!("{resume_step:?}");
     let cursor_after_resume_gate = lifecycle.harness.prepared_cursor_for_test();
     let attempts_after_resume_gate = captured_packet_count(&lifecycle.packets)?;
@@ -798,7 +796,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
             ));
         }
         None => {
-            let current_floor = lifecycle.harness.prepared_physical_floor_for_r3_probe()?;
+            let current_floor = lifecycle.harness.prepared_physical_floor_for_test()?;
             let retry_at = if resume_at >= current_floor.packet_not_before_qpc {
                 resume_at
             } else {
@@ -806,10 +804,10 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
             };
             lifecycle
                 .harness
-                .set_r3_mock_sender_start_qpc_for_test(retry_at);
+                .set_mock_sender_start_qpc_for_test(retry_at);
             let step = lifecycle
                 .harness
-                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(retry_at)?
+                .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(retry_at)?
                 .ok_or(
                     "resumed next Down remained before its recomputed production physical floor",
                 )?;
@@ -821,10 +819,7 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
             (step, retry_at)
         }
     };
-    let next_down_observation = lifecycle
-        .harness
-        .pop_r3_send_observation_for_test()
-        .is_some();
+    let next_down_observation = lifecycle.harness.pop_send_observation_for_test().is_some();
     let actual_next_down = evidence_start(&lifecycle.packets, 2)?;
     let next_down_completion = evidence_completion(&lifecycle.packets, 2)?;
     let required_down_floor = lifecycle
@@ -832,25 +827,22 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
         .checked_add_duration(frame_ticks)
         .map_err(|error| format!("release floor overflow: {error}"))?;
 
-    let final_up_floor = lifecycle.harness.prepared_physical_floor_for_r3_probe()?;
+    let final_up_floor = lifecycle.harness.prepared_physical_floor_for_test()?;
     lifecycle
         .harness
-        .set_r3_mock_sender_start_qpc_for_test(final_up_floor.packet_not_before_qpc);
+        .set_mock_sender_start_qpc_for_test(final_up_floor.packet_not_before_qpc);
     let final_up_step = lifecycle
         .harness
-        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe(
+        .dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test(
             final_up_floor.packet_not_before_qpc,
         )?
         .ok_or("final lifecycle Up was unexpectedly before its physical floor")?;
-    let final_up_observation = lifecycle
-        .harness
-        .pop_r3_send_observation_for_test()
-        .is_some();
+    let final_up_observation = lifecycle.harness.pop_send_observation_for_test().is_some();
     let final_up_actual = evidence_start(&lifecycle.packets, 3)?;
     let final_up_completion = evidence_completion(&lifecycle.packets, 3)?;
     let final_accounting = generation_accounting_json(&lifecycle.harness);
     let final_obligation = lifecycle.harness.release_obligation_mask_for_test();
-    let config = lifecycle.harness.r3_timing_config_for_test()?;
+    let config = lifecycle.harness.dispatch_timing_config_for_test()?;
 
     let no_pause_not_due = no_pause_step.is_none()
         && no_pause_floor.packet_not_before_qpc == no_pause_completion_floor
@@ -970,13 +962,13 @@ fn run_lifecycle_vector(frequency_hz: u64, odd_vector: bool) -> Result<Value, St
 fn run_hol_vector() -> Result<Value, String> {
     let frequency_hz = 1_000_000;
     let clock = QpcClock::from_frequency_hz(NonZeroU64::new(frequency_hz).expect("frequency"));
-    let mut harness = ProductionDispatchTestHarness::new_r3_hol_sequence_for_test(frequency_hz)?;
-    let timing_config = harness.r3_timing_config_for_test()?;
-    let packets = harness.configure_r3_mock_packet_sender_for_test(&[10_000, 0, 0, 0]);
+    let mut harness = ProductionDispatchTestHarness::new_hol_sequence_for_test(frequency_hz)?;
+    let timing_config = harness.dispatch_timing_config_for_test()?;
+    let packets = harness.configure_mock_packet_sender_for_test(&[10_000, 0, 0, 0]);
     harness.prepare_prepared_stream_for_test();
     harness.set_playback_epoch_qpc_for_test(QpcTicks::ZERO);
 
-    harness.set_r3_mock_sender_start_qpc_for_test(ticks_at_us(clock, 100_000)?);
+    harness.set_mock_sender_start_qpc_for_test(ticks_at_us(clock, 100_000)?);
     let down = harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(
         ticks_at_us(clock, 100_000)?,
     );
@@ -984,13 +976,13 @@ fn run_hol_vector() -> Result<Value, String> {
     let a_up_at = down_completion
         .checked_add_duration(duration_ticks(clock, HOLD_US)?)
         .map_err(|error| format!("HOL Up floor overflow: {error}"))?;
-    harness.set_r3_mock_sender_start_qpc_for_test(a_up_at);
+    harness.set_mock_sender_start_qpc_for_test(a_up_at);
     let a_up =
         harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(a_up_at);
     let b_target = ticks_at_us(clock, 118_000)?;
     let b_at = a_up_at;
     let cursor_before_b = harness.prepared_cursor_for_test();
-    harness.set_r3_mock_sender_start_qpc_for_test(b_at);
+    harness.set_mock_sender_start_qpc_for_test(b_at);
     let b_down =
         harness.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(b_at);
     let cursor_after_b = harness.prepared_cursor_for_test();
@@ -1071,14 +1063,14 @@ fn run_hol_case(config: HolCaseConfig) -> Result<Value, String> {
     } = config;
     let frequency_hz = 1_000_000;
     let clock = QpcClock::from_frequency_hz(NonZeroU64::new(frequency_hz).expect("frequency"));
-    let mut harness = ProductionDispatchTestHarness::new_r3_diagnostics_sequence_for_test(
+    let mut harness = ProductionDispatchTestHarness::new_diagnostics_sequence_for_test(
         &actions,
         frequency_hz,
         frame_us,
         frame_base_hold_us,
         timing_margin_us,
     )?;
-    let captured = harness.configure_r3_mock_packet_sender_for_test(&sender_delays_us);
+    let captured = harness.configure_mock_packet_sender_for_test(&sender_delays_us);
     harness.prepare_prepared_stream_for_test();
     harness.set_playback_epoch_qpc_for_test(QpcTicks::ZERO);
 
@@ -1104,7 +1096,7 @@ fn run_hol_case(config: HolCaseConfig) -> Result<Value, String> {
     let mut transport_attempts = 0u64;
 
     for packet_index in 0..expected_authored_targets.len() {
-        let floor = harness.prepared_physical_floor_for_r3_probe()?;
+        let floor = harness.prepared_physical_floor_for_test()?;
         let authored_target_qpc = floor.authored_target_qpc;
         let production_plan = harness.plan_current_dispatch();
         let ready_floor_qpc = harness
@@ -1114,7 +1106,7 @@ fn run_hol_case(config: HolCaseConfig) -> Result<Value, String> {
             })?;
         let serialized_qpc = previous_completion.unwrap_or(QpcTicks::ZERO);
         let actual_pre_qpc = ready_floor_qpc.max(serialized_qpc);
-        harness.set_r3_mock_sender_start_qpc_for_test(actual_pre_qpc);
+        harness.set_mock_sender_start_qpc_for_test(actual_pre_qpc);
         let step = harness
             .dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(
                 actual_pre_qpc,
@@ -1302,10 +1294,10 @@ fn run_hol_diagnostics() -> Result<Value, String> {
             "hol-a-up-floor-delays-b",
             "D100000 completes110000; A Up authored117167 and is physically floored to127167; different-key B Down authored118000 follows serially.",
             vec![
-                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "p4-hol-a-down"),
-                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "p4-hol-a-up"),
-                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "p4-hol-b-down"),
-                make_diagnostic_action(3, ActionKind::Up, 135_167, &[b], "p4-hol-b-up"),
+                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "head-of-line-a-down"),
+                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "head-of-line-a-up"),
+                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "head-of-line-b-down"),
+                make_diagnostic_action(3, ActionKind::Up, 135_167, &[b], "head-of-line-b-up"),
             ],
             vec![10_000, 400, 200, 100],
             16_667,
@@ -1316,10 +1308,10 @@ fn run_hol_diagnostics() -> Result<Value, String> {
             "hol-mixed-up-a-down-b-one-syscall",
             "Up A and Down B share one authored timestamp; the maximum per-key physical floor delays the atomic mixed packet.",
             vec![
-                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "p4-mixed-a-down"),
-                make_diagnostic_action(1, ActionKind::Up, 118_000, &[a], "p4-mixed-a-up"),
-                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "p4-mixed-b-down"),
-                make_diagnostic_action(3, ActionKind::Up, 135_167, &[b], "p4-mixed-b-up"),
+                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "mixed-a-down"),
+                make_diagnostic_action(1, ActionKind::Up, 118_000, &[a], "mixed-a-up"),
+                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "mixed-b-down"),
+                make_diagnostic_action(3, ActionKind::Up, 135_167, &[b], "mixed-b-up"),
             ],
             vec![10_000, 600, 100],
             16_667,
@@ -1330,14 +1322,14 @@ fn run_hol_diagnostics() -> Result<Value, String> {
             "hol-overdue-down-burst-after-blocked-up",
             "Three unrelated Down packets become overdue behind one floor-blocked Up; output spacing is the configured sender duration, while authored targets remain fixed.",
             vec![
-                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "p4-burst-a-down"),
-                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "p4-burst-a-up"),
-                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "p4-burst-b-down"),
-                make_diagnostic_action(3, ActionKind::Down, 119_000, &[c], "p4-burst-c-down"),
-                make_diagnostic_action(4, ActionKind::Down, 120_000, &[d], "p4-burst-d-down"),
-                make_diagnostic_action(5, ActionKind::Up, 135_167, &[b], "p4-burst-b-up"),
-                make_diagnostic_action(6, ActionKind::Up, 136_167, &[c], "p4-burst-c-up"),
-                make_diagnostic_action(7, ActionKind::Up, 137_167, &[d], "p4-burst-d-up"),
+                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "burst-a-down"),
+                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "burst-a-up"),
+                make_diagnostic_action(2, ActionKind::Down, 118_000, &[b], "burst-b-down"),
+                make_diagnostic_action(3, ActionKind::Down, 119_000, &[c], "burst-c-down"),
+                make_diagnostic_action(4, ActionKind::Down, 120_000, &[d], "burst-d-down"),
+                make_diagnostic_action(5, ActionKind::Up, 135_167, &[b], "burst-b-up"),
+                make_diagnostic_action(6, ActionKind::Up, 136_167, &[c], "burst-c-up"),
+                make_diagnostic_action(7, ActionKind::Up, 137_167, &[d], "burst-d-up"),
             ],
             vec![10_000, 3_000, 80, 90, 100, 100, 100, 100],
             16_667,
@@ -1348,10 +1340,10 @@ fn run_hol_diagnostics() -> Result<Value, String> {
             "hol-same-key-repeated-note-serialization",
             "The next same-key Down follows A Up and is checked against the production physical same-key frame floor and musical hold floor.",
             vec![
-                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "p4-repeat-a-down-1"),
-                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "p4-repeat-a-up-1"),
-                make_diagnostic_action(2, ActionKind::Down, 135_000, &[a], "p4-repeat-a-down-2"),
-                make_diagnostic_action(3, ActionKind::Up, 152_167, &[a], "p4-repeat-a-up-2"),
+                make_diagnostic_action(0, ActionKind::Down, 100_000, &[a], "repeat-a-down-1"),
+                make_diagnostic_action(1, ActionKind::Up, 117_167, &[a], "repeat-a-up-1"),
+                make_diagnostic_action(2, ActionKind::Down, 135_000, &[a], "repeat-a-down-2"),
+                make_diagnostic_action(3, ActionKind::Up, 152_167, &[a], "repeat-a-up-2"),
             ],
             vec![10_000, 50, 50, 50],
             16_667,
@@ -1371,7 +1363,7 @@ fn run_hol_diagnostics() -> Result<Value, String> {
             frame_us: frame,
             frame_base_hold_us: base_hold,
             timing_margin_us: margin,
-            seed: P4_STARTUP_SEED,
+            seed: STARTUP_DIAGNOSTIC_DATASET_SEED,
         })?;
         rows.extend(result["rows"].as_array().cloned().unwrap_or_default());
         cases.push(result);
@@ -1391,13 +1383,19 @@ fn run_hol_diagnostics() -> Result<Value, String> {
                 let chord = PHYSICAL_INSTRUMENT_SCAN_CODES;
                 let case_id = format!("hol-chord15-fps{fps}-margin{margin_us}-hold{hold_label}");
                 let actions = vec![
-                    make_diagnostic_action(0, ActionKind::Down, 100_000, &chord, "p4-chord15-down"),
+                    make_diagnostic_action(
+                        0,
+                        ActionKind::Down,
+                        100_000,
+                        &chord,
+                        "startup-chord-down",
+                    ),
                     make_diagnostic_action(
                         1,
                         ActionKind::Up,
                         100_000 + effective_hold_us,
                         &chord,
-                        "p4-chord15-up",
+                        "startup-chord-up",
                     ),
                 ];
                 let result = run_hol_case(HolCaseConfig {
@@ -1408,7 +1406,7 @@ fn run_hol_diagnostics() -> Result<Value, String> {
                     frame_us,
                     frame_base_hold_us,
                     timing_margin_us: margin_us,
-                    seed: P4_STARTUP_SEED,
+                    seed: STARTUP_DIAGNOSTIC_DATASET_SEED,
                 })?;
                 rows.extend(result["rows"].as_array().cloned().unwrap_or_default());
                 cases.push(result);
@@ -1419,9 +1417,9 @@ fn run_hol_diagnostics() -> Result<Value, String> {
     let packet_count = rows.len();
     Ok(json!({
         "status":"CHARACTERIZATION_ONLY",
-        "scenario_id":"r3-p4-hol-fixed-v1",
-        "dataset_seed":P4_STARTUP_SEED,
-        "dispatch_path":"ProductionDispatchTestHarness -> prepared stream -> dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_r3_probe -> existing prepared dispatch/coordinator admission",
+        "scenario_id":"head-of-line-fixed-v1",
+        "dataset_seed":STARTUP_DIAGNOSTIC_DATASET_SEED,
+        "dispatch_path":"ProductionDispatchTestHarness -> prepared stream -> dispatch_prepared_current_at_synthetic_wall_qpc_if_due_for_test -> existing prepared dispatch/coordinator admission",
         "scheduler_duplicated":false,
         "sender":"deterministic mock with per-packet configured delays; no SendInput call",
         "base_scenario_count":base_case_count,
@@ -1450,9 +1448,9 @@ fn measure_allocations_and_time<T>(operation: impl FnOnce() -> T) -> (T, u64, u6
 }
 
 fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String> {
-    if !P4_DIAGNOSTIC_GENERATION_COUNTS.contains(&generation_count) {
+    if !SUPPORTED_DIAGNOSTIC_GENERATION_COUNTS.contains(&generation_count) {
         return Err(format!(
-            "unsupported startup generation_count {generation_count}; fixed dataset is {P4_DIAGNOSTIC_GENERATION_COUNTS:?}"
+            "unsupported startup generation_count {generation_count}; fixed dataset is {SUPPORTED_DIAGNOSTIC_GENERATION_COUNTS:?}"
         ));
     }
     if generation_count.saturating_mul(2) > sky_dispatch_core::compile::MAX_ACTIONS {
@@ -1464,10 +1462,10 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
         let slot = (first_slot + generation * 7) % PHYSICAL_INSTRUMENT_SCAN_CODES.len();
         let scan_code = PHYSICAL_INSTRUMENT_SCAN_CODES[slot];
         let down_us = (generation as u64)
-            .checked_mul(P4_STARTUP_HOLD_US.saturating_mul(2))
+            .checked_mul(STARTUP_DIAGNOSTIC_HOLD_US.saturating_mul(2))
             .ok_or_else(|| "startup fixture timestamp overflow".to_string())?;
         let up_us = down_us
-            .checked_add(P4_STARTUP_HOLD_US)
+            .checked_add(STARTUP_DIAGNOSTIC_HOLD_US)
             .ok_or_else(|| "startup fixture Up timestamp overflow".to_string())?;
         let down_index = u32::try_from(generation.saturating_mul(2))
             .map_err(|_| "startup source action index overflow".to_string())?;
@@ -1479,14 +1477,14 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
             ActionKind::Down,
             down_us,
             &[scan_code],
-            "r3-p4-startup-down",
+            "prepared-startup-down",
         ));
         actions.push(make_diagnostic_action(
             up_index,
             ActionKind::Up,
             up_us,
             &[scan_code],
-            "r3-p4-startup-up",
+            "prepared-startup-up",
         ));
     }
 
@@ -1517,10 +1515,10 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
         measure_allocations_and_time(|| schedule.clone());
     let (builder_result, coordinator_wall_us, coordinator_allocations, coordinator_allocated_bytes) =
         measure_allocations_and_time(|| {
-            ProductionDispatchTestHarness::new_r3_prepared_startup_builder_for_test(
+            ProductionDispatchTestHarness::new_prepared_startup_builder_for_test(
                 coordinator_schedule,
                 1_000_000,
-                P4_STARTUP_HOLD_US,
+                STARTUP_DIAGNOSTIC_HOLD_US,
             )
         });
     let builder = builder_result?;
@@ -1549,7 +1547,7 @@ fn run_startup_case(generation_count: usize, seed: u64) -> Result<Value, String>
 
     Ok(json!({
         "status":"CHARACTERIZATION_ONLY",
-        "dataset_id":"r3-p4-startup-synthetic-v1",
+        "dataset_id":"startup-synthetic-v1",
         "seed":seed,
         "generation_count":generation_count,
         "action_count":actions.len(),
@@ -1767,10 +1765,10 @@ fn run_frame_polling_model() -> Result<Value, String> {
     }
     Ok(json!({
         "status":"CHARACTERIZATION_ONLY",
-        "scenario_id":"r3-p4-frame-polling-fixed-v1",
+        "scenario_id":"frame-polling-fixed-v1",
         "evidence_labels":{
             "modeled_polling":"This deterministic offline state-sampling simulation.",
-            "actual_receive_only":"Separate published P1/P2 sink event evidence; not rerun in P4.",
+            "actual_receive_only":"Separate published lifecycle and lease sink event evidence; not rerun in P4.",
             "sky_consumption":"UNKNOWN; not observed or inferred from DWM/monitor refresh rate."
         },
         "polling_model":"periodic state sampler at declared FPS, fixed phase and receiver stall; event delivery skew is independently applied to Down and Up",
@@ -1784,11 +1782,11 @@ fn run_frame_polling_model() -> Result<Value, String> {
 }
 
 #[cfg(test)]
-mod p4_diagnostics_tests {
+mod diagnostics_tests {
     use super::*;
 
     #[test]
-    fn r3_p4_hol_rows_use_prepared_paths_and_attribute_sender_time() {
+    fn head_of_line_rows_use_prepared_paths_and_attribute_sender_time() {
         let report = run_hol_diagnostics().expect("fixed HOL diagnostics");
         let cases = report["cases"].as_array().expect("case array");
         let first = cases
@@ -1814,7 +1812,7 @@ mod p4_diagnostics_tests {
     }
 
     #[test]
-    fn r3_p4_short_hold_and_exact_boundary_can_miss_down_state() {
+    fn short_hold_and_exact_boundary_can_miss_down_state() {
         let short = simulate_polling_case(PollingCaseConfig {
             fps: 30,
             margin_us: 0,
@@ -1845,7 +1843,7 @@ mod p4_diagnostics_tests {
     }
 
     #[test]
-    fn r3_p4_polling_matrix_keeps_missed_states_as_results() {
+    fn polling_matrix_keeps_missed_states_as_results() {
         let report = run_frame_polling_model().expect("fixed polling dataset");
         assert_eq!(report["matrix_case_count"], 1_620);
         assert_eq!(report["rows"].as_array().unwrap().len(), 1_626);
@@ -1856,19 +1854,19 @@ mod p4_diagnostics_tests {
 
 fn run_focus_vectors() -> Result<Value, String> {
     let mut restore =
-        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 50_000)?;
-    let restore_packets = restore.configure_r3_mock_packet_sender_for_test(&[]);
-    let restore_cleanup = restore.configure_r3_mock_cleanup_emitter_for_test();
+        ProductionDispatchTestHarness::new_prepared_down_or_uponly_for_test(1, 50_000)?;
+    let restore_packets = restore.configure_mock_packet_sender_for_test(&[]);
+    let restore_cleanup = restore.configure_mock_cleanup_emitter_for_test();
     restore.prepare_prepared_stream_for_test();
     let down_at = restore.qpc_now_for_test()?;
-    restore.reanchor_playback_clock_for_r3_probe(down_at)?;
-    restore.set_r3_mock_sender_start_qpc_for_test(down_at);
+    restore.reanchor_playback_clock_for_test(down_at)?;
+    restore.set_mock_sender_start_qpc_for_test(down_at);
     let down_step =
         restore.dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(down_at);
     let focus_lost_at = down_at
         .checked_add_duration(restore.qpc_duration_from_us_for_test(1_000)?)
         .map_err(|error| format!("focus-lost timestamp overflow: {error}"))?;
-    restore.lose_focus_for_r3_probe(focus_lost_at)?;
+    restore.lose_focus_for_test(focus_lost_at)?;
     let packets_while_unfocused = restore_packets
         .lock()
         .map_err(|_| "focus capture lock poisoned".to_string())?
@@ -1881,8 +1879,8 @@ fn run_focus_vectors() -> Result<Value, String> {
     let focus_restored_at = focus_lost_at
         .checked_add_duration(restore.qpc_duration_from_us_for_test(10_000)?)
         .map_err(|error| format!("focus-restore timestamp overflow: {error}"))?;
-    restore.set_r3_mock_sender_start_qpc_for_test(focus_restored_at);
-    restore.restore_focus_for_r3_probe(focus_restored_at)?;
+    restore.set_mock_sender_start_qpc_for_test(focus_restored_at);
+    restore.restore_focus_for_test(focus_restored_at)?;
     let packets_after_restore = restore_packets
         .lock()
         .map_err(|_| "focus capture lock poisoned".to_string())?
@@ -1905,18 +1903,18 @@ fn run_focus_vectors() -> Result<Value, String> {
     });
 
     let mut terminal =
-        ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(1, 50_000)?;
-    let terminal_packets = terminal.configure_r3_mock_packet_sender_for_test(&[]);
-    let terminal_cleanup = terminal.configure_r3_mock_cleanup_emitter_for_test();
+        ProductionDispatchTestHarness::new_prepared_down_or_uponly_for_test(1, 50_000)?;
+    let terminal_packets = terminal.configure_mock_packet_sender_for_test(&[]);
+    let terminal_cleanup = terminal.configure_mock_cleanup_emitter_for_test();
     terminal.prepare_prepared_stream_for_test();
     let terminal_down_at = terminal.qpc_now_for_test()?;
-    terminal.reanchor_playback_clock_for_r3_probe(terminal_down_at)?;
-    terminal.set_r3_mock_sender_start_qpc_for_test(terminal_down_at);
+    terminal.reanchor_playback_clock_for_test(terminal_down_at)?;
+    terminal.set_mock_sender_start_qpc_for_test(terminal_down_at);
     let terminal_down = terminal
         .dispatch_prepared_current_at_synthetic_wall_qpc_with_sender_start_for_test(
             terminal_down_at,
         );
-    terminal.lose_focus_for_r3_probe(terminal.qpc_now_for_test()?)?;
+    terminal.lose_focus_for_test(terminal.qpc_now_for_test()?)?;
     let packets_before_terminal_cleanup = terminal_packets
         .lock()
         .map_err(|_| "terminal capture lock poisoned".to_string())?
@@ -1925,8 +1923,8 @@ fn run_focus_vectors() -> Result<Value, String> {
         .lock()
         .map_err(|_| "terminal cleanup capture lock poisoned".to_string())?
         .len();
-    terminal.set_r3_mock_sender_start_qpc_for_test(terminal.qpc_now_for_test()?);
-    let finalized = terminal.finalize_for_r3_probe();
+    terminal.set_mock_sender_start_qpc_for_test(terminal.qpc_now_for_test()?);
+    let finalized = terminal.finalize_for_test();
     let packets_after_terminal_cleanup = terminal_packets
         .lock()
         .map_err(|_| "terminal capture lock poisoned".to_string())?
@@ -1964,8 +1962,8 @@ fn run_focus_vectors() -> Result<Value, String> {
 
 fn run_empty_cleanup() -> Result<Value, String> {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
-    let packets = harness.configure_r3_mock_packet_sender_for_test(&[]);
-    let outcome = harness.release_all_for_r3_probe();
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    let outcome = harness.release_all_for_test();
     let transport_calls = packets
         .lock()
         .map_err(|_| "empty cleanup capture lock poisoned".to_string())?
@@ -2017,9 +2015,9 @@ fn precision_report(
 
     for sample_index in 0..total {
         let mut harness = make_precision_harness(workload)?;
-        let _packets = harness.configure_r3_precision_mock_sender_for_test();
-        harness.set_supervisor_lease_timeout_for_r3_probe(3_000_000)?;
-        config_evidence.get_or_insert(harness.r3_timing_config_for_test()?);
+        let _packets = harness.configure_precision_mock_sender_for_test();
+        harness.set_supervisor_lease_timeout_for_test(3_000_000)?;
+        config_evidence.get_or_insert(harness.dispatch_timing_config_for_test()?);
         harness.prepare_prepared_stream_for_test();
         let needs_active_keys = matches!(
             workload.kind,
@@ -2074,8 +2072,7 @@ fn precision_report(
             failed_samples += 1;
             continue;
         }
-        let Some((packet, pre_call, completed, attempts)) =
-            harness.pop_r3_send_observation_for_test()
+        let Some((packet, pre_call, completed, attempts)) = harness.pop_send_observation_for_test()
         else {
             failed_samples += 1;
             continue;
@@ -2137,7 +2134,7 @@ fn precision_report(
         "sample_count":admission_ticks.len(),
         "failed_sample_count":failed_samples,
         "packet_shape":workload_shape(workload.kind),
-        "r3_timing_config": {
+        "dispatch_timing_config": {
             "frame_gap_g_us":config.frame_us,
             "frame_gap_g_ticks":config.frame_ticks,
             "frame_base_hold_us":config.frame_base_hold_us,
@@ -2196,10 +2193,10 @@ fn precision_report(
 fn make_precision_harness(workload: Workload) -> Result<ProductionDispatchTestHarness, String> {
     match workload.kind {
         WorkloadKind::Down(keys) | WorkloadKind::UpOnly(keys) => {
-            ProductionDispatchTestHarness::new_r3_prepared_down_or_uponly_for_test(keys, 20_000)
+            ProductionDispatchTestHarness::new_prepared_down_or_uponly_for_test(keys, 20_000)
         }
         WorkloadKind::Mixed(up, down) => {
-            ProductionDispatchTestHarness::new_r3_prepared_mixed_for_test(up, down, 20_000)
+            ProductionDispatchTestHarness::new_prepared_mixed_for_test(up, down, 20_000)
         }
     }
 }
@@ -2269,7 +2266,7 @@ fn packet_attempts(
 ) -> Result<(u8, PhysicalPacket), String> {
     let packets = packets
         .lock()
-        .map_err(|_| "P0 packet capture lock poisoned".to_string())?;
+        .map_err(|_| "packet capture lock poisoned".to_string())?;
     let (packet, evidence) = packets
         .get(index)
         .ok_or_else(|| format!("expected packet capture {index}, got {}", packets.len()))?;
@@ -2282,7 +2279,7 @@ fn evidence_start(
 ) -> Result<QpcTicks, String> {
     let packets = packets
         .lock()
-        .map_err(|_| "P0 packet capture lock poisoned".to_string())?;
+        .map_err(|_| "packet capture lock poisoned".to_string())?;
     packets
         .get(index)
         .and_then(|(_, evidence)| evidence.started_ticks)
@@ -2295,17 +2292,17 @@ fn evidence_completion(
 ) -> Result<QpcTicks, String> {
     let packets = packets
         .lock()
-        .map_err(|_| "P0 packet capture lock poisoned".to_string())?;
+        .map_err(|_| "packet capture lock poisoned".to_string())?;
     packets
         .get(index)
         .and_then(|(_, evidence)| evidence.completed_ticks)
         .ok_or_else(|| format!("missing sender completion evidence {index}"))
 }
 
-fn cleanup_sends_json(captured: &RtR3CleanupCapture) -> Result<Vec<Value>, String> {
+fn cleanup_sends_json(captured: &CleanupCapture) -> Result<Vec<Value>, String> {
     captured
         .lock()
-        .map_err(|_| "P0 cleanup capture lock poisoned".to_string())
+        .map_err(|_| "cleanup capture lock poisoned".to_string())
         .map(|sends| {
             sends
                 .iter()
@@ -2336,22 +2333,22 @@ fn duration_ticks(clock: QpcClock, us: u64) -> Result<DurationTicks, String> {
 }
 
 fn host_metadata() -> (String, Value, String, String) {
-    let target = std::env::var("SKY_RT_R3_TARGET").unwrap_or_else(|_| rustc_host());
+    let target = std::env::var("SKY_RT_DISPATCH_TARGET").unwrap_or_else(|_| rustc_host());
     let toolchain = json!({
-        "rustc":std::env::var("SKY_RT_R3_RUSTC_VERSION").unwrap_or_else(|_|command_version("rustc","--version")),
-        "cargo":std::env::var("SKY_RT_R3_CARGO_VERSION").unwrap_or_else(|_|command_version("cargo","--version")),
-        "bun":std::env::var("SKY_RT_R3_BUN_VERSION").unwrap_or_else(|_|command_version("bun","--version")),
-        "pwsh":std::env::var("SKY_RT_R3_PWSH_VERSION").unwrap_or_else(|_|command_version("pwsh","--version")),
-        "git":std::env::var("SKY_RT_R3_GIT_VERSION").unwrap_or_else(|_|command_version("git","--version"))
+        "rustc":std::env::var("SKY_RT_DISPATCH_RUSTC_VERSION").unwrap_or_else(|_|command_version("rustc","--version")),
+        "cargo":std::env::var("SKY_RT_DISPATCH_CARGO_VERSION").unwrap_or_else(|_|command_version("cargo","--version")),
+        "bun":std::env::var("SKY_RT_DISPATCH_BUN_VERSION").unwrap_or_else(|_|command_version("bun","--version")),
+        "pwsh":std::env::var("SKY_RT_DISPATCH_PWSH_VERSION").unwrap_or_else(|_|command_version("pwsh","--version")),
+        "git":std::env::var("SKY_RT_DISPATCH_GIT_VERSION").unwrap_or_else(|_|command_version("git","--version"))
     });
-    let os = std::env::var("SKY_RT_R3_OS").unwrap_or_else(|_| {
+    let os = std::env::var("SKY_RT_DISPATCH_OS").unwrap_or_else(|_| {
         format!(
             "{} {}",
             std::env::consts::OS,
             std::env::var("OS").unwrap_or_default()
         )
     });
-    let cpu = std::env::var("SKY_RT_R3_CPU").unwrap_or_else(|_| {
+    let cpu = std::env::var("SKY_RT_DISPATCH_CPU").unwrap_or_else(|_| {
         std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".to_string())
     });
     (target, toolchain, os, cpu)
@@ -2419,7 +2416,11 @@ fn git_revision() -> Result<String, String> {
 }
 
 fn generated_run_id() -> String {
-    format!("p0-{}-{}", unix_ms().unwrap_or(0), std::process::id())
+    format!(
+        "dispatch-probe-{}-{}",
+        unix_ms().unwrap_or(0),
+        std::process::id()
+    )
 }
 
 fn unix_ms() -> Result<u128, String> {

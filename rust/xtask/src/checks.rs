@@ -42,7 +42,7 @@ const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
     "Win32::Media",
     "Win32::UI::Input",
     "Win32::System::Performance",
-    // W4 playback lifecycle request and explicit suspend/resume notification boundary.
+    // Playback lifecycle requests and explicit suspend/resume notification boundaries.
     "Win32::System::Power",
     "Win32::System::LibraryLoader",
     "Win32::System::SystemInformation",
@@ -2904,7 +2904,7 @@ fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
         "scripts/ci_tauri_update_e2e.ps1",
         "scripts/v4_release_pipeline.ps1",
         "scripts/ci_v4_release_latest_guard.ps1",
-        "tests/fixtures/wave2/settings.json",
+        "tests/fixtures/settings/compatibility_cases.json",
     ];
     for relative in current_v4_surfaces {
         let path = root.join(relative);
@@ -3810,15 +3810,15 @@ fn load_architecture_allowlist(root: &Path) -> Result<BTreeMap<(String, String),
             .and_then(Value::as_str)
             .ok_or("architecture allowlist reason missing")?;
         let expires = object
-            .get("expires_phase")
+            .get("review_trigger")
             .and_then(Value::as_str)
-            .ok_or("architecture allowlist expiry missing")?;
+            .ok_or("architecture allowlist review trigger missing")?;
         if !root.join(path).is_file() {
             return Err(format!("architecture allowlist path does not exist: {path}").into());
         }
         result.insert(
             (path.replace('\\', "/"), rule.to_owned()),
-            format!("{reason} (expires {expires})"),
+            format!("{reason} ({expires})"),
         );
     }
     Ok(result)

@@ -19,7 +19,7 @@ pub(crate) use command_timing::{
 #[cfg(any(test, feature = "test-support"))]
 #[allow(unused_imports)]
 pub use dispatch_harness::{
-    PhysicalFloorEvidence, PreparedBoundaryEvidence, ProductionDispatchTestHarness,
-    RtR3CleanupCapture, RtR3FinalizeEvidence, RtR3PreparedStartupBuilder,
-    RtR3PreparedStartupEvidence, RtR3TimingConfigEvidence,
+    CleanupCapture, DispatchTimingConfigEvidence, FinalizeEvidence, PhysicalFloorEvidence,
+    PreparedBoundaryEvidence, PreparedStartupBuilder, PreparedStartupEvidence,
+    ProductionDispatchTestHarness,
 };

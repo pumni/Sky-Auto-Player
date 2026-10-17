@@ -66,7 +66,7 @@ pub(super) fn healthy_generation_qualification(
             | Scenario::RapidRetrigger
             | Scenario::ReleaseGapStress
             | Scenario::MixedUpDown
-            | Scenario::W4Noncanonical
+            | Scenario::NoncanonicalProfile
             | Scenario::TimingMarginSweep
     ) {
         return (

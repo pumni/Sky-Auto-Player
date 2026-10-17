@@ -11,7 +11,7 @@ mod acceptance {
 #[path = "arguments.rs"] mod arguments;
 #[path = "owner_identity.rs"] mod owner_identity;
 #[cfg(windows)]
-#[path = "r3_final_qualification.rs"] mod r3_final_qualification;
+#[path = "lifecycle_lease_qualification.rs"] mod lifecycle_lease_qualification;
 #[cfg(windows)]
 #[path = "lifecycle_wait.rs"] mod lifecycle_wait;
 #[cfg(windows)]
@@ -32,7 +32,7 @@ use release_gap_stress::{attach_sink_window_provenance, healthy_generation_quali
 use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, scenario_plan};
 use arguments::{ParsedCommand, RunArgs, Scenario};
 #[cfg(test)]
-pub(super) use scenarios::w4_profile_spec;
+pub(super) use scenarios::noncanonical_profile_spec;
 use snapshot_report::{
     NativeCleanupEvidence, ambiguous_packet_cleanup_qualified,
     ambiguous_packet_event_sequence_matches, cleanup_evidence_clean, focus_evidence_clean,
@@ -508,10 +508,10 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
     let (mut options, modifier_query_count) = modifier_guard::native_session_options(plan.schedule, plan.profile, args.timing_margin_us, args.scenario);
-    let r3_acceptance_hook = r3_final_qualification::hook_for_scenario(args.scenario);
-    options.startup_ordering_hook = r3_acceptance_hook.clone();
-    let _r3_hook_cleanup = r3_final_qualification::R3AcceptanceHookCleanup::new(
-        r3_acceptance_hook.clone(),
+    let acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
+    options.startup_ordering_hook = acceptance_hook.clone();
+    let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(
+        acceptance_hook.clone(),
     );
     let session = match NativeDispatchSession::new(options) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
     let owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
@@ -535,8 +535,8 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     let mut final_probe = targets.probe.clone();
     let mut independent_helper_probe: Option<release_gap_stress::IndependentHelperLivenessProbe> = None;
-    let mut r3_release_floor_cycles = Vec::<Value>::new();
-    let mut r3_watchdog_was_held = false;
+    let mut release_floor_cycles = Vec::<Value>::new();
+    let mut watchdog_was_held = false;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
         if !wait_for_startup_ready(&session) {
@@ -611,10 +611,10 @@ fn run_windows(args: RunArgs) -> i32 {
     } else if args.scenario == Scenario::PauseResume {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
     } else if args.scenario == Scenario::PauseResumeReleaseFloor {
-        let hook = r3_acceptance_hook.as_deref().expect("release-floor acceptance hook");
-        match r3_final_qualification::run_release_floor_case(&args, &session, hook) {
+        let hook = acceptance_hook.as_deref().expect("release-floor acceptance hook");
+        match lifecycle_lease_qualification::run_release_floor_case(&args, &session, hook) {
             Ok(cycles) => {
-                r3_release_floor_cycles = cycles;
+                release_floor_cycles = cycles;
                 first_physical_commit_observed = true;
                 pause_observed = true;
                 resume_requested = true;
@@ -640,11 +640,11 @@ fn run_windows(args: RunArgs) -> i32 {
         };
         false
     } else if args.scenario == Scenario::LeaseAgeWatchdogDelayed {
-        let hook = r3_acceptance_hook.as_deref().expect("delayed-watchdog acceptance hook");
-        match r3_final_qualification::begin_delayed_watchdog_case(&session, hook) {
-            Ok((helper_probe, watchdog_was_held)) => {
+        let hook = acceptance_hook.as_deref().expect("delayed-watchdog acceptance hook");
+        match lifecycle_lease_qualification::begin_delayed_watchdog_case(&session, hook) {
+            Ok((helper_probe, helper_observed_watchdog_hold)) => {
                 independent_helper_probe = Some(helper_probe);
-                r3_watchdog_was_held = watchdog_was_held;
+                watchdog_was_held = helper_observed_watchdog_hold;
             }
             Err(error) => {
                 let _ = session.quit();
@@ -703,13 +703,13 @@ fn run_windows(args: RunArgs) -> i32 {
         if args.scenario == Scenario::SupervisorLeaseExpiry {
             object.insert("supervisor_progress".to_string(), json!({"source":"direct_native_session_seed","desktop_monitor_exercised":false}));
         }
-        r3_final_qualification::attach_case_details(
+        lifecycle_lease_qualification::attach_case_details(
             object,
-            r3_final_qualification::CaseDetails {
+            lifecycle_lease_qualification::CaseDetails {
                 scenario: args.scenario,
-                release_floor_cycles: &r3_release_floor_cycles,
-                watchdog_was_held: r3_watchdog_was_held,
-                hook: r3_acceptance_hook.as_deref(),
+                release_floor_cycles: &release_floor_cycles,
+                watchdog_was_held,
+                hook: acceptance_hook.as_deref(),
                 final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
                 terminal_error: snapshot.terminal_error.as_deref(),
                 helper_liveness_ticks: independent_helper_liveness_ticks,
@@ -751,7 +751,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_target_preflight_failure = args.scenario == Scenario::TargetHwndChange && target_change_preflight_error(&snapshot);
     let target_cleanup_exception = target_change_cleanup_exception(&snapshot);
     let expected_supervisor_expiry = args.scenario == Scenario::SupervisorLeaseExpiry && supervisor_expiry_cleanup_exception(&snapshot); let expected_ambiguous_cleanup = args.scenario == Scenario::AmbiguousPacket && ambiguous_packet_cleanup_qualified(&snapshot, 0b11);
-    let expected_delayed_watchdog_expiry = r3_final_qualification::expected_delayed_watchdog_expiry(
+    let expected_delayed_watchdog_expiry = lifecycle_lease_qualification::expected_delayed_watchdog_expiry(
         args.scenario,
         snapshot.terminal_error.as_deref(),
     );
@@ -776,9 +776,9 @@ fn run_windows(args: RunArgs) -> i32 {
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
     if args.scenario == Scenario::PauseResumeReleaseFloor
-        && let Some(code) = r3_final_qualification::release_floor_failure(
+        && let Some(code) = lifecycle_lease_qualification::release_floor_failure(
             &args,
-            r3_release_floor_cycles.len(),
+            release_floor_cycles.len(),
             snapshot.final_release_obligation_mask,
             snapshot.production_release_floor_violation_count,
             &details,
@@ -796,13 +796,13 @@ fn run_windows(args: RunArgs) -> i32 {
         if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); }
     }
     if args.scenario == Scenario::LeaseAgeWatchdogDelayed {
-        let hook = r3_acceptance_hook.as_deref().expect("delayed-watchdog acceptance hook");
-        return r3_final_qualification::finish_delayed_watchdog_case(
+        let hook = acceptance_hook.as_deref().expect("delayed-watchdog acceptance hook");
+        return lifecycle_lease_qualification::finish_delayed_watchdog_case(
             &args,
             hook,
-            r3_final_qualification::DelayedWatchdogOracle {
-                watchdog_was_held: r3_watchdog_was_held,
-                down_sender_attempt_count: hook.r3_down_sender_attempt_count(),
+            lifecycle_lease_qualification::DelayedWatchdogOracle {
+                watchdog_was_held,
+                down_sender_attempt_count: hook.down_sender_attempt_count(),
                 final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
                 terminal_error: snapshot.terminal_error.as_deref(),
                 final_release_obligation_mask: snapshot.final_release_obligation_mask,

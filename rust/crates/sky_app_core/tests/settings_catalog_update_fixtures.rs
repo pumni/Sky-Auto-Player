@@ -8,12 +8,12 @@ use sky_app_core::update::{channel_policy, retry_delay, should_auto_check};
 
 fn fixture(name: &str) -> Value {
     let text = match name {
-        "settings" => include_str!("../../../../tests/fixtures/wave2/settings.json"),
-        "catalog" => include_str!("../../../../tests/fixtures/wave2/catalog.json"),
-        "update" => include_str!("../../../../tests/fixtures/wave2/update.json"),
+        "settings" => include_str!("../../../../tests/fixtures/settings/compatibility_cases.json"),
+        "catalog" => include_str!("../../../../tests/fixtures/catalog/search_cases.json"),
+        "update" => include_str!("../../../../tests/fixtures/update/policy_cases.json"),
         _ => unreachable!(),
     };
-    serde_json::from_str(text).expect("valid committed Wave 2 fixture")
+    serde_json::from_str(text).expect("valid committed application compatibility fixture")
 }
 
 #[derive(Default)]

@@ -44,6 +44,18 @@ targeted tests, formatting) within the requested scope does not require separate
 - Source, tests, and configuration are primary evidence. Consult `docs/INDEX.md` to locate current
   canonical documentation on demand.
 
+## Mandatory naming policy
+
+- Names for active source paths, types, functions, tests, scripts, command arguments, environment
+  variables, and configuration fields must describe their lasting behavior or responsibility.
+- Do not encode the implementation sequence in maintained names with phase, sprint, work-order, or
+  optimization-wave markers such as `r3_`, `p4_`, `phase8_`, `wo04_`, or `h4_`.
+- Keep a numbered name only when it is a real version/schema identifier or immutable historical or
+  external contract. Document that exception narrowly; do not add a compatibility alias without
+  evidence that an external consumer needs it.
+- A domain state machine may use “phase” when it describes an actual runtime state. The naming
+  audit in `cargo xtask check static` enforces the implementation-name rule.
+
 ## Verification
 
 Canonical repository verification:

@@ -16,6 +16,17 @@ Do not preload historical plans or archives. Existing documentation describes th
 should normally be preserved, but an intentional contribution may change a documented architecture
 or contract; update the active documentation in the same change when that happens.
 
+## Required naming rule
+
+Give maintained paths, Rust and TypeScript identifiers, tests, scripts, CLI arguments, environment
+variables, and configuration fields names that describe their continuing behavior or responsibility.
+Do not use phase, sprint, work-order, or earlier optimization-wave numbers as implementation names
+(for example `r3_*`, `p4_*`, `phase8_*`, `wo04_*`, or `h4_*`). Keep such a marker only for a genuine
+version/schema identifier or immutable historical or external contract, and record the narrow reason
+in the relevant documentation. Do not preserve an old alias without evidence of an external caller.
+The durable-name audit in `cargo xtask check static` is required for changes to active source or
+configuration.
+
 ## Contributions we welcome
 
 - Bug fixes with direct regression coverage.

@@ -5,7 +5,7 @@ use std::fs;
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
-        "../../../../tests/fixtures/wave2/settings.json"
+        "../../../../tests/fixtures/settings/compatibility_cases.json"
     ))
     .expect("valid committed settings fixture")
 }
@@ -29,7 +29,7 @@ fn persisted_settings_cases_exercise_json_store_and_settings_service() {
     for (index, case) in cases.iter().enumerate() {
         let name = case["name"].as_str().expect("case name");
         let root = std::env::temp_dir().join(format!(
-            "sky-w2-settings-fixture-{}-{index}",
+            "sky-settings-fixture-{}-{index}",
             std::process::id()
         ));
         fs::create_dir_all(&root).expect("fixture root");

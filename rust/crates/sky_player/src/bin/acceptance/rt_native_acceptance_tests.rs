@@ -11,7 +11,7 @@ use super::{
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
     healthy_generation_qualification, production_visibility_qualification,
     reconcile_events, scenario_plan,
-    validate_event_stream, validate_ready_record, w4_profile_spec, wait_for_sink_events_with,
+    validate_event_stream, validate_ready_record, noncanonical_profile_spec, wait_for_sink_events_with,
 };
 use super::scenarios::production_options;
 use super::release_gap_stress::{
@@ -171,12 +171,12 @@ fn schema_v3_rejects_v2_and_requires_bound_header() {
     );
 }
 #[test]
-fn canonical_and_w4_expectations_are_physical() {
+fn canonical_and_noncanonical_expectations_are_physical() {
     assert_eq!(
         expected_physical_keys(None, &[0]),
         vec![physical(PHYSICAL_INSTRUMENT_SCAN_CODES[0])]
     );
-    let profile = w4_profile_spec();
+    let profile = noncanonical_profile_spec();
     assert_eq!(
         expected_physical_keys(Some(&profile), &[0]),
         vec![physical(0x02)]
@@ -602,9 +602,9 @@ fn cleanup_reconciles_fifteen_down_and_up_records() {
     assert!(reconcile_events(&a, &e, &e, false).is_ok());
 }
 #[test]
-fn w4_profile_and_cleanup_verdicts_remain_valid() {
+fn noncanonical_profile_and_cleanup_verdicts_remain_valid() {
     let p = MaterializedInstrumentKeyProfile::from_validated(
-        sky_dispatch_win32::input::InstrumentKeyProfile::try_from_spec(w4_profile_spec()).unwrap(),
+        sky_dispatch_win32::input::InstrumentKeyProfile::try_from_spec(noncanonical_profile_spec()).unwrap(),
     );
     assert_eq!(p.physical_key(0).scan_code, 0x02);
     let plan = scenario_plan(Scenario::CleanupFullRelease, ACCEPTANCE_TIMING_MARGIN_US).unwrap();

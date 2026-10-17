@@ -53,11 +53,18 @@ cargo xtask check desktop
 
 Packaging, Windows timing acceptance, release, and benchmark scripts are specialized evidence paths used when a change touches those boundaries.
 
+- [physical-key-study-method.md](physical-key-study-method.md) — Current receive-only physical-key
+  observation method and its deterministic cases.
+
 ## Decisions and bounded evidence
 
-- [r3-keyboard-final-evidence.md](r3-keyboard-final-evidence.md) — P5 final lifecycle-floor and lease-age characterization, paired A/B matrix, assembly audits, and explicit receiver uncertainty.
-- [r3-keyboard-diagnostics.md](r3-keyboard-diagnostics.md) — P4 prepared-dispatch HOL, startup/resource, and offline receiver-polling characterization with immutable evidence links.
-- [post-adr-0017-hardening-final-evidence.md](post-adr-0017-hardening-final-evidence.md) — merged-main P8/H4 authority, ownership, lifecycle, and native qualification checkpoint; pending coordinator review.
+The following entries are historical records. Their filenames, embedded run IDs, hashes, and old
+stage labels are retained to preserve provenance; use current source and active contracts above for
+current behavior.
+
+- [r3-keyboard-final-evidence.md](r3-keyboard-final-evidence.md) — Historical final lifecycle-floor and lease-age characterization with immutable evidence links.
+- [r3-keyboard-diagnostics.md](r3-keyboard-diagnostics.md) — Historical prepared-dispatch, startup/resource, and offline receiver-polling characterization.
+- [post-adr-0017-hardening-final-evidence.md](post-adr-0017-hardening-final-evidence.md) — Historical mainline authority, ownership, lifecycle, and native qualification checkpoint.
 - `docs/adr/` — Architecture Decision Records for specific structural choices:
   - [adr/ADR-0001-packetized-native-input-dispatch.md](adr/ADR-0001-packetized-native-input-dispatch.md)
   - [adr/ADR-0002-tauri-desktop-ui.md](adr/ADR-0002-tauri-desktop-ui.md)
