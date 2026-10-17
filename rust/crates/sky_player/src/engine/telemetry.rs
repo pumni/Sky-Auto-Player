@@ -9,6 +9,17 @@ use sky_dispatch_core::time::{TimeArithmeticError, TimelineTicks};
 use sky_dispatch_win32::input::SendTransactionStatus;
 use std::collections::VecDeque;
 
+/// Provenance assigned to every exported QPC observation.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestampProvenance {
+    Measured = 0,
+    DerivedFromPreCall = 1,
+    #[default]
+    Unavailable = 2,
+}
+
 /// Fixed-size record retained on the real-time worker path.
 ///
 /// Human-readable outcome names, authored reasons, scan-code lists and
@@ -16,31 +27,41 @@ use std::collections::VecDeque;
 /// worker has stopped.  This is the only representation kept in the bounded
 /// native ring.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 pub struct RtTraceRecord {
     pub compiled_packet_index: u64,
-    pub authored_ticks: u64,
-    pub effective_deadline_ticks: u64,
-    pub wake_ticks: u64,
-    /// Raw QPC values must be interpreted only when their paired availability
-    /// field is true; zero is a valid QPC value.
-    pub authored_target_qpc_ticks: u64,
-    pub physical_not_before_qpc_ticks: u64,
-    pub hold_floor_qpc_ticks: u64,
-    pub release_floor_qpc_ticks: u64,
+    /// Authored and effective positions relative to the immutable playback
+    /// epoch. These are schedule offsets, not sampled wall-clock timestamps.
+    pub authored_offset_ticks: u64,
+    pub effective_deadline_offset_ticks: u64,
+    pub wake_offset_ticks: u64,
+    /// Absolute QPC values below are present only when an actual sample exists.
+    pub wake_qpc_ticks: u64,
+    pub target_crossing_qpc_ticks: u64,
+    pub final_policy_qpc_ticks: u64,
     pub pre_call_qpc_ticks: u64,
     pub sendinput_completion_qpc_ticks: u64,
+    pub post_send_qpc_ticks: u64,
     pub observation_qpc_ticks: u64,
-    /// Deprecated compatibility key. Its value is the trusted pre-call QPC
-    /// boundary immediately before the prepared SendInput call.
+    /// Deprecated timeline-offset compatibility key converted from the
+    /// sampled pre-call QPC and immutable epoch.
     pub send_started_ticks: u64,
-    /// Deprecated compatibility key for the SendInput return QPC boundary.
+    /// Deprecated timeline-offset compatibility key converted from the
+    /// sampled SendInput completion QPC and immutable epoch.
     pub send_completed_ticks: u64,
-    /// Legacy completion-target residual, retained for diagnostics only.
-    /// The primary timing evidence is `dispatch_start_error_ticks`.
-    /// Deprecated compatibility key for completion residual diagnostics.
+    pub authored_lateness_ticks: i64,
+    pub physical_floor_displacement_ticks: u64,
+    pub hold_floor_displacement_ticks: u64,
+    pub release_floor_displacement_ticks: u64,
+    pub other_floor_displacement_ticks: u64,
+    pub residual_lateness_ticks: i64,
+    pub hol_delay_lower_bound_ticks: u64,
+    pub unattributed_lateness_ticks: u64,
+    pub sendinput_envelope_ticks: u64,
+    /// Deprecated compatibility completion residual in microseconds.
     pub dispatch_cost_us: u64,
     pub core_post_send_duration_us: u64,
+    /// Legacy start-error alias; `authored_lateness_ticks` is authoritative.
     pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
@@ -60,15 +81,34 @@ pub struct RtTraceRecord {
     pub down_mask: u16,
     pub hold_floor_mask: u16,
     pub release_floor_mask: u16,
-    /// Availability fields distinguish missing QPC samples from valid zero.
+    /// Availability and provenance distinguish missing QPC samples from valid zero.
     pub compiled_packet_index_available: bool,
-    pub authored_target_qpc_available: bool,
-    pub physical_not_before_qpc_available: bool,
-    pub hold_floor_qpc_available: bool,
-    pub release_floor_qpc_available: bool,
+    pub wake_offset_available: bool,
+    pub wake_qpc_available: bool,
+    pub target_crossing_qpc_available: bool,
+    pub final_policy_qpc_available: bool,
     pub pre_call_qpc_available: bool,
     pub sendinput_completion_qpc_available: bool,
+    pub post_send_qpc_available: bool,
     pub observation_qpc_available: bool,
+    pub authored_lateness_available: bool,
+    pub authored_target_overdue: bool,
+    pub floor_displacement_available: bool,
+    pub residual_lateness_available: bool,
+    pub hol_delay_available: bool,
+    pub unattributed_lateness_available: bool,
+    pub sendinput_envelope_available: bool,
+    pub transport_anomaly: bool,
+    pub wake_offset_provenance: TimestampProvenance,
+    pub wake_qpc_provenance: TimestampProvenance,
+    pub target_crossing_qpc_provenance: TimestampProvenance,
+    pub final_policy_qpc_provenance: TimestampProvenance,
+    pub pre_call_qpc_provenance: TimestampProvenance,
+    pub sendinput_completion_qpc_provenance: TimestampProvenance,
+    pub post_send_qpc_provenance: TimestampProvenance,
+    pub observation_qpc_provenance: TimestampProvenance,
+    pub send_started_ticks_provenance: TimestampProvenance,
+    pub send_completed_ticks_provenance: TimestampProvenance,
     pub post_send_metrics_available: bool,
     pub kind: u8,
     pub outcome: u8,
@@ -81,7 +121,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 17;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 18;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -114,23 +154,26 @@ pub(crate) const fn trace_send_status_code(status: SendTransactionStatus) -> u8 
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TraceTiming {
     pub(crate) authored_ticks: TimelineTicks,
     pub(crate) effective_deadline_ticks: TimelineTicks,
-    pub(crate) wake_ticks: TimelineTicks,
+    pub(crate) wake_ticks: Option<TimelineTicks>,
+    pub(crate) wake_qpc_ticks: Option<u64>,
+    pub(crate) target_crossing_qpc_ticks: Option<u64>,
     pub(crate) physical_target_qpc_ticks: Option<u64>,
     pub(crate) physical_not_before_qpc_ticks: Option<u64>,
     pub(crate) hold_floor_qpc_ticks: Option<u64>,
     pub(crate) release_floor_qpc_ticks: Option<u64>,
+    pub(crate) previous_sendinput_completion_qpc_ticks: Option<u64>,
+    pub(crate) previous_sender_completion_known: bool,
     pub(crate) hold_floor_mask: u16,
     pub(crate) release_floor_mask: u16,
+    pub(crate) final_policy_qpc_ticks: Option<u64>,
     pub(crate) pre_call_qpc_ticks: Option<u64>,
     pub(crate) sendinput_completion_qpc_ticks: Option<u64>,
+    pub(crate) post_send_qpc_ticks: Option<u64>,
     pub(crate) observation_qpc_ticks: Option<u64>,
-    /// Final target/focus/control proof, sampled before the pre-call sender
-    /// boundary.
-    pub(crate) final_policy_ticks: Option<TimelineTicks>,
     /// Compatibility output `send_started_ticks` is sourced from this
     /// prepared-sender pre-call boundary.
     pub(crate) pre_call_ticks: Option<TimelineTicks>,
@@ -140,7 +183,6 @@ pub(crate) struct TraceTiming {
     pub(crate) completion_residual_us: u64,
     pub(crate) core_post_send_duration_us: u64,
     pub(crate) post_send_metrics_available: bool,
-    pub(crate) dispatch_start_error_ticks: i64,
     pub(crate) completion_error_ticks: i64,
     pub(crate) authored_completion_error_ticks: i64,
 }
@@ -174,7 +216,6 @@ impl RtTraceRecord {
         timing: TraceTiming,
         delivery: TraceDelivery,
     ) -> Result<Self, TimeArithmeticError> {
-        let _final_policy_ticks = timing.final_policy_ticks;
         if delivery.sent > delivery.requested
             || delivery.skipped > delivery.requested
             || delivery.sent.saturating_add(delivery.skipped) > delivery.requested
@@ -191,6 +232,82 @@ impl RtTraceRecord {
             u8::try_from(delivery.skipped).map_err(|_| TimeArithmeticError::Overflow)?;
         let send_attempts =
             u8::try_from(delivery.send_attempts).map_err(|_| TimeArithmeticError::Overflow)?;
+        let physical_floor_displacement_ticks = checked_displacement(
+            timing.physical_not_before_qpc_ticks,
+            timing.physical_target_qpc_ticks,
+        )?;
+        let hold_floor_displacement_ticks = checked_displacement(
+            timing.hold_floor_qpc_ticks,
+            timing.physical_target_qpc_ticks,
+        )?;
+        let release_floor_displacement_ticks = checked_displacement(
+            timing.release_floor_qpc_ticks,
+            timing.physical_target_qpc_ticks,
+        )?;
+        let other_floor_displacement_ticks = match (
+            timing.physical_not_before_qpc_ticks,
+            timing.physical_target_qpc_ticks,
+        ) {
+            (Some(not_before), Some(target)) => {
+                let known_floor = target
+                    .max(timing.hold_floor_qpc_ticks.unwrap_or(target))
+                    .max(timing.release_floor_qpc_ticks.unwrap_or(target));
+                Some(
+                    not_before
+                        .checked_sub(known_floor)
+                        .ok_or(TimeArithmeticError::Overflow)?,
+                )
+            }
+            _ => None,
+        };
+        let residual_lateness_ticks = checked_signed_delta(
+            timing.pre_call_qpc_ticks,
+            timing.physical_not_before_qpc_ticks,
+        )?;
+        let hol_delay_lower_bound_ticks = match (
+            timing.pre_call_qpc_ticks,
+            timing.physical_not_before_qpc_ticks,
+            timing.previous_sendinput_completion_qpc_ticks,
+            timing.previous_sender_completion_known,
+        ) {
+            (Some(pre_call), Some(not_before), previous, true) => Some(
+                previous
+                    .unwrap_or(not_before)
+                    .min(pre_call)
+                    .saturating_sub(not_before),
+            ),
+            _ => None,
+        };
+        let unattributed_lateness_ticks =
+            match (residual_lateness_ticks, hol_delay_lower_bound_ticks) {
+                (Some(residual), Some(hol)) => Some(
+                    residual
+                        .saturating_sub(
+                            i64::try_from(hol).map_err(|_| TimeArithmeticError::Overflow)?,
+                        )
+                        .max(0) as u64,
+                ),
+                _ => None,
+            };
+        let sendinput_envelope_ticks = match (
+            timing.pre_call_qpc_ticks,
+            timing.sendinput_completion_qpc_ticks,
+        ) {
+            (Some(start), Some(completed)) => Some(
+                completed
+                    .checked_sub(start)
+                    .ok_or(TimeArithmeticError::Overflow)?,
+            ),
+            _ => None,
+        };
+        let authored_lateness_ticks = checked_signed_delta(
+            timing.pre_call_qpc_ticks.or(timing.observation_qpc_ticks),
+            timing.physical_target_qpc_ticks,
+        )?;
+        let send_started_ticks = timing.pre_call_qpc_ticks.and(timing.pre_call_ticks);
+        let send_completed_ticks = timing
+            .sendinput_completion_qpc_ticks
+            .and(timing.sendinput_completion_ticks);
         Ok(Self {
             trace_record_index: 0,
             compiled_packet_index: context.compiled_packet_index.unwrap_or_default(),
@@ -204,17 +321,16 @@ impl RtTraceRecord {
             send_status: context.send_status,
             up_mask: context.up_mask,
             down_mask: context.down_mask,
-            authored_ticks: timing.authored_ticks.as_u64(),
-            effective_deadline_ticks: timing.effective_deadline_ticks.as_u64(),
-            wake_ticks: timing.wake_ticks.as_u64(),
-            authored_target_qpc_ticks: timing.physical_target_qpc_ticks.unwrap_or_default(),
-            authored_target_qpc_available: timing.physical_target_qpc_ticks.is_some(),
-            physical_not_before_qpc_ticks: timing.physical_not_before_qpc_ticks.unwrap_or_default(),
-            physical_not_before_qpc_available: timing.physical_not_before_qpc_ticks.is_some(),
-            hold_floor_qpc_ticks: timing.hold_floor_qpc_ticks.unwrap_or_default(),
-            hold_floor_qpc_available: timing.hold_floor_qpc_ticks.is_some(),
-            release_floor_qpc_ticks: timing.release_floor_qpc_ticks.unwrap_or_default(),
-            release_floor_qpc_available: timing.release_floor_qpc_ticks.is_some(),
+            authored_offset_ticks: timing.authored_ticks.as_u64(),
+            effective_deadline_offset_ticks: timing.effective_deadline_ticks.as_u64(),
+            wake_offset_ticks: timing.wake_ticks.map_or(0, TimelineTicks::as_u64),
+            wake_offset_available: timing.wake_ticks.is_some(),
+            wake_qpc_ticks: timing.wake_qpc_ticks.unwrap_or_default(),
+            wake_qpc_available: timing.wake_qpc_ticks.is_some(),
+            target_crossing_qpc_ticks: timing.target_crossing_qpc_ticks.unwrap_or_default(),
+            target_crossing_qpc_available: timing.target_crossing_qpc_ticks.is_some(),
+            final_policy_qpc_ticks: timing.final_policy_qpc_ticks.unwrap_or_default(),
+            final_policy_qpc_available: timing.final_policy_qpc_ticks.is_some(),
             hold_floor_mask: timing.hold_floor_mask,
             release_floor_mask: timing.release_floor_mask,
             pre_call_qpc_ticks: timing.pre_call_qpc_ticks.unwrap_or_default(),
@@ -223,16 +339,54 @@ impl RtTraceRecord {
                 .sendinput_completion_qpc_ticks
                 .unwrap_or_default(),
             sendinput_completion_qpc_available: timing.sendinput_completion_qpc_ticks.is_some(),
+            post_send_qpc_ticks: timing.post_send_qpc_ticks.unwrap_or_default(),
+            post_send_qpc_available: timing.post_send_qpc_ticks.is_some(),
             observation_qpc_ticks: timing.observation_qpc_ticks.unwrap_or_default(),
             observation_qpc_available: timing.observation_qpc_ticks.is_some(),
-            send_started_ticks: timing.pre_call_ticks.map_or(0, TimelineTicks::as_u64),
-            send_completed_ticks: timing
-                .sendinput_completion_ticks
-                .map_or(0, TimelineTicks::as_u64),
+            authored_lateness_ticks: authored_lateness_ticks.unwrap_or_default(),
+            authored_target_overdue: authored_lateness_ticks.is_some_and(|late| late > 0),
+            physical_floor_displacement_ticks: physical_floor_displacement_ticks
+                .unwrap_or_default(),
+            hold_floor_displacement_ticks: hold_floor_displacement_ticks.unwrap_or_default(),
+            release_floor_displacement_ticks: release_floor_displacement_ticks.unwrap_or_default(),
+            other_floor_displacement_ticks: other_floor_displacement_ticks.unwrap_or_default(),
+            residual_lateness_ticks: residual_lateness_ticks.unwrap_or_default(),
+            hol_delay_lower_bound_ticks: hol_delay_lower_bound_ticks.unwrap_or_default(),
+            unattributed_lateness_ticks: unattributed_lateness_ticks.unwrap_or_default(),
+            sendinput_envelope_ticks: sendinput_envelope_ticks.unwrap_or_default(),
+            floor_displacement_available: physical_floor_displacement_ticks.is_some(),
+            residual_lateness_available: residual_lateness_ticks.is_some(),
+            authored_lateness_available: authored_lateness_ticks.is_some(),
+            hol_delay_available: hol_delay_lower_bound_ticks.is_some(),
+            unattributed_lateness_available: unattributed_lateness_ticks.is_some(),
+            sendinput_envelope_available: sendinput_envelope_ticks.is_some(),
+            transport_anomaly: context.send_status != TRACE_SEND_STATUS_NOT_ATTEMPTED
+                && (context.send_status != TRACE_SEND_STATUS_COMPLETE
+                    || context.win32_error != 0
+                    || delivery.skipped != 0
+                    || delivery.send_attempts != 1),
+            wake_offset_provenance: provenance(timing.wake_ticks.is_some()),
+            wake_qpc_provenance: provenance(timing.wake_qpc_ticks.is_some()),
+            target_crossing_qpc_provenance: provenance(timing.target_crossing_qpc_ticks.is_some()),
+            final_policy_qpc_provenance: provenance(timing.final_policy_qpc_ticks.is_some()),
+            pre_call_qpc_provenance: provenance(timing.pre_call_qpc_ticks.is_some()),
+            sendinput_completion_qpc_provenance: provenance(
+                timing.sendinput_completion_qpc_ticks.is_some(),
+            ),
+            post_send_qpc_provenance: provenance(timing.post_send_qpc_ticks.is_some()),
+            observation_qpc_provenance: provenance(timing.observation_qpc_ticks.is_some()),
+            send_started_ticks_provenance: if send_started_ticks.is_some() {
+                TimestampProvenance::DerivedFromPreCall
+            } else {
+                TimestampProvenance::Unavailable
+            },
+            send_completed_ticks_provenance: provenance(send_completed_ticks.is_some()),
+            send_started_ticks: send_started_ticks.map_or(0, TimelineTicks::as_u64),
+            send_completed_ticks: send_completed_ticks.map_or(0, TimelineTicks::as_u64),
             dispatch_cost_us: timing.completion_residual_us,
             core_post_send_duration_us: timing.core_post_send_duration_us,
             post_send_metrics_available: timing.post_send_metrics_available,
-            dispatch_start_error_ticks: timing.dispatch_start_error_ticks,
+            dispatch_start_error_ticks: authored_lateness_ticks.unwrap_or_default(),
             completion_error_ticks: timing.completion_error_ticks,
             authored_completion_error_ticks: timing.authored_completion_error_ticks,
             applied_lead_ticks: 0,
@@ -242,6 +396,39 @@ impl RtTraceRecord {
             skipped_count,
             send_attempts,
         })
+    }
+}
+
+fn provenance(available: bool) -> TimestampProvenance {
+    if available {
+        TimestampProvenance::Measured
+    } else {
+        TimestampProvenance::Unavailable
+    }
+}
+
+fn checked_displacement(
+    value: Option<u64>,
+    baseline: Option<u64>,
+) -> Result<Option<u64>, TimeArithmeticError> {
+    match (value, baseline) {
+        (Some(value), Some(baseline)) => value
+            .checked_sub(baseline)
+            .map(Some)
+            .ok_or(TimeArithmeticError::Overflow),
+        _ => Ok(None),
+    }
+}
+
+fn checked_signed_delta(
+    value: Option<u64>,
+    baseline: Option<u64>,
+) -> Result<Option<i64>, TimeArithmeticError> {
+    match (value, baseline) {
+        (Some(value), Some(baseline)) => i64::try_from(i128::from(value) - i128::from(baseline))
+            .map(Some)
+            .map_err(|_| TimeArithmeticError::Overflow),
+        _ => Ok(None),
     }
 }
 
@@ -280,6 +467,22 @@ pub struct NativeTelemetrySummary {
     /// explicit instead of pretending it is a narrow 750–800 µs bucket.
     pub lateness_overflow_count: u64,
     pub send_duration_overflow_count: u64,
+    pub authored_lateness_samples: u64,
+    pub max_authored_lateness_ticks: i64,
+    pub max_authored_lateness_abs_ticks: u64,
+    pub overdue_packet_count: u64,
+    pub floor_displacement_samples: u64,
+    pub max_physical_floor_displacement_ticks: u64,
+    pub residual_lateness_samples: u64,
+    pub max_residual_lateness_ticks: i64,
+    pub max_residual_lateness_abs_ticks: u64,
+    pub hol_delay_samples: u64,
+    pub max_hol_delay_lower_bound_ticks: u64,
+    pub unattributed_lateness_samples: u64,
+    pub max_unattributed_lateness_ticks: u64,
+    pub sender_envelope_samples: u64,
+    pub max_sendinput_envelope_ticks: u64,
+    pub transport_anomaly_count: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -291,19 +494,25 @@ pub struct TimingSemantics {
     pub wake_boundary: &'static str,
     pub sender_start_boundary: &'static str,
     pub sender_completion_boundary: &'static str,
+    pub timestamp_provenance: &'static str,
+    pub final_policy_boundary: &'static str,
+    pub observer_boundary: &'static str,
     pub game_observed_available: bool,
 }
 
 impl Default for TimingSemantics {
     fn default() -> Self {
         Self {
-            evidence_kind: "sender_start_error",
-            primary_metric: "dispatch_start_error_ticks",
+            evidence_kind: "sender_pre_call_and_observer_lateness",
+            primary_metric: "authored_lateness_ticks",
             completion_metric: "completion_error_ticks_diagnostic_only",
             scheduled_boundary: "authored_timeline",
             wake_boundary: "worker_wake_before_sendinput",
             sender_start_boundary: "pre_call_qpc_before_sendinput",
             sender_completion_boundary: "sendinput_completion_qpc",
+            timestamp_provenance: "measured|derived_from_pre_call|unavailable",
+            final_policy_boundary: "sampled_when_present_else_unavailable",
+            observer_boundary: "post_send_capture_and_observer_drain_are_distinct",
             game_observed_available: false,
         }
     }
@@ -311,12 +520,13 @@ impl Default for TimingSemantics {
 
 impl NativeTelemetrySummary {
     pub(crate) fn observe(&mut self, record: &RtTraceRecord) {
-        let backend_dispatch =
-            record.send_attempts > 0 || record.sent_count > 0 || record.skipped_count > 0;
+        let backend_dispatch = record.send_attempts > 0
+            || record.sent_count > 0
+            || record.skipped_count > 0
+            || record.transport_anomaly;
         if !backend_dispatch {
             return;
         }
-        let first_dispatch = self.dispatch_count == 0;
         self.dispatch_count = self.dispatch_count.saturating_add(1);
         match record.kind {
             TRACE_KIND_DOWN => self.down_count = self.down_count.saturating_add(1),
@@ -332,16 +542,71 @@ impl NativeTelemetrySummary {
         self.skipped_key_count = self
             .skipped_key_count
             .saturating_add(u64::from(record.skipped_count));
-        if first_dispatch {
-            self.max_dispatch_start_error_ticks = record.dispatch_start_error_ticks;
-        } else {
-            self.max_dispatch_start_error_ticks = self
-                .max_dispatch_start_error_ticks
-                .max(record.dispatch_start_error_ticks);
+        if record.authored_lateness_available {
+            let first_lateness_sample = self.authored_lateness_samples == 0;
+            self.authored_lateness_samples = self.authored_lateness_samples.saturating_add(1);
+            self.max_dispatch_start_error_ticks = if first_lateness_sample {
+                record.dispatch_start_error_ticks
+            } else {
+                self.max_dispatch_start_error_ticks
+                    .max(record.dispatch_start_error_ticks)
+            };
+            self.max_dispatch_start_error_abs_ticks = self
+                .max_dispatch_start_error_abs_ticks
+                .max(record.dispatch_start_error_ticks.unsigned_abs());
+            self.max_authored_lateness_ticks = if self.authored_lateness_samples == 1 {
+                record.authored_lateness_ticks
+            } else {
+                self.max_authored_lateness_ticks
+                    .max(record.authored_lateness_ticks)
+            };
+            self.max_authored_lateness_abs_ticks = self
+                .max_authored_lateness_abs_ticks
+                .max(record.authored_lateness_ticks.unsigned_abs());
+            self.overdue_packet_count = self
+                .overdue_packet_count
+                .saturating_add(u64::from(record.authored_target_overdue));
         }
-        self.max_dispatch_start_error_abs_ticks = self
-            .max_dispatch_start_error_abs_ticks
-            .max(record.dispatch_start_error_ticks.unsigned_abs());
+        if record.floor_displacement_available {
+            self.floor_displacement_samples = self.floor_displacement_samples.saturating_add(1);
+            self.max_physical_floor_displacement_ticks = self
+                .max_physical_floor_displacement_ticks
+                .max(record.physical_floor_displacement_ticks);
+        }
+        if record.residual_lateness_available {
+            self.residual_lateness_samples = self.residual_lateness_samples.saturating_add(1);
+            self.max_residual_lateness_ticks = if self.residual_lateness_samples == 1 {
+                record.residual_lateness_ticks
+            } else {
+                self.max_residual_lateness_ticks
+                    .max(record.residual_lateness_ticks)
+            };
+            self.max_residual_lateness_abs_ticks = self
+                .max_residual_lateness_abs_ticks
+                .max(record.residual_lateness_ticks.unsigned_abs());
+        }
+        if record.hol_delay_available {
+            self.hol_delay_samples = self.hol_delay_samples.saturating_add(1);
+            self.max_hol_delay_lower_bound_ticks = self
+                .max_hol_delay_lower_bound_ticks
+                .max(record.hol_delay_lower_bound_ticks);
+        }
+        if record.unattributed_lateness_available {
+            self.unattributed_lateness_samples =
+                self.unattributed_lateness_samples.saturating_add(1);
+            self.max_unattributed_lateness_ticks = self
+                .max_unattributed_lateness_ticks
+                .max(record.unattributed_lateness_ticks);
+        }
+        if record.sendinput_envelope_available {
+            self.sender_envelope_samples = self.sender_envelope_samples.saturating_add(1);
+            self.max_sendinput_envelope_ticks = self
+                .max_sendinput_envelope_ticks
+                .max(record.sendinput_envelope_ticks);
+        }
+        if record.transport_anomaly {
+            self.transport_anomaly_count = self.transport_anomaly_count.saturating_add(1);
+        }
     }
 }
 
@@ -479,8 +744,9 @@ impl TelemetryCollector {
 mod tests {
     use super::{
         NativeTelemetrySummary, RtTraceRecord, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
-        TRACE_KIND_MIXED, TRACE_KIND_UP, TRACE_SEND_STATUS_COMPLETE, TelemetryCollector,
-        TelemetryMode, TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
+        TRACE_KIND_MIXED, TRACE_KIND_UP, TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND,
+        TRACE_SEND_STATUS_COMPLETE, TelemetryCollector, TelemetryMode, TimestampProvenance,
+        TraceContext, TraceDelivery, TraceTiming, trace_outcome_code,
     };
     use sky_dispatch_core::time::TimelineTicks;
 
@@ -529,25 +795,25 @@ mod tests {
             TraceTiming {
                 authored_ticks: TimelineTicks::ZERO,
                 effective_deadline_ticks: TimelineTicks::ZERO,
-                wake_ticks: TimelineTicks::ZERO,
+                wake_ticks: Some(TimelineTicks::ZERO),
+                wake_qpc_ticks: Some(0),
+                pre_call_qpc_ticks: Some(1),
+                sendinput_completion_qpc_ticks: Some(2),
                 physical_target_qpc_ticks: None,
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
                 release_floor_qpc_ticks: None,
                 hold_floor_mask: 0,
                 release_floor_mask: 0,
-                pre_call_qpc_ticks: None,
-                sendinput_completion_qpc_ticks: None,
                 observation_qpc_ticks: None,
-                final_policy_ticks: Some(TimelineTicks::from_raw(1)),
                 pre_call_ticks: Some(TimelineTicks::from_raw(1)),
                 sendinput_completion_ticks: Some(TimelineTicks::from_raw(2)),
                 completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
-                dispatch_start_error_ticks: 0,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
+                ..TraceTiming::default()
             },
             TraceDelivery {
                 requested,
@@ -591,17 +857,123 @@ mod tests {
     }
 
     #[test]
+    fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailable() {
+        let measured = record_with_index(1, TRACE_KIND_UP, 1, 1);
+        let value = serde_json::to_value(measured).expect("serialize trace");
+        assert_eq!(value["wake_qpc_provenance"], "measured");
+        assert_eq!(value["pre_call_qpc_provenance"], "measured");
+        assert_eq!(
+            value["send_started_ticks_provenance"],
+            "derived_from_pre_call"
+        );
+        assert_eq!(value["send_completed_ticks_provenance"], "measured");
+        assert_eq!(value["final_policy_qpc_provenance"], "unavailable");
+        assert_eq!(value["final_policy_qpc_available"], false);
+        assert_eq!(value["final_policy_qpc_ticks"], 0);
+    }
+
+    #[test]
+    fn absent_pre_call_qpc_never_uses_a_relative_or_schedule_value_as_a_sample() {
+        let record = RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: 0,
+                source_action_index: 0,
+                compiled_packet_index: None,
+                kind: TRACE_KIND_DOWN,
+                outcome: trace_outcome_code("sent"),
+                polyphony: 1,
+                flags: 0,
+                send_status: TRACE_SEND_STATUS_COMPLETE,
+                win32_error: 0,
+                up_mask: 0,
+                down_mask: 1,
+            },
+            TraceTiming {
+                authored_ticks: TimelineTicks::from_raw(90),
+                effective_deadline_ticks: TimelineTicks::from_raw(95),
+                pre_call_ticks: Some(TimelineTicks::from_raw(100)),
+                ..TraceTiming::default()
+            },
+            TraceDelivery {
+                requested: 1,
+                sent: 1,
+                skipped: 0,
+                send_attempts: 1,
+            },
+        )
+        .expect("trace without sampled QPC boundaries");
+        let value = serde_json::to_value(record).expect("serialize trace");
+        assert_eq!(
+            record.pre_call_qpc_provenance,
+            TimestampProvenance::Unavailable
+        );
+        assert_eq!(
+            record.send_started_ticks_provenance,
+            TimestampProvenance::Unavailable
+        );
+        assert!(!record.authored_lateness_available);
+        assert_eq!(value["pre_call_qpc_ticks"], 0);
+        assert_eq!(value["pre_call_qpc_provenance"], "unavailable");
+        assert_eq!(value["send_started_ticks"], 0);
+        assert_eq!(value["send_started_ticks_provenance"], "unavailable");
+
+        let mut summary = NativeTelemetrySummary::default();
+        summary.observe(&record);
+        assert_eq!(summary.authored_lateness_samples, 0);
+        assert_eq!(summary.overdue_packet_count, 0);
+    }
+
+    #[test]
+    fn pre_send_transaction_failure_is_counted_without_fabricating_an_attempt() {
+        let record = RtTraceRecord::dispatched(
+            TraceContext {
+                event_index: 0,
+                source_action_index: 0,
+                compiled_packet_index: None,
+                kind: TRACE_KIND_DOWN,
+                outcome: trace_outcome_code("aborted"),
+                polyphony: 1,
+                flags: 0,
+                send_status: TRACE_SEND_STATUS_CLOCK_FAILURE_BEFORE_SEND,
+                win32_error: 0,
+                up_mask: 0,
+                down_mask: 1,
+            },
+            TraceTiming::default(),
+            TraceDelivery {
+                requested: 1,
+                sent: 0,
+                skipped: 0,
+                send_attempts: 0,
+            },
+        )
+        .expect("pre-send failure trace");
+        assert_eq!(record.send_attempts, 0);
+        assert!(record.transport_anomaly);
+
+        let mut summary = NativeTelemetrySummary::default();
+        summary.observe(&record);
+        assert_eq!(summary.dispatch_count, 1);
+        assert_eq!(summary.transport_anomaly_count, 1);
+        assert_eq!(summary.authored_lateness_samples, 0);
+    }
+
+    #[test]
     fn signed_start_error_max_preserves_all_negative_samples() {
         let mut summary = NativeTelemetrySummary::default();
 
         for (event_index, start_error_ticks) in [(0, -40), (1, -30), (2, -20)] {
             let mut record = record_with_index(event_index, TRACE_KIND_UP, 1, 1);
+            record.authored_lateness_available = true;
+            record.authored_lateness_ticks = start_error_ticks;
             record.dispatch_start_error_ticks = start_error_ticks;
             summary.observe(&record);
         }
 
         assert_eq!(summary.max_dispatch_start_error_ticks, -20);
         assert_eq!(summary.max_dispatch_start_error_abs_ticks, 40);
+        assert_eq!(summary.max_authored_lateness_ticks, -20);
+        assert_eq!(summary.max_authored_lateness_abs_ticks, 40);
     }
 
     #[test]

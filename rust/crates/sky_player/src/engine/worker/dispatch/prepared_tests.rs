@@ -37,8 +37,21 @@ fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
         "String",
         "Vec",
         "Box",
+        "VecDeque",
+        "HashMap",
         "Mutex",
         "lock(",
+        "std::thread",
+        "thread::spawn",
+        "std::fs",
+        "std::io",
+        "println!(",
+        "eprintln!(",
+        "tracing::",
+        "log::",
+        "sleep(",
+        "join(",
+        ".wait(",
     ] {
         assert!(
             !helper.contains(forbidden),
@@ -93,6 +106,19 @@ fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
     assert!(final_authority < lease_age_proof);
     assert!(lease_age_proof < control_gates[2]);
     assert!(helper.contains("lease_timeout_ticks"));
+    assert!(
+        helper.contains("let final_policy_qpc = None;"),
+        "the production-normal suffix must not add a QPC read for final-policy evidence"
+    );
+    assert!(
+        helper
+            .contains("let final_policy_qpc = backend.physical_study_final_policy_qpc_for_test();"),
+        "test-support final-policy samples remain explicitly isolated"
+    );
+    assert!(
+        !helper.contains("qpc_clock.now("),
+        "the prepared suffix must not add a post-gate QPC sample"
+    );
     assert!(
         control_gates[2] < sender,
         "final atomics must precede sender"
@@ -155,8 +181,21 @@ fn prepared_sender_handoff_is_transitively_auditable() {
         "String",
         "Vec",
         "Box",
+        "VecDeque",
+        "HashMap",
         "Mutex",
         "lock(",
+        "std::thread",
+        "thread::spawn",
+        "std::fs",
+        "std::io",
+        "println!(",
+        "eprintln!(",
+        "tracing::",
+        "log::",
+        "sleep(",
+        "join(",
+        ".wait(",
         "coordinator",
         "planner",
         "recovery",

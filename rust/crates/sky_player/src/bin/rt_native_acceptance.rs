@@ -1,5 +1,5 @@
 #![cfg(feature = "real-input-acceptance")]
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 #[rustfmt::skip]
 mod acceptance {
 #[path = "release_gap_stress.rs"] mod release_gap_stress;

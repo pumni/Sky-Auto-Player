@@ -4757,8 +4757,8 @@ impl NativePlaybackService {
                 },
                 telemetry: TelemetryOptions {
                     mode: TelemetryMode::Ring,
-                    // RtTraceRecord is fixed-width; 8192 records bound capture to
-                    // about 1.5 MiB on x64 before export while covering typical songs.
+                    // RtTraceRecord is fixed-width; its current size and this
+                    // fixed capacity bound capture before export while covering typical songs.
                     capacity: 8_192,
                 },
                 priority: PriorityOptions {
@@ -7556,7 +7556,7 @@ mod tests {
     fn sender_trace_export_includes_session_identity_and_frozen_policy() {
         let active = active_for_control_with_physical(PlaybackSessionState::Finished, None, true);
         let telemetry = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "qpc_frequency_hz": 10_000_000,
             "records": [],
             "attempted": 0,

@@ -715,7 +715,7 @@ pub(super) fn finalize_down_send_outcome(
     physical_target_qpc: QpcTicks,
     physical_timing_window: PhysicalTimingWindow,
     target_crossing_qpc: Option<QpcTicks>,
-    final_policy_qpc: QpcTicks,
+    final_policy_qpc: Option<QpcTicks>,
     trace_kind: u8,
     result_success: bool,
     result_status: sky_dispatch_win32::input::SendTransactionStatus,

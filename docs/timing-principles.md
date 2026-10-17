@@ -179,6 +179,11 @@ authorize, reorder, retry, or split physical input. Useful evidence includes
 authored target, physical floors, sender pre-call and completion QPC, transport
 anomalies, final-gate rejections, floor delays, late Down attempts, missing
 expected Down count, generation accounting, and final release obligations.
+The trace schema pairs every absolute QPC timestamp with provenance and
+availability. Essential fixed-width sender timing counts remain available
+when trace diagnostics are off. See [real-time timing evidence](rt-dispatch-timing-evidence.md)
+for exact formulas, unavailable samples, drop accounting, and the offline
+non-authoritative whole-stream model.
 
 Musical generation accounting is separate from safety cleanup. A safety or
 cleanup Up can be emitted idempotently without creating a musical `Released`
@@ -215,9 +220,11 @@ The following public counters may remain for schema compatibility:
 - `release_floor_infeasible_boundaries`.
 
 They are deprecated, remain zero in production, and do not control dispatch.
-Native telemetry schema version 17 exports the authored target and physical
-floors directly; it contains no latest-start field. Legacy deadline-rejection
-outcomes are historical terminology and are not active runtime outcomes.
+Native telemetry schema version 18 exports authored and physical-floor timing
+differences with explicit sample availability; it does not export absolute
+authored/floor QPC targets and contains no latest-start field. Legacy
+deadline-rejection outcomes are historical terminology and are not active
+runtime outcomes.
 
 ## Security and verification
 

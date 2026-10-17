@@ -15,6 +15,10 @@ pub(crate) struct RecentLatencyRing {
     len: u8,
 }
 
+fn signed_qpc_delta(value: u64, baseline: u64) -> Option<i64> {
+    i64::try_from(i128::from(value) - i128::from(baseline)).ok()
+}
+
 impl RecentLatencyRing {
     pub(crate) fn push(&mut self, value: i64) {
         self.values[usize::from(self.next)] =
@@ -66,6 +70,28 @@ pub struct WorkerMetricsLocal {
     pub pre_call_late_2ms: u64,
     pub pre_call_late_5ms: u64,
     pub pre_call_late_10ms: u64,
+    /// Always-on bounded timing observations captured at the sender return
+    /// boundary; these are independent of the diagnostic observer queue.
+    pub precision_packet_attempts: u64,
+    pub pre_call_qpc_unavailable_attempts: u64,
+    pub sendinput_completion_qpc_unavailable_attempts: u64,
+    pub authored_lateness_samples: u64,
+    pub max_authored_lateness_ticks: i64,
+    pub max_authored_lateness_abs_ticks: u64,
+    pub physical_floor_displacement_samples: u64,
+    pub max_physical_floor_displacement_ticks: u64,
+    pub residual_lateness_samples: u64,
+    pub max_residual_lateness_ticks: i64,
+    pub max_residual_lateness_abs_ticks: u64,
+    pub hol_delay_lower_bound_samples: u64,
+    pub max_hol_delay_lower_bound_ticks: u64,
+    pub unattributed_lateness_samples: u64,
+    pub max_unattributed_lateness_ticks: u64,
+    pub sendinput_envelope_samples: u64,
+    pub max_sendinput_envelope_ticks: u64,
+    pub overdue_packet_observations: u64,
+    pub transport_anomalies: u64,
+    pub timing_arithmetic_anomalies: u64,
     pub release_max_us: u64,
     pub release_late_2ms: u64,
     pub active_count: u64,
@@ -258,6 +284,113 @@ pub struct WorkerMetricsLocal {
 }
 
 impl WorkerMetricsLocal {
+    /// Record fixed-width evidence for one physical sender attempt. Missing or
+    /// unrepresentable intervals are left unavailable by omitting their sample
+    /// count; no timestamp is guessed or replaced with a schedule value.
+    pub(crate) fn observe_precision_packet_timing(
+        &mut self,
+        authored_target_qpc: u64,
+        packet_not_before_qpc: u64,
+        pre_call_qpc: Option<u64>,
+        sendinput_completion_qpc: Option<u64>,
+        previous_sendinput_completion_qpc: Option<u64>,
+        previous_sender_completion_known: bool,
+        transport_anomaly: bool,
+    ) {
+        self.precision_packet_attempts = self.precision_packet_attempts.saturating_add(1);
+        self.pre_call_qpc_unavailable_attempts = self
+            .pre_call_qpc_unavailable_attempts
+            .saturating_add(u64::from(pre_call_qpc.is_none()));
+        self.sendinput_completion_qpc_unavailable_attempts = self
+            .sendinput_completion_qpc_unavailable_attempts
+            .saturating_add(u64::from(sendinput_completion_qpc.is_none()));
+        self.transport_anomalies = self
+            .transport_anomalies
+            .saturating_add(u64::from(transport_anomaly));
+
+        match packet_not_before_qpc.checked_sub(authored_target_qpc) {
+            Some(displacement) => {
+                self.physical_floor_displacement_samples =
+                    self.physical_floor_displacement_samples.saturating_add(1);
+                self.max_physical_floor_displacement_ticks =
+                    self.max_physical_floor_displacement_ticks.max(displacement);
+            }
+            None => {
+                self.timing_arithmetic_anomalies =
+                    self.timing_arithmetic_anomalies.saturating_add(1);
+            }
+        }
+
+        if let Some(pre_call) = pre_call_qpc {
+            if let Some(lateness) = signed_qpc_delta(pre_call, authored_target_qpc) {
+                self.authored_lateness_samples = self.authored_lateness_samples.saturating_add(1);
+                self.max_authored_lateness_ticks = if self.authored_lateness_samples == 1 {
+                    lateness
+                } else {
+                    self.max_authored_lateness_ticks.max(lateness)
+                };
+                self.max_authored_lateness_abs_ticks = self
+                    .max_authored_lateness_abs_ticks
+                    .max(lateness.unsigned_abs());
+                self.overdue_packet_observations = self
+                    .overdue_packet_observations
+                    .saturating_add(u64::from(lateness > 0));
+            } else {
+                self.timing_arithmetic_anomalies =
+                    self.timing_arithmetic_anomalies.saturating_add(1);
+            }
+
+            if let Some(residual) = signed_qpc_delta(pre_call, packet_not_before_qpc) {
+                self.residual_lateness_samples = self.residual_lateness_samples.saturating_add(1);
+                self.max_residual_lateness_ticks = if self.residual_lateness_samples == 1 {
+                    residual
+                } else {
+                    self.max_residual_lateness_ticks.max(residual)
+                };
+                self.max_residual_lateness_abs_ticks = self
+                    .max_residual_lateness_abs_ticks
+                    .max(residual.unsigned_abs());
+
+                if previous_sender_completion_known {
+                    let hol = previous_sendinput_completion_qpc
+                        .map(|previous| {
+                            previous
+                                .saturating_sub(packet_not_before_qpc)
+                                .min(pre_call.saturating_sub(packet_not_before_qpc))
+                        })
+                        .unwrap_or(0);
+                    self.hol_delay_lower_bound_samples =
+                        self.hol_delay_lower_bound_samples.saturating_add(1);
+                    self.max_hol_delay_lower_bound_ticks =
+                        self.max_hol_delay_lower_bound_ticks.max(hol);
+                    let unattributed = residual.max(0).unsigned_abs().saturating_sub(hol);
+                    self.unattributed_lateness_samples =
+                        self.unattributed_lateness_samples.saturating_add(1);
+                    self.max_unattributed_lateness_ticks =
+                        self.max_unattributed_lateness_ticks.max(unattributed);
+                }
+            } else {
+                self.timing_arithmetic_anomalies =
+                    self.timing_arithmetic_anomalies.saturating_add(1);
+            }
+        }
+
+        if let (Some(pre_call), Some(completed)) = (pre_call_qpc, sendinput_completion_qpc) {
+            match completed.checked_sub(pre_call) {
+                Some(envelope) => {
+                    self.sendinput_envelope_samples =
+                        self.sendinput_envelope_samples.saturating_add(1);
+                    self.max_sendinput_envelope_ticks =
+                        self.max_sendinput_envelope_ticks.max(envelope);
+                }
+                None => {
+                    self.timing_arithmetic_anomalies =
+                        self.timing_arithmetic_anomalies.saturating_add(1);
+                }
+            }
+        }
+    }
+
     /// Merge fields produced by the dedicated observer consumer into the
     /// dispatch-owned snapshot before terminal publication. The observer
     /// starts from zero, so producer-owned backend counters remain untouched.
@@ -632,5 +765,51 @@ mod tests {
         assert_eq!(published.max_hold_floor_delay_us, 1_234);
         assert_eq!(published.max_release_floor_delay_ticks, 2_345);
         assert_eq!(published.max_release_floor_delay_us, 2_345);
+    }
+
+    #[test]
+    fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
+        let mut metrics = WorkerMetricsLocal::default();
+        metrics.observe_precision_packet_timing(
+            100,
+            110,
+            Some(125),
+            Some(132),
+            Some(115),
+            true,
+            true,
+        );
+        assert_eq!(metrics.precision_packet_attempts, 1);
+        assert_eq!(metrics.authored_lateness_samples, 1);
+        assert_eq!(metrics.max_authored_lateness_ticks, 25);
+        assert_eq!(metrics.max_authored_lateness_abs_ticks, 25);
+        assert_eq!(metrics.physical_floor_displacement_samples, 1);
+        assert_eq!(metrics.max_physical_floor_displacement_ticks, 10);
+        assert_eq!(metrics.residual_lateness_samples, 1);
+        assert_eq!(metrics.max_residual_lateness_ticks, 15);
+        assert_eq!(metrics.hol_delay_lower_bound_samples, 1);
+        assert_eq!(metrics.max_hol_delay_lower_bound_ticks, 5);
+        assert_eq!(metrics.unattributed_lateness_samples, 1);
+        assert_eq!(metrics.max_unattributed_lateness_ticks, 10);
+        assert_eq!(metrics.sendinput_envelope_samples, 1);
+        assert_eq!(metrics.max_sendinput_envelope_ticks, 7);
+        assert_eq!(metrics.overdue_packet_observations, 1);
+        assert_eq!(metrics.transport_anomalies, 1);
+        assert_eq!(metrics.timing_arithmetic_anomalies, 0);
+    }
+
+    #[test]
+    fn precision_timing_summary_does_not_invent_missing_samples_and_counts_bad_ordering() {
+        let mut metrics = WorkerMetricsLocal::default();
+        metrics.observe_precision_packet_timing(200, 190, None, None, None, false, false);
+        assert_eq!(metrics.precision_packet_attempts, 1);
+        assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 1);
+        assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 1);
+        assert_eq!(metrics.authored_lateness_samples, 0);
+        assert_eq!(metrics.residual_lateness_samples, 0);
+        assert_eq!(metrics.sendinput_envelope_samples, 0);
+        assert_eq!(metrics.physical_floor_displacement_samples, 0);
+        assert_eq!(metrics.timing_arithmetic_anomalies, 1);
+        assert_eq!(metrics.overdue_packet_observations, 0);
     }
 }

@@ -397,6 +397,11 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_lease_age_hook_for_test: Option<FinalLeaseAgeHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
+    /// Measured completion boundary of the most recent physical sender
+    /// transaction, retained so sequential HOL evidence survives queue drops.
+    pub(crate) last_physical_send_completion_qpc: Option<QpcTicks>,
+    pub(crate) previous_sendinput_completion_qpc: Option<QpcTicks>,
+    pub(crate) previous_sender_completion_known: bool,
     /// Musical Down admission state. Up-only safety sends never mutate this
     /// state; authorization is tied to the exact frozen authored boundary.
     pub(crate) down_boundary_state: DownBoundaryState,

@@ -71,7 +71,7 @@ pub(crate) fn publisher_down_send_outcome(
     let sendinput_completion_qpc = timing_proof.sendinput_completion_qpc;
     let strict_completion_late = timing_proof.strict_completion_late;
     let completion_error_ticks_value = timing_proof.completion_error_ticks_value;
-    let wake_qpc = take_deadline_wake_qpc(runtime, final_policy_qpc);
+    let wake_qpc = take_deadline_wake_qpc(runtime);
     let precision_handoff =
         timing_proof
             .target_crossing_qpc
@@ -116,6 +116,8 @@ pub(crate) fn publisher_down_send_outcome(
             final_policy_qpc,
             pre_call_qpc,
             sendinput_completion_qpc,
+            previous_sendinput_completion_qpc: timing_proof.previous_sendinput_completion_qpc,
+            previous_sender_completion_known: timing_proof.previous_sender_completion_known,
             dispatch_ready_qpc,
             wake_qpc,
             precision_handoff,
@@ -372,6 +374,7 @@ pub(crate) fn drain_down_send_outcome(
     telemetry: &mut TelemetryCollector,
     qpc_clock: QpcClock,
     now_us: u64,
+    now_qpc_ticks: sky_dispatch_win32::clock::QpcTicks,
     timing: &WorkerTimingState,
 ) -> Result<(), DispatchStep> {
     let path = observation.path();
@@ -407,16 +410,13 @@ pub(crate) fn drain_down_send_outcome(
                 "note-on completion-residual conversion failure: {error:?}"
             ))
         })?;
-    let final_policy_effective_ticks =
-        down_effective_ticks(observation, observation.final_policy_qpc)?;
     let pre_call_effective_ticks = down_effective_ticks(observation, observation.pre_call_qpc)?;
     let completed_effective_ticks =
         down_effective_ticks(observation, observation.sendinput_completion_qpc)?;
     let wake_ticks = observation
         .wake_qpc
         .map(|qpc| down_effective_ticks(observation, qpc))
-        .transpose()?
-        .unwrap_or(final_policy_effective_ticks);
+        .transpose()?;
     let completed_effective_us = qpc_clock
         .timeline_to_us(completed_effective_ticks)
         .map_err(|error| {
@@ -452,23 +452,26 @@ pub(crate) fn drain_down_send_outcome(
         })
         .transpose()?
         .unwrap_or(0);
-    let wake_to_final_policy_us = observation
-        .wake_qpc
-        .map(|wake| {
+    let wake_to_final_policy_us = match (observation.wake_qpc, observation.final_policy_qpc) {
+        (Some(wake), Some(final_policy)) => Some(qpc_span_us(
+            qpc_clock,
+            wake,
+            final_policy,
+            "note-on wake-to-final-policy",
+        )?),
+        _ => None,
+    };
+    let final_policy_to_pre_call_us = observation
+        .final_policy_qpc
+        .map(|final_policy| {
             qpc_span_us(
                 qpc_clock,
-                wake,
-                observation.final_policy_qpc,
-                "note-on wake-to-final-policy",
+                final_policy,
+                observation.pre_call_qpc,
+                "note-on final-policy-to-pre-call",
             )
         })
         .transpose()?;
-    let final_policy_to_pre_call_us = qpc_span_us(
-        qpc_clock,
-        observation.final_policy_qpc,
-        observation.pre_call_qpc,
-        "note-on final-policy-to-pre-call",
-    )?;
     let wake_to_send_start_us = observation
         .wake_qpc
         .map(|wake| {
@@ -523,15 +526,6 @@ pub(crate) fn drain_down_send_outcome(
                 }
             });
     record_down_recovery_metrics(observation, recovered_partial_up, local_metrics);
-    let dispatch_start_error_ticks = signed_timeline_delta_ticks(
-        TimelineTicks::from_raw(observation.pre_call_qpc.as_u64()),
-        TimelineTicks::from_raw(observation.physical_target_qpc.as_u64()),
-    )
-    .map_err(|error| {
-        DispatchStep::Terminate(format!(
-            "note-on observer dispatch-start conversion failure: {error}"
-        ))
-    })?;
     let completion_error_ticks = signed_timeline_delta_ticks(
         completed_effective_ticks,
         observation.trace.effective_deadline_ticks,
@@ -554,13 +548,12 @@ pub(crate) fn drain_down_send_outcome(
         core_post_send_us,
         completion_residual_us,
         observation.dispatch_ready_qpc.is_some(),
-        dispatch_start_error_ticks,
         completion_error_ticks,
         authored_completion_error_ticks,
-        Some(final_policy_effective_ticks),
         Some(pre_call_effective_ticks),
         Some(completed_effective_ticks),
         wake_ticks,
+        now_qpc_ticks,
         recovered_partial_up,
         strict_completion_late,
     )?;
@@ -572,9 +565,11 @@ pub(crate) fn drain_down_send_outcome(
     local_metrics.sendinput_duration_max_us = local_metrics
         .sendinput_duration_max_us
         .max(pre_call_to_completion_us);
-    local_metrics.final_policy_to_pre_call_max_us = local_metrics
-        .final_policy_to_pre_call_max_us
-        .max(final_policy_to_pre_call_us);
+    if let Some(final_policy_to_pre_call_us) = final_policy_to_pre_call_us {
+        local_metrics.final_policy_to_pre_call_max_us = local_metrics
+            .final_policy_to_pre_call_max_us
+            .max(final_policy_to_pre_call_us);
+    }
     if let Some(wake_to_final_policy_us) = wake_to_final_policy_us {
         local_metrics.wake_to_final_policy_max_us = local_metrics
             .wake_to_final_policy_max_us
@@ -815,6 +810,7 @@ pub(crate) fn drain_one_observer(
             telemetry,
             qpc_clock,
             now_us,
+            now_qpc_ticks,
             timing,
         )?,
         DispatchObservation::DownMiss(miss) => {

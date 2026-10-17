@@ -27,7 +27,7 @@ pub use shared::SystemPowerState;
 pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot};
 pub use telemetry::{
     NATIVE_TELEMETRY_SCHEMA_VERSION, NativeTelemetryOutput, NativeTelemetrySummary, RtTraceRecord,
-    TelemetryMode, TimingSemantics, WorkerMetricsLocal,
+    TelemetryMode, TimestampProvenance, TimingSemantics, WorkerMetricsLocal,
 };
 pub(crate) use telemetry::{
     SharedMetrics, TRACE_FLAG_ANOMALY, TRACE_FLAG_DEFERRED, TRACE_FLAG_RECOVERY,
