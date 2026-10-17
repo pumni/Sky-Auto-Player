@@ -5,9 +5,29 @@ mod acceptance {
 #[path = "release_gap_stress.rs"] mod release_gap_stress;
 #[path = "snapshot_report.rs"] mod snapshot_report;
 #[path = "scenarios.rs"] mod scenarios;
+#[path = "acceptance_limits.rs"] mod acceptance_limits;
+#[path = "entrypoint.rs"] mod entrypoint;
 #[path = "modifier_guard.rs"] mod modifier_guard;
 #[path = "arguments.rs"] mod arguments;
 #[path = "owner_identity.rs"] mod owner_identity;
+#[cfg(windows)]
+#[path = "r3_final_qualification.rs"] mod r3_final_qualification;
+#[cfg(windows)]
+#[path = "lifecycle_wait.rs"] mod lifecycle_wait;
+#[cfg(windows)]
+#[path = "preterminal.rs"] mod preterminal;
+#[path = "evidence_report.rs"] mod evidence_report;
+#[cfg(windows)]
+use lifecycle_wait::{wait_for_focus_pause, wait_for_resume, wait_for_startup_ready};
+#[cfg(windows)]
+use lifecycle_wait::publish_foreground_focus_hint;
+#[cfg(windows)]
+use preterminal::{finish_preterminal, wait_for_sink_events};
+#[cfg(all(test, windows))]
+use preterminal::{PreTerminalResult, wait_for_sink_events_with};
+use evidence_report::{Verdict, write_report};
+use acceptance_limits::*;
+pub(super) use entrypoint::main;
 use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
 use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, scenario_plan};
 use arguments::{ParsedCommand, RunArgs, Scenario};
@@ -36,9 +56,7 @@ use sky_dispatch_win32::input::FULL_INSTRUMENT_MASK;
 pub(super) use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_player::engine::NativeDispatchSession;
 use std::collections::HashMap;
-use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -62,15 +80,6 @@ const PROBE_TITLE: &str = "Sky Auto Player — Native Acceptance Focus Probe";
 const SCRIPT_MARKER: &str = "native_acceptance_sink.ps1";
 const INPUT_POLICY: &str = concat!("receives_only; benchmark must use ", "Send", "Input");
 const REQUIRED_IMAGE_BASENAME: &str = "pwsh.exe";
-const ACCEPTANCE_FPS: u64 = 60;
-const ACCEPTANCE_FRAME_US: u64 = 1_000_000_u64.div_ceil(ACCEPTANCE_FPS);
-const ACCEPTANCE_HOLD_FRAMES: u64 = 1;
-const ACCEPTANCE_TIMING_MARGIN_US: u64 = 800;
-const ACCEPTANCE_TIMING_MARGIN_MIN_US: u64 = 0;
-const ACCEPTANCE_TIMING_MARGIN_MAX_US: u64 = 3_000;
-const ACCEPTANCE_TIMING_MARGIN_STEP_US: u64 = 100;
-const ACCEPTANCE_INPUT_PATH_WARN_US: u64 = 300;
-const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct ReadyRecord { schema_version: u32, run_id: String, role: String, sink_kind: String, pid: u32, hwnd: i64, title: String, process: String, input_policy: String, event_log_id: String, event_schema_version: u32, process_start_time_filetime: u64 }
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct EventRecord { schema_version: u32, run_id: String, role: String, event_log_id: String, sequence: u64, kind: String, scan_code: u16, extended: bool, virtual_key: i32, message: u32, observed_utc: String }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] struct LogCursor { offset: u64, sequence: u64 }
@@ -78,13 +87,6 @@ const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] enum DrainMode { ExpectedEvents { allow_unpaired_cleanup_ups: bool }, ZeroEventSafety }
 #[derive(Debug, Clone, PartialEq, Eq)] struct EventWindow { events: Vec<EventRecord>, complete: bool }
 #[derive(Debug, Clone, PartialEq, Eq)] enum DrainResult { Pass(Vec<EventRecord>), Fail(String, Vec<EventRecord>), Inconclusive(String) }
-#[derive(Debug, Clone, PartialEq, Eq)] enum PreTerminalResult { Satisfied, TrustedFailure(String), ObservationInconclusive(String), IncompleteTimeout { complete: bool } }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Verdict { Pass, NonQualifying, Fail, Inconclusive }
-impl Verdict {
-    const fn label(self) -> &'static str { match self { Self::Pass => "PASS", Self::NonQualifying => "NON_QUALIFYING", Self::Fail => "FAIL", Self::Inconclusive => "INCONCLUSIVE" } }
-    const fn exit_code(self) -> i32 { match self { Self::Pass => 0, Self::NonQualifying => 3, Self::Fail => 1, Self::Inconclusive => 2 } }
-}
 #[derive(Debug, Clone)]
 struct ScenarioPlan {
     schedule: sky_dispatch_core::model::RuntimeSchedule, profile: Option<InstrumentKeyProfileSpec>,
@@ -450,7 +452,6 @@ fn drain_event_window_with<R: EventWindowReader, C: DrainClock>(
         clock.wait_poll();
     }
 }
-fn wait_for_sink_events_with<R: EventWindowReader, C: DrainClock>(reader: &mut R, clock: &mut C, expected_down: &[PhysicalExpectation], expected_up: &[PhysicalExpectation]) -> PreTerminalResult { loop { let now = clock.elapsed_ms(); let sample = match reader.read() { Ok(sample) => sample, Err(error) => return PreTerminalResult::ObservationInconclusive(error) }; match validate_event_prefix(&sample.events, expected_down, expected_up, false) { Ok(true) if sample.complete => return PreTerminalResult::Satisfied, Ok(_) => {}, Err(error) => return PreTerminalResult::TrustedFailure(error) } if now >= PRETERMINAL_DEADLINE_MS { return PreTerminalResult::IncompleteTimeout { complete: sample.complete }; } clock.wait_poll(); } }
 #[cfg(windows)]
 struct FileEventWindowReader<'a> { path: &'a Path, cursor: LogCursor, ready: &'a ReadyRecord, role: &'a str }
 #[cfg(windows)]
@@ -475,70 +476,6 @@ fn drain_event_window(
     let mut reader = FileEventWindowReader { path, cursor, ready, role }; let mut clock = RealDrainClock { started: Instant::now(), poll_ms: DRAIN_POLL_MS };
     drain_event_window_with(&mut reader, &mut clock, mode, expected_down, expected_up)
 }
-#[cfg(windows)]
-fn publish_foreground_focus_hint(session: &NativeDispatchSession, target_hwnd: isize) -> bool {
-    let focused = foreground_window_matches(target_hwnd);
-    session.set_focus_hint(focused);
-    focused
-}
-fn write_report(args: &RunArgs, verdict: Verdict, reason: &str, details: Value) -> i32 {
-    let report = json!({"status": verdict.label(), "scenario": args.scenario.label(), "run_id": args.run_id, "timing_margin_us": args.timing_margin_us, "min_hold_us": acceptance_min_hold_us(args.timing_margin_us), "min_release_gap_us": acceptance_min_release_gap_us(args.timing_margin_us), "reason": reason, "details": details});
-    let serialized = serde_json::to_string(&report).unwrap_or_else(|_| format!(r#"{{"status":"{}","reason":"report serialization failed"}}"#, verdict.label()));
-    println!("{serialized}");
-    if let Err(error) = append_json_line(&args.evidence, &serialized) {
-        eprintln!("failed to write evidence: {error}");
-        return Verdict::Inconclusive.exit_code();
-    }
-    verdict.exit_code()
-}
-fn append_json_line(path: &Path, line: &str) -> io::Result<()> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(file, "{line}")
-}
-#[cfg(windows)]
-fn wait_for_startup_ready(session: &NativeDispatchSession) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let snapshot = session.snapshot();
-        if snapshot.startup_ready { return true; }
-        if snapshot.is_finished || Instant::now() >= deadline { return false; }
-        thread::sleep(Duration::from_millis(5));
-    }
-}
-#[cfg(windows)]
-fn wait_for_focus_pause(session: &NativeDispatchSession) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let state = session.poll_state();
-        if state.is_paused { return true; }
-        if state.is_finished || Instant::now() >= deadline { return false; }
-        thread::sleep(Duration::from_millis(5));
-    }
-}
-#[cfg(windows)]
-fn wait_for_resume(session: &NativeDispatchSession) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let state = session.poll_state();
-        if !state.is_paused { return true; }
-        if state.is_finished || Instant::now() >= deadline { return false; }
-        thread::sleep(Duration::from_millis(5));
-    }
-}
-impl PreTerminalResult {
-    fn verdict(&self) -> Verdict { match self { Self::Satisfied => Verdict::Pass, Self::TrustedFailure(_) | Self::IncompleteTimeout { complete: true } => Verdict::Fail, Self::ObservationInconclusive(_) | Self::IncompleteTimeout { complete: false } => Verdict::Inconclusive } }
-    fn reason(&self) -> &str { match self { Self::Satisfied => "pre-terminal physical evidence is complete", Self::TrustedFailure(reason) | Self::ObservationInconclusive(reason) => reason, Self::IncompleteTimeout { complete: true } => "expected physical evidence did not arrive before the pre-terminal deadline", Self::IncompleteTimeout { complete: false } => "event stream remained truncated at the pre-terminal deadline" } }
-}
-#[cfg(windows)]
-fn wait_for_sink_events(path: &Path, cursor: LogCursor, ready: &ReadyRecord, expected_down: &[PhysicalExpectation], expected_up: &[PhysicalExpectation]) -> PreTerminalResult { let mut reader = FileEventWindowReader { path, cursor, ready, role: RECEIVE_ONLY_ROLE }; let mut clock = RealDrainClock { started: Instant::now(), poll_ms: DRAIN_POLL_MS / 2 }; wait_for_sink_events_with(&mut reader, &mut clock, expected_down, expected_up) }
-#[cfg(windows)]
-fn finish_preterminal(args: &RunArgs, session: &NativeDispatchSession, result: PreTerminalResult) -> Option<i32> { if matches!(result, PreTerminalResult::Satisfied) { return None; } let observer_verdict = result.verdict(); let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); let snapshot = session.snapshot(); let release = snapshot.release_outcome.as_ref(); let evidence = NativeCleanupEvidence { terminal_error: snapshot.terminal_error.is_some(), partial_events: snapshot.sendinput_partial_events, zero_progress_events: snapshot.sendinput_zero_progress_failures, active_count: snapshot.active_count, possibly_active_count: snapshot.possibly_active_count, failed_release_count: snapshot.failed_release_count, release_obligation_mask: snapshot.final_release_obligation_mask, release_failed: release.is_some_and(|outcome| !outcome.released_successfully), stuck_mask: release.map_or(0, |outcome| outcome.stuck_mask), verification_inconclusive: release.is_some_and(|outcome| outcome.verification_inconclusive), transport_anomaly: release.is_some_and(|outcome| outcome.transport_anomaly) }; let cleanup_anomaly = evidence.is_anomalous(); let verdict = preterminal_verdict(observer_verdict, cleanup_anomaly); let reason = if cleanup_anomaly && observer_verdict != Verdict::Fail { "native terminal cleanup/residue evidence is not clean".to_string() } else { result.reason().to_string() }; Some(write_report(args, verdict, &reason, snapshot_json(&snapshot))) }
 #[cfg(windows)]
 fn run_windows(args: RunArgs) -> i32 {
     macro_rules! inconclusive {
@@ -570,7 +507,12 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
-    let (options, modifier_query_count) = modifier_guard::native_session_options(plan.schedule, plan.profile, args.timing_margin_us, args.scenario);
+    let (mut options, modifier_query_count) = modifier_guard::native_session_options(plan.schedule, plan.profile, args.timing_margin_us, args.scenario);
+    let r3_acceptance_hook = r3_final_qualification::hook_for_scenario(args.scenario);
+    options.startup_ordering_hook = r3_acceptance_hook.clone();
+    let _r3_hook_cleanup = r3_final_qualification::R3AcceptanceHookCleanup::new(
+        r3_acceptance_hook.clone(),
+    );
     let session = match NativeDispatchSession::new(options) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
     let owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
     session.set_focus_hint(true);
@@ -593,6 +535,8 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     let mut final_probe = targets.probe.clone();
     let mut independent_helper_probe: Option<release_gap_stress::IndependentHelperLivenessProbe> = None;
+    let mut r3_release_floor_cycles = Vec::<Value>::new();
+    let mut r3_watchdog_was_held = false;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     let focus_gate_observed = if args.scenario.needs_focus_probe() {
         if !wait_for_startup_ready(&session) {
@@ -666,6 +610,18 @@ fn run_windows(args: RunArgs) -> i32 {
         false
     } else if args.scenario == Scenario::PauseResume {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
+    } else if args.scenario == Scenario::PauseResumeReleaseFloor {
+        let hook = r3_acceptance_hook.as_deref().expect("release-floor acceptance hook");
+        match r3_final_qualification::run_release_floor_case(&args, &session, hook) {
+            Ok(cycles) => {
+                r3_release_floor_cycles = cycles;
+                first_physical_commit_observed = true;
+                pause_observed = true;
+                resume_requested = true;
+            }
+            Err(exit_code) => return exit_code,
+        }
+        false
     } else if args.scenario == Scenario::TargetHwndChange {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
     } else if args.scenario == Scenario::SupervisorLeaseExpiry {
@@ -682,6 +638,20 @@ fn run_windows(args: RunArgs) -> i32 {
                 inconclusive!(&format!("could not start independent helper liveness probe: {error}"), snapshot_json(&session.snapshot()));
             }
         };
+        false
+    } else if args.scenario == Scenario::LeaseAgeWatchdogDelayed {
+        let hook = r3_acceptance_hook.as_deref().expect("delayed-watchdog acceptance hook");
+        match r3_final_qualification::begin_delayed_watchdog_case(&session, hook) {
+            Ok((helper_probe, watchdog_was_held)) => {
+                independent_helper_probe = Some(helper_probe);
+                r3_watchdog_was_held = watchdog_was_held;
+            }
+            Err(error) => {
+                let _ = session.quit();
+                let _ = session.join(Duration::from_secs(5));
+                inconclusive!(&error, snapshot_json(&session.snapshot()));
+            }
+        }
         false
     } else if args.scenario == Scenario::StopCleanup {
         if !wait_for_startup_ready(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach startup_ready before stop proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.quit() { inconclusive!(&error, json!({})); }; stop_requested = true; false
@@ -733,6 +703,18 @@ fn run_windows(args: RunArgs) -> i32 {
         if args.scenario == Scenario::SupervisorLeaseExpiry {
             object.insert("supervisor_progress".to_string(), json!({"source":"direct_native_session_seed","desktop_monitor_exercised":false}));
         }
+        r3_final_qualification::attach_case_details(
+            object,
+            r3_final_qualification::CaseDetails {
+                scenario: args.scenario,
+                release_floor_cycles: &r3_release_floor_cycles,
+                watchdog_was_held: r3_watchdog_was_held,
+                hook: r3_acceptance_hook.as_deref(),
+                final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
+                terminal_error: snapshot.terminal_error.as_deref(),
+                helper_liveness_ticks: independent_helper_liveness_ticks,
+            },
+        );
         object.insert(
             "focus_probe_event_count".to_string(),
             json!(probe_events.len()),
@@ -769,7 +751,11 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_target_preflight_failure = args.scenario == Scenario::TargetHwndChange && target_change_preflight_error(&snapshot);
     let target_cleanup_exception = target_change_cleanup_exception(&snapshot);
     let expected_supervisor_expiry = args.scenario == Scenario::SupervisorLeaseExpiry && supervisor_expiry_cleanup_exception(&snapshot); let expected_ambiguous_cleanup = args.scenario == Scenario::AmbiguousPacket && ambiguous_packet_cleanup_qualified(&snapshot, 0b11);
-    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || snapshot.final_release_obligation_mask != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || (snapshot.sendinput_partial_events != 0 && !expected_ambiguous_cleanup) || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry && !expected_ambiguous_cleanup && !modifier_guard::requires_test_query_seam(args.scenario) && !owner_identity::failure_matches(args.scenario, snapshot.terminal_error.as_deref()))
+    let expected_delayed_watchdog_expiry = r3_final_qualification::expected_delayed_watchdog_expiry(
+        args.scenario,
+        snapshot.terminal_error.as_deref(),
+    );
+    if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || snapshot.final_release_obligation_mask != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || (snapshot.sendinput_partial_events != 0 && !expected_ambiguous_cleanup) || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry && !expected_delayed_watchdog_expiry && !expected_ambiguous_cleanup && !modifier_guard::requires_test_query_seam(args.scenario) && !owner_identity::failure_matches(args.scenario, snapshot.terminal_error.as_deref()))
     {
         return write_report(
             &args,
@@ -789,6 +775,17 @@ fn run_windows(args: RunArgs) -> i32 {
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
+    if args.scenario == Scenario::PauseResumeReleaseFloor
+        && let Some(code) = r3_final_qualification::release_floor_failure(
+            &args,
+            r3_release_floor_cycles.len(),
+            snapshot.final_release_obligation_mask,
+            snapshot.production_release_floor_violation_count,
+            &details,
+        )
+    {
+        return code;
+    }
     if args.scenario == Scenario::SuspendResume {
         let power = session.system_power_snapshot();
         if !first_physical_commit_observed || !pause_observed || !resume_requested || power.suspend_notifications == 0 || power.resume_notifications == 0 || power.suspended || snapshot.timeline_rebase_count != 0 {
@@ -797,6 +794,23 @@ fn run_windows(args: RunArgs) -> i32 {
         let first = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let second = expected_physical_keys(plan.profile.as_ref(), &[1])[0];
         let expected = [("key_press", first), ("key_release", first), ("key_release", first), ("key_press", second), ("key_release", second)];
         if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); }
+    }
+    if args.scenario == Scenario::LeaseAgeWatchdogDelayed {
+        let hook = r3_acceptance_hook.as_deref().expect("delayed-watchdog acceptance hook");
+        return r3_final_qualification::finish_delayed_watchdog_case(
+            &args,
+            hook,
+            r3_final_qualification::DelayedWatchdogOracle {
+                watchdog_was_held: r3_watchdog_was_held,
+                down_sender_attempt_count: hook.r3_down_sender_attempt_count(),
+                final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
+                terminal_error: snapshot.terminal_error.as_deref(),
+                final_release_obligation_mask: snapshot.final_release_obligation_mask,
+                sink_events_empty: sink_events.is_empty(),
+                helper_liveness_ticks: independent_helper_liveness_ticks,
+                details,
+            },
+        );
     }
     if args.scenario == Scenario::SupervisorLeaseExpiry {
         if !expected_supervisor_expiry
@@ -867,16 +881,6 @@ fn run_windows(args: RunArgs) -> i32 {
         "Windows-only qualification harness",
         json!({"physical_run": false}),
     )
-}
-pub fn main() {
-    match parse_args(env::args().skip(1)) {
-        Ok(ParsedCommand::Help) => println!("{}", usage()),
-        Ok(ParsedCommand::Run(args)) => std::process::exit(run_windows(*args)),
-        Err(error) => {
-            eprintln!("{error}\n{}", usage());
-            std::process::exit(2);
-        }
-    }
 }
 #[cfg(test)]
 #[path = "rt_native_acceptance_tests.rs"]

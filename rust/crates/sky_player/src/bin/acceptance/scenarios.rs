@@ -321,6 +321,23 @@ pub(super) fn scenario_plan(
                 vec![0, 1],
                 true,
             ),
+            Scenario::PauseResumeReleaseFloor => {
+                let mut actions = Vec::with_capacity(42);
+                let mut down = 50_000;
+                for pair in 0..21_u32 {
+                    let up = down + acceptance_min_hold_us(timing_margin_us);
+                    actions.push(action(2 * pair, ActionKind::Down, down, &[0]));
+                    actions.push(action(2 * pair + 1, ActionKind::Up, up, &[0]));
+                    down = up + acceptance_min_release_gap_us(timing_margin_us);
+                }
+                (
+                    actions,
+                    None,
+                    vec![0; 21],
+                    vec![0; 21],
+                    false,
+                )
+            }
             Scenario::SuspendResume => (
                 vec![
                     action(0, ActionKind::Down, 50_000, &[0]),
@@ -343,6 +360,26 @@ pub(super) fn scenario_plan(
                 vec![],
                 true,
             ),
+            Scenario::LeaseAgeWatchdogDelayed => {
+                let down = DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US + 500_000;
+                (
+                    vec![
+                        action(0, ActionKind::Down, down, &[0]),
+                        action(
+                            1,
+                            ActionKind::Up,
+                            down + acceptance_min_hold_us(timing_margin_us),
+                            &[0],
+                        ),
+                    ],
+                    None,
+                    // The lease-age oracle must reject the authored Down before
+                    // SendInput. Its accepted physical event window is empty.
+                    vec![],
+                    vec![],
+                    true,
+                )
+            }
             Scenario::TimingMarginSweep => {
                 let down = 50_000;
                 let up = down + acceptance_min_hold_us(timing_margin_us);

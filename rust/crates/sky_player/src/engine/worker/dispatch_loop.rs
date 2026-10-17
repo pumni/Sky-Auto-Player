@@ -1090,8 +1090,14 @@ pub(super) fn dispatch(
             }
 
             #[cfg(any(test, feature = "test-support"))]
+            let r3_pause_ack_pending = core
+                .runtime
+                .startup_ordering_hook
+                .as_ref()
+                .is_some_and(|hook| hook.r3_pause_ack_pending());
+            #[cfg(any(test, feature = "test-support"))]
             if resources.playback.has_pause_reason(PauseReason::Manual)
-                && command_timing.needs_acknowledgment()
+                && (command_timing.needs_acknowledgment() || r3_pause_ack_pending)
             {
                 let acknowledged_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
@@ -1101,7 +1107,12 @@ pub(super) fn dispatch(
                         break;
                     }
                 };
-                command_timing.acknowledge_pause(acknowledged_ticks);
+                if command_timing.needs_acknowledgment() {
+                    command_timing.acknowledge_pause(acknowledged_ticks);
+                }
+                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                    hook.record_r3_pause_ack_qpc(acknowledged_ticks.as_u64());
+                }
             }
 
             let paused = resources.playback.is_paused();

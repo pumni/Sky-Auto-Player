@@ -201,6 +201,18 @@ pub struct StartupOrderingHook {
     pub(crate) stale_packet_committed: AtomicU64,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
+    r3_release_floor_control_enabled: AtomicBool,
+    r3_completed_up_count: AtomicU64,
+    r3_released_up_count: AtomicU64,
+    r3_resume_cleanup_qpc_ticks: AtomicU64,
+    r3_pause_ack_qpc_ticks: AtomicU64,
+    r3_pause_ack_pending: AtomicBool,
+    r3_down_authored_target_qpc_ticks: AtomicU64,
+    r3_down_not_before_qpc_ticks: AtomicU64,
+    r3_down_sender_start_qpc_ticks: AtomicU64,
+    r3_down_sender_attempt_count: AtomicU64,
+    r3_watchdog_hold: AtomicBool,
+    r3_watchdog_waiting: AtomicBool,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -224,6 +236,143 @@ impl StartupOrderingHook {
     #[allow(dead_code)]
     pub(crate) fn set_boot_delay_us(&self, delay_us: u64) {
         self.boot_delay_us.store(delay_us, Ordering::SeqCst);
+    }
+
+    /// Enable the feature-gated P5 lifecycle fixture. The worker pauses after
+    /// each successful Up until the acceptance controller requests pause and
+    /// releases that exact completion boundary.
+    pub fn enable_r3_release_floor_control(&self, initial_worker_delay_us: u64) {
+        self.boot_delay_us
+            .store(initial_worker_delay_us, Ordering::SeqCst);
+        self.r3_release_floor_control_enabled
+            .store(true, Ordering::Release);
+    }
+
+    pub fn r3_completed_up_count(&self) -> u64 {
+        self.r3_completed_up_count.load(Ordering::Acquire)
+    }
+
+    pub fn r3_release_completed_up_through(&self, count: u64) {
+        self.r3_released_up_count.store(count, Ordering::Release);
+    }
+
+    pub fn r3_resume_cleanup_qpc_ticks(&self) -> u64 {
+        self.r3_resume_cleanup_qpc_ticks.load(Ordering::Acquire)
+    }
+
+    pub fn r3_clear_pause_ack_qpc(&self) {
+        self.r3_pause_ack_qpc_ticks.store(0, Ordering::Release);
+        self.r3_pause_ack_pending.store(true, Ordering::Release);
+    }
+
+    pub fn r3_pause_ack_qpc_ticks(&self) -> u64 {
+        self.r3_pause_ack_qpc_ticks.load(Ordering::Acquire)
+    }
+
+    pub fn r3_last_down_window(&self) -> (u64, u64) {
+        (
+            self.r3_down_authored_target_qpc_ticks
+                .load(Ordering::Acquire),
+            self.r3_down_not_before_qpc_ticks.load(Ordering::Acquire),
+        )
+    }
+
+    pub fn r3_last_down_sender_start_qpc_ticks(&self) -> u64 {
+        self.r3_down_sender_start_qpc_ticks.load(Ordering::Acquire)
+    }
+
+    pub fn r3_down_sender_attempt_count(&self) -> u64 {
+        self.r3_down_sender_attempt_count.load(Ordering::Acquire)
+    }
+
+    /// Hold the real watchdog before its first age check for the delayed-watchdog
+    /// acceptance case. The worker's final Down gate remains active.
+    pub fn hold_r3_watchdog(&self) {
+        self.r3_watchdog_hold.store(true, Ordering::Release);
+    }
+
+    pub fn r3_watchdog_waiting(&self) -> bool {
+        self.r3_watchdog_waiting.load(Ordering::Acquire)
+    }
+
+    pub fn release_r3_watchdog(&self) {
+        self.r3_watchdog_hold.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn record_r3_resume_cleanup_qpc(&self, qpc_ticks: u64) {
+        if self
+            .r3_release_floor_control_enabled
+            .load(Ordering::Acquire)
+        {
+            self.r3_resume_cleanup_qpc_ticks
+                .store(qpc_ticks, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn record_r3_pause_ack_qpc(&self, qpc_ticks: u64) {
+        if self
+            .r3_release_floor_control_enabled
+            .load(Ordering::Acquire)
+        {
+            self.r3_pause_ack_qpc_ticks
+                .store(qpc_ticks, Ordering::Release);
+            self.r3_pause_ack_pending.store(false, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn r3_pause_ack_pending(&self) -> bool {
+        self.r3_release_floor_control_enabled
+            .load(Ordering::Acquire)
+            && self.r3_pause_ack_pending.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn record_r3_down_window(&self, authored_target: u64, not_before: u64) {
+        if self
+            .r3_release_floor_control_enabled
+            .load(Ordering::Acquire)
+        {
+            self.r3_down_authored_target_qpc_ticks
+                .store(authored_target, Ordering::Release);
+            self.r3_down_not_before_qpc_ticks
+                .store(not_before, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn record_r3_down_sender_attempt(&self, started_qpc_ticks: Option<u64>) {
+        if self
+            .r3_release_floor_control_enabled
+            .load(Ordering::Acquire)
+            || self.r3_watchdog_hold.load(Ordering::Acquire)
+        {
+            self.r3_down_sender_attempt_count
+                .fetch_add(1, Ordering::AcqRel);
+            self.r3_down_sender_start_qpc_ticks
+                .store(started_qpc_ticks.unwrap_or(0), Ordering::Release);
+        }
+    }
+
+    pub(crate) fn wait_after_r3_successful_up(&self) {
+        if !self
+            .r3_release_floor_control_enabled
+            .load(Ordering::Acquire)
+        {
+            return;
+        }
+        let count = self.r3_completed_up_count.fetch_add(1, Ordering::AcqRel) + 1;
+        while self.r3_released_up_count.load(Ordering::Acquire) < count {
+            std::thread::sleep(std::time::Duration::from_micros(50));
+        }
+    }
+
+    pub(crate) fn hold_watchdog_before_check(&self) {
+        if !self.r3_watchdog_hold.load(Ordering::Acquire) {
+            return;
+        }
+        self.r3_watchdog_waiting.store(true, Ordering::Release);
+    }
+
+    pub fn r3_watchdog_is_held(&self) -> bool {
+        self.r3_watchdog_hold.load(Ordering::Acquire)
     }
 }
 

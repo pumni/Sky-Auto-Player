@@ -366,6 +366,13 @@ pub(crate) fn dispatch_prepared_normal_frame(
     let _ = now_ticks;
     let view = &frame.view;
     let has_down_events = view.packet_masks.down_mask != 0;
+    #[cfg(any(test, feature = "test-support"))]
+    if has_down_events && let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+        hook.record_r3_down_window(
+            physical_timing_window.authored_target_qpc.as_u64(),
+            physical_timing_window.packet_not_before_qpc.as_u64(),
+        );
+    }
     // Keep the cheap outer read for the preroll/focus-pause fault path; the
     // precision helper still owns the authoritative final atomic gate.
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
@@ -436,6 +443,15 @@ pub(crate) fn dispatch_prepared_normal_frame(
         Ok(result) => result,
         Err(error) => return DispatchStep::TerminateStatic(error),
     };
+    #[cfg(any(test, feature = "test-support"))]
+    if frame.view.packet_masks.down_mask == 0
+        && frame.view.packet_masks.up_mask != 0
+        && let PreparedNormalPrecisionResult::Sent { result, .. } = &precision_result
+        && result.is_success()
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
+        hook.wait_after_r3_successful_up();
+    }
     let (result, prepared_final_policy_qpc) =
         match finish_prepared_normal_precision_result(precision_result, runtime, local_metrics) {
             Ok(Some(result)) => result,
@@ -498,6 +514,15 @@ pub(super) fn record_down_send_result(
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let packet = view.packet_masks;
+    #[cfg(any(test, feature = "test-support"))]
+    if packet.down_mask != 0
+        && result.evidence.attempts != 0
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
+        hook.record_r3_down_sender_attempt(
+            result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
+        );
+    }
     if let Some(started_qpc) = result.evidence.started_ticks
         && let Err(error) = record_sendinput_pre_call_lateness(
             physical_target_qpc,

@@ -55,6 +55,7 @@ Packaging, Windows timing acceptance, release, and benchmark scripts are special
 
 ## Decisions and bounded evidence
 
+- [r3-keyboard-final-evidence.md](r3-keyboard-final-evidence.md) — P5 final lifecycle-floor and lease-age characterization, paired A/B matrix, assembly audits, and explicit receiver uncertainty.
 - [r3-keyboard-diagnostics.md](r3-keyboard-diagnostics.md) — P4 prepared-dispatch HOL, startup/resource, and offline receiver-polling characterization with immutable evidence links.
 - [post-adr-0017-hardening-final-evidence.md](post-adr-0017-hardening-final-evidence.md) — merged-main P8/H4 authority, ownership, lifecycle, and native qualification checkpoint; pending coordinator review.
 - `docs/adr/` — Architecture Decision Records for specific structural choices:

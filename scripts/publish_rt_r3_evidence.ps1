@@ -221,7 +221,7 @@ try {
     $runnerManifest = Get-Content -LiteralPath $runnerManifestPath -Raw | ConvertFrom-Json
     if ($runnerManifest.status -ne 'COMPLETED_CHARACTERIZATION') { throw 'Runner output is not a completed characterization' }
     if ($runnerManifest.source_revision.ToLowerInvariant() -ne $headSha) { throw 'HeadSha does not match the runner source revision' }
-    $expectedStage = if ($Phase -eq 'P0') { 'baseline' } elseif ($Phase -eq 'P1') { 'phase' + '1' } elseif ($Phase -eq 'P2') { 'phase' + '2' } elseif ($Phase -eq 'P4') { 'diagnostics' } else { $null }
+    $expectedStage = if ($Phase -eq 'P0') { 'baseline' } elseif ($Phase -eq 'P1') { 'phase' + '1' } elseif ($Phase -eq 'P2') { 'phase' + '2' } elseif ($Phase -eq 'P4') { 'diagnostics' } elseif ($Phase -eq 'P5') { 'final' } else { $null }
     if (-not $expectedStage -or $runnerManifest.stage -ne $expectedStage) { throw "This publisher route does not accept phase $Phase stage '$($runnerManifest.stage)'" }
     if ($runnerManifest.run_id -notmatch '^[A-Za-z0-9._-]+$') { throw 'Runner run_id contains unsafe path characters' }
     $runId = [string]$runnerManifest.run_id
@@ -230,7 +230,7 @@ try {
     $currentHead = (& git -C $repoRoot rev-parse --verify HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $currentHead.ToLowerInvariant() -ne $headSha) { throw 'Implementation worktree HEAD differs from HeadSha' }
     $currentBranch = (& git -C $repoRoot branch --show-current).Trim()
-    $implementationBranch = if ($Phase -eq 'P0') { 'rt-r3/p0-baseline' } elseif ($Phase -eq 'P1') { 'rt-r3/p1-lifecycle-release-barrier' } elseif ($Phase -eq 'P2') { 'rt-r3/p2-final-lease-age' } elseif ($Phase -eq 'P4') { 'rt-r3/p4-diagnostics' } else { $null }
+    $implementationBranch = if ($Phase -eq 'P0') { 'rt-r3/p0-baseline' } elseif ($Phase -eq 'P1') { 'rt-r3/p1-lifecycle-release-barrier' } elseif ($Phase -eq 'P2') { 'rt-r3/p2-final-lease-age' } elseif ($Phase -eq 'P4') { 'rt-r3/p4-diagnostics' } elseif ($Phase -eq 'P5') { 'rt-r3/p5-final-qualification' } else { $null }
     if ($LASTEXITCODE -ne 0 -or $currentBranch -ne $implementationBranch) { throw "Phase $Phase publishing requires the fixed implementation branch $implementationBranch" }
     $trackedStatus = @(& git -C $repoRoot status --porcelain --untracked-files=all)
     if ($LASTEXITCODE -ne 0 -or $trackedStatus.Count -ne 0) { throw "$Phase publishing requires a clean implementation worktree" }
@@ -261,7 +261,7 @@ try {
         runtime_revision = $runnerManifest.runtime_revision
         head_sha = $headSha
         executable_sha256 = $runnerManifest.executable_sha256
-        transport_kind = if ($Phase -eq 'P0') { 'deterministic-mock' } elseif ($Phase -eq 'P1') { 'deterministic-mock contracts plus project-owned ReceiveOnly native sink' } elseif ($Phase -eq 'P2') { 'paired accepted-P1/candidate deterministic-mock precision runs plus project-owned ReceiveOnly native sink' } else { 'deterministic-mock prepared dispatch and startup builder plus offline modeled receiver polling; no native rerun' }
+        transport_kind = if ($Phase -eq 'P0') { 'deterministic-mock' } elseif ($Phase -eq 'P1') { 'deterministic-mock contracts plus project-owned ReceiveOnly native sink' } elseif ($Phase -eq 'P2') { 'paired accepted-P1/candidate deterministic-mock precision runs plus project-owned ReceiveOnly native sink' } elseif ($Phase -eq 'P4') { 'deterministic-mock prepared dispatch and startup builder plus offline modeled receiver polling; no native rerun' } else { 'final paired accepted-P1/candidate qualification, native ReceiveOnly acceptance, and bounded lease/lifecycle proofs' }
         declared_outputs = $innerFileManifest
     }
     Write-JsonFile (Join-Path $packageRoot 'manifest.json') $innerManifest

@@ -10,7 +10,7 @@ name = "sky_player"
 [features]
 default = []
 test-support = ["sky_dispatch_core/test-support", "sky_dispatch_win32/test-support"]
-real-input-acceptance = []
+real-input-acceptance = ["test-support"]
 
 [dependencies]
 sky_dispatch_core = { path = "../sky_dispatch_core" }

@@ -1,0 +1,9 @@
+pub(super) const ACCEPTANCE_FPS: u64 = 60;
+pub(super) const ACCEPTANCE_FRAME_US: u64 = 1_000_000_u64.div_ceil(ACCEPTANCE_FPS);
+pub(super) const ACCEPTANCE_HOLD_FRAMES: u64 = 1;
+pub(super) const ACCEPTANCE_TIMING_MARGIN_US: u64 = 800;
+pub(super) const ACCEPTANCE_TIMING_MARGIN_MIN_US: u64 = 0;
+pub(super) const ACCEPTANCE_TIMING_MARGIN_MAX_US: u64 = 3_000;
+pub(super) const ACCEPTANCE_TIMING_MARGIN_STEP_US: u64 = 100;
+pub(super) const ACCEPTANCE_INPUT_PATH_WARN_US: u64 = 300;
+pub(super) const ACCEPTANCE_FOCUS_RESTORE_GRACE_US: u64 = 100_000;
