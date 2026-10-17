@@ -302,6 +302,39 @@ pub struct PreparedAuthoredPacket<'a> {
 pub struct PreparedUpIntent {
     pub intent: CompactIntent,
     pub source_action_index: u32,
+    /// Compiler-owned location identity for this authored Up. The schedule
+    /// entry is invalidated in place when a live generation is cancelled, but
+    /// this frozen identity remains stable in prepared streams.
+    pub identity: AuthoredUpIdentity,
+}
+
+/// Exact authored identity for a paired Up. A generation ID alone is not
+/// sufficient to reconcile a cancellation: the key slot and immutable
+/// compiler location must also match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuthoredUpIdentity {
+    generation_id: GenerationId,
+    key_slot: KeySlot,
+    packet_index: usize,
+    intent_index: usize,
+}
+
+impl AuthoredUpIdentity {
+    pub fn generation_id(self) -> GenerationId {
+        self.generation_id
+    }
+
+    pub fn key_slot(self) -> KeySlot {
+        self.key_slot
+    }
+
+    pub fn packet_index(self) -> usize {
+        self.packet_index
+    }
+
+    pub fn intent_index(self) -> usize {
+        self.intent_index
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,8 +400,24 @@ pub struct RuntimeDispatchCoordinator {
     generation_states: Box<[GenerationStatus]>,
     generation_count: u64,
     up_intent_locations: Box<[Option<(usize, usize)>]>,
+    /// At most one unmatched resumable cancellation can exist per physical
+    /// instrument slot. Tokens are minted only by the worker's verified
+    /// cleanup path and consumed by the exact frozen authored Up.
+    cancelled_up_by_slot: [Option<AuthoredUpIdentity>; MAX_KEYS],
     pending_release_by_slot: [Option<PendingRelease>; MAX_KEYS],
     pending_release_mask: u16,
+    #[cfg(any(test, feature = "test-support"))]
+    operation_evidence: std::cell::Cell<CoordinatorOperationEvidence>,
+}
+
+/// Deterministic operation-site evidence for pause/resume complexity tests.
+/// The fields count actual visits, not inferred slice lengths.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CoordinatorOperationEvidence {
+    pub resumable_cancel_slot_visits: u64,
+    pub local_invariant_slot_visits: u64,
+    pub deep_audit_generation_visits: u64,
 }
 
 #[cfg(test)]
@@ -538,8 +587,11 @@ impl RuntimeDispatchCoordinator {
             generation_states: generation_states.into_boxed_slice(),
             generation_count,
             up_intent_locations: up_intent_locations.into_boxed_slice(),
+            cancelled_up_by_slot: [None; MAX_KEYS],
             pending_release_by_slot: [None; MAX_KEYS],
             pending_release_mask: 0,
+            #[cfg(any(test, feature = "test-support"))]
+            operation_evidence: std::cell::Cell::new(CoordinatorOperationEvidence::default()),
         })
     }
 

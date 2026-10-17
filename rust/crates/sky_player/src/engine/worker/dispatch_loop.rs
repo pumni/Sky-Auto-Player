@@ -291,6 +291,22 @@ pub(crate) fn dispatch_due_from_plan(
     let Some(physical) = plan.physical() else {
         return super::DispatchStep::NoWork;
     };
+    let authored_commit = match &physical.authored_view.commit {
+        super::dispatch::PhysicalCommit::Authored(commit)
+        | super::dispatch::PhysicalCommit::Coalesced {
+            authored: commit, ..
+        } => Some(commit),
+        super::dispatch::PhysicalCommit::PendingRelease { .. } => None,
+    };
+    if let Some(commit) = authored_commit
+        && let Err(error) = resources
+            .coordinator
+            .validate_frozen_authored_commit(commit)
+    {
+        return super::DispatchStep::Terminate(format!(
+            "authored cancellation identity validation failed before SendInput: {error}"
+        ));
+    }
     let masks = physical.authored_view.packet_masks;
     let window = match physical_timing_window_for_dispatch(physical_target_qpc, masks, runtime) {
         Ok(window) => window,
@@ -438,27 +454,23 @@ pub(crate) fn dispatch_due_from_plan(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn suspend_live_input_and_reconcile_prepared(
+fn suspend_live_input_for_dispatch(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     coordinator: &mut sky_dispatch_core::coordinator::RuntimeDispatchCoordinator,
     runtime: &mut super::WorkerRuntime,
     effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
-    prepared_stream: Option<&mut PreparedDispatchStream>,
 ) -> Result<(), String> {
-    let cancelled = suspend_live_input(
+    suspend_live_input(
         backend,
         coordinator,
         runtime,
         effective_now_ticks,
         target_hwnd,
         post_cleanup_qpc,
-    )?;
-    if let Some(stream) = prepared_stream {
-        stream.reconcile_resumable_suspension(&cancelled)?;
-    }
-    Ok(())
+    )
+    .map(|_| ())
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -470,16 +482,14 @@ pub(crate) fn apply_resumable_lifecycle_transition_for_test(
     effective_now_ticks: Result<sky_dispatch_core::time::TimelineTicks, String>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
-    prepared_stream: Option<&mut PreparedDispatchStream>,
 ) -> Result<(), String> {
-    suspend_live_input_and_reconcile_prepared(
+    suspend_live_input_for_dispatch(
         backend,
         coordinator,
         runtime,
         effective_now_ticks,
         target_hwnd,
         post_cleanup_qpc,
-        prepared_stream,
     )
 }
 
@@ -494,7 +504,6 @@ pub(crate) fn apply_system_suspend_transition(
     suspend_boundary_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
-    prepared_stream: Option<&mut PreparedDispatchStream>,
 ) -> Result<(), String> {
     runtime.reset_wait_state_after_system_suspend();
     runtime.invalidate_down_authorization();
@@ -502,14 +511,13 @@ pub(crate) fn apply_system_suspend_transition(
     let effective_now = playback
         .get_elapsed_allow_pre_epoch(now_ticks, true)
         .map_err(|error| error.to_string());
-    suspend_live_input_and_reconcile_prepared(
+    suspend_live_input_for_dispatch(
         backend,
         coordinator,
         runtime,
         effective_now,
         target_hwnd,
         post_cleanup_qpc,
-        prepared_stream,
     )?;
     runtime.manual_pause_suspension_pending = false;
     runtime
@@ -709,7 +717,6 @@ pub(super) fn dispatch(
                     system_power.suspend_boundary_qpc(),
                     target.hwnd_for_safety_release(),
                     || qpc_clock.now().map_err(|error| format!("{error:?}")),
-                    prepared_stream.as_mut(),
                 ) {
                     core.runtime.terminal_error =
                         Some(format!("system suspend safety release failed: {error}"));
@@ -825,14 +832,13 @@ pub(super) fn dispatch(
                                 core.runtime.allow_pre_epoch_startup_dispatch,
                             )
                             .map_err(|error| error.to_string());
-                        if let Err(error) = suspend_live_input_and_reconcile_prepared(
+                        if let Err(error) = suspend_live_input_for_dispatch(
                             &mut resources.backend,
                             &mut resources.coordinator,
                             &mut core.runtime,
                             lifecycle_effective_now,
                             preflight_target.hwnd,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
-                            prepared_stream.as_mut(),
                         ) {
                             core.runtime.verified_target = None;
                             core.runtime.terminal_error =
@@ -862,14 +868,13 @@ pub(super) fn dispatch(
                                 core.runtime.allow_pre_epoch_startup_dispatch,
                             )
                             .map_err(|error| error.to_string());
-                        if let Err(error) = suspend_live_input_and_reconcile_prepared(
+                        if let Err(error) = suspend_live_input_for_dispatch(
                             &mut resources.backend,
                             &mut resources.coordinator,
                             &mut core.runtime,
                             lifecycle_effective_now,
                             preflight_target.hwnd,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
-                            prepared_stream.as_mut(),
                         ) {
                             core.runtime.verified_target = None;
                             core.runtime.terminal_error =
@@ -946,14 +951,13 @@ pub(super) fn dispatch(
                             core.runtime.allow_pre_epoch_startup_dispatch,
                         )
                         .map_err(|error| error.to_string());
-                    if let Err(error) = suspend_live_input_and_reconcile_prepared(
+                    if let Err(error) = suspend_live_input_for_dispatch(
                         &mut resources.backend,
                         &mut resources.coordinator,
                         &mut core.runtime,
                         lifecycle_effective_now,
                         target.hwnd_for_safety_release(),
                         || qpc_clock.now().map_err(|error| format!("{error:?}")),
-                        prepared_stream.as_mut(),
                     ) {
                         core.runtime.terminal_error =
                             Some(format!("manual pause suspension failed: {error}"));
@@ -1005,14 +1009,13 @@ pub(super) fn dispatch(
                                 core.runtime.allow_pre_epoch_startup_dispatch,
                             )
                             .map_err(|error| error.to_string());
-                        if let Err(error) = suspend_live_input_and_reconcile_prepared(
+                        if let Err(error) = suspend_live_input_for_dispatch(
                             &mut resources.backend,
                             &mut resources.coordinator,
                             &mut core.runtime,
                             lifecycle_effective_now,
                             target.hwnd_for_safety_release(),
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
-                            prepared_stream.as_mut(),
                         ) {
                             core.runtime.terminal_error =
                                 Some(format!("manual resume deferred suspension failed: {error}"));
@@ -1358,6 +1361,26 @@ pub(super) fn dispatch(
                             Some("prepared physical cursor changed before dispatch".to_string());
                         break;
                     };
+                    if let Err(error) = resources.coordinator.validate_frozen_authored_commit(
+                        match &frame.view.commit {
+                            super::dispatch::PhysicalCommit::Authored(commit)
+                            | super::dispatch::PhysicalCommit::Coalesced {
+                                authored: commit, ..
+                            } => commit,
+                            super::dispatch::PhysicalCommit::PendingRelease { .. } => {
+                                core.runtime.terminal_error = Some(
+                                    "prepared physical frame has no authored cancellation identity"
+                                        .to_string(),
+                                );
+                                break;
+                            }
+                        },
+                    ) {
+                        core.runtime.terminal_error = Some(format!(
+                            "prepared authored cancellation identity validation failed before SendInput: {error}"
+                        ));
+                        break;
+                    }
                     #[cfg(any(test, feature = "test-support"))]
                     if frame.view.packet_masks.down_mask != 0
                         && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
@@ -1391,7 +1414,6 @@ pub(super) fn dispatch(
                         dispatch_qpc,
                         focus_loss_fault,
                         Some(dispatch_qpc),
-                        stream.explicitly_cancelled_generation_ids(),
                         #[cfg(any(test, feature = "test-support"))]
                         false,
                     )

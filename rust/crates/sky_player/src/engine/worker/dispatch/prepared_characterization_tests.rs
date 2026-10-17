@@ -149,20 +149,19 @@ fn late_prepared_down_still_has_one_transport_attempt() {
 }
 
 #[test]
-fn prepared_stream_suspension_reconciliation_does_not_mutate_frozen_entries() {
-    let mut stream = build_stream(
+fn prepared_stream_has_no_song_sized_cancellation_history() {
+    let stream = build_stream(
         &[
             action(0, ActionKind::Down, 0, &[0x15]),
             action(1, ActionKind::Up, 20_000, &[0x15]),
         ],
         &[0x15],
     );
-    let before = format!("{:?}", stream.entries());
-    stream
-        .reconcile_resumable_suspension(&[0])
-        .expect("bounded suspension reconciliation");
-    assert_eq!(stream.explicitly_cancelled_generation_ids(), &[0]);
-    assert_eq!(format!("{:?}", stream.entries()), before);
+    assert_eq!(stream.len(), 2);
+    assert!(
+        std::mem::size_of::<PreparedDispatchStream>() <= 32,
+        "prepared stream must remain a fixed-size cursor plus its entry vector"
+    );
 }
 
 #[test]

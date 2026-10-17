@@ -8,7 +8,6 @@ use super::{
     AuthoredBatchView, DispatchStep, PendingObservationQueue, PhysicalCommit, RecoveryDescriptor,
 };
 use sky_dispatch_core::coordinator::RuntimeDispatchCoordinator;
-use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_win32::input::TrackedKeyState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -233,7 +232,6 @@ pub(crate) fn commit_missed_down_boundary(
     clock_state: &mut PlaybackClockState,
     runtime: &WorkerRuntime,
     started_qpc: QpcTicks,
-    explicitly_cancelled_by_suspension: &[GenerationId],
 ) -> DispatchStep {
     let started_effective = match clock_state
         .get_elapsed_allow_pre_epoch(started_qpc, runtime.allow_pre_epoch_startup_dispatch)
@@ -248,12 +246,11 @@ pub(crate) fn commit_missed_down_boundary(
     let up_mask = view.packet_masks.up_mask;
     let commit_result = match &view.commit {
         PhysicalCommit::Authored(commit) => coordinator
-            .commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
+            .commit_prepared_authored_frame_deadline_miss(
                 commit,
                 up_mask,
                 view.packet_masks.down_mask,
                 started_effective,
-                explicitly_cancelled_by_suspension,
             ),
         PhysicalCommit::Coalesced {
             authored,
@@ -268,14 +265,12 @@ pub(crate) fn commit_missed_down_boundary(
             coordinator
                 .commit_pending_release_success(*release_mask, started_effective)
                 .and_then(|()| {
-                    coordinator
-                        .commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
-                            authored,
-                            authored.frame.immediate_up_mask,
-                            authored.frame.down_mask,
-                            started_effective,
-                            explicitly_cancelled_by_suspension,
-                        )
+                    coordinator.commit_prepared_authored_frame_deadline_miss(
+                        authored,
+                        authored.frame.immediate_up_mask,
+                        authored.frame.down_mask,
+                        started_effective,
+                    )
                 })
         }
         PhysicalCommit::PendingRelease { .. } => {
@@ -304,9 +299,18 @@ pub(super) fn recover_missed_down_boundary(
     wake_ticks: sky_dispatch_core::time::TimelineTicks,
     reason: DownMissReason,
     already_classified: bool,
-    explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
+    if let PhysicalCommit::Authored(commit)
+    | PhysicalCommit::Coalesced {
+        authored: commit, ..
+    } = &view.commit
+        && let Err(error) = coordinator.validate_frozen_authored_commit(commit)
+    {
+        return DispatchStep::Terminate(format!(
+            "missed Down authored cancellation identity validation failed before SendInput: {error}"
+        ));
+    }
     if !already_classified {
         classify_missed_down_boundary(
             view,
@@ -384,14 +388,8 @@ pub(super) fn recover_missed_down_boundary(
         record_recovery_hold_floor_delay(local_metrics, physical_timing_window, up_mask);
         (started, completed)
     };
-    let commit_step = commit_missed_down_boundary(
-        view,
-        coordinator,
-        clock_state,
-        runtime,
-        started_qpc,
-        explicitly_cancelled_by_suspension,
-    );
+    let commit_step =
+        commit_missed_down_boundary(view, coordinator, clock_state, runtime, started_qpc);
     if !matches!(commit_step, DispatchStep::Dispatched) {
         return commit_step;
     }

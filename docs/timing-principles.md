@@ -124,6 +124,17 @@ later Down dispatch. A failed, partial, ambiguous, or untrustworthy transport
 result does not create completion evidence; the existing terminal cleanup
 policy applies.
 
+After that verified cleanup and barrier establishment, resumable reconciliation
+stores at most one exact authored-Up token per instrument slot. The token binds
+the live generation, key slot, and immutable packet/intent location. The mutable
+schedule invalidates the generation while preserving its authored physical Up;
+the matching frozen Up consumes the token once. Validation is bounded by the
+fifteen slots and current packet, while full generation conservation remains a
+separate terminal audit. Because `SendInput` cannot distinguish a user-held
+virtual key from a player-held one, the resumed authored Up is still emitted and
+can release a user's overlapping key. See [the dispatch architecture](rt-dispatch-architecture.md#bounded-resumable-generation-reconciliation)
+for the token ownership contract and its limits.
+
 ## Physical dispatch ordering
 
 The physical path is ordered as follows:

@@ -509,7 +509,7 @@ pub(crate) fn suspend_live_input(
     effective_now_ticks: Result<TimelineTicks, String>,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
-) -> Result<Vec<u64>, String> {
+) -> Result<usize, String> {
     runtime.invalidate_down_authorization();
     if let Some(guard) = runtime.physical_timing_guard.as_mut() {
         guard.invalidate();
@@ -567,11 +567,8 @@ pub(crate) fn suspend_live_input(
             .map_err(|error| format!("coordinator missed Down commit failure: {error}"))?;
     }
     let cancelled = coordinator
-        .cancel_live_generations()
+        .cancel_live_generations_after_verified_resumable_cleanup()
         .map_err(|error| format!("coordinator live cancellation failed: {error}"))?;
-    coordinator
-        .check_invariants()
-        .map_err(|error| format!("coordinator invariant failure after suspension: {error}"))?;
     runtime.invalidate_down_authorization();
     runtime.pending_up_recovery = None;
     Ok(cancelled)

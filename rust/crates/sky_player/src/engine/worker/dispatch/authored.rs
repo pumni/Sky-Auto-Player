@@ -22,7 +22,6 @@ use super::{AuthoredBatchView, AuthoredPacketContext, DispatchStep, PendingObser
 use crate::engine::shared::{
     SessionTarget, SharedProgressClock, SupervisorLeaseState, SystemPowerState,
 };
-use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_win32::input::SendTransactionOutcome;
 use std::sync::atomic::AtomicBool;
 #[allow(clippy::too_many_arguments)]
@@ -214,7 +213,6 @@ fn commit_down_send_outcome(
                 }
             },
             runtime.pending_up_recovery.is_some(),
-            &[],
             observer,
         );
     }
@@ -238,7 +236,6 @@ fn commit_down_send_outcome(
         test_inject_sender_start.then_some(now_ticks),
         #[cfg(not(any(test, feature = "test-support")))]
         None,
-        &[],
         observer,
     )
 }
@@ -619,7 +616,6 @@ pub(super) fn record_down_send_outcome(
     physical_timing_window: PhysicalTimingWindow,
     admission: &AdmissionOutcome,
     test_now_ticks: Option<QpcTicks>,
-    explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let (trace_kind, target_crossing_qpc, prepared_final_policy_qpc) = match admission {
@@ -657,7 +653,6 @@ pub(super) fn record_down_send_outcome(
         trace_kind,
         prepared_final_policy_qpc,
         result,
-        explicitly_cancelled_by_suspension,
         observer,
     )
 }
@@ -680,7 +675,6 @@ pub(super) fn record_prepared_normal_send_outcome(
     target_crossing_qpc: Option<QpcTicks>,
     final_policy_qpc: Option<QpcTicks>,
     result: SendTransactionOutcome,
-    explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     debug_assert!(!timing.strict_timing);
@@ -702,7 +696,6 @@ pub(super) fn record_prepared_normal_send_outcome(
         trace_kind_for_packet_kind(view.prepared_batch.packet_kind),
         final_policy_qpc,
         result,
-        explicitly_cancelled_by_suspension,
         observer,
     )
 }
@@ -734,7 +727,6 @@ pub(super) fn finalize_down_send_outcome(
     result_retry_reason: sky_dispatch_win32::input::PacketRetryReason,
     result_chord_integrity_lost: bool,
     result_last_win32_error: Option<u32>,
-    explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let timing_proof = match interpret_down_send_timing(
@@ -759,7 +751,6 @@ pub(super) fn finalize_down_send_outcome(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
-        explicitly_cancelled_by_suspension,
     ) {
         Ok(value) => value,
         Err(step) => return step,
