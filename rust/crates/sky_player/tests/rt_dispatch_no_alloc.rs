@@ -139,7 +139,6 @@ fn up_observation(n: u64) -> DispatchObservation {
             wake_ticks: TimelineTicks::ZERO,
             final_policy_ticks: Some(TimelineTicks::ZERO),
             sendinput_completion_ticks: Some(TimelineTicks::ZERO),
-            dispatch_start_error_ticks: n as i64,
             completion_error_ticks: 0,
             authored_completion_error_ticks: 0,
             deferred_ticks: DurationTicks::ZERO,

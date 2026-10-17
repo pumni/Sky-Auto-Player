@@ -56,7 +56,6 @@ pub(super) fn drain_stale_metadata_observation(
                 post_send_metrics_available: false,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
-                ..TraceTiming::default()
             },
             TraceDelivery {
                 requested: 0,
@@ -147,7 +146,6 @@ pub(super) fn drain_down_miss(
                 post_send_metrics_available: false,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
-                ..TraceTiming::default()
             },
             TraceDelivery {
                 requested: down_count,
@@ -215,7 +213,6 @@ pub(super) fn drain_blocked_unfocused_observation(
                 post_send_metrics_available: false,
                 completion_error_ticks: 0,
                 authored_completion_error_ticks: 0,
-                ..TraceTiming::default()
             },
             TraceDelivery {
                 requested: 0,

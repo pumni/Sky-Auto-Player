@@ -219,8 +219,11 @@ pub fn analyze_whole_stream(
         let total_floor_displacement = floor_ready
             .checked_sub(packet.authored_target_ticks)
             .ok_or(WholeStreamModelError::ArithmeticOverflow)?;
+        // HOL is a nonnegative lower bound by definition; overlap between the
+        // prior worker and a later floor contributes zero rather than a
+        // negative delay.
         let hol_delay = previous_worker_free
-            .map(|free| free.checked_sub(floor_ready).unwrap_or(0))
+            .map(|free| free.saturating_sub(floor_ready))
             .unwrap_or(0);
         let modeled_lateness = ready
             .checked_sub(packet.authored_target_ticks)

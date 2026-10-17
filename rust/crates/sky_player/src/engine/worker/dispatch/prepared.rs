@@ -14,6 +14,7 @@ use crate::engine::shared::SessionTarget;
 use crate::engine::shared::{
     SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseState, SystemPowerState,
 };
+use crate::engine::telemetry::metrics::PrecisionPacketTimingObservation;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{ModifierKeyObservation, ModifierMask, SendTransactionOutcome};
 use std::sync::atomic::AtomicBool;
@@ -518,20 +519,21 @@ pub(super) fn record_down_send_result(
         hook.record_down_sender_attempt(result.evidence.started_ticks.map(|ticks| ticks.as_u64()));
     }
     if result.evidence.attempts != 0 {
-        local_metrics.observe_precision_packet_timing(
-            physical_timing_window.authored_target_qpc.as_u64(),
-            physical_timing_window.packet_not_before_qpc.as_u64(),
-            result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
-            result.evidence.completed_ticks.map(|ticks| ticks.as_u64()),
-            runtime
+        local_metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
+            authored_target_qpc: physical_timing_window.authored_target_qpc.as_u64(),
+            packet_not_before_qpc: physical_timing_window.packet_not_before_qpc.as_u64(),
+            pre_call_qpc: result.evidence.started_ticks.map(|ticks| ticks.as_u64()),
+            sendinput_completion_qpc: result.evidence.completed_ticks.map(|ticks| ticks.as_u64()),
+            previous_sendinput_completion_qpc: runtime
                 .last_physical_send_completion_qpc
                 .map(|ticks| ticks.as_u64()),
-            runtime.last_physical_send_completion_qpc.is_some(),
-            result.status != sky_dispatch_win32::input::SendTransactionStatus::Complete
+            previous_sender_completion_known: runtime.last_physical_send_completion_qpc.is_some(),
+            transport_anomaly: result.status
+                != sky_dispatch_win32::input::SendTransactionStatus::Complete
                 || result.evidence.last_win32_error.is_some()
                 || result.evidence.skipped_mask != 0
                 || result.evidence.attempts != 1,
-        );
+        });
     } else if result.status != sky_dispatch_win32::input::SendTransactionStatus::Complete {
         local_metrics.transport_anomalies = local_metrics.transport_anomalies.saturating_add(1);
     }

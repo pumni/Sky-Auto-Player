@@ -1463,18 +1463,20 @@ fn record_precision_handoff(
         handoff.target_crossing_qpc,
         physical_target_qpc,
     ));
-    samples
-        .target_crossing_to_final_policy_us
-        .push(signed_qpc_us(
+    if let Some(final_policy_qpc) = handoff.final_policy_qpc {
+        samples
+            .target_crossing_to_final_policy_us
+            .push(signed_qpc_us(
+                qpc_clock,
+                final_policy_qpc,
+                handoff.target_crossing_qpc,
+            ));
+        samples.final_policy_to_true_pre_call_us.push(signed_qpc_us(
             qpc_clock,
-            handoff.final_policy_qpc,
-            handoff.target_crossing_qpc,
+            pre_call_qpc,
+            final_policy_qpc,
         ));
-    samples.final_policy_to_true_pre_call_us.push(signed_qpc_us(
-        qpc_clock,
-        pre_call_qpc,
-        handoff.final_policy_qpc,
-    ));
+    }
     if let Some(dispatch_ready_qpc) = dispatch_ready_qpc {
         samples.completion_to_rt_ready_us.push(signed_qpc_us(
             qpc_clock,
@@ -1497,18 +1499,22 @@ fn add_observation(samples: &mut Samples, observation: DispatchObservation) {
                 value.dispatch_ready_qpc,
                 qpc_clock,
             );
-            if let Some(wake_qpc) = value.wake_qpc {
+            if let (Some(wake_qpc), Some(final_policy_qpc)) =
+                (value.wake_qpc, value.final_policy_qpc)
+            {
                 samples.wake_to_final_policy_us.push(signed_qpc_us(
                     qpc_clock,
-                    value.final_policy_qpc,
+                    final_policy_qpc,
                     wake_qpc,
                 ));
             }
-            samples.final_policy_to_pre_call_us.push(signed_qpc_us(
-                qpc_clock,
-                value.pre_call_qpc,
-                value.final_policy_qpc,
-            ));
+            if let Some(final_policy_qpc) = value.final_policy_qpc {
+                samples.final_policy_to_pre_call_us.push(signed_qpc_us(
+                    qpc_clock,
+                    value.pre_call_qpc,
+                    final_policy_qpc,
+                ));
+            }
             samples.target_to_completion_us.push(signed_qpc_us(
                 qpc_clock,
                 value.sendinput_completion_qpc,

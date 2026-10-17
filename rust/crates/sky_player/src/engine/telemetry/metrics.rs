@@ -19,6 +19,17 @@ fn signed_qpc_delta(value: u64, baseline: u64) -> Option<i64> {
     i64::try_from(i128::from(value) - i128::from(baseline)).ok()
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct PrecisionPacketTimingObservation {
+    pub(crate) authored_target_qpc: u64,
+    pub(crate) packet_not_before_qpc: u64,
+    pub(crate) pre_call_qpc: Option<u64>,
+    pub(crate) sendinput_completion_qpc: Option<u64>,
+    pub(crate) previous_sendinput_completion_qpc: Option<u64>,
+    pub(crate) previous_sender_completion_known: bool,
+    pub(crate) transport_anomaly: bool,
+}
+
 impl RecentLatencyRing {
     pub(crate) fn push(&mut self, value: i64) {
         self.values[usize::from(self.next)] =
@@ -289,14 +300,17 @@ impl WorkerMetricsLocal {
     /// count; no timestamp is guessed or replaced with a schedule value.
     pub(crate) fn observe_precision_packet_timing(
         &mut self,
-        authored_target_qpc: u64,
-        packet_not_before_qpc: u64,
-        pre_call_qpc: Option<u64>,
-        sendinput_completion_qpc: Option<u64>,
-        previous_sendinput_completion_qpc: Option<u64>,
-        previous_sender_completion_known: bool,
-        transport_anomaly: bool,
+        observation: PrecisionPacketTimingObservation,
     ) {
+        let PrecisionPacketTimingObservation {
+            authored_target_qpc,
+            packet_not_before_qpc,
+            pre_call_qpc,
+            sendinput_completion_qpc,
+            previous_sendinput_completion_qpc,
+            previous_sender_completion_known,
+            transport_anomaly,
+        } = observation;
         self.precision_packet_attempts = self.precision_packet_attempts.saturating_add(1);
         self.pre_call_qpc_unavailable_attempts = self
             .pre_call_qpc_unavailable_attempts
@@ -700,7 +714,10 @@ pub(crate) fn cpu_metrics_sample_due(now_us: u64, last_sample_us: u64, interval_
 
 #[cfg(test)]
 mod tests {
-    use super::{SharedMetrics, SnapshotBuffer, WorkerMetricsLocal, try_publish_metrics};
+    use super::{
+        PrecisionPacketTimingObservation, SharedMetrics, SnapshotBuffer, WorkerMetricsLocal,
+        try_publish_metrics,
+    };
     use sky_dispatch_win32::clock::QpcClock;
     use std::num::NonZeroU64;
     use std::sync::Arc;
@@ -770,15 +787,15 @@ mod tests {
     #[test]
     fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
         let mut metrics = WorkerMetricsLocal::default();
-        metrics.observe_precision_packet_timing(
-            100,
-            110,
-            Some(125),
-            Some(132),
-            Some(115),
-            true,
-            true,
-        );
+        metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
+            authored_target_qpc: 100,
+            packet_not_before_qpc: 110,
+            pre_call_qpc: Some(125),
+            sendinput_completion_qpc: Some(132),
+            previous_sendinput_completion_qpc: Some(115),
+            previous_sender_completion_known: true,
+            transport_anomaly: true,
+        });
         assert_eq!(metrics.precision_packet_attempts, 1);
         assert_eq!(metrics.authored_lateness_samples, 1);
         assert_eq!(metrics.max_authored_lateness_ticks, 25);
@@ -801,7 +818,11 @@ mod tests {
     #[test]
     fn precision_timing_summary_does_not_invent_missing_samples_and_counts_bad_ordering() {
         let mut metrics = WorkerMetricsLocal::default();
-        metrics.observe_precision_packet_timing(200, 190, None, None, None, false, false);
+        metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
+            authored_target_qpc: 200,
+            packet_not_before_qpc: 190,
+            ..PrecisionPacketTimingObservation::default()
+        });
         assert_eq!(metrics.precision_packet_attempts, 1);
         assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 1);
         assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 1);
