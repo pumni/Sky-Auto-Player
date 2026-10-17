@@ -1,11 +1,14 @@
 #[cfg(any(test, feature = "test-support"))]
 use super::CommandTimingState;
 use super::{NativeTelemetryOutput, SharedMetrics};
+mod startup;
 use parking_lot::Mutex;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks};
 use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::event::OwnedEvent;
+use startup::StartupPublicationState;
+pub(crate) use startup::{StartupAbortReason, StartupPhase, StartupSnapshot};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 
@@ -412,6 +415,7 @@ const SYSTEM_POWER_NOTIFY_CAS_ATTEMPTS: usize = 8;
 /// signals, then open the next even epoch. Callbacks never take that mutex.
 pub struct SystemPowerState {
     state: AtomicU8,
+    startup_state: StartupPublicationState,
     callback_epoch: AtomicU64,
     callbacks_in_flight: AtomicU64,
     lifecycle: StdMutex<()>,
@@ -431,6 +435,7 @@ impl Default for SystemPowerState {
     fn default() -> Self {
         Self {
             state: AtomicU8::new(0),
+            startup_state: StartupPublicationState::default(),
             // Epoch zero is the initial active epoch for standalone worker
             // tests. The stable process endpoint starts closed at epoch one.
             callback_epoch: AtomicU64::new(0),
@@ -489,6 +494,38 @@ impl Drop for SystemPowerCallbackLease<'_> {
 }
 
 impl SystemPowerState {
+    pub(super) fn startup_snapshot(&self) -> StartupSnapshot {
+        self.startup_state.snapshot()
+    }
+
+    pub(super) fn begin_preparing(&self) -> bool {
+        self.startup_state.begin_preparing()
+    }
+
+    pub(super) fn publish_ready(&self) -> bool {
+        self.startup_state.publish_ready()
+    }
+
+    pub(super) fn begin_arming(&self) -> bool {
+        self.startup_state.begin_arming()
+    }
+
+    pub(super) fn publish_armed(&self) -> bool {
+        self.startup_state.publish_armed()
+    }
+
+    pub(super) fn cancel_prearm(&self, reason: StartupAbortReason) -> bool {
+        self.startup_state.cancel_prearm(reason)
+    }
+
+    pub(super) fn fail_startup(&self, reason: StartupAbortReason) -> bool {
+        self.startup_state.fail(reason)
+    }
+
+    pub(super) fn reset_startup(&self) {
+        self.startup_state.reset();
+    }
+
     /// Acquires mutation authority for one callback epoch. The SeqCst order
     /// makes validation and epoch close comparable: either validation wins,
     /// in which case rundown observes the reference, or close wins and this
@@ -560,6 +597,12 @@ impl SystemPowerState {
         suspend_boundary_qpc: Option<QpcTicks>,
         interrupt: &OwnedEvent,
     ) -> bool {
+        // A suspend accepted before the worker's Armed publication wins the
+        // same lock-free transition used by command and authority invalidation.
+        // If arming already committed, normal post-arm power handling owns it.
+        if suspended {
+            self.cancel_prearm(StartupAbortReason::SystemSuspend);
+        }
         for _ in 0..SYSTEM_POWER_NOTIFY_CAS_ATTEMPTS {
             let current = self.state.load(Ordering::Acquire);
             let os_suspended = current & SYSTEM_POWER_OS_SUSPENDED != 0;
@@ -639,6 +682,7 @@ impl SystemPowerState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let closed_epoch = self.close_epoch_and_rundown();
         self.state.store(0, Ordering::Release);
+        self.reset_startup();
         self.suspend_boundary_qpc.store(0, Ordering::Release);
         self.suspend_count.store(0, Ordering::Relaxed);
         self.resume_count.store(0, Ordering::Relaxed);
@@ -840,10 +884,8 @@ pub(super) struct SessionPublication {
     pub(super) startup_requested_ticks: AtomicU64,
     pub(super) epoch_qpc: AtomicU64,
     pub(super) pre_roll_us: AtomicU64,
-    pub(super) armed: AtomicBool,
     pub(super) startup_ready_ticks: AtomicU64,
     pub(super) startup_latency_us: AtomicU64,
-    pub(super) startup_ready: AtomicBool,
 }
 
 pub(super) struct SessionShared {

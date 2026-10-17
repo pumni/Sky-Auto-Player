@@ -1,4 +1,5 @@
 use super::finalize_admission_failure;
+use crate::engine::OUTCOME_ERROR;
 use crate::engine::telemetry::metrics::SharedMetrics;
 use sky_dispatch_win32::input::{
     InstrumentPhysicalState, PacketRetryReason, PhysicalPacket, SendEvidence,
@@ -39,7 +40,7 @@ fn admission_failure_keeps_startup_cause_and_verified_release_owner() {
 
     assert_eq!(
         finalize_admission_failure(&mut backend, &metrics, 0, "startup admission failed".into()),
-        1
+        OUTCOME_ERROR
     );
 
     let outcome = metrics
@@ -83,7 +84,7 @@ fn admission_cleanup_uncertainty_keeps_residual_mask_and_secondary_provenance() 
 
     assert_eq!(
         finalize_admission_failure(&mut backend, &metrics, 0, "startup admission failed".into()),
-        1
+        OUTCOME_ERROR
     );
 
     let outcome = metrics
@@ -134,7 +135,7 @@ fn admission_cleanup_panic_retains_in_flight_obligation_without_second_budget() 
 
     assert_eq!(
         finalize_admission_failure(&mut backend, &metrics, 0, "startup admission failed".into()),
-        1
+        OUTCOME_ERROR
     );
 
     assert_eq!(backend.release_attempts_total, 1);

@@ -19,7 +19,7 @@ pub use config::{
     PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
 };
 #[cfg(any(test, feature = "test-support"))]
-pub use config::{RestoreRaceHook, StartupOrderingHook};
+pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};
 pub use session::{NativeDispatchSession, SystemPowerSnapshot};
 pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]
@@ -143,9 +143,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 const LIFECYCLE_NEW: u8 = 0;
-const LIFECYCLE_RUNNING: u8 = 1;
-const LIFECYCLE_FINISHED: u8 = 2;
-const LIFECYCLE_POISONED: u8 = 3;
+const LIFECYCLE_STARTING: u8 = 1;
+const LIFECYCLE_RUNNING: u8 = 2;
+const LIFECYCLE_FINISHED: u8 = 3;
+const LIFECYCLE_POISONED: u8 = 4;
 const OUTCOME_NONE: u8 = 0;
 const OUTCOME_FINISHED: u8 = 1;
 const OUTCOME_QUIT: u8 = 2;

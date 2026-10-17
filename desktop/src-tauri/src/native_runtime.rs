@@ -4853,7 +4853,6 @@ impl NativePlaybackService {
                     },
                 )
             };
-            let paused = status == EnginePollStatus::Paused;
             let event_state = playback_event_state(status);
             if is_terminal_status(status) {
                 match publish_terminal_poll_state(&events, &active, &mut last_event_state, status) {
@@ -4895,7 +4894,7 @@ impl NativePlaybackService {
                 last_event_state = event_state;
             }
             if last_snapshot.elapsed() >= Duration::from_millis(100) {
-                if publish_playback_snapshot(&events, &active, elapsed, pre_roll_remaining, paused)
+                if publish_playback_snapshot(&events, &active, elapsed, pre_roll_remaining, status)
                     .is_err()
                 {
                     cleanup_failed_event_delivery(&active);
@@ -5294,7 +5293,9 @@ fn sender_trace_export_json(
 
 fn playback_event_state(status: EnginePollStatus) -> PlaybackEventState {
     match status {
-        EnginePollStatus::Ready | EnginePollStatus::Preroll => PlaybackEventState::Starting,
+        EnginePollStatus::Ready | EnginePollStatus::Preparing | EnginePollStatus::Preroll => {
+            PlaybackEventState::Starting
+        }
         EnginePollStatus::Playing => PlaybackEventState::Playing,
         EnginePollStatus::Paused => PlaybackEventState::Paused,
         EnginePollStatus::Finished | EnginePollStatus::Skipped | EnginePollStatus::Quit => {
@@ -5757,7 +5758,7 @@ fn publish_playback_snapshot(
     active: &NativeActivePlayback,
     elapsed_us: u64,
     pre_roll_remaining_us: u64,
-    paused: bool,
+    status: EnginePollStatus,
 ) -> Result<(), String> {
     let (focus_state, health, input_path_degraded, message) = if let Some(player) = &active.player {
         let snapshot = player.snapshot_lite();
@@ -5805,13 +5806,7 @@ fn publish_playback_snapshot(
         payload: PlaybackSnapshotPayload {
             session_id: active.session_id.clone(),
             seq: active.sequence.fetch_add(1, Ordering::Relaxed) + 1,
-            state: if paused {
-                PlaybackEventState::Paused
-            } else if pre_roll_remaining_us > 0 {
-                PlaybackEventState::Starting
-            } else {
-                PlaybackEventState::Playing
-            },
+            state: playback_event_state(status),
             song_id: active.song_id.clone(),
             title: active.title.clone(),
             current_us: elapsed_us,
@@ -6604,7 +6599,10 @@ mod tests {
         validate_playback_start_request,
     };
     #[cfg(feature = "tauri-test")]
-    use super::{NativeDispatchSession, playback_health_from_snapshot, publish_playback_snapshot};
+    use super::{
+        NativeDispatchSession, playback_event_state, playback_health_from_snapshot,
+        publish_playback_snapshot,
+    };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
         CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest,
@@ -6865,6 +6863,7 @@ mod tests {
     fn terminal_projection_session(
         supervisor_lease_timeout_us: u64,
         up_scheduled_us: u64,
+        startup_ordering_hook: Option<Arc<sky_player::engine::StartupOrderingHook>>,
     ) -> Arc<NativeDispatchSession> {
         use sky_player::adapter_support::{
             ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
@@ -6938,7 +6937,7 @@ mod tests {
                         mode: PriorityMode::Off,
                     },
                     instrument_key_profile: None,
-                    startup_ordering_hook: None,
+                    startup_ordering_hook,
                     restore_race_hook: None,
                     focus_pause_hook: None,
                     timer_lifecycle_context: None,
@@ -6996,9 +6995,94 @@ mod tests {
 
     #[cfg(feature = "tauri-test")]
     #[test]
+    fn native_startup_projection_keeps_ready_worker_starting_until_armed_publication() {
+        use sky_player::engine::{EnginePollStatus, StartupCheckpoint, StartupOrderingHook};
+
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::ReadyToArmed, 1);
+        let session = terminal_projection_session(0, 5_100_000, Some(Arc::clone(&hook)));
+        session
+            .arm(300_000)
+            .expect("start native projection worker");
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+
+        let engine = session.snapshot();
+        let poll = session.poll_state();
+        assert!(engine.startup_ready);
+        assert!(!engine.startup_armed);
+        assert_eq!(engine.status, EnginePollStatus::Preparing.as_str());
+        assert_eq!(engine.elapsed_us, 0);
+        assert_eq!(engine.pre_roll_remaining_us, 0);
+        assert_eq!(poll.status, EnginePollStatus::Preparing);
+        assert_eq!(poll.elapsed_us, 0);
+        assert_eq!(poll.pre_roll_remaining_us, 0);
+
+        let active = terminal_projection_active(Arc::clone(&session));
+        *active.state.lock().expect("native playback state") = PlaybackSessionState::Starting;
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        publish_playback_state(
+            &events,
+            &active,
+            playback_event_state(poll.status),
+            None,
+            None,
+        )
+        .expect("publish preparing playback state");
+        publish_playback_snapshot(
+            &events,
+            &active,
+            poll.elapsed_us,
+            poll.pre_roll_remaining_us,
+            poll.status,
+        )
+        .expect("publish preparing playback snapshot");
+        let events = events.lock().expect("native projection events");
+        let snapshot = events
+            .buffered
+            .iter()
+            .find_map(|event| match event {
+                UiEvent::PlaybackSnapshot { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .expect("preparing playback snapshot");
+        assert_eq!(snapshot.state, PlaybackEventState::Starting);
+        assert_eq!(snapshot.current_us, 0);
+        assert_eq!(snapshot.pre_roll_remaining_us, 0);
+        assert_eq!(snapshot.focus_state, PlaybackFocusState::Waiting);
+        assert_eq!(snapshot.health, PlaybackHealthState::Healthy);
+        assert!(matches!(
+            events.buffered.front(),
+            Some(UiEvent::PlaybackStateChanged { payload, .. })
+                if payload.state == PlaybackEventState::Starting
+        ));
+        drop(events);
+
+        hook.release_startup_checkpoint();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !session.snapshot().startup_armed {
+            assert!(Instant::now() < deadline, "worker did not publish Armed");
+            thread::yield_now();
+        }
+        let armed = session.snapshot();
+        assert!(armed.startup_ready);
+        assert!(armed.startup_armed);
+        assert_eq!(armed.status, EnginePollStatus::Preroll.as_str());
+        assert!(armed.pre_roll_remaining_us > 0);
+        assert!(armed.pre_roll_remaining_us > 0);
+
+        session.quit().expect("stop armed projection worker");
+        assert!(
+            session
+                .join(Duration::from_secs(5))
+                .expect("projection worker join")
+        );
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
     fn terminal_outcome_health_projection_preserves_trigger_and_release_identity() {
         use crate::ui_events::DiagnosticsBackendStatus;
-        use sky_player::engine::EnginePollStatus;
+        use sky_player::engine::{EnginePollStatus, StartupCheckpoint, StartupOrderingHook};
 
         let cases = [
             (
@@ -7047,7 +7131,24 @@ mod tests {
             } else {
                 5_100_000
             };
-            let session = terminal_projection_session(lease_timeout_us, up_scheduled_us);
+            let command_hook = (is_explicit_panic || trigger == "quit" || trigger == "skipped")
+                .then(|| {
+                    let hook = Arc::new(StartupOrderingHook::default());
+                    hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+                    hook
+                });
+            let session = terminal_projection_session(
+                lease_timeout_us,
+                up_scheduled_us,
+                command_hook.clone(),
+            );
+            let wait_for_armed_command = || {
+                let hook = command_hook
+                    .as_ref()
+                    .expect("command terminal startup barrier");
+                assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+                hook.release_startup_checkpoint();
+            };
             session.arm(0).expect("terminal projection worker arm");
 
             if is_lease_expiry {
@@ -7058,6 +7159,7 @@ mod tests {
                     "lease expiry worker should join"
                 );
             } else if is_explicit_panic {
+                wait_for_armed_command();
                 session.panic_release().expect("explicit panic request");
                 assert!(
                     session
@@ -7066,12 +7168,14 @@ mod tests {
                     "panic release worker should join"
                 );
             } else if trigger == "quit" {
+                wait_for_armed_command();
                 session.quit().expect("quit request");
                 assert!(
                     session.join(Duration::from_secs(2)).expect("quit join"),
                     "quit worker should join"
                 );
             } else if trigger == "skipped" {
+                wait_for_armed_command();
                 session.skip().expect("skip request");
                 assert!(
                     session.join(Duration::from_secs(2)).expect("skip join"),
@@ -7111,8 +7215,14 @@ mod tests {
             );
             let events = Arc::new(Mutex::new(NativeEventHub::default()));
             let active = terminal_projection_active(Arc::clone(&session));
-            publish_playback_snapshot(&events, &active, progress.elapsed_us, 0, false)
-                .expect("terminal playback snapshot publication");
+            publish_playback_snapshot(
+                &events,
+                &active,
+                progress.elapsed_us,
+                progress.pre_roll_remaining_us,
+                expected_status,
+            )
+            .expect("terminal playback snapshot publication");
             let published_health = match events
                 .lock()
                 .expect("terminal projection event hub")

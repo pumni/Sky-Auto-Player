@@ -362,6 +362,27 @@ pub struct NativeTelemetryOutput {
 }
 
 impl NativeTelemetryOutput {
+    pub(crate) fn try_new(mode: TelemetryMode, capacity: usize) -> Result<Self, String> {
+        let mut records = VecDeque::new();
+        if matches!(mode, TelemetryMode::Ring) {
+            records
+                .try_reserve_exact(capacity)
+                .map_err(|error| format!("telemetry ring allocation failed: {error}"))?;
+        }
+        Ok(Self {
+            schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
+            qpc_frequency_hz: 0,
+            records,
+            summary: NativeTelemetrySummary::default(),
+            attempted: 0,
+            accepted: 0,
+            dropped: 0,
+            observer_queue_dropped: 0,
+            truncated: false,
+            timing_semantics: TimingSemantics::default(),
+        })
+    }
+
     pub(crate) fn new(mode: TelemetryMode, capacity: usize) -> Self {
         Self {
             schema_version: NATIVE_TELEMETRY_SCHEMA_VERSION,
@@ -400,6 +421,22 @@ pub(crate) struct TelemetryCollector {
 }
 
 impl TelemetryCollector {
+    pub(crate) const MAX_RING_CAPACITY: usize = 65_536;
+
+    pub(crate) fn try_new(mode: TelemetryMode, capacity: usize) -> Result<Self, String> {
+        if matches!(mode, TelemetryMode::Ring) && capacity > Self::MAX_RING_CAPACITY {
+            return Err(format!(
+                "telemetry capacity {capacity} exceeds the {} record admission bound",
+                Self::MAX_RING_CAPACITY
+            ));
+        }
+        Ok(Self {
+            mode,
+            capacity,
+            output: NativeTelemetryOutput::try_new(mode, capacity)?,
+        })
+    }
+
     pub(crate) fn new(mode: TelemetryMode, capacity: usize) -> Self {
         Self {
             mode,

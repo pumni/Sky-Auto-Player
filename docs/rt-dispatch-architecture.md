@@ -22,6 +22,54 @@ The coordinator owns authored cursor and generation state. The worker owns
 runtime QPC state and a fixed-size `PhysicalTimingGuard`; completion timestamps
 never enter the domain schedule or move authored targets.
 
+## Worker-owned preparation and epoch publication
+
+`NativeDispatchSession::arm()` validates the requested pre-roll and starts the
+worker. It does not publish a playback epoch or claim that the worker is
+Armed. The worker owns this transition:
+
+```text
+arm request -> Preparing -> Ready -> Arming --atomic commit--> Armed
+                                   \                         /
+                                    +-- stop, authority loss,
+                                        suspend, lease expiry,
+                                        or failure -> terminal
+```
+
+During `Preparing`, the worker constructs the coordinator, simulates and
+materializes the immutable normal stream, restores the dispatch coordinator,
+reserves bounded cancellation and telemetry storage, creates the required
+wait and observation resources, and acquires worker scheduling guards. Long
+packet and coordinator traversals check cancellation at bounded intervals.
+Prepared normal storage is admitted only when its conservative estimate is at
+most 512 MiB; the telemetry ring is capped at 65,536 records. Allocation and
+admission errors stay terminal and cannot publish an epoch.
+
+`Ready` is an internal milestone: the engine continues to project
+`EnginePollStatus::Preparing`, with zero elapsed time and no countdown. The
+worker then enters `Arming`, rechecks quit/skip/panic, suspend, supervisor
+lease, target generation, focus, and required owner identity, computes a fresh
+QPC epoch as `epoch_base + requested_pre_roll`, and stages the clock projection.
+One atomic `Armed` transition publishes the immutable epoch and pre-roll to
+readers. A concurrent cancellation or authority change that commits first
+prevents Armed publication; a change after Armed still meets the dispatch
+loop's final per-packet gates. Readers load the startup gate once before
+projecting epoch, elapsed time, and countdown, so they cannot combine a staged
+epoch with a pre-Armed status.
+
+All construction time is outside the published count-in. The first authored
+target remains `epoch + authored_timestamp`; no packet timestamp is rebased.
+The full engine snapshot reports `startup_ready` and `startup_armed`
+separately. Native acceptance waits for `startup_armed` and reports both
+milestones, so Ready alone is not evidence that countdown publication
+committed. Desktop projection keeps Preparing and pre-roll in Starting.
+
+Scheduling and power-throttling guards are acquired on the worker only after
+large allocations finish. Their RAII owners remain with the worker resources
+and are dropped on the acquiring worker thread. MMCSS remains best-effort and
+reports the actual acquired mode; production dispatch fails admission when a
+high-resolution waitable timer is unavailable.
+
 ## Authored generations and plans
 
 The compiler opens a generation on a musical Down and closes that same

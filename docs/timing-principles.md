@@ -48,6 +48,28 @@ authored `min_release_gap`, and the physical musical-Up floor through
 `effective_min_hold`. It is not added a second time, is not a lateness cutoff,
 and is not a latest-start deadline.
 
+## Worker preparation and count-in
+
+The caller's `arm()` request does not publish an epoch. The worker prepares the
+immutable stream, coordinator state, bounded allocations, wait/admission
+resources, and scheduling guards before publishing `Ready`. It then performs
+the final control, lease, target, focus, and owner checks in an `Arming` state.
+Only a successful atomic Ready-to-Armed commit publishes the immutable QPC
+epoch and starts the requested count-in:
+
+```text
+epoch_qpc = fresh_qpc_after_preparation + requested_pre_roll
+authored_target(packet) = epoch_qpc + packet.authored_timestamp
+```
+
+Preparation duration is therefore outside the count-in and does not move an
+authored packet target. Readers remain in `preparing` with zero elapsed time
+and no countdown until Armed is committed. The worker checks cancellation
+through long coordinator and stream traversals; a stop or authority change
+that wins the Armed transition cannot be followed by an epoch publication or
+musical input. After Armed, the ordinary final gates still protect every
+Down-bearing packet.
+
 ## Current Down continuity and physical floors
 
 A live normal current Down with no previous transport attempt is admitted when

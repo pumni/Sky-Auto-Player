@@ -1,140 +1,28 @@
 #[cfg(any(test, feature = "test-support"))]
 use super::super::create_mock_backend;
+mod startup_admission;
+use startup_admission::{
+    finalize_admission_failure, finalize_startup_abort, record_startup_abort_without_backend,
+    record_startup_failure, startup_abort_trigger, startup_checkpoint, startup_wake_probe,
+    validate_production_wait_backend,
+};
+mod timing_admission;
+use super::super::config::StartupCheckpoint;
+use super::super::shared::StartupAbortReason;
 use super::super::{
-    BackendConfig, CoordinatorError, DurationTicks, PAUSED_POLL_US, PlaybackClockState, QpcClock,
-    QpcError, QpcTicks, RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector,
-    TrackedKeyState, WaitOptions, current_process_cpu_time_us, current_thread_cpu_time_us,
-    qpc_frequency_checked,
+    BackendConfig, CoordinatorError, DurationTicks, PlaybackClockState, QpcClock, QpcTicks,
+    RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector, TrackedKeyState,
+    current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
 };
 use super::admission::focus_matches_hwnd;
 use super::{
     DispatchHealthOptions, HealthWindow, PreparedDispatchStream, StartupResources, Worker,
-    WorkerHealthState, WorkerResources, WorkerTimingState, describe_release_outcome,
-    ensure_preflight_for_target, initialize_startup, load_target_stamp, release_state_verified,
-    wait_failure_message,
+    WorkerHealthState, WorkerResources, WorkerSchedulingGuards, ensure_preflight_for_target,
+    initialize_startup, load_target_stamp,
 };
-use crate::engine::config::{
-    CALIBRATION_MAX_STARTUP_BUDGET_US, CALIBRATION_SAMPLES, STARTUP_READINESS_RESERVE_US,
-    SpinThresholdSource,
-};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use crate::engine::config::{CALIBRATION_SAMPLES, SpinThresholdSource};
 use std::sync::atomic::Ordering;
-
-fn record_startup_failure(metrics: &SharedMetrics, message: String) -> u8 {
-    *metrics.last_error.lock() = Some(message.clone());
-    *metrics.terminal_error.lock() = Some(message);
-    *metrics.terminal_trigger_reason.lock() = Some("startup_failure".to_string());
-    1
-}
-
-fn finalize_admission_failure(
-    backend: &mut TrackedKeyState,
-    metrics: &SharedMetrics,
-    verification_hwnd: isize,
-    primary_error: String,
-) -> u8 {
-    let cleanup_result = catch_unwind(AssertUnwindSafe(|| backend.release_all(verification_hwnd)));
-    let cleanup_verified = cleanup_result
-        .as_ref()
-        .is_ok_and(|cleanup| release_state_verified(backend, cleanup));
-    let cleanup_error = match &cleanup_result {
-        Ok(_) if cleanup_verified => None,
-        Ok(cleanup) => Some(format!(
-            "admission cleanup failed: {}",
-            describe_release_outcome(backend, cleanup)
-        )),
-        Err(_) => Some(format!(
-            "admission cleanup panicked with obligation mask {:#06x}",
-            backend.release_obligation_mask()
-        )),
-    };
-    if let Ok(cleanup) = &cleanup_result {
-        *metrics.terminal_release_outcome.lock() = Some(cleanup.clone());
-    }
-    metrics.terminal_release_obligation_mask.store(
-        u32::from(backend.release_obligation_mask()),
-        Ordering::Release,
-    );
-    metrics
-        .terminal_release_attempts_total
-        .store(backend.release_attempts_total, Ordering::Release);
-    *metrics.terminal_error.lock() = Some(primary_error.clone());
-    *metrics.terminal_trigger_reason.lock() = Some("startup_failure".to_string());
-    *metrics.secondary_errors.lock() = cleanup_error.iter().cloned().collect();
-    let message = cleanup_error
-        .map(|cleanup_error| format!("{primary_error}; {cleanup_error}"))
-        .unwrap_or(primary_error);
-    *metrics.last_error.lock() = Some(message);
-    1
-}
-
-fn validate_production_wait_backend(
-    backend_is_production: bool,
-    options: &WaitOptions,
-    initial_failure: Option<sky_dispatch_win32::wait::WaitFailure>,
-) -> Result<(), String> {
-    if !backend_is_production {
-        return Ok(());
-    }
-    if !options.enable_waitable_timer {
-        return Err("production wait backend requires the high-resolution waitable timer".into());
-    }
-    if !options.enable_event_wait {
-        return Err("production wait backend requires event wait to be enabled".into());
-    }
-    if let Some(failure) = initial_failure {
-        return Err(wait_failure_message(failure));
-    }
-    Ok(())
-}
-
-fn startup_wake_probe(
-    waiter: &sky_dispatch_win32::wait::HybridWaiter,
-    qpc_clock: QpcClock,
-    interrupt: &sky_dispatch_win32::event::OwnedEvent,
-    initial_now_ticks: QpcTicks,
-    startup_deadline_ticks: QpcTicks,
-) -> Option<sky_dispatch_win32::wait::WakeErrorStats> {
-    let budget_ticks = qpc_clock
-        .duration_from_us(CALIBRATION_MAX_STARTUP_BUDGET_US)
-        .ok()?;
-    let readiness_reserve_ticks = qpc_clock
-        .duration_from_us(STARTUP_READINESS_RESERVE_US)
-        .ok()?;
-    let probe_deadline_ticks = startup_probe_deadline(
-        initial_now_ticks,
-        startup_deadline_ticks,
-        budget_ticks,
-        readiness_reserve_ticks,
-    )?;
-    waiter.probe_wake_error_stats_until(
-        qpc_clock,
-        interrupt,
-        CALIBRATION_SAMPLES,
-        Some(probe_deadline_ticks),
-    )
-}
-
-fn startup_probe_deadline(
-    initial_now_ticks: QpcTicks,
-    startup_deadline_ticks: QpcTicks,
-    calibration_budget_ticks: DurationTicks,
-    readiness_reserve_ticks: DurationTicks,
-) -> Option<QpcTicks> {
-    let readiness_deadline_ticks = QpcTicks::from_raw(
-        startup_deadline_ticks
-            .as_u64()
-            .checked_sub(readiness_reserve_ticks.as_u64())?,
-    );
-    let budget_deadline_ticks = initial_now_ticks
-        .checked_add_duration(calibration_budget_ticks)
-        .ok()?;
-    let probe_deadline_ticks = budget_deadline_ticks.min(readiness_deadline_ticks);
-    let available_ticks = probe_deadline_ticks
-        .checked_duration_since(initial_now_ticks)
-        .ok()?;
-    (available_ticks >= calibration_budget_ticks).then_some(probe_deadline_ticks)
-}
+use timing_admission::{ConvertedTiming, convert as convert_timing};
 
 /// Assembles the worker's admission state: backend, coordinator,
 /// timing frame, health window, startup anchor, and resource bundle.
@@ -147,16 +35,35 @@ fn startup_probe_deadline(
 pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let shared = worker.shared;
     let metrics = &shared.publication.metrics;
+    if !shared.commands.system_power.begin_preparing() {
+        if let Some(trigger) = startup_abort_trigger(shared, false) {
+            return record_startup_abort_without_backend(
+                shared,
+                trigger,
+                format!("startup cancelled before preparation: {}", trigger.as_str()),
+            );
+        }
+        return record_startup_failure(shared, "worker could not claim startup preparation".into());
+    }
+    if let Some(trigger) = startup_abort_trigger(shared, false) {
+        return record_startup_abort_without_backend(
+            shared,
+            trigger,
+            format!("startup cancelled before preparation: {}", trigger.as_str()),
+        );
+    }
 
     let schedule = match worker.take_schedule() {
         Ok(schedule) => schedule,
         Err(error) => {
-            return record_startup_failure(metrics, error.to_string());
+            return record_startup_failure(shared, error.to_string());
         }
     };
 
     let core = &mut worker.core;
     let config = &worker.config;
+    #[cfg(any(test, feature = "test-support"))]
+    let startup_hook = core.runtime.startup_ordering_hook.as_deref();
     let backend_is_production = matches!(&config.backend, &BackendConfig::Production);
     let production_wait = config.wait.production_wait_policy(backend_is_production);
     let requested_wait_policy = config
@@ -171,7 +78,17 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let qpc_clock = match QpcClock::initialize() {
         Ok(clock) => clock,
         Err(error) => {
-            return record_startup_failure(metrics, format!("QPC admission failed: {error:?}"));
+            if let Some(trigger) = startup_abort_trigger(shared, false) {
+                return record_startup_abort_without_backend(
+                    shared,
+                    trigger,
+                    format!(
+                        "startup cancelled during QPC admission: {}",
+                        trigger.as_str()
+                    ),
+                );
+            }
+            return record_startup_failure(shared, format!("QPC admission failed: {error:?}"));
         }
     };
     let instrument_key_profile = worker
@@ -210,20 +127,50 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     let target = &shared.target;
     let priority_acquired = &shared.publication.priority_acquired;
-    let admission_failure =
-        |backend: &mut TrackedKeyState, metrics: &SharedMetrics, primary_error: String| {
-            finalize_admission_failure(
-                backend,
+    let mut schedule_has_down = false;
+    for (index, packet) in schedule.packets.iter().enumerate() {
+        if index.is_multiple_of(64)
+            && let Some(trigger) = startup_abort_trigger(shared, false)
+        {
+            return finalize_startup_abort(
+                &mut backend,
                 metrics,
                 target.hwnd_for_safety_release(),
-                primary_error,
-            )
+                trigger,
+                format!(
+                    "startup cancelled while classifying schedule: {}",
+                    trigger.as_str()
+                ),
+            );
+        }
+        schedule_has_down |= packet.down_mask != 0;
+    }
+    let admission_failure =
+        |backend: &mut TrackedKeyState, metrics: &SharedMetrics, primary_error: String| {
+            if let Some(trigger) =
+                startup_abort_trigger(shared, config.focus.require_focus && schedule_has_down)
+            {
+                finalize_startup_abort(
+                    backend,
+                    metrics,
+                    target.hwnd_for_safety_release(),
+                    trigger,
+                    format!("startup cancelled: {}", trigger.as_str()),
+                )
+            } else {
+                shared
+                    .commands
+                    .system_power
+                    .fail_startup(StartupAbortReason::WorkerFailure);
+                finalize_admission_failure(
+                    backend,
+                    metrics,
+                    target.hwnd_for_safety_release(),
+                    primary_error,
+                )
+            }
         };
-    let StartupResources {
-        scheduling,
-        waiter,
-        power_throttling_disabled,
-    } = initialize_startup(
+    let StartupResources { waiter } = initialize_startup(
         worker.config.priority.mode,
         production_wait,
         config.wait.enable_waitable_timer,
@@ -238,8 +185,15 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     {
         return admission_failure(&mut backend, metrics, error);
     }
-    core.metrics.power_throttling_disabled = power_throttling_disabled;
-    let schedule_has_down = schedule.packets.iter().any(|packet| packet.down_mask != 0);
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::StreamBuild,
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook,
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
     if config.focus.require_focus && schedule_has_down {
         core.runtime.preparation_probe.record_preflight();
         let Some(target_stamp) = load_target_stamp(target) else {
@@ -268,195 +222,23 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     }
-    // Python materializes the frame-rate floor before crossing the FFI
-    // boundary. The worker consumes that effective minimum hold verbatim and
-    // converts it once into the captured QPC tick domain.
-    let effective_min_hold_us = config.timing.min_hold_us;
-    let min_hold_ticks = match qpc_clock.duration_from_us(effective_min_hold_us) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("min-hold conversion failed: {error:?}"),
-            );
-        }
+    let ConvertedTiming {
+        effective_min_hold_us,
+        min_hold_ticks,
+        frame_ticks,
+        mut worker_timing,
+    } = match convert_timing(config, qpc_clock) {
+        Ok(timing) => timing,
+        Err(error) => return admission_failure(&mut backend, metrics, error),
     };
-    let frame_us = config.timing.frame_us;
-    let frame_ticks = match qpc_clock.duration_from_us(frame_us) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("frame-gap conversion failed: {error:?}"),
-            );
-        }
-    };
+    let lease_timeout_ticks = worker_timing.lease_timeout_ticks;
     core.runtime
         .production_forensics
         .set_frame_policies(min_hold_ticks, frame_ticks);
-    let timing_margin_ticks = match qpc_clock.duration_from_us(config.timing.timing_margin_us) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("timing-margin conversion failed: {error:?}"),
-            );
-        }
-    };
     core.runtime.physical_timing_guard = Some(
         super::physical_timing_guard::PhysicalTimingGuard::new(min_hold_ticks, frame_ticks),
     );
-    let strict_down_completion_late_ticks =
-        match qpc_clock.duration_from_us(config.timing.strict_down_completion_late_us) {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("strict note-on threshold conversion failed: {error:?}"),
-                );
-            }
-        };
-    let strict_up_completion_late_ticks =
-        match qpc_clock.duration_from_us(config.timing.strict_up_completion_late_us) {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("strict note-off threshold conversion failed: {error:?}"),
-                );
-            }
-        };
-    let focus_restore_grace_ticks =
-        match qpc_clock.duration_from_us(config.focus.focus_restore_grace_us) {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("focus grace conversion failed: {error:?}"),
-                );
-            }
-        };
-    let paused_poll_ticks = match qpc_clock.duration_from_us(PAUSED_POLL_US) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("paused polling conversion failed: {error:?}"),
-            );
-        }
-    };
-    let lease_timeout_ticks =
-        match qpc_clock.duration_from_us(config.wait.supervisor_lease_timeout_us) {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("lease timeout conversion failed: {error:?}"),
-                );
-            }
-        };
-    let pre_call_250us_ticks = match qpc_clock.duration_from_us(250) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 250us threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    let pre_call_500us_ticks = match qpc_clock.duration_from_us(500) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 500us threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    let pre_call_750us_ticks = match qpc_clock.duration_from_us(750) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 750us threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    let pre_call_1000us_ticks = match qpc_clock.duration_from_us(1_000) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 1000us threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    let pre_call_1500us_ticks = match qpc_clock.duration_from_us(1_500) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 1500us threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    let pre_call_2000us_ticks = match qpc_clock.duration_from_us(2_000) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 2000us threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    // The old producer-side rule converted lateness to floored microseconds
-    // and then tested `> 2/5/10 ms`.  Convert the first strictly-over value
-    // once so the tick comparisons below preserve that exact boundary.
-    let pre_call_2ms_ticks = match qpc_clock.duration_from_us(2_001) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 2ms threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    let pre_call_5ms_ticks = match qpc_clock.duration_from_us(5_001) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 5ms threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    let pre_call_10ms_ticks = match qpc_clock.duration_from_us(10_001) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("SendInput 10ms threshold conversion failed: {error:?}"),
-            );
-        }
-    };
-    let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks(
+    let mut coordinator = match RuntimeDispatchCoordinator::try_new_ticks_with_checkpoint(
         schedule,
         effective_min_hold_us,
         min_hold_ticks,
@@ -464,6 +246,17 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             qpc_clock
                 .timeline_from_us(us)
                 .map_err(|error| CoordinatorError::TimeConversion(format!("{error:?}")))
+        },
+        || {
+            startup_checkpoint(
+                shared,
+                config.focus.require_focus && schedule_has_down,
+                StartupCheckpoint::StreamBuild,
+                #[cfg(any(test, feature = "test-support"))]
+                startup_hook,
+            )
+            .map_err(|_| CoordinatorError::PreparationCancelled)?;
+            Ok(())
         },
     ) {
         Ok(coordinator) => coordinator,
@@ -476,11 +269,29 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         }
     };
     let prepared_stream = if !config.profile.strict_timing() && !config.timing.strict_timing {
-        match PreparedDispatchStream::build(
+        match PreparedDispatchStream::build_with_checkpoints(
             coordinator,
             qpc_clock,
             &core.runtime.preparation_probe,
             backend.instrument_key_profile(),
+            || {
+                startup_checkpoint(
+                    shared,
+                    config.focus.require_focus && schedule_has_down,
+                    StartupCheckpoint::StreamMaterialization,
+                    #[cfg(any(test, feature = "test-support"))]
+                    startup_hook,
+                )
+            },
+            || {
+                startup_checkpoint(
+                    shared,
+                    config.focus.require_focus && schedule_has_down,
+                    StartupCheckpoint::CoordinatorReset,
+                    #[cfg(any(test, feature = "test-support"))]
+                    startup_hook,
+                )
+            },
         ) {
             Ok((stream, restored_coordinator)) => {
                 coordinator = restored_coordinator;
@@ -518,18 +329,25 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    let telemetry = std::sync::Arc::new(parking_lot::Mutex::new(TelemetryCollector::new(
-        config.telemetry.mode,
-        config.telemetry.capacity,
-    )));
-    core.errors.abort_counts.reserve(6);
-    #[cfg(any(test, feature = "test-support"))]
-    let effective_startup_reserve_us = config
-        .wait
-        .test_spin_threshold_us
-        .unwrap_or(STARTUP_READINESS_RESERVE_US);
-    #[cfg(not(any(test, feature = "test-support")))]
-    let effective_startup_reserve_us = STARTUP_READINESS_RESERVE_US;
+    let telemetry =
+        match TelemetryCollector::try_new(config.telemetry.mode, config.telemetry.capacity) {
+            Ok(telemetry) => std::sync::Arc::new(parking_lot::Mutex::new(telemetry)),
+            Err(error) => {
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("telemetry admission failed: {error}"),
+                );
+            }
+        };
+    if let Err(error) = core.errors.abort_counts.try_reserve(6) {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            format!("worker terminal accounting allocation failed: {error}"),
+        );
+    }
+
     let interrupt = &shared.commands.interrupt;
     let _ = interrupt.try_take();
     let initial_now_ticks = match qpc_clock.now() {
@@ -553,33 +371,30 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
-    let startup_reserve_ticks = match qpc_clock.duration_from_us(effective_startup_reserve_us) {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("startup readiness reserve conversion failed: {error:?}"),
-            );
-        }
-    };
-    let startup_anchor_ticks = worker.epoch_qpc;
-    let startup_deadline_ticks = QpcTicks::from_raw(
-        startup_anchor_ticks
-            .as_u64()
-            .saturating_sub(startup_reserve_ticks.as_u64()),
-    );
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::StreamBuild,
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook,
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
     let calibration_stats = if production_wait {
-        startup_wake_probe(
-            &waiter,
-            qpc_clock,
-            interrupt,
-            initial_now_ticks,
-            startup_deadline_ticks,
-        )
+        startup_wake_probe(&waiter, qpc_clock, interrupt, initial_now_ticks)
     } else {
         None
     };
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::StreamBuild,
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook,
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     let (effective_spin_threshold_us, spin_threshold_source) =
         if let Some(threshold_us) = config.wait.test_spin_threshold_us {
@@ -652,43 +467,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     core.metrics.core_post_send_warn_threshold_us = health_options.core_post_send_warn_us;
     core.metrics.observer_warn_threshold_us = health_options.observer_warn_us;
     core.metrics.wait_warn_threshold_us = health_options.wait_warn_us;
-    let startup_anchor_ticks =
-        match PlaybackClockState::new(startup_anchor_ticks, DurationTicks::from_raw(0)) {
-            Ok(clock) => clock,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("playback clock initialization failed: {error}"),
-                );
-            }
-        };
-    let start_wall_time_us = initial_now_us;
-    let start_thread_cpu_us = current_thread_cpu_time_us();
-    let start_process_cpu_us = current_process_cpu_time_us();
-    core.timing = Some(WorkerTimingState {
-        strict_timing: config.timing.strict_timing,
-        timing_margin_ticks,
-        strict_down_completion_late_ticks,
-        strict_up_completion_late_ticks,
-        focus_restore_grace_ticks,
-        paused_poll_ticks,
-        lease_timeout_ticks,
-        effective_spin_threshold_ticks,
-        pre_call_250us_ticks,
-        pre_call_500us_ticks,
-        pre_call_750us_ticks,
-        pre_call_1000us_ticks,
-        pre_call_1500us_ticks,
-        pre_call_2000us_ticks,
-        pre_call_2ms_ticks,
-        pre_call_5ms_ticks,
-        pre_call_10ms_ticks,
-        start_wall_time_us,
-        start_thread_cpu_us,
-        start_process_cpu_us,
-        last_cpu_metrics_sample_us: start_wall_time_us,
-    });
+
     let qpc_admission_error = qpc_frequency_checked()
         .err()
         .map(|error| format!("QPC frequency unavailable: {error:?}"))
@@ -699,103 +478,354 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 .map(|error| format!("QPC counter unavailable: {error:?}"))
         });
     if let Some(error) = qpc_admission_error {
-        core.runtime.terminal_error = Some(error);
+        return admission_failure(&mut backend, metrics, error);
     }
     if wait_fault {
-        core.runtime.terminal_error = Some("wait failure injected".to_string());
+        return admission_failure(&mut backend, metrics, "wait failure injected".to_string());
     }
 
+    let start_thread_cpu_us = current_thread_cpu_time_us();
+    let start_process_cpu_us = current_process_cpu_time_us();
+    worker_timing.effective_spin_threshold_ticks = effective_spin_threshold_ticks;
+    worker_timing.start_wall_time_us = initial_now_us;
+    worker_timing.start_thread_cpu_us = start_thread_cpu_us;
+    worker_timing.start_process_cpu_us = start_process_cpu_us;
+    worker_timing.last_cpu_metrics_sample_us = initial_now_us;
+    core.timing = Some(worker_timing);
     if config.profile.observer_enabled() {
+        #[cfg(any(test, feature = "test-support"))]
+        if startup_hook.is_some_and(|hook| hook.take_observer_spawn_failure()) {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                "injected observer thread creation failure".to_string(),
+            );
+        }
         let pending = super::dispatch::PendingObservationQueue::default();
         core.observer.pending = Some(pending.clone());
         let observer_timing = core.timing.expect("worker timing initialized");
-        core.observer.runtime = Some(super::ObserverRuntime::start(
+        core.observer.runtime = match super::ObserverRuntime::start(
             pending,
             qpc_clock,
             std::sync::Arc::clone(&shared.publication.metrics),
             std::sync::Arc::clone(&telemetry),
             observer_timing,
             health_options,
-        ));
+        ) {
+            Ok(observer) => Some(observer),
+            Err(error) => {
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("observer admission failed: {error}"),
+                );
+            }
+        };
     }
+
+    // Scheduling changes happen only after all large schedule and telemetry
+    // allocations are complete. The guards are acquired and later dropped on
+    // this worker thread.
+    let mut scheduling = WorkerSchedulingGuards::acquire(config.priority.mode);
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+        hook.record_scheduling_guard_acquired();
+        scheduling.startup_ordering_hook = Some(std::sync::Arc::clone(hook));
+    }
+    core.metrics.power_throttling_disabled = scheduling.is_power_active();
+    *priority_acquired.lock() = scheduling.priority_label().to_string();
+
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        let delay_us = hook.boot_delay_us.load(Ordering::Acquire);
+        if delay_us != 0 {
+            std::thread::sleep(std::time::Duration::from_micros(delay_us));
+        }
+    }
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::BeforeReady,
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook,
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
+    let requested_raw = shared
+        .publication
+        .startup_requested_ticks
+        .load(Ordering::Acquire);
+    if requested_raw == 0 {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            "startup request QPC was not published".to_string(),
+        );
+    }
+    let ready_ticks = match qpc_clock.now() {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("QPC startup-ready sample failed: {error:?}"),
+            );
+        }
+    };
+    let startup_latency_us = match ready_ticks
+        .checked_duration_since(QpcTicks::from_raw(requested_raw))
+        .and_then(|elapsed| {
+            qpc_clock
+                .duration_to_us(elapsed)
+                .map_err(|_| sky_dispatch_core::time::TimeArithmeticError::Overflow)
+        }) {
+        Ok(value) => value,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("startup latency conversion failed: {error}"),
+            );
+        }
+    };
+    shared
+        .publication
+        .startup_ready_ticks
+        .store(ready_ticks.as_u64(), Ordering::Relaxed);
+    shared
+        .publication
+        .startup_latency_us
+        .store(startup_latency_us, Ordering::Relaxed);
+    if !shared.commands.system_power.publish_ready() {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            "worker could not publish the Ready startup state".to_string(),
+        );
+    }
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::ReadyToArmed,
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook,
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
+    if !shared.commands.system_power.begin_arming() {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            "worker could not claim the Ready-to-Armed transition".to_string(),
+        );
+    }
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::ReadyToArmed,
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook,
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
+
+    let lease_now = match qpc_clock.now() {
+        Ok(now) => now,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("QPC final startup admission failed: {error:?}"),
+            );
+        }
+    };
+    let lease_proof = shared
+        .commands
+        .supervisor_expired
+        .prove_down_age(lease_now, lease_timeout_ticks);
+    if !matches!(
+        lease_proof.admission,
+        super::super::shared::SupervisorLeaseAdmission::Fresh
+    ) {
+        shared
+            .commands
+            .system_power
+            .cancel_prearm(StartupAbortReason::SupervisorLeaseExpired);
+        shared.commands.supervisor_expired.latch_expired();
+        return admission_failure(
+            &mut backend,
+            metrics,
+            "supervisor lease is not fresh at startup arm admission".to_string(),
+        );
+    }
+
+    if config.focus.require_focus && schedule_has_down {
+        let Some(target_stamp) = load_target_stamp(target) else {
+            shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::TargetInvalidated);
+            return admission_failure(
+                &mut backend,
+                metrics,
+                "target changed before Ready-to-Armed publication".to_string(),
+            );
+        };
+        if !focus_matches_hwnd(true, &shared.commands.focus_active, target_stamp.hwnd) {
+            shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::FocusInvalidated);
+            return admission_failure(
+                &mut backend,
+                metrics,
+                "focus changed before Ready-to-Armed publication".to_string(),
+            );
+        }
+        if let Err(error) =
+            ensure_preflight_for_target(&backend, target_stamp, &mut core.runtime.verified_target)
+        {
+            shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::OwnerInvalidated);
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("owner preflight changed before Ready-to-Armed publication: {error}"),
+            );
+        }
+        if !super::target_stamp_still_current(target, target_stamp) {
+            shared
+                .commands
+                .system_power
+                .cancel_prearm(StartupAbortReason::TargetInvalidated);
+            return admission_failure(
+                &mut backend,
+                metrics,
+                "target generation changed before Ready-to-Armed publication".to_string(),
+            );
+        }
+    }
+    if let Some(trigger) =
+        startup_abort_trigger(shared, config.focus.require_focus && schedule_has_down)
+    {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            format!(
+                "startup cancelled before epoch publication: {}",
+                trigger.as_str()
+            ),
+        );
+    }
+
+    let epoch_base = match qpc_clock.now() {
+        Ok(now) => now,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("QPC playback epoch sample failed: {error:?}"),
+            );
+        }
+    };
+    #[cfg(any(test, feature = "test-support"))]
+    let inject_epoch_conversion_failure =
+        startup_hook.is_some_and(|hook| hook.take_startup_epoch_conversion_failure());
+    #[cfg(not(any(test, feature = "test-support")))]
+    let inject_epoch_conversion_failure = false;
+    let pre_roll_ticks = match if inject_epoch_conversion_failure {
+        Err("injected QPC pre-roll conversion failure".to_string())
+    } else {
+        qpc_clock
+            .duration_from_us(shared.publication.pre_roll_us.load(Ordering::Acquire))
+            .map_err(|error| format!("{error:?}"))
+    } {
+        Ok(ticks) => ticks,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("pre-roll conversion failed before epoch publication: {error}"),
+            );
+        }
+    };
+    let epoch_qpc = match epoch_base.checked_add_duration(pre_roll_ticks) {
+        Ok(epoch) => epoch,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("playback epoch arithmetic failed: {error}"),
+            );
+        }
+    };
+    let playback = match PlaybackClockState::new(epoch_qpc, DurationTicks::ZERO) {
+        Ok(playback) => playback,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("playback clock initialization failed: {error}"),
+            );
+        }
+    };
+    worker.epoch_qpc = epoch_qpc;
+    let epoch_wall_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(epoch_qpc.as_u64()))
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("playback epoch wall-time conversion failed: {error:?}"),
+            );
+        }
+    };
+    if let Some(timing) = core.timing.as_mut() {
+        timing.start_wall_time_us = epoch_wall_us;
+        timing.last_cpu_metrics_sample_us = epoch_wall_us;
+        timing.start_thread_cpu_us = current_thread_cpu_time_us();
+        timing.start_process_cpu_us = current_process_cpu_time_us();
+    }
+
+    shared
+        .publication
+        .epoch_qpc
+        .store(epoch_qpc.as_u64(), Ordering::Relaxed);
+    shared.publication.progress_clock.publish(&playback);
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::EpochPrepared,
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook,
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
+    if !shared.commands.system_power.publish_armed() {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            "worker could not atomically publish the Armed epoch".to_string(),
+        );
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        hook.visit_startup_checkpoint(StartupCheckpoint::ArmedPublished);
+    }
+
     core.resources = Some(WorkerResources {
         clock: qpc_clock,
         waiter,
         backend,
         coordinator,
         prepared_stream,
-        playback: startup_anchor_ticks,
+        playback,
         telemetry,
         scheduling,
     });
-    shared.publication.progress_clock.publish(
-        &core
-            .resources
-            .as_ref()
-            .expect("worker resources published")
-            .playback,
-    );
-
-    #[cfg(any(test, feature = "test-support"))]
-    if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-        let delay_us = hook.boot_delay_us.load(Ordering::Acquire);
-        if delay_us != 0 {
-            std::thread::sleep(std::time::Duration::from_micros(delay_us));
-        }
-    }
-
-    if core.runtime.terminal_error.is_none() {
-        let readiness_now = match qpc_clock.now() {
-            Ok(now) => now,
-            Err(error) => {
-                core.runtime.terminal_error = Some(format!("QPC readiness failure: {error:?}"));
-                worker.epoch_qpc
-            }
-        };
-        if readiness_now > startup_deadline_ticks {
-            core.runtime.terminal_error = Some("startup_deadline_missed".to_string());
-        }
-    }
-
-    if core.runtime.terminal_error.is_none() {
-        let startup_ready_result = qpc_clock.now().and_then(|ready_ticks| {
-            let requested_raw = shared
-                .publication
-                .startup_requested_ticks
-                .load(Ordering::Acquire);
-            if requested_raw == 0 {
-                return Err(QpcError::CounterUnavailable);
-            }
-            let requested_ticks = QpcTicks::from_raw(requested_raw);
-            let elapsed_ticks = ready_ticks
-                .checked_duration_since(requested_ticks)
-                .map_err(|_| QpcError::CounterUnavailable)?;
-            let elapsed_us = qpc_clock
-                .duration_to_us(elapsed_ticks)
-                .map_err(|_| QpcError::CounterUnavailable)?;
-            Ok((ready_ticks, elapsed_us))
-        });
-        match startup_ready_result {
-            Ok((startup_ready_ticks, startup_latency_us)) => {
-                shared
-                    .publication
-                    .startup_ready_ticks
-                    .store(startup_ready_ticks.as_u64(), Ordering::Relaxed);
-                shared
-                    .publication
-                    .startup_latency_us
-                    .store(startup_latency_us, Ordering::Relaxed);
-                shared
-                    .publication
-                    .startup_ready
-                    .store(true, Ordering::Release);
-            }
-            Err(error) => {
-                core.runtime.terminal_error =
-                    Some(format!("QPC startup-ready publication failed: {error:?}"));
-            }
-        }
-    }
     0
 }
 
@@ -803,98 +833,4 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
 mod admission_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::{startup_probe_deadline, validate_production_wait_backend};
-    use crate::engine::WaitOptions;
-    use sky_dispatch_core::time::DurationTicks;
-    use sky_dispatch_win32::clock::QpcTicks;
-    use sky_dispatch_win32::wait::WaitFailure;
-
-    fn options(enable_waitable_timer: bool, enable_event_wait: bool) -> WaitOptions {
-        WaitOptions {
-            enable_waitable_timer,
-            enable_event_wait,
-            supervisor_lease_timeout_us: 0,
-            #[cfg(any(test, feature = "test-support"))]
-            test_spin_threshold_us: None,
-            #[cfg(any(test, feature = "test-support"))]
-            test_wait_policy: crate::engine::TestWaitPolicy::LegacyTestWideSpin,
-        }
-    }
-
-    #[test]
-    fn production_wait_backend_requires_both_precision_primitives() {
-        assert!(validate_production_wait_backend(true, &options(true, true), None).is_ok());
-        assert!(validate_production_wait_backend(true, &options(false, true), None).is_err());
-        assert!(validate_production_wait_backend(true, &options(true, false), None).is_err());
-    }
-
-    #[test]
-    fn production_wait_backend_rejects_startup_failure() {
-        let result = validate_production_wait_backend(
-            true,
-            &options(true, true),
-            Some(WaitFailure::TimerCreate { win32_error: 5 }),
-        );
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .expect_err("initial wait failure must reject production")
-                .contains("high-resolution waitable timer creation failed")
-        );
-    }
-
-    #[test]
-    fn non_production_wait_backend_can_keep_explicit_fallback_support() {
-        assert!(
-            validate_production_wait_backend(
-                false,
-                &options(false, false),
-                Some(WaitFailure::TimerCreate { win32_error: 5 }),
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn calibration_skips_when_only_probe_budget_without_readiness_reserve_remains() {
-        let initial_now = QpcTicks::from_raw(100_000);
-        let calibration_budget = DurationTicks::from_raw(20_000);
-        let readiness_reserve = DurationTicks::from_raw(2_000);
-
-        assert_eq!(
-            startup_probe_deadline(
-                initial_now,
-                QpcTicks::from_raw(120_000),
-                calibration_budget,
-                readiness_reserve,
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn calibration_deadline_preserves_viable_startup_readiness() {
-        let initial_now = QpcTicks::from_raw(100_000);
-        let calibration_budget = DurationTicks::from_raw(20_000);
-        let readiness_reserve = DurationTicks::from_raw(2_000);
-        let startup_deadline = QpcTicks::from_raw(125_000);
-
-        let probe_deadline = startup_probe_deadline(
-            initial_now,
-            startup_deadline,
-            calibration_budget,
-            readiness_reserve,
-        )
-        .expect("calibration has a full budget and readiness reserve");
-
-        assert_eq!(probe_deadline, QpcTicks::from_raw(120_000));
-        assert!(
-            startup_deadline
-                .checked_duration_since(probe_deadline)
-                .expect("probe precedes startup deadline")
-                >= readiness_reserve
-        );
-    }
-}
+mod timing_admission_tests;

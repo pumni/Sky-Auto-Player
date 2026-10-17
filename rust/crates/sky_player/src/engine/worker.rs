@@ -681,7 +681,6 @@ impl<'a> Worker<'a> {
     pub(super) fn new(
         admitted: super::config::AdmittedNativeSessionOptions,
         shared: &'a SessionShared,
-        epoch_qpc: QpcTicks,
     ) -> Self {
         let super::config::AdmittedNativeSessionOptions {
             options:
@@ -739,7 +738,7 @@ impl<'a> Worker<'a> {
                 modifier_key_state_query_for_test,
             },
             shared,
-            epoch_qpc,
+            epoch_qpc: QpcTicks::ZERO,
             instrument_key_profile: Some(instrument_key_profile),
             core: WorkerCore {
                 runtime,

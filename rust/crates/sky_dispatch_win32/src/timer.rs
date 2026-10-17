@@ -6,7 +6,7 @@ use std::num::NonZeroU64;
 pub mod test_support {
     use std::cell::RefCell;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     thread_local! {
         static ACTIVE_COUNTERS: RefCell<Option<Arc<TimerLifecycleCounters>>> =
@@ -17,6 +17,7 @@ pub mod test_support {
         created: AtomicUsize,
         dropped: AtomicUsize,
         live: AtomicUsize,
+        fail_next_creation: AtomicBool,
     }
 
     pub type TimerLifecycleContext = Arc<TimerLifecycleCounters>;
@@ -33,7 +34,12 @@ pub mod test_support {
             created: AtomicUsize::new(0),
             dropped: AtomicUsize::new(0),
             live: AtomicUsize::new(0),
+            fail_next_creation: AtomicBool::new(false),
         })
+    }
+
+    pub fn fail_next_creation(counters: &TimerLifecycleContext) {
+        counters.fail_next_creation.store(true, Ordering::Release);
     }
 
     pub fn with_context<R>(counters: &TimerLifecycleContext, f: impl FnOnce() -> R) -> R {
@@ -60,6 +66,12 @@ pub mod test_support {
             counters.live.fetch_add(1, Ordering::SeqCst);
         }
         counters
+    }
+
+    pub(super) fn take_creation_failure() -> bool {
+        ACTIVE_COUNTERS
+            .with(|active| active.borrow().as_ref().cloned())
+            .is_some_and(|counters| counters.fail_next_creation.swap(false, Ordering::AcqRel))
     }
 
     pub(super) fn record_dropped(counters: &TimerLifecycleContext) {
@@ -117,6 +129,10 @@ impl WaitableTimer {
     pub fn new_with_error() -> Result<Self, u32> {
         #[cfg(windows)]
         {
+            #[cfg(feature = "test-support")]
+            if test_support::take_creation_failure() {
+                return Err(5);
+            }
             use windows_sys::Win32::System::Threading::{
                 CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, TIMER_MODIFY_STATE,
             };

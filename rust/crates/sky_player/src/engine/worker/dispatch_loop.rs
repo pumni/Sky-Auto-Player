@@ -394,6 +394,12 @@ pub(crate) fn dispatch_due_from_plan(
         });
         return super::DispatchStep::NoWork;
     }
+    #[cfg(any(test, feature = "test-support"))]
+    if masks.down_mask != 0
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
+        hook.visit_startup_checkpoint(super::super::config::StartupCheckpoint::FirstDownAdmission);
+    }
     let authored_step = super::dispatch_authored_packet(
         super::AuthoredPacketContext {
             dispatch_plan: plan,
@@ -654,6 +660,10 @@ pub(super) fn dispatch(
     catch_unwind(AssertUnwindSafe(|| {
         if core.runtime.terminal_error.is_some() {
             return;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+            hook.visit_startup_checkpoint(super::super::config::StartupCheckpoint::InitialWait);
         }
         let resources = core
             .resources
@@ -1348,6 +1358,14 @@ pub(super) fn dispatch(
                             Some("prepared physical cursor changed before dispatch".to_string());
                         break;
                     };
+                    #[cfg(any(test, feature = "test-support"))]
+                    if frame.view.packet_masks.down_mask != 0
+                        && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                    {
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::FirstDownAdmission,
+                        );
+                    }
                     dispatch_prepared_normal_frame(
                         frame,
                         config,
