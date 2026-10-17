@@ -21,6 +21,11 @@ and telemetry-ring drops are exported as counts; truncation is explicit. A
 disabled trace mode exports no trace rows, while production scalar snapshots
 still retain their sample counts and maxima.
 
+The desktop retains at most 4,096 fixed-width trace records per session. This
+keeps the raw record storage under the existing 2 MiB budget after adding the
+schema 18 provenance and timing fields; all records rejected at that bound
+remain reflected in the dropped count.
+
 ## Schema 18 and timestamp provenance
 
 Every absolute QPC timestamp in the version 18 native trace has a paired

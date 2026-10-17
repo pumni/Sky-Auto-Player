@@ -84,6 +84,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::ipc::Channel;
 
 pub(crate) const MAX_NATIVE_EVENTS: usize = 128;
+const SENDER_TRACE_CAPTURE_CAPACITY: usize = 4_096;
 const MAX_PREPARED_PLANS: usize = 64;
 const MAX_DECISION_COUNT: usize = 8;
 const MAX_CALIBRATION_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
@@ -4757,9 +4758,9 @@ impl NativePlaybackService {
                 },
                 telemetry: TelemetryOptions {
                     mode: TelemetryMode::Ring,
-                    // RtTraceRecord is fixed-width; its current size and this
-                    // fixed capacity bound capture before export while covering typical songs.
-                    capacity: 8_192,
+                    // Keep fixed-width schema 18 records inside the bounded
+                    // sender-trace capture budget before export.
+                    capacity: SENDER_TRACE_CAPTURE_CAPACITY,
                 },
                 priority: PriorityOptions {
                     mode: PriorityMode::Auto,
@@ -6585,8 +6586,8 @@ mod tests {
         MaterializedTimingPolicy, NativeActivePlayback, NativeCalibrationOperation,
         NativeCalibrationService, NativeDesktopRuntime, NativeDiagnosticsSample, NativeEventHub,
         NativePlaybackService, PlaybackActiveStatusDto, PlaybackPendingControl,
-        PlaybackTerminalPublication, PlaybackTerminalStatusDto, SenderTraceState, TestSeams,
-        calibration_budget, compute_catalog_source_fingerprint,
+        PlaybackTerminalPublication, PlaybackTerminalStatusDto, SENDER_TRACE_CAPTURE_CAPACITY,
+        SenderTraceState, TestSeams, calibration_budget, compute_catalog_source_fingerprint,
         compute_catalog_source_static_fingerprint, diagnostics_backend_status, opaque_native_id,
         percentile_ms, physical_startup_failure, plan_fingerprint, population_sigma_ms,
         publish_calibration_cache, publish_diagnostics_snapshot_for_active,
@@ -7629,9 +7630,11 @@ mod tests {
     #[test]
     fn sender_trace_capture_memory_stays_under_two_mib() {
         let record_bytes = std::mem::size_of::<sky_player::engine::RtTraceRecord>();
-        let capture_bytes = record_bytes * 8_192;
+        let capture_bytes = record_bytes * SENDER_TRACE_CAPTURE_CAPACITY;
         assert!(capture_bytes <= 2 * 1024 * 1024);
-        println!("sender trace ring: {record_bytes} bytes/record, {capture_bytes} bytes total");
+        println!(
+            "sender trace ring: {record_bytes} bytes/record, {SENDER_TRACE_CAPTURE_CAPACITY} records, {capture_bytes} bytes total"
+        );
     }
 
     fn playback_trace(events: &Arc<Mutex<NativeEventHub>>) -> Vec<String> {
