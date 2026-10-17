@@ -11,7 +11,6 @@ use super::{DispatchPreparationProbe, QpcClock};
 use sky_dispatch_core::coordinator::{
     CoordinatorError, PreparedAuthoredCommit, RuntimeDispatchCoordinator,
 };
-use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::QpcTicks;
 use sky_dispatch_win32::input::MaterializedInstrumentKeyProfile;
@@ -38,8 +37,6 @@ pub(crate) enum PreparedDispatchEntry {
 pub(crate) struct PreparedDispatchStream {
     entries: Vec<PreparedDispatchEntry>,
     cursor: usize,
-    cancelled_generation_ids: Vec<GenerationId>,
-    cancelled_generation_count: usize,
 }
 
 impl PreparedDispatchStream {
@@ -79,12 +76,12 @@ impl PreparedDispatchStream {
         R: FnMut() -> Result<(), String>,
     {
         let entry_capacity = simulator.schedule.batches.len();
-        let cancellation_capacity = usize::try_from(simulator.schedule.generation_count)
+        let generation_capacity = usize::try_from(simulator.schedule.generation_count)
             .map_err(|_| "normal prepared stream generation ledger is too large".to_string())?;
         let coordinator_bytes = entry_capacity
             .checked_mul(std::mem::size_of::<TimelineTicks>())
             .and_then(|bytes| {
-                cancellation_capacity
+                generation_capacity
                     .checked_mul(
                         std::mem::size_of::<sky_dispatch_core::coordinator::GenerationStatus>()
                             + std::mem::size_of::<Option<(usize, usize)>>(),
@@ -94,11 +91,6 @@ impl PreparedDispatchStream {
             .ok_or_else(|| "normal prepared stream memory estimate overflowed".to_string())?;
         let estimated_bytes = entry_capacity
             .checked_mul(std::mem::size_of::<PreparedDispatchEntry>())
-            .and_then(|bytes| {
-                cancellation_capacity
-                    .checked_mul(std::mem::size_of::<GenerationId>())
-                    .and_then(|ledger| bytes.checked_add(ledger))
-            })
             .and_then(|bytes| {
                 coordinator_bytes
                     .checked_mul(2)
@@ -205,13 +197,6 @@ impl PreparedDispatchStream {
 
         coordinator_checkpoint()?;
         let schedule = simulator.schedule;
-        let mut cancelled_generation_ids = Vec::new();
-        cancelled_generation_ids
-            .try_reserve_exact(cancellation_capacity)
-            .map_err(|error| {
-                format!("normal prepared stream cancellation ledger allocation failed: {error}")
-            })?;
-        cancelled_generation_ids.resize(cancellation_capacity, 0);
         let min_hold_us = simulator.min_hold_us;
         let min_hold_ticks = simulator.min_hold_ticks;
         let coordinator = RuntimeDispatchCoordinator::try_new_ticks_with_checkpoint(
@@ -226,15 +211,7 @@ impl PreparedDispatchStream {
             || coordinator_checkpoint().map_err(|_| CoordinatorError::PreparationCancelled),
         )
         .map_err(|error| format!("normal prepared stream coordinator reset failed: {error}"))?;
-        Ok((
-            Self {
-                entries,
-                cursor: 0,
-                cancelled_generation_ids,
-                cancelled_generation_count: 0,
-            },
-            coordinator,
-        ))
+        Ok((Self { entries, cursor: 0 }, coordinator))
     }
 
     #[inline]
@@ -261,39 +238,6 @@ impl PreparedDispatchStream {
         self.cursor >= self.entries.len()
     }
 
-    /// Record only generation IDs returned by the shared verified suspension
-    /// path.  The bounded ledger is allocated during stream preparation, so a
-    /// later focus/manual/system suspension does not allocate on the worker's
-    /// dispatch path.
-    pub(crate) fn reconcile_resumable_suspension(
-        &mut self,
-        cancelled_generation_ids: &[GenerationId],
-    ) -> Result<(), String> {
-        for &generation_id in cancelled_generation_ids {
-            if self.cancelled_generation_ids[..self.cancelled_generation_count]
-                .contains(&generation_id)
-            {
-                continue;
-            }
-            let Some(slot) = self
-                .cancelled_generation_ids
-                .get_mut(self.cancelled_generation_count)
-            else {
-                return Err(
-                    "normal prepared stream exceeded its cancellation ledger capacity".to_string(),
-                );
-            };
-            *slot = generation_id;
-            self.cancelled_generation_count += 1;
-        }
-        Ok(())
-    }
-
-    #[inline]
-    pub(crate) fn explicitly_cancelled_generation_ids(&self) -> &[GenerationId] {
-        &self.cancelled_generation_ids[..self.cancelled_generation_count]
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
@@ -317,17 +261,19 @@ impl PreparedDispatchStream {
         )
     }
 
-    #[cfg(feature = "test-support")]
-    pub(crate) fn cancellation_ledger_bytes_for_test(&self) -> usize {
-        self.cancelled_generation_ids.len() * std::mem::size_of::<GenerationId>()
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn physical_count(&self) -> usize {
         self.entries
             .iter()
             .filter(|entry| matches!(entry, PreparedDispatchEntry::Physical(_)))
             .count()
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn cancellation_ledger_bytes_for_test(&self) -> usize {
+        // Resumable cancellation provenance is owned by the coordinator's
+        // fixed fifteen-slot token table, never by a song-sized stream list.
+        0
     }
 
     #[cfg(any(test, feature = "test-support"))]

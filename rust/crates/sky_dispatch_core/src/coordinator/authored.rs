@@ -1,10 +1,10 @@
 #[cfg(feature = "test-support")]
 use super::AuthoredPreparationEvidence;
 use super::{
-    ActiveGeneration, CoordinatorError, CoordinatorInvariantError, GenerationStatus,
-    PendingRelease, PreparedAuthoredCommit, PreparedAuthoredFrame, PreparedAuthoredPacket,
-    PreparedBatch, PreparedDownIntent, PreparedStalePacket, PreparedUpIntent,
-    RuntimeDispatchCoordinator, physical_packet_kind,
+    ActiveGeneration, AuthoredUpIdentity, CoordinatorError, CoordinatorInvariantError,
+    GenerationStatus, PendingRelease, PreparedAuthoredCommit, PreparedAuthoredFrame,
+    PreparedAuthoredPacket, PreparedBatch, PreparedDownIntent, PreparedStalePacket,
+    PreparedUpIntent, RuntimeDispatchCoordinator, physical_packet_kind,
 };
 use crate::model::*;
 #[cfg(test)]
@@ -235,11 +235,28 @@ impl RuntimeDispatchCoordinator {
                 return Err(CoordinatorError::InvalidKeySlot { slot });
             }
             let generation_id = compact.generation_id();
+            let bit = Self::bit_for_slot(slot);
             if generation_id == NO_GENERATION_ID {
+                if let Some(identity) =
+                    self.cancelled_up_by_slot[usize::from(slot)].filter(|identity| {
+                        identity.packet_index() == packet.packet_index
+                            && identity.intent_index() == intent_index
+                            && identity.key_slot() == slot
+                    })
+                {
+                    self.validate_invalidated_up_identity(identity)
+                        .map_err(CoordinatorError::Invariant)?;
+                    immediate_up_mask |= bit;
+                    up_intents.push(PreparedUpIntent {
+                        intent: CompactIntent::new(identity.generation_id(), slot),
+                        source_action_index: 0,
+                        identity,
+                    });
+                    continue;
+                }
                 stale_up_count = stale_up_count.saturating_add(1);
                 continue;
             }
-            let bit = Self::bit_for_slot(slot);
             let Some(active) = self.active_for_slot(slot) else {
                 return Err(CoordinatorError::Invariant(
                     CoordinatorInvariantError::Accounting(
@@ -254,6 +271,26 @@ impl RuntimeDispatchCoordinator {
                     ),
                 ));
             }
+            let identity = AuthoredUpIdentity {
+                generation_id,
+                key_slot: slot,
+                packet_index: packet.packet_index,
+                intent_index,
+            };
+            if self
+                .up_intent_locations
+                .get(generation_id as usize)
+                .copied()
+                .flatten()
+                != Some((packet.packet_index, intent_index))
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored Up location differs from compiler-owned generation identity"
+                            .into(),
+                    ),
+                ));
+            }
             if active.release_not_before_ticks <= authored_ticks {
                 immediate_up_mask |= bit;
                 // Immediate releases do not need their source action index;
@@ -262,6 +299,7 @@ impl RuntimeDispatchCoordinator {
                 up_intents.push(PreparedUpIntent {
                     intent: compact,
                     source_action_index: 0,
+                    identity,
                 });
             } else {
                 deferred_up_mask |= bit;
@@ -269,7 +307,7 @@ impl RuntimeDispatchCoordinator {
                     #[cfg(any(test, feature = "test-support"))]
                     {
                         let mut batch_visits = 0u64;
-                        let (source_action_index, batch_visits) = self
+                        let (source_action_index, _batch_visits) = self
                             .packet_intent_source_action_index(
                                 packet.header,
                                 intent_index,
@@ -280,7 +318,7 @@ impl RuntimeDispatchCoordinator {
                         {
                             preparation_evidence.secondary_batch_visits = preparation_evidence
                                 .secondary_batch_visits
-                                .saturating_add(batch_visits);
+                                .saturating_add(_batch_visits);
                         }
                         source_action_index
                     }
@@ -296,6 +334,7 @@ impl RuntimeDispatchCoordinator {
                 up_intents.push(PreparedUpIntent {
                     intent: compact,
                     source_action_index,
+                    identity,
                 });
             }
         }
@@ -671,14 +710,62 @@ impl RuntimeDispatchCoordinator {
             })
         })?;
         for (offset, intent) in view.up_intents.iter().copied().enumerate() {
+            let intent_index = up_start.checked_add(offset).ok_or(CoordinatorError::Time(
+                crate::time::TimeArithmeticError::Overflow,
+            ))?;
             if intent.generation_id() == NO_GENERATION_ID {
+                let slot = intent.key_slot();
+                if let Some(identity) =
+                    self.cancelled_up_by_slot[usize::from(slot)].filter(|identity| {
+                        identity.packet_index() == prepared.packet_index
+                            && identity.intent_index() == intent_index
+                            && identity.key_slot() == slot
+                    })
+                {
+                    if prepared.immediate_up_mask & Self::bit_for_slot(slot) == 0 {
+                        return Err(CoordinatorError::Invariant(
+                            CoordinatorInvariantError::Accounting(
+                                "cancelled authored Up is absent from its immediate release mask"
+                                    .into(),
+                            ),
+                        ));
+                    }
+                    self.validate_invalidated_up_identity(identity)
+                        .map_err(CoordinatorError::Invariant)?;
+                    up_intents.push(PreparedUpIntent {
+                        intent: CompactIntent::new(identity.generation_id(), slot),
+                        source_action_index: 0,
+                        identity,
+                    });
+                }
                 continue;
+            }
+            let identity = AuthoredUpIdentity {
+                generation_id: intent.generation_id(),
+                key_slot: intent.key_slot(),
+                packet_index: prepared.packet_index,
+                intent_index,
+            };
+            if self
+                .up_intent_locations
+                .get(intent.generation_id() as usize)
+                .copied()
+                .flatten()
+                != Some((prepared.packet_index, intent_index))
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "authored Up location differs from compiler-owned generation identity"
+                            .into(),
+                    ),
+                ));
             }
             let bit = Self::bit_for_slot(intent.key_slot());
             if prepared.immediate_up_mask & bit != 0 {
                 up_intents.push(PreparedUpIntent {
                     intent,
                     source_action_index: 0,
+                    identity,
                 });
             } else if prepared.deferred_up_mask & bit != 0 {
                 let source_action_index = {
@@ -709,6 +796,7 @@ impl RuntimeDispatchCoordinator {
                 up_intents.push(PreparedUpIntent {
                     intent,
                     source_action_index,
+                    identity,
                 });
             }
         }
@@ -737,21 +825,6 @@ impl RuntimeDispatchCoordinator {
         up_intents: &[PreparedUpIntent],
         started: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
-        self.commit_prepared_up_intents_frozen_with_resumable_cancellation(
-            prepared,
-            up_intents,
-            started,
-            &[],
-        )
-    }
-
-    fn commit_prepared_up_intents_frozen_with_resumable_cancellation(
-        &mut self,
-        prepared: PreparedAuthoredFrame,
-        up_intents: &[PreparedUpIntent],
-        started: TimelineTicks,
-        explicitly_cancelled_by_suspension: &[GenerationId],
-    ) -> Result<(), CoordinatorError> {
         if prepared.first_batch_index != self.cursor {
             return Err(CoordinatorError::PreparedBatchMismatch {
                 prepared: prepared.first_batch_index,
@@ -759,25 +832,32 @@ impl RuntimeDispatchCoordinator {
             });
         }
         for up in up_intents {
-            let generation_id = up.intent.generation_id();
-            let slot = up.intent.key_slot();
+            let identity = up.identity;
+            let generation_id = identity.generation_id();
+            let slot = identity.key_slot();
             let bit = Self::bit_for_slot(slot);
-            if generation_id == NO_GENERATION_ID {
-                continue;
+            if generation_id == NO_GENERATION_ID
+                || generation_id != up.intent.generation_id()
+                || slot != up.intent.key_slot()
+                || identity.packet_index() != prepared.packet_index
+            {
+                return Err(CoordinatorError::Invariant(
+                    CoordinatorInvariantError::Accounting(
+                        "frozen authored Up identity does not match its intent".into(),
+                    ),
+                ));
             }
             if prepared.immediate_up_mask & bit != 0 {
                 let Some(active) = self.active_for_slot(slot).cloned() else {
-                    if explicitly_cancelled_by_suspension.contains(&generation_id)
-                        && self.frozen_up_matches_cancelled_generation(prepared, up)
-                    {
+                    if self.cancelled_up_by_slot[usize::from(slot)] == Some(identity) {
                         // A resumable suspension has already released this
                         // physical key. The frozen Up remains in the
                         // immutable stream, so consume its accounting using
                         // the narrow cancellation reconciliation contract.
-                        self.reconcile_resumable_cancelled_generation(generation_id)?;
+                        self.reconcile_resumable_cancelled_up(identity)?;
                         continue;
                     }
-                    if self.frozen_up_matches_dropped_expired_generation(prepared, up) {
+                    if self.frozen_up_matches_dropped_expired_generation(identity) {
                         // The matching Down was terminalized as
                         // DroppedExpired and its mutable schedule Up was
                         // invalidated. The immutable prepared stream may
@@ -839,46 +919,11 @@ impl RuntimeDispatchCoordinator {
         Ok(())
     }
 
-    fn frozen_up_matches_cancelled_generation(
-        &self,
-        prepared: PreparedAuthoredFrame,
-        up: &PreparedUpIntent,
-    ) -> bool {
-        self.frozen_up_matches_invalidated_generation(prepared, up)
-    }
-
-    fn frozen_up_matches_dropped_expired_generation(
-        &self,
-        prepared: PreparedAuthoredFrame,
-        up: &PreparedUpIntent,
-    ) -> bool {
-        let generation_id = up.intent.generation_id();
+    fn frozen_up_matches_dropped_expired_generation(&self, identity: AuthoredUpIdentity) -> bool {
         self.generation_states
-            .get(generation_id as usize)
+            .get(identity.generation_id() as usize)
             .is_some_and(|state| *state == GenerationStatus::DroppedExpired)
-            && self.frozen_up_matches_invalidated_generation(prepared, up)
-    }
-
-    fn frozen_up_matches_invalidated_generation(
-        &self,
-        prepared: PreparedAuthoredFrame,
-        up: &PreparedUpIntent,
-    ) -> bool {
-        let Ok(generation_index) = usize::try_from(up.intent.generation_id()) else {
-            return false;
-        };
-        let Some(location) = self.up_intent_locations.get(generation_index) else {
-            return false;
-        };
-        let Some((packet_index, intent_index)) = *location else {
-            return false;
-        };
-        let Some(compact) = self.schedule.intents.get(intent_index) else {
-            return false;
-        };
-        packet_index == prepared.packet_index
-            && compact.generation_id() == NO_GENERATION_ID
-            && compact.key_slot() == up.intent.key_slot()
+            && self.validate_dropped_expired_up_identity(identity).is_ok()
     }
 
     /// Apply a frozen authored commit after a successful physical send.
@@ -889,38 +934,6 @@ impl RuntimeDispatchCoordinator {
         started: TimelineTicks,
         _completed: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
-        self.commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
-            commit,
-            started,
-            &[],
-        )
-    }
-
-    /// Apply a frozen authored commit after a successful normal prepared send
-    /// when one or more earlier generations were explicitly cancelled by a
-    /// resumable suspension.  Only generation IDs supplied by the suspension
-    /// path and still marked `Cancelled` may bypass the usual immediate-Up
-    /// active-owner check; genuine ownership mismatches remain errors.
-    pub fn commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
-        &mut self,
-        commit: &PreparedAuthoredCommit,
-        started: TimelineTicks,
-        _completed: TimelineTicks,
-        explicitly_cancelled_by_suspension: &[GenerationId],
-    ) -> Result<(), CoordinatorError> {
-        self.commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
-            commit,
-            started,
-            explicitly_cancelled_by_suspension,
-        )
-    }
-
-    fn commit_prepared_authored_frame_success_frozen_with_resumable_cancellation(
-        &mut self,
-        commit: &PreparedAuthoredCommit,
-        started: TimelineTicks,
-        explicitly_cancelled_by_suspension: &[GenerationId],
-    ) -> Result<(), CoordinatorError> {
         let prepared = commit.frame;
         if prepared.first_batch_index != self.cursor {
             return Err(CoordinatorError::PreparedBatchMismatch {
@@ -928,16 +941,12 @@ impl RuntimeDispatchCoordinator {
                 cursor: self.cursor,
             });
         }
+        self.validate_frozen_authored_commit(commit)?;
         let release_not_before_ticks = prepared
             .authored_ticks
             .checked_add_duration(self.min_hold_ticks)?;
 
-        self.commit_prepared_up_intents_frozen_with_resumable_cancellation(
-            prepared,
-            &commit.up_intents,
-            started,
-            explicitly_cancelled_by_suspension,
-        )?;
+        self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
 
         for down in &commit.down_intents {
             let generation_id = down.intent.generation_id();
@@ -997,44 +1006,6 @@ impl RuntimeDispatchCoordinator {
         missed_down_mask: u16,
         started: TimelineTicks,
     ) -> Result<(), CoordinatorError> {
-        self.commit_prepared_authored_frame_deadline_miss_with_resumable_cancellation(
-            commit,
-            confirmed_up_mask,
-            missed_down_mask,
-            started,
-            &[],
-        )
-    }
-
-    /// Commit a missed prepared frame while proving that an immediate Up may
-    /// belong to a generation cancelled by a resumable suspension. The
-    /// suspended generation is reconciled exactly once; newly missed Downs
-    /// are still terminalized as `DroppedExpired` in the same frozen commit.
-    pub fn commit_prepared_authored_frame_deadline_miss_after_resumable_suspension(
-        &mut self,
-        commit: &PreparedAuthoredCommit,
-        confirmed_up_mask: u16,
-        missed_down_mask: u16,
-        started: TimelineTicks,
-        explicitly_cancelled_by_suspension: &[GenerationId],
-    ) -> Result<(), CoordinatorError> {
-        self.commit_prepared_authored_frame_deadline_miss_with_resumable_cancellation(
-            commit,
-            confirmed_up_mask,
-            missed_down_mask,
-            started,
-            explicitly_cancelled_by_suspension,
-        )
-    }
-
-    fn commit_prepared_authored_frame_deadline_miss_with_resumable_cancellation(
-        &mut self,
-        commit: &PreparedAuthoredCommit,
-        confirmed_up_mask: u16,
-        missed_down_mask: u16,
-        started: TimelineTicks,
-        explicitly_cancelled_by_suspension: &[GenerationId],
-    ) -> Result<(), CoordinatorError> {
         let prepared = commit.frame;
         if prepared.first_batch_index != self.cursor {
             return Err(CoordinatorError::PreparedBatchMismatch {
@@ -1042,6 +1013,7 @@ impl RuntimeDispatchCoordinator {
                 cursor: self.cursor,
             });
         }
+        self.validate_frozen_authored_commit(commit)?;
         if confirmed_up_mask != prepared.immediate_up_mask || missed_down_mask != prepared.down_mask
         {
             return Err(CoordinatorError::Invariant(
@@ -1051,12 +1023,7 @@ impl RuntimeDispatchCoordinator {
             ));
         }
 
-        self.commit_prepared_up_intents_frozen_with_resumable_cancellation(
-            prepared,
-            &commit.up_intents,
-            started,
-            explicitly_cancelled_by_suspension,
-        )?;
+        self.commit_prepared_up_intents_frozen(prepared, &commit.up_intents, started)?;
 
         let mut observed_down_mask = 0u16;
         for down in &commit.down_intents {

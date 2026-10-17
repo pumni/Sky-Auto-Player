@@ -29,8 +29,9 @@ use sky_dispatch_win32::clock::{
     DurationTicks, QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
 };
 use sky_dispatch_win32::input::{
-    InstrumentKeyProfileSpec, PacketRetryReason, PhysicalKey, PhysicalPacket,
-    PreparedPhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
+    InstrumentKeyProfileSpec, InstrumentPhysicalState, PacketRetryReason, PhysicalKey,
+    PhysicalPacket, PreparedPhysicalPacket, SendEvidence, SendTransactionOutcome,
+    SendTransactionStatus,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU16, AtomicU64, Ordering};
@@ -2286,7 +2287,7 @@ fn prepared_suspension_preserves_cancellation_and_current_packet() {
     let cancelled = harness
         .suspend_live_input_for_test()
         .expect("resumable suspension cancellation");
-    assert_eq!(cancelled, vec![0]);
+    assert_eq!(cancelled, 1);
 
     assert!(matches!(
         harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
@@ -2365,7 +2366,7 @@ fn prepared_normal_resumable_suspension_reconciles_frozen_up_and_continues() {
     let cancelled = harness
         .suspend_live_input_for_test()
         .expect("shared resumable suspension");
-    assert_eq!(cancelled, vec![0]);
+    assert_eq!(cancelled, 1);
     assert_eq!(
         harness.prepared_suspension_cancellation_count_for_test(),
         1,
@@ -2909,6 +2910,14 @@ fn lifecycle_cleanup_qpc_failure_and_overflow_leave_down_fail_closed() {
             })
         };
         assert!(result.is_err());
+        assert_eq!(
+            harness
+                .resources
+                .coordinator
+                .cancelled_up_token_count_for_test_support(),
+            0,
+            "failed post-cleanup QPC or barrier must not mint cancellation tokens"
+        );
         assert!(cleanup.lock().expect("empty cleanup capture").is_empty());
         assert_eq!(
             harness.down_floor_for_test(QpcTicks::ZERO, 1),
@@ -2958,6 +2967,14 @@ fn lifecycle_inconclusive_cleanup_does_not_establish_or_bypass_barrier() {
             Ok(QpcTicks::from_raw(117_300))
         });
     assert!(result.is_err());
+    assert_eq!(
+        harness
+            .resources
+            .coordinator
+            .cancelled_up_token_count_for_test_support(),
+        0,
+        "unverified physical cleanup must not mint cancellation tokens"
+    );
     assert!(
         !post_cleanup_sampled.load(Ordering::Acquire),
         "an unverified cleanup cannot establish a resume barrier"
@@ -8006,7 +8023,7 @@ fn deferred_release_and_authored_chord_have_exact_packet_order() {
 }
 
 #[test]
-fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
+fn manual_pause_retains_authored_up_and_exposes_user_held_key_collision() {
     use super::test_support::ProductionDispatchTestHarness;
 
     let mut harness = ProductionDispatchTestHarness::new_admissible_dynamic_pending_release();
@@ -8023,6 +8040,13 @@ fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
         .expect("manual pause suspension");
     assert_eq!(harness.resources.coordinator.pending_release_count(), 0);
     assert_eq!(harness.resources.coordinator.pending_release_mask(), 0);
+    // Model the user physically holding the same instrument key after the
+    // verified safety cleanup. SendInput carries no ownership identity, so
+    // the resumed authored Up remains an observable Up event.
+    harness
+        .resources
+        .backend
+        .set_probe(|_, _| InstrumentPhysicalState::Held(vec![0x15].into()));
     let packets = harness.configure_packet_capture();
     let cleanup = harness.plan_current_dispatch();
     assert!(matches!(
@@ -8030,7 +8054,11 @@ fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
         super::worker::DispatchStep::Dispatched
     ));
     assert!(harness.resources.coordinator.is_finished());
-    assert!(packets.lock().expect("packet capture lock").is_empty());
+    assert_eq!(
+        *packets.lock().expect("packet capture lock"),
+        vec![PhysicalPacket::new(0b001, 0)],
+        "the authored Up stays in the resumed packet despite an external physical hold"
+    );
     harness
         .resources
         .coordinator
@@ -8039,7 +8067,7 @@ fn manual_pause_cancels_pending_release_without_stale_up_on_resume() {
 }
 
 #[test]
-fn focus_suspend_restore_cancels_pending_release_without_stale_up() {
+fn focus_suspend_restore_retains_authored_up_after_safety_cleanup() {
     use super::test_support::ProductionDispatchTestHarness;
 
     let mut harness = ProductionDispatchTestHarness::new_admissible_dynamic_pending_release();
@@ -8066,7 +8094,11 @@ fn focus_suspend_restore_cancels_pending_release_without_stale_up() {
         super::worker::DispatchStep::Dispatched
     ));
     assert!(harness.resources.coordinator.is_finished());
-    assert!(packets.lock().expect("packet capture lock").is_empty());
+    assert_eq!(
+        *packets.lock().expect("packet capture lock"),
+        vec![PhysicalPacket::new(0b001, 0)],
+        "the frozen authored Up remains physical work after focus restoration"
+    );
     harness
         .resources
         .coordinator

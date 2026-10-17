@@ -1609,16 +1609,16 @@ fn cancel_live_generations_clears_pending_release_ownership() {
     let mut coordinator = coordinator_with_pending_release();
 
     let cancelled = coordinator
-        .cancel_live_generations()
+        .cancel_live_generations_after_verified_resumable_cleanup()
         .expect("cancel live generations");
-    assert_eq!(cancelled, vec![0]);
+    assert_eq!(cancelled, 1);
     assert_eq!(coordinator.pending_release_mask(), 0);
     assert_eq!(coordinator.pending_release_count(), 0);
     assert!(coordinator.pending_release_for_slot(0).is_none());
     coordinator
         .check_invariants()
         .expect("cancelled coordinator remains consistent");
-    assert!(coordinator.is_finished());
+    assert!(!coordinator.is_finished());
 }
 
 #[test]
@@ -1664,28 +1664,26 @@ fn frozen_up_after_resumable_suspension_consumes_only_explicit_cancelled_owner()
         up.commit.clone()
     };
     let cancelled = coordinator
-        .cancel_live_generations()
+        .cancel_live_generations_after_verified_resumable_cleanup()
         .expect("cancel active generation");
-    assert_eq!(cancelled, vec![0]);
+    assert_eq!(cancelled, 1);
     coordinator
-        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+        .commit_prepared_authored_frame_success_frozen(
             &up_commit,
             TimelineTicks::from_raw(20_000),
             TimelineTicks::from_raw(20_000),
-            &cancelled,
         )
-        .expect("frozen Up is reconciled only for explicit suspension cancellation");
+        .expect("exact frozen Up consumes the coordinator-owned cancellation token");
     assert_eq!(coordinator.active_mask, 0);
     let counts = coordinator.generation_status_counts();
     assert_eq!(counts.get("released"), Some(&1));
     assert_eq!(counts.get("cancelled"), Some(&0));
     assert!(coordinator.is_finished());
     let duplicate_error = coordinator
-        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+        .commit_prepared_authored_frame_success_frozen(
             &up_commit,
             TimelineTicks::from_raw(20_000),
             TimelineTicks::from_raw(20_000),
-            &cancelled,
         )
         .expect_err("a reconciled frozen Up must not bypass its cursor on replay");
     assert!(matches!(
@@ -1734,35 +1732,29 @@ fn frozen_up_after_resumable_suspension_consumes_only_explicit_cancelled_owner()
         up.commit.clone()
     };
     let cancelled = mismatch
-        .cancel_live_generations()
+        .cancel_live_generations_after_verified_resumable_cleanup()
         .expect("cancel mismatch generation");
+    assert_eq!(cancelled, 1);
     let mut wrong_slot = up_commit.clone();
     wrong_slot.up_intents[0].intent = crate::model::CompactIntent::new(0, 1);
     let wrong_slot_error = mismatch
-        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+        .commit_prepared_authored_frame_success_frozen(
             &wrong_slot,
             TimelineTicks::from_raw(20_000),
             TimelineTicks::from_raw(20_000),
-            &cancelled,
         )
         .expect_err("a cancelled generation with a mismatched frozen slot must fail");
     assert!(matches!(
         wrong_slot_error,
         CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
     ));
-    let error = mismatch
-        .commit_prepared_authored_frame_success_frozen_after_resumable_suspension(
+    mismatch
+        .commit_prepared_authored_frame_success_frozen(
             &up_commit,
             TimelineTicks::from_raw(20_000),
             TimelineTicks::from_raw(20_000),
-            &[],
         )
-        .expect_err("missing explicit cancellation must remain an ownership error");
-    assert!(matches!(
-        error,
-        CoordinatorError::Invariant(CoordinatorInvariantError::Accounting(_))
-    ));
-    assert_eq!(cancelled, vec![0]);
+        .expect("a failed mismatched identity leaves the exact live token available");
 }
 
 #[test]
@@ -1789,9 +1781,10 @@ fn pending_release_invariants_require_a_matching_active_owner() {
         .check_invariants()
         .expect_err("orphan pending release must be rejected");
     assert!(
-        error
-            .to_string()
-            .contains("pending slot 0 has no active owner")
+        error.to_string().contains("slot 0")
+            || error
+                .to_string()
+                .contains("ownership mask has no active slot owner")
     );
 }
 

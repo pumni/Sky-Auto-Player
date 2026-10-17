@@ -14,7 +14,6 @@ use crate::engine::shared::SessionTarget;
 use crate::engine::shared::{
     SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseState, SystemPowerState,
 };
-use sky_dispatch_core::model::GenerationId;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{ModifierKeyObservation, ModifierMask, SendTransactionOutcome};
 use std::sync::atomic::AtomicBool;
@@ -359,7 +358,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
     now_ticks: QpcTicks,
     focus_loss_fault: bool,
     boundary_crossing_qpc: Option<QpcTicks>,
-    explicitly_cancelled_by_suspension: &[GenerationId],
     #[cfg(any(test, feature = "test-support"))] test_inject_sender_start: bool,
 ) -> DispatchStep {
     #[cfg(not(any(test, feature = "test-support")))]
@@ -486,7 +484,6 @@ pub(crate) fn dispatch_prepared_normal_frame(
         boundary_crossing_qpc,
         prepared_final_policy_qpc,
         result,
-        explicitly_cancelled_by_suspension,
         observer,
     )
 }
@@ -510,7 +507,6 @@ pub(super) fn record_down_send_result(
     trace_kind: u8,
     prepared_final_policy_qpc: Option<QpcTicks>,
     result: SendTransactionOutcome,
-    explicitly_cancelled_by_suspension: &[GenerationId],
     observer: Option<&PendingObservationQueue>,
 ) -> DispatchStep {
     let packet = view.packet_masks;
@@ -606,7 +602,6 @@ pub(super) fn record_down_send_result(
         result_retry_reason,
         result_chord_integrity_lost,
         result_last_win32_error,
-        explicitly_cancelled_by_suspension,
         observer,
     )
 }

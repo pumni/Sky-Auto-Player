@@ -38,7 +38,8 @@ arm request -> Preparing -> Ready -> Arming --atomic commit--> Armed
 
 During `Preparing`, the worker constructs the coordinator, simulates and
 materializes the immutable normal stream, restores the dispatch coordinator,
-reserves bounded cancellation and telemetry storage, creates the required
+creates the coordinator's fixed fifteen-slot cancellation-token table and
+bounded telemetry storage, creates the required
 wait and observation resources, and acquires worker scheduling guards. Long
 packet and coordinator traversals check cancellation at bounded intervals.
 Prepared normal storage is admitted only when its conservative estimate is at
@@ -135,6 +136,39 @@ the barrier time has passed it adds no delay, and authored targets later than
 the barrier are preserved. A new session constructs a clean guard. Failed or
 inconclusive cleanup, a failed post-cleanup QPC read, or barrier overflow keeps
 the guard invalid and Down dispatch fail-closed.
+
+### Bounded resumable generation reconciliation
+
+Only after physical release is verified and the resume Down barrier is
+established does the coordinator cancel live musical owners and mint resumable
+Up tokens. Each token is stored in the authoritative key slot and binds the
+generation, slot, and immutable compiler-owned packet/intent location. The
+mutable schedule invalidates that generation identity but retains the authored
+physical Up bit. Both dynamic planning and the immutable normal stream freeze
+the exact token identity into the matching Up commit. The worker validates it
+before sending; a complete matching Up commit consumes it once. Wrong slot,
+generation, packet, intent location, stale identity, or a second live owner
+fails closed before a mixed packet can authorize its Down.
+
+The compiler's paired, chronological, same-key-nonoverlap schedule allows at
+most one unmatched cancelled Up per key: the next generation on that key
+cannot become active before the prior authored Up boundary. The coordinator
+checks this locally and refuses to overwrite a token. Pause/resume walks the
+fixed fifteen slots and the current packet intents only. It performs no
+historical generation-ID search, song-sized list allocation, or full-ledger
+scan. `check_local_invariants` proves slot ownership, token identity, masks,
+and incremental counter bounds in fixed work. `check_invariants` remains the
+deliberate full-ledger conservation audit used at terminal publication and
+explicit test checkpoints; terminal accounting was not weakened.
+
+The cleanup Up and the later authored Up are separate `SendInput` events. The
+sender cannot identify whether a virtual key-down came from Sky Auto Player or
+the user, so it cannot safely suppress an authored Up when a user holds the
+same instrument key. The resumed authored Up and mixed Up-before-Down packet
+are retained; this can release that user's held virtual key. The regression
+fixture proves only the emitted packet under a simulated physical-held probe,
+not the game's response. No hook, alternate input transport, or ownership
+claim is introduced.
 
 For a physical plan the loop queries the guard before waiting. It waits to
 `packet_not_before_qpc`; metadata-only work waits to its authored target. Causal

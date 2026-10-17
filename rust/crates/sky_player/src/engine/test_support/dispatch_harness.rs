@@ -2065,7 +2065,6 @@ impl ProductionDispatchTestHarness {
             Ok(self.effective_now_ticks),
             self.target.hwnd_for_safety_release(),
             post_cleanup_qpc,
-            self.prepared_stream_for_test.as_mut(),
         )
     }
 
@@ -2073,11 +2072,11 @@ impl ProductionDispatchTestHarness {
     /// and focus suspension.  The harness keeps this call explicit so tests
     /// cannot accidentally replace the production cleanup path with a direct
     /// coordinator mutation.
-    pub fn suspend_live_input_for_test(&mut self) -> Result<Vec<u64>, String> {
+    pub fn suspend_live_input_for_test(&mut self) -> Result<usize, String> {
         let effective_now_ticks = self.effective_now_ticks;
         let target_hwnd = self.target.hwnd_for_safety_release();
         let qpc_clock = self.resources.clock;
-        let cancelled = super::super::worker::suspend_live_input(
+        super::super::worker::suspend_live_input(
             &mut self.resources.backend,
             &mut self.resources.coordinator,
             &mut self.runtime,
@@ -2088,11 +2087,7 @@ impl ProductionDispatchTestHarness {
                     .now()
                     .map_err(|error| format!("test cleanup QPC: {error:?}"))
             },
-        )?;
-        if let Some(stream) = self.prepared_stream_for_test.as_mut() {
-            stream.reconcile_resumable_suspension(&cancelled)?;
-        }
-        Ok(cancelled)
+        )
     }
 
     /// Drive the same verified cleanup and playback-clock transitions used by
@@ -2117,7 +2112,6 @@ impl ProductionDispatchTestHarness {
             Ok(effective_now),
             self.target.hwnd_for_safety_release(),
             || Ok(pause_qpc),
-            self.prepared_stream_for_test.as_mut(),
         )?;
         self.resources
             .playback
@@ -2164,7 +2158,6 @@ impl ProductionDispatchTestHarness {
                     .now()
                     .map_err(|error| format!("focus restore cleanup QPC: {error:?}"))
             },
-            self.prepared_stream_for_test.as_mut(),
         )?;
         self.resources
             .playback
@@ -2411,7 +2404,6 @@ impl ProductionDispatchTestHarness {
                     .now()
                     .map_err(|error| format!("system cleanup QPC: {error:?}"))
             },
-            None,
         )
     }
 
@@ -2793,9 +2785,9 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn prepared_suspension_cancellation_count_for_test(&self) -> usize {
-        self.prepared_stream_for_test.as_ref().map_or(0, |stream| {
-            stream.explicitly_cancelled_generation_ids().len()
-        })
+        self.resources
+            .coordinator
+            .cancelled_up_token_count_for_test_support()
     }
 
     pub fn prepared_cursor_for_test(&self) -> usize {
@@ -2929,7 +2921,6 @@ impl ProductionDispatchTestHarness {
             wall_now,
             false,
             Some(wall_now),
-            stream.explicitly_cancelled_generation_ids(),
             false,
         );
         if matches!(step, DispatchStep::Dispatched) {
@@ -3111,7 +3102,6 @@ impl ProductionDispatchTestHarness {
             wall_now,
             false,
             Some(wall_now),
-            stream.explicitly_cancelled_generation_ids(),
             test_inject_sender_start,
         );
         if matches!(step, DispatchStep::Dispatched) {
@@ -3310,7 +3300,6 @@ impl ProductionDispatchTestHarness {
             dispatch_qpc,
             false,
             Some(dispatch_qpc),
-            stream.explicitly_cancelled_generation_ids(),
             false,
         );
         if matches!(step, DispatchStep::Dispatched) {
@@ -3420,7 +3409,6 @@ impl ProductionDispatchTestHarness {
             wall_now,
             false,
             Some(wall_now),
-            stream.explicitly_cancelled_generation_ids(),
             false,
         );
         if matches!(step, DispatchStep::Dispatched) {
