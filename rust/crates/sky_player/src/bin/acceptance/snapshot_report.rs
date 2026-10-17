@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use sky_player::engine::EngineSnapshot;
 use sky_dispatch_win32::input::FULL_INSTRUMENT_MASK;
+use sky_dispatch_win32::input::ReleaseAllOutcome;
 use super::{EventRecord, PhysicalExpectation, Verdict};
 
 pub(super) fn cleanup_evidence_clean(full_mask_required: bool, attempted_mask: u16, attempts: u8, released: bool, stuck_mask: u16, verification_inconclusive: bool, transport_anomaly: bool) -> bool {
@@ -64,16 +65,6 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         .release_outcome
         .as_ref()
         .map_or(0, |outcome| u64::from(outcome.stuck_mask.count_ones()));
-    let release = snapshot.release_outcome.as_ref().map(|outcome| {
-        json!({
-            "attempted_mask": outcome.attempted_mask,
-            "transport_anomaly": outcome.transport_anomaly,
-            "released_successfully": outcome.released_successfully,
-            "stuck_mask": outcome.stuck_mask,
-            "verification_inconclusive": outcome.verification_inconclusive,
-            "attempts": outcome.attempts,
-        })
-    });
 
     let mut report = json!({
         "status": snapshot.status,
@@ -159,9 +150,17 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "production_forensics_anomaly_count": snapshot.production_forensics_anomaly_count,
         "production_structural_anomaly_count": snapshot.production_structural_anomaly_count,
         "production_timing_diagnostic_count": snapshot.production_timing_diagnostic_count,
-        "release_outcome": release,
     });
     if let Value::Object(object) = &mut report {
+        object.extend(
+            release_accounting_json(
+                snapshot.release_attempts_total,
+                snapshot.release_outcome.as_ref(),
+            )
+            .as_object()
+            .expect("release accounting report object")
+            .clone(),
+        );
         object.insert(
             "terminal_trigger_reason".to_string(),
             snapshot
@@ -171,4 +170,49 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         );
     }
     report
+}
+
+fn release_accounting_json(
+    release_attempts_total: u64,
+    release_outcome: Option<&ReleaseAllOutcome>,
+) -> Value {
+    let release = release_outcome.map(|outcome| {
+        json!({
+            "attempted_mask": outcome.attempted_mask,
+            "transport_anomaly": outcome.transport_anomaly,
+            "released_successfully": outcome.released_successfully,
+            "stuck_mask": outcome.stuck_mask,
+            "verification_inconclusive": outcome.verification_inconclusive,
+            "attempts": outcome.attempts,
+        })
+    });
+    json!({
+        "release_attempts_total": release_attempts_total,
+        "release_outcome": release,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::release_accounting_json;
+    use sky_dispatch_win32::input::ReleaseAllOutcome;
+
+    #[test]
+    fn acceptance_report_separates_cumulative_and_terminal_release_attempts() {
+        // Four attempts from resumable cleanup precede this four-attempt
+        // terminal invocation; acceptance output must retain both scopes.
+        let terminal_invocation = ReleaseAllOutcome {
+            attempted_mask: 0b1,
+            transport_anomaly: false,
+            released_successfully: true,
+            stuck_mask: 0,
+            verification_inconclusive: false,
+            attempts: 4,
+        };
+
+        let report = release_accounting_json(8, Some(&terminal_invocation));
+        assert_eq!(report["release_attempts_total"], 8);
+        assert_eq!(report["release_outcome"]["attempts"], 4);
+        assert_eq!(report["release_outcome"]["released_successfully"], true);
+    }
 }

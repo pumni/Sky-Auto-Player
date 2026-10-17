@@ -68,9 +68,9 @@ use sky_player::adapter_support::{
     ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
 };
 use sky_player::engine::{
-    BackendConfig, DispatchProfile, EnginePollStatus, FocusOptions, NativeDispatchSession,
-    NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TimingOptions,
-    WaitOptions,
+    BackendConfig, DispatchProfile, EnginePollStatus, EngineProgressSnapshot, FocusOptions,
+    NativeDispatchSession, NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions,
+    TimingOptions, WaitOptions,
 };
 use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -5627,6 +5627,9 @@ impl NativeDiagnosticsSample {
                 physical_session,
                 player_attached: true,
                 has_terminal_error: snapshot.has_terminal_error,
+                has_terminal_failure_outcome: snapshot
+                    .terminal_outcome
+                    .is_some_and(EnginePollStatus::is_terminal_failure),
                 has_last_error,
                 failed_release_count: snapshot.failed_release_count,
                 keys_dropped: snapshot.keys_dropped,
@@ -5650,6 +5653,7 @@ struct DiagnosticsBackendHealth {
     physical_session: bool,
     player_attached: bool,
     has_terminal_error: bool,
+    has_terminal_failure_outcome: bool,
     has_last_error: bool,
     failed_release_count: usize,
     keys_dropped: u64,
@@ -5665,7 +5669,10 @@ fn diagnostics_backend_status(
         crate::ui_events::DiagnosticsBackendStatus::Error
     } else if !health.player_attached {
         crate::ui_events::DiagnosticsBackendStatus::Unavailable
-    } else if health.has_terminal_error || health.has_last_error || health.failed_release_count > 0
+    } else if health.has_terminal_error
+        || health.has_terminal_failure_outcome
+        || health.has_last_error
+        || health.failed_release_count > 0
     {
         crate::ui_events::DiagnosticsBackendStatus::Error
     } else if health.keys_dropped > 0
@@ -5767,20 +5774,7 @@ fn publish_playback_snapshot(
         } else {
             PlaybackFocusState::Unfocused
         };
-        let health = if snapshot.has_terminal_error
-            || snapshot.last_error.is_some()
-            || snapshot.failed_release_count > 0
-        {
-            PlaybackHealthState::Error
-        } else if snapshot.input_path_degraded
-            || snapshot.keys_dropped > 0
-            || snapshot.chord_split_events > 0
-            || snapshot.possibly_active_count > snapshot.active_count
-        {
-            PlaybackHealthState::Degraded
-        } else {
-            PlaybackHealthState::Healthy
-        };
+        let health = playback_health_from_snapshot(&snapshot);
         (
             focus_state,
             health,
@@ -5833,6 +5827,26 @@ fn publish_playback_snapshot(
         .lock()
         .map_err(|_| "native event hub lock poisoned".to_string())?
         .publish(event)
+}
+
+fn playback_health_from_snapshot(snapshot: &EngineProgressSnapshot) -> PlaybackHealthState {
+    if snapshot
+        .terminal_outcome
+        .is_some_and(EnginePollStatus::is_terminal_failure)
+        || snapshot.has_terminal_error
+        || snapshot.last_error.is_some()
+        || snapshot.failed_release_count > 0
+    {
+        PlaybackHealthState::Error
+    } else if snapshot.input_path_degraded
+        || snapshot.keys_dropped > 0
+        || snapshot.chord_split_events > 0
+        || snapshot.possibly_active_count > snapshot.active_count
+    {
+        PlaybackHealthState::Degraded
+    } else {
+        PlaybackHealthState::Healthy
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6589,6 +6603,8 @@ mod tests {
         settings_fingerprint, target_integrity_startup_failure, timing_margin_recommendation,
         validate_playback_start_request,
     };
+    #[cfg(feature = "tauri-test")]
+    use super::{NativeDispatchSession, playback_health_from_snapshot, publish_playback_snapshot};
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
         CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest,
@@ -6843,6 +6859,308 @@ mod tests {
             "resuming the monitor must not heal the expiry latch"
         );
         assert!(active.done.load(Ordering::Acquire));
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn terminal_projection_session(
+        supervisor_lease_timeout_us: u64,
+        up_scheduled_us: u64,
+    ) -> Arc<NativeDispatchSession> {
+        use sky_player::adapter_support::{
+            ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
+        };
+        use sky_player::engine::{
+            BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions,
+            NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TestWaitPolicy,
+            TimingOptions, WaitOptions,
+        };
+
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: DispatchActionKind::Down,
+                    scheduled_us: 100_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: Arc::<str>::from("terminal-projection-down"),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: DispatchActionKind::Up,
+                    scheduled_us: up_scheduled_us,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: Arc::<str>::from("terminal-projection-up"),
+                },
+            ],
+            &sky_app_core::song::SKY_SCAN_CODES,
+        )
+        .expect("terminal projection schedule");
+        Arc::new(
+            NativeDispatchSession::new_with_power_endpoint(
+                NativeSessionOptions {
+                    schedule,
+                    #[cfg(feature = "tauri-test")]
+                    modifier_key_state_query_for_test: None,
+                    backend: BackendConfig::Mock {
+                        latency_base_us: 0,
+                        latency_per_key_us: 0,
+                        fault_script: FaultInjectionScript::none(),
+                    },
+                    profile: DispatchProfile::MockTest,
+                    timing: TimingOptions {
+                        game_fps: 60,
+                        min_hold_us: 17_467,
+                        min_release_gap_us: 17_467,
+                        frame_us: 16_667,
+                        frame_base_hold_us: 16_667,
+                        timing_margin_us: 800,
+                        strict_timing: false,
+                        strict_down_completion_late_us: 2_000,
+                        strict_up_completion_late_us: 2_000,
+                        input_path_warn_us: 300,
+                    },
+                    focus: FocusOptions {
+                        require_focus: false,
+                        focus_restore_grace_us: 100_000,
+                    },
+                    wait: WaitOptions {
+                        enable_waitable_timer: true,
+                        enable_event_wait: true,
+                        supervisor_lease_timeout_us,
+                        test_spin_threshold_us: None,
+                        test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+                    },
+                    telemetry: TelemetryOptions {
+                        mode: TelemetryMode::Off,
+                        capacity: 64,
+                    },
+                    priority: PriorityOptions {
+                        mode: PriorityMode::Off,
+                    },
+                    instrument_key_profile: None,
+                    startup_ordering_hook: None,
+                    restore_race_hook: None,
+                    focus_pause_hook: None,
+                    timer_lifecycle_context: None,
+                    prepared_packet_ambiguity_mask: None,
+                    preflight_user_held_mask: None,
+                },
+                sky_player::engine::SystemPowerEndpoint::new()
+                    .expect("terminal projection power endpoint"),
+            )
+            .expect("terminal projection session"),
+        )
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn terminal_projection_active(player: Arc<NativeDispatchSession>) -> NativeActivePlayback {
+        NativeActivePlayback {
+            session_id: "a".repeat(32),
+            prepared_id: "b".repeat(32),
+            song_id: "c".repeat(32),
+            title: "Terminal projection fixture".into(),
+            total_us: 5_100_000,
+            config: PlaybackConfigDto {
+                hold_frames: 1.0,
+                timing_margin_us: 800,
+                tempo_scale: 1.0,
+                fps: 60,
+                dry_run: false,
+            },
+            timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
+                .expect("terminal projection timing policy"),
+            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
+                recommended_timing_margin_us: Some(800),
+                qualified: false,
+                source: "default_fallback".into(),
+            },
+            plan_fingerprint: "d".repeat(64),
+            physical: true,
+            activity_lease: Mutex::new(None),
+            target_hwnd: None,
+            state: Mutex::new(PlaybackSessionState::Playing),
+            pending: Mutex::new(None),
+            player: Some(player),
+            power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
+            power_request: Mutex::new(None),
+            suspend_resume_registration: Mutex::new(None),
+            started_at: Instant::now(),
+            paused_since: Mutex::new(None),
+            paused_total: Mutex::new(Duration::ZERO),
+            stop_requested: AtomicBool::new(false),
+            skip_requested: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            sequence: AtomicU64::new(0),
+        }
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn terminal_outcome_health_projection_preserves_trigger_and_release_identity() {
+        use crate::ui_events::DiagnosticsBackendStatus;
+        use sky_player::engine::EnginePollStatus;
+
+        let cases = [
+            (
+                "supervisor_lease_expired",
+                EnginePollStatus::Error,
+                "error",
+                PlaybackHealthState::Error,
+                DiagnosticsBackendStatus::Error,
+            ),
+            (
+                "panic_release_requested",
+                EnginePollStatus::Error,
+                "error",
+                PlaybackHealthState::Error,
+                DiagnosticsBackendStatus::Error,
+            ),
+            (
+                "quit",
+                EnginePollStatus::Quit,
+                "quit",
+                PlaybackHealthState::Healthy,
+                DiagnosticsBackendStatus::Healthy,
+            ),
+            (
+                "skipped",
+                EnginePollStatus::Skipped,
+                "skipped",
+                PlaybackHealthState::Healthy,
+                DiagnosticsBackendStatus::Healthy,
+            ),
+            (
+                "finished",
+                EnginePollStatus::Finished,
+                "finished",
+                PlaybackHealthState::Healthy,
+                DiagnosticsBackendStatus::Healthy,
+            ),
+        ];
+
+        for (trigger, expected_status, expected_outcome, playback_health, backend_health) in cases {
+            let is_lease_expiry = trigger == "supervisor_lease_expired";
+            let is_explicit_panic = trigger == "panic_release_requested";
+            let lease_timeout_us = if is_lease_expiry { 300_000 } else { 0 };
+            let up_scheduled_us = if expected_status == EnginePollStatus::Finished {
+                180_000
+            } else {
+                5_100_000
+            };
+            let session = terminal_projection_session(lease_timeout_us, up_scheduled_us);
+            session.arm(0).expect("terminal projection worker arm");
+
+            if is_lease_expiry {
+                assert!(
+                    session
+                        .join(Duration::from_secs(2))
+                        .expect("lease expiry join"),
+                    "lease expiry worker should join"
+                );
+            } else if is_explicit_panic {
+                session.panic_release().expect("explicit panic request");
+                assert!(
+                    session
+                        .join(Duration::from_secs(2))
+                        .expect("panic release join"),
+                    "panic release worker should join"
+                );
+            } else if trigger == "quit" {
+                session.quit().expect("quit request");
+                assert!(
+                    session.join(Duration::from_secs(2)).expect("quit join"),
+                    "quit worker should join"
+                );
+            } else if trigger == "skipped" {
+                session.skip().expect("skip request");
+                assert!(
+                    session.join(Duration::from_secs(2)).expect("skip join"),
+                    "skip worker should join"
+                );
+            } else {
+                assert!(
+                    session
+                        .join(Duration::from_secs(2))
+                        .expect("natural completion join"),
+                    "natural completion worker should join"
+                );
+            }
+
+            let full = session.snapshot();
+            let progress = session.snapshot_lite();
+            assert_eq!(full.outcome.as_deref(), Some(expected_outcome), "{trigger}");
+            let expected_trigger = (trigger != "finished").then_some(trigger);
+            assert_eq!(
+                full.terminal_trigger_reason.as_deref(),
+                expected_trigger,
+                "{trigger}"
+            );
+            assert!(full.terminal_error.is_none(), "{trigger}: {full:?}");
+            assert!(full.secondary_errors.is_empty(), "{trigger}: {full:?}");
+            assert_eq!(
+                progress.terminal_outcome,
+                Some(expected_status),
+                "{trigger}"
+            );
+            assert_eq!(progress.status, expected_status.as_str(), "{trigger}");
+            assert!(!progress.has_terminal_error, "{trigger}: {progress:?}");
+            assert_eq!(
+                playback_health_from_snapshot(&progress),
+                playback_health,
+                "playback projection for {trigger}"
+            );
+            let events = Arc::new(Mutex::new(NativeEventHub::default()));
+            let active = terminal_projection_active(Arc::clone(&session));
+            publish_playback_snapshot(&events, &active, progress.elapsed_us, 0, false)
+                .expect("terminal playback snapshot publication");
+            let published_health = match events
+                .lock()
+                .expect("terminal projection event hub")
+                .buffered
+                .back()
+                .expect("playback snapshot event")
+            {
+                UiEvent::PlaybackSnapshot { payload, .. } => payload.health,
+                event => panic!("expected playback snapshot, got {event:?}"),
+            };
+            assert_eq!(
+                published_health, playback_health,
+                "event projection for {trigger}"
+            );
+            assert_eq!(
+                NativeDiagnosticsSample::from_player(&session, true).backend_status,
+                backend_health,
+                "diagnostics projection for {trigger}"
+            );
+            let diagnostics_gate = DiagnosticsPublicationGate::default();
+            diagnostics_gate
+                .set_enabled(true)
+                .expect("enable final diagnostics publication");
+            publish_final_diagnostics_snapshot_for_active(&events, &active, &diagnostics_gate)
+                .expect("final diagnostics snapshot publication");
+            let published_backend_health = events
+                .lock()
+                .expect("terminal projection event hub")
+                .buffered
+                .iter()
+                .find_map(|event| match event {
+                    UiEvent::DiagnosticsSnapshot { payload, .. } => Some(payload.backend_status),
+                    _ => None,
+                })
+                .expect("diagnostics snapshot event");
+            assert_eq!(
+                published_backend_health, backend_health,
+                "diagnostics event projection for {trigger}"
+            );
+            let release = full
+                .release_outcome
+                .as_ref()
+                .unwrap_or_else(|| panic!("{trigger}: missing tracked release result"));
+            assert!(release.released_successfully, "{trigger}: {release:?}");
+            assert_eq!(release.stuck_mask, 0, "{trigger}: {release:?}");
+            assert!(!release.verification_inconclusive, "{trigger}: {release:?}");
+            assert!(!release.transport_anomaly, "{trigger}: {release:?}");
+        }
     }
 
     fn catalog_generation(runtime: &NativeDesktopRuntime) -> u64 {
@@ -8928,6 +9246,13 @@ mod tests {
         assert_eq!(
             diagnostics_backend_status(DiagnosticsBackendHealth {
                 has_terminal_error: true,
+                ..healthy
+            }),
+            DiagnosticsBackendStatus::Error
+        );
+        assert_eq!(
+            diagnostics_backend_status(DiagnosticsBackendHealth {
+                has_terminal_failure_outcome: true,
                 ..healthy
             }),
             DiagnosticsBackendStatus::Error

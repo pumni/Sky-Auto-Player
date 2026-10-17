@@ -6,19 +6,19 @@ use super::test_support::command_timing::{
 };
 use super::{
     BackendConfig, CommandTimingResult, CommandTimingState, DispatchProfile, DownAdmission,
-    FaultInjectionScript, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
-    FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome, NativeDispatchSession,
-    NativeSessionOptions, PlatformSendResult, PriorityOptions, RtTraceRecord, SharedMetrics,
-    StartupOrderingHook, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN, TargetStamp, TelemetryCollector,
-    TelemetryMode, TelemetryOptions, TimingOptions, TraceContext, TraceDelivery, TraceTiming,
-    TrackedKeyState, WaitOptions, WakeErrorStats, Worker, WorkerMetricsLocal,
-    adjust_spin_threshold, anchored_dispatch_target_ticks, cpu_metrics_sample_due,
-    deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
-    exact_sender_durations, final_control_precheck, final_down_target_admission,
-    focus_gate_matches, focus_matches, focus_matches_hwnd, record_input_path_health,
-    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
-    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code, try_publish_metrics,
-    wake_lateness_ticks,
+    EnginePollStatus, FaultInjectionScript, FinalControlAdmission, FinalControlSignals,
+    FinalTargetSignals, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
+    NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
+    RtTraceRecord, SharedMetrics, StartupOrderingHook, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
+    TargetStamp, TelemetryCollector, TelemetryMode, TelemetryOptions, TimingOptions, TraceContext,
+    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
+    WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
+    cpu_metrics_sample_due, deadline_target_ticks, derive_spin_threshold_us,
+    ensure_preflight_for_target, exact_sender_durations, final_control_precheck,
+    final_down_target_admission, focus_gate_matches, focus_matches, focus_matches_hwnd,
+    record_input_path_health, record_termination_error, release_runtime_outcome,
+    signed_timeline_delta_ticks, supervisor_lease_expired, target_stamp_still_current,
+    trace_outcome_code, try_publish_metrics, wake_lateness_ticks,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_dispatch_core::clock::PauseReason;
@@ -4593,6 +4593,12 @@ fn large_runtime_schedule_starts_and_quits_cleanly() {
             .expect("large schedule join")
     );
     assert!(session.snapshot().is_finished);
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome.as_deref(), Some("quit"));
+    assert_eq!(snapshot.terminal_trigger_reason.as_deref(), Some("quit"));
+    let progress = session.snapshot_lite();
+    assert_eq!(progress.terminal_outcome, Some(EnginePollStatus::Quit));
+    assert!(!progress.has_terminal_error);
 }
 
 #[test]
@@ -7837,14 +7843,39 @@ fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
         Some("supervisor_lease_expired"),
         "stopped heartbeat must terminate the worker: {expiry_snapshot:?}"
     );
+    assert_eq!(expiry_snapshot.status, "error");
+    assert_eq!(expiry_snapshot.outcome.as_deref(), Some("error"));
+    assert!(expiry_snapshot.terminal_error.is_none());
+    assert!(expiry_snapshot.secondary_errors.is_empty());
+    assert_eq!(expiry_snapshot.active_count, 0);
+    assert_eq!(expiry_snapshot.possibly_active_count, 0);
+    assert_eq!(expiry_snapshot.release_attempts_total, 0);
+    let release = expiry_snapshot
+        .release_outcome
+        .as_ref()
+        .expect("lease expiry publishes terminal release evidence");
+    assert!(release.released_successfully);
+    assert_eq!(release.attempted_mask, 0);
+    assert_eq!(release.attempts, 0);
+    assert_eq!(release.stuck_mask, 0);
+    assert!(!release.verification_inconclusive);
+    assert!(!release.transport_anomaly);
+    let expiry_progress = expiry_session.snapshot_lite();
+    assert_eq!(expiry_progress.status, "error");
+    assert_eq!(
+        expiry_progress.terminal_outcome,
+        Some(EnginePollStatus::Error)
+    );
+    assert!(
+        !expiry_progress.has_terminal_error,
+        "clean hard-stop identity must not be encoded as cleanup failure"
+    );
     let expiry_elapsed = expiry_started.elapsed();
     eprintln!("watchdog expiry latency: {expiry_elapsed:?}");
     assert!(
         expiry_elapsed < Duration::from_millis(500),
         "watchdog must interrupt the long musical wait promptly: {expiry_elapsed:?}"
     );
-    assert_eq!(expiry_snapshot.active_count, 0);
-    assert_eq!(expiry_snapshot.possibly_active_count, 0);
     assert!(expiry_snapshot.wait_interrupted_count >= 1);
     assert_eq!(expiry_snapshot.timeline_rebase_count, 0);
     assert!(expiry_snapshot.release_outcome.is_some());
@@ -8030,9 +8061,25 @@ fn explicit_panic_release_keeps_user_terminal_identity() {
         snapshot.terminal_trigger_reason.as_deref(),
         Some("panic_release_requested")
     );
+    assert_eq!(snapshot.outcome.as_deref(), Some("error"));
+    assert!(snapshot.terminal_error.is_none());
+    assert!(snapshot.secondary_errors.is_empty());
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.timeline_rebase_count, 0);
+    let release = snapshot
+        .release_outcome
+        .as_ref()
+        .expect("explicit panic publishes terminal release evidence");
+    assert_eq!(release.attempted_mask, 0);
+    assert!(release.released_successfully);
+    assert_eq!(release.stuck_mask, 0);
+    assert!(!release.verification_inconclusive);
+    assert!(!release.transport_anomaly);
+    let progress = session.snapshot_lite();
+    assert_eq!(progress.status, "error");
+    assert_eq!(progress.terminal_outcome, Some(EnginePollStatus::Error));
+    assert!(!progress.has_terminal_error);
 }
 
 #[test]

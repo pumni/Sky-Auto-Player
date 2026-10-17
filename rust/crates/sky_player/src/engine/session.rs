@@ -1016,9 +1016,8 @@ impl NativeDispatchSession {
     pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
         let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
         let ((elapsed_us, paused), pre_roll_remaining_us) = self.live_projection();
-        let status = self
-            .poll_status(lifecycle, paused, pre_roll_remaining_us)
-            .as_str();
+        let poll_status = self.poll_status(lifecycle, paused, pre_roll_remaining_us);
+        let status = poll_status.as_str();
         let local = self.shared.publication.metrics.snapshot.load();
         EngineProgressSnapshot {
             elapsed_us,
@@ -1047,6 +1046,7 @@ impl NativeDispatchSession {
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
             status: status.to_string(),
+            terminal_outcome: poll_status.is_terminal().then_some(poll_status),
             has_terminal_error: self
                 .shared
                 .publication

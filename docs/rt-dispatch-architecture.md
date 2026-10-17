@@ -188,6 +188,16 @@ separately from `terminal_error` and secondary cleanup failures. Quit and skip
 retain their distinct outcomes. Panic requests, worker panic, lease expiry,
 release uncertainty, and cleanup failures cannot produce `Finished`.
 
+The frequent engine progress snapshot publishes a typed terminal outcome
+separately from `has_terminal_error`, which reports diagnostic failure
+provenance. `Error`, `Panicked`, `Poisoned`, and invalid terminal states map to
+error playback and backend health even when tracked release is verified and
+`terminal_error` is empty. `Finished`, `Quit`, and `Skipped` are not errors by
+themselves. The full engine snapshot and native acceptance JSON retain the
+trigger reason and cleanup details. Acceptance output reports
+`release_attempts_total` across resumable and terminal cleanup; nested
+`release_outcome.attempts` counts only the represented terminal invocation.
+
 Admission failures after backend construction have one startup/admission
 cleanup owner and use the same tracked release state machine. Schedule or QPC
 failures before backend construction have no input backend or outstanding

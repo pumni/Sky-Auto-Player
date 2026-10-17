@@ -37,6 +37,26 @@ impl EnginePollStatus {
             Self::Invalid => "invalid",
         }
     }
+
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Finished
+                | Self::Quit
+                | Self::Skipped
+                | Self::Error
+                | Self::Panicked
+                | Self::Poisoned
+                | Self::Invalid
+        )
+    }
+
+    pub const fn is_terminal_failure(self) -> bool {
+        matches!(
+            self,
+            Self::Error | Self::Panicked | Self::Poisoned | Self::Invalid
+        )
+    }
 }
 
 /// Tiny frequent-poll shape. It intentionally has no dependency on the
@@ -276,6 +296,9 @@ pub struct EngineProgressSnapshot {
     pub is_finished: bool,
     pub is_paused: bool,
     pub status: String,
+    /// Terminal playback result, independent of the presence of a cleanup or
+    /// worker diagnostic. Clean Quit and Skip remain successful user stops.
+    pub terminal_outcome: Option<EnginePollStatus>,
     pub has_terminal_error: bool,
     pub active_count: usize,
     pub possibly_active_count: usize,
