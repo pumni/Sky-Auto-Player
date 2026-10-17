@@ -3028,7 +3028,11 @@ fn lifecycle_inconclusive_cleanup_does_not_establish_or_bypass_barrier() {
         !post_cleanup_sampled.load(Ordering::Acquire),
         "an unverified cleanup cannot establish a resume barrier"
     );
-    assert_eq!(cleanup.lock().expect("cleanup capture").len(), 1);
+    assert_eq!(
+        cleanup.lock().expect("cleanup capture").len(),
+        4,
+        "an inconclusive probe retains the mask for all bounded cleanup rounds"
+    );
     assert_eq!(packets.lock().expect("packet capture").len(), 1);
     assert_eq!(
         harness.down_floor_for_test(QpcTicks::ZERO, 1),
@@ -3609,17 +3613,17 @@ fn failed_resumable_release_and_terminal_escalation_account_for_both_budgets() {
             .expect("release packet capture")
             .push(packet);
         SendTransactionOutcome {
-            status: SendTransactionStatus::PartialProgress,
+            status: SendTransactionStatus::Complete,
             evidence: SendEvidence {
                 requested_mask: packet.up_mask | packet.down_mask,
-                confirmed_mask: 0,
+                confirmed_mask: packet.up_mask,
                 skipped_mask: 0,
-                first_inserted: 0,
+                first_inserted: packet.event_count(),
                 attempts: 1,
                 zero_progress_retries: 0,
                 retry_reason: PacketRetryReason::None,
-                first_win32_error: Some(5),
-                last_win32_error: Some(5),
+                first_win32_error: None,
+                last_win32_error: None,
                 started_ticks: None,
                 completed_ticks: None,
                 timing_error: None,
@@ -3637,6 +3641,19 @@ fn failed_resumable_release_and_terminal_escalation_account_for_both_budgets() {
     assert_eq!(release_send_count.load(Ordering::SeqCst), 4);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
     assert_eq!(harness.resources.backend.failed_release_mask, 1);
+    assert_eq!(
+        harness
+            .resources
+            .coordinator
+            .cancelled_up_token_count_for_test_support(),
+        0,
+        "unverified resumable cleanup must not mint cancellation tokens"
+    );
+    assert_eq!(
+        harness.down_floor_for_test(QpcTicks::ZERO, 1),
+        None,
+        "unverified cleanup must not establish or allow a resume Down barrier"
+    );
     harness.runtime.terminal_error = Some(resumable_error.clone());
 
     let mut observation = super::worker::FinalizeTestObservation::default();

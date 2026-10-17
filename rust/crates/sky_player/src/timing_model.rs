@@ -93,20 +93,32 @@ pub enum WholeStreamModelError {
     ZeroQpcFrequency,
     InvalidPacketMask,
     InvalidPacketKind,
+    NonChronologicalTargets {
+        previous_index: usize,
+        current_index: usize,
+    },
     ArithmeticOverflow,
 }
 
 impl std::fmt::Display for WholeStreamModelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let message = match self {
-            Self::ZeroQpcFrequency => "QPC frequency must be nonzero",
-            Self::InvalidPacketMask => "packet masks exceed or overlap the instrument slots",
-            Self::InvalidPacketKind => {
-                "metadata packets must have empty masks and physical packets must not"
+        match self {
+            Self::ZeroQpcFrequency => f.write_str("QPC frequency must be nonzero"),
+            Self::InvalidPacketMask => {
+                f.write_str("packet masks exceed or overlap the instrument slots")
             }
-            Self::ArithmeticOverflow => "whole-stream model arithmetic overflow",
-        };
-        f.write_str(message)
+            Self::InvalidPacketKind => {
+                f.write_str("metadata packets must have empty masks and physical packets must not")
+            }
+            Self::NonChronologicalTargets {
+                previous_index,
+                current_index,
+            } => write!(
+                f,
+                "authored target at packet {current_index} precedes packet {previous_index}"
+            ),
+            Self::ArithmeticOverflow => f.write_str("whole-stream model arithmetic overflow"),
+        }
     }
 }
 
@@ -139,8 +151,19 @@ pub fn analyze_whole_stream(
     let mut zero_slack_count = 0u64;
     let mut negative_slack_count = 0u64;
     let mut slack_values = Vec::with_capacity(packets.len());
+    let mut previous_target: Option<(usize, u64)> = None;
 
     for (packet_index, packet) in packets.iter().copied().enumerate() {
+        if let Some((previous_index, previous_ticks)) = previous_target
+            && packet.authored_target_ticks < previous_ticks
+        {
+            return Err(WholeStreamModelError::NonChronologicalTargets {
+                previous_index,
+                current_index: packet_index,
+            });
+        }
+        previous_target = Some((packet_index, packet.authored_target_ticks));
+
         if (packet.up_mask | packet.down_mask) & !INSTRUMENT_MASK != 0
             || packet.up_mask & packet.down_mask != 0
         {
@@ -360,8 +383,8 @@ fn percentiles(values: &mut [i64]) -> TickPercentiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelPacket, ModelPacketKind, SlackClass, WholeStreamModelConfig, WholeStreamModelError,
-        analyze_whole_stream,
+        INSTRUMENT_SLOT_COUNT, ModelPacket, ModelPacketKind, SlackClass, WholeStreamModelConfig,
+        WholeStreamModelError, analyze_whole_stream,
     };
 
     fn config() -> WholeStreamModelConfig {
@@ -492,6 +515,10 @@ mod tests {
             Err(WholeStreamModelError::InvalidPacketMask)
         );
         assert_eq!(
+            analyze_whole_stream(&[physical(0, 1 << INSTRUMENT_SLOT_COUNT, 0)], config()),
+            Err(WholeStreamModelError::InvalidPacketMask)
+        );
+        assert_eq!(
             analyze_whole_stream(
                 &[],
                 WholeStreamModelConfig {
@@ -501,5 +528,57 @@ mod tests {
             ),
             Err(WholeStreamModelError::ZeroQpcFrequency)
         );
+    }
+
+    #[test]
+    fn chronological_input_accepts_increasing_and_equal_targets_with_mixed_packets() {
+        let mixed = physical(10, 0b0001, 0b0010);
+        let metadata = ModelPacket {
+            authored_target_ticks: 10,
+            up_mask: 0,
+            down_mask: 0,
+            kind: ModelPacketKind::Metadata,
+        };
+        let later = physical(20, 0, 0b0100);
+        let report = analyze_whole_stream(&[mixed, metadata, later], config())
+            .expect("nondecreasing authored targets");
+
+        assert_eq!(report.packet_count, 3);
+        assert_eq!(report.packets[0].authored_target_ticks, 10);
+        assert_eq!(report.packets[1].authored_target_ticks, 10);
+        assert_eq!(report.packets[2].authored_target_ticks, 20);
+        assert_eq!(report.packets[0].packet_index, 0);
+        assert_eq!(report.packets[1].packet_index, 1);
+        assert_eq!(report.packets[2].packet_index, 2);
+    }
+
+    #[test]
+    fn decreasing_authored_target_is_a_typed_error_without_sorting() {
+        let error = analyze_whole_stream(&[physical(10, 0, 1), physical(9, 0, 2)], config())
+            .expect_err("decreasing authored target must be rejected");
+        assert_eq!(
+            error,
+            WholeStreamModelError::NonChronologicalTargets {
+                previous_index: 0,
+                current_index: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_packet_kinds_are_rejected_for_both_empty_and_nonempty_masks() {
+        let metadata_with_mask = ModelPacket {
+            authored_target_ticks: 0,
+            up_mask: 1,
+            down_mask: 0,
+            kind: ModelPacketKind::Metadata,
+        };
+        let empty_physical = physical(0, 0, 0);
+        for packet in [metadata_with_mask, empty_physical] {
+            assert_eq!(
+                analyze_whole_stream(&[packet], config()),
+                Err(WholeStreamModelError::InvalidPacketKind)
+            );
+        }
     }
 }

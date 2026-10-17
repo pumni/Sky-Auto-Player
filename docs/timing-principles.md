@@ -220,7 +220,7 @@ The following public counters may remain for schema compatibility:
 - `release_floor_infeasible_boundaries`.
 
 They are deprecated, remain zero in production, and do not control dispatch.
-Native telemetry schema version 18 exports authored and physical-floor timing
+Native telemetry schema version 19 exports authored and physical-floor timing
 differences with explicit sample availability; it does not export absolute
 authored/floor QPC targets and contains no latest-start field. Legacy
 deadline-rejection outcomes are historical terminology and are not active

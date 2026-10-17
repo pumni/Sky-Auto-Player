@@ -21,7 +21,8 @@ fn custom_emitter_without_probe_never_synthesizes_all_up() {
         "emitter alone must not confirm all-up"
     );
     assert!(outcome.verification_inconclusive);
-    assert!(outcome.stuck_keys().is_empty());
+    assert_eq!(outcome.stuck_mask, 0x0003);
+    assert_eq!(state.release_obligation_mask(), 0x0003);
 }
 
 #[test]

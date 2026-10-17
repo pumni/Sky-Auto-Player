@@ -111,16 +111,85 @@ fn timing_semantics_names_the_true_pre_call_boundary() {
 fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailable() {
     let measured = record_with_index(1, TRACE_KIND_UP, 1, 1);
     let value = serde_json::to_value(measured).expect("serialize trace");
+    assert_eq!(value["wake_offset_provenance"], "derived_from_wake_qpc");
+    assert_eq!(value["wake_offset_available"], true);
     assert_eq!(value["wake_qpc_provenance"], "measured");
     assert_eq!(value["pre_call_qpc_provenance"], "measured");
+    assert_eq!(value["sendinput_completion_qpc_provenance"], "measured");
     assert_eq!(
         value["send_started_ticks_provenance"],
         "derived_from_pre_call"
     );
-    assert_eq!(value["send_completed_ticks_provenance"], "measured");
+    assert_eq!(
+        value["send_completed_ticks_provenance"],
+        "derived_from_send_input_completion"
+    );
     assert_eq!(value["final_policy_qpc_provenance"], "unavailable");
     assert_eq!(value["final_policy_qpc_available"], false);
     assert_eq!(value["final_policy_qpc_ticks"], 0);
+}
+
+#[test]
+fn derived_offsets_are_unavailable_without_their_absolute_qpc_source() {
+    let record = RtTraceRecord::dispatched(
+        TraceContext {
+            event_index: 0,
+            source_action_index: 0,
+            compiled_packet_index: None,
+            kind: TRACE_KIND_DOWN,
+            outcome: trace_outcome_code("sent"),
+            polyphony: 1,
+            flags: TRACE_FLAG_SENT_FULL,
+            send_status: TRACE_SEND_STATUS_COMPLETE,
+            win32_error: 0,
+            up_mask: 0,
+            down_mask: 1,
+        },
+        TraceTiming {
+            authored_ticks: TimelineTicks::ZERO,
+            effective_deadline_ticks: TimelineTicks::ZERO,
+            wake_ticks: Some(TimelineTicks::from_raw(7)),
+            pre_call_ticks: Some(TimelineTicks::from_raw(8)),
+            sendinput_completion_ticks: Some(TimelineTicks::from_raw(9)),
+            ..TraceTiming::default()
+        },
+        TraceDelivery {
+            requested: 1,
+            sent: 1,
+            skipped: 0,
+            send_attempts: 1,
+        },
+    )
+    .expect("trace with derived values but no source samples");
+    let value = serde_json::to_value(record).expect("serialize trace");
+
+    for (value_key, available_key, provenance_key, available) in [
+        (
+            "wake_offset_ticks",
+            Some("wake_offset_available"),
+            "wake_offset_provenance",
+            record.wake_offset_available,
+        ),
+        (
+            "send_started_ticks",
+            None,
+            "send_started_ticks_provenance",
+            record.send_started_ticks_provenance == TimestampProvenance::Measured,
+        ),
+        (
+            "send_completed_ticks",
+            None,
+            "send_completed_ticks_provenance",
+            record.send_completed_ticks_provenance == TimestampProvenance::Measured,
+        ),
+    ] {
+        assert!(!available, "{value_key} requires its absolute QPC source");
+        assert_eq!(value[provenance_key], "unavailable");
+        if let Some(available_key) = available_key {
+            assert_eq!(value[available_key], false);
+        }
+        assert_eq!(value[value_key], 0);
+    }
 }
 
 #[test]

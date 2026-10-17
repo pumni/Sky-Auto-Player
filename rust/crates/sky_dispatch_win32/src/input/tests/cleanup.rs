@@ -38,6 +38,106 @@ fn focus_loss_probe_cannot_report_cleanup_success() {
     let outcome = state.release_all(isize::MAX);
     assert!(!outcome.released_successfully);
     assert!(outcome.verification_inconclusive);
+    assert_eq!(outcome.stuck_mask, 0x0001);
+    assert_eq!(state.release_obligation_mask(), 0x0001);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn foreground_change_after_cleanup_send_keeps_verified_release_unavailable() {
+    struct ForegroundReset;
+
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            crate::focus::set_foreground_window_for_test(None);
+        }
+    }
+
+    let _foreground_lock = crate::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+    crate::focus::set_foreground_window_for_test(Some(42));
+
+    let send_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let send_count_for_emitter = Arc::clone(&send_count);
+    let mut state = TrackedKeyState::with_emitter(move |codes, _| {
+        send_count_for_emitter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let result = test_send_result(codes.len() as u8, codes.len() as u8, 0);
+        crate::focus::set_foreground_window_for_test(None);
+        result
+    });
+    state.set_probe(|_, _| {
+        if crate::focus::foreground_window_matches(42) {
+            InstrumentPhysicalState::AllUp
+        } else {
+            InstrumentPhysicalState::Inconclusive
+        }
+    });
+    state.active_mask = 1;
+
+    let outcome = state.release_scope(ReleaseScope::Tracked, 42);
+    assert!(!outcome.released_successfully);
+    assert!(outcome.verification_inconclusive);
+    assert_eq!(outcome.stuck_mask, 1);
+    assert_eq!(outcome.attempts, 4);
+    assert_eq!(state.release_obligation_mask(), 1);
+    assert_eq!(send_count.load(std::sync::atomic::Ordering::SeqCst), 4);
+}
+
+#[test]
+fn custom_full_instrument_cleanup_preserves_all_fifteen_uncertain_slots_until_verified() {
+    let mut spec = InstrumentKeyProfileSpec::canonical();
+    for (slot, scan_code) in super::super::profile::SUPPORTED_NON_EXTENDED_SCAN_CODES
+        .iter()
+        .copied()
+        .take(15)
+        .enumerate()
+    {
+        spec.keys[slot] = PhysicalKey {
+            scan_code,
+            extended: false,
+        };
+    }
+    let profile = MaterializedInstrumentKeyProfile::from_validated(
+        InstrumentKeyProfile::try_from_spec(spec).expect("custom instrument profile"),
+    );
+    let verified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let verified_for_probe = Arc::clone(&verified);
+    let mut state = TrackedKeyState::with_profile(profile);
+    state.set_emitter(|codes, _| test_send_result(codes.len() as u8, codes.len() as u8, 0));
+    state.set_probe(move |_, _| {
+        if verified_for_probe.load(std::sync::atomic::Ordering::Acquire) {
+            InstrumentPhysicalState::AllUp
+        } else {
+            InstrumentPhysicalState::Inconclusive
+        }
+    });
+
+    let first = state.release_all_full_instrument(0);
+    assert!(!first.released_successfully);
+    assert!(first.verification_inconclusive);
+    assert_eq!(first.attempted_mask, 0x7fff);
+    assert_eq!(first.stuck_mask, 0x7fff);
+    assert_eq!(first.attempts, 4);
+    assert_eq!(state.release_obligation_mask(), 0x7fff);
+    assert_eq!(state.failed_release_mask, 0x7fff);
+    assert_eq!(state.release_attempts_total, 4);
+    assert_eq!(
+        first.stuck_keys_with_profile(state.instrument_key_profile()),
+        state
+            .instrument_key_profile()
+            .scan_codes_from_mask(0x7fff)
+            .into_vec()
+    );
+
+    verified.store(true, std::sync::atomic::Ordering::Release);
+    let second = state.release_all_full_instrument(0);
+    assert!(second.released_successfully);
+    assert!(!second.verification_inconclusive);
+    assert_eq!(second.attempted_mask, 0x7fff);
+    assert_eq!(second.stuck_mask, 0);
+    assert_eq!(second.attempts, 1);
+    assert_eq!(state.release_obligation_mask(), 0);
+    assert_eq!(state.release_attempts_total, 5);
 }
 
 #[test]

@@ -23,19 +23,24 @@ still retain their sample counts and maxima.
 
 The desktop retains at most 4,096 fixed-width trace records per session. This
 keeps the raw record storage under the existing 2 MiB budget after adding the
-schema 18 provenance and timing fields; all records rejected at that bound
+schema 19 provenance and timing fields; all records rejected at that bound
 remain reflected in the dropped count.
 
-## Schema 18 and timestamp provenance
+## Schema 19 and timestamp provenance
 
-Every absolute QPC timestamp in the version 18 native trace has a paired
-`*_available` flag and `*_provenance` value:
+Every absolute QPC timestamp in the version 19 native trace has a paired
+`*_available` flag and `*_provenance` value. Provenance describes how the
+exported field value is obtained: absolute QPC fields are direct samples, and
+relative compatibility offsets are derived from a named sampled QPC boundary
+and the immutable playback epoch.
 
 | Provenance | Meaning |
 | --- | --- |
-| `measured` | The named QPC boundary was actually sampled. |
-| `derived_from_pre_call` | The compatibility `send_started_ticks` value was converted from the sampled sender pre-call QPC. |
-| `unavailable` | No value for that boundary was sampled. Its numeric field is zero and its availability flag is false. |
+| `measured` | The exported absolute QPC boundary was directly sampled. |
+| `derived_from_wake_qpc` | `wake_offset_ticks` was converted from sampled wake QPC relative to the epoch. |
+| `derived_from_pre_call` | The compatibility `send_started_ticks` offset was converted from sampled pre-call QPC relative to the epoch. |
+| `derived_from_send_input_completion` | The compatibility `send_completed_ticks` offset was converted from sampled SendInput completion QPC relative to the epoch. |
+| `unavailable` | The required source sample or conversion is absent and the numeric field is zero. Absolute QPC fields and `wake_offset_ticks` also have a false availability flag; the deprecated send offsets use this provenance value as their availability signal. |
 
 The absolute QPC fields are wake, target crossing, final policy, sender
 pre-call, `SendInput` completion, post-send capture, and observer sample.
@@ -100,6 +105,9 @@ historical absolute schedule QPC values are not included in that snapshot.
 It uses caller-supplied sender setup, per-input, post-send, metadata, QPC
 frequency, effective hold H, physical release gap T, and optional resume
 barrier assumptions. Checked arithmetic rejects invalid masks and overflow.
+The public input slice must be chronological by `authored_target_ticks`;
+equal targets are allowed, while a decreasing target returns a typed error and
+is never silently sorted.
 The model preserves packet order, processes Up keys before Down keys in a
 mixed packet, tracks per-slot H/T constraints, applies the resume floor to
 Down-bearing packets, and carries sequential sender/post-send occupancy into

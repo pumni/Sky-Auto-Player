@@ -246,6 +246,21 @@ larger than the musical Down count. The cleanup contract is:
 release_obligation_mask = active_mask | possibly_active_mask | failed_release_mask | in_flight_mask
 ```
 
+Cleanup keeps transport and physical verification as separate evidence. A
+physical `AllUp` observation means the foreground-scoped key-state snapshot
+saw no requested instrument virtual-key down bits; it does not identify which
+actor previously held those keys. This probe's documented zero/failure
+ambiguity remains as described in the [physical-key study](physical-key-study-method.md).
+A physical `AllUp` observation resolves the requested keys only when the Up
+transport confirmed the complete requested mask. A `Held(mask)` observation
+retains both physically held keys and requested keys whose Up transport was
+incomplete or ambiguous. An `Inconclusive` observation retains the entire
+requested mask even when `SendInput` reported every Up event inserted. The
+`SendInput` return count is insertion evidence, not proof that the key is now
+up. Each cleanup invocation retries only its remaining obligations, with a
+four-send upper bound; an unverified invocation leaves those obligations for
+resumable failure escalation or terminal cleanup.
+
 Partial, ambiguous, or clock-uncertain Downs retain conservative obligations
 and are not replayed.
 
@@ -305,7 +320,7 @@ physical floor delay, sender pre-call and completion timing, transport
 anomalies, final-gate rejections, late Down attempts, missing expected Down
 count, generation accounting, and final release obligation state.
 
-Version 18 traces pair absolute QPC timestamps with explicit availability and
+Version 19 traces pair absolute QPC timestamps with explicit availability and
 provenance. Production-normal leaves the final-policy timestamp unavailable
 instead of inserting a nearby sample or schedule value. Always-on timing
 snapshot counts and maxima are worker-local and independent of trace mode.
@@ -320,7 +335,7 @@ These compatibility counters may remain in snapshots and UI DTOs:
 - `release_floor_infeasible_boundaries`.
 
 They are deprecated, remain zero in production, and do not control execution.
-Native telemetry schema version 18 reports authored and physical-floor
+Native telemetry schema version 19 reports authored and physical-floor
 differences, not absolute authored/floor QPC targets, and contains no
 latest-start field. Legacy deadline-rejection outcomes are historical
 terminology and are not active runtime outcomes.

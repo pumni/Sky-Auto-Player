@@ -18,6 +18,8 @@ pub enum TimestampProvenance {
     DerivedFromPreCall = 1,
     #[default]
     Unavailable = 2,
+    DerivedFromWakeQpc = 3,
+    DerivedFromSendInputCompletion = 4,
 }
 
 /// Fixed-size record retained on the real-time worker path.
@@ -121,7 +123,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 18;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 19;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
 pub(crate) const TRACE_KIND_UP: u8 = 1;
@@ -304,6 +306,7 @@ impl RtTraceRecord {
             timing.pre_call_qpc_ticks.or(timing.observation_qpc_ticks),
             timing.physical_target_qpc_ticks,
         )?;
+        let wake_offset_ticks = timing.wake_qpc_ticks.and(timing.wake_ticks);
         let send_started_ticks = timing.pre_call_qpc_ticks.and(timing.pre_call_ticks);
         let send_completed_ticks = timing
             .sendinput_completion_qpc_ticks
@@ -323,8 +326,8 @@ impl RtTraceRecord {
             down_mask: context.down_mask,
             authored_offset_ticks: timing.authored_ticks.as_u64(),
             effective_deadline_offset_ticks: timing.effective_deadline_ticks.as_u64(),
-            wake_offset_ticks: timing.wake_ticks.map_or(0, TimelineTicks::as_u64),
-            wake_offset_available: timing.wake_ticks.is_some(),
+            wake_offset_ticks: wake_offset_ticks.map_or(0, TimelineTicks::as_u64),
+            wake_offset_available: wake_offset_ticks.is_some(),
             wake_qpc_ticks: timing.wake_qpc_ticks.unwrap_or_default(),
             wake_qpc_available: timing.wake_qpc_ticks.is_some(),
             target_crossing_qpc_ticks: timing.target_crossing_qpc_ticks.unwrap_or_default(),
@@ -365,7 +368,11 @@ impl RtTraceRecord {
                     || context.win32_error != 0
                     || delivery.skipped != 0
                     || delivery.send_attempts != 1),
-            wake_offset_provenance: provenance(timing.wake_ticks.is_some()),
+            wake_offset_provenance: if wake_offset_ticks.is_some() {
+                TimestampProvenance::DerivedFromWakeQpc
+            } else {
+                TimestampProvenance::Unavailable
+            },
             wake_qpc_provenance: provenance(timing.wake_qpc_ticks.is_some()),
             target_crossing_qpc_provenance: provenance(timing.target_crossing_qpc_ticks.is_some()),
             final_policy_qpc_provenance: provenance(timing.final_policy_qpc_ticks.is_some()),
@@ -380,7 +387,11 @@ impl RtTraceRecord {
             } else {
                 TimestampProvenance::Unavailable
             },
-            send_completed_ticks_provenance: provenance(send_completed_ticks.is_some()),
+            send_completed_ticks_provenance: if send_completed_ticks.is_some() {
+                TimestampProvenance::DerivedFromSendInputCompletion
+            } else {
+                TimestampProvenance::Unavailable
+            },
             send_started_ticks: send_started_ticks.map_or(0, TimelineTicks::as_u64),
             send_completed_ticks: send_completed_ticks.map_or(0, TimelineTicks::as_u64),
             dispatch_cost_us: timing.completion_residual_us,
@@ -510,7 +521,10 @@ impl Default for TimingSemantics {
             wake_boundary: "worker_wake_before_sendinput",
             sender_start_boundary: "pre_call_qpc_before_sendinput",
             sender_completion_boundary: "sendinput_completion_qpc",
-            timestamp_provenance: "measured|derived_from_pre_call|unavailable",
+            timestamp_provenance: concat!(
+                "measured|derived_from_wake_qpc|derived_from_pre_call|",
+                "derived_from_send_input_completion|unavailable",
+            ),
             final_policy_boundary: "sampled_when_present_else_unavailable",
             observer_boundary: "post_send_capture_and_observer_drain_are_distinct",
             game_observed_available: false,
