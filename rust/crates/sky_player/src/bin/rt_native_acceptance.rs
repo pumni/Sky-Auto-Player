@@ -712,6 +712,7 @@ fn run_windows(args: RunArgs) -> i32 {
                 hook: acceptance_hook.as_deref(),
                 final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
                 terminal_error: snapshot.terminal_error.as_deref(),
+                terminal_trigger_reason: snapshot.terminal_trigger_reason.as_deref(),
                 helper_liveness_ticks: independent_helper_liveness_ticks,
             },
         );
@@ -753,8 +754,8 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_supervisor_expiry = args.scenario == Scenario::SupervisorLeaseExpiry && supervisor_expiry_cleanup_exception(&snapshot); let expected_ambiguous_cleanup = args.scenario == Scenario::AmbiguousPacket && ambiguous_packet_cleanup_qualified(&snapshot, 0b11);
     let expected_delayed_watchdog_expiry = lifecycle_lease_qualification::expected_delayed_watchdog_expiry(
         args.scenario,
-        snapshot.terminal_error.as_deref(),
-    );
+        snapshot.terminal_trigger_reason.as_deref(),
+    ) && snapshot.terminal_error.is_none() && snapshot.secondary_errors.is_empty();
     if snapshot.active_count != 0 || snapshot.possibly_active_count != 0 || snapshot.final_release_obligation_mask != 0 || (snapshot.failed_release_count != 0 && !target_cleanup_exception && !expected_supervisor_expiry) || (snapshot.sendinput_partial_events != 0 && !expected_ambiguous_cleanup) || snapshot.sendinput_zero_progress_failures != 0 || (snapshot.terminal_error.is_some() && !expected_target_preflight_failure && !expected_supervisor_expiry && !expected_delayed_watchdog_expiry && !expected_ambiguous_cleanup && !modifier_guard::requires_test_query_seam(args.scenario) && !owner_identity::failure_matches(args.scenario, snapshot.terminal_error.as_deref()))
     {
         return write_report(
@@ -805,6 +806,7 @@ fn run_windows(args: RunArgs) -> i32 {
                 down_sender_attempt_count: hook.down_sender_attempt_count(),
                 final_gate_lease_expirations: snapshot.final_gate_lease_expirations,
                 terminal_error: snapshot.terminal_error.as_deref(),
+                terminal_trigger_reason: snapshot.terminal_trigger_reason.as_deref(),
                 final_release_obligation_mask: snapshot.final_release_obligation_mask,
                 sink_events_empty: sink_events.is_empty(),
                 helper_liveness_ticks: independent_helper_liveness_ticks,

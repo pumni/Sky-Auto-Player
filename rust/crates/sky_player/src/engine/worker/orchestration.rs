@@ -61,11 +61,14 @@ impl Worker<'_> {
                 terminal_error: std::mem::take(&mut core.runtime.terminal_error),
                 secondary_errors: std::mem::take(&mut core.errors.secondary),
                 last_published_error: std::mem::take(&mut core.errors.last_published),
+                terminal_trigger: core.runtime.terminal_trigger.take(),
             },
             signals: FinalizeSignals {
                 target: &shared.target,
                 skip_requested: &shared.commands.skip_requested,
                 quit_requested: &shared.commands.quit_requested,
+                panic_requested: &shared.commands.panic_requested,
+                supervisor_expired: &shared.commands.supervisor_expired,
             },
             publication: FinalizePublication {
                 metrics: &shared.publication.metrics,

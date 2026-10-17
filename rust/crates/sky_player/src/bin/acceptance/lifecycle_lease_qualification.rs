@@ -253,6 +253,7 @@ pub(super) struct CaseDetails<'a> {
     pub(super) hook: Option<&'a StartupOrderingHook>,
     pub(super) final_gate_lease_expirations: u64,
     pub(super) terminal_error: Option<&'a str>,
+    pub(super) terminal_trigger_reason: Option<&'a str>,
     pub(super) helper_liveness_ticks: u64,
 }
 
@@ -280,7 +281,8 @@ pub(super) fn attach_case_details(object: &mut Map<String, Value>, details: Case
                 "down_sender_attempt_count": hook.down_sender_attempt_count(),
                 "final_gate_lease_expirations": details.final_gate_lease_expirations,
                 "auxiliary_thread_liveness_ticks": details.helper_liveness_ticks,
-                "terminal_error": details.terminal_error
+                "terminal_error": details.terminal_error,
+                "terminal_trigger_reason": details.terminal_trigger_reason
             }),
         );
     }
@@ -288,10 +290,10 @@ pub(super) fn attach_case_details(object: &mut Map<String, Value>, details: Case
 
 pub(super) fn expected_delayed_watchdog_expiry(
     scenario: Scenario,
-    terminal_error: Option<&str>,
+    terminal_trigger_reason: Option<&str>,
 ) -> bool {
     scenario == Scenario::LeaseAgeWatchdogDelayed
-        && terminal_error == Some("supervisor_lease_expired")
+        && terminal_trigger_reason == Some("supervisor_lease_expired")
 }
 
 pub(super) fn release_floor_failure(
@@ -317,6 +319,7 @@ pub(super) struct DelayedWatchdogOracle<'a> {
     pub(super) down_sender_attempt_count: u64,
     pub(super) final_gate_lease_expirations: u64,
     pub(super) terminal_error: Option<&'a str>,
+    pub(super) terminal_trigger_reason: Option<&'a str>,
     pub(super) final_release_obligation_mask: u16,
     pub(super) sink_events_empty: bool,
     pub(super) helper_liveness_ticks: u64,
@@ -339,7 +342,8 @@ pub(super) fn finish_delayed_watchdog_case(
     if !hook.watchdog_is_held()
         || oracle.down_sender_attempt_count != 0
         || oracle.final_gate_lease_expirations == 0
-        || oracle.terminal_error != Some("supervisor_lease_expired")
+        || oracle.terminal_trigger_reason != Some("supervisor_lease_expired")
+        || oracle.terminal_error.is_some()
         || oracle.final_release_obligation_mask != 0
         || !oracle.sink_events_empty
         || oracle.helper_liveness_ticks == 0

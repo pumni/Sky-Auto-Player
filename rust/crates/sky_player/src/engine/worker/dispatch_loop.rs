@@ -6,12 +6,12 @@ use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publ
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
 use super::wait::WaitObservation;
 use super::{
-    CommandControl, CommandControlClock, CommandControlInput, CommandControlMetrics,
-    CommandControlRuntime, CommandControlSignals, PlanningInput, WaitBoundary, WaitBoundaryInput,
-    WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
-    focus_matches, focus_matches_hwnd, load_target_stamp, plan_next_dispatch_projected,
-    process_command_control, publish_backend_counters, publish_backend_metrics,
-    record_wait_failure, suspend_live_input, target_stamp_still_current, wait_for_next_boundary,
+    CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
+    PlanningInput, WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, Worker,
+    ensure_preflight_for_target, enter_focus_pause, focus_matches, focus_matches_hwnd,
+    load_target_stamp, plan_next_dispatch_projected, process_command_control,
+    publish_backend_counters, publish_backend_metrics, record_wait_failure, suspend_live_input,
+    target_stamp_still_current, wait_for_next_boundary,
 };
 use super::{PreparedDispatchEntry, PreparedDispatchStream, dispatch_prepared_normal_frame};
 use sky_dispatch_core::clock::PauseReason;
@@ -670,25 +670,14 @@ pub(super) fn dispatch(
             core.runtime.last_dispatch_deadline_wake_qpc = None;
             core.runtime.last_dispatch_deadline_target_qpc = None;
             if let CommandControl::Exit = process_command_control(CommandControlInput {
-                clock: CommandControlClock { qpc_clock },
                 signals: CommandControlSignals {
                     quit_requested,
                     skip_requested,
                     panic_requested,
                     supervisor_expired,
-                    target,
                 },
                 runtime: CommandControlRuntime {
-                    backend: &mut resources.backend,
-                    coordinator: &mut resources.coordinator,
-                    terminal_error: &mut core.runtime.terminal_error,
-                    secondary_errors: &mut core.errors.secondary,
-                    abort_counts: &mut core.errors.abort_counts,
-                },
-                metrics: CommandControlMetrics {
-                    local_metrics: &mut core.metrics,
-                    metrics,
-                    last_published_error: &mut core.errors.last_published,
+                    terminal_trigger: &mut core.runtime.terminal_trigger,
                 },
             }) {
                 break;

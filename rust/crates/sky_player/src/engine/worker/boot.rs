@@ -17,7 +17,56 @@ use crate::engine::config::{
     CALIBRATION_MAX_STARTUP_BUDGET_US, CALIBRATION_SAMPLES, STARTUP_READINESS_RESERVE_US,
     SpinThresholdSource,
 };
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::Ordering;
+
+fn record_startup_failure(metrics: &SharedMetrics, message: String) -> u8 {
+    *metrics.last_error.lock() = Some(message.clone());
+    *metrics.terminal_error.lock() = Some(message);
+    *metrics.terminal_trigger_reason.lock() = Some("startup_failure".to_string());
+    1
+}
+
+fn finalize_admission_failure(
+    backend: &mut TrackedKeyState,
+    metrics: &SharedMetrics,
+    verification_hwnd: isize,
+    primary_error: String,
+) -> u8 {
+    let cleanup_result = catch_unwind(AssertUnwindSafe(|| backend.release_all(verification_hwnd)));
+    let cleanup_verified = cleanup_result
+        .as_ref()
+        .is_ok_and(|cleanup| release_state_verified(backend, cleanup));
+    let cleanup_error = match &cleanup_result {
+        Ok(_) if cleanup_verified => None,
+        Ok(cleanup) => Some(format!(
+            "admission cleanup failed: {}",
+            describe_release_outcome(backend, cleanup)
+        )),
+        Err(_) => Some(format!(
+            "admission cleanup panicked with obligation mask {:#06x}",
+            backend.release_obligation_mask()
+        )),
+    };
+    if let Ok(cleanup) = &cleanup_result {
+        *metrics.terminal_release_outcome.lock() = Some(cleanup.clone());
+    }
+    metrics.terminal_release_obligation_mask.store(
+        u32::from(backend.release_obligation_mask()),
+        Ordering::Release,
+    );
+    metrics
+        .terminal_release_attempts_total
+        .store(backend.release_attempts_total, Ordering::Release);
+    *metrics.terminal_error.lock() = Some(primary_error.clone());
+    *metrics.terminal_trigger_reason.lock() = Some("startup_failure".to_string());
+    *metrics.secondary_errors.lock() = cleanup_error.iter().cloned().collect();
+    let message = cleanup_error
+        .map(|cleanup_error| format!("{primary_error}; {cleanup_error}"))
+        .unwrap_or(primary_error);
+    *metrics.last_error.lock() = Some(message);
+    1
+}
 
 fn validate_production_wait_backend(
     backend_is_production: bool,
@@ -102,8 +151,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let schedule = match worker.take_schedule() {
         Ok(schedule) => schedule,
         Err(error) => {
-            *metrics.last_error.lock() = Some(error.to_string());
-            return 1;
+            return record_startup_failure(metrics, error.to_string());
         }
     };
 
@@ -123,8 +171,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let qpc_clock = match QpcClock::initialize() {
         Ok(clock) => clock,
         Err(error) => {
-            *metrics.last_error.lock() = Some(format!("QPC admission failed: {error:?}"));
-            return 1;
+            return record_startup_failure(metrics, format!("QPC admission failed: {error:?}"));
         }
     };
     let instrument_key_profile = worker
@@ -165,18 +212,12 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let priority_acquired = &shared.publication.priority_acquired;
     let admission_failure =
         |backend: &mut TrackedKeyState, metrics: &SharedMetrics, primary_error: String| {
-            let verification_hwnd = target.hwnd_for_safety_release();
-            let cleanup = backend.release_all(verification_hwnd);
-            let message = if release_state_verified(backend, &cleanup) {
-                primary_error
-            } else {
-                format!(
-                    "{primary_error}; admission cleanup failed: {}",
-                    describe_release_outcome(backend, &cleanup)
-                )
-            };
-            *metrics.last_error.lock() = Some(message);
-            1
+            finalize_admission_failure(
+                backend,
+                metrics,
+                target.hwnd_for_safety_release(),
+                primary_error,
+            )
         };
     let StartupResources {
         scheduling,
@@ -757,6 +798,9 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     0
 }
+
+#[cfg(test)]
+mod admission_tests;
 
 #[cfg(test)]
 mod tests {

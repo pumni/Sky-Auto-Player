@@ -24,7 +24,7 @@ fn empty_successful_cleanup(snapshot: &EngineSnapshot) -> bool {
 }
 pub(super) fn target_change_cleanup_exception(snapshot: &EngineSnapshot) -> bool { target_change_preflight_error(snapshot) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && empty_successful_cleanup(snapshot) }
 pub(super) fn preflight_user_held_cleanup_exception(snapshot: &EngineSnapshot) -> bool { snapshot.outcome.as_deref() == Some("finished") && snapshot.last_error.as_deref().is_some_and(|error| error.contains("instrument key preflight failed during preroll") && error.contains("physically held before playback")) && snapshot.keys_inserted_before_failure == 0 && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.failed_release_count == 0 && snapshot.final_release_obligation_mask == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.release_outcome.as_ref().is_none_or(|outcome| outcome.attempted_mask == 0 && outcome.attempts == 0 && outcome.released_successfully && outcome.stuck_mask == 0 && !outcome.verification_inconclusive && !outcome.transport_anomaly) }
-pub(super) fn supervisor_expiry_cleanup_exception(snapshot: &EngineSnapshot) -> bool { snapshot.terminal_error.as_deref() == Some("supervisor_lease_expired") && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.timeline_rebase_count == 0 && empty_successful_cleanup(snapshot) }
+pub(super) fn supervisor_expiry_cleanup_exception(snapshot: &EngineSnapshot) -> bool { snapshot.terminal_trigger_reason.as_deref() == Some("supervisor_lease_expired") && snapshot.terminal_error.is_none() && snapshot.secondary_errors.is_empty() && snapshot.active_count == 0 && snapshot.possibly_active_count == 0 && snapshot.sendinput_partial_events == 0 && snapshot.sendinput_zero_progress_failures == 0 && snapshot.timeline_rebase_count == 0 && empty_successful_cleanup(snapshot) }
 
 pub(super) fn ambiguous_packet_event_sequence_matches(events: &[EventRecord], first: PhysicalExpectation, second: PhysicalExpectation) -> bool {
     let expected = [("key_press", first), ("key_release", first), ("key_press", second), ("key_release", first), ("key_release", second)];
@@ -75,7 +75,7 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         })
     });
 
-    json!({
+    let mut report = json!({
         "status": snapshot.status,
         "outcome": snapshot.outcome,
         "last_error": snapshot.last_error,
@@ -160,5 +160,15 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "production_structural_anomaly_count": snapshot.production_structural_anomaly_count,
         "production_timing_diagnostic_count": snapshot.production_timing_diagnostic_count,
         "release_outcome": release,
-    })
+    });
+    if let Value::Object(object) = &mut report {
+        object.insert(
+            "terminal_trigger_reason".to_string(),
+            snapshot
+                .terminal_trigger_reason
+                .clone()
+                .map_or(Value::Null, Value::String),
+        );
+    }
+    report
 }

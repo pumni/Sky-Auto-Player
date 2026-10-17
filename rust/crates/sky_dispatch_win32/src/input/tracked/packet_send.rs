@@ -80,11 +80,11 @@ impl TrackedKeyState {
             } else {
                 None
             };
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
             self.in_flight_mask |= packet.up_mask | packet.down_mask;
             let mut outcome = emitter(packet);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterSenderReturn);
             if let Some(started_ticks) = started_ticks {
                 outcome.evidence.started_ticks = Some(started_ticks);
@@ -99,7 +99,7 @@ impl TrackedKeyState {
             #[cfg(any(test, feature = "test-support"))]
             let outcome = self.apply_test_packet_ambiguity(packet, outcome);
             let outcome = self.apply_packet_outcome(packet, outcome);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
             return outcome;
         }
@@ -127,17 +127,17 @@ impl TrackedKeyState {
                 },
             );
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
         self.in_flight_mask |= packet.up_mask | packet.down_mask;
         let outcome =
             super::super::packet::send_prepared_physical_packet_view_once(prepared, clock);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterSenderReturn);
         #[cfg(any(test, feature = "test-support"))]
         let outcome = self.apply_test_packet_ambiguity(packet, outcome);
         let outcome = self.apply_packet_outcome(packet, outcome);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
     }
@@ -399,13 +399,13 @@ impl TrackedKeyState {
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 self.panic_if_prepared_send_at(
                     super::PreparedSendPanicPoint::BeforeSenderAuthority,
                 );
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
                 let mut outcome = emitter(packet);
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterSenderReturn);
                 outcome.evidence.started_ticks = Some(started_ticks);
                 outcome
@@ -430,7 +430,7 @@ impl TrackedKeyState {
                         },
                     };
                 };
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 self.panic_if_prepared_send_at(
                     super::PreparedSendPanicPoint::BeforeSenderAuthority,
                 );
@@ -459,7 +459,7 @@ impl TrackedKeyState {
                         },
                     };
                 };
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 self.panic_if_prepared_send_at(
                     super::PreparedSendPanicPoint::BeforeSenderAuthority,
                 );
@@ -467,12 +467,12 @@ impl TrackedKeyState {
                 send_prepared_physical_packet_once_with_start(&prepared, clock, started_ticks)
             }
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterSenderReturn);
         #[cfg(any(test, feature = "test-support"))]
         let outcome = self.apply_test_packet_ambiguity(packet, outcome);
         let outcome = self.apply_packet_outcome(packet, outcome);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
     }
@@ -494,7 +494,7 @@ impl TrackedKeyState {
         started_ticks: QpcTicks,
     ) -> SendTransactionOutcome {
         let packet = prepared.packet();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
         let outcome = {
             #[cfg(any(test, feature = "test-support"))]
@@ -574,10 +574,10 @@ impl TrackedKeyState {
                 )
             }
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterSenderReturn);
         let outcome = self.apply_packet_outcome(packet, outcome);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
     }

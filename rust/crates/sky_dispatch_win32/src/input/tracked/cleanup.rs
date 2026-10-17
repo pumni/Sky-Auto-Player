@@ -41,6 +41,7 @@ impl TrackedKeyState {
             }
 
             let previous_unresolved = unresolved_mask;
+            self.release_attempts_total = self.release_attempts_total.saturating_add(1);
             let emitted = self.do_emit_up_once(unresolved_mask);
             let transport_confirmed_mask = emitted.evidence.confirmed_mask;
 

@@ -481,12 +481,23 @@ impl NativeDispatchSession {
                 };
                 let panicked = panic_message.is_some();
                 if let Some(message) = panic_message {
-                    shared
-                        .publication
-                        .metrics
-                        .terminal_error
-                        .lock()
-                        .replace(message);
+                    let metrics = &shared.publication.metrics;
+                    let mut terminal_error = metrics.terminal_error.lock();
+                    if terminal_error.is_none() {
+                        *terminal_error = Some(message.clone());
+                    } else if !terminal_error
+                        .as_deref()
+                        .is_some_and(|error| error.contains(&message))
+                    {
+                        let panic_error = format!("worker panic: {message}");
+                        let mut secondary_errors = metrics.secondary_errors.lock();
+                        if !secondary_errors.contains(&panic_error) {
+                            secondary_errors.push(panic_error);
+                        }
+                    }
+                    drop(terminal_error);
+                    let mut trigger_reason = metrics.terminal_trigger_reason.lock();
+                    trigger_reason.get_or_insert_with(|| "worker_panic".to_string());
                 }
                 shared
                     .lifecycle
@@ -1363,6 +1374,13 @@ impl NativeDispatchSession {
                 .terminal_error
                 .lock()
                 .clone(),
+            terminal_trigger_reason: self
+                .shared
+                .publication
+                .metrics
+                .terminal_trigger_reason
+                .lock()
+                .clone(),
             secondary_errors: self
                 .shared
                 .publication
@@ -1400,6 +1418,12 @@ impl NativeDispatchSession {
                 .terminal_release_outcome
                 .lock()
                 .clone(),
+            release_attempts_total: self
+                .shared
+                .publication
+                .metrics
+                .terminal_release_attempts_total
+                .load(Ordering::Acquire),
             startup_ready,
             startup_latency_us: startup_ready.then(|| {
                 self.shared

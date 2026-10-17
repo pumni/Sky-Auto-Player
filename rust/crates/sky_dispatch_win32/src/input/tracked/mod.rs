@@ -89,6 +89,9 @@ pub struct TrackedKeyState {
     pub possibly_active_mask: u16,
     pub failed_release_mask: u16,
     pub in_flight_mask: u16,
+    /// Cumulative release-FSM send attempts for this worker-owned backend.
+    /// This includes distinct resumable and terminal cleanup operations.
+    pub release_attempts_total: u64,
     pub last_error: Option<String>,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
@@ -124,14 +127,14 @@ pub struct TrackedKeyState {
     pub(crate) force_preflight_user_held_mask: Option<u16>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) prepared_packet_ambiguity_mask: Option<u16>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) prepared_send_panic_point: Option<PreparedSendPanicPoint>,
     qpc_clock: Option<crate::clock::QpcClock>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreparedSendPanicPoint {
+pub enum PreparedSendPanicPoint {
     BeforeSenderAuthority,
     AfterSenderReturn,
     AfterStateCommit,

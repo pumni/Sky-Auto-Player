@@ -6795,12 +6795,13 @@ mod tests {
         });
 
         let expiry_deadline = Instant::now() + Duration::from_secs(5);
-        while player.snapshot().terminal_error.as_deref() != Some("supervisor_lease_expired")
+        while player.snapshot().terminal_trigger_reason.as_deref()
+            != Some("supervisor_lease_expired")
             && Instant::now() < expiry_deadline
         {
             thread::sleep(Duration::from_millis(5));
         }
-        let terminal_error = player.snapshot().terminal_error;
+        let terminal_trigger_reason = player.snapshot().terminal_trigger_reason;
         let helper_remained_active = helper_ticks.load(Ordering::Acquire) > 1;
 
         helper_running.store(false, Ordering::Release);
@@ -6819,7 +6820,7 @@ mod tests {
         monitor_thread.join().expect("native monitor thread");
 
         assert_eq!(
-            terminal_error.as_deref(),
+            terminal_trigger_reason.as_deref(),
             Some("supervisor_lease_expired"),
             "the worker watchdog must latch hard-stop authority while the real monitor is stalled"
         );
@@ -6837,7 +6838,7 @@ mod tests {
             "the resumed monitor must not certify progress after terminal supervision"
         );
         assert_eq!(
-            player.snapshot().terminal_error.as_deref(),
+            player.snapshot().terminal_trigger_reason.as_deref(),
             Some("supervisor_lease_expired"),
             "resuming the monitor must not heal the expiry latch"
         );

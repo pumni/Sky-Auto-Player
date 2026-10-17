@@ -2537,9 +2537,20 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     harness.process_command_control_for_test(),
                     "{path}: command-exit owner"
                 );
+                assert_eq!(
+                    *packets.lock().expect("pre-finalizer packet capture"),
+                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+                    "{path}: command control must only latch the stop"
+                );
+                assert_eq!(
+                    harness.resources.coordinator.generation_accounting().active,
+                    1,
+                    "{path}: generation ledger remains available for post-release audit"
+                );
                 let mut observation = super::worker::FinalizeTestObservation::default();
                 let outcome = harness.finalize_worker_for_test(false, &mut observation);
                 assert_eq!(outcome, super::OUTCOME_QUIT, "{path}: quit remains quit");
+                assert_eq!(observation.terminal_trigger_reason.as_deref(), Some("quit"));
                 assert_eq!(
                     observation.attempted_mask, 0b1,
                     "{path}: tracked scope mask"
@@ -2574,12 +2585,21 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     harness.process_command_control_for_test(),
                     "{path}: command-exit owner"
                 );
+                assert_eq!(
+                    *packets.lock().expect("pre-finalizer packet capture"),
+                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+                    "{path}: command control must only latch the stop"
+                );
                 let mut observation = super::worker::FinalizeTestObservation::default();
                 let outcome = harness.finalize_worker_for_test(false, &mut observation);
                 assert_eq!(
                     outcome,
                     super::OUTCOME_SKIPPED,
                     "{path}: skip remains skipped"
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("skipped")
                 );
                 assert_eq!(
                     observation.attempted_mask, 0b1,
@@ -2653,6 +2673,32 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     0,
                     "{path}: supervisor expiry must use tracked ownership"
                 );
+                assert_eq!(
+                    *packets.lock().expect("pre-finalizer packet capture"),
+                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+                    "{path}: lease control must defer release to finalization"
+                );
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                let outcome = harness.finalize_worker_for_test(false, &mut observation);
+                assert_eq!(
+                    outcome,
+                    super::OUTCOME_ERROR,
+                    "{path}: expiry is terminal error"
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("supervisor_lease_expired")
+                );
+                assert_eq!(observation.attempted_mask, 0b1);
+                assert_eq!(observation.release_obligation_mask, 0);
+                assert_eq!(
+                    *packets.lock().expect("terminal packet capture"),
+                    vec![
+                        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1),
+                        sky_dispatch_win32::input::PhysicalPacket::new(0b1, 0),
+                    ]
+                );
+                continue;
             }
             "panic_hard_stop" => {
                 harness.panic_requested.store(true, Ordering::Release);
@@ -2665,6 +2711,32 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
                     0,
                     "{path}: panic hard-stop must use tracked ownership"
                 );
+                assert_eq!(
+                    *packets.lock().expect("pre-finalizer packet capture"),
+                    vec![sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1)],
+                    "{path}: panic control must defer release to finalization"
+                );
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                let outcome = harness.finalize_worker_for_test(false, &mut observation);
+                assert_eq!(
+                    outcome,
+                    super::OUTCOME_ERROR,
+                    "{path}: panic is terminal error"
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("panic_release_requested")
+                );
+                assert_eq!(observation.attempted_mask, 0b1);
+                assert_eq!(observation.release_obligation_mask, 0);
+                assert_eq!(
+                    *packets.lock().expect("terminal packet capture"),
+                    vec![
+                        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1),
+                        sky_dispatch_win32::input::PhysicalPacket::new(0b1, 0),
+                    ]
+                );
+                continue;
             }
             "terminal_cleanup" => {
                 let mut observation = super::worker::FinalizeTestObservation::default();
@@ -2777,6 +2849,290 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
 }
 
 #[test]
+fn terminal_release_precedes_million_entry_ledger_audits_and_publication() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use parking_lot::Mutex;
+    use sky_dispatch_core::model::{KeyRegistry, RuntimeSchedule};
+
+    const GENERATIONS: u64 = 1_000_000;
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.resources.backend.custom_emitter = None;
+    let packets = harness.configure_packet_capture();
+    harness.resources.backend.active_mask = 1;
+    harness.resources.coordinator =
+        sky_dispatch_core::coordinator::RuntimeDispatchCoordinator::try_new_ticks(
+            RuntimeSchedule {
+                packets: Vec::new(),
+                batches: Vec::new(),
+                intents: Vec::new(),
+                generation_count: GENERATIONS,
+                key_registry: KeyRegistry::new(&[]),
+                reason_table: Vec::new(),
+            },
+            0,
+            DurationTicks::ZERO,
+            |us| Ok(TimelineTicks::from_raw(us)),
+        )
+        .expect("million-entry cancellation ledger");
+
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let trace_for_sender = Arc::clone(&trace);
+    let sender = harness
+        .resources
+        .backend
+        .custom_packet_emitter
+        .take()
+        .expect("configured packet capture sender");
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        if packet.up_mask != 0 {
+            trace_for_sender.lock().push("physical_release_attempt");
+        }
+        sender(packet)
+    });
+
+    harness.quit_requested.store(true, Ordering::Release);
+    assert!(harness.process_command_control_for_test());
+    assert_eq!(
+        *packets.lock().expect("packet capture before finalization"),
+        Vec::<PhysicalPacket>::new(),
+        "the command boundary only latches Quit"
+    );
+    assert_eq!(
+        harness
+            .resources
+            .coordinator
+            .generation_accounting()
+            .scheduled,
+        GENERATIONS,
+        "the generation ledger has not been traversed or cancelled"
+    );
+
+    let mut observation = super::worker::FinalizeTestObservation {
+        operation_trace: Some(Arc::clone(&trace)),
+        ..Default::default()
+    };
+    assert_eq!(
+        harness.finalize_worker_for_test(false, &mut observation),
+        super::OUTCOME_QUIT
+    );
+    assert_eq!(observation.terminal_trigger_reason.as_deref(), Some("quit"));
+    assert_eq!(observation.terminal_release_attempts, 1);
+    assert_eq!(observation.total_release_attempts, 1);
+    assert_eq!(
+        observation.pre_cancel_generation_accounting.total,
+        GENERATIONS
+    );
+    assert_eq!(
+        observation.pre_cancel_generation_accounting.scheduled,
+        GENERATIONS
+    );
+    assert_eq!(observation.generation_accounting.cancelled, GENERATIONS);
+    assert_eq!(observation.release_obligation_mask, 0);
+    assert_eq!(
+        *packets.lock().expect("terminal packet capture"),
+        vec![PhysicalPacket::new(1, 0)]
+    );
+
+    let trace = trace.lock();
+    let position = |event| {
+        trace
+            .iter()
+            .position(|observed| *observed == event)
+            .unwrap_or_else(|| panic!("missing terminal event {event}: {trace:?}"))
+    };
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|event| **event == "physical_release_attempt")
+            .count(),
+        1
+    );
+    assert!(position("terminal_release_started") < position("physical_release_attempt"));
+    assert!(position("physical_release_attempt") < position("pre_cancel_ledger_audit"));
+    assert!(position("pre_cancel_ledger_audit") < position("coordinator_cancellation"));
+    assert!(position("coordinator_cancellation") < position("post_cleanup_ledger_audit"));
+    assert!(position("post_cleanup_ledger_audit") < position("observer_shutdown"));
+    assert!(position("observer_shutdown") < position("generation_metrics_export"));
+    assert!(position("generation_metrics_export") < position("telemetry_export"));
+    assert!(position("observer_shutdown") < position("terminal_metrics_publication"));
+    assert!(position("physical_release_attempt") < position("generation_metrics_export"));
+    assert!(position("physical_release_attempt") < position("terminal_metrics_publication"));
+    assert!(position("physical_release_attempt") < position("telemetry_export"));
+}
+
+#[test]
+fn failed_resumable_release_and_terminal_escalation_account_for_both_budgets() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::input::InstrumentPhysicalState;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let packets = harness.configure_packet_capture();
+    harness.resources.backend.custom_emitter = None;
+    harness.align_next_plan_to_future_for_test(500_000);
+    let plan = harness.plan_current_dispatch();
+    assert!(matches!(
+        harness.dispatch_at_plan_target_for_test(&plan),
+        super::worker::DispatchStep::Dispatched
+    ));
+
+    let release_send_count = Arc::new(AtomicU64::new(0));
+    let captured_releases = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let count_sender = Arc::clone(&release_send_count);
+    let packet_sender = Arc::clone(&captured_releases);
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        count_sender.fetch_add(1, Ordering::SeqCst);
+        packet_sender
+            .lock()
+            .expect("release packet capture")
+            .push(packet);
+        SendTransactionOutcome {
+            status: SendTransactionStatus::PartialProgress,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: None,
+                completed_ticks: None,
+                timing_error: None,
+            },
+        }
+    });
+    harness
+        .resources
+        .backend
+        .set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+    let resumable_error = harness
+        .apply_resumable_lifecycle_transition_for_test()
+        .expect_err("uncertain resumable release escalates to terminal cleanup");
+    assert_eq!(release_send_count.load(Ordering::SeqCst), 4);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    assert_eq!(harness.resources.backend.failed_release_mask, 1);
+    harness.runtime.terminal_error = Some(resumable_error.clone());
+
+    let mut observation = super::worker::FinalizeTestObservation::default();
+    assert_eq!(
+        harness.finalize_worker_for_test(false, &mut observation),
+        super::OUTCOME_ERROR,
+        "uncertain cleanup must never be reported Finished"
+    );
+    assert_eq!(release_send_count.load(Ordering::SeqCst), 8);
+    assert_eq!(observation.terminal_release_attempts, 4);
+    assert_eq!(observation.total_release_attempts, 8);
+    assert_eq!(observation.cleanup_outcome.as_ref().unwrap().attempts, 4);
+    assert!(
+        observation
+            .cleanup_outcome
+            .as_ref()
+            .unwrap()
+            .verification_inconclusive
+    );
+    assert_eq!(observation.cleanup_outcome.as_ref().unwrap().stuck_mask, 1);
+    assert_eq!(observation.release_obligation_mask, 1);
+    assert_eq!(observation.failed_release_mask, 1);
+    assert_eq!(
+        observation.terminal_error.as_deref(),
+        Some(resumable_error.as_str())
+    );
+    assert!(
+        observation
+            .secondary_errors
+            .iter()
+            .any(|error| error.contains("terminal release verification failed"))
+    );
+    assert_eq!(
+        captured_releases
+            .lock()
+            .expect("release packet capture")
+            .len(),
+        8
+    );
+    assert_eq!(
+        packets.lock().expect("musical packet capture").as_slice(),
+        &[PhysicalPacket::new(0, 1)]
+    );
+}
+
+#[test]
+fn sender_and_commit_panics_keep_uncertain_keys_for_terminal_release() {
+    use super::test_support::ProductionDispatchTestHarness;
+    use sky_dispatch_win32::input::PreparedSendPanicPoint;
+
+    for (point, expected_active, expected_in_flight) in [
+        (PreparedSendPanicPoint::AfterSenderReturn, 0, 1),
+        (PreparedSendPanicPoint::AfterStateCommit, 1, 0),
+    ] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        let packets = harness.configure_packet_capture();
+        harness.resources.backend.custom_emitter = None;
+        harness.align_next_plan_to_future_for_test(500_000);
+        let plan = harness.plan_current_dispatch();
+        harness
+            .resources
+            .backend
+            .set_prepared_send_panic_point_for_test(Some(point));
+
+        let dispatch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            harness.dispatch_at_plan_target_for_test(&plan)
+        }));
+        assert!(
+            dispatch_result.is_err(),
+            "{point:?}: dispatch panic injected"
+        );
+        assert_eq!(
+            harness.resources.backend.active_mask, expected_active,
+            "{point:?}"
+        );
+        assert_eq!(
+            harness.resources.backend.in_flight_mask, expected_in_flight,
+            "{point:?}"
+        );
+        assert_eq!(harness.release_obligation_mask_for_test(), 1, "{point:?}");
+
+        // The one-shot fault has already crossed the sender/commit seam. The
+        // terminal release is then allowed to run its own safety transaction.
+        harness
+            .resources
+            .backend
+            .set_prepared_send_panic_point_for_test(None);
+        let mut observation = super::worker::FinalizeTestObservation::default();
+        let finalize_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            harness.finalize_worker_for_test(true, &mut observation)
+        }));
+        assert!(
+            finalize_result.is_err(),
+            "{point:?}: worker panic remains visible"
+        );
+        assert_eq!(
+            observation.terminal_trigger_reason.as_deref(),
+            Some("worker_panic")
+        );
+        assert_eq!(observation.terminal_release_attempts, 1, "{point:?}");
+        assert_eq!(observation.total_release_attempts, 1, "{point:?}");
+        assert_eq!(observation.release_obligation_mask, 0, "{point:?}");
+        assert_eq!(observation.active_mask, 0, "{point:?}");
+        assert_eq!(observation.in_flight_mask, 0, "{point:?}");
+        assert!(
+            observation
+                .terminal_error
+                .as_deref()
+                .is_some_and(|error| error.contains("worker panicked"))
+        );
+        assert_eq!(
+            *packets.lock().expect("panic packet capture"),
+            vec![PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 0),],
+            "{point:?}: uncertain or committed ownership is released exactly once"
+        );
+    }
+}
+
+#[test]
 fn empty_ownership_lifecycle_cleanup_emits_no_transport() {
     use super::test_support::ProductionDispatchTestHarness;
     use sky_dispatch_win32::input::PhysicalPacket;
@@ -2816,10 +3172,28 @@ fn empty_ownership_lifecycle_cleanup_emits_no_transport() {
             "supervisor_expiry" => {
                 harness.supervisor_expired.latch_expired();
                 assert!(harness.process_command_control_for_test());
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                assert_eq!(
+                    harness.finalize_worker_for_test(false, &mut observation),
+                    super::OUTCOME_ERROR
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("supervisor_lease_expired")
+                );
             }
             "panic_hard_stop" => {
                 harness.panic_requested.store(true, Ordering::Release);
                 assert!(harness.process_command_control_for_test());
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                assert_eq!(
+                    harness.finalize_worker_for_test(false, &mut observation),
+                    super::OUTCOME_ERROR
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("panic_release_requested")
+                );
             }
             "worker_panic_finalize" => {
                 let mut observation = super::worker::FinalizeTestObservation::default();
@@ -7411,7 +7785,7 @@ fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
     );
     let heartbeat_snapshot = heartbeat_session.snapshot();
     assert_ne!(
-        heartbeat_snapshot.terminal_error.as_deref(),
+        heartbeat_snapshot.terminal_trigger_reason.as_deref(),
         Some("supervisor_lease_expired"),
         "periodic heartbeat must keep the worker admitted: {heartbeat_snapshot:?}"
     );
@@ -7459,7 +7833,7 @@ fn supervisor_heartbeat_keeps_worker_alive_and_expiry_runs_cleanup() {
     );
     let expiry_snapshot = expiry_session.snapshot();
     assert_eq!(
-        expiry_snapshot.terminal_error.as_deref(),
+        expiry_snapshot.terminal_trigger_reason.as_deref(),
         Some("supervisor_lease_expired"),
         "stopped heartbeat must terminate the worker: {expiry_snapshot:?}"
     );
@@ -7563,7 +7937,7 @@ fn watchdog_age_begins_at_arm_heartbeat_not_construction() {
             .expect("delayed-arm join")
     );
     assert_ne!(
-        session.snapshot().terminal_error.as_deref(),
+        session.snapshot().terminal_trigger_reason.as_deref(),
         Some("supervisor_lease_expired"),
         "pre-arm construction heartbeat must not terminate the session"
     );
@@ -7653,7 +8027,7 @@ fn explicit_panic_release_keeps_user_terminal_identity() {
     );
     let snapshot = session.snapshot();
     assert_eq!(
-        snapshot.terminal_error.as_deref(),
+        snapshot.terminal_trigger_reason.as_deref(),
         Some("panic_release_requested")
     );
     assert_eq!(snapshot.active_count, 0);
