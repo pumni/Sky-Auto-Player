@@ -1,6 +1,6 @@
 use super::super::super::{
     DurationTicks, QpcClock, RuntimeDispatchCoordinator, SharedMetrics, TelemetryCollector,
-    TimelineTicks, try_publish_metrics,
+    TimelineTicks, try_publish_observer_metrics,
 };
 use super::super::health::build_dispatch_budget;
 use super::super::physical_timing_guard::PhysicalTimingWindow;
@@ -142,6 +142,11 @@ pub(crate) fn publisher_down_send_outcome(
             &mut local_metrics.observer_dropped_samples,
             &mut local_metrics.observer_queue_high_watermark,
         );
+        super::observer_wake::publish_pending_wait_observation(
+            runtime,
+            Some(observer),
+            local_metrics,
+        );
     }
     resolve_slo_terminal_step(
         result_chord_integrity_lost,
@@ -194,17 +199,19 @@ impl PendingObservationQueue {
         &self,
         observation: DispatchObservation,
         dropped_samples: &mut u64,
-        _high_watermark: &mut u64,
+        high_watermark: &mut u64,
     ) {
         if self.queue.push(observation).is_err() {
             *dropped_samples = dropped_samples.saturating_add(1);
+        } else {
+            self.observe_occupancy(high_watermark);
         }
     }
     pub fn push_wait(
         &self,
         observation: WaitObservation,
         dropped_samples: &mut u64,
-        _high_watermark: &mut u64,
+        high_watermark: &mut u64,
     ) {
         if self
             .queue
@@ -212,8 +219,16 @@ impl PendingObservationQueue {
             .is_err()
         {
             *dropped_samples = dropped_samples.saturating_add(1);
+        } else {
+            self.observe_occupancy(high_watermark);
         }
     }
+
+    fn observe_occupancy(&self, high_watermark: &mut u64) {
+        let observed = u64::try_from(self.queue.len()).unwrap_or(u64::MAX);
+        *high_watermark = (*high_watermark).max(observed);
+    }
+
     pub fn pop_front(&self) -> Option<DispatchObservation> {
         self.queue.pop()
     }
@@ -594,7 +609,7 @@ pub(crate) fn drain_down_send_outcome(
         &mut health.core_post_send_window,
         local_metrics,
     );
-    try_publish_metrics(local_metrics, metrics, qpc_clock, now_us, force_publish);
+    try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, force_publish);
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
@@ -762,7 +777,7 @@ pub(crate) fn drain_up_send_outcome(
         &mut health.core_post_send_window,
         local_metrics,
     );
-    try_publish_metrics(
+    try_publish_observer_metrics(
         local_metrics,
         metrics,
         qpc_clock,
@@ -870,7 +885,7 @@ pub(crate) fn drain_one_observer(
             | DispatchObservation::DownMiss(_)
             | DispatchObservation::BlockedUnfocused(_)
     ) {
-        try_publish_metrics(local_metrics, metrics, qpc_clock, now_us, false);
+        try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, false);
     }
     Ok(Some(drain_us))
 }

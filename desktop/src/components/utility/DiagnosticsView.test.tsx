@@ -171,9 +171,9 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Unobserved backlog boundaries')).toBeInTheDocument();
     expect(screen.getByText('Sender-window expirations')).toBeInTheDocument();
     expect(screen.getByText('Focus gate rejections')).toBeInTheDocument();
-    expect(screen.getByText('Target changes')).toBeInTheDocument();
-    expect(screen.getByText('Lease expirations')).toBeInTheDocument();
-    expect(screen.getByText('Control rejections')).toBeInTheDocument();
+    expect(screen.getByText('Target / owner rejections').parentElement).toHaveTextContent('1');
+    expect(screen.getByText('Lease gate rejections')).toBeInTheDocument();
+    expect(screen.getByText('Control / modifier rejections')).toBeInTheDocument();
     expect(screen.getByText('SendInput zero-progress failures')).toBeInTheDocument();
     expect(screen.getByText('SendInput partial events')).toBeInTheDocument();
     expect(screen.getByText('Dropped keys')).toBeInTheDocument();

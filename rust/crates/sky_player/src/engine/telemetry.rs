@@ -3,6 +3,7 @@ pub(crate) mod metrics;
 pub use metrics::WorkerMetricsLocal;
 pub(crate) use metrics::{
     SharedMetrics, cpu_metrics_sample_due, publish_terminal_metrics, try_publish_metrics,
+    try_publish_observer_metrics,
 };
 
 use sky_dispatch_core::time::{TimeArithmeticError, TimelineTicks};

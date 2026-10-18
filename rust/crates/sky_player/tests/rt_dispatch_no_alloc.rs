@@ -402,9 +402,9 @@ fn burst_push_and_drain_no_alloc() {
     );
     assert_eq!(drained, BURST);
     assert_eq!(dropped, 0);
-    // Producer paths no longer call queue.len(); high-watermark is an
-    // observer-side diagnostic and remains zero on this hard path.
-    assert_eq!(high, 0);
+    // Queue occupancy is sampled after successful producer enqueues without
+    // allocating or blocking the dispatch path.
+    assert_eq!(high, BURST as u64);
 }
 
 /// pop_front on an empty queue does not allocate.

@@ -333,7 +333,7 @@ impl NativeDispatchSession {
         *metrics.effective_wait_policy.lock() = "unknown".to_string();
         let mut initial_metrics = metrics.snapshot.load();
         initial_metrics.total_us = total_us;
-        let _ = metrics.snapshot.try_publish(&initial_metrics);
+        let _ = metrics.snapshot.try_publish_dispatch(initial_metrics);
         let shared = Arc::new(SessionShared {
             commands: SessionCommands {
                 interrupt,

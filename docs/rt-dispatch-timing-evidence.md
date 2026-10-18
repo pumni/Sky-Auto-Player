@@ -21,6 +21,14 @@ and telemetry-ring drops are exported as counts; truncation is explicit. A
 disabled trace mode exports no trace rows, while production scalar snapshots
 still retain their sample counts and maxima.
 
+Dispatch and observer snapshots have separate owners and are merged only for
+readout. A live snapshot publication that cannot acquire its own slot is
+skipped without making the other source's counters appear to be its own. A
+zero wait maximum with `wait_window_sample_count == 0` means no deadline-wake
+measurement was recorded; it is not a measured zero-lateness wake. Interrupted
+waits retain their QPC/deadline attribution but do not enter the deadline-wake
+health sample population.
+
 The desktop retains at most 4,096 fixed-width trace records per session. This
 keeps the raw record storage under the existing 2 MiB budget after adding the
 schema 19 provenance and timing fields; all records rejected at that bound

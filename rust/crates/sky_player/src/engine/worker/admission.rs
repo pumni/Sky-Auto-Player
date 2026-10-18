@@ -26,9 +26,12 @@ pub(crate) struct TargetStamp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FinalGateRejection {
     Control,
+    Modifier,
     Target,
+    Owner,
     Focus,
     LeaseExpired,
+    LeaseUnproven,
 }
 
 /// Take the single enabled-lease age sample for eligible Down traffic and
@@ -94,7 +97,16 @@ pub(crate) fn record_final_gate_rejection(
                 .final_gate_control_rejections
                 .saturating_add(1)
         }
+        FinalGateRejection::Modifier => {
+            local_metrics.final_gate_control_rejections = local_metrics
+                .final_gate_control_rejections
+                .saturating_add(1)
+        }
         FinalGateRejection::Target => {
+            local_metrics.final_gate_target_changes =
+                local_metrics.final_gate_target_changes.saturating_add(1)
+        }
+        FinalGateRejection::Owner => {
             local_metrics.final_gate_target_changes =
                 local_metrics.final_gate_target_changes.saturating_add(1)
         }
@@ -103,6 +115,10 @@ pub(crate) fn record_final_gate_rejection(
                 local_metrics.final_gate_focus_losses.saturating_add(1)
         }
         FinalGateRejection::LeaseExpired => {
+            local_metrics.final_gate_lease_expirations =
+                local_metrics.final_gate_lease_expirations.saturating_add(1)
+        }
+        FinalGateRejection::LeaseUnproven => {
             local_metrics.final_gate_lease_expirations =
                 local_metrics.final_gate_lease_expirations.saturating_add(1)
         }
@@ -361,6 +377,7 @@ pub(super) fn modifier_guard_and_final_revalidation(
     match backend.observe_modifiers_before_down() {
         ModifierKeyObservation::NoHeldObserved => {}
         ModifierKeyObservation::HeldObserved(mask) => {
+            record_final_gate_rejection(local_metrics, FinalGateRejection::Modifier);
             return Err(modifier_guard_rejection_step(mask));
         }
     }
@@ -402,6 +419,7 @@ pub(super) fn modifier_guard_and_final_revalidation(
         | DownAdmission::OwnerIdentityDrift => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
             return Err(DispatchStep::TerminateStatic(
                 "authored_down_owner_changed_after_modifier_guard",
             ));
@@ -432,6 +450,7 @@ pub(super) fn modifier_guard_and_final_revalidation(
         SupervisorLeaseAdmission::Unproven => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, FinalGateRejection::LeaseUnproven);
             return Err(DispatchStep::TerminateStatic("supervisor_lease_unproven"));
         }
     }

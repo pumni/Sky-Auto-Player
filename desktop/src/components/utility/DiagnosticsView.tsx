@@ -462,15 +462,15 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                   value={playerMetric(latest.final_gate_focus_losses)}
                 />
                 <Metric
-                  label="Target changes"
+                  label="Target / owner rejections"
                   value={playerMetric(latest.final_gate_target_changes)}
                 />
                 <Metric
-                  label="Lease expirations"
+                  label="Lease gate rejections"
                   value={playerMetric(latest.final_gate_lease_expirations)}
                 />
                 <Metric
-                  label="Control rejections"
+                  label="Control / modifier rejections"
                   value={playerMetric(latest.final_gate_control_rejections)}
                 />
               </MetricGroup>

@@ -241,6 +241,55 @@ barrier above; failure paths invalidate the guard. A new session starts with a
 fresh guard. Cleanup releases remain safety operations and bypass the musical
 hold floor.
 
+### Snapshot and observer ownership
+
+Live metric snapshots use separate safe `RwLock` slots for dispatch-owned and
+observer-owned values. The worker and observer each publish only to their own
+slot. Both use nonblocking `try_write`; if a reader currently holds a slot,
+that live publication is skipped and the producer's later cumulative snapshot
+can replace it. The physical worker never waits for a UI snapshot reader.
+Snapshot readers hold both read guards while copying and merge the two source
+snapshots once, so observer fields cannot replace independent dispatch
+counters. The observer's publish interval is independent of the worker's.
+
+The observer is stopped and joined before terminal aggregation. The finalizer
+merges its returned metrics into the dispatch-owned terminal values, then
+publishes those values while clearing the observer slot in the same guarded
+operation. Terminal publication may yield while readers release their guards;
+it cannot be skipped or double-count observer data.
+
+#### Risk memo
+
+The snapshot path contains no `UnsafeCell` or unsafe `Sync` implementation.
+`parking_lot::RwLock` guards prevent concurrent reads and writes to each
+`WorkerMetricsLocal`. Only the dispatch worker writes the dispatch slot and
+only the observer thread writes the observer slot. Readers take both read
+guards in dispatch-then-observer order, so they copy one coherent pair before
+merging observer-owned fields. Live writers use `try_write` and skip that
+publication if a reader holds their slot; the next cumulative update can
+publish later. Terminal cleanup runs after the observer has joined and may
+yield while acquiring both write guards. The terminal marker makes later
+readers return the already-merged dispatch slot without merging the cleared
+observer slot again.
+
+Wait evidence is enqueued immediately when a real wait attempt returns, both
+for a deadline wake and an interrupted replan. A target already due before a
+wait has no wait result and produces no wait sample. Failed waits terminate
+without a sample. Immediate enqueue keeps the original deadline and wake
+attached if focus, pause, target state, or the next plan changes afterward.
+Metadata-only and physical packet waits use the same path. The fixed queue
+uses drop-new behavior; each failed enqueue increments the dropped-sample
+counter. Its high-watermark is the largest occupancy observed after a
+successful enqueue, so a concurrent drain can make it a conservative sample
+of the actual peak.
+
+The existing final-gate DTO counters keep their wire names and group related
+causes: control and modifier rejections share `final_gate_control_rejections`,
+target-generation and bound-owner rejections share
+`final_gate_target_changes`, and expired or unproven lease decisions share
+`final_gate_lease_expirations`. Focus rejections remain separate. Rejected
+Down packets stay fail-closed and do not reach `SendInput`.
+
 Musical generation accounting and physical cleanup obligations are separate.
 Only a matching musical Up produces a normal generation `Released` transition;
 safety/cleanup Ups may be idempotent and may make the raw physical Up count

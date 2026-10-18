@@ -144,9 +144,12 @@ pub struct EngineSnapshot {
     pub missed_unobserved_backlog_boundaries: u64,
     /// Deprecated compatibility counter; always zero in current production.
     pub missed_physical_window_boundaries: u64,
+    /// Compatibility bucket for control and modifier gate rejections.
     pub final_gate_control_rejections: u64,
+    /// Compatibility bucket for target-generation and bound-owner rejections.
     pub final_gate_target_changes: u64,
     pub final_gate_focus_losses: u64,
+    /// Compatibility bucket for expired and unproven lease gate rejections.
     pub final_gate_lease_expirations: u64,
     /// Deprecated compatibility counter; always zero in current production.
     pub final_sender_window_expirations: u64,
@@ -274,7 +277,7 @@ pub struct EngineSnapshot {
     pub observer_duration_max_us: u64,
     /// Observations dropped because the fixed queue was full (§8.13).
     pub observer_dropped_samples: u64,
-    /// High-watermark of the diagnostic fixed observer queue (§8.13).
+    /// Largest post-enqueue occupancy observed in the diagnostic queue (§8.13).
     pub observer_queue_high_watermark: u64,
     pub terminal_error: Option<String>,
     pub terminal_trigger_reason: Option<String>,
@@ -364,9 +367,12 @@ pub struct EngineProgressSnapshot {
     pub missed_unobserved_backlog_boundaries: u64,
     /// Deprecated compatibility counter; always zero in current production.
     pub missed_physical_window_boundaries: u64,
+    /// Compatibility bucket for control and modifier gate rejections.
     pub final_gate_control_rejections: u64,
+    /// Compatibility bucket for target-generation and bound-owner rejections.
     pub final_gate_target_changes: u64,
     pub final_gate_focus_losses: u64,
+    /// Compatibility bucket for expired and unproven lease gate rejections.
     pub final_gate_lease_expirations: u64,
     /// Deprecated compatibility counter; always zero in current production.
     pub final_sender_window_expirations: u64,
@@ -425,6 +431,7 @@ pub struct EngineProgressSnapshot {
     pub wake_to_send_max_us: u64,
     pub observer_duration_max_us: u64,
     pub observer_dropped_samples: u64,
+    /// Largest post-enqueue occupancy observed in the diagnostic queue.
     pub observer_queue_high_watermark: u64,
     pub dispatch_occupancy_max_us: u64,
     pub recovered_zero_progress_but_late: u64,
