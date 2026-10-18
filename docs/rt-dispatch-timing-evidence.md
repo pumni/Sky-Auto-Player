@@ -29,6 +29,13 @@ measurement was recorded; it is not a measured zero-lateness wake. Interrupted
 waits retain their QPC/deadline attribution but do not enter the deadline-wake
 health sample population.
 
+For a deadline wait, the wake QPC is captured from the wait result and copied
+into worker-owned pending evidence as soon as control returns from the wait.
+The corresponding bounded observer-queue insertion occurs only after that
+dispatch attempt returns, so queue insertion time is not wake time and does not
+replace the captured wake timestamp. Interrupted waits have no following
+dispatch attempt and are inserted on their immediate replan path.
+
 The desktop retains at most 4,096 fixed-width trace records per session. This
 keeps the raw record storage under the existing 2 MiB budget after adding the
 schema 19 provenance and timing fields; all records rejected at that bound
@@ -431,3 +438,89 @@ evidence, and a partial run stopped after focus verification falsely rejected
 an already-foreground sink. The latter case remained pre-arm and sent no
 input. The accepted 120-session run used the corrected harness and passed all
 acceptance checks.
+
+## Prepared commit pre-wait experiment for issue #475
+
+The proposed change was to validate a frozen prepared authored commit before
+the physical wait, then carry an iteration-scoped proof across the wait. The
+candidate proof borrowed both the exact immutable stream entry and coordinator
+so their cursor and cancellation ownership could not change during the wait;
+replans discarded it, and all post-wake physical admission checks remained
+fresh. The candidate was safe under the exercised checks, but the Windows
+latency evidence did not demonstrate a repeatable tail improvement. The
+runtime change was therefore not promoted: current code continues to validate
+the frozen coordinator commit after each due wait and before prepared physical
+admission.
+
+Baseline A was clean `fcb610bbc13ee25b852eab3b2be880e07379cff2`; candidate B
+was clean `a00d531582311b2232e9db84ccb143f1964e4b21`. Both acceptance binaries
+were built with `cargo build --locked --manifest-path rust/Cargo.toml -p
+sky_player --release --features real-input-acceptance --bin
+rt-native-acceptance`. A's executable SHA-256 was
+`919db9392a43b4373f692f41dcf47121741c693d5d82e6b6c8dee78ea5795403`; B's was
+`ad548bb632fd4f3f78ed142b47aab9dca8c87448f36efd564d355b4fcc45cb7d`. Both
+source trees were clean during measurement. Runs alternated A/B order by pair,
+used the same production ReceiveOnly sink, 500 µs margin, and timing observer.
+The environment was Windows 11 Pro build 26300, AMD Ryzen 5 5600 (6 cores, 12
+logical processors), Balanced power plan, and `rustc 1.99.1 (58cf8f9c3
+2026-10-13)`. QPC frequency was 10 MHz. These tests measured the Windows
+SendInput-to-sink boundary; they did not measure game sampling or musical
+output.
+
+Run commands, invoked once per session by the alternating qualification
+runner, were:
+
+```powershell
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario dense-alternating -TimingMarginUs 500 -TimingObserverForQualification
+pwsh.exe -NoProfile -File scripts/run_native_acceptance_case.ps1 -Scenario mixed-up-down -TimingMarginUs 500 -TimingObserverForQualification
+```
+
+The dense workload used 20 sessions per build and 640 attempted/accepted
+packets per build. The mixed Up/Down workload used 60 sessions per build and
+180 attempted/accepted packets per build. Wake-to-precall latency is nearest
+rank p50/p95/p99/max in microseconds, measured as
+`pre_call_qpc - wake_qpc`. Fourteen dense baseline packets had no wake sample
+because the target was already due; all 640 candidate dense packets and all
+180 mixed packets per build had wake samples. These were unavailable wake
+observations, not telemetry drops.
+
+| Workload | Build | Wake-to-precall p50 / p95 / p99 / max (µs) | SendInput envelope p50 / p95 / p99 / max (µs) | Core post-send p50 / p95 / max (µs) | Process CPU p50 / p95 (ms) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Dense alternating | Baseline A | 3.1 / 11.3 / 30.7 / 584,577.5 | 97.8 / 170.8 / 576.6 / 157,337.7 | 1 / 3 / 8 | 31.25 / 46.875 |
+| Dense alternating | Candidate B | 2.4 / 11.2 / 41.0 / 165.9 | 98.4 / 173.1 / 520.3 / 783.1 | 2 / 3 / 10 | 15.625 / 46.875 |
+| Mixed Up/Down | Baseline A | 11.2 / 30.7 / 1,413.6 / 1,656.0 | 129.7 / 158.1 / 226.7 / 237.4 | 2 / 5 / 6 | 0 / 15.625 |
+| Mixed Up/Down | Candidate B | 10.9 / 49.2 / 1,683.7 / 2,439.7 | 128.4 / 198.7 / 225.7 / 234.0 | 3 / 6 / 7 | 0 / 15.625 |
+
+Paired per-session median wake-to-precall deltas (B minus A) were -0.3 µs at
+the dense median and -0.4 µs at the mixed median. The candidate's median was
+lower in 11 of 20 dense pairs and 34 of 60 mixed pairs. The p95 paired-session
+delta was +0.2 µs dense and +13.9 µs mixed; the candidate's pooled mixed p95
+and p99 were also higher. The very large dense baseline maxima coincide with
+extreme wake-to-precall and SendInput-envelope samples. The harness cannot
+attribute those intervals to `SendInput` execution versus preemption around a
+sampled boundary, so they are reported and not trimmed. Candidate B therefore
+did not establish a repeatable improvement in tail behavior, despite its small
+pooled median reduction.
+
+All 160 measured sessions passed the sink acceptance checks. Both builds had
+zero hold-floor or release-floor violations, transport anomalies, timing
+arithmetic anomalies, production forensics anomalies, telemetry drops,
+observer-queue drops, or nonzero terminal ownership/failed-release state. The
+process CPU field is quantized at approximately 15.625 ms on this host; dense
+CPU sums were 437.5 ms for A and 421.875 ms for B across 20 sessions, and mixed
+CPU sums were 156.25 ms for each build across 60 sessions. This resolution is
+too coarse to attribute a small per-packet CPU change.
+
+The existing after-send work was also reviewed. Wait evidence insertion uses a
+fixed-capacity drop-new queue. Live packet snapshots use a 50 ms cadence and a
+nonblocking `try_write`; unavailable snapshot publication is already
+best-effort. Backend-counter refreshes are scalar copies and the measured core
+post-send samples remained in the 1–10 µs range. The A/B data does not identify
+these bounded operations as a dominant source of late calls, so no additional
+publication machinery or timing-path change was added. The raw per-session
+reports and alternating ledgers remain under the local ignored
+`.benchmarks/dispatch-prewait-qualification/` and
+`.benchmarks/physical-native-cases/` directories. The dense ledger SHA-256 is
+`63a744afc7a9ebe0ccc755a8a009da3537ff61c8e17b337a6e0229477815f9f2`; the
+mixed ledger SHA-256 is
+`0bd7b963ef5ca85805e0f821bf27238fc8cf9b458699a4ec31f704f489eb7605`.

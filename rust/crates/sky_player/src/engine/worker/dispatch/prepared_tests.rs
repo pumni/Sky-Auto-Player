@@ -336,6 +336,47 @@ fn normal_stream_materializes_only_physical_boundaries_and_keeps_authored_order(
 }
 
 #[test]
+fn prepared_commit_identity_is_revalidated_after_each_due_wait() {
+    let source = include_str!("../dispatch_loop.rs");
+    let prepared = source
+        .split("if prepared_stream")
+        .nth(1)
+        .expect("prepared stream dispatch section")
+        .split("if prepared_stream_requires_terminal(")
+        .next()
+        .expect("prepared stream dispatch body");
+    let wait = prepared
+        .find("wait_for_next_boundary(WaitBoundaryInput")
+        .expect("prepared wait");
+    let replan = prepared
+        .find("WaitBoundary::Replan {")
+        .expect("interrupt/replan handling");
+    let replan_continue = prepared
+        .find("let Some((_wait_result, target_qpc, dispatch_qpc)) = dispatch_result else {")
+        .expect("replan exits before due processing");
+    let validation = prepared
+        .find("validate_frozen_authored_commit(")
+        .expect("fresh frozen-commit validation");
+    let dispatch = prepared
+        .find("dispatch_prepared_normal_frame(")
+        .expect("final prepared admission");
+
+    assert!(wait < replan, "the wait precedes interrupt classification");
+    assert!(
+        replan < replan_continue && replan_continue < validation,
+        "an interrupted wait exits the iteration before coordinator validation"
+    );
+    assert!(
+        validation < dispatch,
+        "every due physical entry is checked against current coordinator ownership before admission"
+    );
+    assert!(
+        !source.contains("PreparedAuthoredCommitWitness"),
+        "no validation witness may survive a wait or replan"
+    );
+}
+
+#[test]
 fn prepared_stream_payload_and_offsets_are_immutable_across_builds() {
     let actions = [
         sky_dispatch_core::model::KeyActionInput {
