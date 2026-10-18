@@ -350,7 +350,15 @@ fn run_windows(args: RunArgs) -> i32 {
         },
         None => None,
     };
-    if !focus_window_and_verify(sink_hwnd, Duration::from_millis(250)) { inconclusive!("receive-only sink could not be made the exact foreground HWND", json!({})); }
+    // A receive-only sink that is already the exact foreground HWND needs no
+    // focus request. Keep the product focus admission helper strict about a
+    // successful SetForegroundWindow call; this harness pre-check is only a
+    // setup convenience for an already-satisfied target state.
+    if !foreground_window_matches(sink_hwnd)
+        && !focus_window_and_verify(sink_hwnd, Duration::from_millis(250))
+    {
+        inconclusive!("receive-only sink could not be made the exact foreground HWND", json!({}));
+    }
     let plan = match scenario_plan(args.scenario, args.timing_margin_us) {
         Ok(plan) => plan,
         Err(error) => return write_report(&args, Verdict::Fail, &error, json!({})),

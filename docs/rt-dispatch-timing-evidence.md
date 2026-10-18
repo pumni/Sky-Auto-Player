@@ -278,9 +278,10 @@ The measured source revision was
 `a9d74c2e5ff919c701b4797d194ca29efa9f7d47`, with a clean source tree. Both
 placements used the same Release harness binary
 (`6890349d508ed753d690bd51ca075583789ccde672804210ce96ba10e71b1d12`). The
-host was Windows 11 Pro 10.0.26300, AMD Ryzen 5 5600 (6 cores, 12 logical
-processors), Rust `1.99.1 (58cf8f9c3 2026-10-13)`, Balanced power plan, and
-10,000,000 QPC ticks per second. Timing margin was 500 µs.
+platform was Windows 11 x64 with Rust `1.99.1 (58cf8f9c3 2026-10-13)` and
+10,000,000 QPC ticks per second. Timing margin was 500 µs. The committed
+evidence omits the host CPU model, exact Windows build, power-scheme identifier,
+process identifiers, absolute paths, and raw event timestamps.
 
 The runner alternated AB and BA order across 60 pairs: six repetitions for
 each of five workloads under quiet conditions and under two hidden
@@ -363,7 +364,7 @@ The dedicated ReceiveOnly sink verified event delivery from the test harness.
 No metric here establishes a Sky key transition, note reception, or audio
 latency.
 
-Reproduce on the same Windows host and pinned toolchain with:
+Reproduce on a Windows 11 x64 host with the pinned toolchain using:
 
 ```powershell
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/qualify_startup_calibration.ps1 -TimingMarginUs 500
@@ -381,6 +382,40 @@ ordered ledger SHA-256 is
 `0969ed103082412ed810f07d338ef8ab901e584b7e4540f189c6e15df3d7e767`, and the
 qualification metadata SHA-256 is
 `9f49decd7987addae29e8487b10aafa36f0eaf9acac234f87e0a88733e467e21`.
+
+The sanitized, machine-readable projection is
+[`wake-calibration-qualification-20261018.json`](evidence/wake-calibration-qualification-20261018.json),
+SHA-256 `68323b15e8f47773f92fda79187f9dfe61e3e673898fd4a8af256ec49a8070a8`.
+It contains the 120-row run-order ledger,
+60 paired comparisons, all 20 workload/load/placement cells, nearest-rank
+distributions, per-field sample/missing/drop/truncation counts, and artifact
+hashes. `scripts/export_startup_calibration_evidence.ps1` verifies the
+qualification manifest and every file listed by all 120 per-session
+manifests before it exports the projection. The accepted local artifact set
+passed that verification: four qualification inputs and all files in 120 case
+directories (1,320 files total); the qualification manifest SHA-256 is
+`c26829d68a5c744392dca4f9b38bd70b8ff8fb1d4485851772a26a229816c6b7`. Recreate
+the sanitized projection from the preserved local artifact directories with:
+
+```powershell
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/export_startup_calibration_evidence.ps1 -QualificationDirectory .benchmarks/wake-calibration-qualification/wake-calibration-20261018T161010-7459e9f8 -CaseRoot .benchmarks/physical-native-cases -OutputPath docs/evidence/wake-calibration-qualification-20261018.json
+```
+
+The raw reports and sink traces remain ignored under
+`.benchmarks/`; the committed projection preserves their relevant checksums
+without publishing the raw records or local machine identifiers.
+
+The measured source SHA above differs from the final PR head. Changes after the
+measured source only affect diagnostic reporting, completion-handle retirement,
+test support, source organization, or the acceptance harness's handling of an
+already-foreground ReceiveOnly sink. Baseline A remains the production
+calibration placement. The join correction runs after worker terminal cleanup
+and does not change authored QPC deadlines, calibration placement, timing
+floors, dispatch decisions, or SendInput calls. The focus helper itself is
+restored to its earlier strict contract; the acceptance harness now checks the
+exact already-foreground sink HWND before requesting a focus change. The
+recorded 120-session timing comparison therefore remains applicable without
+repeating the experiment.
 
 Three earlier attempts were excluded from the comparison: one lacked accepted
 timing-observer records, one lacked retained scheduling-guard acquisition

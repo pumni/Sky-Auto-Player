@@ -297,6 +297,8 @@ pub enum StartupCheckpoint {
     TerminalCleanup = 11,
     #[cfg(any(test, feature = "test-support"))]
     WakeCalibration = 12,
+    #[cfg(any(test, feature = "test-support"))]
+    WorkerCompletionPublished = 13,
 }
 
 #[cfg(any(test, feature = "test-support"))]

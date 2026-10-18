@@ -673,14 +673,8 @@ pub fn focus_window(_hwnd: isize) -> bool {
 /// a bounded interval before a physical worker is armed.  The polling is
 /// read-only and intentionally does not attach input queues or force z-order.
 pub fn focus_window_and_verify(hwnd: isize, budget: std::time::Duration) -> bool {
-    if hwnd == 0 {
-        return false;
-    }
-    if foreground_window_matches(hwnd) {
-        return true;
-    }
     if !focus_window(hwnd) {
-        return foreground_window_matches(hwnd);
+        return false;
     }
     let deadline = std::time::Instant::now() + budget;
     loop {
