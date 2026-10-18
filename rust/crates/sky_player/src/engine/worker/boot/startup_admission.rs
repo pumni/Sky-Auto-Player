@@ -280,7 +280,18 @@ pub(super) fn startup_wake_probe(
     qpc_clock: QpcClock,
     interrupt: &sky_dispatch_win32::event::OwnedEvent,
     initial_now_ticks: QpcTicks,
+    #[cfg(any(test, feature = "test-support"))] startup_hook: Option<
+        &super::super::config::StartupOrderingHook,
+    >,
 ) -> Option<sky_dispatch_win32::wait::WakeErrorStats> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        hook.visit_startup_checkpoint(StartupCheckpoint::WakeCalibration);
+        #[cfg(test)]
+        if hook.take_startup_calibration_completion() {
+            return Some(sky_dispatch_win32::wait::WakeErrorStats::default());
+        }
+    }
     let budget_ticks = qpc_clock
         .duration_from_us(CALIBRATION_MAX_STARTUP_BUDGET_US)
         .ok()?;

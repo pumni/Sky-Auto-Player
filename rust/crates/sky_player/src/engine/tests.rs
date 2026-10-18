@@ -91,6 +91,8 @@ fn test_session_options(
             mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
         },
         instrument_key_profile: None,
+        startup_calibration_placement:
+            super::config::StartupCalibrationPlacement::BeforeSchedulingGuards,
         startup_ordering_hook: None,
         restore_race_hook: None,
         focus_pause_hook: None,
@@ -318,6 +320,116 @@ fn startup_boundary_publishes_after_worker_startup() {
     assert!(snapshot.startup_latency_us.is_some());
     let (requested, ready) = session.startup_ticks();
     assert!(requested <= ready);
+}
+
+#[test]
+fn startup_calibration_placement_stays_before_ready_and_tracks_guard_context() {
+    for (placement, guards_precede_calibration) in [
+        (
+            super::config::StartupCalibrationPlacement::BeforeSchedulingGuards,
+            false,
+        ),
+        (
+            super::config::StartupCalibrationPlacement::AfterSchedulingGuards,
+            true,
+        ),
+    ] {
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::WakeCalibration, 1);
+        hook.complete_startup_calibration_after_checkpoint();
+        let mut options = test_session_options(
+            startup_boundary_schedule(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        );
+        options.profile = DispatchProfile::MockTest;
+        options.wait.test_spin_threshold_us = None;
+        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+        options.startup_calibration_placement = placement;
+        options.startup_ordering_hook = Some(Arc::clone(&hook));
+        let session = NativeDispatchSession::new(options).expect("calibration placement session");
+        session.arm(100_000).expect("calibration placement arm");
+
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(!session.snapshot().startup_ready);
+        assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
+        assert_eq!(
+            hook.scheduling_guard_acquired_thread().is_some(),
+            guards_precede_calibration,
+            "placement {placement:?}"
+        );
+        hook.release_startup_checkpoint();
+        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.outcome.as_deref(), Some("finished"));
+        assert!(snapshot.startup_ready);
+        assert!(snapshot.startup_armed);
+        assert_eq!(snapshot.startup_calibration_executed, true);
+        assert_eq!(snapshot.startup_calibration_sample_count, 6);
+        assert_eq!(snapshot.startup_calibration_result, "completed");
+        let (acquired, dropped) = hook
+            .scheduling_guard_threads()
+            .expect("guard lifetime is observable");
+        assert_eq!(acquired, dropped);
+    }
+}
+
+#[test]
+fn accepted_stop_or_skip_during_candidate_calibration_cannot_publish_armed() {
+    for (skip, expected_status, expected_outcome) in [
+        (false, EnginePollStatus::Quit, "quit"),
+        (true, EnginePollStatus::Skipped, "skipped"),
+    ] {
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::WakeCalibration, 1);
+        // Complete the controlled probe successfully after the command races
+        // it. The post-probe startup gate must still give cancellation priority.
+        hook.complete_startup_calibration_after_checkpoint();
+        let send_calls = Arc::new(AtomicU64::new(0));
+        let mut fault_script = FaultInjectionScript::none();
+        fault_script.send_call_count = Some(Arc::clone(&send_calls));
+        let mut options = test_session_options(
+            startup_boundary_schedule(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script,
+            },
+        );
+        options.profile = DispatchProfile::MockTest;
+        options.wait.test_spin_threshold_us = None;
+        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+        options.startup_calibration_placement =
+            super::config::StartupCalibrationPlacement::AfterSchedulingGuards;
+        options.startup_ordering_hook = Some(Arc::clone(&hook));
+        let session = NativeDispatchSession::new(options).expect("candidate calibration session");
+        session.arm(100_000).expect("candidate calibration arm");
+
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(hook.scheduling_guard_acquired_thread().is_some());
+        assert!(!session.snapshot().startup_ready);
+        assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
+        if skip {
+            session.skip().expect("accept skip during calibration");
+        } else {
+            session.quit().expect("accept stop during calibration");
+        }
+        hook.release_startup_checkpoint();
+        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.status, expected_status.as_str());
+        assert_eq!(snapshot.outcome.as_deref(), Some(expected_outcome));
+        assert!(!snapshot.startup_armed);
+        assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
+        assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[test]

@@ -198,3 +198,67 @@ The sink is an isolated receiver used to verify the project harness and
 receiver observation path. Even a successful native run establishes only
 that the harness sent to and the sink observed project-owned test input. It
 does not establish that Sky received a transition or that audio began.
+
+## Startup calibration placement qualification
+
+Issue #467 compares the current placement (Baseline A), before scheduling
+guards, with Candidate B, after worker preparation allocations, observer
+startup, and scheduling-guard acquisition, but before `Ready`, `Armed`, or
+epoch publication. The placement selector exists only in test-support and the
+feature-gated native qualification harness. Shipping builds have no runtime
+placement setting.
+
+Both placements run the same six zero-spin samples with the existing 2 ms
+targets and 20 ms startup calibration budget. The absolute deadline remains
+anchored at the same QPC sample immediately before Baseline A would probe:
+
+```text
+probe_deadline = initial_probe_qpc + 20 ms
+```
+
+Candidate B receives only the remaining portion of that deadline. It does not
+get a new budget after resource setup. An exhausted deadline selects the same
+safe fallback threshold and is recorded as a calibration fallback. The worker
+publishes the calibration result and selected threshold before Ready. A
+controlled test-only completion seam allows Stop and Skip to race a successful
+probe completion without depending on timer resolution; the final pre-Ready
+startup gate remains authoritative.
+
+The qualification runner builds one Release executable and alternates AB/BA
+within each paired workload cell. It covers sparse single-key sequences,
+single-key traffic, mixed Up/Down packets, 15-key chords, and near-minimum
+same-key retriggers under quiet and two BelowNormal-priority CPU workers. Each
+session writes the bounded native telemetry ring and the exact ReceiveOnly
+event window, with checksums and host/build provenance. Raw per-session QPC
+records remain under `.benchmarks/wake-calibration-qualification/`; reports
+must include per-field availability, missing counts, telemetry truncation,
+and empirical p50, p95, p99, p99.9, maximum, and sample count. Low-count cells
+must be labeled as weakly supported rather than treating p99.9 as a service
+guarantee.
+
+Before collecting A/B results, Candidate B promotion was conditioned on all
+of the following:
+
+- Every paired run passes generation, packet-order, ReceiveOnly event-count,
+  joined retirement, and cleanup checks, with zero transport anomalies or
+  unresolved release obligations.
+- In both load conditions, paired median p99 residual lateness improves by
+  at least 10% and 100 µs in at least three of the five workload groups; at
+  least five of six pairs in each counted group must move in the improving
+  direction. The pooled session p95 startup wake-error metric must also
+  improve by at least 10% and 50 µs.
+- Candidate Ready-latency p95 increases by no more than 1 ms, no individual
+  paired median increases by more than 2 ms, and calibration fallback rate
+  increases by no more than one percentage point.
+- Worker CPU and process CPU do not increase by more than 5% at the paired
+  median, spin duty cycle does not increase by more than two percentage
+  points, and acquired priority/MMCSS and power-throttling guard status do not
+  regress.
+
+If any required distribution is missing, too small to evaluate, noisy, or
+truncated, the evidence is inconclusive and Baseline A remains the shipping
+policy. Wake-probe statistics are six startup wait observations per completed
+session; they characterize the calibration input rather than production
+dispatch p99. Packet timing fields are sampled QPC boundaries around the
+sender. ReceiveOnly messages establish sink receipt by this test process only.
+The qualification does not measure Sky note reception or audio onset.

@@ -196,6 +196,8 @@ pub struct EngineSnapshot {
     pub effective_wait_policy: String,
     pub startup_calibration_executed: bool,
     pub startup_calibration_sample_count: u64,
+    pub startup_calibration_duration_us: u64,
+    pub startup_calibration_result: String,
     pub startup_wake_error_p50_us: u64,
     pub startup_wake_error_p95_us: u64,
     pub startup_wake_error_p99_us: u64,

@@ -481,6 +481,8 @@ pub(super) fn production_options(
             mode: PriorityMode::Auto,
         },
         instrument_key_profile: profile,
+        startup_calibration_placement:
+            sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         #[cfg(feature = "test-support")]
         startup_ordering_hook: None,
         #[cfg(feature = "test-support")]

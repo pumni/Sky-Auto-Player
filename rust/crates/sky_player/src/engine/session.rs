@@ -1514,6 +1514,12 @@ impl NativeDispatchSession {
                 .clone(),
             startup_calibration_executed: local.startup_calibration_executed,
             startup_calibration_sample_count: local.startup_calibration_sample_count,
+            startup_calibration_duration_us: local.startup_calibration_duration_us,
+            startup_calibration_result: crate::engine::config::StartupCalibrationResult::from_raw(
+                local.startup_calibration_result,
+            )
+            .label()
+            .to_string(),
             startup_wake_error_p50_us: local.wake_error_p50_us,
             startup_wake_error_p95_us: local.wake_error_p95_us,
             startup_wake_error_p99_us: local.wake_error_p99_us,

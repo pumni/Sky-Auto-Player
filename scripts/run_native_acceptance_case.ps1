@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory)]
     [ValidateScript({ $_ -ge 0 -and $_ -le 3000 -and $_ % 100 -eq 0 })]
     [int]$TimingMarginUs,
+    [ValidateSet('Baseline', 'Candidate')]
+    [string]$CalibrationPlacement = 'Baseline',
     [switch]$CpuContention
 )
 
@@ -114,26 +116,46 @@ try {
     if ($CpuContention) {
         $loadCommand = 'while ($true) { [void]([Math]::Sqrt(12345.6789)) }'
         for ($index = 0; $index -lt 2; $index++) {
-            $contentionProcesses += Start-Process -FilePath $pwshPath -ArgumentList @('-NoProfile', '-Command', $loadCommand) -PassThru -WindowStyle Hidden
+            $loadProcess = Start-Process -FilePath $pwshPath -ArgumentList @('-NoProfile', '-Command', $loadCommand) -PassThru -WindowStyle Hidden
+            $loadProcess.PriorityClass = 'BelowNormal'
+            $contentionProcesses += $loadProcess
         }
     }
 
     $harnessHash = Get-Sha256 $harness
     $runnerHash = Get-Sha256 $PSCommandPath
+    $operatingSystem = Get-CimInstance Win32_OperatingSystem
+    $processor = Get-CimInstance Win32_Processor | Select-Object -First 1
+    $rustVersion = (& rustc --version).Trim()
     $runConfig = [ordered]@{
         run_id = $runId
         source_revision = $head
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
+        calibration_placement = $CalibrationPlacement.ToLowerInvariant()
         cpu_contention = [bool]$CpuContention
         cpu_contention_processes = $contentionProcesses.Count
-        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers' } else { $null }
+        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }
         timing_margin_us = $TimingMarginUs
         expected_hold_us = 16667 + $TimingMarginUs
         expected_release_gap_us = 16667 + $TimingMarginUs
+        profile = 'production'
+        telemetry_mode = 'ring'
+        telemetry_capacity = 1024
+        waitable_timer_enabled = $true
+        event_wait_enabled = $true
+        priority_mode = 'auto'
         harness_path = $harness
         harness_sha256 = $harnessHash
         runner_sha256 = $runnerHash
+        rust_version = $rustVersion
+        windows_caption = $operatingSystem.Caption
+        windows_version = $operatingSystem.Version
+        windows_build = $operatingSystem.BuildNumber
+        processor_name = $processor.Name
+        processor_cores = $processor.NumberOfCores
+        processor_logical_processors = $processor.NumberOfLogicalProcessors
+        power_scheme = (& powercfg /getactivescheme | Out-String).Trim()
         sink_ready_path = $readyPath
         sink_event_path = $eventsPath
         sink_pid = [int]$sink.pid
@@ -149,6 +171,7 @@ try {
         '--sink-ready', $readyPath, '--sink-events', $eventsPath,
         '--target-hwnd', ([long]$sink.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture),
         '--scenario', $Scenario, '--evidence', $reportPath,
+        '--calibration-placement', $CalibrationPlacement.ToLowerInvariant(),
         '--timing-margin-us', [string]$TimingMarginUs
     )
     if ($Scenario -eq 'focus-loss') {
@@ -163,7 +186,7 @@ try {
     $reportLines = @(Get-Content -LiteralPath $reportPath)
     if ($reportLines.Count -ne 1) { throw 'native harness did not emit exactly one report' }
     $report = $reportLines[0] | ConvertFrom-Json
-    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs) {
+    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs -or $report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant()) {
         throw 'native report identity or selected settings do not match this invocation'
     }
 
@@ -206,9 +229,10 @@ try {
         source_revision = $head
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
+        calibration_placement = $CalibrationPlacement.ToLowerInvariant()
         cpu_contention = [bool]$CpuContention
         cpu_contention_processes = $contentionProcesses.Count
-        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers' } else { $null }
+        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }
         timing_margin_us = $TimingMarginUs
         started_utc = $startedUtc
         ended_utc = $endedUtc

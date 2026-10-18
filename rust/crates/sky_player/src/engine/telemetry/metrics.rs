@@ -205,6 +205,8 @@ pub struct WorkerMetricsLocal {
     /// before dispatch and are never touched by the precision path.
     pub startup_calibration_executed: bool,
     pub startup_calibration_sample_count: u64,
+    pub startup_calibration_duration_us: u64,
+    pub startup_calibration_result: u8,
     pub startup_wake_error_robust_us: u64,
     pub spin_threshold_source: u8,
     pub effective_spin_threshold_us: u64,

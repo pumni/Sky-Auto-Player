@@ -1,6 +1,29 @@
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CalibrationPlacement {
+    Baseline,
+    Candidate,
+}
+
+impl CalibrationPlacement {
+    pub(super) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "baseline" => Ok(Self::Baseline),
+            "candidate" => Ok(Self::Candidate),
+            _ => Err("--calibration-placement must be baseline or candidate".to_string()),
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::Candidate => "candidate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Scenario {
     CanonicalSingle,
     CanonicalChord,
@@ -118,6 +141,7 @@ pub(super) struct RunArgs {
     pub(super) sink_events: PathBuf,
     pub(super) target_hwnd: isize,
     pub(super) scenario: Scenario,
+    pub(super) calibration_placement: CalibrationPlacement,
     pub(super) evidence: PathBuf,
     pub(super) timing_margin_us: u64,
     pub(super) focus_probe_ready: Option<PathBuf>,
