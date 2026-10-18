@@ -8,7 +8,8 @@
   [P0 #431](https://github.com/pumni/Sky-Auto-Player/issues/431),
   [P1 #432](https://github.com/pumni/Sky-Auto-Player/issues/432),
   [P2 #433](https://github.com/pumni/Sky-Auto-Player/issues/433),
-  [documentation phase #434](https://github.com/pumni/Sky-Auto-Player/issues/434).
+  [documentation phase #434](https://github.com/pumni/Sky-Auto-Player/issues/434),
+  [terminal suspend contract #465](https://github.com/pumni/Sky-Auto-Player/issues/465).
 
 ## Scope and relationship to ADR-0017
 
@@ -17,8 +18,9 @@ authored release gaps, normal current-Down continuity, packet order, musical
 ownership, safety release accounting, and the prohibition on schedule rewrite.
 This ADR records the accepted D4 resumable Down barrier, D5 bounded final
 lease-age proof, D6 focus-loss behavior, and the platform/evidence boundaries
-needed to describe them accurately. It does not authorize a runtime behavior
-change or replace any ADR-0017 decision.
+needed to describe them accurately. Its terminal-system-suspend section
+supplements those lifecycle rules for #465 without replacing ADR-0017 timing
+decisions.
 
 The P3 change is documentation-only. Current implementation and direct tests
 remain the executable authority. P0 is linked as historical characterization;
@@ -42,13 +44,55 @@ atomic mixed packet. It is global and conservative: a completed Down for one
 key does not clear it for other keys. Authored targets later than `B` are
 preserved. UpOnly packets bypass the barrier and retain their safety timing.
 
-Manual pause, focus restoration, deferred manual suspension, and system-power
-resume use the same verified cleanup operation and preserve the barrier. That
-cleanup clears canceled musical per-key floors; it does not reset `B`. A new
-session may construct a fresh guard. Cleanup that is unknown, partial, or
-unverified, a failed post-cleanup QPC read, or checked-add overflow leaves
-Down dispatch fail-closed. No usable timestamp is fabricated for an unknown
-release state.
+Manual pause, focus restoration, and deferred manual suspension use the same
+verified cleanup operation and preserve the barrier. That cleanup clears
+canceled musical per-key floors; it does not reset `B`. System suspend is a
+terminal session boundary and does not enter a resumable cleanup or clock
+rebase path. A later Resume notification cannot reopen Down admission or
+restore that session's QPC epoch. A new physical session may construct a fresh
+guard only after the prior worker and its release handoff permit retirement.
+Cleanup that is unknown, partial, or unverified, a failed post-cleanup QPC
+read, or checked-add overflow leaves Down dispatch fail-closed. No usable
+timestamp is fabricated for an unknown release state.
+
+### Terminal system-suspend contract
+
+The stable Windows power callback records an accepted Suspend in a monotonic
+bit in the same atomic publication word as worker `Armed`. This gives Suspend
+and startup activation one linearization point: if the suspend bit wins, the
+worker cannot publish Armed; if Armed wins, the accepted suspend immediately
+closes final Down admission and the worker exits through terminal release.
+The Down admission gate reads the sticky bit, so no new musical Down is
+authorized after that boundary. A transport attempt admitted before the
+boundary may still be in flight and remains covered by the existing tracked
+obligation union and terminal cleanup.
+
+Resume may update transient operating-system notification state and wake the
+worker, but cannot clear the session bit, rewrite the staged or published
+epoch, or reopen a terminal startup state. The bit is reset only while opening
+a new callback epoch for a successor physical
+session after the prior session's retirement handoff. Manual pause and focus
+restoration remain independently resumable.
+
+The existing three-second supervisor lease remains monotonic and unchanged.
+A long QPC age can expire it during suspend; that error trigger takes
+precedence over the clean `system_suspend` outcome. Worker error, panic,
+cleanup failure, or unverified physical release also remains an error. A clean
+verified terminal release publishes the typed `system_suspend` outcome. The
+desktop reports that session as failed with code `system_suspend` and requires
+a new playback session after resume.
+
+The outcome precedence is:
+
+| Condition observed before terminal publication | Result |
+| --- | --- |
+| Supervisor lease expiry, a selected panic-release trigger, worker Error/Panicked/Poisoned, owner invalidation, cleanup failure, or unverified release | Error; retain the primary failure and suspend trigger diagnostics independently |
+| Accepted system suspend with successful terminal release and no higher-priority failure | `system_suspend`; this takes precedence over nominal Stop, Skip, and the desktop's Quit-then-panic shutdown request |
+| Stop or Skip without an accepted suspend | Existing Quit or Skipped outcome |
+
+An already-admitted sender transaction may finish after Suspend. Its tracked
+in-flight obligation is reconciled by the same terminal release path before
+worker retirement; it does not authorize another Down transaction.
 
 ### Focus loss and physical release
 

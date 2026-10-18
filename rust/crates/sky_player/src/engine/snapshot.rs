@@ -16,6 +16,7 @@ pub enum EnginePollStatus {
     Finished,
     Quit,
     Skipped,
+    SystemSuspended,
     Error,
     Panicked,
     Poisoned,
@@ -33,6 +34,7 @@ impl EnginePollStatus {
             Self::Finished => "finished",
             Self::Quit => "quit",
             Self::Skipped => "skipped",
+            Self::SystemSuspended => "system_suspended",
             Self::Error => "error",
             Self::Panicked => "panicked",
             Self::Poisoned => "poisoned",
@@ -46,6 +48,7 @@ impl EnginePollStatus {
             Self::Finished
                 | Self::Quit
                 | Self::Skipped
+                | Self::SystemSuspended
                 | Self::Error
                 | Self::Panicked
                 | Self::Poisoned

@@ -2040,6 +2040,7 @@ impl ProductionDispatchTestHarness {
             &self.skip_requested,
             &self.panic_requested,
             &self.supervisor_expired,
+            &self.system_power,
         )
     }
 
@@ -2368,6 +2369,7 @@ impl ProductionDispatchTestHarness {
             skip_requested,
             panic_requested,
             supervisor_expired,
+            system_power,
             metrics,
             progress_clock,
             ..
@@ -2379,31 +2381,13 @@ impl ProductionDispatchTestHarness {
             &quit_requested,
             &panic_requested,
             &supervisor_expired,
+            &system_power,
             &metrics,
             &progress_clock,
             worker_panicked,
             runtime.terminal_trigger,
             runtime.terminal_error,
             cleanup_observation,
-        )
-    }
-
-    pub fn apply_system_suspend_for_test(&mut self, now_ticks: QpcTicks) -> Result<(), String> {
-        let qpc_clock = self.resources.clock;
-        super::super::worker::apply_system_suspend_transition(
-            &mut self.resources.backend,
-            &mut self.resources.coordinator,
-            &mut self.runtime,
-            &mut self.resources.playback,
-            &self.progress_clock,
-            now_ticks,
-            self.system_power.suspend_boundary_qpc(),
-            self.target.hwnd_for_safety_release(),
-            || {
-                qpc_clock
-                    .now()
-                    .map_err(|error| format!("system cleanup QPC: {error:?}"))
-            },
         )
     }
 
@@ -2430,31 +2414,6 @@ impl ProductionDispatchTestHarness {
 
     pub fn complete_system_resume_for_test(&self) -> bool {
         self.system_power.complete_resume()
-    }
-
-    pub fn try_system_resume_for_test(
-        &mut self,
-        lease_timeout_ticks: DurationTicks,
-    ) -> Result<bool, String> {
-        let mut suspend_applied = true;
-        let mut resume_pending = true;
-        super::super::worker::try_complete_system_resume_transition(
-            &mut suspend_applied,
-            &mut resume_pending,
-            super::super::worker::SystemResumeTransition {
-                system_power: &self.system_power,
-                config: &self.config,
-                backend: &self.resources.backend,
-                runtime: &mut self.runtime,
-                playback: &mut self.resources.playback,
-                progress_clock: &self.progress_clock,
-                qpc_clock: self.resources.clock,
-                focus_active: &self.focus_active,
-                target: &self.target,
-                lease_timeout_ticks,
-                supervisor_lease: &self.supervisor_expired,
-            },
-        )
     }
 
     pub fn set_supervisor_heartbeat_for_test(&self, ticks: QpcTicks) {

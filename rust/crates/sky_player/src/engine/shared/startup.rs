@@ -37,11 +37,15 @@ pub(crate) struct StartupSnapshot {
     pub(crate) abort_reason: StartupAbortReason,
     pub(crate) ready_published: bool,
     pub(crate) armed_published: bool,
+    pub(crate) system_suspend_terminal: bool,
 }
 
 const STARTUP_PHASE_MASK: u32 = 0x0f;
 const STARTUP_READY_PUBLISHED: u32 = 1 << 8;
 const STARTUP_ARMED_PUBLISHED: u32 = 1 << 9;
+// Monotonic for one physical session. It shares the publication word with
+// Armed so the power callback and worker arm CAS have one linearization point.
+const STARTUP_SYSTEM_SUSPEND_TERMINAL: u32 = 1 << 10;
 const STARTUP_ABORT_SHIFT: u32 = 16;
 const STARTUP_ABORT_MASK: u32 = 0xff << STARTUP_ABORT_SHIFT;
 
@@ -76,7 +80,7 @@ fn decode_startup_word(raw: u32) -> StartupSnapshot {
         6 => StartupPhase::Failed,
         _ => StartupPhase::Invalid,
     };
-    let abort_reason = match (raw & STARTUP_ABORT_MASK) >> STARTUP_ABORT_SHIFT {
+    let encoded_abort_reason = match (raw & STARTUP_ABORT_MASK) >> STARTUP_ABORT_SHIFT {
         0 => StartupAbortReason::None,
         1 => StartupAbortReason::Quit,
         2 => StartupAbortReason::Skip,
@@ -89,11 +93,27 @@ fn decode_startup_word(raw: u32) -> StartupSnapshot {
         9 => StartupAbortReason::WorkerFailure,
         _ => StartupAbortReason::WorkerFailure,
     };
+    let system_suspend_terminal = raw & STARTUP_SYSTEM_SUSPEND_TERMINAL != 0;
+    let abort_reason = if system_suspend_terminal
+        && !matches!(
+            encoded_abort_reason,
+            StartupAbortReason::PanicRelease
+                | StartupAbortReason::SupervisorLeaseExpired
+                | StartupAbortReason::FocusInvalidated
+                | StartupAbortReason::TargetInvalidated
+                | StartupAbortReason::OwnerInvalidated
+                | StartupAbortReason::WorkerFailure
+        ) {
+        StartupAbortReason::SystemSuspend
+    } else {
+        encoded_abort_reason
+    };
     StartupSnapshot {
         phase,
         abort_reason,
         ready_published: raw & STARTUP_READY_PUBLISHED != 0,
         armed_published: raw & STARTUP_ARMED_PUBLISHED != 0,
+        system_suspend_terminal,
     }
 }
 
@@ -109,6 +129,20 @@ fn cancel_startup_before_arm(state: &AtomicU32, reason: StartupAbortReason) -> b
     loop {
         let current = state.load(Ordering::Acquire);
         let snapshot = decode_startup_word(current);
+        if snapshot.system_suspend_terminal
+            && reason != StartupAbortReason::SystemSuspend
+            && !matches!(
+                reason,
+                StartupAbortReason::PanicRelease
+                    | StartupAbortReason::SupervisorLeaseExpired
+                    | StartupAbortReason::FocusInvalidated
+                    | StartupAbortReason::TargetInvalidated
+                    | StartupAbortReason::OwnerInvalidated
+                    | StartupAbortReason::WorkerFailure
+            )
+        {
+            return false;
+        }
         if !matches!(
             snapshot.phase,
             StartupPhase::Idle
@@ -123,7 +157,7 @@ fn cancel_startup_before_arm(state: &AtomicU32, reason: StartupAbortReason) -> b
             reason,
             snapshot.ready_published,
             snapshot.armed_published,
-        );
+        ) | (current & STARTUP_SYSTEM_SUSPEND_TERMINAL);
         if state
             .compare_exchange_weak(current, cancelled, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
@@ -141,7 +175,7 @@ fn move_startup_phase(
     armed_published: bool,
 ) -> bool {
     let current = state.load(Ordering::Acquire);
-    if startup_phase(current) != from {
+    if startup_phase(current) != from || current & STARTUP_SYSTEM_SUSPEND_TERMINAL != 0 {
         return false;
     }
     let next = startup_word(
@@ -149,7 +183,7 @@ fn move_startup_phase(
         StartupAbortReason::None,
         ready_published,
         armed_published,
-    );
+    ) | (current & STARTUP_SYSTEM_SUSPEND_TERMINAL);
     state
         .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
@@ -171,6 +205,10 @@ impl Default for StartupPublicationState {
 impl StartupPublicationState {
     pub(super) fn snapshot(&self) -> StartupSnapshot {
         decode_startup_word(self.0.load(Ordering::Acquire))
+    }
+
+    pub(super) fn system_suspend_terminal(&self) -> bool {
+        self.0.load(Ordering::Acquire) & STARTUP_SYSTEM_SUSPEND_TERMINAL != 0
     }
 
     pub(super) fn begin_preparing(&self) -> bool {
@@ -217,6 +255,14 @@ impl StartupPublicationState {
         cancel_startup_before_arm(&self.0, reason)
     }
 
+    /// Latch system suspension in one bounded atomic RMW. The bit is never
+    /// cleared by Resume; only the next session reset after callback rundown
+    /// can clear it.
+    pub(super) fn latch_system_suspend_terminal(&self) {
+        self.0
+            .fetch_or(STARTUP_SYSTEM_SUSPEND_TERMINAL, Ordering::AcqRel);
+    }
+
     pub(super) fn fail(&self, reason: StartupAbortReason) -> bool {
         loop {
             let current = self.0.load(Ordering::Acquire);
@@ -235,7 +281,7 @@ impl StartupPublicationState {
                 reason,
                 snapshot.ready_published,
                 snapshot.armed_published,
-            );
+            ) | (current & STARTUP_SYSTEM_SUSPEND_TERMINAL);
             if self
                 .0
                 .compare_exchange_weak(current, failed, Ordering::AcqRel, Ordering::Acquire)

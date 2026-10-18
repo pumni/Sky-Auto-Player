@@ -3,7 +3,8 @@
 This document is normative for the real-time playback path. The application
 reads authored schedules, materializes paired musical generations, and emits
 physical keyboard input through the Windows `SendInput` boundary. The current
-resumable lifecycle and final lease contract is recorded in
+resumable lifecycle, terminal system-suspend contract, and final lease
+contract are recorded in
 [ADR-0018](adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md).
 
 ## Ownership boundaries
@@ -30,10 +31,10 @@ Armed. The worker owns this transition:
 
 ```text
 arm request -> Preparing -> Ready -> Arming --atomic commit--> Armed
-                                   \                         /
+                                   \                          /
                                     +-- stop, authority loss,
-                                        suspend, lease expiry,
-                                        or failure -> terminal
+                                        system suspend, lease
+                                        expiry, or failure -> terminal
 ```
 
 During `Preparing`, the worker constructs the coordinator, simulates and
@@ -52,11 +53,12 @@ worker then enters `Arming`, rechecks quit/skip/panic, suspend, supervisor
 lease, target generation, focus, and required owner identity, computes a fresh
 QPC epoch as `epoch_base + requested_pre_roll`, and stages the clock projection.
 One atomic `Armed` transition publishes the immutable epoch and pre-roll to
-readers. A concurrent cancellation or authority change that commits first
-prevents Armed publication; a change after Armed still meets the dispatch
-loop's final per-packet gates. Readers load the startup gate once before
-projecting epoch, elapsed time, and countdown, so they cannot combine a staged
-epoch with a pre-Armed status.
+readers. The monotonic system-suspend bit shares that atomic word: if it is set
+before this transition, Armed publication fails and startup terminates; if
+Armed commits first, suspend closes final Down admission and enters terminal
+release. Readers load the startup gate once before projecting epoch, elapsed
+time, and countdown, so they cannot combine a staged epoch with a pre-Armed
+status. Resume never clears this bit or republishes an epoch.
 
 All construction time is outside the published count-in. The first authored
 target remains `epoch + authored_timestamp`; no packet timestamp is rebased.
@@ -128,14 +130,16 @@ Transport failures do not create completion evidence.
 After verified resumable cleanup returns, the worker samples QPC and sets the
 global absolute Down barrier to that sample plus one frame. It clears canceled
 musical hold floors while retaining this barrier. Manual pause, focus restore,
-deferred manual suspension, and system suspend use the same cleanup operation;
-resume paths do not reset the barrier. It applies to every later Down-bearing
-packet, including all Down keys in a mixed packet, and never delays Up-only
-packets. A completed Down for one key does not clear it for other keys. Once
-the barrier time has passed it adds no delay, and authored targets later than
-the barrier are preserved. A new session constructs a clean guard. Failed or
-inconclusive cleanup, a failed post-cleanup QPC read, or barrier overflow keeps
-the guard invalid and Down dispatch fail-closed.
+and deferred manual suspension use the same cleanup operation; their resume
+paths do not reset the barrier. System suspend ends the physical session and
+does not use the resumable cleanup path. Resume cannot reactivate that worker
+or its QPC epoch. The barrier applies to every later Down-bearing packet,
+including all Down keys in a mixed packet, and never delays Up-only packets. A
+completed Down for one key does not clear it for other keys. Once the barrier
+time has passed it adds no delay, and authored targets later than the barrier
+are preserved. A new session constructs a clean guard. Failed or inconclusive
+cleanup, a failed post-cleanup QPC read, or barrier overflow keeps the guard
+invalid and Down dispatch fail-closed.
 
 ### Bounded resumable generation reconciliation
 

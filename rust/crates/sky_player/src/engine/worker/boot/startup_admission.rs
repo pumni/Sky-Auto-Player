@@ -44,16 +44,35 @@ pub(super) fn startup_abort_trigger(
     require_focus: bool,
 ) -> Option<TerminalTrigger> {
     let startup = shared.commands.system_power.startup_snapshot();
+    if startup.phase == StartupPhase::Failed {
+        return trigger_for_abort(startup.abort_reason);
+    }
+    if matches!(
+        startup.abort_reason,
+        StartupAbortReason::PanicRelease
+            | StartupAbortReason::SupervisorLeaseExpired
+            | StartupAbortReason::FocusInvalidated
+            | StartupAbortReason::TargetInvalidated
+            | StartupAbortReason::OwnerInvalidated
+            | StartupAbortReason::WorkerFailure
+    ) {
+        return trigger_for_abort(startup.abort_reason);
+    }
+    if shared.commands.supervisor_expired.is_expired() {
+        return Some(TerminalTrigger::SupervisorLeaseExpired);
+    }
+    if startup.system_suspend_terminal || startup.abort_reason == StartupAbortReason::SystemSuspend
+    {
+        return Some(TerminalTrigger::SystemSuspend);
+    }
     if startup.phase == StartupPhase::Cancelled {
         return trigger_for_abort(startup.abort_reason);
     }
-    if matches!(startup.phase, StartupPhase::Armed | StartupPhase::Failed) {
+    if startup.phase == StartupPhase::Armed {
         return None;
     }
 
-    let reason = if shared.commands.supervisor_expired.is_expired() {
-        Some(StartupAbortReason::SupervisorLeaseExpired)
-    } else if shared.commands.skip_requested.load(Ordering::Acquire) {
+    let reason = if shared.commands.skip_requested.load(Ordering::Acquire) {
         Some(StartupAbortReason::Skip)
     } else if shared.commands.quit_requested.load(Ordering::Acquire) {
         Some(StartupAbortReason::Quit)
@@ -118,6 +137,8 @@ pub(super) fn record_startup_abort_without_backend(
 fn startup_outcome(trigger: TerminalTrigger) -> u8 {
     if trigger.requires_error_outcome() {
         OUTCOME_ERROR
+    } else if matches!(trigger, TerminalTrigger::SystemSuspend) {
+        super::super::super::OUTCOME_SYSTEM_SUSPENDED
     } else if matches!(trigger, TerminalTrigger::Skip) {
         OUTCOME_SKIPPED
     } else if matches!(trigger, TerminalTrigger::Quit) {

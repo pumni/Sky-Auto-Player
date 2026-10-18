@@ -152,6 +152,7 @@ const OUTCOME_FINISHED: u8 = 1;
 const OUTCOME_QUIT: u8 = 2;
 const OUTCOME_SKIPPED: u8 = 3;
 const OUTCOME_ERROR: u8 = 4;
+const OUTCOME_SYSTEM_SUSPENDED: u8 = 5;
 const PAUSED_POLL_US: u64 = 2_000;
 const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
 #[cfg(test)]

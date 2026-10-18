@@ -401,9 +401,9 @@ impl SupervisorLeaseState {
 }
 
 pub(super) const SYSTEM_POWER_OS_SUSPENDED: u8 = 1 << 0;
-pub(super) const SYSTEM_POWER_DOWN_BLOCKED: u8 = 1 << 1;
 pub(super) const SYSTEM_POWER_SUSPEND_PENDING: u8 = 1 << 2;
 pub(super) const SYSTEM_POWER_RESUME_PENDING: u8 = 1 << 3;
+#[cfg(any(test, feature = "test-support"))]
 const SYSTEM_POWER_PENDING_MASK: u8 = SYSTEM_POWER_SUSPEND_PENDING | SYSTEM_POWER_RESUME_PENDING;
 const SYSTEM_POWER_NOTIFY_CAS_ATTEMPTS: usize = 8;
 
@@ -575,6 +575,9 @@ impl SystemPowerState {
         let Some(_lease) = self.enter_callback() else {
             return false;
         };
+        if suspended {
+            self.startup_state.latch_system_suspend_terminal();
+        }
         self.notify_authorized(suspended, suspend_boundary_qpc, interrupt)
     }
 
@@ -587,6 +590,11 @@ impl SystemPowerState {
         let Some(_lease) = self.enter_callback() else {
             return false;
         };
+        if suspended {
+            // Close Armed and Down admission before taking the callback's QPC
+            // sample; the sample is diagnostic and cannot delay termination.
+            self.startup_state.latch_system_suspend_terminal();
+        }
         let suspend_boundary_qpc = suspended.then(read_qpc).flatten();
         self.notify_authorized(suspended, suspend_boundary_qpc, interrupt)
     }
@@ -597,12 +605,9 @@ impl SystemPowerState {
         suspend_boundary_qpc: Option<QpcTicks>,
         interrupt: &OwnedEvent,
     ) -> bool {
-        // A suspend accepted before the worker's Armed publication wins the
-        // same lock-free transition used by command and authority invalidation.
-        // If arming already committed, normal post-arm power handling owns it.
-        if suspended {
-            self.cancel_prearm(StartupAbortReason::SystemSuspend);
-        }
+        // The startup-word latch is the linearization point shared with
+        // publish_armed and final Down admission. Resume only changes
+        // transient OS notification bits and cannot clear this session latch.
         for _ in 0..SYSTEM_POWER_NOTIFY_CAS_ATTEMPTS {
             let current = self.state.load(Ordering::Acquire);
             let os_suspended = current & SYSTEM_POWER_OS_SUSPENDED != 0;
@@ -624,14 +629,9 @@ impl SystemPowerState {
                 continue;
             }
             let next = if suspended {
-                current
-                    | SYSTEM_POWER_OS_SUSPENDED
-                    | SYSTEM_POWER_DOWN_BLOCKED
-                    | SYSTEM_POWER_SUSPEND_PENDING
+                current | SYSTEM_POWER_OS_SUSPENDED | SYSTEM_POWER_SUSPEND_PENDING
             } else {
-                (current & !SYSTEM_POWER_OS_SUSPENDED)
-                    | SYSTEM_POWER_DOWN_BLOCKED
-                    | SYSTEM_POWER_RESUME_PENDING
+                (current & !SYSTEM_POWER_OS_SUSPENDED) | SYSTEM_POWER_RESUME_PENDING
             };
             if self
                 .state
@@ -649,11 +649,10 @@ impl SystemPowerState {
         }
 
         // Contention beyond the fixed retry budget must never reopen Down
-        // admission on an ambiguous notification history. Treat it as a
-        // conservative suspend; only a current-epoch resume can reopen the
-        // gate after worker-side suspend/resume processing.
+        // admission on an ambiguous notification history. The sticky startup
+        // latch already blocks it; retain the transient state conservatively.
         self.state.fetch_or(
-            SYSTEM_POWER_OS_SUSPENDED | SYSTEM_POWER_DOWN_BLOCKED | SYSTEM_POWER_SUSPEND_PENDING,
+            SYSTEM_POWER_OS_SUSPENDED | SYSTEM_POWER_SUSPEND_PENDING,
             Ordering::AcqRel,
         );
         let _ = interrupt.signal();
@@ -666,13 +665,10 @@ impl SystemPowerState {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn suspend_boundary_qpc(&self) -> Option<QpcTicks> {
         let raw = self.suspend_boundary_qpc.load(Ordering::Acquire);
         (raw != 0).then(|| QpcTicks::from_raw(raw))
-    }
-
-    pub(super) fn clear_suspend_boundary(&self) {
-        self.suspend_boundary_qpc.store(0, Ordering::Release);
     }
 
     pub(super) fn reset_for_new_session(&self, interrupt: &OwnedEvent) -> Result<(), String> {
@@ -750,6 +746,7 @@ impl SystemPowerState {
         let _ = interrupt.try_take();
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn take_pending(&self) -> u8 {
         let state = self.state.load(Ordering::Acquire);
         if state & SYSTEM_POWER_PENDING_MASK == 0 {
@@ -761,40 +758,35 @@ impl SystemPowerState {
     }
 
     pub(super) fn down_blocked(&self) -> bool {
-        self.state.load(Ordering::Acquire) & SYSTEM_POWER_DOWN_BLOCKED != 0
+        self.startup_state.system_suspend_terminal()
     }
 
+    pub(super) fn system_suspend_terminal(&self) -> bool {
+        self.startup_state.system_suspend_terminal()
+    }
+
+    #[cfg(test)]
     pub(super) fn os_suspended(&self) -> bool {
         self.state.load(Ordering::Acquire) & SYSTEM_POWER_OS_SUSPENDED != 0
     }
 
-    /// Complete worker-side resume only if no newer suspend has arrived.
+    /// Report whether a transient resume notification can be acknowledged.
+    /// An accepted suspend is session-terminal and always rejects this path.
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn complete_resume(&self) -> bool {
-        loop {
-            let current = self.state.load(Ordering::Acquire);
-            if current & (SYSTEM_POWER_OS_SUSPENDED | SYSTEM_POWER_SUSPEND_PENDING) != 0 {
-                return false;
-            }
-            if self
-                .state
-                .compare_exchange(
-                    current,
-                    current & !SYSTEM_POWER_DOWN_BLOCKED,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                return true;
-            }
+        if self.startup_state.system_suspend_terminal() {
+            return false;
         }
+        self.state.load(Ordering::Acquire)
+            & (SYSTEM_POWER_OS_SUSPENDED | SYSTEM_POWER_SUSPEND_PENDING)
+            == 0
     }
 
     pub(super) fn snapshot(&self) -> (bool, bool, u64, u64, u64) {
         let state = self.state.load(Ordering::Acquire);
         (
             state & SYSTEM_POWER_OS_SUSPENDED != 0,
-            state & SYSTEM_POWER_DOWN_BLOCKED != 0,
+            self.startup_state.system_suspend_terminal(),
             self.suspend_count.load(Ordering::Relaxed),
             self.resume_count.load(Ordering::Relaxed),
             self.duplicate_count.load(Ordering::Relaxed),

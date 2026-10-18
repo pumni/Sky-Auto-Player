@@ -117,12 +117,14 @@ Down-bearing packet applies this global absolute floor alongside its authored
 target and per-key floors. A mixed packet waits as a whole; Up-only packets are
 unaffected. A successful Down does not clear the barrier for other keys, and
 an authored target later than the barrier remains unchanged. Once the barrier
-has passed it adds no delay. Manual, focus, and system-power resume paths keep
-the same barrier. A new session constructs a clean guard. Unverified cleanup,
-QPC failure, or checked-add overflow leaves the guard fail-closed and prevents
-later Down dispatch. A failed, partial, ambiguous, or untrustworthy transport
-result does not create completion evidence; the existing terminal cleanup
-policy applies.
+has passed it adds no delay. Manual pause and focus restoration keep the same
+barrier. System suspend permanently terminates the physical session; Resume
+cannot reactivate its worker, reopen Down admission, or restore its QPC epoch.
+A new session constructs a clean guard after the prior worker and release
+handoff permit retirement. Unverified cleanup, QPC failure, or checked-add
+overflow leaves the guard fail-closed and prevents later Down dispatch. A
+failed, partial, ambiguous, or untrustworthy transport result does not create
+completion evidence; the existing terminal cleanup policy applies.
 
 After that verified cleanup and barrier establishment, resumable reconciliation
 stores at most one exact authored-Up token per instrument slot. The token binds

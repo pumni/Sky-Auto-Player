@@ -860,13 +860,13 @@ mod tests {
         let resumed = next_session.system_power_snapshot();
         assert!(
             !resumed.suspended && resumed.down_blocked,
-            "expected callback resume to clear suspension while retaining Down block; snapshot: {resumed:?}"
+            "resume clears the OS suspended bit but retains the session terminal block; snapshot: {resumed:?}"
         );
         assert_eq!(resumed.resume_notifications, 1);
 
         next_session.deactivate_system_power();
         let retired = next_session.system_power_snapshot();
-        assert!(!retired.suspended && !retired.down_blocked);
+        assert!(!retired.suspended && retired.down_blocked);
         drop(registration);
         // SAFETY: unregister does not invalidate the retained context. The
         // retired epoch must ignore callbacks that arrive after rundown.

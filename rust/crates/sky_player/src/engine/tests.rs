@@ -362,6 +362,53 @@ fn arm_epoch_is_immutable_across_worker_boot_delay() {
 }
 
 #[test]
+fn suspend_at_epoch_prepared_barrier_prevents_armed_publication_and_down() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::EpochPrepared, 1);
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let send_input_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    fault_script.send_input_capture = Some(Arc::clone(&send_input_capture));
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+
+    session.arm(0).expect("arm worker");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(3)));
+    assert!(!session.snapshot().startup_armed);
+    assert!(session.notify_system_power(true));
+    // Windows may deliver Resume before the worker leaves its pre-Armed
+    // checkpoint. The monotonic session decision must survive that ordering.
+    assert!(session.notify_system_power(false));
+    hook.release_startup_checkpoint();
+
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert_eq!(
+        session.poll_state().status,
+        EnginePollStatus::SystemSuspended
+    );
+    assert_eq!(session.terminal_outcome(), Some("system_suspend"));
+    assert!(!session.snapshot().startup_armed);
+    assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 0);
+    assert!(
+        send_input_capture
+            .lock()
+            .expect("mock send capture")
+            .is_empty()
+    );
+}
+
+#[test]
 fn slow_preparation_does_not_consume_published_preroll_or_shift_authored_onset() {
     let hook = Arc::new(StartupOrderingHook::default());
     hook.set_boot_delay_us(100_000);
@@ -473,7 +520,12 @@ fn assert_checkpointed_terminal_stop(
     );
     let snapshot = session.snapshot();
     assert_eq!(snapshot.status, expected_status.as_str());
-    assert_eq!(snapshot.outcome.as_deref(), Some(expected_status.as_str()));
+    let expected_outcome = if expected_status == EnginePollStatus::SystemSuspended {
+        "system_suspend"
+    } else {
+        expected_status.as_str()
+    };
+    assert_eq!(snapshot.outcome.as_deref(), Some(expected_outcome));
     assert_eq!(
         snapshot.terminal_trigger_reason.as_deref(),
         Some(expected_trigger)
@@ -556,8 +608,8 @@ fn skip_panic_suspend_target_owner_and_lease_stops_win_ready_to_armed() {
         ("panic", EnginePollStatus::Error, "panic_release_requested"),
         (
             "suspend",
-            EnginePollStatus::Error,
-            "system_suspend_during_preparation",
+            EnginePollStatus::SystemSuspended,
+            "system_suspend",
         ),
         (
             "target",
@@ -3083,7 +3135,7 @@ fn lifecycle_inconclusive_cleanup_does_not_establish_or_bypass_barrier() {
 }
 
 #[test]
-fn lifecycle_focus_and_system_resume_keep_the_verified_cleanup_barrier() {
+fn focus_restoration_is_resumable_while_system_suspend_is_terminal() {
     use super::test_support::ProductionDispatchTestHarness;
 
     let mut focus = ProductionDispatchTestHarness::new_down_only();
@@ -3113,36 +3165,23 @@ fn lifecycle_focus_and_system_resume_keep_the_verified_cleanup_barrier() {
 
     let mut power = ProductionDispatchTestHarness::new_down_only();
     let suspend_qpc = power.resources.clock.now().expect("suspend QPC");
-    power
-        .reanchor_playback_clock_for_test(suspend_qpc)
-        .expect("power lifecycle epoch");
     assert!(power.notify_system_power_at_for_test(true, Some(suspend_qpc)));
-    assert_ne!(power.take_system_power_pending_for_test(), 0);
-    power
-        .apply_system_suspend_for_test(suspend_qpc)
-        .expect("verified system suspend cleanup");
-    let barrier_before_resume = power
-        .down_floor_for_test(QpcTicks::ZERO, 1)
-        .expect("system suspend barrier");
     assert!(power.notify_system_power_at_for_test(false, None));
-    assert_ne!(power.take_system_power_pending_for_test(), 0);
-    assert!(
-        power
-            .try_system_resume_for_test(DurationTicks::ZERO)
-            .expect("system resume transition")
+    assert!(power.system_power_down_blocked_for_test());
+    assert!(!power.complete_system_resume_for_test());
+    assert!(power.process_command_control_for_test());
+    assert_eq!(
+        power.runtime.terminal_trigger,
+        Some(super::worker::TerminalTrigger::SystemSuspend)
     );
-    let barrier_after_resume = power
-        .down_floor_for_test(QpcTicks::ZERO, 1)
-        .expect("system resume barrier");
-    assert_eq!(barrier_after_resume, barrier_before_resume);
-    assert!(
-        !power.notify_system_power_at_for_test(false, None),
-        "stale duplicate resume callback is ignored"
+    let mut observation = super::worker::FinalizeTestObservation::default();
+    assert_eq!(
+        power.finalize_worker_for_test(false, &mut observation),
+        super::OUTCOME_SYSTEM_SUSPENDED
     );
     assert_eq!(
-        power.down_floor_for_test(QpcTicks::ZERO, 1),
-        Some(barrier_before_resume),
-        "resume callbacks must not reset the barrier"
+        observation.terminal_trigger_reason.as_deref(),
+        Some("system_suspend")
     );
 }
 
@@ -3317,10 +3356,30 @@ fn release_obligation_lifecycle_matrix_keeps_safety_cleanup_outside_musical_pair
             }
             "system_suspend" => {
                 assert!(harness.notify_system_power_for_test(true));
-                let suspend_qpc = harness.resources.clock.now().expect("suspend QPC");
-                harness
-                    .apply_system_suspend_for_test(suspend_qpc)
-                    .expect("system suspend cleanup");
+                assert!(harness.notify_system_power_for_test(false));
+                assert!(harness.system_power_down_blocked_for_test());
+                assert!(harness.process_command_control_for_test());
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                assert_eq!(
+                    harness.finalize_worker_for_test(false, &mut observation),
+                    super::OUTCOME_SYSTEM_SUSPENDED,
+                    "{path}: suspend is a clean but terminal outcome"
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("system_suspend")
+                );
+                assert_eq!(observation.attempted_mask, 0b1);
+                assert_eq!(observation.release_obligation_mask, 0);
+                assert_eq!(
+                    *packets.lock().expect("terminal packet capture"),
+                    vec![
+                        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1),
+                        sky_dispatch_win32::input::PhysicalPacket::new(0b1, 0),
+                    ],
+                    "{path}: terminal finalizer releases held physical input"
+                );
+                continue;
             }
             "supervisor_expiry" => {
                 harness.supervisor_expired.latch_expired();
@@ -3837,10 +3896,18 @@ fn empty_ownership_lifecycle_cleanup_emits_no_transport() {
             }
             "system_suspend" => {
                 assert!(harness.notify_system_power_for_test(true));
-                let suspend_qpc = harness.resources.clock.now().expect("suspend QPC");
-                harness
-                    .apply_system_suspend_for_test(suspend_qpc)
-                    .expect("system suspend cleanup");
+                assert!(harness.notify_system_power_for_test(false));
+                assert!(harness.system_power_down_blocked_for_test());
+                assert!(harness.process_command_control_for_test());
+                let mut observation = super::worker::FinalizeTestObservation::default();
+                assert_eq!(
+                    harness.finalize_worker_for_test(false, &mut observation),
+                    super::OUTCOME_SYSTEM_SUSPENDED
+                );
+                assert_eq!(
+                    observation.terminal_trigger_reason.as_deref(),
+                    Some("system_suspend")
+                );
             }
             "supervisor_expiry" => {
                 harness.supervisor_expired.latch_expired();
@@ -6885,7 +6952,7 @@ fn panic_arriving_after_outer_sample_is_caught_by_final_control_gate() {
 }
 
 #[test]
-fn system_suspend_after_wait_wake_blocks_final_down_admission_until_revalidated_resume() {
+fn system_suspend_after_wait_wake_blocks_final_down_admission_after_resume() {
     use super::shared::SystemPowerState;
     use sky_dispatch_win32::event::OwnedEvent;
 
@@ -6912,17 +6979,65 @@ fn system_suspend_after_wait_wake_blocks_final_down_admission_until_revalidated_
         final_control_precheck(signals()),
         FinalControlAdmission::SystemSuspendRequested
     );
+    quit_requested.store(true, Ordering::Release);
+    skip_requested.store(true, Ordering::Release);
+    assert_eq!(
+        final_control_precheck(signals()),
+        FinalControlAdmission::SystemSuspendRequested,
+        "accepted suspend wins over nominal Stop and Skip at final admission"
+    );
     system_power.take_pending();
     assert!(system_power.notify(false, &interrupt));
     assert_eq!(
         final_control_precheck(signals()),
         FinalControlAdmission::SystemSuspendRequested
     );
-    assert!(system_power.complete_resume());
+    assert!(!system_power.complete_resume());
     assert_eq!(
         final_control_precheck(signals()),
-        FinalControlAdmission::Allowed
+        FinalControlAdmission::SystemSuspendRequested
     );
+}
+
+#[test]
+fn system_suspend_precedes_stop_skip_and_shutdown_terminal_requests() {
+    for request in ["stop", "skip", "shutdown"] {
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        match request {
+            "stop" => harness.quit_requested.store(true, Ordering::Release),
+            "skip" => harness.skip_requested.store(true, Ordering::Release),
+            "shutdown" => {
+                // The desktop shutdown path requests Quit and then asks for
+                // panic-release as its final physical safety signal.
+                harness.quit_requested.store(true, Ordering::Release);
+                harness.panic_requested.store(true, Ordering::Release);
+            }
+            _ => unreachable!(),
+        }
+
+        assert!(harness.process_command_control_for_test());
+        assert_eq!(
+            harness.runtime.terminal_trigger,
+            Some(if request == "skip" {
+                super::worker::TerminalTrigger::Skip
+            } else {
+                super::worker::TerminalTrigger::Quit
+            }),
+            "the worker must first record the requested terminal command"
+        );
+        assert!(harness.notify_system_power_for_test(true));
+        assert!(harness.notify_system_power_for_test(false));
+        let mut observation = super::worker::FinalizeTestObservation::default();
+        assert_eq!(
+            harness.finalize_worker_for_test(false, &mut observation),
+            super::OUTCOME_SYSTEM_SUSPENDED,
+            "{request} request replaced clean suspend outcome"
+        );
+        assert_eq!(
+            observation.terminal_trigger_reason.as_deref(),
+            Some("system_suspend")
+        );
+    }
 }
 
 #[test]
@@ -6990,22 +7105,101 @@ fn stale_epoch_resume_cannot_authorize_due_worker_down() {
         worker.take_system_power_pending_for_test(),
         super::shared::SYSTEM_POWER_RESUME_PENDING
     );
-    assert!(worker.complete_system_resume_for_test());
-    assert!(!state.down_blocked());
+    assert!(!worker.complete_system_resume_for_test());
+    assert!(state.down_blocked());
 
     let resumed_step = worker.dispatch_prepared_current_at_lateness_for_test(&mut due_down, 2_000);
     assert!(
-        matches!(resumed_step, DispatchStep::Dispatched),
-        "current-epoch resume did not admit due Down: {resumed_step:?}"
+        !matches!(resumed_step, DispatchStep::Dispatched),
+        "current-epoch resume reopened terminal Down admission: {resumed_step:?}"
     );
-    assert_eq!(sender_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(sender_calls.load(Ordering::SeqCst), 0);
+    assert!(worker.process_command_control_for_test());
+    let mut observation = super::worker::FinalizeTestObservation::default();
+    assert_eq!(
+        worker.finalize_worker_for_test(false, &mut observation),
+        super::OUTCOME_SYSTEM_SUSPENDED
+    );
+    assert_eq!(
+        observation.terminal_trigger_reason.as_deref(),
+        Some("system_suspend")
+    );
 }
 
 #[test]
-fn shutdown_during_system_suspend_finishes_with_physical_state_released() {
+fn shutdown_after_system_suspend_keeps_the_terminal_outcome_and_releases_held_input() {
+    use super::MockSendInputCapture;
+
     let send_call_count = Arc::new(AtomicU64::new(0));
+    let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session
+        .arm(TEST_WALL_CLOCK_PREROLL_US)
+        .expect("arm session");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(3)));
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 1);
+
+    assert!(session.notify_system_power(true));
+    assert!(session.notify_system_power(false));
+    let _stop_result = session.quit();
+    let _panic_release_result = session.panic_release();
+    hook.release_startup_checkpoint();
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let terminal = session.snapshot_lite();
+    assert!(terminal.is_finished);
+    assert_eq!(terminal.status, EnginePollStatus::SystemSuspended.as_str());
+    assert_eq!(session.terminal_outcome(), Some("system_suspend"));
+    assert_eq!(terminal.active_count, 0);
+    assert!(session.system_power_snapshot().down_blocked);
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
+    let captures = captures.lock().expect("mock input capture");
+    assert!(
+        matches!(
+            captures.as_slice(),
+            [
+                MockSendInputCapture::Packet {
+                    packet: PhysicalPacket {
+                        down_mask: 1,
+                        up_mask: 0
+                    },
+                    ..
+                },
+                MockSendInputCapture::SingleEmitter { key_up: true, .. }
+            ]
+        ),
+        "unexpected mock input sequence: {captures:?}"
+    );
+}
+
+#[test]
+fn suspend_during_admitted_mock_send_accounts_in_flight_down_and_releases_it() {
+    use super::MockSendInputCapture;
+    use std::sync::Barrier;
+
+    let entered = Arc::new(Barrier::new(2));
+    let release_sender = Arc::new(Barrier::new(2));
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
+    fault_script.first_packet_send_entered = Some(Arc::clone(&entered));
+    fault_script.release_first_packet_send = Some(Arc::clone(&release_sender));
     let options = test_session_options(
         startup_boundary_schedule(),
         1,
@@ -7019,29 +7213,85 @@ fn shutdown_during_system_suspend_finishes_with_physical_state_released() {
     session
         .arm(TEST_WALL_CLOCK_PREROLL_US)
         .expect("arm session");
-    wait_for_focus_down(&session);
 
+    // The worker has passed final Down admission and entered its first mock
+    // packet send. Hold it there while the OS callback accepts Suspend/Resume.
+    entered.wait();
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 1);
     assert!(session.notify_system_power(true));
-    let pause_deadline = Instant::now() + Duration::from_secs(2);
-    let mut snapshot = session.snapshot_lite();
-    while !snapshot.is_paused && !snapshot.is_finished && Instant::now() < pause_deadline {
-        std::thread::sleep(Duration::from_millis(1));
-        snapshot = session.snapshot_lite();
-    }
-    assert!(snapshot.is_paused, "suspend was not applied: {snapshot:?}");
-    assert_eq!(
-        snapshot.active_count, 0,
-        "suspend did not release held keys"
-    );
-    assert!(session.system_power_snapshot().down_blocked);
+    assert!(session.notify_system_power(false));
+    release_sender.wait();
 
-    session.quit().expect("quit while suspended");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
-    let terminal = session.snapshot_lite();
-    assert!(terminal.is_finished);
-    assert_eq!(terminal.active_count, 0);
-    assert!(session.system_power_snapshot().down_blocked);
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::SystemSuspended.as_str());
+    assert_eq!(snapshot.outcome.as_deref(), Some("system_suspend"));
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert!(
+        snapshot
+            .release_outcome
+            .as_ref()
+            .is_some_and(|release| release.released_successfully && release.stuck_mask == 0)
+    );
     assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
+    let captures = captures.lock().expect("mock input capture");
+    assert!(
+        matches!(
+            captures.as_slice(),
+            [
+                MockSendInputCapture::Packet {
+                    packet: PhysicalPacket {
+                        down_mask: 1,
+                        up_mask: 0
+                    },
+                    ..
+                },
+                MockSendInputCapture::SingleEmitter { key_up: true, .. }
+            ]
+        ),
+        "unexpected in-flight and terminal release sequence: {captures:?}"
+    );
+}
+
+#[test]
+fn system_suspend_with_unverified_terminal_release_stays_a_worker_error() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
+    let send_call_count = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::persistent_release();
+    fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+
+    session
+        .arm(TEST_WALL_CLOCK_PREROLL_US)
+        .expect("arm session");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(3)));
+    assert_eq!(send_call_count.load(Ordering::SeqCst), 1);
+    assert!(session.notify_system_power(true));
+    assert!(session.notify_system_power(false));
+    hook.release_startup_checkpoint();
+
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let snapshot = session.snapshot();
+    assert_eq!(session.poll_state().status, EnginePollStatus::Error);
+    assert_eq!(session.terminal_outcome(), Some("error"));
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("system_suspend")
+    );
+    assert!(snapshot.final_release_obligation_mask != 0);
+    assert!(snapshot.terminal_error.is_some());
+    assert!(send_call_count.load(Ordering::SeqCst) > 1);
 }
 
 #[test]
@@ -11714,7 +11964,7 @@ fn manual_then_focus_then_focus_restore_does_not_duplicate_suspension() {
 }
 
 #[test]
-fn deferred_manual_suspension_cleared_by_system_suspend_without_duplicate_cleanup() {
+fn system_suspend_terminates_without_rewriting_manual_or_focus_pause_state() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     let mixed_target = QpcTicks::from_raw(1_000);
     harness.runtime.musical_physical_commit_started = true;
@@ -11745,20 +11995,9 @@ fn deferred_manual_suspension_cleared_by_system_suspend_without_duplicate_cleanu
     );
 
     assert!(harness.notify_system_power_for_test(true));
-    let suspend_qpc = harness.resources.clock.now().expect("suspend qpc");
-    harness
-        .apply_system_suspend_for_test(suspend_qpc)
-        .expect("system suspend succeeds");
-
     assert!(
-        !harness.runtime.manual_pause_suspension_pending,
-        "system suspend cleared deferred manual suspension"
-    );
-    assert!(
-        harness
-            .resources
-            .playback
-            .has_pause_reason(PauseReason::SystemSuspend)
+        harness.runtime.manual_pause_suspension_pending,
+        "terminal system suspend does not rewrite the resumable manual pause state"
     );
     assert!(
         harness
@@ -11771,6 +12010,12 @@ fn deferred_manual_suspension_cleared_by_system_suspend_without_duplicate_cleanu
             .resources
             .playback
             .has_pause_reason(PauseReason::Focus)
+    );
+    assert!(harness.process_command_control_for_test());
+    let mut observation = super::worker::FinalizeTestObservation::default();
+    assert_eq!(
+        harness.finalize_worker_for_test(false, &mut observation),
+        super::OUTCOME_SYSTEM_SUSPENDED
     );
 }
 

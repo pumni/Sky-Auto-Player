@@ -155,11 +155,21 @@ pub(crate) fn create_mock_backend(
     let call_index_packet = Arc::clone(&call_index);
     let send_call_count_packet = script.send_call_count.clone();
     let send_input_capture_packet = script.send_input_capture.clone();
+    let first_packet_send_entered = script.first_packet_send_entered.clone();
+    let release_first_packet_send = script.release_first_packet_send.clone();
     backend.set_packet_emitter(move |packet| {
         if let Some(counter) = &send_call_count_packet {
             counter.fetch_add(1, Ordering::SeqCst);
         }
         let idx = call_index_packet.fetch_add(1, Ordering::Relaxed) as usize;
+        if idx == 0 {
+            if let Some(entered) = &first_packet_send_entered {
+                entered.wait();
+            }
+            if let Some(release) = &release_first_packet_send {
+                release.wait();
+            }
+        }
         let outcome = physical_packet_outcome(
             qpc_clock,
             &script_packet,
