@@ -367,6 +367,44 @@ verify release, startup remains failed and the residual mask, cumulative
 release attempt count, primary admission cause, and cleanup failure are
 preserved.
 
+### Desktop supervisor and UI event delivery
+
+The desktop playback monitor remains the sole issuer of supervisor progress.
+It samples the target focus hint, checks retained window-owner authority on
+the existing 100 ms cadence, polls worker lifecycle state (including terminal
+control and system suspend), and stops progressing once a terminal state or
+delivery failure is observed. Each progress publication still takes a fresh
+QPC sample and applies the unchanged three-second lease rule; there is no
+independent heartbeat thread.
+
+The monitor enqueues UI events and never calls `Channel::send` itself. One
+application-scoped event publisher drains a FIFO queue with a 128-event
+capacity, including its in-flight send. Playback and diagnostics snapshots
+and calibration progress are keyed best-effort values: a pending value with
+the same key is replaced, older snapshots may be evicted to make room for
+lifecycle events, and a new snapshot may be dropped when only lifecycle
+events occupy the queue. Accepted lifecycle and terminal events retain FIFO
+order. If a lifecycle event cannot be admitted, the hub latches the failure
+and rejects further publication. An actual channel-send error or panic closes
+the hub, latches the failure, and requests `panic_release` and `quit` through
+the active player. The monitor observes that latch and stops lease progress;
+the worker still owns tracked release and the supervisor still owns join and
+session retirement.
+
+The monitor copies worker metrics into each event DTO before queueing it. No
+snapshot read guard or dispatch lock is held during `Channel::send`, so the
+blocking focus/manual-pause metrics write remains independent of subscriber
+time.
+
+Shutdown requests worker cleanup before closing the event queue. Closing
+rejects new events and discards queued events; an already in-flight channel
+call may finish, but no later queued event is published after close. Shutdown
+waits at most 50 ms for the event publisher. A blocked channel call cannot hold
+the playback activity lease, physical cleanup, monitor join, or retirement.
+If an underlying channel call does not return within that bound, only the
+single application-scoped publisher handle is detached; it does not own the
+session, activity reservation, or any physical input path.
+
 ### Desktop physical-session handoff
 
 The desktop playback supervisor treats Stop, Skip, event-delivery failure, and
