@@ -263,6 +263,9 @@ foreach ($scenario in $workloads) {
                 $reportPath = Join-Path $caseDirectory 'rt-native-acceptance.jsonl'
                 if (-not (Test-Path -LiteralPath $reportPath)) { throw "Missing native report: $reportPath" }
                 $report = (Get-Content -LiteralPath $reportPath -Raw).Trim() | ConvertFrom-Json
+                if ($caseExit -ne 0 -or $report.status -ne 'PASS') {
+                    throw "ReceiveOnly acceptance failed for $pairId/$placement with exit $caseExit ($($report.status)): $($report.reason). Evidence: $caseDirectory"
+                }
                 $nativeTelemetry = $report.details.native_timing_telemetry
                 if ($null -eq $nativeTelemetry -or [long]$nativeTelemetry.accepted -le 0 -or @($nativeTelemetry.records).Count -eq 0) {
                     throw "Native timing telemetry was unavailable for $pairId/$placement. Evidence: $caseDirectory"

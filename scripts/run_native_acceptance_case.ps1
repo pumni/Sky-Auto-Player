@@ -192,8 +192,11 @@ try {
     $reportLines = @(Get-Content -LiteralPath $reportPath)
     if ($reportLines.Count -ne 1) { throw 'native harness did not emit exactly one report' }
     $report = $reportLines[0] | ConvertFrom-Json
-    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs -or $report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant() -or [bool]$report.details.timing_observer_for_qualification -ne [bool]$TimingObserverForQualification) {
-        throw 'native report identity or selected settings do not match this invocation'
+    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs) {
+        throw 'native report identity does not match this invocation'
+    }
+    if ($report.status -eq 'PASS' -and ($report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant() -or [bool]$report.details.timing_observer_for_qualification -ne [bool]$TimingObserverForQualification)) {
+        throw 'passing native report settings do not match this invocation'
     }
 
     $sinkRecords = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
