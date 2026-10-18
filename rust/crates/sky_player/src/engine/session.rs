@@ -1,4 +1,4 @@
-use super::config::{AdmittedNativeSessionOptions, DispatchProfile, NativeSessionOptions};
+use super::config::{AdmittedNativeSessionOptions, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
     StartupAbortReason, StartupPhase, SupervisorLeaseState, SystemPowerEndpoint,
@@ -200,7 +200,7 @@ pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<
 
 pub struct NativeDispatchSession {
     config: Mutex<Option<AdmittedNativeSessionOptions>>,
-    profile: DispatchProfile,
+    observer_enabled: bool,
     focus_required: bool,
     generation_count: u64,
     shared: Arc<SessionShared>,
@@ -276,6 +276,9 @@ impl NativeDispatchSession {
             .last()
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = options.schedule.generation_count;
+        let observer_enabled = options.profile.observer_enabled();
+        #[cfg(any(test, feature = "test-support"))]
+        let observer_enabled = observer_enabled || options.timing_observer_for_qualification;
         let require_owner_identity =
             options.focus.require_focus && matches!(&options.backend, BackendConfig::Production);
         let target = SessionTarget::new(0, 0);
@@ -327,7 +330,7 @@ impl NativeDispatchSession {
             instrument_key_profile,
         };
         Ok(Self {
-            profile: admitted_options.options.profile,
+            observer_enabled,
             focus_required: admitted_options.options.focus.require_focus,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
@@ -1256,7 +1259,7 @@ impl NativeDispatchSession {
             release_max_us: local.release_max_us,
             release_late_2ms: local.release_late_2ms,
             recent_latencies_us: local.recent_latencies.to_vec(),
-            recent_latency_samples_available: self.profile.observer_enabled(),
+            recent_latency_samples_available: self.observer_enabled,
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
@@ -1415,7 +1418,7 @@ impl NativeDispatchSession {
             release_max_us: local.release_max_us,
             release_late_2ms: local.release_late_2ms,
             recent_latencies_us: local.recent_latencies.to_vec(),
-            recent_latency_samples_available: self.profile.observer_enabled(),
+            recent_latency_samples_available: self.observer_enabled,
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,

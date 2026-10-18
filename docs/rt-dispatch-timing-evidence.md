@@ -236,6 +236,12 @@ and empirical p50, p95, p99, p99.9, maximum, and sample count. Low-count cells
 must be labeled as weakly supported rather than treating p99.9 as a service
 guarantee.
 
+The qualification build enables the existing timing observer through a
+test-support-only option while keeping the production dispatch profile and
+timing policy. This supplies per-packet QPC traces without using the strict
+diagnostic profile or exposing a production setting. A run with no accepted
+trace records is invalid for the placement comparison.
+
 Before collecting A/B results, Candidate B promotion was conditioned on all
 of the following:
 

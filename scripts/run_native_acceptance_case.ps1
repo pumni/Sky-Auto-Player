@@ -145,6 +145,7 @@ try {
         profile = 'production'
         telemetry_mode = 'ring'
         telemetry_capacity = 1024
+        timing_observer_for_qualification = $true
         waitable_timer_enabled = $true
         event_wait_enabled = $true
         priority_mode = 'auto'

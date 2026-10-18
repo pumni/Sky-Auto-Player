@@ -486,7 +486,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     worker_timing.start_process_cpu_us = start_process_cpu_us;
     worker_timing.last_cpu_metrics_sample_us = initial_now_us;
     core.timing = Some(worker_timing);
-    if config.profile.observer_enabled() {
+    if config.observer_enabled() {
         #[cfg(any(test, feature = "test-support"))]
         if startup_hook.is_some_and(|hook| hook.take_observer_spawn_failure()) {
             return admission_failure(

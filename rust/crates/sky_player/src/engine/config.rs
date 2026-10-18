@@ -216,6 +216,9 @@ pub struct NativeSessionOptions {
     /// Paired benchmark selector; absent from production-facing options.
     #[cfg(any(test, feature = "test-support"))]
     pub startup_calibration_placement: StartupCalibrationPlacement,
+    /// Enables existing QPC timing observation for qualification builds only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub timing_observer_for_qualification: bool,
     #[cfg(any(test, feature = "test-support"))]
     pub restore_race_hook: Option<RestoreRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
@@ -594,11 +597,26 @@ pub(crate) struct WorkerConfig {
     #[cfg(any(test, feature = "test-support"))]
     pub(super) startup_calibration_placement: StartupCalibrationPlacement,
     #[cfg(any(test, feature = "test-support"))]
+    pub(super) timing_observer_for_qualification: bool,
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) prepared_packet_ambiguity_mask: Option<u16>,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) preflight_user_held_mask: Option<u16>,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) modifier_key_state_query_for_test: Option<Arc<dyn Fn(i32) -> i16 + Send + Sync>>,
+}
+
+impl WorkerConfig {
+    pub(crate) fn observer_enabled(&self) -> bool {
+        if self.profile.observer_enabled() {
+            return true;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        if self.timing_observer_for_qualification {
+            return true;
+        }
+        false
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -640,6 +658,7 @@ impl Default for WorkerConfig {
                 mode: PriorityMode::Off,
             },
             startup_calibration_placement: StartupCalibrationPlacement::BeforeSchedulingGuards,
+            timing_observer_for_qualification: false,
             prepared_packet_ambiguity_mask: None,
             preflight_user_held_mask: None,
             modifier_key_state_query_for_test: None,
@@ -722,7 +741,7 @@ pub struct PriorityOptions {
 mod tests {
     use super::{
         DEFAULT_SPIN_THRESHOLD_US, DispatchProfile, MIN_CALIBRATED_SPIN_US, TestWaitPolicy,
-        WaitOptions,
+        WaitOptions, WorkerConfig,
     };
 
     #[test]
@@ -736,6 +755,16 @@ mod tests {
     fn production_profile_has_no_deferred_observer() {
         assert!(!DispatchProfile::Production.observer_enabled());
         assert!(DispatchProfile::StrictTimingDiagnostic.observer_enabled());
+    }
+
+    #[test]
+    fn qualification_observer_preserves_production_dispatch_profile() {
+        let mut config = WorkerConfig::default();
+        assert_eq!(config.profile, DispatchProfile::Production);
+        assert!(!config.observer_enabled());
+        config.timing_observer_for_qualification = true;
+        assert!(config.observer_enabled());
+        assert_eq!(config.profile, DispatchProfile::Production);
     }
 
     #[test]

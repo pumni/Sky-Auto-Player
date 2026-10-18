@@ -694,6 +694,8 @@ impl<'a> Worker<'a> {
                     #[cfg(any(test, feature = "test-support"))]
                     startup_calibration_placement,
                     #[cfg(any(test, feature = "test-support"))]
+                    timing_observer_for_qualification,
+                    #[cfg(any(test, feature = "test-support"))]
                     startup_ordering_hook,
                     #[cfg(any(test, feature = "test-support"))]
                     restore_race_hook,
@@ -732,6 +734,8 @@ impl<'a> Worker<'a> {
                 priority,
                 #[cfg(any(test, feature = "test-support"))]
                 startup_calibration_placement,
+                #[cfg(any(test, feature = "test-support"))]
+                timing_observer_for_qualification,
                 #[cfg(any(test, feature = "test-support"))]
                 prepared_packet_ambiguity_mask,
                 #[cfg(any(test, feature = "test-support"))]

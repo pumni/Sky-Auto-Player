@@ -93,6 +93,7 @@ fn test_session_options(
         instrument_key_profile: None,
         startup_calibration_placement:
             super::config::StartupCalibrationPlacement::BeforeSchedulingGuards,
+        timing_observer_for_qualification: false,
         startup_ordering_hook: None,
         restore_race_hook: None,
         focus_pause_hook: None,

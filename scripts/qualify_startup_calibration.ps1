@@ -224,6 +224,7 @@ $metadata = [ordered]@{
     order = 'alternating AB and BA per workload/load cell'
     quiet = 'no qualification contention workers requested'
     contention = 'two hidden pwsh workers at BelowNormal priority'
+    observer = 'qualification-only timing observer; production dispatch profile and timing policy'
     workloads = $workloads
     raw_artifacts = 'per-session directories in .benchmarks/physical-native-cases'
     promotion_thresholds = 'docs/rt-dispatch-timing-evidence.md#startup-calibration-placement-qualification'
@@ -261,6 +262,10 @@ foreach ($scenario in $workloads) {
                 $reportPath = Join-Path $caseDirectory 'rt-native-acceptance.jsonl'
                 if (-not (Test-Path -LiteralPath $reportPath)) { throw "Missing native report: $reportPath" }
                 $report = (Get-Content -LiteralPath $reportPath -Raw).Trim() | ConvertFrom-Json
+                $nativeTelemetry = $report.details.native_timing_telemetry
+                if ($null -eq $nativeTelemetry -or [long]$nativeTelemetry.accepted -le 0 -or @($nativeTelemetry.records).Count -eq 0) {
+                    throw "Native timing telemetry was unavailable for $pairId/$placement. Evidence: $caseDirectory"
+                }
                 $row = [pscustomobject]@{
                     pair_id = $pairId
                     scenario = $scenario
