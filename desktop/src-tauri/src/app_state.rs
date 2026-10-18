@@ -495,7 +495,7 @@ mod tests {
     use sky_native_adapters::AppPaths;
     use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
     use tauri::ipc::{Channel, InvokeResponseBody};
 
     #[test]
@@ -553,6 +553,11 @@ mod tests {
         runtime
             .dispatch("catalog.reload", serde_json::json!({}))
             .expect("catalog event");
+
+        let delivery_deadline = Instant::now() + Duration::from_secs(2);
+        while received.lock().expect("event log").len() < 2 && Instant::now() < delivery_deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
 
         assert_eq!(
             *received.lock().expect("event log"),

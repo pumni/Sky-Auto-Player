@@ -76,6 +76,7 @@ use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::io::Read;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -95,6 +96,7 @@ const CALIBRATION_TIMING_MARGIN_GUARD_US: u64 = 100;
 const CALIBRATION_PUBLICATION_RESERVE_SECONDS: f64 = 5.0;
 const PLAYBACK_JOIN_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const PLAYBACK_SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
+const EVENT_PUBLISHER_CLOSE_BUDGET: Duration = Duration::from_millis(50);
 const DRY_RUN_TERMINAL_NONE: u8 = 0;
 const CALIBRATION_PARENT_EXIT_RESERVE_SECONDS: f64 = 1.0;
 const CALIBRATION_NATIVE_EXIT_RESERVE_SECONDS: f64 = 1.0;
@@ -4614,6 +4616,11 @@ impl NativePlaybackService {
             release_verified: AtomicBool::new(false),
             sequence: AtomicU64::new(0),
         });
+        if let Some(player) = &active.player
+            && let Ok(mut hub) = events.lock()
+        {
+            let _ = hub.register_playback_player(Arc::downgrade(player));
+        }
         if let Some(player) = &active.player {
             player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());
         }
@@ -4978,8 +4985,13 @@ impl NativePlaybackService {
         let mut last_identity_check = Instant::now();
         let mut last_event_state = PlaybackEventState::Starting;
         let mut event_delivery_failed = false;
+        let mut identity_authority_invalidated = false;
         let mut stop_sent = false;
         let terminal_status = loop {
+            if !event_delivery_failed && native_event_delivery_failure(&events).is_some() {
+                event_delivery_failed = true;
+                cleanup_failed_event_delivery(&active);
+            }
             if active.stop_requested.load(Ordering::Acquire) && !stop_sent {
                 stop_sent = true;
                 if let Some(player) = &active.player {
@@ -5014,6 +5026,7 @@ impl NativePlaybackService {
                 if let Some(player) = &active.player
                     && !player.poll_window_identity_authority()
                 {
+                    identity_authority_invalidated = true;
                     let _ = player.panic_release();
                 }
                 last_identity_check = Instant::now();
@@ -5111,7 +5124,15 @@ impl NativePlaybackService {
                 }
                 last_snapshot = Instant::now();
             }
-            if let Some(player) = &active.player {
+            if !event_delivery_failed && native_event_delivery_failure(&events).is_some() {
+                event_delivery_failed = true;
+                cleanup_failed_event_delivery(&active);
+            }
+            if !event_delivery_failed
+                && !active.stop_requested.load(Ordering::Acquire)
+                && !identity_authority_invalidated
+                && let Some(player) = &active.player
+            {
                 let progress_result = player.publish_supervisor_progress();
                 #[cfg(all(test, feature = "tauri-test"))]
                 if let Some(hook) = &self.monitor_progress_test_hook {
@@ -6019,6 +6040,13 @@ fn cleanup_failed_event_delivery(active: &NativeActivePlayback) {
     if let Some(player) = &active.player {
         let _ = player.panic_release();
         let _ = player.quit();
+    }
+}
+
+fn native_event_delivery_failure(events: &Arc<Mutex<NativeEventHub>>) -> Option<String> {
+    match events.lock() {
+        Ok(hub) => hub.delivery_failure(),
+        Err(_) => Some("native event hub lock poisoned".into()),
     }
 }
 
@@ -7028,78 +7056,319 @@ fn catalog_error(error: CatalogError) -> String {
 }
 
 #[derive(Default)]
-pub(crate) struct NativeEventHub {
+struct NativeEventHubState {
     buffered: VecDeque<UiEvent>,
     channel: Option<Channel<UiEvent>>,
     closed: bool,
+    in_flight: bool,
+    delivery_failure: Option<String>,
+    playback_player: Option<std::sync::Weak<NativeDispatchSession>>,
+}
+
+#[derive(Default)]
+struct NativeEventQueue {
+    state: Mutex<NativeEventHubState>,
+    changed: Condvar,
+    publisher_finished: AtomicBool,
+}
+
+pub(crate) struct NativeEventHub {
+    queue: Arc<NativeEventQueue>,
+    publisher: Option<thread::JoinHandle<()>>,
+}
+
+impl Default for NativeEventHub {
+    fn default() -> Self {
+        Self {
+            queue: Arc::new(NativeEventQueue::default()),
+            publisher: None,
+        }
+    }
 }
 
 impl NativeEventHub {
     fn publish(&mut self, event: UiEvent) -> Result<(), String> {
-        if self.closed {
-            return Err("native event hub is closed".into());
-        }
         validate_ui_event(&event)?;
-        if let Some(channel) = &self.channel {
-            if let Err(error) = channel.send(event) {
-                // A failed delivery is not a queueing opportunity: buffering
-                // after a subscriber failure would hide the loss of the
-                // delivery contract and let a native worker continue without
-                // a consumer.  Close the hub and let the owner perform its
-                // bounded cleanup path.
-                self.channel = None;
-                self.closed = true;
-                self.buffered.clear();
-                return Err(format!("native UI event delivery failed: {error}"));
+        let is_snapshot = snapshot_key(&event).is_some();
+        let mut failed_player = None;
+        let result = {
+            let mut state = self
+                .queue
+                .state
+                .lock()
+                .map_err(|_| "native event queue lock poisoned".to_string())?;
+            if state.closed {
+                return Err("native event hub is closed".into());
             }
-            return Ok(());
-        }
-        if let Some(key) = snapshot_key(&event) {
-            if let Some(existing) = self
-                .buffered
-                .iter_mut()
-                .find(|candidate| snapshot_key(candidate).as_ref() == Some(&key))
+            if let Some(error) = &state.delivery_failure {
+                return Err(error.clone());
+            }
+
+            if let Some(key) = snapshot_key(&event)
+                && let Some(existing) = state
+                    .buffered
+                    .iter_mut()
+                    .find(|candidate| snapshot_key(candidate).as_ref() == Some(&key))
             {
                 *existing = event;
-                return Ok(());
+                Ok(())
+            } else {
+                let occupied = state.buffered.len() + usize::from(state.in_flight);
+                let at_capacity = occupied >= MAX_NATIVE_EVENTS;
+                let has_room = !at_capacity || remove_oldest_snapshot(&mut state.buffered);
+                if has_room {
+                    state.buffered.push_back(event);
+                    Ok(())
+                } else if is_snapshot {
+                    // Snapshots are best-effort. A full queue containing only
+                    // ordered lifecycle events leaves no older snapshot to
+                    // evict, so this update is dropped without affecting the
+                    // lifecycle delivery contract.
+                    Ok(())
+                } else {
+                    let error = "native event hub lifecycle buffer overflow".to_string();
+                    state.delivery_failure = Some(error.clone());
+                    failed_player = state
+                        .playback_player
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade);
+                    Err(error)
+                }
             }
-            if self.buffered.len() >= MAX_NATIVE_EVENTS
-                && !remove_oldest_snapshot(&mut self.buffered)
-            {
-                return Err("native event hub lifecycle buffer overflow".into());
-            }
-        } else if self.buffered.len() >= MAX_NATIVE_EVENTS
-            && !remove_oldest_snapshot(&mut self.buffered)
-        {
-            // Lifecycle events are never silently discarded.  The caller must
-            // initiate bounded cleanup when this fail-closed signal occurs.
-            return Err("native event hub lifecycle buffer overflow".into());
+        };
+        self.queue.changed.notify_one();
+        if let Some(player) = failed_player {
+            request_event_delivery_termination(&player);
         }
-        self.buffered.push_back(event);
-        Ok(())
+        result
     }
 
     pub(crate) fn subscribe(&mut self, channel: Channel<UiEvent>) -> Result<(), String> {
-        if self.closed {
-            return Err("native event hub is closed".into());
-        }
-        for event in &self.buffered {
-            if let Err(error) = channel.send(event.clone()) {
-                self.closed = true;
-                self.buffered.clear();
-                return Err(format!("native UI event replay failed: {error}"));
+        {
+            let state = self
+                .queue
+                .state
+                .lock()
+                .map_err(|_| "native event queue lock poisoned".to_string())?;
+            if state.closed {
+                return Err("native event hub is closed".into());
+            }
+            if state.channel.is_some() {
+                return Err("native event hub already has a subscriber".into());
             }
         }
-        self.buffered.clear();
-        self.channel = Some(channel);
+
+        if self.publisher.is_none() {
+            let queue = Arc::clone(&self.queue);
+            match thread::Builder::new()
+                .name("sky-native-ui-event-publisher".into())
+                .spawn(move || publish_native_events(queue))
+            {
+                Ok(publisher) => self.publisher = Some(publisher),
+                Err(error) => {
+                    let failure = format!("could not start native UI event publisher: {error}");
+                    let player = if let Ok(mut state) = self.queue.state.lock() {
+                        state.delivery_failure = Some(failure.clone());
+                        state
+                            .playback_player
+                            .as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                    } else {
+                        None
+                    };
+                    if let Some(player) = player {
+                        request_event_delivery_termination(&player);
+                    }
+                    return Err(failure);
+                }
+            }
+        }
+
+        let mut state = self
+            .queue
+            .state
+            .lock()
+            .map_err(|_| "native event queue lock poisoned".to_string())?;
+        if state.closed {
+            return Err("native event hub is closed".into());
+        }
+        state.channel = Some(channel);
+        drop(state);
+        self.queue.changed.notify_one();
         Ok(())
     }
 
-    pub(crate) fn close(&mut self) {
-        self.closed = true;
-        self.channel = None;
-        self.buffered.clear();
+    fn register_playback_player(
+        &mut self,
+        player: std::sync::Weak<NativeDispatchSession>,
+    ) -> Result<(), String> {
+        let mut state = self
+            .queue
+            .state
+            .lock()
+            .map_err(|_| "native event queue lock poisoned".to_string())?;
+        if state.closed {
+            return Err("native event hub is closed".into());
+        }
+        state.playback_player = Some(player);
+        Ok(())
     }
+
+    fn delivery_failure(&self) -> Option<String> {
+        match self.queue.state.lock() {
+            Ok(state) => state.delivery_failure.clone(),
+            Err(_) => Some("native event queue lock poisoned".to_string()),
+        }
+    }
+
+    pub(crate) fn close(&mut self) {
+        if let Ok(mut state) = self.queue.state.lock() {
+            state.closed = true;
+            state.buffered.clear();
+            state.playback_player = None;
+        }
+        self.queue.changed.notify_all();
+
+        // A platform channel send is not cancellable. Never make physical
+        // shutdown wait indefinitely for it; this is one app-scoped publisher,
+        // not a per-session thread or a physical input owner.
+        if let Some(publisher) = self.publisher.take() {
+            let deadline = Instant::now() + EVENT_PUBLISHER_CLOSE_BUDGET;
+            while !publisher.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            if publisher.is_finished() {
+                let _ = publisher.join();
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn buffered_for_test(&self) -> VecDeque<UiEvent> {
+        self.queue
+            .state
+            .lock()
+            .expect("event queue")
+            .buffered
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn publisher_finished_for_test(&self) -> bool {
+        self.queue.publisher_finished.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    fn wait_idle_for_test(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let Ok(mut state) = self.queue.state.lock() else {
+            return false;
+        };
+        loop {
+            if state.buffered.is_empty() && !state.in_flight {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            match self.queue.changed.wait_timeout(state, remaining) {
+                Ok((next, result)) => {
+                    state = next;
+                    if result.timed_out() {
+                        return state.buffered.is_empty() && !state.in_flight;
+                    }
+                }
+                Err(_) => return false,
+            }
+        }
+    }
+}
+
+impl Drop for NativeEventHub {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn publish_native_events(queue: Arc<NativeEventQueue>) {
+    loop {
+        let (channel, event) = {
+            let mut state = match queue.state.lock() {
+                Ok(state) => state,
+                Err(_) => break,
+            };
+            loop {
+                if state.closed && state.buffered.is_empty() {
+                    let channel = state.channel.take();
+                    drop(state);
+                    drop(channel);
+                    queue.publisher_finished.store(true, Ordering::Release);
+                    queue.changed.notify_all();
+                    return;
+                }
+                if !state.buffered.is_empty()
+                    && let Some(channel) = state.channel.clone()
+                    && let Some(event) = state.buffered.pop_front()
+                {
+                    state.in_flight = true;
+                    break (channel, event);
+                }
+                state = match queue.changed.wait(state) {
+                    Ok(state) => state,
+                    Err(_) => {
+                        queue.publisher_finished.store(true, Ordering::Release);
+                        queue.changed.notify_all();
+                        return;
+                    }
+                };
+            }
+        };
+
+        let sent = catch_unwind(AssertUnwindSafe(|| channel.send(event)))
+            .map_err(|_| "native UI event delivery panicked".to_string())
+            .and_then(|result| {
+                result.map_err(|error| format!("native UI event delivery failed: {error}"))
+            });
+        match sent {
+            Ok(()) => {
+                if let Ok(mut state) = queue.state.lock() {
+                    state.in_flight = false;
+                }
+                queue.changed.notify_all();
+            }
+            Err(error) => {
+                let player = if let Ok(mut state) = queue.state.lock() {
+                    state.in_flight = false;
+                    state.channel = None;
+                    state.closed = true;
+                    state.delivery_failure = Some(error);
+                    state.buffered.clear();
+                    state
+                        .playback_player
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade)
+                } else {
+                    None
+                };
+                queue.changed.notify_all();
+                if let Some(player) = player {
+                    request_event_delivery_termination(&player);
+                }
+                queue.publisher_finished.store(true, Ordering::Release);
+                return;
+            }
+        }
+    }
+    queue.publisher_finished.store(true, Ordering::Release);
+    queue.changed.notify_all();
+}
+
+fn request_event_delivery_termination(player: &NativeDispatchSession) {
+    let _ = player.panic_release();
+    let _ = player.quit();
 }
 
 fn validate_ui_event(event: &UiEvent) -> Result<(), String> {
@@ -7203,8 +7472,8 @@ mod tests {
         SenderTraceState, TerminalReleaseEvidence, TerminalRetirement, TestSeams,
         WorkerQuiescenceProof, calibration_budget, compute_catalog_source_fingerprint,
         compute_catalog_source_static_fingerprint, decide_playback_handoff,
-        diagnostics_backend_status, opaque_native_id, percentile_ms, physical_startup_failure,
-        plan_fingerprint, population_sigma_ms, publish_calibration_cache,
+        diagnostics_backend_status, native_event_delivery_failure, opaque_native_id, percentile_ms,
+        physical_startup_failure, plan_fingerprint, population_sigma_ms, publish_calibration_cache,
         publish_diagnostics_snapshot_for_active, publish_final_diagnostics_snapshot_for_active,
         publish_playback_state, publish_retirement_barrier, publish_terminal_poll_result,
         recommended_calibrated_timing_margin_us, release_terminal_ownership,
@@ -7241,6 +7510,7 @@ mod tests {
     use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use tauri::ipc::{Channel, InvokeResponseBody};
 
     #[cfg(feature = "tauri-test")]
     #[test]
@@ -7490,6 +7760,218 @@ mod tests {
     }
 
     #[cfg(feature = "tauri-test")]
+    #[test]
+    fn blocked_ui_publication_past_lease_keeps_supervision_live_and_shutdown_releases() {
+        use sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US;
+
+        let activity = ActivityCoordinator::default();
+        let player =
+            terminal_projection_session(DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, 30_100_000, None);
+        player.arm(0).expect("arm blocked-UI test worker");
+        let active = Arc::new(tracked_test_active(Arc::clone(&player), activity.clone()));
+        let mut service = NativePlaybackService::new(activity.clone());
+        *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+        let accepted_progress = Arc::new(AtomicU64::new(0));
+        let hook_progress = Arc::clone(&accepted_progress);
+        service.monitor_progress_test_hook = Some(Arc::new(move |accepted| {
+            if accepted {
+                hook_progress.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+        let service = Arc::new(service);
+
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let callback_entered = Arc::new(AtomicBool::new(false));
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let delivered_events = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let callback_gate = Arc::clone(&gate);
+        let callback_entered_flag = Arc::clone(&callback_entered);
+        let callback_events = Arc::clone(&delivered_events);
+        let channel: Channel<UiEvent> = Channel::new(move |body| {
+            if !callback_entered_flag.swap(true, Ordering::AcqRel) {
+                entered_sender.send(()).expect("callback entry receiver");
+                let (released, changed) = &*callback_gate;
+                let mut released = released.lock().expect("blocked channel gate");
+                while !*released {
+                    released = changed.wait(released).expect("blocked channel gate wait");
+                }
+            }
+            if let InvokeResponseBody::Json(json) = body {
+                callback_events
+                    .lock()
+                    .expect("delivered event trace")
+                    .push(serde_json::from_str(&json).expect("serialize UI event"));
+            }
+            Ok(())
+        });
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        {
+            let mut hub = events.lock().expect("event hub");
+            hub.register_playback_player(Arc::downgrade(&player))
+                .expect("register monitored player");
+        }
+        publish_playback_state(&events, &active, PlaybackEventState::Starting, None, None)
+            .expect("queue starting state");
+        {
+            let mut hub = events.lock().expect("event hub");
+            hub.subscribe(channel).expect("subscribe blocked channel");
+        }
+        entered_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("publisher entered the blocked channel send");
+
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor_service = Arc::clone(&service);
+        let (activation_sender, activation_receiver) = mpsc::channel();
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("monitor activation receiver");
+        let monitor = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events, activation_receiver)
+        });
+
+        let blocked_for = Duration::from_millis(
+            DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US.saturating_add(300_000) / 1_000,
+        );
+        thread::sleep(blocked_for);
+        assert!(
+            accepted_progress.load(Ordering::Acquire) >= 100,
+            "the owning monitor must continue authority-checked progress during blocked UI publication"
+        );
+        assert_ne!(
+            player.snapshot().terminal_trigger_reason.as_deref(),
+            Some("supervisor_lease_expired"),
+            "presentation backpressure must not expire the live supervisor lease"
+        );
+
+        let shutdown_started = Instant::now();
+        assert!(service.shutdown(Arc::clone(&events)));
+        assert!(
+            shutdown_started.elapsed() < Duration::from_secs(2),
+            "physical shutdown must not wait for the blocked UI consumer"
+        );
+        monitor.join().expect("monitor thread exits after shutdown");
+        assert!(active.done.load(Ordering::Acquire));
+        assert!(active.worker_quiescent.load(Ordering::Acquire));
+        assert!(active.release_verified.load(Ordering::Acquire));
+        assert!(service.status().expect("retired status").active.is_none());
+        drop(
+            activity
+                .reserve_playback("successor-after-blocked-ui")
+                .expect("session lease released after tracked cleanup"),
+        );
+
+        let close_started = Instant::now();
+        events.lock().expect("event hub").close();
+        assert!(
+            close_started.elapsed() < Duration::from_millis(500),
+            "event hub shutdown must be bounded while Channel::send is blocked"
+        );
+        {
+            let (released, changed) = &*gate;
+            *released.lock().expect("blocked channel gate") = true;
+            changed.notify_all();
+        }
+        let publisher_deadline = Instant::now() + Duration::from_secs(2);
+        while !events
+            .lock()
+            .expect("event hub")
+            .publisher_finished_for_test()
+            && Instant::now() < publisher_deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            events
+                .lock()
+                .expect("event hub")
+                .publisher_finished_for_test(),
+            "the app-scoped publisher must exit after its blocked send returns"
+        );
+        let delivered_events = delivered_events.lock().expect("delivered event trace");
+        let states = delivered_events
+            .iter()
+            .filter(|event| event["name"] == "playback.state_changed")
+            .filter_map(|event| event["payload"]["state"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(states, vec!["starting"]);
+        assert!(delivered_events.iter().all(|event| {
+            event["name"] != "playback.finished" && event["name"] != "playback.failed"
+        }));
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn failed_critical_channel_delivery_requests_tracked_terminal_cleanup() {
+        use sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US;
+
+        let activity = ActivityCoordinator::default();
+        let player =
+            terminal_projection_session(DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, 30_100_000, None);
+        player.arm(0).expect("arm channel-failure test worker");
+        let active = Arc::new(tracked_test_active(Arc::clone(&player), activity.clone()));
+        let service = Arc::new(NativePlaybackService::new(activity.clone()));
+        *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        {
+            let mut hub = events.lock().expect("event hub");
+            hub.register_playback_player(Arc::downgrade(&player))
+                .expect("register monitored player");
+        }
+        publish_playback_state(&events, &active, PlaybackEventState::Starting, None, None)
+            .expect("queue starting state");
+        {
+            let mut hub = events.lock().expect("event hub");
+            let failing_channel: Channel<UiEvent> = Channel::new(|_| {
+                Err(std::io::Error::other("injected critical delivery failure").into())
+            });
+            hub.subscribe(failing_channel)
+                .expect("subscribe failing channel");
+        }
+
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor_service = Arc::clone(&service);
+        let (activation_sender, activation_receiver) = mpsc::channel();
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("monitor activation receiver");
+        let monitor = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events, activation_receiver)
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while native_event_delivery_failure(&events).is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(native_event_delivery_failure(&events).is_some());
+        let monitor_deadline = Instant::now() + Duration::from_secs(3);
+        while !active.done.load(Ordering::Acquire) && Instant::now() < monitor_deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        monitor.join().expect("monitor exits after channel failure");
+        assert!(active.done.load(Ordering::Acquire));
+        assert!(active.worker_quiescent.load(Ordering::Acquire));
+        assert!(active.release_verified.load(Ordering::Acquire));
+        assert!(service.status().expect("retired status").active.is_none());
+        drop(
+            activity
+                .reserve_playback("successor-after-channel-failure")
+                .expect("failed delivery still releases tracked session ownership"),
+        );
+        events.lock().expect("event hub").close();
+        assert!(
+            events
+                .lock()
+                .expect("event hub")
+                .publisher_finished_for_test()
+        );
+    }
+
+    #[cfg(feature = "tauri-test")]
     fn terminal_projection_session(
         supervisor_lease_timeout_us: u64,
         up_scheduled_us: u64,
@@ -7632,6 +8114,23 @@ mod tests {
     }
 
     #[cfg(feature = "tauri-test")]
+    fn tracked_test_active(
+        player: Arc<NativeDispatchSession>,
+        activity: ActivityCoordinator,
+    ) -> NativeActivePlayback {
+        let mut active = terminal_projection_active(player);
+        active.activity = activity.clone();
+        active.total_us = 30_100_000;
+        active.state = Mutex::new(PlaybackSessionState::Starting);
+        active.activity_lease = Mutex::new(Some(
+            activity
+                .reserve_playback(&active.session_id)
+                .expect("mock physical activity lease"),
+        ));
+        active
+    }
+
+    #[cfg(feature = "tauri-test")]
     #[test]
     fn native_startup_projection_keeps_ready_worker_starting_until_armed_publication() {
         use sky_player::engine::{EnginePollStatus, StartupCheckpoint, StartupOrderingHook};
@@ -7675,8 +8174,8 @@ mod tests {
         )
         .expect("publish preparing playback snapshot");
         let events = events.lock().expect("native projection events");
-        let snapshot = events
-            .buffered
+        let buffered = events.buffered_for_test();
+        let snapshot = buffered
             .iter()
             .find_map(|event| match event {
                 UiEvent::PlaybackSnapshot { payload, .. } => Some(payload),
@@ -7689,7 +8188,7 @@ mod tests {
         assert_eq!(snapshot.focus_state, PlaybackFocusState::Waiting);
         assert_eq!(snapshot.health, PlaybackHealthState::Healthy);
         assert!(matches!(
-            events.buffered.front(),
+            buffered.front(),
             Some(UiEvent::PlaybackStateChanged { payload, .. })
                 if payload.state == PlaybackEventState::Starting
         ));
@@ -7864,8 +8363,8 @@ mod tests {
             let published_health = match events
                 .lock()
                 .expect("terminal projection event hub")
-                .buffered
-                .back()
+                .buffered_for_test()
+                .pop_back()
                 .expect("playback snapshot event")
             {
                 UiEvent::PlaybackSnapshot { payload, .. } => payload.health,
@@ -7889,7 +8388,7 @@ mod tests {
             let published_backend_health = events
                 .lock()
                 .expect("terminal projection event hub")
-                .buffered
+                .buffered_for_test()
                 .iter()
                 .find_map(|event| match event {
                     UiEvent::DiagnosticsSnapshot { payload, .. } => Some(payload.backend_status),
@@ -8407,10 +8906,17 @@ mod tests {
             terminal.failure_code.as_deref(),
             Some("playback_supervisor_start_failed")
         );
-        assert!(events.lock().expect("event hub").buffered.iter().any(
-            |event| matches!(event, UiEvent::PlaybackFailed { payload, .. }
+        assert!(
+            events
+                .lock()
+                .expect("event hub")
+                .buffered_for_test()
+                .iter()
+                .any(
+                    |event| matches!(event, UiEvent::PlaybackFailed { payload, .. }
                 if payload.code == "playback_supervisor_start_failed")
-        ));
+                )
+        );
     }
 
     #[cfg(feature = "tauri-test")]
@@ -8848,11 +9354,18 @@ mod tests {
                 .as_deref()
                 .is_some_and(|message| message.contains("Sky window was not found"))
         );
-        assert!(events.lock().expect("event hub").buffered.iter().any(
-            |event| matches!(event, UiEvent::PlaybackFailed { payload, .. }
+        assert!(
+            events
+                .lock()
+                .expect("event hub")
+                .buffered_for_test()
+                .iter()
+                .any(
+                    |event| matches!(event, UiEvent::PlaybackFailed { payload, .. }
                 if payload.session_id == first_terminal.session_id
                     && payload.code == "target_not_found")
-        ));
+                )
+        );
 
         let reservation = activity
             .reserve_playback("after-target-not-found")
@@ -8985,7 +9498,7 @@ mod tests {
         events
             .lock()
             .expect("event hub")
-            .buffered
+            .buffered_for_test()
             .iter()
             .filter_map(|event| match event {
                 UiEvent::PlaybackStateChanged { payload, .. } => {
@@ -9147,7 +9660,7 @@ mod tests {
         events
             .lock()
             .expect("event hub")
-            .buffered
+            .buffered_for_test()
             .iter()
             .filter(|event| matches!(event, UiEvent::CalibrationFinished { .. }))
             .count()
@@ -10610,9 +11123,10 @@ mod tests {
         let session_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         hub.publish(snapshot(session_id, 1)).expect("snapshot");
         hub.publish(snapshot(session_id, 2)).expect("coalesce");
-        assert_eq!(hub.buffered.len(), 1);
+        let buffered = hub.buffered_for_test();
+        assert_eq!(buffered.len(), 1);
         assert!(
-            matches!(hub.buffered.front(), Some(UiEvent::PlaybackSnapshot { payload, .. }) if payload.seq == 2)
+            matches!(buffered.front(), Some(UiEvent::PlaybackSnapshot { payload, .. }) if payload.seq == 2)
         );
 
         for index in 0..MAX_NATIVE_EVENTS {
@@ -10625,6 +11139,11 @@ mod tests {
             })
             .expect("snapshot slot can be evicted before lifecycle fill");
         }
+        hub.publish(snapshot(session_id, 3)).expect(
+            "best-effort snapshot is dropped when the bounded queue has only lifecycle events",
+        );
+        assert_eq!(hub.buffered_for_test().len(), MAX_NATIVE_EVENTS);
+        assert!(hub.delivery_failure().is_none());
         assert!(
             hub.publish(UiEvent::CatalogChanged {
                 v: 1,
@@ -10635,6 +11154,95 @@ mod tests {
             })
             .is_err()
         );
+        assert!(hub.delivery_failure().is_some());
+    }
+
+    #[test]
+    fn blocked_event_publisher_coalesces_snapshots_and_preserves_lifecycle_order() {
+        let session_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let callback_entered = Arc::new(AtomicBool::new(false));
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let received = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let callback_gate = Arc::clone(&gate);
+        let callback_entered_flag = Arc::clone(&callback_entered);
+        let callback_received = Arc::clone(&received);
+        let channel: Channel<UiEvent> = Channel::new(move |body| {
+            if !callback_entered_flag.swap(true, Ordering::AcqRel) {
+                entered_sender.send(()).expect("publisher entry receiver");
+                let (released, changed) = &*callback_gate;
+                let mut released = released.lock().expect("publisher gate");
+                while !*released {
+                    released = changed.wait(released).expect("publisher gate wait");
+                }
+            }
+            let InvokeResponseBody::Json(json) = body else {
+                return Err(std::io::Error::other("expected JSON event").into());
+            };
+            let event = serde_json::from_str::<Value>(&json)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            callback_received
+                .lock()
+                .expect("delivered events")
+                .push(event);
+            Ok(())
+        });
+
+        let mut hub = NativeEventHub::default();
+        hub.publish(snapshot(session_id, 1))
+            .expect("buffer initial snapshot");
+        hub.subscribe(channel).expect("subscribe event sink");
+        entered_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first send entered blocked callback");
+        hub.publish(snapshot(session_id, 2))
+            .expect("queue snapshot");
+        hub.publish(UiEvent::CatalogChanged {
+            v: 1,
+            payload: crate::ui_events::CatalogChangedPayload {
+                generation: 1,
+                total: 0,
+            },
+        })
+        .expect("queue first lifecycle event");
+        hub.publish(snapshot(session_id, 3))
+            .expect("coalesce pending snapshot");
+        hub.publish(UiEvent::CatalogChanged {
+            v: 1,
+            payload: crate::ui_events::CatalogChangedPayload {
+                generation: 2,
+                total: 0,
+            },
+        })
+        .expect("queue second lifecycle event");
+        let pending = hub.buffered_for_test();
+        assert_eq!(pending.len(), 3);
+        assert!(matches!(
+            pending.front(),
+            Some(UiEvent::PlaybackSnapshot { payload, .. }) if payload.seq == 3
+        ));
+
+        {
+            let (released, changed) = &*gate;
+            *released.lock().expect("publisher gate") = true;
+            changed.notify_all();
+        }
+        assert!(hub.wait_idle_for_test(Duration::from_secs(2)));
+        let delivered = received.lock().expect("delivered events").clone();
+        let snapshots = delivered
+            .iter()
+            .filter(|event| event["name"] == "playback.snapshot")
+            .filter_map(|event| event["payload"]["seq"].as_u64())
+            .collect::<Vec<_>>();
+        let generations = delivered
+            .iter()
+            .filter(|event| event["name"] == "catalog.changed")
+            .filter_map(|event| event["payload"]["generation"].as_u64())
+            .collect::<Vec<_>>();
+        assert_eq!(snapshots, vec![1, 3]);
+        assert_eq!(generations, vec![1, 2]);
+        hub.close();
+        assert!(hub.publisher_finished_for_test());
     }
 
     #[test]
@@ -10822,8 +11430,9 @@ mod tests {
             .expect("final diagnostics");
 
         let hub = events.lock().expect("event hub");
-        assert_eq!(hub.buffered.len(), 1, "snapshot events coalesce to latest");
-        let UiEvent::DiagnosticsSnapshot { payload, .. } = &hub.buffered[0] else {
+        let buffered = hub.buffered_for_test();
+        assert_eq!(buffered.len(), 1, "snapshot events coalesce to latest");
+        let UiEvent::DiagnosticsSnapshot { payload, .. } = &buffered[0] else {
             panic!("expected final diagnostics snapshot");
         };
         assert_eq!(payload.seq, 2);
@@ -10882,8 +11491,9 @@ mod tests {
         publish_diagnostics_snapshot_for_active(&events, &active, &gate)
             .expect("dry-run diagnostics");
         let hub = events.lock().expect("event hub");
-        assert_eq!(hub.buffered.len(), 1);
-        let UiEvent::DiagnosticsSnapshot { payload, .. } = &hub.buffered[0] else {
+        let buffered = hub.buffered_for_test();
+        assert_eq!(buffered.len(), 1);
+        let UiEvent::DiagnosticsSnapshot { payload, .. } = &buffered[0] else {
             panic!("expected diagnostics snapshot");
         };
         assert_eq!(payload.session_id.as_deref(), Some("a".repeat(32).as_str()));
@@ -12225,13 +12835,15 @@ mod tests {
             })
             .expect("snapshot is evictable");
         }
-        assert_eq!(hub.buffered.len(), MAX_NATIVE_EVENTS);
+        let buffered = hub.buffered_for_test();
+        assert_eq!(buffered.len(), MAX_NATIVE_EVENTS);
         assert!(
-            !hub.buffered
+            !buffered
                 .iter()
                 .any(|event| matches!(event, UiEvent::PlaybackSnapshot { .. }))
         );
-        assert!(!remove_oldest_snapshot(&mut hub.buffered));
+        let mut buffered = buffered;
+        assert!(!remove_oldest_snapshot(&mut buffered));
     }
 
     #[test]
