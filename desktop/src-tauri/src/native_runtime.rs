@@ -11546,6 +11546,10 @@ mod tests {
         assert_eq!(payload.missed_physical_window_boundaries, 0);
         assert_eq!(payload.final_sender_window_expirations, 0);
         assert_eq!(payload.release_floor_infeasible_boundaries, 0);
+        let serialized = serde_json::to_value(payload).expect("diagnostics DTO JSON");
+        assert_eq!(serialized["missed_physical_window_boundaries"], 0);
+        assert_eq!(serialized["final_sender_window_expirations"], 0);
+        assert_eq!(serialized["release_floor_infeasible_boundaries"], 0);
         assert_eq!(payload.hold_floor_delay_boundaries, 0);
         assert_eq!(payload.max_hold_floor_delay_us, 0);
         assert_eq!(payload.release_floor_delay_boundaries, 0);
