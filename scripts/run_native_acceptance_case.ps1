@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Get-Location).Path
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
 $pwshPath = (Get-Command pwsh.exe).Source
+$pwshExecutablePath = (Get-Process -Id $PID).Path
 $runId = 'native-case-' + (Get-Date -Format 'yyyyMMddTHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $runDir = Join-Path $root (Join-Path '.benchmarks\physical-native-cases' $runId)
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
@@ -61,8 +62,10 @@ function Assert-SinkIdentity {
         throw 'sink ready record omitted process, HWND, event-log, or start-time identity'
     }
     $owner = Get-Process -Id ([int]$Record.pid)
-    if (-not [string]::Equals($owner.Path, $pwshPath, [System.StringComparison]::OrdinalIgnoreCase) -or $owner.SessionId -ne $SessionId -or [long]$owner.MainWindowHandle -ne [long]$Record.hwnd -or $owner.MainWindowTitle -ne $Record.title) {
-        throw 'live sink HWND/process identity mismatch'
+    $ownerStartTimeFiletime = [long]$owner.StartTime.ToUniversalTime().ToFileTimeUtc()
+    $sameExecutable = [string]::Equals($owner.Path, $pwshExecutablePath, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $sameExecutable -or $owner.SessionId -ne $SessionId -or $ownerStartTimeFiletime -ne [long]$Record.process_start_time_filetime -or [long]$owner.MainWindowHandle -ne [long]$Record.hwnd -or $owner.MainWindowTitle -ne $Record.title) {
+        throw ('live sink HWND/process identity mismatch (path=' + $owner.Path + '; expected_path=' + $pwshExecutablePath + '; session=' + $owner.SessionId + '; expected_session=' + $SessionId + '; start=' + $ownerStartTimeFiletime + '; expected_start=' + $Record.process_start_time_filetime + '; hwnd=' + $owner.MainWindowHandle + '; expected_hwnd=' + $Record.hwnd + '; title=' + $owner.MainWindowTitle + '; expected_title=' + $Record.title + ')')
     }
     $records = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
     if ($records.Count -lt 1 -or $records[0].kind -ne 'stream_start' -or $records[0].sequence -ne 0) {
