@@ -486,6 +486,7 @@ fn finalize_authored_down_admission(
             DownAdmission::OwnerMismatch => {
                 runtime.verified_target = None;
                 runtime.invalidate_down_authorization();
+                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
                 return Err(DispatchStep::TerminateStatic(
                     "authored_down_owner_mismatch",
                 ));
@@ -493,6 +494,7 @@ fn finalize_authored_down_admission(
             DownAdmission::OwnerQueryUnavailable => {
                 runtime.verified_target = None;
                 runtime.invalidate_down_authorization();
+                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
                 return Err(DispatchStep::TerminateStatic(
                     "authored_down_owner_query_unavailable",
                 ));
@@ -500,6 +502,7 @@ fn finalize_authored_down_admission(
             DownAdmission::OwnerIdentityAbsent => {
                 runtime.verified_target = None;
                 runtime.invalidate_down_authorization();
+                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
                 return Err(DispatchStep::TerminateStatic(
                     "authored_down_owner_identity_absent",
                 ));
@@ -507,6 +510,7 @@ fn finalize_authored_down_admission(
             DownAdmission::OwnerIdentityStale => {
                 runtime.verified_target = None;
                 runtime.invalidate_down_authorization();
+                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
                 return Err(DispatchStep::TerminateStatic(
                     "authored_down_owner_identity_stale",
                 ));
@@ -514,6 +518,7 @@ fn finalize_authored_down_admission(
             DownAdmission::OwnerProcessTerminated => {
                 runtime.verified_target = None;
                 runtime.invalidate_down_authorization();
+                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
                 return Err(DispatchStep::TerminateStatic(
                     "authored_down_owner_process_terminated",
                 ));
@@ -521,6 +526,7 @@ fn finalize_authored_down_admission(
             DownAdmission::OwnerIdentityDrift => {
                 runtime.verified_target = None;
                 runtime.invalidate_down_authorization();
+                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
                 return Err(DispatchStep::TerminateStatic(
                     "authored_down_owner_identity_drift",
                 ));

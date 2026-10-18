@@ -12,6 +12,7 @@ use crate::engine::telemetry::{
 };
 use crate::engine::worker::dispatch::{
     AuthoredPacketContext, DispatchStep, DownBoundaryAdmission, dispatch_authored_packet,
+    publish_pending_wait_observation, record_wait_attempt,
 };
 use crate::engine::worker::dispatch::{DispatchObservation, PendingObservationQueue};
 use crate::engine::worker::{
@@ -2882,6 +2883,11 @@ impl ProductionDispatchTestHarness {
             Some(wall_now),
             false,
         );
+        publish_pending_wait_observation(
+            &mut self.runtime,
+            Some(&self.observer),
+            &mut self.local_metrics,
+        );
         if matches!(step, DispatchStep::Dispatched) {
             stream.advance().expect("prepared stream advance");
         }
@@ -3184,25 +3190,13 @@ impl ProductionDispatchTestHarness {
                 terminal_error: &mut self.runtime.terminal_error,
             },
         });
-        let (wait_result, dispatch_qpc, wait_observation) = match boundary {
+        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = match boundary {
             WaitBoundary::Due {
                 wait_result,
                 target_qpc,
                 dispatch_qpc,
                 planned_wait_ticks,
-            } => {
-                let observation = wait_result.map(|result| WaitObservation {
-                    outcome: result.outcome,
-                    wake_qpc: result.wake_qpc,
-                    spin_ticks: result.spin_ticks,
-                    physical_target_qpc: target_qpc,
-                    planned_wait_ticks,
-                    deadline_ticks: frame.view.prepared_batch.effective_scheduled_ticks,
-                    epoch_qpc: self.resources.playback.epoch,
-                    allow_pre_epoch_startup_dispatch: true,
-                });
-                (wait_result, dispatch_qpc, observation)
-            }
+            } => (wait_result, dispatch_qpc, planned_wait_ticks, target_qpc),
             WaitBoundary::Replan { .. } => {
                 return Err("prepared wait unexpectedly required a replan".to_string());
             }
@@ -3215,7 +3209,15 @@ impl ProductionDispatchTestHarness {
             }
         };
         self.last_wait_result = wait_result;
-        self.last_wait_observation = wait_observation;
+        self.last_wait_observation = record_wait_attempt(
+            Some(&self.observer),
+            wait_result,
+            wait_target_qpc,
+            planned_wait_ticks,
+            frame.view.prepared_batch.effective_scheduled_ticks,
+            self.resources.playback.epoch,
+        );
+        self.runtime.pending_wait_observation = self.last_wait_observation;
         self.runtime.set_deadline_wait_evidence_for_test(
             wait_result.and_then(|result| result.wake_qpc),
             Some(target_qpc),
@@ -3529,35 +3531,31 @@ impl ProductionDispatchTestHarness {
         let wait_deadline_ticks = plan
             .deadline_ticks()
             .ok_or_else(|| "benchmark wait plan has no deadline".to_string())?;
-        let (wait_result, dispatch_qpc, wait_observation) = match boundary {
+        let (wait_result, dispatch_qpc, planned_wait_ticks, wait_target_qpc) = match boundary {
             WaitBoundary::Due {
                 wait_result: Some(wait_result),
                 target_qpc,
                 dispatch_qpc,
                 planned_wait_ticks,
-                ..
             } => {
                 self.runtime.set_deadline_wait_evidence_for_test(
                     Some(dispatch_qpc),
                     plan.physical_target_qpc(),
                 );
-                let observation = WaitObservation {
-                    outcome: wait_result.outcome,
-                    wake_qpc: wait_result.wake_qpc,
-                    spin_ticks: wait_result.spin_ticks,
-                    physical_target_qpc: target_qpc,
+                (
+                    Some(wait_result),
+                    dispatch_qpc,
                     planned_wait_ticks,
-                    deadline_ticks: wait_deadline_ticks,
-                    epoch_qpc: self.resources.playback.epoch,
-                    allow_pre_epoch_startup_dispatch: true,
-                };
-                (Some(wait_result), dispatch_qpc, Some(observation))
+                    target_qpc,
+                )
             }
             WaitBoundary::Due {
                 wait_result: None,
+                target_qpc,
                 dispatch_qpc,
+                planned_wait_ticks,
                 ..
-            } => (None, dispatch_qpc, None),
+            } => (None, dispatch_qpc, planned_wait_ticks, target_qpc),
             WaitBoundary::Replan { .. } => {
                 return Err("benchmark wait unexpectedly required replan".to_string());
             }
@@ -3570,7 +3568,15 @@ impl ProductionDispatchTestHarness {
             }
         };
         self.last_wait_result = wait_result;
-        self.last_wait_observation = wait_observation;
+        self.last_wait_observation = record_wait_attempt(
+            Some(&self.observer),
+            wait_result,
+            wait_target_qpc,
+            planned_wait_ticks,
+            wait_deadline_ticks,
+            self.resources.playback.epoch,
+        );
+        self.runtime.pending_wait_observation = self.last_wait_observation;
         self.runtime.set_deadline_wait_evidence_for_test(
             wait_result.and_then(|result| result.wake_qpc),
             plan.physical_target_qpc(),
@@ -3592,6 +3598,11 @@ impl ProductionDispatchTestHarness {
             Some(now_ticks),
             None,
             false,
+        );
+        publish_pending_wait_observation(
+            &mut self.runtime,
+            Some(&self.observer),
+            &mut self.local_metrics,
         );
         Ok(step)
     }

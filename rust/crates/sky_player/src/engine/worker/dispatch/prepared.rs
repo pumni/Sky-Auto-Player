@@ -253,12 +253,17 @@ fn finish_prepared_normal_precision_result(
         } => Ok(Some((result, final_policy_qpc))),
         Rejected(PreparedNormalAdmission::EarlyControl) => {
             runtime.verified_target = None;
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Control);
             Err(DispatchStep::Continue)
         }
-        Rejected(PreparedNormalAdmission::FocusLost) => Ok(None),
+        Rejected(PreparedNormalAdmission::FocusLost) => {
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Focus);
+            Ok(None)
+        }
         Rejected(PreparedNormalAdmission::TargetChanged) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Target);
             Err(DispatchStep::Continue)
         }
         Rejected(PreparedNormalAdmission::LateControl) => {
@@ -269,6 +274,7 @@ fn finish_prepared_normal_precision_result(
         Rejected(PreparedNormalAdmission::OwnerMismatch) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
             Err(DispatchStep::TerminateStatic(
                 "prepared_down_owner_mismatch",
             ))
@@ -276,6 +282,7 @@ fn finish_prepared_normal_precision_result(
         Rejected(PreparedNormalAdmission::OwnerQueryUnavailable) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
             Err(DispatchStep::TerminateStatic(
                 "prepared_down_owner_query_unavailable",
             ))
@@ -283,6 +290,7 @@ fn finish_prepared_normal_precision_result(
         Rejected(PreparedNormalAdmission::OwnerIdentityAbsent) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
             Err(DispatchStep::TerminateStatic(
                 "prepared_down_owner_identity_absent",
             ))
@@ -290,6 +298,7 @@ fn finish_prepared_normal_precision_result(
         Rejected(PreparedNormalAdmission::OwnerIdentityStale) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
             Err(DispatchStep::TerminateStatic(
                 "prepared_down_owner_identity_stale",
             ))
@@ -297,6 +306,7 @@ fn finish_prepared_normal_precision_result(
         Rejected(PreparedNormalAdmission::OwnerProcessTerminated) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
             Err(DispatchStep::TerminateStatic(
                 "prepared_down_owner_process_terminated",
             ))
@@ -304,11 +314,15 @@ fn finish_prepared_normal_precision_result(
         Rejected(PreparedNormalAdmission::OwnerIdentityDrift) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
             Err(DispatchStep::TerminateStatic(
                 "prepared_down_owner_identity_drift",
             ))
         }
-        Rejected(ModifierHeld(mask)) => Err(modifier_guard_rejection_step(mask)),
+        Rejected(ModifierHeld(mask)) => {
+            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Modifier);
+            Err(modifier_guard_rejection_step(mask))
+        }
         Rejected(PreparedNormalAdmission::SupervisorLeaseExpired) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
@@ -321,6 +335,10 @@ fn finish_prepared_normal_precision_result(
         Rejected(PreparedNormalAdmission::SupervisorLeaseUnproven) => {
             runtime.verified_target = None;
             runtime.invalidate_down_authorization();
+            record_final_gate_rejection(
+                local_metrics,
+                super::super::FinalGateRejection::LeaseUnproven,
+            );
             Err(DispatchStep::TerminateStatic("supervisor_lease_unproven"))
         }
     }
@@ -375,6 +393,7 @@ pub(crate) fn dispatch_prepared_normal_frame(
     // Keep the cheap outer read for the preroll/focus-pause fault path; the
     // precision helper still owns the authoritative final atomic gate.
     if has_down_events && !focus_matches(config.focus.require_focus, focus_active) {
+        record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Focus);
         if !runtime.musical_physical_commit_started {
             return DispatchStep::TerminateStatic("focus_lost_during_preroll");
         }

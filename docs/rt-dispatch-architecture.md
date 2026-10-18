@@ -241,6 +241,66 @@ barrier above; failure paths invalidate the guard. A new session starts with a
 fresh guard. Cleanup releases remain safety operations and bypass the musical
 hold floor.
 
+### Snapshot and observer ownership
+
+Live metric snapshots use separate safe `RwLock` slots for dispatch-owned and
+observer-owned values. Packet metric updates and observer updates each use
+nonblocking `try_write`; if a reader currently holds a slot, that best-effort
+publication is skipped and a later cumulative update can replace it. The
+physical worker never waits for a UI snapshot reader in the packet dispatch
+path. Focus/manual-pause lifecycle publication is different: after the
+existing pause or tracked-cleanup boundary, the worker publishes the current
+dispatch projection with a blocking write so the lifecycle and physical
+ownership state cannot disappear when no later packet is dispatched. This
+write stays outside the QPC-to-SendInput suffix. Snapshot readers hold both
+read guards while copying and merge the two source snapshots once, so observer
+fields cannot replace independent dispatch counters. The observer's publish
+interval is independent of the worker's.
+
+The observer is stopped and joined before terminal aggregation. The finalizer
+merges its returned metrics into the dispatch-owned terminal values, then
+publishes those values while clearing the observer slot in the same guarded
+operation. Terminal publication may yield while readers release their guards;
+it cannot be skipped or double-count observer data.
+
+#### Risk memo
+
+The snapshot path contains no `UnsafeCell` or unsafe `Sync` implementation.
+`parking_lot::RwLock` guards prevent concurrent reads and writes to each
+`WorkerMetricsLocal`. Only the dispatch worker writes the dispatch slot and
+only the observer thread writes the observer slot. Readers take both read
+guards in dispatch-then-observer order, so they copy one coherent pair before
+merging observer-owned fields. Packet and observer publishers use `try_write`;
+contention drops that individual cumulative publication without delaying the
+physical path. Focus/manual-pause lifecycle updates use a blocking dispatch
+write only after pause or cleanup work has completed, because their resulting
+physical state must be observable even if the worker dispatches no more
+packets. Terminal cleanup runs after the observer has joined and may yield
+while acquiring both write guards. The terminal marker makes later readers
+return the already-merged dispatch slot without merging the cleared observer
+slot again.
+
+For an observed session, a real wait result is captured into worker-owned
+pending state at wake time, before later control changes can replace its
+deadline attribution. A due wait is inserted into the observer queue after
+the current dispatch attempt returns, including attempts rejected by a final
+gate or returning a terminal dispatch result. If the loop exits before that
+handoff, its exit path inserts the pending observation. An interrupted replan
+is inserted immediately because no physical dispatch follows that wait.
+Metadata-only and physical packet waits use the same capture/handoff path. An
+already-due target, a failed wait, or an observer-disabled session produces no
+wait sample. The fixed queue uses drop-new behavior; each failed enqueue
+increments the dropped-sample counter. Its high-watermark is the largest
+occupancy observed after a successful enqueue, so a concurrent drain can make
+it a conservative sample of the actual peak.
+
+The existing final-gate DTO counters keep their wire names and group related
+causes: control and modifier rejections share `final_gate_control_rejections`,
+target-generation and bound-owner rejections share
+`final_gate_target_changes`, and expired or unproven lease decisions share
+`final_gate_lease_expirations`. Focus rejections remain separate. Rejected
+Down packets stay fail-closed and do not reach `SendInput`.
+
 Musical generation accounting and physical cleanup obligations are separate.
 Only a matching musical Up produces a normal generation `Released` transition;
 safety/cleanup Ups may be idempotent and may make the raw physical Up count

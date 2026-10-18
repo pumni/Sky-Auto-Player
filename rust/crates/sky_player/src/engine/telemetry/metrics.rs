@@ -1,12 +1,11 @@
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_core::coordinator::GenerationAccounting;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::input::ReleaseAllOutcome;
-use std::cell::UnsafeCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RecentLatencyRing {
@@ -48,6 +47,20 @@ impl RecentLatencyRing {
         (0..len)
             .map(|offset| i64::from(self.values[(start + offset) % self.values.len()]))
             .collect()
+    }
+
+    fn extend_from(&mut self, other: &Self) {
+        let len = usize::from(other.len);
+        let start = if other.len == other.values.len() as u8 {
+            usize::from(other.next)
+        } else {
+            0
+        };
+        for offset in 0..len {
+            self.push(i64::from(
+                other.values[(start + offset) % other.values.len()],
+            ));
+        }
     }
 }
 
@@ -133,11 +146,15 @@ pub struct WorkerMetricsLocal {
     /// Deprecated compatibility counter; prepared sender expiry is retired and
     /// this remains zero in production.
     pub prepared_normal_sender_expirations: u64,
-    /// Final authored Down admission rejections observed after target
-    /// crossing and before the authoritative SendInput timestamp.
+    /// Final control and modifier gate rejections observed before the
+    /// authoritative SendInput timestamp.
     pub final_gate_control_rejections: u64,
+    /// Final target and bound-owner authority rejections observed before the
+    /// authoritative SendInput timestamp.
     pub final_gate_target_changes: u64,
     pub final_gate_focus_losses: u64,
+    /// Final supervisor-lease gate rejections. The compatibility field name
+    /// includes both expired and unproven lease outcomes.
     pub final_gate_lease_expirations: u64,
     /// Deprecated compatibility counter; sender-window rejection is retired
     /// and this remains zero in production.
@@ -291,7 +308,7 @@ pub struct WorkerMetricsLocal {
     /// How many `DispatchObservation` samples were dropped because the fixed
     /// diagnostic observer queue was full (drop-new policy).
     pub observer_dropped_samples: u64,
-    /// Largest number of entries ever held by the diagnostic observer queue.
+    /// Largest queue occupancy observed immediately after a successful enqueue.
     pub observer_queue_high_watermark: u64,
     pub(crate) recent_latencies: RecentLatencyRing,
 }
@@ -407,9 +424,9 @@ impl WorkerMetricsLocal {
         }
     }
 
-    /// Merge fields produced by the dedicated observer consumer into the
-    /// dispatch-owned snapshot before terminal publication. The observer
-    /// starts from zero, so producer-owned backend counters remain untouched.
+    /// Merge fields owned by the dedicated observer consumer into the
+    /// dispatch snapshot projection. Each source snapshot starts from its own
+    /// zero state, so producer-owned counters remain separate until readout.
     pub(crate) fn merge_observer(&mut self, observer: &Self) {
         self.total_us = self.total_us.saturating_add(observer.total_us);
         self.lateness_us = observer.lateness_us;
@@ -550,64 +567,66 @@ impl WorkerMetricsLocal {
         self.observer_queue_high_watermark = self
             .observer_queue_high_watermark
             .max(observer.observer_queue_high_watermark);
-        for latency in observer.recent_latencies.to_vec() {
-            self.recent_latencies.push(latency);
-        }
+        self.recent_latencies
+            .extend_from(&observer.recent_latencies);
     }
 }
 
+#[derive(Default)]
 pub(crate) struct SnapshotBuffer {
-    buffers: [UnsafeCell<WorkerMetricsLocal>; 2],
-    active: AtomicU8,
-    readers: [AtomicU32; 2],
-}
-
-// Safety: only the worker writes the inactive slot, and it skips a slot while
-// a reader has pinned it. Readers validate the active index before and after
-// copying, so an active slot is never concurrently overwritten.
-unsafe impl Sync for SnapshotBuffer {}
-
-impl Default for SnapshotBuffer {
-    fn default() -> Self {
-        Self {
-            buffers: [
-                UnsafeCell::new(WorkerMetricsLocal::default()),
-                UnsafeCell::new(WorkerMetricsLocal::default()),
-            ],
-            active: AtomicU8::new(0),
-            readers: [AtomicU32::new(0), AtomicU32::new(0)],
-        }
-    }
+    dispatch: RwLock<WorkerMetricsLocal>,
+    observer: RwLock<WorkerMetricsLocal>,
+    terminal_published: AtomicBool,
 }
 
 impl SnapshotBuffer {
     pub(crate) fn load(&self) -> WorkerMetricsLocal {
-        loop {
-            let index = self.active.load(Ordering::Acquire) as usize;
-            self.readers[index].fetch_add(1, Ordering::Acquire);
-            if self.active.load(Ordering::Acquire) as usize == index {
-                let value = unsafe { (*self.buffers[index].get()).clone() };
-                let stable = self.active.load(Ordering::Acquire) as usize == index;
-                self.readers[index].fetch_sub(1, Ordering::Release);
-                if stable {
-                    return value;
-                }
-            } else {
-                self.readers[index].fetch_sub(1, Ordering::Release);
-            }
+        let dispatch = self.dispatch.read();
+        let observer = self.observer.read();
+        if self.terminal_published.load(Ordering::Acquire) {
+            return dispatch.clone();
         }
+        let mut value = dispatch.clone();
+        value.merge_observer(&observer);
+        value
     }
 
-    pub(crate) fn try_publish(&self, local: &WorkerMetricsLocal) -> bool {
-        let current = self.active.load(Ordering::Acquire) as usize;
-        let target = 1 - current;
-        if self.readers[target].load(Ordering::Acquire) != 0 {
+    /// Dispatch publication never waits for a snapshot reader. If readout
+    /// currently owns the slot, this point-in-time publication is dropped;
+    /// the worker's next publication carries its cumulative metrics.
+    pub(crate) fn try_publish_dispatch(&self, local: WorkerMetricsLocal) -> bool {
+        let Some(mut slot) = self.dispatch.try_write() else {
             return false;
-        }
-        unsafe {
-            *self.buffers[target].get() = local.clone();
-        }
-        self.active.store(target as u8, Ordering::Release);
+        };
+        *slot = local;
+        true
+    }
+
+    /// Observer metrics have a separate writer-owned slot. They cannot race
+    /// with or replace dispatch-owned counters.
+    #[cfg(test)]
+    pub(crate) fn try_publish_observer(&self, local: WorkerMetricsLocal) -> bool {
+        let Some(mut slot) = self.observer.try_write() else {
+            return false;
+        };
+        *slot = local;
+        true
+    }
+
+    /// Terminal publication replaces the live dispatch projection and clears
+    /// the observer slot in one lock acquisition order. Readers hold both
+    /// read guards together, so they see either the prior live projection or
+    /// the merged terminal projection without double-counting observer data.
+    fn try_publish_terminal(&self, local: &mut WorkerMetricsLocal) -> bool {
+        let Some(mut dispatch) = self.dispatch.try_write() else {
+            return false;
+        };
+        let Some(mut observer) = self.observer.try_write() else {
+            return false;
+        };
+        *dispatch = std::mem::take(local);
+        *observer = WorkerMetricsLocal::default();
+        self.terminal_published.store(true, Ordering::Release);
         true
     }
 }
@@ -616,6 +635,7 @@ impl SnapshotBuffer {
 pub(crate) struct SharedMetrics {
     pub(crate) snapshot: SnapshotBuffer,
     pub(crate) last_publish_us: AtomicU64,
+    pub(crate) last_observer_publish_us: AtomicU64,
     pub(crate) live_diagnostics_enabled: AtomicBool,
     pub(crate) is_paused: AtomicBool,
     pub(crate) panicked: AtomicBool,
@@ -647,10 +667,105 @@ pub(crate) fn try_publish_metrics(
     now_us: u64,
     force: bool,
 ) -> bool {
-    let last = shared.last_publish_us.load(Ordering::Relaxed);
+    try_publish_metrics_from(
+        local,
+        shared,
+        qpc_clock,
+        now_us,
+        force,
+        SnapshotOwner::Dispatch,
+    )
+}
+
+pub(crate) fn try_publish_observer_metrics(
+    local: &WorkerMetricsLocal,
+    shared: &SharedMetrics,
+    qpc_clock: QpcClock,
+    now_us: u64,
+    force: bool,
+) -> bool {
+    try_publish_metrics_from(
+        local,
+        shared,
+        qpc_clock,
+        now_us,
+        force,
+        SnapshotOwner::Observer,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum SnapshotOwner {
+    Dispatch,
+    Observer,
+}
+
+fn try_publish_metrics_from(
+    local: &WorkerMetricsLocal,
+    shared: &SharedMetrics,
+    qpc_clock: QpcClock,
+    now_us: u64,
+    force: bool,
+    owner: SnapshotOwner,
+) -> bool {
+    let last_publish_us = match owner {
+        SnapshotOwner::Dispatch => &shared.last_publish_us,
+        SnapshotOwner::Observer => &shared.last_observer_publish_us,
+    };
+    let last = last_publish_us.load(Ordering::Relaxed);
     if !force && now_us.saturating_sub(last) < 50_000 {
         return true;
     }
+    let published_ok = match owner {
+        SnapshotOwner::Dispatch => {
+            let Some(mut slot) = shared.snapshot.dispatch.try_write() else {
+                return false;
+            };
+            *slot = project_metrics_for_snapshot(local, qpc_clock);
+            true
+        }
+        SnapshotOwner::Observer => {
+            let Some(mut slot) = shared.snapshot.observer.try_write() else {
+                return false;
+            };
+            *slot = project_metrics_for_snapshot(local, qpc_clock);
+            true
+        }
+    };
+    if published_ok {
+        last_publish_us.store(now_us, Ordering::Relaxed);
+        #[cfg(test)]
+        if matches!(owner, SnapshotOwner::Dispatch) {
+            shared.publish_count.fetch_add(1, Ordering::Relaxed);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Publish a focus/manual-pause lifecycle snapshot after the control
+/// transition and any cleanup permitted at that boundary. Packet metrics
+/// remain best effort; this path waits for a current snapshot reader so the
+/// lifecycle and tracked-key state cannot be lost when no later packet is
+/// dispatched. It must stay outside the QPC to SendInput suffix.
+pub(crate) fn publish_lifecycle_metrics(
+    local: &WorkerMetricsLocal,
+    shared: &SharedMetrics,
+    qpc_clock: QpcClock,
+    now_us: u64,
+) {
+    let published = project_metrics_for_snapshot(local, qpc_clock);
+    *shared.snapshot.dispatch.write() = published;
+    shared.last_publish_us.store(now_us, Ordering::Relaxed);
+    #[cfg(test)]
+    shared.publish_count.fetch_add(1, Ordering::Relaxed);
+}
+
+fn project_metrics_for_snapshot(
+    local: &WorkerMetricsLocal,
+    qpc_clock: QpcClock,
+) -> WorkerMetricsLocal {
     let mut published = local.clone();
     published.max_sendinput_pre_call_lateness_us = qpc_clock
         .duration_to_us(DurationTicks::from_raw(
@@ -681,33 +796,30 @@ pub(crate) fn try_publish_metrics(
             local.physical_target_to_wake_max_ticks,
         ))
         .unwrap_or_default();
-    if shared.snapshot.try_publish(&published) {
-        shared.last_publish_us.store(now_us, Ordering::Relaxed);
-        #[cfg(test)]
-        shared.publish_count.fetch_add(1, Ordering::Relaxed);
-        true
-    } else {
-        false
-    }
+    published
 }
 
 /// Publish the terminal metrics before the lifecycle outcome becomes visible.
 ///
-/// A live snapshot reader may briefly pin both double-buffer slots across a
-/// publication boundary. Dropping the terminal publication in that case lets
-/// callers observe a finished/error outcome with stale counters. Terminal
-/// cleanup is outside the precision dispatch path, so yielding until a slot
-/// is available preserves the terminal snapshot consistency contract without
-/// adding work to healthy dispatch.
+/// A live snapshot reader may hold either source slot. Terminal cleanup is
+/// outside the precision dispatch path, so it can wait for both nonblocking
+/// write acquisitions and publish one merged terminal snapshot.
 pub(crate) fn publish_terminal_metrics(
     local: &WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
     now_us: u64,
 ) {
-    while !try_publish_metrics(local, shared, qpc_clock, now_us, true) {
+    let mut published = project_metrics_for_snapshot(local, qpc_clock);
+    loop {
+        if shared.snapshot.try_publish_terminal(&mut published) {
+            break;
+        }
         std::thread::yield_now();
     }
+    shared.last_publish_us.store(now_us, Ordering::Relaxed);
+    #[cfg(test)]
+    shared.publish_count.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn cpu_metrics_sample_due(now_us: u64, last_sample_us: u64, interval_us: u64) -> bool {
@@ -715,124 +827,5 @@ pub(crate) fn cpu_metrics_sample_due(now_us: u64, last_sample_us: u64, interval_
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        PrecisionPacketTimingObservation, SharedMetrics, SnapshotBuffer, WorkerMetricsLocal,
-        try_publish_metrics,
-    };
-    use sky_dispatch_win32::clock::QpcClock;
-    use std::num::NonZeroU64;
-    use std::sync::Arc;
-    use std::thread;
-
-    #[test]
-    fn snapshot_buffer_never_publishes_torn_scalar_pair() {
-        let buffer = Arc::new(SnapshotBuffer::default());
-        let writer_buffer = Arc::clone(&buffer);
-        let writer = thread::spawn(move || {
-            for value in 1..=10_000u64 {
-                let local = WorkerMetricsLocal {
-                    elapsed_us: value,
-                    total_us: value,
-                    ..WorkerMetricsLocal::default()
-                };
-                let _ = writer_buffer.try_publish(&local);
-            }
-        });
-        for _ in 0..10_000 {
-            let snapshot = buffer.load();
-            assert_eq!(snapshot.elapsed_us, snapshot.total_us);
-        }
-        writer.join().expect("snapshot writer thread");
-    }
-
-    #[test]
-    fn publication_derives_public_lateness_microseconds_from_ticks() {
-        let shared = SharedMetrics::default();
-        let local = WorkerMetricsLocal {
-            max_sendinput_pre_call_lateness_ticks: 1_234,
-            max_sendinput_pre_call_lateness_us: 999_999,
-            wait_planned_gap_max_ticks: 2_345,
-            physical_target_to_wake_max_ticks: 3_456,
-            ..WorkerMetricsLocal::default()
-        };
-        let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
-
-        try_publish_metrics(&local, &shared, qpc_clock, 0, true);
-
-        let published = shared.snapshot.load();
-        assert_eq!(published.max_sendinput_pre_call_lateness_ticks, 1_234);
-        assert_eq!(published.max_sendinput_pre_call_lateness_us, 1_234);
-        assert_eq!(published.wait_planned_gap_max_us, 2_345);
-        assert_eq!(published.physical_target_to_wake_max_us, 3_456);
-    }
-
-    #[test]
-    fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
-        let shared = SharedMetrics::default();
-        let local = WorkerMetricsLocal {
-            max_hold_floor_delay_ticks: 1_234,
-            max_release_floor_delay_ticks: 2_345,
-            ..WorkerMetricsLocal::default()
-        };
-        let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
-
-        try_publish_metrics(&local, &shared, qpc_clock, 0, true);
-
-        let published = shared.snapshot.load();
-        assert_eq!(published.max_hold_floor_delay_ticks, 1_234);
-        assert_eq!(published.max_hold_floor_delay_us, 1_234);
-        assert_eq!(published.max_release_floor_delay_ticks, 2_345);
-        assert_eq!(published.max_release_floor_delay_us, 2_345);
-    }
-
-    #[test]
-    fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
-        let mut metrics = WorkerMetricsLocal::default();
-        metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
-            authored_target_qpc: 100,
-            packet_not_before_qpc: 110,
-            pre_call_qpc: Some(125),
-            sendinput_completion_qpc: Some(132),
-            previous_sendinput_completion_qpc: Some(115),
-            previous_sender_completion_known: true,
-            transport_anomaly: true,
-        });
-        assert_eq!(metrics.precision_packet_attempts, 1);
-        assert_eq!(metrics.authored_lateness_samples, 1);
-        assert_eq!(metrics.max_authored_lateness_ticks, 25);
-        assert_eq!(metrics.max_authored_lateness_abs_ticks, 25);
-        assert_eq!(metrics.physical_floor_displacement_samples, 1);
-        assert_eq!(metrics.max_physical_floor_displacement_ticks, 10);
-        assert_eq!(metrics.residual_lateness_samples, 1);
-        assert_eq!(metrics.max_residual_lateness_ticks, 15);
-        assert_eq!(metrics.hol_delay_lower_bound_samples, 1);
-        assert_eq!(metrics.max_hol_delay_lower_bound_ticks, 5);
-        assert_eq!(metrics.unattributed_lateness_samples, 1);
-        assert_eq!(metrics.max_unattributed_lateness_ticks, 10);
-        assert_eq!(metrics.sendinput_envelope_samples, 1);
-        assert_eq!(metrics.max_sendinput_envelope_ticks, 7);
-        assert_eq!(metrics.overdue_packet_observations, 1);
-        assert_eq!(metrics.transport_anomalies, 1);
-        assert_eq!(metrics.timing_arithmetic_anomalies, 0);
-    }
-
-    #[test]
-    fn precision_timing_summary_does_not_invent_missing_samples_and_counts_bad_ordering() {
-        let mut metrics = WorkerMetricsLocal::default();
-        metrics.observe_precision_packet_timing(PrecisionPacketTimingObservation {
-            authored_target_qpc: 200,
-            packet_not_before_qpc: 190,
-            ..PrecisionPacketTimingObservation::default()
-        });
-        assert_eq!(metrics.precision_packet_attempts, 1);
-        assert_eq!(metrics.pre_call_qpc_unavailable_attempts, 1);
-        assert_eq!(metrics.sendinput_completion_qpc_unavailable_attempts, 1);
-        assert_eq!(metrics.authored_lateness_samples, 0);
-        assert_eq!(metrics.residual_lateness_samples, 0);
-        assert_eq!(metrics.sendinput_envelope_samples, 0);
-        assert_eq!(metrics.physical_floor_displacement_samples, 0);
-        assert_eq!(metrics.timing_arithmetic_anomalies, 1);
-        assert_eq!(metrics.overdue_packet_observations, 0);
-    }
-}
+#[path = "metrics_tests.rs"]
+mod tests;

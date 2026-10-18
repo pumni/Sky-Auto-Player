@@ -1,7 +1,9 @@
 use super::super::shared::{SessionTarget, SupervisorLeaseState, SystemPowerState};
-use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
+use super::super::{
+    DurationTicks, QpcError, TimelineTicks, WaitOutcome, publish_lifecycle_metrics,
+    try_publish_metrics,
+};
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
-use super::wait::WaitObservation;
 use super::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
     PlanningInput, WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, Worker,
@@ -629,12 +631,11 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(
+                    publish_lifecycle_metrics(
                         &core.metrics,
                         metrics,
                         qpc_clock,
                         qpc_us_or_terminal!(),
-                        true,
                     );
                 }
             } else if resources.playback.has_pause_reason(PauseReason::Focus) {
@@ -778,12 +779,11 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(
+                    publish_lifecycle_metrics(
                         &core.metrics,
                         metrics,
                         qpc_clock,
                         qpc_us_or_terminal!(),
-                        true,
                     );
                 }
             }
@@ -822,12 +822,11 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(
+                    publish_lifecycle_metrics(
                         &core.metrics,
                         metrics,
                         qpc_clock,
                         qpc_us_or_terminal!(),
-                        true,
                     );
                 } else if resources.playback.has_pause_reason(PauseReason::Focus) {
                     core.runtime.manual_pause_suspension_pending = true;
@@ -1096,19 +1095,16 @@ pub(super) fn dispatch(
                             if let Some(wait_result) = wait_result {
                                 core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
                                 core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                                if core.observer.pending.is_some() {
-                                    core.runtime.pending_wait_observation = Some(WaitObservation {
-                                        outcome: wait_result.outcome,
-                                        wake_qpc: wait_result.wake_qpc,
-                                        spin_ticks: wait_result.spin_ticks,
-                                        physical_target_qpc: target_qpc,
-                                        planned_wait_ticks,
-                                        deadline_ticks: offset_ticks,
-                                        epoch_qpc: resources.playback.epoch,
-                                        allow_pre_epoch_startup_dispatch: true,
-                                    });
-                                }
                             }
+                            core.runtime.pending_wait_observation =
+                                super::dispatch::record_wait_attempt(
+                                    core.observer.pending.as_ref(),
+                                    wait_result,
+                                    target_qpc,
+                                    planned_wait_ticks,
+                                    offset_ticks,
+                                    resources.playback.epoch,
+                                );
                             Some((wait_result, authored_target_qpc, dispatch_qpc))
                         }
                         WaitBoundary::Replan {
@@ -1116,16 +1112,20 @@ pub(super) fn dispatch(
                             target_qpc,
                             planned_wait_ticks,
                         } => {
-                            core.runtime.pending_wait_observation = Some(WaitObservation {
-                                outcome: wait_result.outcome,
-                                wake_qpc: wait_result.wake_qpc,
-                                spin_ticks: wait_result.spin_ticks,
-                                physical_target_qpc: target_qpc,
-                                planned_wait_ticks,
-                                deadline_ticks: offset_ticks,
-                                epoch_qpc: resources.playback.epoch,
-                                allow_pre_epoch_startup_dispatch: true,
-                            });
+                            core.runtime.pending_wait_observation =
+                                super::dispatch::record_wait_attempt(
+                                    core.observer.pending.as_ref(),
+                                    Some(wait_result),
+                                    target_qpc,
+                                    planned_wait_ticks,
+                                    offset_ticks,
+                                    resources.playback.epoch,
+                                );
+                            super::dispatch::publish_pending_wait_observation(
+                                &mut core.runtime,
+                                core.observer.pending.as_ref(),
+                                &mut core.metrics,
+                            );
                             let _ = interrupt.try_take();
                             None
                         }
@@ -1247,6 +1247,11 @@ pub(super) fn dispatch(
                         false,
                     )
                 };
+                super::dispatch::publish_pending_wait_observation(
+                    &mut core.runtime,
+                    core.observer.pending.as_ref(),
+                    &mut core.metrics,
+                );
                 if matches!(&step, super::DispatchStep::Dispatched) && has_physical {
                     if let Some(stream) = prepared_stream.as_mut()
                         && let Err(error) = stream.advance()
@@ -1361,18 +1366,6 @@ pub(super) fn dispatch(
                     }
                 }
             };
-            // Wait evidence is also deferred through the nonblocking producer
-            // path. The observer consumer owns all conversion and health work.
-            if let (Some(wait_observation), Some(observer)) = (
-                core.runtime.pending_wait_observation.take(),
-                core.observer.pending.as_ref(),
-            ) {
-                observer.push_wait(
-                    wait_observation,
-                    &mut core.metrics.observer_dropped_samples,
-                    &mut core.metrics.observer_queue_high_watermark,
-                );
-            }
             let mut dispatch_plan = super::planning::NextDispatchPlan::default();
             match plan_next_dispatch_projected(
                 PlanningInput {
@@ -1512,19 +1505,15 @@ pub(super) fn dispatch(
                     if let Some(wait_result) = wait_result {
                         core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
                         core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                        if core.observer.pending.is_some() {
-                            core.runtime.pending_wait_observation = Some(WaitObservation {
-                                outcome: wait_result.outcome,
-                                wake_qpc: wait_result.wake_qpc,
-                                spin_ticks: wait_result.spin_ticks,
-                                physical_target_qpc: target_qpc,
-                                planned_wait_ticks,
-                                deadline_ticks: wait_deadline_ticks,
-                                epoch_qpc: resources.playback.epoch,
-                                allow_pre_epoch_startup_dispatch: true,
-                            });
-                        }
                     }
+                    core.runtime.pending_wait_observation = super::dispatch::record_wait_attempt(
+                        core.observer.pending.as_ref(),
+                        wait_result,
+                        target_qpc,
+                        planned_wait_ticks,
+                        wait_deadline_ticks,
+                        resources.playback.epoch,
+                    );
                     core.runtime.future_physical_wait_target_qpc = None;
                     let dispatch_now_ticks = dispatch_qpc;
                     let dispatch_effective_now = match resources
@@ -1567,6 +1556,11 @@ pub(super) fn dispatch(
                         #[cfg(any(test, feature = "test-support"))]
                         false,
                     );
+                    super::dispatch::publish_pending_wait_observation(
+                        &mut core.runtime,
+                        core.observer.pending.as_ref(),
+                        &mut core.metrics,
+                    );
                     if matches!(&authored_step, super::DispatchStep::Dispatched)
                         && metrics.live_diagnostics_enabled.load(Ordering::Relaxed)
                     {
@@ -1603,16 +1597,19 @@ pub(super) fn dispatch(
                             Some("replan wait result without a dispatch deadline".to_string());
                         break;
                     };
-                    core.runtime.pending_wait_observation = Some(WaitObservation {
-                        outcome: wait_result.outcome,
-                        wake_qpc: wait_result.wake_qpc,
-                        spin_ticks: wait_result.spin_ticks,
-                        physical_target_qpc: target_qpc,
+                    core.runtime.pending_wait_observation = super::dispatch::record_wait_attempt(
+                        core.observer.pending.as_ref(),
+                        Some(wait_result),
+                        target_qpc,
                         planned_wait_ticks,
-                        deadline_ticks: wait_deadline_ticks,
-                        epoch_qpc: resources.playback.epoch,
-                        allow_pre_epoch_startup_dispatch: true,
-                    });
+                        wait_deadline_ticks,
+                        resources.playback.epoch,
+                    );
+                    super::dispatch::publish_pending_wait_observation(
+                        &mut core.runtime,
+                        core.observer.pending.as_ref(),
+                        &mut core.metrics,
+                    );
                     // Event consumption is intentionally outside the
                     // precision boundary.  A signal racing this drain is
                     // harmless; the next blocking wait will replan.
@@ -1622,6 +1619,11 @@ pub(super) fn dispatch(
                 WaitBoundary::Exit => break,
             }
         }
+        super::dispatch::publish_pending_wait_observation(
+            &mut core.runtime,
+            core.observer.pending.as_ref(),
+            &mut core.metrics,
+        );
     }))
 }
 
@@ -1641,7 +1643,7 @@ mod tests {
     use crate::engine::telemetry::metrics::{SharedMetrics, WorkerMetricsLocal};
     use crate::engine::test_support::ProductionDispatchTestHarness;
     use crate::engine::worker::{
-        DownBoundaryState, PhysicalBoundaryStamp, WorkerRuntime,
+        DownBoundaryState, NextDispatchPlan, PhysicalBoundaryStamp, WorkerRuntime,
         dispatch::{DispatchObservation, DispatchStep},
     };
     use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
@@ -1890,6 +1892,23 @@ mod tests {
         let DispatchObservation::Down(observation) = observation else {
             panic!("expected normal Down observation");
         };
+        let wait = harness
+            .pop_observation()
+            .expect("prepared wait observation");
+        let DispatchObservation::Wait(wait) = wait else {
+            panic!("expected the staged wait attempt after its Down result");
+        };
+        assert!(matches!(
+            wait.outcome,
+            sky_dispatch_win32::wait::WaitOutcome::Deadline
+        ));
+        assert_eq!(wait.wake_qpc, Some(observation.wake_qpc.unwrap()));
+        assert_eq!(wait.physical_target_qpc, observation.physical_target_qpc);
+        assert_eq!(
+            wait.deadline_ticks,
+            observation.trace.effective_deadline_ticks
+        );
+        assert_eq!(wait.epoch_qpc, observation.epoch_qpc);
         assert_eq!(
             observation.physical_timing_window.authored_target_qpc,
             observation.physical_target_qpc
@@ -1908,6 +1927,84 @@ mod tests {
         );
         assert_eq!(observation.physical_timing_window.hold_floor_mask, 0);
         assert_eq!(observation.physical_timing_window.release_floor_mask, 0);
+    }
+
+    #[test]
+    fn prepared_mixed_wait_keeps_physical_and_authored_deadline_attribution() {
+        let mut harness = ProductionDispatchTestHarness::new_mixed();
+        harness.prepare_prepared_stream_for_test();
+        assert_dispatched(
+            harness.dispatch_prepared_current_at_lateness_without_stream_for_test(2_000),
+        );
+        assert!(matches!(
+            harness.pop_observation(),
+            Some(DispatchObservation::Down(_))
+        ));
+        harness
+            .align_prepared_current_to_benchmark_margin_for_test(20_000)
+            .expect("prepared mixed boundary alignment");
+        assert_dispatched(
+            harness
+                .wait_and_dispatch_prepared_current_for_test()
+                .expect("prepared mixed wait and dispatch"),
+        );
+
+        let down = harness.pop_observation().expect("mixed Down observation");
+        let DispatchObservation::Down(down) = down else {
+            panic!("expected mixed Down observation");
+        };
+        let wait = harness.pop_observation().expect("mixed wait observation");
+        let DispatchObservation::Wait(wait) = wait else {
+            panic!("expected the staged mixed wait after its Down result");
+        };
+        assert!(matches!(
+            wait.outcome,
+            sky_dispatch_win32::wait::WaitOutcome::Deadline
+        ));
+        assert_eq!(wait.physical_target_qpc, down.physical_target_qpc);
+        assert_eq!(wait.deadline_ticks, down.trace.effective_deadline_ticks);
+        assert_ne!(down.requested_packet.up_mask, 0);
+        assert_ne!(down.requested_packet.down_mask, 0);
+        assert!(harness.observer.is_empty());
+    }
+
+    #[test]
+    fn metadata_wait_is_observed_with_its_original_deadline() {
+        let mut harness = ProductionDispatchTestHarness::new_stale_metadata_boundary();
+        let now = harness.qpc_now_for_test().expect("metadata wait QPC");
+        let margin = harness
+            .qpc_duration_from_us_for_test(20_000)
+            .expect("metadata wait margin");
+        let epoch = now
+            .checked_add_duration(margin)
+            .expect("future metadata epoch");
+        harness.set_playback_epoch_qpc_for_test(epoch);
+        let plan = harness.plan_current_dispatch();
+        let NextDispatchPlan::Metadata(metadata) = &plan else {
+            panic!("leading stale Up should produce a metadata boundary");
+        };
+        let target_qpc = metadata.physical_target_qpc;
+        let deadline_ticks = metadata.deadline_ticks;
+
+        assert_dispatched(
+            harness
+                .wait_and_dispatch_current_plan(&plan)
+                .expect("metadata wait and commit"),
+        );
+        let observation = harness
+            .pop_observation()
+            .expect("metadata wait observation");
+        let DispatchObservation::Wait(observation) = observation else {
+            panic!("metadata wait must be published as a wait observation");
+        };
+        assert!(matches!(
+            observation.outcome,
+            sky_dispatch_win32::wait::WaitOutcome::Deadline
+        ));
+        assert_eq!(observation.physical_target_qpc, target_qpc);
+        assert_eq!(observation.deadline_ticks, deadline_ticks);
+        assert_eq!(observation.epoch_qpc, epoch);
+        assert!(harness.observer.is_empty());
     }
 
     #[test]

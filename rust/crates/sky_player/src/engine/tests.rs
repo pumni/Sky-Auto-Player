@@ -1,10 +1,10 @@
 use super::config::StartupCheckpoint;
 use super::shared::SessionTarget;
 use super::telemetry::metrics::RecentLatencyRing;
-use super::test_support::ProductionDispatchTestHarness;
 use super::test_support::command_timing::{
     CommandTimingError, CommandTimingLookup as PauseTimingLookup, PauseTimingPhase,
 };
+use super::test_support::{MockSendInputCapture, ProductionDispatchTestHarness};
 use super::{
     BackendConfig, CommandTimingResult, CommandTimingState, DispatchProfile, DownAdmission,
     EnginePollStatus, FaultInjectionScript, FinalControlAdmission, FinalControlSignals,
@@ -1770,6 +1770,7 @@ fn modifier_guard_rejects_each_modifier_and_exact_multi_mask_without_send() {
         ));
         assert_eq!(query_count.load(Ordering::SeqCst), 5);
         assert!(packets.lock().expect("packet capture").is_empty());
+        assert_eq!(harness.local_metrics.final_gate_control_rejections, 1);
     }
 }
 
@@ -1795,6 +1796,7 @@ fn modifier_guard_rejects_first_down_without_send_or_unowned_cleanup() {
     ));
     assert_eq!(query_count.load(Ordering::SeqCst), 5);
     assert!(packets.lock().expect("packet capture").is_empty());
+    assert_eq!(harness.local_metrics.final_gate_control_rejections, 1);
     assert_eq!(harness.backend_active_mask(), 0);
     assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
     assert_eq!(harness.generation_accounting_for_test(), accounting_before);
@@ -2914,6 +2916,7 @@ fn overdue_supervisor_lease_blocks_prepared_down() {
         step,
         super::worker::DispatchStep::TerminateStatic("supervisor_lease_expired")
     ));
+    assert_eq!(harness.local_metrics.final_gate_lease_expirations, 1);
     assert_eq!(harness.final_lease_qpc_sample_count_for_test(), 1);
     assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
     assert_eq!(harness.generation_accounting_for_test(), accounting_before);
@@ -2952,6 +2955,7 @@ fn lifecycle_unproven_lease_blocks_prepared_down_without_latching_expiry() {
     assert_eq!(harness.final_lease_qpc_sample_count_for_test(), 1);
     assert_eq!(harness.prepared_cursor_for_test(), cursor_before);
     assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+    assert_eq!(harness.local_metrics.final_gate_lease_expirations, 1);
 }
 
 #[test]
@@ -5021,9 +5025,14 @@ fn many_midstream_stale_packets_remain_linear_and_physical_work_continues() {
         hook.first_physical_send_started.load(Ordering::SeqCst),
     );
     assert!(snapshot.observer_dropped_samples > 0);
-    assert_eq!(
-        snapshot.observer_queue_high_watermark, 0,
-        "producer no longer samples queue length; compatibility field is unavailable"
+    assert!(
+        snapshot.observer_queue_high_watermark > 0,
+        "successful observer enqueue should publish an observed occupancy"
+    );
+    assert!(
+        snapshot.observer_queue_high_watermark
+            <= super::worker::dispatch::observation::OBSERVATION_QUEUE_CAPACITY as u64,
+        "observer queue high-water mark must not exceed its fixed capacity"
     );
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
@@ -6675,8 +6684,65 @@ fn prepared_down_owner_rejections_do_not_send_or_advance_accounting() {
         assert_eq!(harness.release_obligation_mask_for_test(), 0);
         assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
         assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
+        assert_eq!(harness.local_metrics.final_gate_target_changes, 1);
     }
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn prepared_final_gate_buckets_count_early_late_target_and_focus_rejections() {
+    let mut early_control = ProductionDispatchTestHarness::new_down_only();
+    let early_calls = early_control.configure_send_counter();
+    let mut early_stream = early_control.build_prepared_stream_for_test();
+    early_control.set_final_gate_race_hook(|_, _, quit, _, _, _, _| {
+        quit.store(true, Ordering::Release);
+    });
+    assert!(matches!(
+        early_control.dispatch_prepared_current_at_lateness_for_test(&mut early_stream, 2_000),
+        super::worker::DispatchStep::Continue
+    ));
+    assert_eq!(early_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(early_control.local_metrics.final_gate_control_rejections, 1);
+    assert_eq!(early_control.local_metrics.final_gate_target_changes, 0);
+
+    let mut late_control = ProductionDispatchTestHarness::new_down_only();
+    let late_calls = late_control.configure_send_counter();
+    let mut late_stream = late_control.build_prepared_stream_for_test();
+    late_control.set_post_focus_revalidation_race_hook(|_, _, _, _, _, pause, _| {
+        pause.store(true, Ordering::Release);
+    });
+    assert!(matches!(
+        late_control.dispatch_prepared_current_at_lateness_for_test(&mut late_stream, 2_000),
+        super::worker::DispatchStep::Continue
+    ));
+    assert_eq!(late_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(late_control.local_metrics.final_gate_control_rejections, 1);
+
+    let mut target_change = ProductionDispatchTestHarness::new_down_only();
+    let target_calls = target_change.configure_send_counter();
+    let mut target_stream = target_change.build_prepared_stream_for_test();
+    target_change.set_final_gate_race_hook(|_, target, _, _, _, _, _| {
+        target.publish(456);
+    });
+    assert!(matches!(
+        target_change.dispatch_prepared_current_at_lateness_for_test(&mut target_stream, 2_000),
+        super::worker::DispatchStep::Continue
+    ));
+    assert_eq!(target_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(target_change.local_metrics.final_gate_target_changes, 1);
+
+    let mut focus_loss = ProductionDispatchTestHarness::new_down_only();
+    focus_loss.config.focus.require_focus = true;
+    focus_loss.runtime.musical_physical_commit_started = true;
+    focus_loss.focus_active.store(false, Ordering::Release);
+    let focus_calls = focus_loss.configure_send_counter();
+    let mut focus_stream = focus_loss.build_prepared_stream_for_test();
+    assert!(matches!(
+        focus_loss.dispatch_prepared_current_at_lateness_for_test(&mut focus_stream, 2_000),
+        super::worker::DispatchStep::Continue
+    ));
+    assert_eq!(focus_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(focus_loss.local_metrics.final_gate_focus_losses, 1);
 }
 
 #[test]
@@ -6705,6 +6771,7 @@ fn stale_published_focus_false_rejects_matching_foreground_before_fresh_query() 
             .playback
             .has_pause_reason(PauseReason::Focus)
     );
+    assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
 }
 
@@ -6751,6 +6818,7 @@ fn fresh_focus_rejection_preserves_current_frame_and_miss_lifecycle_state() {
         0
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
+    assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
 }
 
@@ -11887,10 +11955,12 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
     let send_call_count = Arc::new(AtomicU64::new(0));
     let full_release_count = Arc::new(AtomicU64::new(0));
+    let send_input_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
     fault_script.send_call_count = Some(Arc::clone(&send_call_count));
     fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    fault_script.send_input_capture = Some(Arc::clone(&send_input_capture));
 
     let mut options = test_session_options(
         schedule,
@@ -11931,6 +12001,7 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
         0,
         "no release while unfocused"
     );
+    let send_count_before_restore = send_call_count.load(Ordering::SeqCst);
 
     // 3. Restore exact target/focus and pass grace
     force_inconclusive_probe.store(false, Ordering::Release);
@@ -11942,6 +12013,23 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
         full_release_count.load(Ordering::SeqCst),
         0,
         "suspension uses tracked ownership"
+    );
+    assert_eq!(
+        send_call_count.load(Ordering::SeqCst),
+        send_count_before_restore + 1,
+        "focus restoration sends one tracked release call"
+    );
+    let captures = send_input_capture
+        .lock()
+        .expect("send input capture lock")
+        .clone();
+    assert!(
+        captures.iter().any(|capture| matches!(
+            capture,
+            MockSendInputCapture::SingleEmitter { scan_codes, key_up: true }
+                if scan_codes.as_slice() == [0x15]
+        )),
+        "tracked suspension cleanup must reach the backend as a key-up call: {captures:?}"
     );
     assert!(snap.is_paused, "session remains paused due to manual pause");
     assert_eq!(snap.active_count, 0, "active keys clean after suspension");

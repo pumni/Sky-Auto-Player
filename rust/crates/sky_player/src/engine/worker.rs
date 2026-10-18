@@ -397,6 +397,7 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_lease_age_hook_for_test: Option<FinalLeaseAgeHook>,
     focus_restore_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
+    pub(crate) pending_wait_observation: Option<WaitObservation>,
     /// Measured completion boundary of the most recent physical sender
     /// transaction, retained so sequential HOL evidence survives queue drops.
     pub(crate) last_physical_send_completion_qpc: Option<QpcTicks>,
@@ -419,7 +420,6 @@ pub(crate) struct WorkerRuntime {
     /// pause/rebase event.
     pub(crate) musical_physical_commit_started: bool,
     allow_pre_epoch_startup_dispatch: bool,
-    pending_wait_observation: Option<wait::WaitObservation>,
     chord_integrity_lost: u64,
 }
 
