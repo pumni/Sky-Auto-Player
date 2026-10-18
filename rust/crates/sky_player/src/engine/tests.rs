@@ -373,6 +373,7 @@ fn startup_calibration_placement_stays_before_ready_and_tracks_guard_context() {
         assert_eq!(snapshot.startup_calibration_executed, true);
         assert_eq!(snapshot.startup_calibration_sample_count, 6);
         assert_eq!(snapshot.startup_calibration_result, "completed");
+        assert_eq!(snapshot.startup_priority_mode_acquired, "off");
         let (acquired, dropped) = hook
             .scheduling_guard_threads()
             .expect("guard lifetime is observable");

@@ -530,6 +530,12 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     core.metrics.power_throttling_disabled = scheduling.is_power_active();
     *priority_acquired.lock() = scheduling.priority_label().to_string();
+    *shared.publication.startup_priority_mode_acquired.lock() =
+        scheduling.priority_label().to_string();
+    shared
+        .publication
+        .startup_power_guard_acquired
+        .store(scheduling.is_power_active(), Ordering::Release);
 
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = startup_hook {

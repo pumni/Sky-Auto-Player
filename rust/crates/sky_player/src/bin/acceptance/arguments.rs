@@ -142,6 +142,7 @@ pub(super) struct RunArgs {
     pub(super) target_hwnd: isize,
     pub(super) scenario: Scenario,
     pub(super) calibration_placement: CalibrationPlacement,
+    pub(super) timing_observer_for_qualification: bool,
     pub(super) evidence: PathBuf,
     pub(super) timing_margin_us: u64,
     pub(super) focus_probe_ready: Option<PathBuf>,

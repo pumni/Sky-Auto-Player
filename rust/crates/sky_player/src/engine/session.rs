@@ -318,6 +318,8 @@ impl NativeDispatchSession {
                 progress_clock: super::shared::SharedProgressClock::default(),
                 telemetry_output: Mutex::new(None),
                 priority_acquired: Mutex::new("pending".to_string()),
+                startup_priority_mode_acquired: Mutex::new("pending".to_string()),
+                startup_power_guard_acquired: AtomicBool::new(false),
                 startup_requested_ticks: AtomicU64::new(0),
                 epoch_qpc: AtomicU64::new(0),
                 pre_roll_us: AtomicU64::new(0),
@@ -1501,6 +1503,17 @@ impl NativeDispatchSession {
                 .lock()
                 .clone(),
             rt_priority_acquired: self.shared.publication.priority_acquired.lock().clone(),
+            startup_priority_mode_acquired: self
+                .shared
+                .publication
+                .startup_priority_mode_acquired
+                .lock()
+                .clone(),
+            startup_power_guard_acquired: self
+                .shared
+                .publication
+                .startup_power_guard_acquired
+                .load(Ordering::Acquire),
             requested_wait_policy: self
                 .shared
                 .publication

@@ -680,6 +680,7 @@ fn calibration_placement_is_an_explicit_paired_run_setting() {
         panic!("expected run command")
     };
     assert_eq!(defaults.calibration_placement, CalibrationPlacement::Baseline);
+    assert!(!defaults.timing_observer_for_qualification);
 
     let mut candidate_args = base_arguments("canonical-single");
     candidate_args.extend(
@@ -710,6 +711,20 @@ fn calibration_placement_is_an_explicit_paired_run_setting() {
             .map(str::to_owned),
     );
     assert!(parse_args(invalid).is_err());
+}
+
+#[test]
+fn timing_observer_is_opt_in_for_qualification_runs_only() {
+    let mut args = base_arguments("canonical-single");
+    args.push("--timing-observer-for-qualification".to_string());
+    let ParsedCommand::Run(run) = parse_args(args.clone()).expect("qualification observer flag")
+    else {
+        panic!("expected run command")
+    };
+    assert!(run.timing_observer_for_qualification);
+
+    args.push("--timing-observer-for-qualification".to_string());
+    assert!(parse_args(args).is_err(), "duplicate observer flag is rejected");
 }
 #[test]
 fn timing_margin_sweep_authors_exact_hold_and_release_targets() {

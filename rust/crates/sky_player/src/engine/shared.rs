@@ -873,6 +873,8 @@ pub(super) struct SessionPublication {
     pub(super) progress_clock: SharedProgressClock,
     pub(super) telemetry_output: Mutex<Option<NativeTelemetryOutput>>,
     pub(super) priority_acquired: Mutex<String>,
+    pub(super) startup_priority_mode_acquired: Mutex<String>,
+    pub(super) startup_power_guard_acquired: AtomicBool,
     pub(super) startup_requested_ticks: AtomicU64,
     pub(super) epoch_qpc: AtomicU64,
     pub(super) pre_roll_us: AtomicU64,

@@ -240,7 +240,9 @@ The qualification build enables the existing timing observer through a
 test-support-only option while keeping the production dispatch profile and
 timing policy. This supplies per-packet QPC traces without using the strict
 diagnostic profile or exposing a production setting. A run with no accepted
-trace records is invalid for the placement comparison.
+trace records is invalid for the placement comparison. The harness also
+retains the priority/MMCSS mode and power guard acquisition result separately
+from their post-session released state.
 
 Before collecting A/B results, Candidate B promotion was conditioned on all
 of the following:

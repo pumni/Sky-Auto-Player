@@ -183,6 +183,8 @@ pub(super) fn snapshot_json(snapshot: &EngineSnapshot) -> Value {
         "playback_wall_time_us": snapshot.playback_wall_time_us,
         "spin_duty_cycle_ppm": snapshot.spin_duty_cycle_ppm,
         "rt_priority_acquired": snapshot.rt_priority_acquired,
+        "startup_priority_mode_acquired": snapshot.startup_priority_mode_acquired,
+        "startup_power_guard_acquired": snapshot.startup_power_guard_acquired,
         "wait_strategy_acquired": snapshot.wait_strategy_acquired,
         "power_throttling_disabled": snapshot.power_throttling_disabled,
     });

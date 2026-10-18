@@ -7,6 +7,7 @@ param(
     [int]$TimingMarginUs,
     [ValidateSet('Baseline', 'Candidate')]
     [string]$CalibrationPlacement = 'Baseline',
+    [switch]$TimingObserverForQualification,
     [switch]$CpuContention
 )
 
@@ -145,7 +146,7 @@ try {
         profile = 'production'
         telemetry_mode = 'ring'
         telemetry_capacity = 1024
-        timing_observer_for_qualification = $true
+        timing_observer_for_qualification = [bool]$TimingObserverForQualification
         waitable_timer_enabled = $true
         event_wait_enabled = $true
         priority_mode = 'auto'
@@ -178,6 +179,7 @@ try {
         '--calibration-placement', $CalibrationPlacement.ToLowerInvariant(),
         '--timing-margin-us', [string]$TimingMarginUs
     )
+    if ($TimingObserverForQualification) { $harnessArgs += '--timing-observer-for-qualification' }
     if ($Scenario -eq 'focus-loss') {
         $harnessArgs += @('--focus-probe-ready', $probeReadyPath, '--focus-probe-events', $probeEventsPath, '--focus-probe-hwnd', ([long]$probe.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture), '--focus-restore-request', $focusRestoreRequestPath)
     }
@@ -190,7 +192,7 @@ try {
     $reportLines = @(Get-Content -LiteralPath $reportPath)
     if ($reportLines.Count -ne 1) { throw 'native harness did not emit exactly one report' }
     $report = $reportLines[0] | ConvertFrom-Json
-    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs -or $report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant()) {
+    if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs -or $report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant() -or [bool]$report.details.timing_observer_for_qualification -ne [bool]$TimingObserverForQualification) {
         throw 'native report identity or selected settings do not match this invocation'
     }
 

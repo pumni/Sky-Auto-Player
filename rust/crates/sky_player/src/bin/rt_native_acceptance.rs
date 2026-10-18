@@ -98,7 +98,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--calibration-placement <baseline|candidate>] [--timing-margin-us <0..3000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
 }
 fn validate_run_id(value: &str) -> Result<String, String> {
     if value.is_empty()
@@ -167,6 +167,7 @@ where
     let mut target_hwnd = None;
     let mut scenario = None;
     let mut calibration_placement = None;
+    let mut timing_observer_for_qualification = false;
     let mut evidence = None; let mut timing_margin_us = None;
     let mut focus_probe_ready = None;
     let mut focus_probe_events = None;
@@ -193,6 +194,13 @@ where
                 return Err("duplicate --allow-real-input".to_string());
             }
             allow_real_input = true;
+            continue;
+        }
+        if flag == "--timing-observer-for-qualification" {
+            if timing_observer_for_qualification {
+                return Err("duplicate --timing-observer-for-qualification".to_string());
+            }
+            timing_observer_for_qualification = true;
             continue;
         }
         match flag.as_str() {
@@ -223,6 +231,7 @@ where
         target_hwnd: target_hwnd.ok_or_else(|| "--target-hwnd is required".to_string())?,
         scenario,
         calibration_placement: calibration_placement.unwrap_or(CalibrationPlacement::Baseline),
+        timing_observer_for_qualification,
         evidence: evidence.ok_or_else(|| "--evidence is required".to_string())?,
         timing_margin_us: timing_margin_us.unwrap_or(ACCEPTANCE_TIMING_MARGIN_US),
         focus_probe_ready,
@@ -515,6 +524,7 @@ fn run_windows(args: RunArgs) -> i32 {
         CalibrationPlacement::Baseline => sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         CalibrationPlacement::Candidate => sky_player::engine::StartupCalibrationPlacement::AfterSchedulingGuards,
     };
+    options.timing_observer_for_qualification = args.timing_observer_for_qualification;
     let acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
     options.startup_ordering_hook = acceptance_hook.clone();
     let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(
@@ -715,6 +725,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, expected_down.len() + expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
         object.insert("calibration_placement".to_string(), json!(args.calibration_placement.label()));
+        object.insert("timing_observer_for_qualification".to_string(), json!(args.timing_observer_for_qualification));
         object.insert("native_timing_telemetry".to_string(), timing_telemetry);
         if args.scenario == Scenario::SupervisorLeaseExpiry {
             object.insert("supervisor_progress".to_string(), json!({"source":"direct_native_session_seed","desktop_monitor_exercised":false}));

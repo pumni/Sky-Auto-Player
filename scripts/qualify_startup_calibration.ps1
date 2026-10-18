@@ -249,6 +249,7 @@ foreach ($scenario in $workloads) {
                     '-TimingMarginUs', [string]$TimingMarginUs,
                     '-CalibrationPlacement', (Get-Culture).TextInfo.ToTitleCase($placement)
                 )
+                $caseArguments += '-TimingObserverForQualification'
                 if ($contention) { $caseArguments += '-CpuContention' }
                 $started = [DateTimeOffset]::UtcNow.ToString('O')
                 $caseOutput = @(& (Get-Command pwsh.exe).Source @caseArguments 2>&1)
@@ -265,6 +266,9 @@ foreach ($scenario in $workloads) {
                 $nativeTelemetry = $report.details.native_timing_telemetry
                 if ($null -eq $nativeTelemetry -or [long]$nativeTelemetry.accepted -le 0 -or @($nativeTelemetry.records).Count -eq 0) {
                     throw "Native timing telemetry was unavailable for $pairId/$placement. Evidence: $caseDirectory"
+                }
+                if ([string]::IsNullOrWhiteSpace([string]$report.details.startup_priority_mode_acquired) -or $null -eq $report.details.startup_power_guard_acquired) {
+                    throw "Scheduling guard acquisition status was unavailable for $pairId/$placement. Evidence: $caseDirectory"
                 }
                 $row = [pscustomobject]@{
                     pair_id = $pairId
@@ -347,8 +351,8 @@ foreach ($cell in ($runRows | Group-Object scenario, contention, placement)) {
         worker_cpu_time_us = Get-SessionDistribution -Runs $runs -Property 'worker_cpu_time_us'
         process_cpu_time_us = Get-SessionDistribution -Runs $runs -Property 'process_cpu_time_us'
         spin_duty_cycle_ppm = Get-SessionDistribution -Runs $runs -Property 'spin_duty_cycle_ppm'
-        acquired_priority_modes = @($runs | Group-Object { $_.report.details.rt_priority_acquired } | ForEach-Object { [ordered]@{ mode = $_.Name; count = $_.Count } })
-        power_guard_active_runs = @($runs | Where-Object { $_.report.details.power_throttling_disabled }).Count
+        startup_acquired_priority_modes = @($runs | Group-Object { $_.report.details.startup_priority_mode_acquired } | ForEach-Object { [ordered]@{ mode = $_.Name; count = $_.Count } })
+        startup_power_guard_acquired_runs = @($runs | Where-Object { $_.report.details.startup_power_guard_acquired }).Count
         dispatch_timing = $traceMetrics
         telemetry_attempted = (@($runs | ForEach-Object { [long]$_.report.details.native_timing_telemetry.attempted }) | Measure-Object -Sum).Sum
         telemetry_accepted = (@($runs | ForEach-Object { [long]$_.report.details.native_timing_telemetry.accepted }) | Measure-Object -Sum).Sum

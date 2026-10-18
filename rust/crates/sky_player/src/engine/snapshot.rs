@@ -192,6 +192,8 @@ pub struct EngineSnapshot {
     pub outcome: Option<String>,
     pub requested_rt_priority_mode: String,
     pub rt_priority_acquired: String,
+    pub startup_priority_mode_acquired: String,
+    pub startup_power_guard_acquired: bool,
     pub requested_wait_policy: String,
     pub effective_wait_policy: String,
     pub startup_calibration_executed: bool,
