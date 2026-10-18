@@ -372,6 +372,10 @@ impl NativeDispatchSession {
     }
 
     pub fn arm(&self, requested_pre_roll_us: u64) -> Result<(), String> {
+        // LIFECYCLE_STARTING records worker launch, not input activation. The
+        // startup publication state remains the linearization gate until its
+        // Ready-to-Armed CAS succeeds, so Quit/Skip accepted in New or during
+        // preparation cannot be overwritten by this arm request.
         validate_timing_constants()?;
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC arm admission failed: {error:?}"))?;
@@ -717,11 +721,13 @@ impl NativeDispatchSession {
     }
 
     fn signal_worker(&self) -> Result<(), String> {
-        if !matches!(
-            self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
-            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
-        ) {
-            return Err("session commands require a running worker".to_string());
+        match self.shared.lifecycle.lifecycle.load(Ordering::Acquire) {
+            // A terminal request can win before arm() launches the worker.
+            // Its sticky startup cancellation is observed by the worker if
+            // arm races after this point, so there is nothing to wake yet.
+            LIFECYCLE_NEW => return Ok(()),
+            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED => {}
+            _ => return Err("session commands require a running worker".to_string()),
         }
         let _ = self.shared.commands.interrupt.signal();
         Ok(())
@@ -812,7 +818,7 @@ impl NativeDispatchSession {
     pub fn skip(&self) -> Result<(), String> {
         if !matches!(
             self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
-            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
+            LIFECYCLE_NEW | LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
@@ -830,7 +836,7 @@ impl NativeDispatchSession {
     pub fn quit(&self) -> Result<(), String> {
         if !matches!(
             self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
-            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
+            LIFECYCLE_NEW | LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }
@@ -848,7 +854,7 @@ impl NativeDispatchSession {
     pub fn panic_release(&self) -> Result<(), String> {
         if !matches!(
             self.shared.lifecycle.lifecycle.load(Ordering::Acquire),
-            LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
+            LIFECYCLE_NEW | LIFECYCLE_STARTING | LIFECYCLE_RUNNING | LIFECYCLE_POISONED
         ) {
             return Err("session commands require a running worker".to_string());
         }

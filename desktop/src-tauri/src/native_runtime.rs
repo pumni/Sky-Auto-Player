@@ -102,6 +102,10 @@ const CALIBRATION_NATIVE_CLEANUP_RESERVE_SECONDS: f64 = 5.0;
 
 #[cfg(test)]
 type PlaybackJoinTestHook = Arc<dyn Fn(Duration) -> Result<bool, String> + Send + Sync>;
+#[cfg(all(test, feature = "tauri-test"))]
+type PlaybackBeforeArmTestHook = Arc<dyn Fn() + Send + Sync>;
+#[cfg(all(test, feature = "tauri-test"))]
+type PlaybackRetiredTestHook = Arc<dyn Fn() + Send + Sync>;
 const CALIBRATION_MIN_MEASUREMENT_SECONDS: f64 = 1.0;
 const CALIBRATION_MIN_NATIVE_TOTAL_SECONDS: f64 =
     CALIBRATION_NATIVE_CLEANUP_RESERVE_SECONDS + CALIBRATION_MIN_MEASUREMENT_SECONDS;
@@ -3522,6 +3526,12 @@ struct NativePlaybackService {
     monitor_join_test_hook: Option<PlaybackJoinTestHook>,
     #[cfg(test)]
     supervisor_spawn_failure: bool,
+    #[cfg(all(test, feature = "tauri-test"))]
+    test_player: Option<Arc<NativeDispatchSession>>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    before_arm_test_hook: Option<PlaybackBeforeArmTestHook>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    monitor_retired_test_hook: Option<PlaybackRetiredTestHook>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4140,6 +4150,12 @@ impl NativePlaybackService {
             monitor_join_test_hook: None,
             #[cfg(test)]
             supervisor_spawn_failure: false,
+            #[cfg(all(test, feature = "tauri-test"))]
+            test_player: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            before_arm_test_hook: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            monitor_retired_test_hook: None,
         }
     }
 
@@ -4469,6 +4485,10 @@ impl NativePlaybackService {
             )
             .and_then(|(player, target)| {
                 let result: Result<_, String> = (|| {
+                    #[cfg(all(test, feature = "tauri-test"))]
+                    if self.test_player.is_some() {
+                        return Ok((Some(player.clone()), Some(target)));
+                    }
                     (power_request, suspend_resume_registration) =
                         acquire_playback_power_resources(
                             Some(Arc::downgrade(&player)),
@@ -4705,6 +4725,10 @@ impl NativePlaybackService {
                 "failed to start native playback supervisor: {error}"
             ));
         }
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(hook) = &self.before_arm_test_hook {
+            hook();
+        }
         if let Some(player) = &active.player
             && let Err(error) = player.arm(0)
         {
@@ -4758,6 +4782,8 @@ impl NativePlaybackService {
             activity: self.activity.clone(),
             #[cfg(test)]
             monitor_join_test_hook: self.monitor_join_test_hook.clone(),
+            #[cfg(all(test, feature = "tauri-test"))]
+            monitor_retired_test_hook: self.monitor_retired_test_hook.clone(),
         }
     }
 
@@ -4771,6 +4797,10 @@ impl NativePlaybackService {
         #[cfg(test)]
         if let Some(error) = &self.startup_failure {
             return Err(error.clone());
+        }
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(player) = &self.test_player {
+            return Ok((Arc::clone(player), 0));
         }
         let runtime_schedule = compile_dispatch_schedule(schedule)?;
         let target = sky_dispatch_win32::focus::find_sky_window(
@@ -5214,6 +5244,10 @@ impl NativePlaybackService {
             terminal_outcome,
         );
         let _ = publish_terminal_event(&events, &active, &retirement.publication);
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(hook) = &self.monitor_retired_test_hook {
+            hook();
+        }
     }
 
     fn command(
@@ -5469,8 +5503,8 @@ impl NativePlaybackService {
                 active.stop_requested.store(true, Ordering::Release);
             }
             if let Some(player) = &active.player {
-                let _ = player.panic_release();
                 let _ = player.quit();
+                let _ = player.panic_release();
             }
             let deadline = Instant::now() + PLAYBACK_SHUTDOWN_GRACE;
             while !active.done.load(Ordering::Acquire) && Instant::now() < deadline {
@@ -5505,6 +5539,8 @@ struct NativePlaybackServiceHandle {
     activity: ActivityCoordinator,
     #[cfg(test)]
     monitor_join_test_hook: Option<PlaybackJoinTestHook>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    monitor_retired_test_hook: Option<PlaybackRetiredTestHook>,
 }
 
 impl NativePlaybackServiceHandle {
@@ -5529,8 +5565,14 @@ impl NativePlaybackServiceHandle {
             monitor_progress_test_hook: None,
             #[cfg(test)]
             monitor_join_test_hook: self.monitor_join_test_hook.clone(),
+            #[cfg(all(test, feature = "tauri-test"))]
+            monitor_retired_test_hook: self.monitor_retired_test_hook.clone(),
             #[cfg(test)]
             supervisor_spawn_failure: false,
+            #[cfg(all(test, feature = "tauri-test"))]
+            test_player: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            before_arm_test_hook: None,
         };
         service.monitor(active, events, activation);
     }
@@ -6205,6 +6247,31 @@ fn terminal_release_evidence(
     }
 }
 
+fn terminal_release_evidence_after_startup(
+    physical: bool,
+    snapshot: &EngineSnapshot,
+) -> TerminalReleaseEvidence {
+    if physical
+        && !snapshot.startup_armed
+        && snapshot.release_outcome.is_none()
+        && snapshot.final_release_obligation_mask == 0
+        && matches!(
+            snapshot.terminal_trigger_reason.as_deref(),
+            Some("quit" | "skipped")
+        )
+    {
+        // The startup gate rejects every input before Armed. With no Armed
+        // publication, no terminal release result, and no obligation, a
+        // pre-arm Quit/Skip has no physical key state to reconcile.
+        return TerminalReleaseEvidence::NotRequired;
+    }
+    terminal_release_evidence(
+        physical,
+        snapshot.release_outcome.as_ref(),
+        snapshot.final_release_obligation_mask,
+    )
+}
+
 fn terminal_publication_after_worker(
     status: EnginePollStatus,
     release: &TerminalReleaseEvidence,
@@ -6291,11 +6358,7 @@ fn terminal_retirement_after_worker(
     snapshot: &EngineSnapshot,
     physical: bool,
 ) -> TerminalRetirement {
-    let release = terminal_release_evidence(
-        physical,
-        snapshot.release_outcome.as_ref(),
-        snapshot.final_release_obligation_mask,
-    );
+    let release = terminal_release_evidence_after_startup(physical, snapshot);
     let publication = terminal_publication_after_worker(
         status,
         &release,
@@ -7165,6 +7228,9 @@ mod tests {
     #[cfg(feature = "tauri-test")]
     #[test]
     fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
+        // This is behavioral coverage for supervisor ownership: progress
+        // stops when the owning monitor iteration stalls, independent of
+        // source checkout line endings or Rust formatting.
         use sky_player::adapter_support::{
             ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
         };
@@ -7883,8 +7949,24 @@ mod tests {
         pending: Option<PlaybackPendingControl>,
         physical: bool,
     ) -> Arc<NativeActivePlayback> {
+        active_for_control_with_player(
+            state,
+            pending,
+            physical,
+            ActivityCoordinator::default(),
+            None,
+        )
+    }
+
+    fn active_for_control_with_player(
+        state: PlaybackSessionState,
+        pending: Option<PlaybackPendingControl>,
+        physical: bool,
+        activity: ActivityCoordinator,
+        player: Option<Arc<NativeDispatchSession>>,
+    ) -> Arc<NativeActivePlayback> {
         Arc::new(NativeActivePlayback {
-            activity: ActivityCoordinator::default(),
+            activity,
             session_id: "a".repeat(32),
             prepared_id: "b".repeat(32),
             song_id: "c".repeat(32),
@@ -7910,7 +7992,7 @@ mod tests {
             target_hwnd: None,
             state: Mutex::new(state),
             pending: Mutex::new(pending),
-            player: None,
+            player,
             power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
             power_request: Mutex::new(None),
             suspend_resume_registration: Mutex::new(None),
@@ -8030,6 +8112,97 @@ mod tests {
             })
             .expect("dry-run fixture plan");
         prepared.prepared_id.expect("prepared ID")
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn native_handoff_test_player(
+        hook: Arc<sky_player::engine::StartupOrderingHook>,
+        capture: Arc<Mutex<Vec<sky_player::engine::MockSendInputCapture>>>,
+        mut fault_script: sky_player::engine::FaultInjectionScript,
+    ) -> Arc<NativeDispatchSession> {
+        use sky_player::adapter_support::{
+            ActionKind as DispatchActionKind, KeyActionInput, compile_runtime_intents,
+        };
+        use sky_player::engine::{
+            BackendConfig, DispatchProfile, FocusOptions, NativeSessionOptions, PriorityOptions,
+            SystemPowerEndpoint, TelemetryMode, TelemetryOptions, TestWaitPolicy, TimingOptions,
+            WaitOptions,
+        };
+
+        let schedule = compile_runtime_intents(
+            &[
+                KeyActionInput {
+                    source_action_index: 0,
+                    kind: DispatchActionKind::Down,
+                    scheduled_us: 0,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: Arc::<str>::from("terminal-handoff-test-down"),
+                },
+                KeyActionInput {
+                    source_action_index: 1,
+                    kind: DispatchActionKind::Up,
+                    scheduled_us: 100_000,
+                    scan_codes: smallvec::smallvec![0x15],
+                    reason: Arc::<str>::from("terminal-handoff-test-up"),
+                },
+            ],
+            &sky_app_core::song::SKY_SCAN_CODES,
+        )
+        .expect("handoff test schedule");
+        fault_script.send_input_capture = Some(capture);
+        Arc::new(
+            NativeDispatchSession::new_with_power_endpoint(
+                NativeSessionOptions {
+                    schedule,
+                    modifier_key_state_query_for_test: None,
+                    backend: BackendConfig::Mock {
+                        latency_base_us: 0,
+                        latency_per_key_us: 0,
+                        fault_script,
+                    },
+                    profile: DispatchProfile::MockTest,
+                    timing: TimingOptions {
+                        game_fps: 60,
+                        min_hold_us: 17_467,
+                        min_release_gap_us: 17_467,
+                        frame_us: 16_667,
+                        frame_base_hold_us: 16_667,
+                        timing_margin_us: 800,
+                        strict_timing: false,
+                        strict_down_completion_late_us: 2_000,
+                        strict_up_completion_late_us: 2_000,
+                        input_path_warn_us: 300,
+                    },
+                    focus: FocusOptions {
+                        require_focus: false,
+                        focus_restore_grace_us: 100_000,
+                    },
+                    wait: WaitOptions {
+                        enable_waitable_timer: true,
+                        enable_event_wait: true,
+                        supervisor_lease_timeout_us: 0,
+                        test_spin_threshold_us: None,
+                        test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+                    },
+                    telemetry: TelemetryOptions {
+                        mode: TelemetryMode::Ring,
+                        capacity: 64,
+                    },
+                    priority: PriorityOptions {
+                        mode: sky_player::adapter_support::PriorityMode::Off,
+                    },
+                    instrument_key_profile: None,
+                    startup_ordering_hook: Some(Arc::clone(&hook)),
+                    restore_race_hook: None,
+                    focus_pause_hook: None,
+                    timer_lifecycle_context: None,
+                    prepared_packet_ambiguity_mask: None,
+                    preflight_user_held_mask: None,
+                },
+                SystemPowerEndpoint::new().expect("isolated test power endpoint"),
+            )
+            .expect("mock native handoff session"),
+        )
     }
 
     #[test]
@@ -8205,6 +8378,371 @@ mod tests {
         assert!(events.lock().expect("event hub").buffered.iter().any(
             |event| matches!(event, UiEvent::PlaybackFailed { payload, .. }
                 if payload.code == "playback_supervisor_start_failed")
+        ));
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn stop_skip_and_shutdown_cancel_the_published_pre_arm_session() {
+        use sky_player::engine::{
+            EnginePollStatus, FaultInjectionScript, StartupCheckpoint, StartupOrderingHook,
+        };
+
+        #[derive(Clone, Copy)]
+        enum PendingControl {
+            Stop,
+            Skip,
+            Shutdown,
+        }
+
+        for (control, expected_outcome) in [
+            (PendingControl::Stop, "quit"),
+            (PendingControl::Skip, "skipped"),
+            (PendingControl::Shutdown, "quit"),
+        ] {
+            let activity = ActivityCoordinator::default();
+            let mut service = NativePlaybackService::new(activity.clone());
+            let worker_hook = Arc::new(StartupOrderingHook::default());
+            worker_hook.arm_startup_checkpoint(StartupCheckpoint::ReadyToArmed, 1);
+            let captures = Arc::new(Mutex::new(Vec::new()));
+            let player = native_handoff_test_player(
+                worker_hook,
+                Arc::clone(&captures),
+                FaultInjectionScript::none(),
+            );
+            service.test_player = Some(Arc::clone(&player));
+
+            let at_arm = Arc::new(Barrier::new(2));
+            let continue_arm = Arc::new(Barrier::new(2));
+            let hook_at_arm = Arc::clone(&at_arm);
+            let hook_continue_arm = Arc::clone(&continue_arm);
+            service.before_arm_test_hook = Some(Arc::new(move || {
+                hook_at_arm.wait();
+                hook_continue_arm.wait();
+            }));
+            let (retired_sender, retired_receiver) = mpsc::channel();
+            service.monitor_retired_test_hook = Some(Arc::new(move || {
+                let _ = retired_sender.send(());
+            }));
+
+            let service = Arc::new(service);
+            let settings = ApplicationSettings::default();
+            let prepared_id = prepare_physical_failure_plan(&service, &settings, &"c".repeat(32));
+            let events = Arc::new(Mutex::new(NativeEventHub::default()));
+            let start_service = Arc::clone(&service);
+            let start_settings = settings.clone();
+            let start_events = Arc::clone(&events);
+            let start_thread = thread::spawn(move || {
+                start_service.start(
+                    PlaybackStartRequest {
+                        prepared_id,
+                        decisions: Vec::new(),
+                    },
+                    &start_settings,
+                    start_events,
+                )
+            });
+
+            // The start thread has published Starting, reserved physical
+            // activity, and spawned its parked monitor, but has not called arm.
+            at_arm.wait();
+            let active = service
+                .active
+                .lock()
+                .expect("active slot")
+                .clone()
+                .expect("published active playback");
+            let session_id = active.session_id.clone();
+            assert_eq!(player.poll_state().status, EnginePollStatus::Ready);
+            assert!(matches!(
+                activity.reserve_playback("successor-before-arm"),
+                Err(crate::app_state::ActivityReservationError::PhysicalPlaybackActive)
+            ));
+
+            match control {
+                PendingControl::Stop => {
+                    let ack = service
+                        .command("playback.stop", session_id.clone(), Arc::clone(&events))
+                        .expect("pre-arm Stop must be acknowledged");
+                    assert!(ack.accepted);
+                }
+                PendingControl::Skip => {
+                    let ack = service
+                        .command("playback.skip", session_id.clone(), Arc::clone(&events))
+                        .expect("pre-arm Skip must be acknowledged");
+                    assert!(ack.accepted);
+                }
+                PendingControl::Shutdown => {
+                    assert!(!service.shutdown(Arc::clone(&events)));
+                    assert!(!active.done.load(Ordering::Acquire));
+                }
+            }
+
+            assert_eq!(player.poll_state().status, EnginePollStatus::Ready);
+            continue_arm.wait();
+            start_thread
+                .join()
+                .expect("start command thread")
+                .expect("pre-arm cancellation still completes start handoff");
+            retired_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("monitor must retire the cancelled worker");
+
+            assert!(player.join(Duration::ZERO).expect("retired worker join"));
+            let snapshot = player.snapshot();
+            assert_eq!(snapshot.status, expected_outcome);
+            assert_eq!(snapshot.outcome.as_deref(), Some(expected_outcome));
+            assert!(!snapshot.startup_armed);
+            assert!(captures.lock().expect("mock input capture").is_empty());
+            assert!(active.worker_quiescent.load(Ordering::Acquire));
+            assert!(active.release_verified.load(Ordering::Acquire));
+            let status = service.status().expect("terminal status");
+            assert!(status.active.is_none());
+            let terminal = status
+                .last_terminal
+                .expect("authoritative pre-arm terminal result");
+            assert_eq!(terminal.state, PlaybackSessionState::Finished);
+            assert_eq!(terminal.outcome.as_deref(), Some(expected_outcome));
+            assert_eq!(terminal.terminal_release_verified, Some(true));
+            assert!(activity.reserve_playback("successor-after-arm").is_ok());
+        }
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn native_worker_cleanup_barrier_keeps_session_exclusive_until_join_and_release() {
+        use sky_player::engine::{
+            EnginePollStatus, FaultInjectionScript, MockSendInputCapture, StartupCheckpoint,
+            StartupOrderingHook,
+        };
+
+        let activity = ActivityCoordinator::default();
+        let captures = Arc::new(Mutex::new(Vec::<MockSendInputCapture>::new()));
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
+        let player = native_handoff_test_player(
+            Arc::clone(&hook),
+            Arc::clone(&captures),
+            FaultInjectionScript::none(),
+        );
+        let (retired_sender, retired_receiver) = mpsc::channel();
+        let mut service = NativePlaybackService::new(activity.clone());
+        service.monitor_retired_test_hook = Some(Arc::new(move || {
+            let _ = retired_sender.send(());
+        }));
+        let service = Arc::new(service);
+        let active = active_for_control_with_player(
+            PlaybackSessionState::Playing,
+            None,
+            true,
+            activity.clone(),
+            Some(Arc::clone(&player)),
+        );
+        *active.activity_lease.lock().expect("activity lease slot") = Some(
+            activity
+                .reserve_playback(&active.session_id)
+                .expect("session A physical reservation"),
+        );
+        *service.active.lock().expect("active slot") = Some(Arc::clone(&active));
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let (activation_sender, activation_receiver) = mpsc::channel();
+        let monitor_service = Arc::clone(&service);
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+        });
+        player.arm(0).expect("session A arm");
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("session A monitor activation");
+
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        let before_cleanup = captures.lock().expect("captured mock packets").clone();
+        assert!(before_cleanup.iter().any(|capture| matches!(
+            capture,
+            MockSendInputCapture::Packet { packet, .. } if packet.down_mask != 0
+        )));
+        assert!(!before_cleanup.iter().any(|capture| matches!(
+            capture,
+            MockSendInputCapture::Packet { packet, .. } if packet.up_mask != 0
+        )));
+
+        hook.arm_startup_checkpoint(StartupCheckpoint::TerminalCleanup, 1);
+        let ack = service
+            .command(
+                "playback.stop",
+                active.session_id.clone(),
+                Arc::clone(&events),
+            )
+            .expect("session A Stop");
+        assert!(ack.accepted);
+        hook.release_startup_checkpoint();
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+
+        assert!(!player.join(Duration::ZERO).expect("bounded join timeout"));
+        assert!(!active.worker_quiescent.load(Ordering::Acquire));
+        assert!(!active.release_verified.load(Ordering::Acquire));
+        assert!(
+            service
+                .active
+                .lock()
+                .expect("active slot during cleanup")
+                .is_some()
+        );
+        assert!(matches!(
+            activity.reserve_playback("session-b-before-a-cleanup"),
+            Err(crate::app_state::ActivityReservationError::PhysicalPlaybackActive)
+        ));
+
+        hook.release_startup_checkpoint();
+        retired_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("monitor must retire after worker and release completion");
+        monitor.join().expect("monitor thread");
+        assert!(active.worker_quiescent.load(Ordering::Acquire));
+        assert!(active.release_verified.load(Ordering::Acquire));
+        assert!(player.join(Duration::ZERO).expect("eventual worker join"));
+        let terminal = service
+            .status()
+            .expect("session A terminal status")
+            .last_terminal
+            .expect("session A result");
+        assert_eq!(terminal.state, PlaybackSessionState::Finished);
+        assert_eq!(terminal.outcome.as_deref(), Some("quit"));
+        assert_eq!(terminal.terminal_release_verified, Some(true));
+        assert_eq!(player.snapshot().status, EnginePollStatus::Quit.as_str());
+
+        let lease_b = activity
+            .reserve_playback("session-b-after-a-cleanup")
+            .expect("successor reservation after verified release");
+        let hook_b = Arc::new(StartupOrderingHook::default());
+        hook_b.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
+        let player_b = native_handoff_test_player(
+            Arc::clone(&hook_b),
+            Arc::clone(&captures),
+            FaultInjectionScript::none(),
+        );
+        player_b.arm(0).expect("session B arm");
+        assert!(hook_b.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        player_b.quit().expect("session B Stop");
+        hook_b.release_startup_checkpoint();
+        assert!(
+            player_b
+                .join(Duration::from_secs(5))
+                .expect("session B join")
+        );
+        drop(lease_b);
+
+        let packet_events = captures
+            .lock()
+            .expect("all mock packets")
+            .iter()
+            .flat_map(|capture| match capture {
+                MockSendInputCapture::Packet { packet, .. } => {
+                    let mut events = Vec::new();
+                    if packet.down_mask != 0 {
+                        events.push("down");
+                    }
+                    if packet.up_mask != 0 {
+                        events.push("up");
+                    }
+                    events
+                }
+                MockSendInputCapture::SingleEmitter { key_up, .. } => {
+                    vec![if *key_up { "up" } else { "down" }]
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(packet_events, ["down", "up", "down", "up"]);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn native_worker_release_error_after_stop_quarantines_successor_admission() {
+        use sky_player::engine::{
+            EnginePollStatus, FaultInjectionScript, StartupCheckpoint, StartupOrderingHook,
+        };
+
+        let activity = ActivityCoordinator::default();
+        let captures = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
+        let player = native_handoff_test_player(
+            Arc::clone(&hook),
+            captures,
+            FaultInjectionScript::persistent_release(),
+        );
+        let mut service = NativePlaybackService::new(activity.clone());
+        let (retired_sender, retired_receiver) = mpsc::channel();
+        service.monitor_retired_test_hook = Some(Arc::new(move || {
+            let _ = retired_sender.send(());
+        }));
+        let service = Arc::new(service);
+        let active = active_for_control_with_player(
+            PlaybackSessionState::Playing,
+            None,
+            true,
+            activity.clone(),
+            Some(Arc::clone(&player)),
+        );
+        *active.activity_lease.lock().expect("activity lease slot") = Some(
+            activity
+                .reserve_playback(&active.session_id)
+                .expect("session A physical reservation"),
+        );
+        *service.active.lock().expect("active slot") = Some(Arc::clone(&active));
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let (activation_sender, activation_receiver) = mpsc::channel();
+        let monitor_service = Arc::clone(&service);
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+        });
+        player.arm(0).expect("session A arm");
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("session A monitor activation");
+
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        hook.arm_startup_checkpoint(StartupCheckpoint::TerminalCleanup, 1);
+        let ack = service
+            .command(
+                "playback.stop",
+                active.session_id.clone(),
+                Arc::clone(&events),
+            )
+            .expect("session A Stop");
+        assert!(ack.accepted);
+        hook.release_startup_checkpoint();
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(!player.join(Duration::ZERO).expect("bounded join timeout"));
+        assert!(matches!(
+            activity.reserve_playback("successor-before-error-retirement"),
+            Err(crate::app_state::ActivityReservationError::PhysicalPlaybackActive)
+        ));
+
+        hook.release_startup_checkpoint();
+        retired_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("monitor must publish the worker cleanup error");
+        monitor.join().expect("monitor thread");
+        assert!(player.join(Duration::ZERO).expect("eventual worker join"));
+        assert_eq!(player.poll_state().status, EnginePollStatus::Error);
+        let terminal = service
+            .status()
+            .expect("session A failed terminal status")
+            .last_terminal
+            .expect("worker error result");
+        assert_eq!(terminal.state, PlaybackSessionState::Failed);
+        assert_eq!(terminal.terminal_release_verified, Some(false));
+        assert!(activity.physical_release_is_quarantined());
+        assert!(matches!(
+            activity.reserve_playback("successor-after-release-error"),
+            Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
         ));
     }
 
@@ -11883,67 +12421,6 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp);
-    }
-
-    #[test]
-    fn native_supervisor_progress_belongs_to_completed_monitor_iterations() {
-        let source = include_str!("native_runtime.rs");
-        let independent_thread_name = ["sky-native-playback", "heartbeat"].join("-");
-        let heartbeat_spawner = ["spawn_supervisor_", "heartbeat"].concat();
-        assert!(!source.contains(&independent_thread_name));
-        assert!(!source.contains(&heartbeat_spawner));
-
-        let monitor_start = source
-            .find("    fn monitor(\n        &self,\n        active: Arc<NativeActivePlayback>")
-            .expect("native playback monitor");
-        let monitor_length = source[monitor_start..]
-            .find("\n    fn command(")
-            .expect("monitor implementation boundary");
-        let monitor = &source[monitor_start..monitor_start + monitor_length];
-        let stop = monitor
-            .find("if active.stop_requested.load(Ordering::Acquire)")
-            .expect("stop branch");
-        let terminal = monitor
-            .find("if is_terminal_status(status)")
-            .expect("terminal branch");
-        let poll = monitor.find("player.poll_state()").expect("engine poll");
-        let diagnostics = monitor
-            .find("publish_diagnostics_snapshot_for_active")
-            .expect("supervision publication");
-        let progress = monitor
-            .find("player.publish_supervisor_progress()")
-            .expect("progress publication");
-        let sleep = monitor
-            .find("thread::sleep(Duration::from_millis(20))")
-            .expect("normal monitor sleep");
-
-        assert!(stop < progress, "stop exits before publishing progress");
-        assert!(poll < progress, "progress follows engine polling");
-        assert!(
-            terminal < progress,
-            "terminal poll exits before publishing progress"
-        );
-        assert!(
-            diagnostics < progress,
-            "progress follows completed supervision work"
-        );
-        assert!(
-            progress < sleep,
-            "progress is published before the normal poll delay"
-        );
-        let reaper = monitor
-            .find("let retirement = loop")
-            .expect("terminal reaper loop");
-        let join = monitor[reaper..]
-            .find("self.join_worker(&active, PLAYBACK_JOIN_RETRY_INTERVAL)")
-            .expect("bounded worker join retry");
-        let ownership_release = monitor[reaper..]
-            .find("release_terminal_ownership(")
-            .expect("retirement ownership release");
-        assert!(
-            join < ownership_release,
-            "ownership release follows confirmed worker join"
-        );
     }
 
     #[test]

@@ -2,6 +2,8 @@
 use super::super::BackendConfig;
 #[cfg(any(test, feature = "test-support"))]
 use super::super::CommandTimingCleanup;
+#[cfg(any(test, feature = "test-support"))]
+use super::super::config::StartupCheckpoint;
 use super::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
     FinalizeTiming, Worker, boot, dispatch_loop, finalize_worker,
@@ -53,6 +55,11 @@ impl Worker<'_> {
             .timing
             .as_ref()
             .expect("worker timing available for finalization");
+
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+            hook.visit_startup_checkpoint(StartupCheckpoint::TerminalCleanup);
+        }
 
         finalize_worker(FinalizeInput {
             resources: FinalizeResources {

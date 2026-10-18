@@ -313,6 +313,17 @@ terminal status. The supervisor then retries bounded joins off the UI thread;
 an incomplete or failed join keeps the active slot, activity lease, and power
 authority in place while the session remains Stopping.
 
+The desktop publishes Starting and parks its monitor before it calls
+`NativeDispatchSession::arm`, so Stop, Skip, or shutdown can arrive while the
+native lifecycle is still New. Those terminal requests are accepted in New and
+latch cancellation in the native startup publication state. That state uses
+one atomic transition for pre-arm cancellation and another for Armed
+publication: if cancellation wins, Armed cannot publish and the worker cannot
+admit a musical Down; if Armed wins, the request is ordered after activation
+and follows normal worker finalization. A pre-arm Quit or Skip that joined
+without Armed publication, a release result, or any residual obligation has no
+physical release to reconcile.
+
 Worker quiescence and physical release verification are separate proofs. A
 successful join permits retirement, but a physical session is reported
 successful only when its terminal release is verified and its residual
@@ -321,8 +332,9 @@ unverified, the desktop records a failed terminal result and quarantines
 physical playback, calibration, and update admission for the rest of the
 process. Restart is required to clear that conservative quarantine. Startup
 failures before worker activation retire under an explicit no-worker-started
-proof. A failed UI event delivery requests safe termination and does not
-replace the engine outcome.
+proof; a worker launched for a pre-arm cancellation is instead joined with no
+release obligation. A failed UI event delivery requests safe termination and
+does not replace the engine outcome.
 
 The updater's `activity.admission_closed` safety marker records that new
 physical operations are blocked; it does not assert worker quiescence. The

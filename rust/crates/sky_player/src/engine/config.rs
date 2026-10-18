@@ -243,6 +243,10 @@ pub enum StartupCheckpoint {
     #[cfg(any(test, feature = "test-support"))]
     FirstDownAdmission = 8,
     StreamMaterialization = 9,
+    #[cfg(any(test, feature = "test-support"))]
+    FirstDownCommitted = 10,
+    #[cfg(any(test, feature = "test-support"))]
+    TerminalCleanup = 11,
 }
 
 #[cfg(any(test, feature = "test-support"))]
