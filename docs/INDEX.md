@@ -19,6 +19,7 @@ Historical plans, audit reports, issue text, and obsolete work orders do not ove
 - [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — Native real-time dispatch contract, thread split, hot-path constraints, and runtime boundary.
 - [timing-principles.md](timing-principles.md) — Timing semantics, targets, measurement domains, and fail-closed behavior.
 - [rt-dispatch-timing-evidence.md](rt-dispatch-timing-evidence.md) — Timestamp provenance, production timing observations, offline risk model, and Windows A/B qualification plan.
+- [dispatch-forensics-cost-qualification.md](dispatch-forensics-cost-qualification.md) — #476 ownership/cost audit, retained-design rationale, release component measurements, offline model, and Windows receive-only qualification.
 - [hold-frame-model.md](hold-frame-model.md) — User-selected FPS and authored hold materialization.
 - [tuning-presets.md](tuning-presets.md) — Native settings, playback preferences, and runtime tuning boundaries.
 - [adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md](adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md) — Current lifecycle release barrier, final Down lease proof, timing domains, and evidence limits.
