@@ -8,9 +8,11 @@ component measurements put successful-packet forensics in the tens of nanosecond
 15-key workload remains below 30 ns at batch-mean p99. Removing the independent H/G oracle would
 discard separately measured physical evidence without a demonstrated dispatch benefit.
 
-The qualification code commit is `8d9d30a73f41ffa2ff5be6900fdb9a41211f74bf`, directly based on
-the assigned baseline `8e965ca626e8657ac4e9433fe46bc7456e102fde`. Its only source changes are
-qualification tests and compatibility serialization assertions.
+The initial qualification code commit is `8d9d30a73f41ffa2ff5be6900fdb9a41211f74bf`, directly
+based on the assigned baseline `8e965ca626e8657ac4e9433fe46bc7456e102fde`. Test isolation and the
+Clippy correction are in `c16562c32e2a1f10ec67a68ab34599a8da3b9a0e`. Across those commits, the
+Rust source changes are test-only qualification modules; the desktop source change adds assertions
+to an existing serialization test.
 
 The fixed anomaly ring is also retained. It is bounded to 32 fixed-width records (1,328 bytes on
 the measured x64 target), is written only when an anomaly is classified, and does not participate
@@ -80,36 +82,36 @@ zero observer queue drops, and zero telemetry ring drops for its synthetic accep
 
 | Workload | Component | p50 | p95 | p99 | Max |
 |---|---|---:|---:|---:|---:|
-| Dense alternating | Production forensics | 10.55 | 13.09 | 13.67 | 18.55 |
-| Dense alternating | Guard query + update | 8.40 | 10.55 | 11.72 | 17.77 |
-| Dense alternating | Backend counter refresh | 3.71 | 4.69 | 4.88 | 6.64 |
-| Dense alternating | Best-effort snapshot publication | 4.69 | 6.05 | 8.01 | 14.65 |
-| Dense alternating | Pending wait capture + queue | 31.05 | 38.87 | 40.23 | 53.52 |
-| Dense alternating | Telemetry record + ring | 106.05 | 126.37 | 142.58 | 166.02 |
-| Sparse single key | Production forensics | 10.61 | 10.61 | 13.45 | 21.97 |
-| Sparse single key | Guard query + update | 8.33 | 8.52 | 8.71 | 30.11 |
-| Sparse single key | Backend counter refresh | 3.79 | 3.79 | 4.17 | 8.14 |
-| Sparse single key | Best-effort snapshot publication | 20.64 | 21.02 | 26.70 | 31.82 |
-| Sparse single key | Pending wait capture + queue | 31.25 | 31.63 | 38.07 | 56.63 |
-| Sparse single key | Telemetry record + ring | 54.73 | 108.71 | 111.17 | 158.14 |
-| Mixed Up/Down | Production forensics | 9.62 | 9.81 | 12.50 | 23.08 |
-| Mixed Up/Down | Guard query + update | 8.85 | 9.04 | 12.12 | 17.88 |
-| Mixed Up/Down | Backend counter refresh | 3.65 | 3.85 | 4.81 | 5.19 |
-| Mixed Up/Down | Best-effort snapshot publication | 6.15 | 6.54 | 8.27 | 10.19 |
-| Mixed Up/Down | Pending wait capture + queue | 31.15 | 36.15 | 40.19 | 60.00 |
-| Mixed Up/Down | Telemetry record + ring | 100.96 | 127.69 | 157.88 | 213.46 |
-| 2–15-key chord sweep | Production forensics | 19.55 | 20.11 | 28.01 | 49.25 |
-| 2–15-key chord sweep | Guard query + update | 22.74 | 23.12 | 29.14 | 58.27 |
-| 2–15-key chord sweep | Backend counter refresh | 3.76 | 3.76 | 4.70 | 9.21 |
-| 2–15-key chord sweep | Best-effort snapshot publication | 20.68 | 21.24 | 31.39 | 49.62 |
-| 2–15-key chord sweep | Pending wait capture + queue | 31.20 | 32.14 | 39.29 | 58.46 |
-| 2–15-key chord sweep | Telemetry record + ring | 55.08 | 109.02 | 135.71 | 220.11 |
-| Same-key retrigger | Production forensics | 10.55 | 10.74 | 11.13 | 18.55 |
-| Same-key retrigger | Guard query + update | 8.40 | 8.59 | 11.91 | 18.55 |
-| Same-key retrigger | Backend counter refresh | 3.71 | 3.91 | 3.91 | 10.94 |
-| Same-key retrigger | Best-effort snapshot publication | 7.03 | 7.42 | 7.42 | 13.87 |
-| Same-key retrigger | Pending wait capture + queue | 31.05 | 31.45 | 32.42 | 38.28 |
-| Same-key retrigger | Telemetry record + ring | 55.08 | 120.90 | 166.21 | 214.26 |
+| Dense alternating | Production forensics | 10.55 | 10.94 | 11.91 | 19.14 |
+| Dense alternating | Guard query + update | 8.20 | 8.40 | 9.96 | 14.45 |
+| Dense alternating | Backend counter refresh | 3.91 | 4.10 | 5.08 | 8.01 |
+| Dense alternating | Best-effort snapshot publication | 4.88 | 5.08 | 5.27 | 43.16 |
+| Dense alternating | Pending wait capture + queue | 31.25 | 32.42 | 39.65 | 62.30 |
+| Dense alternating | Telemetry record + ring | 55.27 | 104.10 | 108.98 | 161.72 |
+| Sparse single key | Production forensics | 10.42 | 10.61 | 11.17 | 17.61 |
+| Sparse single key | Guard query + update | 8.14 | 8.33 | 8.52 | 13.45 |
+| Sparse single key | Backend counter refresh | 3.98 | 3.98 | 4.73 | 11.55 |
+| Sparse single key | Best-effort snapshot publication | 20.83 | 21.02 | 24.05 | 39.77 |
+| Sparse single key | Pending wait capture + queue | 31.25 | 31.82 | 39.20 | 80.68 |
+| Sparse single key | Telemetry record + ring | 101.52 | 111.55 | 154.55 | 215.15 |
+| Mixed Up/Down | Production forensics | 9.62 | 9.81 | 10.77 | 34.23 |
+| Mixed Up/Down | Guard query + update | 8.65 | 8.85 | 9.42 | 18.46 |
+| Mixed Up/Down | Backend counter refresh | 4.04 | 4.04 | 4.62 | 6.73 |
+| Mixed Up/Down | Best-effort snapshot publication | 6.15 | 6.54 | 8.27 | 11.15 |
+| Mixed Up/Down | Pending wait capture + queue | 31.35 | 32.50 | 38.85 | 55.58 |
+| Mixed Up/Down | Telemetry record + ring | 55.38 | 82.31 | 105.58 | 136.54 |
+| 2–15-key chord sweep | Production forensics | 19.36 | 19.55 | 25.00 | 32.52 |
+| 2–15-key chord sweep | Guard query + update | 22.74 | 22.93 | 23.12 | 31.95 |
+| 2–15-key chord sweep | Backend counter refresh | 3.95 | 4.14 | 4.51 | 7.33 |
+| 2–15-key chord sweep | Best-effort snapshot publication | 20.68 | 21.05 | 23.68 | 37.03 |
+| 2–15-key chord sweep | Pending wait capture + queue | 31.20 | 31.77 | 37.59 | 77.82 |
+| 2–15-key chord sweep | Telemetry record + ring | 55.45 | 103.01 | 139.85 | 167.29 |
+| Same-key retrigger | Production forensics | 10.35 | 10.55 | 12.50 | 20.12 |
+| Same-key retrigger | Guard query + update | 8.01 | 8.40 | 8.59 | 11.52 |
+| Same-key retrigger | Backend counter refresh | 3.91 | 4.10 | 4.88 | 5.86 |
+| Same-key retrigger | Best-effort snapshot publication | 7.03 | 7.42 | 8.59 | 12.50 |
+| Same-key retrigger | Pending wait capture + queue | 31.25 | 31.64 | 37.70 | 40.43 |
+| Same-key retrigger | Telemetry record + ring | 55.27 | 83.79 | 118.55 | 141.60 |
 
 These component timings are local release-build microbenchmarks. They are not paired against a
 runtime candidate because no production runtime code changed. They are not native per-call samples,
@@ -133,10 +135,11 @@ The 224-session distribution matrix used harness SHA-256
 assigned baseline source `8e965ca626e8657ac4e9433fe46bc7456e102fde`. Its runner checkout was the
 qualification commit `8d9d30a73f41ffa2ff5be6900fdb9a41211f74bf`; the intervening diff contains
 tests only, and the release acceptance feature does not compile those test-only changes. A later
-post-commit build produced candidate harness SHA-256
-`6e23e888d844c31f91be3527a78948fd0ab88c6493562a77e303fb37bdd32426`. Eight additional one-session
-checks on that exact candidate binary passed for the five representative workloads and the three
-lifecycle cases listed below. These are behavior checks, not a paired performance comparison.
+final post-commit build at `c16562c32e2a1f10ec67a68ab34599a8da3b9a0e` produced candidate harness
+SHA-256 `02bd5c21f8806522aebceda6a8968707edc61793243dc1cde55f8b55905e3a35`. Eight additional
+one-session checks on that exact candidate binary passed for the five representative workloads and
+the three lifecycle cases listed below. These are behavior checks, not a paired performance
+comparison.
 
 The tracked [native session ledger](dispatch-forensics-native-sessions.csv) records per-session
 identities, counts, tail summaries, and raw report hashes. Its SHA-256 is
