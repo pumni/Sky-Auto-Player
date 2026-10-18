@@ -28,6 +28,7 @@ impl Default for ActivityCoordinator {
 #[derive(Default)]
 struct ActivityState {
     physical_playback: Option<String>,
+    physical_release_quarantined: bool,
     calibration_active: bool,
     update_installing: bool,
     closing: bool,
@@ -38,6 +39,7 @@ pub(crate) enum ActivityReservationError {
     Closing,
     CalibrationAlreadyActive,
     PhysicalPlaybackActive,
+    PhysicalReleaseUnverified,
     UpdateAlreadyActive,
 }
 
@@ -47,6 +49,9 @@ impl std::fmt::Display for ActivityReservationError {
             Self::Closing => "desktop application is closing",
             Self::CalibrationAlreadyActive => "a calibration operation is already active",
             Self::PhysicalPlaybackActive => "physical playback is active",
+            Self::PhysicalReleaseUnverified => {
+                "a previous physical playback release could not be verified; restart the application before using physical input"
+            }
             Self::UpdateAlreadyActive => "an update installation is already active",
         };
         formatter.write_str(message)
@@ -64,6 +69,15 @@ impl Drop for PhysicalActivityLease {
     }
 }
 
+impl PhysicalActivityLease {
+    /// Retain the physical-input exclusion after worker quiescence when the
+    /// final release could not be verified. No safe in-process observation can
+    /// distinguish player-held keys from keys held by the user.
+    pub(crate) fn quarantine(self) -> bool {
+        self.coordinator.quarantine_playback(&self.session_id)
+    }
+}
+
 impl ActivityCoordinator {
     pub(crate) fn reserve_playback(
         &self,
@@ -76,6 +90,9 @@ impl ActivityCoordinator {
             .map_err(|_| ActivityReservationError::Closing)?;
         if state.closing {
             return Err(ActivityReservationError::Closing);
+        }
+        if state.physical_release_quarantined {
+            return Err(ActivityReservationError::PhysicalReleaseUnverified);
         }
         if state.calibration_active {
             return Err(ActivityReservationError::CalibrationAlreadyActive);
@@ -103,6 +120,9 @@ impl ActivityCoordinator {
         if state.closing {
             return Err(ActivityReservationError::Closing);
         }
+        if state.physical_release_quarantined {
+            return Err(ActivityReservationError::PhysicalReleaseUnverified);
+        }
         if state.calibration_active {
             return Err(ActivityReservationError::CalibrationAlreadyActive);
         }
@@ -125,6 +145,9 @@ impl ActivityCoordinator {
             .map_err(|_| ActivityReservationError::Closing)?;
         if state.closing {
             return Err(ActivityReservationError::Closing);
+        }
+        if state.physical_release_quarantined {
+            return Err(ActivityReservationError::PhysicalReleaseUnverified);
         }
         if state.physical_playback.is_some() {
             return Err(ActivityReservationError::PhysicalPlaybackActive);
@@ -149,6 +172,29 @@ impl ActivityCoordinator {
         }
     }
 
+    pub(crate) fn quarantine_playback(&self, session_id: &str) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state
+            .physical_playback
+            .as_deref()
+            .is_some_and(|current| current != session_id)
+        {
+            return false;
+        }
+        state.physical_playback = None;
+        state.physical_release_quarantined = true;
+        true
+    }
+
+    pub(crate) fn physical_release_is_quarantined(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.physical_release_quarantined)
+            .unwrap_or(true)
+    }
+
     pub(crate) fn release_calibration(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.calibration_active = false;
@@ -164,8 +210,6 @@ impl ActivityCoordinator {
     pub(crate) fn begin_shutdown(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.closing = true;
-            state.physical_playback = None;
-            state.calibration_active = false;
         }
     }
 
@@ -551,6 +595,47 @@ mod tests {
             activity.reserve_update(),
             Err(ActivityReservationError::PhysicalPlaybackActive)
         ));
+    }
+
+    #[test]
+    fn unverified_playback_release_quarantines_physical_activity_until_restart() {
+        let activity = ActivityCoordinator::default();
+        let lease = activity
+            .reserve_playback("unverified-session")
+            .expect("playback reservation");
+
+        assert!(lease.quarantine());
+
+        assert!(activity.physical_release_is_quarantined());
+        assert!(matches!(
+            activity.reserve_playback("successor"),
+            Err(ActivityReservationError::PhysicalReleaseUnverified)
+        ));
+        assert_eq!(
+            activity.reserve_calibration().map(|_| ()),
+            Err(ActivityReservationError::PhysicalReleaseUnverified)
+        );
+        assert_eq!(
+            activity.reserve_update().map(|_| ()),
+            Err(ActivityReservationError::PhysicalReleaseUnverified)
+        );
+    }
+
+    #[test]
+    fn shutdown_closes_admission_without_releasing_the_playback_reservation() {
+        let activity = ActivityCoordinator::default();
+        let lease = activity
+            .reserve_playback("running-session")
+            .expect("playback reservation");
+
+        activity.begin_shutdown();
+
+        assert!(matches!(
+            activity.reserve_playback("successor"),
+            Err(ActivityReservationError::Closing)
+        ));
+        assert!(!activity.physical_release_is_quarantined());
+        drop(lease);
     }
 
     #[test]

@@ -187,6 +187,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     outcome: string | null;
     failure_code: string | null;
     failure_message: string | null;
+    terminal_release_verified: boolean | null;
+    release_obligation_mask: number | null;
   } | null = null;
   let playbackTimer: ReturnType<typeof setInterval> | null = null;
   const preparedConfigs = new Map<string, PlaybackConfig>();
@@ -437,6 +439,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       outcome,
       failure_code: null,
       failure_message: null,
+      terminal_release_verified: session.config.dry_run ? null : true,
+      release_obligation_mask: session.config.dry_run ? null : 0,
     };
     activeSession = null;
     stopPlaybackTimer();

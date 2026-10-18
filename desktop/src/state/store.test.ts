@@ -2050,6 +2050,8 @@ describe('desktop store', () => {
         outcome: null,
         failure_code: 'target_not_found',
         failure_message: failureMessage,
+        terminal_release_verified: null,
+        release_obligation_mask: null,
       },
     });
 

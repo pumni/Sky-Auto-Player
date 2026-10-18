@@ -303,6 +303,33 @@ verify release, startup remains failed and the residual mask, cumulative
 release attempt count, primary admission cause, and cleanup failure are
 preserved.
 
+### Desktop physical-session handoff
+
+The desktop playback supervisor treats Stop, Skip, event-delivery failure, and
+shutdown as requests to end a session. It does not publish a final outcome or
+release the physical activity lease because one of those requests was made.
+The engine's terminal snapshot supplies the outcome after the worker reports a
+terminal status. The supervisor then retries bounded joins off the UI thread;
+an incomplete or failed join keeps the active slot, activity lease, and power
+authority in place while the session remains Stopping.
+
+Worker quiescence and physical release verification are separate proofs. A
+successful join permits retirement, but a physical session is reported
+successful only when its terminal release is verified and its residual
+obligation mask is zero. If the worker is joined but release remains
+unverified, the desktop records a failed terminal result and quarantines
+physical playback, calibration, and update admission for the rest of the
+process. Restart is required to clear that conservative quarantine. Startup
+failures before worker activation retire under an explicit no-worker-started
+proof. A failed UI event delivery requests safe termination and does not
+replace the engine outcome.
+
+The updater's `activity.admission_closed` safety marker records that new
+physical operations are blocked; it does not assert worker quiescence. The
+`playback.keys_released` marker is written only when shutdown observes both
+terminal retirement and verified physical release. A timed-out shutdown omits
+that marker and retains the in-process reservation until process exit.
+
 Resumable lifecycle release remains a separate operation because it must
 verify cleanup before establishing the resume Down barrier. If it fails, the
 terminal finalizer may perform its one terminal cleanup transaction. The

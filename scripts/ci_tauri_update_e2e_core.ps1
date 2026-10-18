@@ -957,7 +957,7 @@ try {
 
   Wait-ForPath -Path $safetyPath
   $phases = @(Get-Content -LiteralPath $safetyPath)
-  $requiredPhases = @('activity.quiesced', 'playback.keys_released', 'state.persisted', 'resources.closed')
+  $requiredPhases = @('activity.admission_closed', 'playback.keys_released', 'state.persisted', 'resources.closed')
   for ($index = 0; $index -lt $requiredPhases.Count; $index++) {
     $offset = [array]::IndexOf($phases, $requiredPhases[$index])
     if ($offset -lt 0) { throw "Missing updater shutdown safety phase: $($requiredPhases[$index])" }

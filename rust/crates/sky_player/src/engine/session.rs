@@ -1689,12 +1689,27 @@ impl NativeDispatchSession {
             return Ok(false);
         }
         drop(done);
-        if let Some(handle) = self.thread_handle.lock().take() {
+        let mut worker_handle = self.thread_handle.lock();
+        if worker_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+        {
+            return Ok(false);
+        }
+        if let Some(handle) = worker_handle.take() {
             handle
                 .join()
                 .map_err(|_| "native dispatch worker panicked".to_string())?;
         }
-        if let Some(handle) = self.watchdog_handle.lock().take() {
+        drop(worker_handle);
+        let mut watchdog_handle = self.watchdog_handle.lock();
+        if watchdog_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+        {
+            return Ok(false);
+        }
+        if let Some(handle) = watchdog_handle.take() {
             handle
                 .join()
                 .map_err(|_| "supervisor watchdog panicked".to_string())?;
