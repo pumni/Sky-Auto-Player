@@ -42,7 +42,7 @@ pub(crate) use test_support::mock_sender::create_mock_backend;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use test_support::{CommandTimingCleanup, CommandTimingState, PauseTimingLookup};
 #[cfg(any(test, feature = "test-support"))]
-pub use test_support::{FaultInjectionScript, InjectedSendOutcome};
+pub use test_support::{FaultInjectionScript, InjectedSendOutcome, MockSendInputCapture};
 #[cfg(test)]
 pub(crate) use worker::*;
 #[cfg(feature = "test-support")]

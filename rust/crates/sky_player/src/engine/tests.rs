@@ -517,6 +517,38 @@ fn accepted_quit_cannot_arm_from_preparation_ready_arming_or_epoch_staging() {
 }
 
 #[test]
+fn quit_and_skip_accepted_before_arm_remain_sticky_through_worker_startup() {
+    for (skip, expected_status, expected_trigger) in [
+        (false, EnginePollStatus::Quit, "quit"),
+        (true, EnginePollStatus::Skipped, "skipped"),
+    ] {
+        let (session, _hook, send_calls) = checkpointed_session(
+            startup_boundary_schedule(),
+            StartupCheckpoint::ReadyToArmed,
+            1,
+            false,
+        );
+        let accepted = if skip { session.skip() } else { session.quit() };
+        accepted.expect("pre-arm terminal request must be accepted");
+
+        session
+            .arm(100_000)
+            .expect("cancelled session still retires");
+        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.status, expected_status.as_str());
+        assert_eq!(snapshot.outcome.as_deref(), Some(expected_status.as_str()));
+        assert_eq!(
+            snapshot.terminal_trigger_reason.as_deref(),
+            Some(expected_trigger)
+        );
+        assert!(!snapshot.startup_armed);
+        assert_eq!(send_calls.load(Ordering::Acquire), 0);
+    }
+}
+
+#[test]
 fn skip_panic_suspend_target_owner_and_lease_stops_win_ready_to_armed() {
     let checkpoint = StartupCheckpoint::ReadyToArmed;
     let cases = [

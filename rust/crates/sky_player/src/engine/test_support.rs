@@ -7,7 +7,7 @@ mod fault_injection;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod mock_sender;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use fault_injection::MockSendInputCapture;
 #[cfg(any(test, feature = "test-support"))]
 pub use fault_injection::{FaultInjectionScript, InjectedSendOutcome};

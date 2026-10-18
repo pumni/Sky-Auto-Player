@@ -455,6 +455,8 @@ pub struct PlaybackTerminalStatusDto {
     pub outcome: Option<String>,
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
+    pub terminal_release_verified: Option<bool>,
+    pub release_obligation_mask: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

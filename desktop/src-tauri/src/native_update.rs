@@ -464,6 +464,9 @@ impl<R: Runtime> UpdateService<R> {
                     ActivityReservationError::PhysicalPlaybackActive => {
                         (UpdateErrorCode::PlaybackActive, UpdateRetryAction::Install)
                     }
+                    ActivityReservationError::PhysicalReleaseUnverified => {
+                        (UpdateErrorCode::PlaybackActive, UpdateRetryAction::None)
+                    }
                     ActivityReservationError::CalibrationAlreadyActive => (
                         UpdateErrorCode::CalibrationActive,
                         UpdateRetryAction::Install,
@@ -979,6 +982,9 @@ fn update_activity_error(error: ActivityReservationError) -> String {
         ActivityReservationError::Closing => "closing: desktop application is closing".into(),
         ActivityReservationError::PhysicalPlaybackActive => {
             "playback_active: update installation cannot run during physical playback".into()
+        }
+        ActivityReservationError::PhysicalReleaseUnverified => {
+            "playback_release_unverified: update installation is blocked because the previous physical key release could not be verified; restart the application to restore physical input".into()
         }
         ActivityReservationError::CalibrationAlreadyActive => {
             "calibration_active: update installation cannot run during calibration".into()

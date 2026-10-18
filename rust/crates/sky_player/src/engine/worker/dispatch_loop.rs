@@ -433,6 +433,13 @@ pub(crate) fn dispatch_due_from_plan(
     if pending_up_recovery.is_some() && matches!(&authored_step, super::DispatchStep::Dispatched) {
         runtime.pending_up_recovery = None;
     }
+    #[cfg(any(test, feature = "test-support"))]
+    if masks.down_mask != 0
+        && matches!(&authored_step, super::DispatchStep::Dispatched)
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
+        hook.visit_startup_checkpoint(super::super::config::StartupCheckpoint::FirstDownCommitted);
+    }
     authored_step
 }
 
@@ -1311,6 +1318,8 @@ pub(super) fn dispatch(
                         break;
                     }
                 };
+                #[cfg(any(test, feature = "test-support"))]
+                let mut packet_down_mask = 0;
                 let step = if !has_physical {
                     let stream = prepared_stream
                         .as_mut()
@@ -1344,6 +1353,10 @@ pub(super) fn dispatch(
                             Some("prepared physical cursor changed before dispatch".to_string());
                         break;
                     };
+                    #[cfg(any(test, feature = "test-support"))]
+                    {
+                        packet_down_mask = frame.view.packet_masks.down_mask;
+                    }
                     if let Err(error) = resources.coordinator.validate_frozen_authored_commit(
                         match &frame.view.commit {
                             super::dispatch::PhysicalCommit::Authored(commit)
@@ -1417,6 +1430,15 @@ pub(super) fn dispatch(
                             dispatch_qpc,
                         );
                     }
+                }
+                #[cfg(any(test, feature = "test-support"))]
+                if matches!(&step, super::DispatchStep::Dispatched)
+                    && packet_down_mask != 0
+                    && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                {
+                    hook.visit_startup_checkpoint(
+                        super::super::config::StartupCheckpoint::FirstDownCommitted,
+                    );
                 }
                 match step {
                     super::DispatchStep::Dispatched | super::DispatchStep::Continue => continue,
