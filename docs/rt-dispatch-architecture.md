@@ -263,6 +263,66 @@ publishes those values while clearing the observer slot in the same guarded
 operation. Terminal publication may yield while readers release their guards;
 it cannot be skipped or double-count observer data.
 
+### Desktop safety supervisor and presentation ownership
+
+The desktop owns one real `sky-native-playback-supervisor` monitor for each
+active session. It observes Stop and terminal control flags, updates the
+worker's focus hint from the current foreground window, polls the retained
+window-owner identity every 100 ms, reads the small `poll_state` projection,
+and renews the worker's supervisor lease on its normal 20 ms loop. The monitor
+does not build UI snapshot or diagnostics DTOs and does not acquire the
+diagnostics publication gate. It renews the lease before enqueueing UI work.
+The three-second lease and the worker watchdog remain authoritative; a stalled
+monitor still expires the lease.
+
+Each session owns one `sky-native-playback-presentation` consumer. It receives
+ordered state transitions and terminal finalization messages through a
+nonblocking critical queue with capacity 64. A separate one-slot snapshot
+handoff retains only the latest frame; replacing or failing to lock that slot
+drops a best-effort update and increments its counters. The consumer builds
+playback snapshot and diagnostics DTOs, calculates diagnostic statistics, and
+inserts resulting events into the app-scoped event queue. Diagnostics enable,
+disable, rate-limit, and re-enable sequence behavior remains linearized by the
+diagnostics gate on this consumer.
+
+The app-scoped event queue holds at most 128 buffered or in-flight events.
+Pending snapshots are coalesced by session and a snapshot may be dropped when
+the queue contains only lifecycle events. Neither case fails the session. A
+full critical presentation queue, lifecycle queue overflow, publisher failure,
+or presentation consumer failure sets the shared delivery-failure flag and
+requests panic-release plus worker quit. The monitor observes that flag and
+performs the normal worker join and tracked release handoff. A confirmed
+lifecycle delivery failure is never treated as a snapshot drop.
+
+The initial `Starting` state is inserted into the event queue before the
+worker can arm, so a closed transport cannot start physical playback. Later
+state transitions use the per-session critical queue. At termination, the
+monitor joins the input worker and verifies release or records quarantine
+before it enqueues final presentation. The presentation consumer appends the
+forced final diagnostics sample, terminal state, and terminal event in order,
+then clears active-session ownership. A successor cannot enqueue its
+`Starting` event until that terminal event has entered the shared event queue.
+The monitor does not wait for the presentation consumer or for `Channel::send`
+to finish. A blocked publisher remains bounded by the existing app-level
+publisher and close budget.
+
+The ownership flow is:
+
+```text
+Before:
+  safety monitor -> focus / owner / poll -> snapshot DTO + diagnostics + gate
+                 -> event queue -> lease renewal
+  app publisher -> Channel::send
+
+After:
+  safety monitor -> focus / owner / controls / poll -> lease renewal
+                 -> bounded per-session presentation handoff
+  presentation consumer -> snapshot + diagnostics -> bounded event queue
+  app publisher -> Channel::send
+  terminal monitor -> join + release verification/quarantine -> enqueue finalize
+  presentation consumer -> final diagnostics + terminal state/event -> retire slot
+```
+
 #### Risk memo
 
 The snapshot path contains no `UnsafeCell` or unsafe `Sync` implementation.
