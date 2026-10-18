@@ -4841,6 +4841,11 @@ impl NativePlaybackService {
             NativeSessionOptions {
                 schedule: runtime_schedule,
                 #[cfg(feature = "tauri-test")]
+                startup_calibration_placement:
+                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+                #[cfg(feature = "tauri-test")]
+                timing_observer_for_qualification: false,
+                #[cfg(feature = "tauri-test")]
                 modifier_key_state_query_for_test: None,
                 backend: BackendConfig::Production,
                 profile: DispatchProfile::Production,
@@ -7277,6 +7282,11 @@ mod tests {
                 NativeSessionOptions {
                     schedule,
                     #[cfg(feature = "tauri-test")]
+                    startup_calibration_placement:
+                        sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+                    #[cfg(feature = "tauri-test")]
+                    timing_observer_for_qualification: false,
+                    #[cfg(feature = "tauri-test")]
                     modifier_key_state_query_for_test: None,
                     backend: BackendConfig::Mock {
                         latency_base_us: 0,
@@ -7518,6 +7528,11 @@ mod tests {
             NativeDispatchSession::new_with_power_endpoint(
                 NativeSessionOptions {
                     schedule,
+                    #[cfg(feature = "tauri-test")]
+                    startup_calibration_placement:
+                        sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+                    #[cfg(feature = "tauri-test")]
+                    timing_observer_for_qualification: false,
                     #[cfg(feature = "tauri-test")]
                     modifier_key_state_query_for_test: None,
                     backend: BackendConfig::Mock {
@@ -8166,6 +8181,11 @@ mod tests {
             NativeDispatchSession::new_with_power_endpoint(
                 NativeSessionOptions {
                     schedule,
+                    #[cfg(feature = "tauri-test")]
+                    startup_calibration_placement:
+                        sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+                    #[cfg(feature = "tauri-test")]
+                    timing_observer_for_qualification: false,
                     modifier_key_state_query_for_test: None,
                     backend: BackendConfig::Mock {
                         latency_base_us: 0,

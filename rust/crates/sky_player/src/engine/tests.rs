@@ -370,7 +370,7 @@ fn startup_calibration_placement_stays_before_ready_and_tracks_guard_context() {
         assert_eq!(snapshot.outcome.as_deref(), Some("finished"));
         assert!(snapshot.startup_ready);
         assert!(snapshot.startup_armed);
-        assert_eq!(snapshot.startup_calibration_executed, true);
+        assert!(snapshot.startup_calibration_executed);
         assert_eq!(snapshot.startup_calibration_sample_count, 6);
         assert_eq!(snapshot.startup_calibration_result, "completed");
         assert_eq!(snapshot.startup_priority_mode_acquired, "off");
