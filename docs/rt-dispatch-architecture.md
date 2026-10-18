@@ -244,13 +244,18 @@ hold floor.
 ### Snapshot and observer ownership
 
 Live metric snapshots use separate safe `RwLock` slots for dispatch-owned and
-observer-owned values. The worker and observer each publish only to their own
-slot. Both use nonblocking `try_write`; if a reader currently holds a slot,
-that live publication is skipped and the producer's later cumulative snapshot
-can replace it. The physical worker never waits for a UI snapshot reader.
-Snapshot readers hold both read guards while copying and merge the two source
-snapshots once, so observer fields cannot replace independent dispatch
-counters. The observer's publish interval is independent of the worker's.
+observer-owned values. Packet metric updates and observer updates each use
+nonblocking `try_write`; if a reader currently holds a slot, that best-effort
+publication is skipped and a later cumulative update can replace it. The
+physical worker never waits for a UI snapshot reader in the packet dispatch
+path. Focus/manual-pause lifecycle publication is different: after the
+existing pause or tracked-cleanup boundary, the worker publishes the current
+dispatch projection with a blocking write so the lifecycle and physical
+ownership state cannot disappear when no later packet is dispatched. This
+write stays outside the QPC-to-SendInput suffix. Snapshot readers hold both
+read guards while copying and merge the two source snapshots once, so observer
+fields cannot replace independent dispatch counters. The observer's publish
+interval is independent of the worker's.
 
 The observer is stopped and joined before terminal aggregation. The finalizer
 merges its returned metrics into the dispatch-owned terminal values, then
@@ -265,23 +270,29 @@ The snapshot path contains no `UnsafeCell` or unsafe `Sync` implementation.
 `WorkerMetricsLocal`. Only the dispatch worker writes the dispatch slot and
 only the observer thread writes the observer slot. Readers take both read
 guards in dispatch-then-observer order, so they copy one coherent pair before
-merging observer-owned fields. Live writers use `try_write` and skip that
-publication if a reader holds their slot; the next cumulative update can
-publish later. Terminal cleanup runs after the observer has joined and may
-yield while acquiring both write guards. The terminal marker makes later
-readers return the already-merged dispatch slot without merging the cleared
-observer slot again.
+merging observer-owned fields. Packet and observer publishers use `try_write`;
+contention drops that individual cumulative publication without delaying the
+physical path. Focus/manual-pause lifecycle updates use a blocking dispatch
+write only after pause or cleanup work has completed, because their resulting
+physical state must be observable even if the worker dispatches no more
+packets. Terminal cleanup runs after the observer has joined and may yield
+while acquiring both write guards. The terminal marker makes later readers
+return the already-merged dispatch slot without merging the cleared observer
+slot again.
 
-Wait evidence is enqueued immediately when a real wait attempt returns, both
-for a deadline wake and an interrupted replan. A target already due before a
-wait has no wait result and produces no wait sample. Failed waits terminate
-without a sample. Immediate enqueue keeps the original deadline and wake
-attached if focus, pause, target state, or the next plan changes afterward.
-Metadata-only and physical packet waits use the same path. The fixed queue
-uses drop-new behavior; each failed enqueue increments the dropped-sample
-counter. Its high-watermark is the largest occupancy observed after a
-successful enqueue, so a concurrent drain can make it a conservative sample
-of the actual peak.
+For an observed session, a real wait result is captured into worker-owned
+pending state at wake time, before later control changes can replace its
+deadline attribution. A due wait is inserted into the observer queue after
+the current dispatch attempt returns, including attempts rejected by a final
+gate or returning a terminal dispatch result. If the loop exits before that
+handoff, its exit path inserts the pending observation. An interrupted replan
+is inserted immediately because no physical dispatch follows that wait.
+Metadata-only and physical packet waits use the same capture/handoff path. An
+already-due target, a failed wait, or an observer-disabled session produces no
+wait sample. The fixed queue uses drop-new behavior; each failed enqueue
+increments the dropped-sample counter. Its high-watermark is the largest
+occupancy observed after a successful enqueue, so a concurrent drain can make
+it a conservative sample of the actual peak.
 
 The existing final-gate DTO counters keep their wire names and group related
 causes: control and modifier rejections share `final_gate_control_rejections`,

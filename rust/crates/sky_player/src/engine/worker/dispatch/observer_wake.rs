@@ -9,9 +9,10 @@ pub(crate) fn take_deadline_wake_qpc(runtime: &mut WorkerRuntime) -> Option<QpcT
     runtime.last_dispatch_deadline_wake_qpc.take()
 }
 
-/// Record a real wait result before control transitions or another plan can
-/// replace its deadline attribution. An already-due target has no wait result;
-/// failed waits terminate and are not observer samples.
+/// Capture a real wait result before control transitions or another plan can
+/// replace its deadline attribution. Queue insertion happens after dispatch,
+/// except interrupted replans, which have no following dispatch attempt. An
+/// already-due target has no wait result; failed waits are not observer samples.
 pub(crate) fn record_wait_attempt(
     observer: Option<&PendingObservationQueue>,
     wait_result: Option<sky_dispatch_win32::wait::WaitResult>,

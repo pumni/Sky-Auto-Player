@@ -1,6 +1,7 @@
 use super::{
     PrecisionPacketTimingObservation, SharedMetrics, SnapshotBuffer, WorkerMetricsLocal,
-    publish_terminal_metrics, try_publish_metrics, try_publish_observer_metrics,
+    publish_lifecycle_metrics, publish_terminal_metrics, try_publish_metrics,
+    try_publish_observer_metrics,
 };
 use sky_dispatch_win32::clock::QpcClock;
 use std::num::NonZeroU64;
@@ -104,6 +105,54 @@ fn dispatch_publication_is_nonblocking_when_a_reader_holds_its_slot() {
 }
 
 #[test]
+fn required_lifecycle_publication_survives_forced_snapshot_contention() {
+    let shared = Arc::new(SharedMetrics::default());
+    let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+    let active = WorkerMetricsLocal {
+        active_count: 1,
+        possibly_active_count: 1,
+        failed_release_count: 0,
+        ..WorkerMetricsLocal::default()
+    };
+    assert!(try_publish_metrics(&active, &shared, qpc_clock, 1, true));
+
+    let reader = shared.snapshot.dispatch.read();
+    let cleaned = WorkerMetricsLocal {
+        active_count: 0,
+        possibly_active_count: 0,
+        failed_release_count: 0,
+        ..active.clone()
+    };
+    assert!(
+        !try_publish_metrics(&cleaned, &shared, qpc_clock, 2, true),
+        "a forced packet-style publication remains best effort under reader contention"
+    );
+
+    drop(reader);
+
+    let stale = shared.snapshot.load();
+    assert_eq!(
+        stale.active_count, 1,
+        "a rejected packet-style publication leaves the prior snapshot stale"
+    );
+
+    let writer_shared = Arc::clone(&shared);
+    let started = Arc::new(Barrier::new(2));
+    let writer_started = Arc::clone(&started);
+    let writer = thread::spawn(move || {
+        writer_started.wait();
+        publish_lifecycle_metrics(&cleaned, &writer_shared, qpc_clock, 3);
+    });
+    started.wait();
+    writer.join().expect("required lifecycle publisher");
+
+    let snapshot = shared.snapshot.load();
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    assert_eq!(snapshot.failed_release_count, 0);
+}
+
+#[test]
 fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
     let shared = SharedMetrics::default();
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
@@ -132,6 +181,59 @@ fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
     assert_eq!(published.total_us, 11);
     assert_eq!(published.observer_degraded_samples, 3);
     assert_eq!(published.wait_window_sample_count, 5);
+}
+
+#[test]
+fn terminal_cleanup_snapshot_is_visible_after_forced_publication_contention() {
+    let shared = Arc::new(SharedMetrics::default());
+    let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+    let live = WorkerMetricsLocal {
+        active_count: 1,
+        possibly_active_count: 1,
+        ..WorkerMetricsLocal::default()
+    };
+    let observer = WorkerMetricsLocal {
+        observer_degraded_samples: 7,
+        ..WorkerMetricsLocal::default()
+    };
+    assert!(shared.snapshot.try_publish_dispatch(live));
+    assert!(shared.snapshot.try_publish_observer(observer.clone()));
+
+    let mut terminal = WorkerMetricsLocal {
+        active_count: 0,
+        possibly_active_count: 0,
+        failed_release_count: 0,
+        ..WorkerMetricsLocal::default()
+    };
+    terminal.merge_observer(&observer);
+
+    let dispatch_reader = shared.snapshot.dispatch.read();
+    assert!(
+        !shared.snapshot.try_publish_terminal(&mut terminal),
+        "terminal aggregation must report dispatch-slot contention"
+    );
+    assert_eq!(dispatch_reader.active_count, 1);
+    drop(dispatch_reader);
+
+    let observer_reader = shared.snapshot.observer.read();
+    assert!(
+        !shared.snapshot.try_publish_terminal(&mut terminal),
+        "terminal aggregation must report observer-slot contention"
+    );
+    drop(observer_reader);
+
+    assert_eq!(terminal.active_count, 0);
+    assert_eq!(terminal.observer_degraded_samples, 7);
+    let still_live = shared.snapshot.load();
+    assert_eq!(still_live.active_count, 1);
+    assert_eq!(still_live.observer_degraded_samples, 7);
+    publish_terminal_metrics(&terminal, &shared, qpc_clock, 11);
+
+    let snapshot = shared.snapshot.load();
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.possibly_active_count, 0);
+    assert_eq!(snapshot.failed_release_count, 0);
+    assert_eq!(snapshot.observer_degraded_samples, 7);
 }
 
 #[test]

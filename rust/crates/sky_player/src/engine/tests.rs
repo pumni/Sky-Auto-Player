@@ -1,10 +1,10 @@
 use super::config::StartupCheckpoint;
 use super::shared::SessionTarget;
 use super::telemetry::metrics::RecentLatencyRing;
-use super::test_support::ProductionDispatchTestHarness;
 use super::test_support::command_timing::{
     CommandTimingError, CommandTimingLookup as PauseTimingLookup, PauseTimingPhase,
 };
+use super::test_support::{MockSendInputCapture, ProductionDispatchTestHarness};
 use super::{
     BackendConfig, CommandTimingResult, CommandTimingState, DispatchProfile, DownAdmission,
     EnginePollStatus, FaultInjectionScript, FinalControlAdmission, FinalControlSignals,
@@ -11955,10 +11955,12 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
     let force_inconclusive_probe = Arc::new(AtomicBool::new(false));
     let send_call_count = Arc::new(AtomicU64::new(0));
     let full_release_count = Arc::new(AtomicU64::new(0));
+    let send_input_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
     fault_script.send_call_count = Some(Arc::clone(&send_call_count));
     fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
+    fault_script.send_input_capture = Some(Arc::clone(&send_input_capture));
 
     let mut options = test_session_options(
         schedule,
@@ -11999,6 +12001,7 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
         0,
         "no release while unfocused"
     );
+    let send_count_before_restore = send_call_count.load(Ordering::SeqCst);
 
     // 3. Restore exact target/focus and pass grace
     force_inconclusive_probe.store(false, Ordering::Release);
@@ -12010,6 +12013,23 @@ fn focus_then_manual_then_focus_restore_suspends_once_and_keeps_manual_pause() {
         full_release_count.load(Ordering::SeqCst),
         0,
         "suspension uses tracked ownership"
+    );
+    assert_eq!(
+        send_call_count.load(Ordering::SeqCst),
+        send_count_before_restore + 1,
+        "focus restoration sends one tracked release call"
+    );
+    let captures = send_input_capture
+        .lock()
+        .expect("send input capture lock")
+        .clone();
+    assert!(
+        captures.iter().any(|capture| matches!(
+            capture,
+            MockSendInputCapture::SingleEmitter { scan_codes, key_up: true }
+                if scan_codes.as_slice() == [0x15]
+        )),
+        "tracked suspension cleanup must reach the backend as a key-up call: {captures:?}"
     );
     assert!(snap.is_paused, "session remains paused due to manual pause");
     assert_eq!(snap.active_count, 0, "active keys clean after suspension");

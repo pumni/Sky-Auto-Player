@@ -604,6 +604,7 @@ impl SnapshotBuffer {
 
     /// Observer metrics have a separate writer-owned slot. They cannot race
     /// with or replace dispatch-owned counters.
+    #[cfg(test)]
     pub(crate) fn try_publish_observer(&self, local: WorkerMetricsLocal) -> bool {
         let Some(mut slot) = self.observer.try_write() else {
             return false;
@@ -715,10 +716,21 @@ fn try_publish_metrics_from(
     if !force && now_us.saturating_sub(last) < 50_000 {
         return true;
     }
-    let published = project_metrics_for_snapshot(local, qpc_clock);
     let published_ok = match owner {
-        SnapshotOwner::Dispatch => shared.snapshot.try_publish_dispatch(published),
-        SnapshotOwner::Observer => shared.snapshot.try_publish_observer(published),
+        SnapshotOwner::Dispatch => {
+            let Some(mut slot) = shared.snapshot.dispatch.try_write() else {
+                return false;
+            };
+            *slot = project_metrics_for_snapshot(local, qpc_clock);
+            true
+        }
+        SnapshotOwner::Observer => {
+            let Some(mut slot) = shared.snapshot.observer.try_write() else {
+                return false;
+            };
+            *slot = project_metrics_for_snapshot(local, qpc_clock);
+            true
+        }
     };
     if published_ok {
         last_publish_us.store(now_us, Ordering::Relaxed);
@@ -730,6 +742,24 @@ fn try_publish_metrics_from(
     } else {
         false
     }
+}
+
+/// Publish a focus/manual-pause lifecycle snapshot after the control
+/// transition and any cleanup permitted at that boundary. Packet metrics
+/// remain best effort; this path waits for a current snapshot reader so the
+/// lifecycle and tracked-key state cannot be lost when no later packet is
+/// dispatched. It must stay outside the QPC to SendInput suffix.
+pub(crate) fn publish_lifecycle_metrics(
+    local: &WorkerMetricsLocal,
+    shared: &SharedMetrics,
+    qpc_clock: QpcClock,
+    now_us: u64,
+) {
+    let published = project_metrics_for_snapshot(local, qpc_clock);
+    *shared.snapshot.dispatch.write() = published;
+    shared.last_publish_us.store(now_us, Ordering::Relaxed);
+    #[cfg(test)]
+    shared.publish_count.fetch_add(1, Ordering::Relaxed);
 }
 
 fn project_metrics_for_snapshot(

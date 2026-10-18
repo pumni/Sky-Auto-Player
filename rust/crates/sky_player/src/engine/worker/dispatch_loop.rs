@@ -1,5 +1,8 @@
 use super::super::shared::{SessionTarget, SupervisorLeaseState, SystemPowerState};
-use super::super::{DurationTicks, QpcError, TimelineTicks, WaitOutcome, try_publish_metrics};
+use super::super::{
+    DurationTicks, QpcError, TimelineTicks, WaitOutcome, publish_lifecycle_metrics,
+    try_publish_metrics,
+};
 use super::dispatch::{DownBoundaryAdmission, PhysicalBoundaryStamp};
 use super::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
@@ -628,12 +631,11 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(
+                    publish_lifecycle_metrics(
                         &core.metrics,
                         metrics,
                         qpc_clock,
                         qpc_us_or_terminal!(),
-                        true,
                     );
                 }
             } else if resources.playback.has_pause_reason(PauseReason::Focus) {
@@ -777,12 +779,11 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(
+                    publish_lifecycle_metrics(
                         &core.metrics,
                         metrics,
                         qpc_clock,
                         qpc_us_or_terminal!(),
-                        true,
                     );
                 }
             }
@@ -821,12 +822,11 @@ pub(super) fn dispatch(
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    try_publish_metrics(
+                    publish_lifecycle_metrics(
                         &core.metrics,
                         metrics,
                         qpc_clock,
                         qpc_us_or_terminal!(),
-                        true,
                     );
                 } else if resources.playback.has_pause_reason(PauseReason::Focus) {
                     core.runtime.manual_pause_suspension_pending = true;
