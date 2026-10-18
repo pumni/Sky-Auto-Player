@@ -126,8 +126,10 @@ impl std::error::Error for WholeStreamModelError {}
 
 /// Simulate the complete sequential schedule using explicit cost assumptions.
 /// Up events in a mixed packet precede every Down event, matching the physical
-/// packet contract. Every operation uses checked arithmetic. This is a risk
-/// estimate, never a production timing guarantee.
+/// packet contract. Every key in a successful physical packet receives floors
+/// from that packet's common sender-completion estimate. Every operation uses
+/// checked arithmetic. This is a risk estimate, never a production timing
+/// guarantee.
 pub fn analyze_whole_stream(
     packets: &[ModelPacket],
     config: WholeStreamModelConfig,
@@ -268,40 +270,41 @@ pub fn analyze_whole_stream(
                 .checked_add(post_send_ticks)
                 .ok_or(WholeStreamModelError::ArithmeticOverflow)?;
 
-            let mut event_ordinal = 0u64;
+            // SendInput observes one packet completion, not per-key event
+            // completions. The production guard applies that same completion
+            // to every member and replaces the opposite-direction floor.
+            let next_t_floor = if packet.up_mask != 0 {
+                Some(
+                    sender_completion
+                        .checked_add(t_ticks)
+                        .ok_or(WholeStreamModelError::ArithmeticOverflow)?,
+                )
+            } else {
+                None
+            };
+            let next_h_floor = if packet.down_mask != 0 {
+                Some(
+                    sender_completion
+                        .checked_add(h_ticks)
+                        .ok_or(WholeStreamModelError::ArithmeticOverflow)?,
+                )
+            } else {
+                None
+            };
+
             let mut up_mask = packet.up_mask;
             while up_mask != 0 {
                 let slot = up_mask.trailing_zeros() as usize;
                 up_mask &= up_mask - 1;
-                event_ordinal = event_ordinal
-                    .checked_add(1)
-                    .ok_or(WholeStreamModelError::ArithmeticOverflow)?;
-                let event_completion = ready
-                    .checked_add(setup_ticks)
-                    .and_then(|ticks| ticks.checked_add(input_ticks.checked_mul(event_ordinal)?))
-                    .ok_or(WholeStreamModelError::ArithmeticOverflow)?;
-                t_not_before[slot] = Some(
-                    event_completion
-                        .checked_add(t_ticks)
-                        .ok_or(WholeStreamModelError::ArithmeticOverflow)?,
-                );
+                h_not_before[slot] = None;
+                t_not_before[slot] = next_t_floor;
             }
             let mut down_mask = packet.down_mask;
             while down_mask != 0 {
                 let slot = down_mask.trailing_zeros() as usize;
                 down_mask &= down_mask - 1;
-                event_ordinal = event_ordinal
-                    .checked_add(1)
-                    .ok_or(WholeStreamModelError::ArithmeticOverflow)?;
-                let event_completion = ready
-                    .checked_add(setup_ticks)
-                    .and_then(|ticks| ticks.checked_add(input_ticks.checked_mul(event_ordinal)?))
-                    .ok_or(WholeStreamModelError::ArithmeticOverflow)?;
-                h_not_before[slot] = Some(
-                    event_completion
-                        .checked_add(h_ticks)
-                        .ok_or(WholeStreamModelError::ArithmeticOverflow)?,
-                );
+                t_not_before[slot] = None;
+                h_not_before[slot] = next_h_floor;
             }
             (Some(sender_completion), worker_free)
         } else {
@@ -383,8 +386,8 @@ fn percentiles(values: &mut [i64]) -> TickPercentiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        INSTRUMENT_SLOT_COUNT, ModelPacket, ModelPacketKind, SlackClass, WholeStreamModelConfig,
-        WholeStreamModelError, analyze_whole_stream,
+        INSTRUMENT_SLOT_COUNT, ModelPacket, ModelPacketKind, SlackClass, TickPercentiles,
+        WholeStreamModelConfig, WholeStreamModelError, analyze_whole_stream,
     };
 
     fn config() -> WholeStreamModelConfig {
@@ -434,6 +437,14 @@ mod tests {
         assert_eq!(report.packets[2].signed_slack_ticks, -2);
         assert_eq!(report.packets[2].slack_class, SlackClass::Negative);
         assert_eq!(report.negative_slack_count, 3);
+        assert_eq!(
+            report.slack_ticks,
+            TickPercentiles {
+                p50: -2,
+                p95: 0,
+                p99: 0,
+            }
+        );
         assert!(!report.guarantee);
     }
 
@@ -463,7 +474,7 @@ mod tests {
         assert_eq!(report.packets[1].authored_target_ticks, 1_000_000);
         assert_eq!(report.packets[1].modeled_ready_ticks, 1_000_000);
         assert_eq!(report.packets[1].t_floor_displacement_ticks, 0);
-        assert_eq!(report.packets[1].signed_slack_ticks, 999_991);
+        assert_eq!(report.packets[1].signed_slack_ticks, 999_988);
         assert_eq!(report.positive_slack_count, 1);
     }
 
@@ -506,6 +517,27 @@ mod tests {
             },
         );
         assert_eq!(overflow, Err(WholeStreamModelError::ArithmeticOverflow));
+    }
+
+    #[test]
+    fn completion_based_hold_and_release_floor_addition_checks_overflow() {
+        let completion = i64::MAX as u64;
+        let huge_duration_us = 1_u64 << 63;
+        let mut hold_overflow = config();
+        hold_overflow.effective_min_hold_us = huge_duration_us;
+        hold_overflow.estimated_per_input_us = 1;
+        assert_eq!(
+            analyze_whole_stream(&[physical(completion, 0, 1)], hold_overflow),
+            Err(WholeStreamModelError::ArithmeticOverflow)
+        );
+
+        let mut release_overflow = config();
+        release_overflow.physical_release_gap_us = huge_duration_us;
+        release_overflow.estimated_per_input_us = 1;
+        assert_eq!(
+            analyze_whole_stream(&[physical(completion, 1, 0)], release_overflow),
+            Err(WholeStreamModelError::ArithmeticOverflow)
+        );
     }
 
     #[test]

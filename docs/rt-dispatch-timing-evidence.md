@@ -117,6 +117,43 @@ Positive slack means the authored target is later than all modeled constraints;
 zero means equality; negative slack means a floor or prior worker occupancy
 pushes readiness past the authored target.
 
+The physical floor recurrence follows packet completion. For physical packet
+`i`, let `N_i` be its total number of Up and Down inputs:
+
+```text
+R_i = max(authored_target_i, relevant H/T floors, resume barrier for Downs,
+          previous_worker_free)
+C_i = R_i + setup + N_i * per_input
+W_i = C_i + post_send
+```
+
+Every Up key in the packet clears its prior H floor and receives
+`T_i[key] = C_i + T`; every Down key clears its prior T floor and receives
+`H_i[key] = C_i + H`. Floors for keys outside the packet carry forward. All
+packet members share `C_i`, matching the production guard's use of one
+trustworthy completion QPC for the successful atomic packet. Metadata has no
+per-key floors or sender completion; its ready time is the maximum of its
+authored target and prior worker-free time, then its configured metadata cost
+sets the next worker-free time. Durations are rounded up to QPC ticks and all
+additions remain checked.
+
+For a concrete difference, use a 1 MHz QPC frequency, zero setup, 10 ticks per
+input, and `H = 10`. A Down chord for A and B at tick 0 completes at tick 20.
+The production guard sets both Up floors to tick 30. The old event-ordinal
+model assigned A an event completion at tick 10 and predicted its floor at
+tick 20, while B received tick 30. An Up for A authored at tick 20 therefore
+looked unconstrained in the old report even though the production guard waits
+until tick 30. The corrected report uses tick 30 for both chord members.
+
+The estimates remain diagnostic: `C_i` is not an observed `SendInput`
+timestamp, and neither sender completion nor this model proves game input or
+audio reception. `analyze_whole_stream` currently has no Prepare-path caller.
+Attaching it to Prepare would expand `PreparedPlaybackDto` and the desktop
+projection/UI contract to describe assumptions and advisory meaning. This
+change leaves that as an explicit integration seam; any future presentation
+must remain advisory and must not gate Prepare, worker admission, waits, or
+musical input.
+
 The result is labeled `guarantee: false`. Estimates never enter production
 admission, waiting, or scheduling and cannot rewrite authored targets. Model
 cost inputs are estimates rather than machine measurements. Boot constructs a
