@@ -196,6 +196,12 @@ pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalC
     if signals.supervisor_expired.is_expired() || signals.panic_requested.load(Ordering::Acquire) {
         return FinalControlAdmission::PanicRequested;
     }
+    if signals
+        .system_power
+        .is_some_and(super::super::shared::SystemPowerState::down_blocked)
+    {
+        return FinalControlAdmission::SystemSuspendRequested;
+    }
     if signals.quit_requested.load(Ordering::Acquire) {
         return FinalControlAdmission::QuitRequested;
     }
@@ -204,12 +210,6 @@ pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalC
     }
     if signals.desired_pause.load(Ordering::Acquire) {
         return FinalControlAdmission::PauseRequested;
-    }
-    if signals
-        .system_power
-        .is_some_and(super::super::shared::SystemPowerState::down_blocked)
-    {
-        return FinalControlAdmission::SystemSuspendRequested;
     }
     FinalControlAdmission::Allowed
 }

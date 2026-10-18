@@ -5617,6 +5617,7 @@ fn playback_event_state(status: EnginePollStatus) -> PlaybackEventState {
         EnginePollStatus::Finished | EnginePollStatus::Skipped | EnginePollStatus::Quit => {
             PlaybackEventState::Finished
         }
+        EnginePollStatus::SystemSuspended => PlaybackEventState::Failed,
         EnginePollStatus::Error
         | EnginePollStatus::Panicked
         | EnginePollStatus::Poisoned
@@ -5630,6 +5631,7 @@ fn is_terminal_status(status: EnginePollStatus) -> bool {
         EnginePollStatus::Finished
             | EnginePollStatus::Skipped
             | EnginePollStatus::Quit
+            | EnginePollStatus::SystemSuspended
             | EnginePollStatus::Error
             | EnginePollStatus::Panicked
             | EnginePollStatus::Poisoned
@@ -5652,6 +5654,7 @@ fn terminal_success_outcome(status: EnginePollStatus) -> &'static str {
         EnginePollStatus::Skipped => "skipped",
         EnginePollStatus::Quit => "quit",
         EnginePollStatus::Finished => "finished",
+        EnginePollStatus::SystemSuspended => "system_suspend",
         _ => "finished",
     }
 }
@@ -6257,12 +6260,12 @@ fn terminal_release_evidence_after_startup(
         && snapshot.final_release_obligation_mask == 0
         && matches!(
             snapshot.terminal_trigger_reason.as_deref(),
-            Some("quit" | "skipped")
+            Some("quit" | "skipped" | "system_suspend")
         )
     {
         // The startup gate rejects every input before Armed. With no Armed
         // publication, no terminal release result, and no obligation, a
-        // pre-arm Quit/Skip has no physical key state to reconcile.
+        // pre-arm terminal has no physical key state to reconcile.
         return TerminalReleaseEvidence::NotRequired;
     }
     terminal_release_evidence(
@@ -6331,6 +6334,10 @@ fn terminal_publication_after_worker(
         }
     } else {
         match status {
+            EnginePollStatus::SystemSuspended => PlaybackTerminalPublication::Failed {
+                code: "system_suspend".into(),
+                message: "Windows suspended or hibernated the system. This playback session has ended; start a new session after resume.".into(),
+            },
             EnginePollStatus::Finished | EnginePollStatus::Quit | EnginePollStatus::Skipped => {
                 PlaybackTerminalPublication::Finished {
                     outcome: terminal_success_outcome(status).into(),
@@ -6457,6 +6464,11 @@ fn publish_terminal_poll_state(
             .into(),
             message: format!("Native playback worker ended with `{}`.", status.as_str()),
         }
+    } else if status == EnginePollStatus::SystemSuspended {
+        PlaybackTerminalPublication::Failed {
+            code: "system_suspend".into(),
+            message: "Windows suspended or hibernated the system. This playback session has ended; start a new session after resume.".into(),
+        }
     } else {
         PlaybackTerminalPublication::Finished {
             outcome: terminal_success_outcome(status).into(),
@@ -6470,7 +6482,7 @@ fn publish_terminal_poll_state(
     if *last_event_state != terminal_state {
         set_playback_state(
             active,
-            if is_failure {
+            if is_failure || status == EnginePollStatus::SystemSuspended {
                 PlaybackSessionState::Failed
             } else {
                 PlaybackSessionState::Finished
@@ -11186,6 +11198,10 @@ mod tests {
                 vec!["state:finished", "finished:quit"],
             ),
             (
+                EnginePollStatus::SystemSuspended,
+                vec!["state:failed", "failed:system_suspend"],
+            ),
+            (
                 EnginePollStatus::Error,
                 vec!["state:failed", "failed:native_player_failed"],
             ),
@@ -11302,6 +11318,32 @@ mod tests {
         assert!(matches!(
             clean_quit,
             PlaybackTerminalPublication::Finished { outcome, .. } if outcome == "quit"
+        ));
+
+        let clean_suspend = terminal_publication_after_worker(
+            EnginePollStatus::SystemSuspended,
+            &release,
+            None,
+            None,
+            Some("system_suspend"),
+            0,
+        );
+        assert!(matches!(
+            clean_suspend,
+            PlaybackTerminalPublication::Failed { code, .. } if code == "system_suspend"
+        ));
+        let suspend_with_residue = terminal_publication_after_worker(
+            EnginePollStatus::SystemSuspended,
+            &unverified,
+            None,
+            None,
+            Some("system_suspend"),
+            0,
+        );
+        assert!(matches!(
+            suspend_with_residue,
+            PlaybackTerminalPublication::Failed { code, .. }
+                if code == "terminal_release_unverified"
         ));
     }
 

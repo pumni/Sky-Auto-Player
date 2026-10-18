@@ -1,11 +1,13 @@
 use super::{
-    OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED, RuntimeDispatchCoordinator,
-    TerminalTrigger, TrackedKeyState, WorkerMetricsLocal, WorkerRuntime, WorkerSchedulingGuards,
-    current_process_cpu_time_us, current_thread_cpu_time_us, publish_backend_metrics,
+    OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED, OUTCOME_SYSTEM_SUSPENDED,
+    RuntimeDispatchCoordinator, TerminalTrigger, TrackedKeyState, WorkerMetricsLocal,
+    WorkerRuntime, WorkerSchedulingGuards, current_process_cpu_time_us, current_thread_cpu_time_us,
+    publish_backend_metrics,
 };
 use crate::engine::shared::SessionTarget;
 use crate::engine::shared::SharedProgressClock;
 use crate::engine::shared::SupervisorLeaseState;
+use crate::engine::shared::SystemPowerState;
 use crate::engine::telemetry::{
     NativeTelemetryOutput, SharedMetrics, TelemetryCollector, publish_terminal_metrics,
 };
@@ -47,6 +49,7 @@ pub(super) struct FinalizeSignals<'a> {
     pub(super) quit_requested: &'a AtomicBool,
     pub(super) panic_requested: &'a AtomicBool,
     pub(super) supervisor_expired: &'a SupervisorLeaseState,
+    pub(super) system_power: &'a SystemPowerState,
 }
 
 pub(super) struct FinalizePublication<'a> {
@@ -127,6 +130,7 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         quit_requested,
         panic_requested,
         supervisor_expired,
+        system_power,
     } = signals;
     let FinalizePublication {
         metrics,
@@ -148,6 +152,8 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if terminal_trigger.is_none() {
         terminal_trigger = if supervisor_expired.is_expired() {
             Some(TerminalTrigger::SupervisorLeaseExpired)
+        } else if system_power.system_suspend_terminal() {
+            Some(TerminalTrigger::SystemSuspend)
         } else if skip_requested.load(Ordering::Acquire) {
             Some(TerminalTrigger::Skip)
         } else if quit_requested.load(Ordering::Acquire) {
@@ -326,6 +332,30 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if let Ok(terminal_ticks) = end_ticks {
         progress_clock.publish_terminal(&playback, terminal_ticks);
     }
+    // A callback may arrive while terminal cleanup is running. Re-read the
+    // monotonic session latch before publishing the outcome so Stop/Skip or
+    // clean completion cannot hide an accepted suspend boundary.
+    if supervisor_expired.is_expired()
+        && !terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
+    {
+        terminal_trigger = Some(TerminalTrigger::SupervisorLeaseExpired);
+    } else if system_power.system_suspend_terminal()
+        && !terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
+    {
+        terminal_trigger = Some(TerminalTrigger::SystemSuspend);
+    } else if panic_requested.load(Ordering::Acquire)
+        && !terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
+    {
+        terminal_trigger = Some(TerminalTrigger::PanicReleaseRequested);
+    }
+    if let Some(trigger) = terminal_trigger {
+        *metrics.terminal_trigger_reason.lock() = Some(trigger.as_str().to_string());
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(observation) = cleanup_observation.as_deref_mut() {
+        observation.terminal_trigger_reason =
+            terminal_trigger.map(|trigger| trigger.as_str().to_string());
+    }
     if matches!(
         terminal_trigger,
         Some(TerminalTrigger::PanicReleaseRequested | TerminalTrigger::SupervisorLeaseExpired)
@@ -338,6 +368,8 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         || terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
     {
         "error"
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::SystemSuspend)) {
+        "system_suspend"
     } else if matches!(terminal_trigger, Some(TerminalTrigger::Skip))
         || skip_requested.load(Ordering::Acquire)
     {
@@ -416,6 +448,8 @@ pub(super) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         || terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
     {
         OUTCOME_ERROR
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::SystemSuspend)) {
+        OUTCOME_SYSTEM_SUSPENDED
     } else if matches!(terminal_trigger, Some(TerminalTrigger::Skip))
         || skip_requested.load(Ordering::Acquire)
     {

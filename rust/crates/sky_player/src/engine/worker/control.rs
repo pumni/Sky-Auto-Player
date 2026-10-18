@@ -1,4 +1,4 @@
-use crate::engine::shared::SupervisorLeaseState;
+use crate::engine::shared::{SupervisorLeaseState, SystemPowerState};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) enum CommandControl {
@@ -26,7 +26,7 @@ impl TerminalTrigger {
             Self::Skip => "skipped",
             Self::PanicReleaseRequested => "panic_release_requested",
             Self::SupervisorLeaseExpired => "supervisor_lease_expired",
-            Self::SystemSuspend => "system_suspend_during_preparation",
+            Self::SystemSuspend => "system_suspend",
             Self::FocusAuthorityInvalidated => "focus_authority_invalidated_during_preparation",
             Self::TargetAuthorityInvalidated => "target_authority_invalidated_during_preparation",
             Self::OwnerAuthorityInvalidated => "owner_authority_invalidated_during_preparation",
@@ -39,7 +39,6 @@ impl TerminalTrigger {
             self,
             Self::PanicReleaseRequested
                 | Self::SupervisorLeaseExpired
-                | Self::SystemSuspend
                 | Self::FocusAuthorityInvalidated
                 | Self::TargetAuthorityInvalidated
                 | Self::OwnerAuthorityInvalidated
@@ -53,6 +52,7 @@ pub(super) struct CommandControlSignals<'a> {
     pub(super) skip_requested: &'a AtomicBool,
     pub(super) panic_requested: &'a AtomicBool,
     pub(super) supervisor_expired: &'a SupervisorLeaseState,
+    pub(super) system_power: &'a SystemPowerState,
 }
 
 pub(super) struct CommandControlRuntime<'a> {
@@ -93,12 +93,18 @@ pub(super) fn process_command_control(context: CommandControlInput<'_>) -> Comma
                 skip_requested,
                 panic_requested,
                 supervisor_expired,
+                system_power,
             },
         runtime: CommandControlRuntime { terminal_trigger },
     } = context;
 
     if supervisor_expired.is_expired() {
         latch_terminal_trigger(terminal_trigger, TerminalTrigger::SupervisorLeaseExpired);
+        return CommandControl::Exit;
+    }
+
+    if system_power.system_suspend_terminal() {
+        latch_terminal_trigger(terminal_trigger, TerminalTrigger::SystemSuspend);
         return CommandControl::Exit;
     }
 
@@ -144,6 +150,8 @@ mod tests {
             TerminalTrigger::SupervisorLeaseExpired.as_str(),
             "supervisor_lease_expired"
         );
+        assert_eq!(TerminalTrigger::SystemSuspend.as_str(), "system_suspend");
+        assert!(!TerminalTrigger::SystemSuspend.requires_error_outcome());
     }
 
     #[test]

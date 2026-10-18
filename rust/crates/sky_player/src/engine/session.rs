@@ -1172,6 +1172,7 @@ impl NativeDispatchSession {
                 OUTCOME_ERROR => EnginePollStatus::Error,
                 OUTCOME_QUIT => EnginePollStatus::Quit,
                 OUTCOME_SKIPPED => EnginePollStatus::Skipped,
+                OUTCOME_SYSTEM_SUSPENDED => EnginePollStatus::SystemSuspended,
                 _ => EnginePollStatus::Finished,
             },
             LIFECYCLE_POISONED
@@ -1754,6 +1755,7 @@ impl NativeDispatchSession {
             OUTCOME_FINISHED => Some("finished"),
             OUTCOME_QUIT => Some("quit"),
             OUTCOME_SKIPPED => Some("skipped"),
+            OUTCOME_SYSTEM_SUSPENDED => Some("system_suspend"),
             OUTCOME_ERROR => Some("error"),
             _ => Some("error"),
         }

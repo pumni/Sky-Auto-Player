@@ -86,6 +86,7 @@ impl Worker<'_> {
                 quit_requested: &shared.commands.quit_requested,
                 panic_requested: &shared.commands.panic_requested,
                 supervisor_expired: &shared.commands.supervisor_expired,
+                system_power: &shared.commands.system_power,
             },
             publication: FinalizePublication {
                 metrics: &shared.publication.metrics,

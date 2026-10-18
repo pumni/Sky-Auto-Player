@@ -8,6 +8,7 @@ use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::event::OwnedEvent;
 use std::num::NonZeroU64;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Barrier};
 
 fn test_qpc_clock() -> QpcClock {
     QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap())
@@ -106,7 +107,7 @@ fn focus_pause_before_future_epoch_remains_clamped() {
 }
 
 #[test]
-fn power_notifications_are_idempotent_and_down_stays_blocked_until_worker_resume() {
+fn power_notifications_are_idempotent_and_system_suspend_stays_terminal_after_resume() {
     let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
     let power = SystemPowerState::default();
 
@@ -122,8 +123,9 @@ fn power_notifications_are_idempotent_and_down_stays_blocked_until_worker_resume
     assert!(power.down_blocked());
     assert_eq!(power.take_pending(), SYSTEM_POWER_RESUME_PENDING);
 
-    assert!(power.complete_resume());
-    assert!(!power.down_blocked());
+    assert!(!power.complete_resume());
+    assert!(power.down_blocked());
+    assert!(power.system_suspend_terminal());
     let (_, _, suspends, resumes, duplicates) = power.snapshot();
     assert_eq!((suspends, resumes, duplicates), (1, 1, 2));
 
@@ -141,7 +143,7 @@ fn pending_power_fast_path_returns_without_consume_when_clear() {
 }
 
 #[test]
-fn notify_cas_exhaustion_fails_closed_until_current_epoch_resume() {
+fn notify_cas_exhaustion_latches_system_suspend_for_the_session() {
     let interrupt = OwnedEvent::new_auto_reset().expect("interrupt event");
     let power = SystemPowerState::default();
 
@@ -174,8 +176,8 @@ fn notify_cas_exhaustion_fails_closed_until_current_epoch_resume() {
         power.take_pending(),
         SYSTEM_POWER_SUSPEND_PENDING | SYSTEM_POWER_RESUME_PENDING
     );
-    assert!(power.complete_resume());
-    assert!(!power.down_blocked());
+    assert!(!power.complete_resume());
+    assert!(power.down_blocked());
     assert_eq!(interrupt.signal_generation(), 2);
 }
 
@@ -203,39 +205,110 @@ fn suspend_boundary_is_captured_before_worker_wakes_and_survives_resume_notifica
     // asleep; the original suspend boundary must remain available.
     assert!(endpoint.notify_system_power(false, None));
     assert_eq!(endpoint.state().suspend_boundary_qpc(), Some(suspend_qpc));
+    assert!(endpoint.state().system_suspend_terminal());
+    assert!(endpoint.state().down_blocked());
 }
 
 #[test]
-fn callback_suspend_boundary_excludes_sleep_sized_qpc_interval() {
-    let mut clock =
-        PlaybackClockState::new(QpcTicks::from_raw(1_000), DurationTicks::ZERO).unwrap();
+fn suspend_then_resume_before_worker_observation_does_not_restore_startup_or_down_gate() {
     let endpoint = SystemPowerEndpoint::new().expect("power endpoint");
     endpoint.reset_for_new_session().expect("new power epoch");
     let suspend_qpc = QpcTicks::from_raw(2_000);
-    let resume_qpc = QpcTicks::from_raw(2_000_000_000);
     assert!(endpoint.notify_system_power(true, Some(suspend_qpc)));
     assert!(endpoint.notify_system_power(false, None));
-    clock
-        .enter_pause(
-            PauseReason::SystemSuspend,
-            endpoint.state().suspend_boundary_qpc().unwrap(),
-        )
-        .unwrap();
-    clock
-        .exit_pause(PauseReason::SystemSuspend, resume_qpc)
-        .unwrap();
+    let state = endpoint.state();
+    assert!(state.system_suspend_terminal());
+    assert!(state.down_blocked());
+    assert!(!state.os_suspended());
     assert_eq!(
-        test_qpc_clock()
-            .duration_to_us(DurationTicks::from_raw(
-                clock.get_elapsed(resume_qpc).unwrap().as_u64(),
-            ))
-            .unwrap(),
-        1_000
+        state.startup_snapshot().abort_reason,
+        super::StartupAbortReason::SystemSuspend
+    );
+    assert!(!state.complete_resume());
+    assert!(state.down_blocked());
+}
+
+#[test]
+fn suspend_racing_armed_publication_has_one_atomic_winner() {
+    let endpoint = SystemPowerEndpoint::new().expect("power endpoint");
+    endpoint.reset_for_new_session().expect("new power epoch");
+    let state = endpoint.state();
+    assert!(state.begin_preparing());
+    assert!(state.publish_ready());
+    assert!(state.begin_arming());
+
+    let gate = Arc::new(Barrier::new(2));
+    let callback_state = Arc::clone(&state);
+    let callback_gate = Arc::clone(&gate);
+    let interrupt = endpoint.interrupt();
+    let callback = std::thread::spawn(move || {
+        callback_gate.wait();
+        callback_state.notify_at(true, Some(QpcTicks::from_raw(70_000)), &interrupt)
+    });
+
+    gate.wait();
+    let armed_publication_won = state.publish_armed();
+    assert!(callback.join().expect("suspend callback completes"));
+
+    let snapshot = state.startup_snapshot();
+    assert!(snapshot.system_suspend_terminal);
+    assert!(state.down_blocked());
+    if armed_publication_won {
+        assert!(snapshot.armed_published);
+        assert_eq!(snapshot.phase, super::StartupPhase::Armed);
+    } else {
+        assert!(!snapshot.armed_published);
+        assert_ne!(snapshot.phase, super::StartupPhase::Armed);
+    }
+    assert!(
+        !state.publish_armed(),
+        "resume cannot reopen Armed after the session suspend latch"
+    );
+    assert!(state.notify_at(false, None, &endpoint.interrupt()));
+    assert!(state.down_blocked());
+    assert!(state.startup_snapshot().system_suspend_terminal);
+}
+
+#[test]
+fn suspend_latches_before_callback_qpc_sampling_and_blocks_armed_commit() {
+    let endpoint = SystemPowerEndpoint::new().expect("power endpoint");
+    endpoint.reset_for_new_session().expect("new power epoch");
+    let state = endpoint.state();
+    assert!(state.begin_preparing());
+    assert!(state.publish_ready());
+    assert!(state.begin_arming());
+
+    let sample_entered = Arc::new(Barrier::new(2));
+    let release_sample = Arc::new(Barrier::new(2));
+    let callback_state = Arc::clone(&state);
+    let callback_interrupt = endpoint.interrupt();
+    let callback_sample_entered = Arc::clone(&sample_entered);
+    let callback_release_sample = Arc::clone(&release_sample);
+    let callback = std::thread::spawn(move || {
+        callback_state.notify_with_qpc(true, &callback_interrupt, || {
+            callback_sample_entered.wait();
+            callback_release_sample.wait();
+            Some(QpcTicks::from_raw(80_000))
+        })
+    });
+
+    sample_entered.wait();
+    assert!(state.system_suspend_terminal());
+    assert!(state.down_blocked());
+    assert!(
+        !state.publish_armed(),
+        "the callback's QPC sample must not defer the suspend decision"
+    );
+    release_sample.wait();
+    assert!(callback.join().expect("suspend callback completes"));
+    assert_eq!(
+        state.startup_snapshot().abort_reason,
+        super::StartupAbortReason::SystemSuspend
     );
 }
 
 #[test]
-fn stale_resume_callback_crossing_session_reset_can_clear_new_session_suspend() {
+fn stale_resume_callback_cannot_clear_new_session_suspend() {
     use std::sync::Arc;
 
     let state = Arc::new(SystemPowerState::default());

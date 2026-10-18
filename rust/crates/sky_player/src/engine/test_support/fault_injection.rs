@@ -1,9 +1,9 @@
 #![cfg(any(test, feature = "test-support"))]
 
 use sky_dispatch_win32::input::PhysicalPacket;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::{Arc, Barrier};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MockSendInputCapture {
@@ -70,6 +70,9 @@ pub struct FaultInjectionScript {
     pub send_call_count: Option<Arc<AtomicU64>>,
     /// Optional test-only capture of exact physical send calls in send order.
     pub send_input_capture: Option<Arc<Mutex<Vec<MockSendInputCapture>>>>,
+    /// Optional first-packet send barriers for deterministic in-flight tests.
+    pub first_packet_send_entered: Option<Arc<Barrier>>,
+    pub release_first_packet_send: Option<Arc<Barrier>>,
     /// Shared test-only count of full-instrument cleanup calls.
     pub full_instrument_release_calls: Option<Arc<AtomicU64>>,
     /// Makes mock preflight fail closed when set.
