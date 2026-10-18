@@ -893,3 +893,7 @@ pub(crate) fn drain_one_observer(
 #[cfg(test)]
 #[path = "hold_forensics_tests.rs"]
 mod hold_forensics_tests;
+
+#[cfg(test)]
+#[path = "dispatch_forensics_qualification_tests.rs"]
+mod dispatch_forensics_qualification_tests;
