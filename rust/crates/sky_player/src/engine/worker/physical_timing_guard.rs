@@ -730,3 +730,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "physical_timing_guard_model_tests.rs"]
+mod model_differential_tests;

@@ -97,6 +97,11 @@ where `effective_min_hold = frame_base_hold + timing_margin` is materialized
 at boot and passed to the guard. The guard does not recompute that sum. It has
 no latest start or feasibility rejection. A normal and a strict/diagnostic
 successful completion use the same update path.
+Each key in one successful atomic packet uses that packet's common sender
+completion QPC: an Up clears the key's previous H floor and sets its T floor;
+a Down clears its previous T floor and sets its H floor. Mixed packets retain
+their Up-before-Down transport order and apply these transitions to their
+disjoint key masks.
 An authorized Down delayed by a floor is still sent once when the non-time
 final gates pass. A matching Up waits for the Down completion floor, and the
 next same-key Down waits for the Up completion floor. A mixed packet waits for
