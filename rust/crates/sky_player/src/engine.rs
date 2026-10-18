@@ -12,6 +12,8 @@ mod worker;
 
 pub use config::DispatchProfile;
 #[cfg(any(test, feature = "test-support"))]
+pub use config::StartupCalibrationPlacement;
+#[cfg(any(test, feature = "test-support"))]
 pub use config::TestWaitPolicy;
 use config::WorkerConfig;
 pub use config::{

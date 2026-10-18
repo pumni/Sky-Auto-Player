@@ -5,6 +5,9 @@ param(
     [Parameter(Mandatory)]
     [ValidateScript({ $_ -ge 0 -and $_ -le 3000 -and $_ % 100 -eq 0 })]
     [int]$TimingMarginUs,
+    [ValidateSet('Baseline', 'Candidate')]
+    [string]$CalibrationPlacement = 'Baseline',
+    [switch]$TimingObserverForQualification,
     [switch]$CpuContention
 )
 
@@ -12,6 +15,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Get-Location).Path
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
 $pwshPath = (Get-Command pwsh.exe).Source
+$pwshExecutablePath = (Get-Process -Id $PID).Path
 $runId = 'native-case-' + (Get-Date -Format 'yyyyMMddTHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $runDir = Join-Path $root (Join-Path '.benchmarks\physical-native-cases' $runId)
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
@@ -59,8 +63,10 @@ function Assert-SinkIdentity {
         throw 'sink ready record omitted process, HWND, event-log, or start-time identity'
     }
     $owner = Get-Process -Id ([int]$Record.pid)
-    if (-not [string]::Equals($owner.Path, $pwshPath, [System.StringComparison]::OrdinalIgnoreCase) -or $owner.SessionId -ne $SessionId -or [long]$owner.MainWindowHandle -ne [long]$Record.hwnd -or $owner.MainWindowTitle -ne $Record.title) {
-        throw 'live sink HWND/process identity mismatch'
+    $ownerStartTimeFiletime = [long]$owner.StartTime.ToUniversalTime().ToFileTimeUtc()
+    $sameExecutable = [string]::Equals($owner.Path, $pwshExecutablePath, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $sameExecutable -or $owner.SessionId -ne $SessionId -or $ownerStartTimeFiletime -ne [long]$Record.process_start_time_filetime -or [long]$owner.MainWindowHandle -ne [long]$Record.hwnd -or $owner.MainWindowTitle -ne $Record.title) {
+        throw ('live sink HWND/process identity mismatch (path=' + $owner.Path + '; expected_path=' + $pwshExecutablePath + '; session=' + $owner.SessionId + '; expected_session=' + $SessionId + '; start=' + $ownerStartTimeFiletime + '; expected_start=' + $Record.process_start_time_filetime + '; hwnd=' + $owner.MainWindowHandle + '; expected_hwnd=' + $Record.hwnd + '; title=' + $owner.MainWindowTitle + '; expected_title=' + $Record.title + ')')
     }
     $records = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
     if ($records.Count -lt 1 -or $records[0].kind -ne 'stream_start' -or $records[0].sequence -ne 0) {
@@ -114,26 +120,47 @@ try {
     if ($CpuContention) {
         $loadCommand = 'while ($true) { [void]([Math]::Sqrt(12345.6789)) }'
         for ($index = 0; $index -lt 2; $index++) {
-            $contentionProcesses += Start-Process -FilePath $pwshPath -ArgumentList @('-NoProfile', '-Command', $loadCommand) -PassThru -WindowStyle Hidden
+            $loadProcess = Start-Process -FilePath $pwshPath -ArgumentList @('-NoProfile', '-Command', $loadCommand) -PassThru -WindowStyle Hidden
+            $loadProcess.PriorityClass = 'BelowNormal'
+            $contentionProcesses += $loadProcess
         }
     }
 
     $harnessHash = Get-Sha256 $harness
     $runnerHash = Get-Sha256 $PSCommandPath
+    $operatingSystem = Get-CimInstance Win32_OperatingSystem
+    $processor = Get-CimInstance Win32_Processor | Select-Object -First 1
+    $rustVersion = (& rustc --version).Trim()
     $runConfig = [ordered]@{
         run_id = $runId
         source_revision = $head
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
+        calibration_placement = $CalibrationPlacement.ToLowerInvariant()
         cpu_contention = [bool]$CpuContention
         cpu_contention_processes = $contentionProcesses.Count
-        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers' } else { $null }
+        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }
         timing_margin_us = $TimingMarginUs
         expected_hold_us = 16667 + $TimingMarginUs
         expected_release_gap_us = 16667 + $TimingMarginUs
+        profile = 'production'
+        telemetry_mode = 'ring'
+        telemetry_capacity = 1024
+        timing_observer_for_qualification = [bool]$TimingObserverForQualification
+        waitable_timer_enabled = $true
+        event_wait_enabled = $true
+        priority_mode = 'auto'
         harness_path = $harness
         harness_sha256 = $harnessHash
         runner_sha256 = $runnerHash
+        rust_version = $rustVersion
+        windows_caption = $operatingSystem.Caption
+        windows_version = $operatingSystem.Version
+        windows_build = $operatingSystem.BuildNumber
+        processor_name = $processor.Name
+        processor_cores = $processor.NumberOfCores
+        processor_logical_processors = $processor.NumberOfLogicalProcessors
+        power_scheme = (& powercfg /getactivescheme | Out-String).Trim()
         sink_ready_path = $readyPath
         sink_event_path = $eventsPath
         sink_pid = [int]$sink.pid
@@ -149,8 +176,10 @@ try {
         '--sink-ready', $readyPath, '--sink-events', $eventsPath,
         '--target-hwnd', ([long]$sink.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture),
         '--scenario', $Scenario, '--evidence', $reportPath,
+        '--calibration-placement', $CalibrationPlacement.ToLowerInvariant(),
         '--timing-margin-us', [string]$TimingMarginUs
     )
+    if ($TimingObserverForQualification) { $harnessArgs += '--timing-observer-for-qualification' }
     if ($Scenario -eq 'focus-loss') {
         $harnessArgs += @('--focus-probe-ready', $probeReadyPath, '--focus-probe-events', $probeEventsPath, '--focus-probe-hwnd', ([long]$probe.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture), '--focus-restore-request', $focusRestoreRequestPath)
     }
@@ -164,7 +193,10 @@ try {
     if ($reportLines.Count -ne 1) { throw 'native harness did not emit exactly one report' }
     $report = $reportLines[0] | ConvertFrom-Json
     if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs) {
-        throw 'native report identity or selected settings do not match this invocation'
+        throw 'native report identity does not match this invocation'
+    }
+    if ($report.status -eq 'PASS' -and ($report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant() -or [bool]$report.details.timing_observer_for_qualification -ne [bool]$TimingObserverForQualification)) {
+        throw 'passing native report settings do not match this invocation'
     }
 
     $sinkRecords = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
@@ -206,9 +238,10 @@ try {
         source_revision = $head
         source_tree_clean = $sourceTreeClean
         scenario = $Scenario
+        calibration_placement = $CalibrationPlacement.ToLowerInvariant()
         cpu_contention = [bool]$CpuContention
         cpu_contention_processes = $contentionProcesses.Count
-        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers' } else { $null }
+        cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }
         timing_margin_us = $TimingMarginUs
         started_utc = $startedUtc
         ended_utc = $endedUtc

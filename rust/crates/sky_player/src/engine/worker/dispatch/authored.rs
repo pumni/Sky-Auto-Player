@@ -754,7 +754,7 @@ pub(super) fn finalize_down_send_outcome(
     if view.packet_masks.down_mask != 0 {
         runtime.musical_physical_commit_started = true;
     }
-    let capture_dispatch_ready_qpc = config.profile.observer_enabled();
+    let capture_dispatch_ready_qpc = config.observer_enabled();
     publisher_down_send_outcome(
         view,
         runtime,

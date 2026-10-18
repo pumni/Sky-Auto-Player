@@ -3,9 +3,10 @@ use super::super::create_mock_backend;
 mod startup_admission;
 use startup_admission::{
     finalize_admission_failure, finalize_startup_abort, record_startup_abort_without_backend,
-    record_startup_failure, startup_abort_trigger, startup_checkpoint, startup_wake_probe,
+    record_startup_failure, startup_abort_trigger, startup_checkpoint,
     validate_production_wait_backend,
 };
+mod startup_calibration;
 mod timing_admission;
 use super::super::config::StartupCheckpoint;
 use super::super::shared::StartupAbortReason;
@@ -20,7 +21,10 @@ use super::{
     WorkerHealthState, WorkerResources, WorkerSchedulingGuards, ensure_preflight_for_target,
     initialize_startup, load_target_stamp,
 };
-use crate::engine::config::{CALIBRATION_SAMPLES, SpinThresholdSource};
+use crate::engine::config::{CALIBRATION_SAMPLES, StartupCalibrationPlacement};
+use startup_calibration::{
+    StartupCalibrationMeasurement, measure_startup_calibration, select_startup_spin_threshold,
+};
 use std::sync::atomic::Ordering;
 use timing_admission::{ConvertedTiming, convert as convert_timing};
 
@@ -74,6 +78,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     } else {
         "legacy_test_wide_spin"
     };
+    #[cfg(any(test, feature = "test-support"))]
+    let calibration_placement = config.startup_calibration_placement;
+    #[cfg(not(any(test, feature = "test-support")))]
+    let calibration_placement = StartupCalibrationPlacement::BeforeSchedulingGuards;
 
     let qpc_clock = match QpcClock::initialize() {
         Ok(clock) => clock,
@@ -380,11 +388,21 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     ) {
         return admission_failure(&mut backend, metrics, error);
     }
-    let calibration_stats = if production_wait {
-        startup_wake_probe(&waiter, qpc_clock, interrupt, initial_now_ticks)
-    } else {
-        None
-    };
+    let mut calibration = StartupCalibrationMeasurement::not_requested();
+    if production_wait
+        && calibration_placement == StartupCalibrationPlacement::BeforeSchedulingGuards
+    {
+        calibration = measure_startup_calibration(
+            shared,
+            config.focus.require_focus && schedule_has_down,
+            &waiter,
+            qpc_clock,
+            interrupt,
+            initial_now_ticks,
+            #[cfg(any(test, feature = "test-support"))]
+            startup_hook,
+        );
+    }
     if let Err(error) = startup_checkpoint(
         shared,
         config.focus.require_focus && schedule_has_down,
@@ -394,54 +412,30 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     ) {
         return admission_failure(&mut backend, metrics, error);
     }
-
-    #[cfg(any(test, feature = "test-support"))]
-    let (effective_spin_threshold_us, spin_threshold_source) =
-        if let Some(threshold_us) = config.wait.test_spin_threshold_us {
-            let source = if threshold_us == 20_000 {
-                SpinThresholdSource::LegacyTestWideSpin
-            } else {
-                SpinThresholdSource::TestFixedOverride
-            };
-            (threshold_us, source)
-        } else if calibration_stats.is_some() {
-            (
-                super::timing::select_spin_threshold_us(calibration_stats),
-                SpinThresholdSource::ProductionStartupCalibration,
-            )
-        } else {
-            (
-                super::timing::select_spin_threshold_us(None),
-                SpinThresholdSource::ProductionFallback,
-            )
-        };
-    #[cfg(not(any(test, feature = "test-support")))]
-    let (effective_spin_threshold_us, spin_threshold_source) = if calibration_stats.is_some() {
-        (
-            super::timing::select_spin_threshold_us(calibration_stats),
-            SpinThresholdSource::ProductionStartupCalibration,
-        )
-    } else {
-        (
-            super::timing::select_spin_threshold_us(None),
-            SpinThresholdSource::ProductionFallback,
-        )
-    };
-    core.metrics.startup_calibration_executed = calibration_stats.is_some();
-    core.metrics.startup_calibration_sample_count = calibration_stats
-        .as_ref()
-        .map(|_| CALIBRATION_SAMPLES as u64)
-        .unwrap_or(0);
+    let (mut effective_spin_threshold_us, mut spin_threshold_source) =
+        select_startup_spin_threshold(config, calibration.stats);
+    if production_wait
+        && calibration_placement == StartupCalibrationPlacement::BeforeSchedulingGuards
+    {
+        core.metrics.startup_calibration_executed = calibration.stats.is_some();
+        core.metrics.startup_calibration_sample_count = calibration
+            .stats
+            .as_ref()
+            .map(|_| CALIBRATION_SAMPLES as u64)
+            .unwrap_or(0);
+        core.metrics.startup_calibration_duration_us = calibration.duration_us;
+        core.metrics.startup_calibration_result = calibration.result as u8;
+        if let Some(stats) = calibration.stats {
+            core.metrics.wake_error_p50_us = stats.p50_us;
+            core.metrics.wake_error_p95_us = stats.p95_us;
+            core.metrics.wake_error_p99_us = stats.p99_us;
+            core.metrics.wake_error_max_us = stats.max_us;
+            core.metrics.startup_wake_error_robust_us = stats.robust_us;
+        }
+    }
     core.metrics.spin_threshold_source = spin_threshold_source as u8;
     core.metrics.effective_spin_threshold_us = effective_spin_threshold_us;
-    if let Some(stats) = calibration_stats {
-        core.metrics.wake_error_p50_us = stats.p50_us;
-        core.metrics.wake_error_p95_us = stats.p95_us;
-        core.metrics.wake_error_p99_us = stats.p99_us;
-        core.metrics.wake_error_max_us = stats.max_us;
-        core.metrics.startup_wake_error_robust_us = stats.robust_us;
-    }
-    let effective_spin_threshold_ticks =
+    let mut effective_spin_threshold_ticks =
         match qpc_clock.duration_from_us(effective_spin_threshold_us) {
             Ok(ticks) => ticks,
             Err(error) => {
@@ -452,6 +446,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 );
             }
         };
+    worker_timing.effective_spin_threshold_ticks = effective_spin_threshold_ticks;
+
     let health_options = DispatchHealthOptions {
         wait_warn_us: config.timing.input_path_warn_us,
         ..DispatchHealthOptions::default()
@@ -486,13 +482,12 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
 
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
-    worker_timing.effective_spin_threshold_ticks = effective_spin_threshold_ticks;
     worker_timing.start_wall_time_us = initial_now_us;
     worker_timing.start_thread_cpu_us = start_thread_cpu_us;
     worker_timing.start_process_cpu_us = start_process_cpu_us;
     worker_timing.last_cpu_metrics_sample_us = initial_now_us;
     core.timing = Some(worker_timing);
-    if config.profile.observer_enabled() {
+    if config.observer_enabled() {
         #[cfg(any(test, feature = "test-support"))]
         if startup_hook.is_some_and(|hook| hook.take_observer_spawn_failure()) {
             return admission_failure(
@@ -536,12 +531,78 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     core.metrics.power_throttling_disabled = scheduling.is_power_active();
     *priority_acquired.lock() = scheduling.priority_label().to_string();
+    *shared.publication.startup_priority_mode_acquired.lock() =
+        scheduling.priority_label().to_string();
+    shared
+        .publication
+        .startup_power_guard_acquired
+        .store(scheduling.is_power_active(), Ordering::Release);
 
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = startup_hook {
         let delay_us = hook.boot_delay_us.load(Ordering::Acquire);
         if delay_us != 0 {
             std::thread::sleep(std::time::Duration::from_micros(delay_us));
+        }
+    }
+    if production_wait
+        && calibration_placement == StartupCalibrationPlacement::AfterSchedulingGuards
+    {
+        calibration = measure_startup_calibration(
+            shared,
+            config.focus.require_focus && schedule_has_down,
+            &waiter,
+            qpc_clock,
+            interrupt,
+            initial_now_ticks,
+            #[cfg(any(test, feature = "test-support"))]
+            startup_hook,
+        );
+    }
+    if let Err(error) = startup_checkpoint(
+        shared,
+        config.focus.require_focus && schedule_has_down,
+        StartupCheckpoint::StreamBuild,
+        #[cfg(any(test, feature = "test-support"))]
+        startup_hook,
+    ) {
+        return admission_failure(&mut backend, metrics, error);
+    }
+    if production_wait
+        && calibration_placement == StartupCalibrationPlacement::AfterSchedulingGuards
+    {
+        let calibration_stats = calibration.stats;
+        (effective_spin_threshold_us, spin_threshold_source) =
+            select_startup_spin_threshold(config, calibration_stats);
+        core.metrics.startup_calibration_executed = calibration_stats.is_some();
+        core.metrics.startup_calibration_sample_count = calibration_stats
+            .as_ref()
+            .map(|_| CALIBRATION_SAMPLES as u64)
+            .unwrap_or(0);
+        core.metrics.startup_calibration_duration_us = calibration.duration_us;
+        core.metrics.startup_calibration_result = calibration.result as u8;
+        core.metrics.spin_threshold_source = spin_threshold_source as u8;
+        core.metrics.effective_spin_threshold_us = effective_spin_threshold_us;
+        if let Some(stats) = calibration_stats {
+            core.metrics.wake_error_p50_us = stats.p50_us;
+            core.metrics.wake_error_p95_us = stats.p95_us;
+            core.metrics.wake_error_p99_us = stats.p99_us;
+            core.metrics.wake_error_max_us = stats.max_us;
+            core.metrics.startup_wake_error_robust_us = stats.robust_us;
+        }
+        effective_spin_threshold_ticks =
+            match qpc_clock.duration_from_us(effective_spin_threshold_us) {
+                Ok(ticks) => ticks,
+                Err(error) => {
+                    return admission_failure(
+                        &mut backend,
+                        metrics,
+                        format!("spin threshold conversion failed: {error:?}"),
+                    );
+                }
+            };
+        if let Some(timing) = core.timing.as_mut() {
+            timing.effective_spin_threshold_ticks = effective_spin_threshold_ticks;
         }
     }
     if let Err(error) = startup_checkpoint(

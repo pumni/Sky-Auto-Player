@@ -63,6 +63,28 @@ fn calibration_budget_is_independent_of_published_preroll() {
 }
 
 #[test]
+fn candidate_calibration_keeps_the_original_absolute_deadline() {
+    let initial_now = QpcTicks::from_raw(2_000);
+    let candidate_probe_start = QpcTicks::from_raw(18_000);
+    let calibration_budget = DurationTicks::from_raw(20_000);
+    let deadline =
+        startup_probe_deadline(initial_now, calibration_budget).expect("absolute startup deadline");
+
+    assert_eq!(deadline, QpcTicks::from_raw(22_000));
+    assert!(candidate_probe_start < deadline);
+    assert_eq!(
+        deadline.as_u64() - candidate_probe_start.as_u64(),
+        4_000,
+        "candidate receives only the remaining time from the original budget"
+    );
+    assert_ne!(
+        deadline,
+        startup_probe_deadline(candidate_probe_start, calibration_budget)
+            .expect("a newly reset deadline would be arithmetically valid")
+    );
+}
+
+#[test]
 fn calibration_deadline_overflow_fails_closed() {
     let initial_now = QpcTicks::from_raw(100_000);
     let calibration_budget = DurationTicks::from_raw(u64::MAX);

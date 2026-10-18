@@ -1,5 +1,5 @@
 use super::{
-    ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US,
+    ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US, CalibrationPlacement,
     DRAIN_DEADLINE_MS, DrainClock, DrainMode, DrainResult, EVENT_SCHEMA_VERSION, EventRecord,
     EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY,
     MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
@@ -670,6 +670,61 @@ fn timing_margin_override_accepts_only_bounded_hundred_microsecond_values() {
         );
         assert!(parse_args(args).is_err(), "invalid margin {margin}");
     }
+}
+
+#[test]
+fn calibration_placement_is_an_explicit_paired_run_setting() {
+    let ParsedCommand::Run(defaults) = parse_args(base_arguments("canonical-single"))
+        .expect("baseline placement defaults")
+    else {
+        panic!("expected run command")
+    };
+    assert_eq!(defaults.calibration_placement, CalibrationPlacement::Baseline);
+    assert!(!defaults.timing_observer_for_qualification);
+
+    let mut candidate_args = base_arguments("canonical-single");
+    candidate_args.extend(
+        ["--calibration-placement", "candidate"]
+            .into_iter()
+            .map(str::to_owned),
+    );
+    let ParsedCommand::Run(candidate) = parse_args(candidate_args)
+        .expect("candidate placement is accepted")
+    else {
+        panic!("expected run command")
+    };
+    assert_eq!(candidate.calibration_placement, CalibrationPlacement::Candidate);
+
+    for placement in ["baseline", "candidate"] {
+        let mut args = base_arguments("canonical-single");
+        args.extend(
+            ["--calibration-placement", placement]
+                .into_iter()
+                .map(str::to_owned),
+        );
+        assert!(parse_args(args).is_ok(), "placement {placement}");
+    }
+    let mut invalid = base_arguments("canonical-single");
+    invalid.extend(
+        ["--calibration-placement", "after-ready"]
+            .into_iter()
+            .map(str::to_owned),
+    );
+    assert!(parse_args(invalid).is_err());
+}
+
+#[test]
+fn timing_observer_is_opt_in_for_qualification_runs_only() {
+    let mut args = base_arguments("canonical-single");
+    args.push("--timing-observer-for-qualification".to_string());
+    let ParsedCommand::Run(run) = parse_args(args.clone()).expect("qualification observer flag")
+    else {
+        panic!("expected run command")
+    };
+    assert!(run.timing_observer_for_qualification);
+
+    args.push("--timing-observer-for-qualification".to_string());
+    assert!(parse_args(args).is_err(), "duplicate observer flag is rejected");
 }
 #[test]
 fn timing_margin_sweep_authors_exact_hold_and_release_targets() {

@@ -198,3 +198,228 @@ The sink is an isolated receiver used to verify the project harness and
 receiver observation path. Even a successful native run establishes only
 that the harness sent to and the sink observed project-owned test input. It
 does not establish that Sky received a transition or that audio began.
+
+## Startup calibration placement qualification
+
+Issue #467 compares the current placement (Baseline A), before scheduling
+guards, with Candidate B, after worker preparation allocations, observer
+startup, and scheduling-guard acquisition, but before `Ready`, `Armed`, or
+epoch publication. The placement selector exists only in test-support and the
+feature-gated native qualification harness. Shipping builds have no runtime
+placement setting.
+
+Both placements run the same six zero-spin samples with the existing 2 ms
+targets and 20 ms startup calibration budget. The absolute deadline remains
+anchored at the same QPC sample immediately before Baseline A would probe:
+
+```text
+probe_deadline = initial_probe_qpc + 20 ms
+```
+
+Candidate B receives only the remaining portion of that deadline. It does not
+get a new budget after resource setup. An exhausted deadline selects the same
+safe fallback threshold and is recorded as a calibration fallback. The worker
+publishes the calibration result and selected threshold before Ready. A
+controlled test-only completion seam allows Stop and Skip to race a successful
+probe completion without depending on timer resolution; the final pre-Ready
+startup gate remains authoritative.
+
+The qualification runner builds one Release executable and alternates AB/BA
+within each paired workload cell. It covers sparse single-key sequences,
+single-key traffic, mixed Up/Down packets, 15-key chords, and near-minimum
+same-key retriggers under quiet and two BelowNormal-priority CPU workers. Each
+session writes the bounded native telemetry ring and the exact ReceiveOnly
+event window, with checksums and host/build provenance. Raw per-session QPC
+records remain under `.benchmarks/wake-calibration-qualification/`; reports
+must include per-field availability, missing counts, telemetry truncation,
+and empirical p50, p95, p99, p99.9, maximum, and sample count. Low-count cells
+must be labeled as weakly supported rather than treating p99.9 as a service
+guarantee.
+
+The qualification build enables the existing timing observer through a
+test-support-only option while keeping the production dispatch profile and
+timing policy. This supplies per-packet QPC traces without using the strict
+diagnostic profile or exposing a production setting. A run with no accepted
+trace records is invalid for the placement comparison. The harness also
+retains the priority/MMCSS mode and power guard acquisition result separately
+from their post-session released state.
+
+Before collecting A/B results, Candidate B promotion was conditioned on all
+of the following:
+
+- Every paired run passes generation, packet-order, ReceiveOnly event-count,
+  joined retirement, and cleanup checks, with zero transport anomalies or
+  unresolved release obligations.
+- In both load conditions, paired median p99 residual lateness improves by
+  at least 10% and 100 µs in at least three of the five workload groups; at
+  least five of six pairs in each counted group must move in the improving
+  direction. The pooled session p95 startup wake-error metric must also
+  improve by at least 10% and 50 µs.
+- Candidate Ready-latency p95 increases by no more than 1 ms, no individual
+  paired median increases by more than 2 ms, and calibration fallback rate
+  increases by no more than one percentage point.
+- Worker CPU and process CPU do not increase by more than 5% at the paired
+  median, spin duty cycle does not increase by more than two percentage
+  points, and acquired priority/MMCSS and power-throttling guard status do not
+  regress.
+
+If any required distribution is missing, too small to evaluate, noisy, or
+truncated, the evidence is inconclusive and Baseline A remains the shipping
+policy. Wake-probe statistics are six startup wait observations per completed
+session; they characterize the calibration input rather than production
+dispatch p99. Packet timing fields are sampled QPC boundaries around the
+sender. ReceiveOnly messages establish sink receipt by this test process only.
+The qualification does not measure Sky note reception or audio onset.
+
+### Windows 11 paired results — 2026-10-18
+
+The promotion gate was applied to qualification `wake-calibration-20261018T161010-7459e9f8`.
+The measured source revision was
+`a9d74c2e5ff919c701b4797d194ca29efa9f7d47`, with a clean source tree. Both
+placements used the same Release harness binary
+(`6890349d508ed753d690bd51ca075583789ccde672804210ce96ba10e71b1d12`). The
+platform was Windows 11 x64 with Rust `1.99.1 (58cf8f9c3 2026-10-13)` and
+10,000,000 QPC ticks per second. Timing margin was 500 µs. The committed
+evidence omits the host CPU model, exact Windows build, power-scheme identifier,
+process identifiers, absolute paths, and raw event timestamps.
+
+The runner alternated AB and BA order across 60 pairs: six repetitions for
+each of five workloads under quiet conditions and under two hidden
+BelowNormal-priority CPU workers. The workloads were
+`long-single-sequence`, `canonical-single`, `mixed-up-down`,
+`canonical-max-chord` (15-key chord), and `near-minimum-retrigger`. It ran 120
+sessions total, with 60 sessions per placement. Every session passed the
+ReceiveOnly acceptance checks. Each placement completed all six calibration
+samples in all 60 sessions, with zero calibration fallbacks. MMCSS `Games`
+and the startup power guard were acquired in all sessions. There were no
+transport anomalies, unresolved release obligations, failed release checks,
+or nonzero final release masks. The telemetry ring accepted 756 records for
+each placement; both placements had zero telemetry drops, observer queue
+drops, and truncated reports.
+
+The tables use empirical nearest-rank quantiles. Session rows summarize 60
+session values per placement. Dispatch rows summarize 756 packet records,
+except HOL, which has 696 available values and 60 expected missing first-packet
+values. `p99.9` equals the maximum at these sample counts and is not a tail
+service guarantee. Values are microseconds unless the unit column says
+otherwise; counts show `samples / missing`.
+
+| Session metric | Unit | Baseline A p50 / p95 / p99 / p99.9 / max | A n / missing | Candidate B p50 / p95 / p99 / p99.9 / max | B n / missing |
+| --- | --- | --- | --- | --- | --- | --- |
+| Ready latency | µs | 14667 / 15328 / 15495 / 15495 / 15495 | 60 / 0 | 13869 / 14627 / 14794 / 14794 / 14794 | 60 / 0 |
+| Calibration duration | µs | 14272 / 14919 / 15074 / 15074 / 15074 | 60 / 0 | 13477 / 14207 / 14362 / 14362 / 14362 | 60 / 0 |
+| Startup wake error, per-session p50 | µs | 399 / 512 / 516 / 516 / 516 | 60 / 0 | 80 / 451 / 512 / 512 / 512 | 60 / 0 |
+| Startup wake error, per-session p95 | µs | 519 / 669 / 831 / 831 / 831 | 60 / 0 | 530 / 853 / 954 / 954 / 954 | 60 / 0 |
+| Effective spin threshold | µs | 838 / 1000 / 1000 / 1000 / 1000 | 60 / 0 | 911 / 1000 / 1000 / 1000 / 1000 | 60 / 0 |
+| Worker CPU time | µs | 0 / 31250 / 62500 / 62500 / 62500 | 60 / 0 | 0 / 62500 / 78125 / 78125 / 78125 | 60 / 0 |
+| Process CPU time | µs | 0 / 46875 / 78125 / 78125 / 78125 | 60 / 0 | 0 / 62500 / 78125 / 78125 / 78125 | 60 / 0 |
+| Spin duty cycle | ppm | 0 / 0 / 0 / 0 / 0 | 60 / 0 | 0 / 0 / 0 / 0 / 0 | 60 / 0 |
+
+| Dispatch metric | Unit | Baseline A p50 / p95 / p99 / p99.9 / max | A n / missing | Candidate B p50 / p95 / p99 / p99.9 / max | B n / missing |
+| --- | --- | --- | --- | --- | --- | --- |
+| Authored lateness | µs | 28.9 / 173.5 / 329.7 / 612.8 / 612.8 | 756 / 0 | 29.5 / 206.2 / 515.0 / 720.7 / 720.7 | 756 / 0 |
+| Physical floor displacement | µs | 0 / 170.6 / 322.2 / 611.1 / 611.1 | 756 / 0 | 0 / 181.1 / 462.9 / 605.2 / 605.2 | 756 / 0 |
+| Residual lateness | µs | 8.9 / 28.6 / 56.9 / 248.7 / 248.7 | 756 / 0 | 9.1 / 34.9 / 173.7 / 291.6 / 291.6 | 756 / 0 |
+| HOL lower bound | µs | 0 / 0 / 0 / 0 / 0 | 696 / 60 | 0 / 0 / 0 / 0 / 0 | 696 / 60 |
+| Sender envelope | µs | 128.6 / 341.8 / 490.7 / 2123.3 / 2123.3 | 756 / 0 | 129.0 / 266.0 / 560.6 / 819.9 / 819.9 | 756 / 0 |
+
+The per-session startup wake p95 distribution moved from p50/p95
+`519/669 µs` under Baseline A to `530/853 µs` under Candidate B. The packet
+residual-lateness p99 moved from `56.9 µs` to `173.7 µs`. Ready latency p95
+was 701 µs lower for B, with the largest paired Ready increase 561 µs. The
+Ready result did not offset the wake and dispatch regressions.
+
+Paired p99 residual-lateness deltas below are `Candidate B - Baseline A` in
+µs; a negative value favors B. No group met the required 100 µs and 10%
+improvement in at least five of six pairs.
+
+| Workload | Load | Median paired p99 delta | Pairs improved / 6 |
+| --- | --- | ---: | ---: |
+| 15-key chord | Quiet | -0.3 | 4 |
+| 15-key chord | Contention | -1.2 | 3 |
+| Canonical single | Quiet | -2.1 | 4 |
+| Canonical single | Contention | -2.5 | 3 |
+| Long single sequence | Quiet | -8.1 | 4 |
+| Long single sequence | Contention | -4.4 | 3 |
+| Mixed Up/Down | Quiet | -2.6 | 6 |
+| Mixed Up/Down | Contention | -0.4 | 3 |
+| Near-minimum retrigger | Quiet | +2.5 | 1 |
+| Near-minimum retrigger | Contention | -0.4 | 3 |
+
+Windows CPU time counters were quantized in 15.625 ms steps. Their zero
+medians and coarse upper quantiles cannot establish the 5% CPU-cost gate; the
+long-single quiet worker median was one counter step higher for B, so the
+available CPU evidence does not support promotion. Reported zero spin duty
+cycle is the recorded value and does not establish that no spin occurred.
+Candidate B therefore fails the predeclared improvement gate and the shipping
+recommendation is to retain Baseline A. Candidate placement remains
+qualification-only; production continues to calibrate before scheduling
+guards.
+
+Timing attribution is limited to measured QPC boundaries: calibration sample
+wake errors, authored and floor-relative packet timing against the sampled
+sender pre-call boundary, and the pre-call-to-`SendInput` completion envelope.
+The OS worker/process CPU counters are separate coarse CPU-time observations.
+The dedicated ReceiveOnly sink verified event delivery from the test harness.
+No metric here establishes a Sky key transition, note reception, or audio
+latency.
+
+Reproduce on a Windows 11 x64 host with the pinned toolchain using:
+
+```powershell
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/qualify_startup_calibration.ps1 -TimingMarginUs 500
+```
+
+The qualification build command was `cargo build --locked --manifest-path
+rust/Cargo.toml -p sky_player --features real-input-acceptance --bin
+rt-native-acceptance --release` (exit 0). The run summary and ordered session
+ledger are retained locally under
+`.benchmarks/wake-calibration-qualification/wake-calibration-20261018T161010-7459e9f8/`;
+the 120 per-session reports, sink event windows, invocation details, and
+checksums are under `.benchmarks/physical-native-cases/`. The summary SHA-256
+is `4036a7c77ffa5f038de44ed284c177dc2f0ff3c7c0a360e541a59d425fd92cd2`, the
+ordered ledger SHA-256 is
+`0969ed103082412ed810f07d338ef8ab901e584b7e4540f189c6e15df3d7e767`, and the
+qualification metadata SHA-256 is
+`9f49decd7987addae29e8487b10aafa36f0eaf9acac234f87e0a88733e467e21`.
+
+The sanitized, machine-readable projection is
+[`wake-calibration-qualification-20261018.json`](evidence/wake-calibration-qualification-20261018.json),
+SHA-256 `68323b15e8f47773f92fda79187f9dfe61e3e673898fd4a8af256ec49a8070a8`.
+It contains the 120-row run-order ledger,
+60 paired comparisons, all 20 workload/load/placement cells, nearest-rank
+distributions, per-field sample/missing/drop/truncation counts, and artifact
+hashes. `scripts/export_startup_calibration_evidence.ps1` verifies the
+qualification manifest and every file listed by all 120 per-session
+manifests before it exports the projection. The accepted local artifact set
+passed that verification: four qualification inputs and all files in 120 case
+directories (1,320 files total); the qualification manifest SHA-256 is
+`c26829d68a5c744392dca4f9b38bd70b8ff8fb1d4485851772a26a229816c6b7`. Recreate
+the sanitized projection from the preserved local artifact directories with:
+
+```powershell
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/export_startup_calibration_evidence.ps1 -QualificationDirectory .benchmarks/wake-calibration-qualification/wake-calibration-20261018T161010-7459e9f8 -CaseRoot .benchmarks/physical-native-cases -OutputPath docs/evidence/wake-calibration-qualification-20261018.json
+```
+
+The raw reports and sink traces remain ignored under
+`.benchmarks/`; the committed projection preserves their relevant checksums
+without publishing the raw records or local machine identifiers.
+
+The measured source SHA above differs from the final PR head. Changes after the
+measured source only affect diagnostic reporting, completion-handle retirement,
+test support, source organization, or the acceptance harness's handling of an
+already-foreground ReceiveOnly sink. Baseline A remains the production
+calibration placement. The join correction runs after worker terminal cleanup
+and does not change authored QPC deadlines, calibration placement, timing
+floors, dispatch decisions, or SendInput calls. The focus helper itself is
+restored to its earlier strict contract; the acceptance harness now checks the
+exact already-foreground sink HWND before requesting a focus change. The
+recorded 120-session timing comparison therefore remains applicable without
+repeating the experiment.
+
+Three earlier attempts were excluded from the comparison: one lacked accepted
+timing-observer records, one lacked retained scheduling-guard acquisition
+evidence, and a partial run stopped after focus verification falsely rejected
+an already-foreground sink. The latter case remained pre-arm and sent no
+input. The accepted 120-session run used the corrected harness and passed all
+acceptance checks.

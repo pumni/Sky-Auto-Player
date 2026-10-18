@@ -30,7 +30,7 @@ use acceptance_limits::*;
 pub(super) use entrypoint::main;
 use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
 use scenarios::{action, acceptance_min_hold_us, acceptance_min_release_gap_us, expected_physical_keys, scenario_plan};
-use arguments::{ParsedCommand, RunArgs, Scenario};
+use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
 #[cfg(test)]
 pub(super) use scenarios::noncanonical_profile_spec;
 use snapshot_report::{
@@ -57,7 +57,7 @@ pub(super) use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
 use sky_player::engine::NativeDispatchSession;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 #[cfg(windows)]
@@ -98,156 +98,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--timing-margin-us <0..3000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
-}
-fn validate_run_id(value: &str) -> Result<String, String> {
-    if value.is_empty()
-        || value.len() > MAX_RUN_ID_BYTES
-        || value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
-    {
-        return Err("run ID must be 1..128 non-whitespace, non-control characters".to_string());
-    }
-    Ok(value.to_string())
-}
-fn bounded_path(value: &str, flag: &str) -> Result<PathBuf, String> {
-    if value.is_empty() || value.len() > MAX_PATH_BYTES || value.chars().any(char::is_control) {
-        return Err(format!("{flag} must be a bounded nonempty path"));
-    }
-    Ok(PathBuf::from(value))
-}
-fn parse_hwnd(value: &str) -> Result<isize, String> {
-    let value = value.trim();
-    let parsed = if let Some(hex) = value.strip_prefix("0x") {
-        u64::from_str_radix(hex, 16)
-    } else if let Some(hex) = value.strip_prefix("0X") {
-        u64::from_str_radix(hex, 16)
-    } else {
-        value.parse::<u64>()
-    }
-    .map_err(|_| "target HWND must be a decimal or 0x-prefixed hexadecimal integer".to_string())?;
-    if parsed == 0 {
-        return Err("target HWND must be nonzero".to_string());
-    }
-    let max = isize::MAX as u64;
-    if parsed > max {
-        return Err("target HWND is outside the positive isize range".to_string());
-    }
-    Ok(parsed as isize)
-}
-fn parse_timing_margin_us(value: &str) -> Result<u64, String> {
-    let parsed = value.parse::<u64>().map_err(|_| "--timing-margin-us must be 0..3000 in 100 us steps".to_string())?;
-    if (ACCEPTANCE_TIMING_MARGIN_MIN_US..=ACCEPTANCE_TIMING_MARGIN_MAX_US).contains(&parsed)
-        && parsed % ACCEPTANCE_TIMING_MARGIN_STEP_US == 0
-    {
-        Ok(parsed)
-    } else {
-        Err("--timing-margin-us must be 0..3000 in 100 us steps".to_string())
-    }
-}
-fn parse_args<I>(arguments: I) -> Result<ParsedCommand, String>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut arguments = arguments.into_iter();
-    let Some(command) = arguments.next() else {
-        return Err(usage().to_string());
-    };
-    if command == "--help" || command == "-h" {
-        return Ok(ParsedCommand::Help);
-    }
-    if command != "run" {
-        return Err(format!("expected subcommand run, got {command:?}"));
-    }
-    let mut allow_real_input = false;
-    let mut run_id = None;
-    let mut sink_ready = None;
-    let mut sink_events = None;
-    let mut target_hwnd = None;
-    let mut scenario = None;
-    let mut evidence = None; let mut timing_margin_us = None;
-    let mut focus_probe_ready = None;
-    let mut focus_probe_events = None;
-    let mut focus_probe_hwnd = None;
-    let mut focus_restore_request = None;
-    let mut arguments = arguments.peekable();
-    while let Some(flag) = arguments.next() {
-        macro_rules! next_value {
-            ($name:literal) => {
-                arguments
-                    .next()
-                    .ok_or_else(|| format!("{} requires a value", $name))?
-            };
-        }
-        macro_rules! unique {
-            ($slot:ident, $name:literal) => {{
-                if $slot.is_some() {
-                    return Err(format!("duplicate {}", $name));
-                }
-            }};
-        }
-        if flag == "--allow-real-input" {
-            if allow_real_input {
-                return Err("duplicate --allow-real-input".to_string());
-            }
-            allow_real_input = true;
-            continue;
-        }
-        match flag.as_str() {
-            "--run-id" => { unique!(run_id, "--run-id"); run_id = Some(validate_run_id(&next_value!("--run-id"))?); }
-            "--sink-ready" => { unique!(sink_ready, "--sink-ready"); let value = next_value!("--sink-ready"); sink_ready = Some(bounded_path(&value, "--sink-ready")?); }
-            "--sink-events" => { unique!(sink_events, "--sink-events"); let value = next_value!("--sink-events"); sink_events = Some(bounded_path(&value, "--sink-events")?); }
-            "--target-hwnd" => { unique!(target_hwnd, "--target-hwnd"); target_hwnd = Some(parse_hwnd(&next_value!("--target-hwnd"))?); }
-            "--scenario" => { unique!(scenario, "--scenario"); scenario = Some(Scenario::parse(&next_value!("--scenario"))?); }
-            "--evidence" => { unique!(evidence, "--evidence"); let value = next_value!("--evidence"); evidence = Some(bounded_path(&value, "--evidence")?); }
-            "--timing-margin-us" => { unique!(timing_margin_us, "--timing-margin-us"); timing_margin_us = Some(parse_timing_margin_us(&next_value!("--timing-margin-us"))?); }
-            "--focus-probe-ready" => { unique!(focus_probe_ready, "--focus-probe-ready"); let value = next_value!("--focus-probe-ready"); focus_probe_ready = Some(bounded_path(&value, "--focus-probe-ready")?); }
-            "--focus-probe-events" => { unique!(focus_probe_events, "--focus-probe-events"); let value = next_value!("--focus-probe-events"); focus_probe_events = Some(bounded_path(&value, "--focus-probe-events")?); }
-            "--focus-probe-hwnd" => { unique!(focus_probe_hwnd, "--focus-probe-hwnd"); focus_probe_hwnd = Some(parse_hwnd(&next_value!("--focus-probe-hwnd"))?); }
-            "--focus-restore-request" => { unique!(focus_restore_request, "--focus-restore-request"); let value = next_value!("--focus-restore-request"); focus_restore_request = Some(bounded_path(&value, "--focus-restore-request")?); }
-            "--help" | "-h" => return Ok(ParsedCommand::Help),
-            _ => return Err(format!("unknown argument {flag:?}")),
-        }
-    }
-    if !allow_real_input {
-        return Err("--allow-real-input is required".to_string());
-    }
-    let scenario = scenario.ok_or_else(|| "--scenario is required".to_string())?;
-    let run = RunArgs {
-        run_id: run_id.ok_or_else(|| "--run-id is required".to_string())?,
-        sink_ready: sink_ready.ok_or_else(|| "--sink-ready is required".to_string())?,
-        sink_events: sink_events.ok_or_else(|| "--sink-events is required".to_string())?,
-        target_hwnd: target_hwnd.ok_or_else(|| "--target-hwnd is required".to_string())?,
-        scenario,
-        evidence: evidence.ok_or_else(|| "--evidence is required".to_string())?,
-        timing_margin_us: timing_margin_us.unwrap_or(ACCEPTANCE_TIMING_MARGIN_US),
-        focus_probe_ready,
-        focus_probe_events,
-        focus_probe_hwnd,
-        focus_restore_request,
-    };
-    let probe_count = [
-        run.focus_probe_ready.is_some(),
-        run.focus_probe_events.is_some(),
-        run.focus_probe_hwnd.is_some(),
-    ]
-    .into_iter()
-    .filter(|present| *present)
-    .count();
-    if run.scenario.needs_focus_probe() && probe_count != 3 {
-        return Err(
-            "focus-loss requires --focus-probe-ready, --focus-probe-events, and --focus-probe-hwnd"
-                .to_string(),
-        );
-    }
-    if run.scenario.needs_focus_probe() != run.focus_restore_request.is_some() {
-        return Err("focus-loss requires --focus-restore-request and other scenarios may not use it".to_string());
-    }
-    if !run.scenario.needs_focus_probe() && probe_count != 0 {
-        return Err("focus-probe arguments are valid only for focus-loss".to_string());
-    }
-    Ok(ParsedCommand::Run(Box::new(run)))
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
 }
 fn protocol_expectation(role: &str) -> Result<(&'static str, &'static str, &'static str), String> {
     match role {
@@ -499,7 +350,15 @@ fn run_windows(args: RunArgs) -> i32 {
         },
         None => None,
     };
-    if !focus_window_and_verify(sink_hwnd, Duration::from_millis(250)) { inconclusive!("receive-only sink could not be made the exact foreground HWND", json!({})); }
+    // A receive-only sink that is already the exact foreground HWND needs no
+    // focus request. Keep the product focus admission helper strict about a
+    // successful SetForegroundWindow call; this harness pre-check is only a
+    // setup convenience for an already-satisfied target state.
+    if !foreground_window_matches(sink_hwnd)
+        && !focus_window_and_verify(sink_hwnd, Duration::from_millis(250))
+    {
+        inconclusive!("receive-only sink could not be made the exact foreground HWND", json!({}));
+    }
     let plan = match scenario_plan(args.scenario, args.timing_margin_us) {
         Ok(plan) => plan,
         Err(error) => return write_report(&args, Verdict::Fail, &error, json!({})),
@@ -508,6 +367,11 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
     let (mut options, modifier_query_count) = modifier_guard::native_session_options(plan.schedule, plan.profile, args.timing_margin_us, args.scenario);
+    options.startup_calibration_placement = match args.calibration_placement {
+        CalibrationPlacement::Baseline => sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+        CalibrationPlacement::Candidate => sky_player::engine::StartupCalibrationPlacement::AfterSchedulingGuards,
+    };
+    options.timing_observer_for_qualification = args.timing_observer_for_qualification;
     let acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
     options.startup_ordering_hook = acceptance_hook.clone();
     let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(
@@ -667,6 +531,13 @@ fn run_windows(args: RunArgs) -> i32 {
     owner_identity::clear_test_override(args.scenario);
     let snapshot = session.snapshot();
     if !joined { inconclusive!("production session did not join within the bounded timeout", snapshot_json(&snapshot)); }
+    let timing_telemetry: Value = match session
+        .take_telemetry_json()
+        .and_then(|output| serde_json::from_str(&output).map_err(|error| error.to_string()))
+    {
+        Ok(output) => output,
+        Err(error) => inconclusive!(&format!("native timing telemetry unavailable: {error}"), snapshot_json(&snapshot)),
+    };
     let sink_drain_mode = DrainMode::ExpectedEvents { allow_unpaired_cleanup_ups: plan.allow_unpaired_cleanup_ups };
     let (sink_events, sink_drain_failure) = match drain_event_window(
         &args.sink_events,
@@ -700,6 +571,9 @@ fn run_windows(args: RunArgs) -> i32 {
     };
     let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, expected_down.len() + expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
+        object.insert("calibration_placement".to_string(), json!(args.calibration_placement.label()));
+        object.insert("timing_observer_for_qualification".to_string(), json!(args.timing_observer_for_qualification));
+        object.insert("native_timing_telemetry".to_string(), timing_telemetry);
         if args.scenario == Scenario::SupervisorLeaseExpiry {
             object.insert("supervisor_progress".to_string(), json!({"source":"direct_native_session_seed","desktop_monitor_exercised":false}));
         }

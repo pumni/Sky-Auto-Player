@@ -10,6 +10,46 @@ pub(crate) const CALIBRATION_SAFETY_MARGIN_US: u64 = 50;
 pub(crate) const CALIBRATION_SAMPLES: usize = 6;
 pub(crate) const CALIBRATION_MAX_STARTUP_BUDGET_US: u64 = 20_000;
 pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
+
+/// Experimental calibration placement exposed only by test-support builds.
+/// Normal application builds use the internal shipping selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupCalibrationPlacement {
+    BeforeSchedulingGuards,
+    AfterSchedulingGuards,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum StartupCalibrationResult {
+    NotRequested = 0,
+    Completed = 1,
+    BudgetExpired = 2,
+    Interrupted = 3,
+    Unavailable = 4,
+}
+
+impl StartupCalibrationResult {
+    pub(crate) const fn from_raw(value: u8) -> Self {
+        match value {
+            1 => Self::Completed,
+            2 => Self::BudgetExpired,
+            3 => Self::Interrupted,
+            4 => Self::Unavailable,
+            _ => Self::NotRequested,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::NotRequested => "not_requested",
+            Self::Completed => "completed",
+            Self::BudgetExpired => "budget_expired",
+            Self::Interrupted => "interrupted",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
 /// Maximum interval for the non-realtime supervisor to prove it is still
 /// alive. The direct desktop adapter consumes this same qualified safety
 /// boundary.
@@ -173,6 +213,12 @@ pub struct NativeSessionOptions {
     pub instrument_key_profile: Option<InstrumentKeyProfileSpec>,
     #[cfg(any(test, feature = "test-support"))]
     pub startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
+    /// Paired benchmark selector; absent from production-facing options.
+    #[cfg(any(test, feature = "test-support"))]
+    pub startup_calibration_placement: StartupCalibrationPlacement,
+    /// Enables existing QPC timing observation for qualification builds only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub timing_observer_for_qualification: bool,
     #[cfg(any(test, feature = "test-support"))]
     pub restore_race_hook: Option<RestoreRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
@@ -219,6 +265,8 @@ pub struct StartupOrderingHook {
     startup_checkpoint_released: AtomicBool,
     startup_checkpoint_lock: std::sync::Mutex<()>,
     startup_checkpoint_cv: std::sync::Condvar,
+    #[cfg(test)]
+    complete_startup_calibration_after_checkpoint: AtomicBool,
     panic_startup_checkpoint: AtomicU8,
     fail_worker_spawn: AtomicBool,
     fail_watchdog_spawn: AtomicBool,
@@ -247,10 +295,26 @@ pub enum StartupCheckpoint {
     FirstDownCommitted = 10,
     #[cfg(any(test, feature = "test-support"))]
     TerminalCleanup = 11,
+    #[cfg(any(test, feature = "test-support"))]
+    WakeCalibration = 12,
+    #[cfg(any(test, feature = "test-support"))]
+    WorkerCompletionPublished = 13,
 }
 
 #[cfg(any(test, feature = "test-support"))]
 impl StartupOrderingHook {
+    #[cfg(test)]
+    pub(crate) fn complete_startup_calibration_after_checkpoint(&self) {
+        self.complete_startup_calibration_after_checkpoint
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_startup_calibration_completion(&self) -> bool {
+        self.complete_startup_calibration_after_checkpoint
+            .swap(false, Ordering::AcqRel)
+    }
+
     pub fn fail_next_worker_spawn(&self) {
         self.fail_worker_spawn.store(true, Ordering::Release);
     }
@@ -304,6 +368,13 @@ impl StartupOrderingHook {
             .lock()
             .ok()
             .and_then(|threads| Some((threads.0?, threads.1?)))
+    }
+
+    pub fn scheduling_guard_acquired_thread(&self) -> Option<std::thread::ThreadId> {
+        self.scheduling_threads
+            .lock()
+            .ok()
+            .and_then(|threads| threads.0)
     }
 
     pub fn arm_startup_checkpoint(&self, checkpoint: StartupCheckpoint, occurrence: usize) {
@@ -526,11 +597,28 @@ pub(crate) struct WorkerConfig {
     pub(super) telemetry: TelemetryOptions,
     pub(super) priority: PriorityOptions,
     #[cfg(any(test, feature = "test-support"))]
+    pub(super) startup_calibration_placement: StartupCalibrationPlacement,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) timing_observer_for_qualification: bool,
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) prepared_packet_ambiguity_mask: Option<u16>,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) preflight_user_held_mask: Option<u16>,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) modifier_key_state_query_for_test: Option<Arc<dyn Fn(i32) -> i16 + Send + Sync>>,
+}
+
+impl WorkerConfig {
+    pub(crate) fn observer_enabled(&self) -> bool {
+        if self.profile.observer_enabled() {
+            return true;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        if self.timing_observer_for_qualification {
+            return true;
+        }
+        false
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -571,6 +659,8 @@ impl Default for WorkerConfig {
             priority: PriorityOptions {
                 mode: PriorityMode::Off,
             },
+            startup_calibration_placement: StartupCalibrationPlacement::BeforeSchedulingGuards,
+            timing_observer_for_qualification: false,
             prepared_packet_ambiguity_mask: None,
             preflight_user_held_mask: None,
             modifier_key_state_query_for_test: None,
@@ -653,7 +743,7 @@ pub struct PriorityOptions {
 mod tests {
     use super::{
         DEFAULT_SPIN_THRESHOLD_US, DispatchProfile, MIN_CALIBRATED_SPIN_US, TestWaitPolicy,
-        WaitOptions,
+        WaitOptions, WorkerConfig,
     };
 
     #[test]
@@ -667,6 +757,16 @@ mod tests {
     fn production_profile_has_no_deferred_observer() {
         assert!(!DispatchProfile::Production.observer_enabled());
         assert!(DispatchProfile::StrictTimingDiagnostic.observer_enabled());
+    }
+
+    #[test]
+    fn qualification_observer_preserves_production_dispatch_profile() {
+        let mut config = WorkerConfig::default();
+        assert_eq!(config.profile, DispatchProfile::Production);
+        assert!(!config.observer_enabled());
+        config.timing_observer_for_qualification = true;
+        assert!(config.observer_enabled());
+        assert_eq!(config.profile, DispatchProfile::Production);
     }
 
     #[test]

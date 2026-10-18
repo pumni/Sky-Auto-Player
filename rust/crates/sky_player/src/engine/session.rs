@@ -1,4 +1,4 @@
-use super::config::{AdmittedNativeSessionOptions, DispatchProfile, NativeSessionOptions};
+use super::config::{AdmittedNativeSessionOptions, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
     StartupAbortReason, StartupPhase, SupervisorLeaseState, SystemPowerEndpoint,
@@ -12,7 +12,39 @@ use crate::engine::{EnginePollSnapshot, EnginePollStatus};
 use sky_dispatch_core::coordinator::GenerationAccounting;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+fn join_thread_until(
+    handle: &mut Option<std::thread::JoinHandle<()>>,
+    started: Instant,
+    timeout: Duration,
+    panic_message: &'static str,
+) -> Result<bool, String> {
+    loop {
+        match handle.as_ref() {
+            None => return Ok(true),
+            Some(thread) if thread.is_finished() => {
+                handle
+                    .take()
+                    .expect("finished thread handle remains present")
+                    .join()
+                    .map_err(|_| panic_message.to_string())?;
+                return Ok(true);
+            }
+            Some(_) => {}
+        }
+
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        // The completion condition is published immediately before the
+        // wrapper thread returns. A waiter can observe that publication while
+        // JoinHandle::is_finished is still false. Keep waiting within the
+        // caller's original deadline instead of reporting a premature timeout.
+        std::thread::sleep(remaining.min(Duration::from_millis(1)));
+    }
+}
 
 fn publish_focus_hint(focus_active: &AtomicBool, interrupt: &OwnedEvent, active: bool) {
     if focus_active.swap(active, Ordering::AcqRel) != active {
@@ -200,7 +232,7 @@ pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<
 
 pub struct NativeDispatchSession {
     config: Mutex<Option<AdmittedNativeSessionOptions>>,
-    profile: DispatchProfile,
+    observer_enabled: bool,
     focus_required: bool,
     generation_count: u64,
     shared: Arc<SessionShared>,
@@ -210,6 +242,16 @@ pub struct NativeDispatchSession {
     watchdog_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     window_identity_authority:
         Mutex<Option<(sky_dispatch_win32::focus::WindowIdentityAuthority, u64)>>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct JoinStateForTest {
+    pub(super) completion_signaled: Option<bool>,
+    pub(super) worker_handle_present: bool,
+    pub(super) worker_handle_finished: Option<bool>,
+    pub(super) watchdog_handle_present: bool,
+    pub(super) watchdog_handle_finished: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,6 +318,9 @@ impl NativeDispatchSession {
             .last()
             .map_or(0, |batch| batch.scheduled_us);
         let generation_count = options.schedule.generation_count;
+        let observer_enabled = options.profile.observer_enabled();
+        #[cfg(any(test, feature = "test-support"))]
+        let observer_enabled = observer_enabled || options.timing_observer_for_qualification;
         let require_owner_identity =
             options.focus.require_focus && matches!(&options.backend, BackendConfig::Production);
         let target = SessionTarget::new(0, 0);
@@ -315,6 +360,8 @@ impl NativeDispatchSession {
                 progress_clock: super::shared::SharedProgressClock::default(),
                 telemetry_output: Mutex::new(None),
                 priority_acquired: Mutex::new("pending".to_string()),
+                startup_priority_mode_acquired: Mutex::new("pending".to_string()),
+                startup_power_guard_acquired: AtomicBool::new(false),
                 startup_requested_ticks: AtomicU64::new(0),
                 epoch_qpc: AtomicU64::new(0),
                 pre_roll_us: AtomicU64::new(0),
@@ -327,7 +374,7 @@ impl NativeDispatchSession {
             instrument_key_profile,
         };
         Ok(Self {
-            profile: admitted_options.options.profile,
+            observer_enabled,
             focus_required: admitted_options.options.focus.require_focus,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
@@ -417,6 +464,8 @@ impl NativeDispatchSession {
         let timer_lifecycle_context = config.options.timer_lifecycle_context.clone();
         #[cfg(any(test, feature = "test-support"))]
         let watchdog_test_hook = config.options.startup_ordering_hook.clone();
+        #[cfg(any(test, feature = "test-support"))]
+        let worker_test_hook = config.options.startup_ordering_hook.clone();
         #[cfg(any(test, feature = "test-support"))]
         let fail_watchdog_spawn = config
             .options
@@ -593,6 +642,12 @@ impl NativeDispatchSession {
             if let Ok(mut done) = done_lock.lock() {
                 *done = true;
                 done_cv.notify_all();
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(hook) = worker_test_hook.as_deref() {
+                hook.visit_startup_checkpoint(
+                    super::config::StartupCheckpoint::WorkerCompletionPublished,
+                );
             }
         };
         #[cfg(any(test, feature = "test-support"))]
@@ -1256,7 +1311,7 @@ impl NativeDispatchSession {
             release_max_us: local.release_max_us,
             release_late_2ms: local.release_late_2ms,
             recent_latencies_us: local.recent_latencies.to_vec(),
-            recent_latency_samples_available: self.profile.observer_enabled(),
+            recent_latency_samples_available: self.observer_enabled,
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
@@ -1415,7 +1470,7 @@ impl NativeDispatchSession {
             release_max_us: local.release_max_us,
             release_late_2ms: local.release_late_2ms,
             recent_latencies_us: local.recent_latencies.to_vec(),
-            recent_latency_samples_available: self.profile.observer_enabled(),
+            recent_latency_samples_available: self.observer_enabled,
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
@@ -1498,6 +1553,17 @@ impl NativeDispatchSession {
                 .lock()
                 .clone(),
             rt_priority_acquired: self.shared.publication.priority_acquired.lock().clone(),
+            startup_priority_mode_acquired: self
+                .shared
+                .publication
+                .startup_priority_mode_acquired
+                .lock()
+                .clone(),
+            startup_power_guard_acquired: self
+                .shared
+                .publication
+                .startup_power_guard_acquired
+                .load(Ordering::Acquire),
             requested_wait_policy: self
                 .shared
                 .publication
@@ -1514,6 +1580,12 @@ impl NativeDispatchSession {
                 .clone(),
             startup_calibration_executed: local.startup_calibration_executed,
             startup_calibration_sample_count: local.startup_calibration_sample_count,
+            startup_calibration_duration_us: local.startup_calibration_duration_us,
+            startup_calibration_result: crate::engine::config::StartupCalibrationResult::from_raw(
+                local.startup_calibration_result,
+            )
+            .label()
+            .to_string(),
             startup_wake_error_p50_us: local.wake_error_p50_us,
             startup_wake_error_p95_us: local.wake_error_p95_us,
             startup_wake_error_p99_us: local.wake_error_p99_us,
@@ -1681,7 +1753,34 @@ impl NativeDispatchSession {
         &self.shared
     }
 
+    #[cfg(test)]
+    pub(super) fn join_state_for_test(&self) -> JoinStateForTest {
+        let completion_signaled = self
+            .shared
+            .lifecycle
+            .completed
+            .0
+            .lock()
+            .ok()
+            .map(|done| *done);
+        let worker_handle = self.thread_handle.lock();
+        let worker_handle_present = worker_handle.is_some();
+        let worker_handle_finished = worker_handle.as_ref().map(|handle| handle.is_finished());
+        drop(worker_handle);
+        let watchdog_handle = self.watchdog_handle.lock();
+        let watchdog_handle_present = watchdog_handle.is_some();
+        let watchdog_handle_finished = watchdog_handle.as_ref().map(|handle| handle.is_finished());
+        JoinStateForTest {
+            completion_signaled,
+            worker_handle_present,
+            worker_handle_finished,
+            watchdog_handle_present,
+            watchdog_handle_finished,
+        }
+    }
+
     pub fn join(&self, timeout: Duration) -> Result<bool, String> {
+        let started = Instant::now();
         if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) == LIFECYCLE_NEW {
             return Err("session has not been started".to_string());
         }
@@ -1690,36 +1789,32 @@ impl NativeDispatchSession {
             .lock()
             .map_err(|_| "session completion lock was poisoned".to_string())?;
         let (done, _) = done_cv
-            .wait_timeout_while(done, timeout, |done| !*done)
+            .wait_timeout_while(done, timeout.saturating_sub(started.elapsed()), |done| {
+                !*done
+            })
             .map_err(|_| "session completion wait was poisoned".to_string())?;
         if !*done {
             return Ok(false);
         }
         drop(done);
         let mut worker_handle = self.thread_handle.lock();
-        if worker_handle
-            .as_ref()
-            .is_some_and(|handle| !handle.is_finished())
-        {
+        if !join_thread_until(
+            &mut worker_handle,
+            started,
+            timeout,
+            "native dispatch worker panicked",
+        )? {
             return Ok(false);
-        }
-        if let Some(handle) = worker_handle.take() {
-            handle
-                .join()
-                .map_err(|_| "native dispatch worker panicked".to_string())?;
         }
         drop(worker_handle);
         let mut watchdog_handle = self.watchdog_handle.lock();
-        if watchdog_handle
-            .as_ref()
-            .is_some_and(|handle| !handle.is_finished())
-        {
+        if !join_thread_until(
+            &mut watchdog_handle,
+            started,
+            timeout,
+            "supervisor watchdog panicked",
+        )? {
             return Ok(false);
-        }
-        if let Some(handle) = watchdog_handle.take() {
-            handle
-                .join()
-                .map_err(|_| "supervisor watchdog panicked".to_string())?;
         }
         Ok(true)
     }

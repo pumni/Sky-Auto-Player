@@ -91,6 +91,9 @@ fn test_session_options(
             mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
         },
         instrument_key_profile: None,
+        startup_calibration_placement:
+            super::config::StartupCalibrationPlacement::BeforeSchedulingGuards,
+        timing_observer_for_qualification: false,
         startup_ordering_hook: None,
         restore_race_hook: None,
         focus_pause_hook: None,
@@ -318,6 +321,117 @@ fn startup_boundary_publishes_after_worker_startup() {
     assert!(snapshot.startup_latency_us.is_some());
     let (requested, ready) = session.startup_ticks();
     assert!(requested <= ready);
+}
+
+#[test]
+fn startup_calibration_placement_stays_before_ready_and_tracks_guard_context() {
+    for (placement, guards_precede_calibration) in [
+        (
+            super::config::StartupCalibrationPlacement::BeforeSchedulingGuards,
+            false,
+        ),
+        (
+            super::config::StartupCalibrationPlacement::AfterSchedulingGuards,
+            true,
+        ),
+    ] {
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::WakeCalibration, 1);
+        hook.complete_startup_calibration_after_checkpoint();
+        let mut options = test_session_options(
+            startup_boundary_schedule(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        );
+        options.profile = DispatchProfile::MockTest;
+        options.wait.test_spin_threshold_us = None;
+        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+        options.startup_calibration_placement = placement;
+        options.startup_ordering_hook = Some(Arc::clone(&hook));
+        let session = NativeDispatchSession::new(options).expect("calibration placement session");
+        session.arm(100_000).expect("calibration placement arm");
+
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(!session.snapshot().startup_ready);
+        assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
+        assert_eq!(
+            hook.scheduling_guard_acquired_thread().is_some(),
+            guards_precede_calibration,
+            "placement {placement:?}"
+        );
+        hook.release_startup_checkpoint();
+        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.outcome.as_deref(), Some("finished"));
+        assert!(snapshot.startup_ready);
+        assert!(snapshot.startup_armed);
+        assert!(snapshot.startup_calibration_executed);
+        assert_eq!(snapshot.startup_calibration_sample_count, 6);
+        assert_eq!(snapshot.startup_calibration_result, "completed");
+        assert_eq!(snapshot.startup_priority_mode_acquired, "off");
+        let (acquired, dropped) = hook
+            .scheduling_guard_threads()
+            .expect("guard lifetime is observable");
+        assert_eq!(acquired, dropped);
+    }
+}
+
+#[test]
+fn accepted_stop_or_skip_during_candidate_calibration_cannot_publish_armed() {
+    for (skip, expected_status, expected_outcome) in [
+        (false, EnginePollStatus::Quit, "quit"),
+        (true, EnginePollStatus::Skipped, "skipped"),
+    ] {
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::WakeCalibration, 1);
+        // Complete the controlled probe successfully after the command races
+        // it. The post-probe startup gate must still give cancellation priority.
+        hook.complete_startup_calibration_after_checkpoint();
+        let send_calls = Arc::new(AtomicU64::new(0));
+        let mut fault_script = FaultInjectionScript::none();
+        fault_script.send_call_count = Some(Arc::clone(&send_calls));
+        let mut options = test_session_options(
+            startup_boundary_schedule(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script,
+            },
+        );
+        options.profile = DispatchProfile::MockTest;
+        options.wait.test_spin_threshold_us = None;
+        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+        options.startup_calibration_placement =
+            super::config::StartupCalibrationPlacement::AfterSchedulingGuards;
+        options.startup_ordering_hook = Some(Arc::clone(&hook));
+        let session = NativeDispatchSession::new(options).expect("candidate calibration session");
+        session.arm(100_000).expect("candidate calibration arm");
+
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(hook.scheduling_guard_acquired_thread().is_some());
+        assert!(!session.snapshot().startup_ready);
+        assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
+        if skip {
+            session.skip().expect("accept skip during calibration");
+        } else {
+            session.quit().expect("accept stop during calibration");
+        }
+        hook.release_startup_checkpoint();
+        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.status, expected_status.as_str());
+        assert_eq!(snapshot.outcome.as_deref(), Some(expected_outcome));
+        assert!(!snapshot.startup_armed);
+        assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
+        assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[test]
@@ -1215,8 +1329,60 @@ fn run_seeded_adaptive_startup_schedule(
     run_seeded_adaptive_startup_schedule_with_capacity(schedule, allowed_count, 16).1
 }
 
+fn startup_probe_diagnostics(
+    session: &NativeDispatchSession,
+    hook: &StartupOrderingHook,
+    scheduled_us: u64,
+    elapsed_before_join: Duration,
+    join_elapsed: Option<Duration>,
+    join_result: &str,
+    quit_result: &str,
+) -> String {
+    let snapshot = session.snapshot();
+    let shared = session.shared_for_test();
+    let startup = shared.commands.system_power.startup_snapshot();
+    let join_state = session.join_state_for_test();
+    let power = session.system_power_snapshot();
+    let terminal_error = snapshot
+        .terminal_error
+        .as_deref()
+        .map(|error| error.chars().take(160).collect::<String>());
+
+    format!(
+        "scheduled_us={scheduled_us} elapsed_before_join_us={} join_elapsed_us={:?} join_result={join_result} quit_request={quit_result} lifecycle_raw={} status={} startup={startup:?} completion={:?} worker_handle_present={} worker_finished={:?} watchdog_handle_present={} watchdog_finished={:?} control={{quit_requested={},skip_requested={},panic_requested={},supervisor_expired={},last_progress_ticks={}}} power={power:?} cleanup={{release={:?},obligation_mask=0x{:04x},release_attempts={},active={},possibly_active={},failed_release={}}} timing={{first_physical_send_marker={},ready={},armed={},startup_latency_us={:?},session_elapsed_us={}}} terminal={{worker_outcome={:?},trigger={:?},error={terminal_error:?}}}",
+        elapsed_before_join.as_micros(),
+        join_elapsed.map(|elapsed| elapsed.as_micros()),
+        shared.lifecycle.lifecycle.load(Ordering::Acquire),
+        snapshot.status,
+        join_state.completion_signaled,
+        join_state.worker_handle_present,
+        join_state.worker_handle_finished,
+        join_state.watchdog_handle_present,
+        join_state.watchdog_handle_finished,
+        shared.commands.quit_requested.load(Ordering::Acquire),
+        shared.commands.skip_requested.load(Ordering::Acquire),
+        shared.commands.panic_requested.load(Ordering::Acquire),
+        shared.commands.supervisor_expired.is_expired(),
+        shared.commands.supervisor_expired.last_progress_ticks(),
+        snapshot.release_outcome,
+        snapshot.final_release_obligation_mask,
+        snapshot.release_attempts_total,
+        snapshot.active_count,
+        snapshot.possibly_active_count,
+        snapshot.failed_release_count,
+        hook.first_physical_send_started.load(Ordering::Acquire),
+        snapshot.startup_ready,
+        snapshot.startup_armed,
+        snapshot.startup_latency_us,
+        snapshot.elapsed_us,
+        snapshot.outcome,
+        snapshot.terminal_trigger_reason,
+    )
+}
+
 fn run_startup_first_physical_lead_probe(
     schedule: sky_dispatch_core::model::RuntimeSchedule,
+    scheduled_us: u64,
 ) -> serde_json::Value {
     let hook = Arc::new(StartupOrderingHook::default());
     let mut options = test_session_options(
@@ -1232,32 +1398,86 @@ fn run_startup_first_physical_lead_probe(
     options.wait.supervisor_lease_timeout_us = 3_000_000;
     let session = NativeDispatchSession::new(options).expect("session admission");
     start_with_test_wall_clock_slack(&session);
+    let probe_started = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(5);
     while hook.first_physical_send_started.load(Ordering::Acquire) == 0
         && !session.snapshot().is_finished
         && Instant::now() < deadline
     {
-        session.publish_supervisor_progress().expect("heartbeat");
+        if let Err(error) = session.publish_supervisor_progress() {
+            panic!(
+                "startup probe heartbeat failed ({error}): {}",
+                startup_probe_diagnostics(
+                    &session,
+                    &hook,
+                    scheduled_us,
+                    probe_started.elapsed(),
+                    None,
+                    "not attempted",
+                    "not requested",
+                )
+            );
+        }
         std::thread::sleep(Duration::from_millis(1));
     }
     let snapshot = session.snapshot();
     assert!(
         hook.first_physical_send_started.load(Ordering::Acquire) > 0,
-        "startup probe did not reach physical dispatch: snapshot={snapshot:?}"
+        "startup probe did not reach physical dispatch: {}; snapshot status={} outcome={:?} terminal_error={:?}",
+        startup_probe_diagnostics(
+            &session,
+            &hook,
+            scheduled_us,
+            probe_started.elapsed(),
+            None,
+            "not attempted",
+            "not requested",
+        ),
+        snapshot.status,
+        snapshot.outcome,
+        snapshot.terminal_error,
     );
-    if !session.snapshot().is_finished
-        && let Err(error) = session.quit()
-    {
-        // The worker may finish between the state check and quit().  That is
-        // benign cleanup for this probe; any other quit failure must still
-        // fail the test rather than being hidden.
-        assert_eq!(
-            error, "session commands require a running worker",
-            "probe quit"
-        );
-        assert!(session.snapshot().is_finished, "probe quit after race");
-    }
-    assert!(session.join(Duration::from_secs(5)).expect("probe join"));
+    let quit_result = if !session.snapshot().is_finished {
+        match session.quit() {
+            Ok(()) => "accepted".to_string(),
+            Err(error)
+                if error == "session commands require a running worker"
+                    && session.snapshot().is_finished =>
+            {
+                "worker finished before request".to_string()
+            }
+            Err(error) => panic!(
+                "startup probe quit failed ({error}): {}",
+                startup_probe_diagnostics(
+                    &session,
+                    &hook,
+                    scheduled_us,
+                    probe_started.elapsed(),
+                    None,
+                    "not attempted",
+                    "rejected",
+                )
+            ),
+        }
+    } else {
+        "worker already finished".to_string()
+    };
+    let join_started = Instant::now();
+    let join_result = session.join(Duration::from_secs(5));
+    let join_elapsed = join_started.elapsed();
+    assert!(
+        join_result.as_ref().is_ok_and(|joined| *joined),
+        "startup probe join failed: {}",
+        startup_probe_diagnostics(
+            &session,
+            &hook,
+            scheduled_us,
+            probe_started.elapsed(),
+            Some(join_elapsed),
+            &format!("{join_result:?}"),
+            &quit_result,
+        )
+    );
     serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
         .expect("valid telemetry JSON")
 }
@@ -4845,7 +5065,7 @@ fn production_startup_matrix_preserves_first_physical_lead() {
             &[0x15],
         )
         .expect("valid startup matrix schedule");
-        let telemetry = run_startup_first_physical_lead_probe(schedule);
+        let telemetry = run_startup_first_physical_lead_probe(schedule, scheduled_us);
         let first = telemetry["records"]
             .as_array()
             .expect("records")
@@ -4854,6 +5074,80 @@ fn production_startup_matrix_preserves_first_physical_lead() {
             .expect("first physical record");
         assert_eq!(first["applied_lead_ticks"].as_u64(), Some(0));
     }
+}
+
+#[test]
+fn join_waits_within_the_original_timeout_after_completion_publication() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::WorkerCompletionPublished, 1);
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    options.wait.supervisor_lease_timeout_us = 3_000_000;
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    start_with_test_wall_clock_slack(&session);
+
+    let reached = hook.wait_for_startup_checkpoint(Duration::from_secs(5));
+    if !reached {
+        hook.release_startup_checkpoint();
+        let _ = session.join(Duration::from_secs(5));
+        panic!(
+            "worker did not reach the completion publication barrier: {}",
+            startup_probe_diagnostics(
+                &session,
+                &hook,
+                0,
+                Duration::ZERO,
+                None,
+                "not attempted",
+                "not requested",
+            )
+        );
+    }
+
+    let terminal_snapshot = session.snapshot();
+    let timeout = Duration::from_millis(100);
+    let join_started = Instant::now();
+    let timed_out_join = session.join(timeout);
+    let join_elapsed = join_started.elapsed();
+    let join_state_while_held = session.join_state_for_test();
+
+    // Always release the test barrier before asserting, so a failed assertion
+    // cannot leave a detached worker behind.
+    hook.release_startup_checkpoint();
+    let final_join = session.join(Duration::from_secs(5));
+
+    assert_eq!(terminal_snapshot.outcome, Some("finished".to_string()));
+    assert!(terminal_snapshot.terminal_error.is_none());
+    assert_eq!(terminal_snapshot.active_count, 0);
+    assert_eq!(terminal_snapshot.possibly_active_count, 0);
+    assert_eq!(terminal_snapshot.failed_release_count, 0);
+    assert_eq!(terminal_snapshot.final_release_obligation_mask, 0);
+    assert!(
+        timed_out_join.as_ref().is_ok_and(|joined| !*joined),
+        "join must preserve a timed-out wrapper thread: result={timed_out_join:?}, state={join_state_while_held:?}"
+    );
+    assert!(
+        join_elapsed >= Duration::from_millis(80),
+        "join returned before its timeout while the worker wrapper was held: elapsed={join_elapsed:?}, state={join_state_while_held:?}"
+    );
+    assert_eq!(join_state_while_held.completion_signaled, Some(true));
+    assert!(join_state_while_held.worker_handle_present);
+    assert_eq!(join_state_while_held.worker_handle_finished, Some(false));
+    assert!(
+        final_join.as_ref().is_ok_and(|joined| *joined),
+        "released worker and watchdog must be joinable: {final_join:?}"
+    );
+    let joined_state = session.join_state_for_test();
+    assert!(!joined_state.worker_handle_present);
+    assert!(!joined_state.watchdog_handle_present);
 }
 
 #[test]
