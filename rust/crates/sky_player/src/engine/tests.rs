@@ -6,21 +6,21 @@ use super::test_support::command_timing::{
 };
 use super::test_support::{MockSendInputCapture, ProductionDispatchTestHarness};
 use super::{
-    BackendConfig, CommandTimingResult, CommandTimingState, DispatchProfile, DownAdmission,
-    EnginePollStatus, FaultInjectionScript, FinalControlAdmission, FinalControlSignals,
+    BackendConfig, CommandTimingResult, CommandTimingState, DispatchProfile, EnginePollStatus,
+    FaultInjectionScript, FinalControlAdmission, FinalControlSignals, FinalDownVerdict,
     FinalTargetSignals, FocusOptions, HealthWindow, HealthWindowPolicy, InjectedSendOutcome,
-    NativeDispatchSession, NativeSessionOptions, PlatformSendResult, PriorityOptions,
-    RtTraceRecord, SharedMetrics, StartupOrderingHook, TRACE_FLAG_SENT_FULL, TRACE_KIND_DOWN,
-    TRACE_SEND_STATUS_NOT_ATTEMPTED, TargetStamp, TelemetryCollector, TelemetryMode,
-    TelemetryOptions, TimestampProvenance, TimingOptions, TraceContext, TraceDelivery, TraceTiming,
-    TrackedKeyState, WaitOptions, WakeErrorStats, Worker, WorkerMetricsLocal,
-    adjust_spin_threshold, anchored_dispatch_target_ticks, cpu_metrics_sample_due,
-    deadline_target_ticks, derive_spin_threshold_us, ensure_preflight_for_target,
-    exact_sender_durations, final_control_precheck, final_down_target_admission,
-    focus_gate_matches, focus_matches, focus_matches_hwnd, record_input_path_health,
-    record_termination_error, release_runtime_outcome, signed_timeline_delta_ticks,
-    supervisor_lease_expired, target_stamp_still_current, trace_outcome_code,
-    trace_send_status_code, try_publish_metrics, wake_lateness_ticks,
+    NativeDispatchSession, NativeSessionOptions, OwnerAdmissionFailure, PlatformSendResult,
+    PriorityOptions, RtTraceRecord, SharedMetrics, StartupOrderingHook, TRACE_FLAG_SENT_FULL,
+    TRACE_KIND_DOWN, TRACE_SEND_STATUS_NOT_ATTEMPTED, TargetStamp, TelemetryCollector,
+    TelemetryMode, TelemetryOptions, TimestampProvenance, TimingOptions, TraceContext,
+    TraceDelivery, TraceTiming, TrackedKeyState, WaitOptions, WakeErrorStats, Worker,
+    WorkerMetricsLocal, adjust_spin_threshold, anchored_dispatch_target_ticks,
+    cpu_metrics_sample_due, deadline_target_ticks, derive_spin_threshold_us,
+    ensure_preflight_for_target, exact_sender_durations, final_control_precheck,
+    final_down_target_admission, focus_gate_matches, focus_matches, focus_matches_hwnd,
+    record_input_path_health, record_termination_error, release_runtime_outcome,
+    signed_timeline_delta_ticks, supervisor_lease_expired, target_stamp_still_current,
+    trace_outcome_code, trace_send_status_code, try_publish_metrics, wake_lateness_ticks,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 use sky_dispatch_core::clock::PauseReason;
@@ -6129,7 +6129,7 @@ fn fresh_target_proof_is_admitted_after_aba_invalidates_old_proof() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::Allowed
+        FinalDownVerdict::Allowed
     );
 }
 
@@ -6187,7 +6187,7 @@ fn early_focus_gate_is_atomic_only_and_final_admission_queries_once() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::Allowed
+        FinalDownVerdict::Allowed
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
@@ -6220,7 +6220,7 @@ fn final_down_owner_proof_rejects_recycled_hwnd_owner() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::OwnerMismatch
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch)
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
@@ -6250,7 +6250,7 @@ fn final_down_owner_proof_has_typed_failures_and_one_query_per_suffix() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::OwnerIdentityAbsent
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityAbsent)
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 0);
@@ -6272,7 +6272,7 @@ fn final_down_owner_proof_has_typed_failures_and_one_query_per_suffix() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::OwnerIdentityStale
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityStale)
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
 
@@ -6291,7 +6291,7 @@ fn final_down_owner_proof_has_typed_failures_and_one_query_per_suffix() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::OwnerProcessTerminated
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProcessTerminated)
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
 
@@ -6311,7 +6311,7 @@ fn final_down_owner_proof_has_typed_failures_and_one_query_per_suffix() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::OwnerQueryUnavailable
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::QueryUnavailable)
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
@@ -6330,7 +6330,7 @@ fn final_down_owner_proof_has_typed_failures_and_one_query_per_suffix() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::Allowed
+        FinalDownVerdict::Allowed
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
@@ -6349,7 +6349,7 @@ fn final_down_owner_proof_has_typed_failures_and_one_query_per_suffix() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::Allowed
+        FinalDownVerdict::Allowed
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 0);
@@ -6397,7 +6397,7 @@ fn final_down_rechecks_identity_after_the_post_focus_race_hook() {
             post_focus_race_hook: Some(&hook),
             post_focus_control_signals: Some(controls),
         }),
-        DownAdmission::OwnerMismatch
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch)
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
@@ -6429,7 +6429,7 @@ fn target_aba_rejects_stale_owner_authority_until_full_rebind() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::OwnerIdentityStale
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityStale)
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 0);
@@ -6445,7 +6445,7 @@ fn target_aba_rejects_stale_owner_authority_until_full_rebind() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::Allowed
+        FinalDownVerdict::Allowed
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
     assert_eq!(sky_dispatch_win32::focus::owner_query_count(), 1);
@@ -6523,7 +6523,7 @@ fn final_down_admission_rejects_target_change_before_send() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::TargetChanged
+        FinalDownVerdict::TargetChanged
     );
 }
 
@@ -6546,7 +6546,7 @@ fn final_down_target_admission_checks_target_before_focus() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::FocusLost
+        FinalDownVerdict::FocusLost
     );
 }
 
@@ -6572,7 +6572,7 @@ fn final_admission_requires_fresh_foreground_match_and_rechecks_atomic_focus() {
         post_focus_race_hook: None,
         post_focus_control_signals: None,
     });
-    assert_eq!(final_admission, DownAdmission::FocusLost);
+    assert_eq!(final_admission, FinalDownVerdict::FocusLost);
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
 
     // Once the producer publishes the loss, the early atomic gate suppresses
@@ -6590,7 +6590,7 @@ fn final_admission_requires_fresh_foreground_match_and_rechecks_atomic_focus() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::FocusLost
+        FinalDownVerdict::FocusLost
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 1);
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
@@ -6743,6 +6743,336 @@ fn prepared_final_gate_buckets_count_early_late_target_and_focus_rejections() {
     ));
     assert_eq!(focus_calls.load(Ordering::SeqCst), 0);
     assert_eq!(focus_loss.local_metrics.final_gate_focus_losses, 1);
+}
+
+#[test]
+fn prepared_and_strict_paths_match_shared_final_down_fault_matrix() {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ControlAfterLease {
+        Stop,
+        Skip,
+        Panic,
+        Pause,
+        Suspend,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum OwnerFailureAfterModifier {
+        ProcessTerminated,
+        Mismatch,
+        QueryUnavailable,
+        WindowUnavailable,
+        ProcessIdentityMismatch,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Fault {
+        Allowed,
+        TargetAbaAfterModifier,
+        FocusLossAfterModifier,
+        ForegroundWindowSwitch,
+        ForegroundOwnerSwitch,
+        ForegroundOwnerUnavailable,
+        OwnerFailureAfterModifier(OwnerFailureAfterModifier),
+        ModifierHeld,
+        ModifierAcquiredAfterCheck,
+        LeaseExpired,
+        LeaseUnproven,
+        LeaseClockFailure,
+        ControlAfterLease(ControlAfterLease),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Evidence {
+        step_class: u8,
+        attempts: u64,
+        control_rejections: u64,
+        target_rejections: u64,
+        focus_rejections: u64,
+        lease_rejections: u64,
+        cursor: usize,
+        active_mask: u16,
+        release_obligations: u16,
+        lease_samples: u64,
+        accounting_changed: bool,
+        focus_paused: bool,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum DispatchPath {
+        PreparedNormal,
+        StrictDynamic,
+    }
+
+    fn run_case(path: DispatchPath, fault: Fault) -> Evidence {
+        let requires_target_owner = matches!(
+            fault,
+            Fault::FocusLossAfterModifier
+                | Fault::ForegroundWindowSwitch
+                | Fault::ForegroundOwnerSwitch
+                | Fault::ForegroundOwnerUnavailable
+                | Fault::OwnerFailureAfterModifier(_)
+        );
+        let mut harness = ProductionDispatchTestHarness::new_down_only();
+        harness.set_strict_timing_for_test(path == DispatchPath::StrictDynamic);
+        harness.set_require_focus_for_test(requires_target_owner);
+        if requires_target_owner {
+            harness.bind_owner_identity_for_test(1);
+        }
+        if matches!(
+            fault,
+            Fault::FocusLossAfterModifier | Fault::ForegroundWindowSwitch
+        ) {
+            harness.runtime.musical_physical_commit_started = true;
+        }
+        match fault {
+            Fault::ForegroundWindowSwitch => {
+                sky_dispatch_win32::focus::set_foreground_window_for_test(Some(999));
+            }
+            Fault::ForegroundOwnerSwitch => {
+                sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(2)));
+            }
+            Fault::ForegroundOwnerUnavailable => {
+                sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(None));
+            }
+            _ => {
+                sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+                sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(1)));
+            }
+        }
+        let calls = harness.configure_send_counter();
+        let accounting_before = harness.generation_accounting_for_test();
+        let lease_timeout_ticks = harness
+            .qpc_duration_from_us_for_test(100)
+            .expect("lease timeout ticks")
+            .as_u64();
+        let modifier_held = Arc::new(AtomicBool::new(fault == Fault::ModifierHeld));
+        if matches!(
+            fault,
+            Fault::ModifierHeld | Fault::ModifierAcquiredAfterCheck
+        ) {
+            let modifier_held_for_query = Arc::clone(&modifier_held);
+            harness.set_modifier_key_state_query_for_test(move |_| {
+                if modifier_held_for_query.load(Ordering::Acquire) {
+                    i16::MIN
+                } else {
+                    0
+                }
+            });
+        }
+
+        match fault {
+            Fault::TargetAbaAfterModifier => {
+                harness.set_post_modifier_revalidation_race_hook(|_, target, _, _, _, _, _| {
+                    target.publish(2);
+                    target.publish(1);
+                });
+            }
+            Fault::FocusLossAfterModifier => {
+                harness.set_post_modifier_revalidation_race_hook(|focus, _, _, _, _, _, _| {
+                    focus.store(false, Ordering::Release)
+                });
+            }
+            Fault::OwnerFailureAfterModifier(failure) => {
+                harness.set_post_modifier_revalidation_race_hook(
+                    move |_, target, _, _, _, _, _| {
+                        let failure = match failure {
+                            OwnerFailureAfterModifier::ProcessTerminated => {
+                                super::target::OwnerIdentityFailure::ProcessTerminated
+                            }
+                            OwnerFailureAfterModifier::Mismatch => {
+                                super::target::OwnerIdentityFailure::OwnerMismatch
+                            }
+                            OwnerFailureAfterModifier::QueryUnavailable => {
+                                super::target::OwnerIdentityFailure::QueryUnavailable
+                            }
+                            OwnerFailureAfterModifier::WindowUnavailable => {
+                                super::target::OwnerIdentityFailure::WindowUnavailable
+                            }
+                            OwnerFailureAfterModifier::ProcessIdentityMismatch => {
+                                super::target::OwnerIdentityFailure::ProcessIdentityMismatch
+                            }
+                        };
+                        target.invalidate_owner_identity_with(failure);
+                    },
+                );
+            }
+            Fault::ModifierAcquiredAfterCheck => {
+                harness.set_post_modifier_revalidation_race_hook(move |_, _, _, _, _, _, _| {
+                    modifier_held.store(true, Ordering::Release)
+                });
+            }
+            Fault::LeaseExpired => {
+                harness
+                    .set_supervisor_lease_timeout_for_test(100)
+                    .expect("lease timeout");
+                harness.set_supervisor_heartbeat_for_test(QpcTicks::from_raw(1_000));
+                harness.set_final_lease_qpc_sample_override_for_test(Ok(QpcTicks::from_raw(
+                    1_000 + lease_timeout_ticks + 1,
+                )));
+            }
+            Fault::LeaseUnproven => {
+                harness
+                    .set_supervisor_lease_timeout_for_test(100)
+                    .expect("lease timeout");
+                harness.set_supervisor_heartbeat_for_test(QpcTicks::from_raw(0));
+                harness.set_final_lease_qpc_sample_override_for_test(Ok(QpcTicks::from_raw(1_001)));
+            }
+            Fault::LeaseClockFailure => {
+                harness
+                    .set_supervisor_lease_timeout_for_test(100)
+                    .expect("lease timeout");
+                harness.set_supervisor_heartbeat_for_test(QpcTicks::from_raw(1_000));
+                harness.set_final_lease_qpc_sample_override_for_test(Err(
+                    sky_dispatch_win32::clock::QpcError::CounterUnavailable,
+                ));
+            }
+            Fault::ControlAfterLease(control) => {
+                harness
+                    .set_supervisor_lease_timeout_for_test(100)
+                    .expect("lease timeout");
+                harness.set_supervisor_heartbeat_for_test(QpcTicks::from_raw(1_000));
+                harness.set_final_lease_qpc_sample_override_for_test(Ok(QpcTicks::from_raw(
+                    1_000 + lease_timeout_ticks,
+                )));
+                let interrupt = Arc::clone(&harness.interrupt);
+                harness.set_post_lease_revalidation_race_hook(
+                    move |_, _, quit, skip, panic, pause, system_power| match control {
+                        ControlAfterLease::Stop => quit.store(true, Ordering::Release),
+                        ControlAfterLease::Skip => skip.store(true, Ordering::Release),
+                        ControlAfterLease::Panic => panic.store(true, Ordering::Release),
+                        ControlAfterLease::Pause => pause.store(true, Ordering::Release),
+                        ControlAfterLease::Suspend => {
+                            assert!(system_power.notify(true, interrupt.as_ref()));
+                        }
+                    },
+                );
+            }
+            Fault::ForegroundWindowSwitch
+            | Fault::ForegroundOwnerSwitch
+            | Fault::ForegroundOwnerUnavailable
+            | Fault::ModifierHeld
+            | Fault::Allowed => {}
+        }
+
+        let step = match path {
+            DispatchPath::PreparedNormal => {
+                harness.prepare_prepared_stream_for_test();
+                harness.dispatch_prepared_current_at_lateness_without_stream_for_test(10_000)
+            }
+            DispatchPath::StrictDynamic => {
+                harness.advance_playback_time_us(100_000);
+                let plan = harness.plan_current_dispatch();
+                harness.dispatch_at_plan_target_for_test(&plan)
+            }
+        };
+        let step_class = match step {
+            super::worker::DispatchStep::Dispatched => 0,
+            super::worker::DispatchStep::Continue => 1,
+            super::worker::DispatchStep::Terminate(_)
+            | super::worker::DispatchStep::TerminateStatic(_) => 2,
+            super::worker::DispatchStep::NoWork => 3,
+        };
+        Evidence {
+            step_class,
+            attempts: calls.load(Ordering::SeqCst),
+            control_rejections: harness.local_metrics.final_gate_control_rejections,
+            target_rejections: harness.local_metrics.final_gate_target_changes,
+            focus_rejections: harness.local_metrics.final_gate_focus_losses,
+            lease_rejections: harness.local_metrics.final_gate_lease_expirations,
+            cursor: harness.resources.coordinator.cursor,
+            active_mask: harness.backend_active_mask(),
+            release_obligations: harness.release_obligation_mask_for_test(),
+            lease_samples: harness.final_lease_qpc_sample_count_for_test(),
+            accounting_changed: harness.generation_accounting_for_test() != accounting_before,
+            focus_paused: harness
+                .resources
+                .playback
+                .has_pause_reason(PauseReason::Focus),
+        }
+    }
+
+    struct ForegroundOwnerOverrideReset;
+    impl Drop for ForegroundOwnerOverrideReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+
+    let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_owner_override_reset = ForegroundOwnerOverrideReset;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(1));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(1)));
+
+    let faults = [
+        Fault::Allowed,
+        Fault::TargetAbaAfterModifier,
+        Fault::FocusLossAfterModifier,
+        Fault::ForegroundWindowSwitch,
+        Fault::ForegroundOwnerSwitch,
+        Fault::ForegroundOwnerUnavailable,
+        Fault::OwnerFailureAfterModifier(OwnerFailureAfterModifier::ProcessTerminated),
+        Fault::OwnerFailureAfterModifier(OwnerFailureAfterModifier::Mismatch),
+        Fault::OwnerFailureAfterModifier(OwnerFailureAfterModifier::QueryUnavailable),
+        Fault::OwnerFailureAfterModifier(OwnerFailureAfterModifier::WindowUnavailable),
+        Fault::OwnerFailureAfterModifier(OwnerFailureAfterModifier::ProcessIdentityMismatch),
+        Fault::ModifierHeld,
+        Fault::ModifierAcquiredAfterCheck,
+        Fault::LeaseExpired,
+        Fault::LeaseUnproven,
+        Fault::LeaseClockFailure,
+        Fault::ControlAfterLease(ControlAfterLease::Stop),
+        Fault::ControlAfterLease(ControlAfterLease::Skip),
+        Fault::ControlAfterLease(ControlAfterLease::Panic),
+        Fault::ControlAfterLease(ControlAfterLease::Pause),
+        Fault::ControlAfterLease(ControlAfterLease::Suspend),
+    ];
+
+    for fault in faults {
+        let prepared = run_case(DispatchPath::PreparedNormal, fault);
+        let strict = run_case(DispatchPath::StrictDynamic, fault);
+        assert_eq!(prepared, strict, "path divergence for {fault:?}");
+        assert_eq!(
+            prepared.attempts,
+            u64::from(matches!(
+                fault,
+                Fault::Allowed | Fault::ModifierAcquiredAfterCheck
+            )),
+            "transport attempts for {fault:?}"
+        );
+        assert_eq!(
+            prepared.step_class,
+            match fault {
+                Fault::Allowed | Fault::ModifierAcquiredAfterCheck => 0,
+                Fault::TargetAbaAfterModifier
+                | Fault::FocusLossAfterModifier
+                | Fault::ForegroundWindowSwitch
+                | Fault::ControlAfterLease(_) => 1,
+                _ => 2,
+            },
+            "final verdict class for {fault:?}"
+        );
+        assert_eq!(
+            prepared.lease_samples,
+            u64::from(matches!(
+                fault,
+                Fault::LeaseExpired
+                    | Fault::LeaseUnproven
+                    | Fault::LeaseClockFailure
+                    | Fault::ControlAfterLease(_)
+            )),
+            "lease sample count for {fault:?}"
+        );
+        assert_eq!(
+            prepared.focus_paused,
+            matches!(
+                fault,
+                Fault::FocusLossAfterModifier | Fault::ForegroundWindowSwitch
+            ),
+            "focus pause state for {fault:?}"
+        );
+    }
 }
 
 #[test]
@@ -7232,7 +7562,7 @@ fn final_down_foreground_proof_rejects_invalid_target_without_query() {
             post_focus_race_hook: None,
             post_focus_control_signals: None,
         }),
-        DownAdmission::FocusLost
+        FinalDownVerdict::FocusLost
     );
     assert_eq!(sky_dispatch_win32::focus::foreground_query_count(), 0);
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
@@ -11902,7 +12232,7 @@ fn invariant_mismatch_prevents_sender_invocation() {
         post_focus_control_signals: None,
     });
 
-    assert_eq!(admission, DownAdmission::TargetChanged);
+    assert_eq!(admission, FinalDownVerdict::TargetChanged);
     assert_eq!(
         send_counter.load(Ordering::SeqCst),
         0,

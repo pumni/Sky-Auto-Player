@@ -108,6 +108,98 @@ Down is not `UnobservedBacklog` merely because it was not observed strictly in
 the future. Partial, ambiguous, or clock-uncertain transport is terminal and
 is never retried.
 
+## Final Down authority policy
+
+The prepared and strict/dynamic paths now return one `FinalDownVerdict` for the
+shared safety decisions. Path adapters still own cursor, pause, terminal-reason
+and recovery transitions. This keeps scheduling policy separate while making
+the authority checks, lease result, metric bucket and invalidation behavior
+auditable in one place.
+
+Before this refactor, the prepared suffix translated `DownAdmission` into a
+separate `PreparedNormalAdmission` enum and counted/invalidate each case in a
+large match. The authored finalizer separately matched `DownAdmission`, ran a
+second control helper and repeated its rejection metrics and target invalidation.
+The modifier/lease ordering was shared only by a low-level helper; the two
+callers still owned parallel verdict taxonomies and outcome mapping.
+
+```text
+Before
+prepared: control → target/foreground → control → modifier → atomic target/owner
+          → lease QPC → control → PreparedNormalAdmission mapping
+authored: control → target/foreground → control → modifier/atomic/lease/control
+          → DownAdmission mapping → final-policy QPC
+
+After
+prepared ─┐
+          ├─ final_down_target_admission → final_down_modifier_verdict
+authored ─┘      → final_down_post_modifier_verdict
+                    atomic target/owner → one lease-age QPC proof → final control
+          └─ FinalDownVerdict → apply_final_down_rejection
+             → small path-specific Continue/pause/terminate adapter
+```
+
+For Down-bearing packets, the policy order is:
+
+| Gate | Shared owner | Result and state effect |
+|---|---|---|
+| Pre-finalizer control checkpoints | Each dispatcher; the common final-control projection is `final_down_control_verdict` | Stop, Skip, Panic, Pause or suspend blocks a new Down. Existing path control checkpoints remain where they bracket preflight, wait and final admission. |
+| Frozen target proof and fresh foreground-owner query | `final_down_target_admission` / `SessionTarget` | Requires the same HWND and generation; when focus is required, published focus, fresh foreground HWND and retained process identity must match. Focus loss enters the existing pause/replan path; a changed target invalidates stale authorization; owner identity failures terminate. |
+| Final control checkpoint before modifier | Each dispatcher | Prevents modifier probing or sending after an already-observed terminal/pause request. This intentionally remains a path adapter checkpoint. |
+| Modifier observation | `final_down_modifier_verdict` / tracked backend | Held modifiers reject the whole packet and do not create a new musical owner. |
+| Post-modifier authority | `final_down_post_modifier_verdict` | Rechecks exact target generation, focus and retained owner identity after modifiers. |
+| Lease age | `final_down_lease_age_proof` | When the supervisor lease is enabled, takes exactly one QPC sample at the existing post-modifier boundary. Expired or unproven lease invalidates Down authorization and terminates. QPC failure follows the existing terminal mapping. |
+| Final control | `final_down_control_verdict` | Rechecks Stop, Skip, Panic, Pause and suspend after modifier and lease. A rejection prevents the sender call. |
+| Send transaction | Path's existing sender | The authored immutable packet is submitted once. A mixed Up/Down packet remains atomic and Up precedes Down inside that single SendInput attempt. |
+
+`FinalDownVerdict` distinguishes Allowed, ControlRejected, ModifierHeld,
+TargetChanged, FocusLost, typed owner failures, LeaseExpired and LeaseUnproven.
+`apply_final_down_rejection` owns the common metric bucket and shared target
+invalidation rules. Caller adapters preserve path-specific error strings and
+transitions: focus loss pauses/replans, target or control rejection returns to
+the existing planner, while owner, lease, modifier and QPC failures retain
+their established fail-closed terminal handling. No control rejection is
+converted into musical generation credit.
+
+The policy helpers are static, `#[inline(always)]` Rust functions. They add no
+allocation, lock, virtual call, wait, or new QPC sample. The lease-age proof
+retains its one existing QPC read. `final_down_target_admission`
+does not create a proof that is carried across the wait: both paths validate
+the frozen target before waiting and repeat the final HWND/generation,
+foreground-owner, focus and control proofs after the wait. The prepared path
+does not take a production `final_policy_qpc`; its physical-study sample is
+test-support-only. The strict path retains its existing final-policy QPC after
+the shared safety verdict and before the sender; the sender then takes its own
+pre-call and completion samples. Neither sample moved across the final policy
+boundary.
+
+The two paths intentionally differ outside that shared safety judgment:
+
+| Concern | Normal prepared stream | Strict/dynamic diagnostic path |
+|---|---|---|
+| Schedule and packet | Compiler-owned immutable packet identity, validated after Due; current valid late Down is attempted once. | Runtime planner and strict lateness/causal admission remain active. |
+| Control checkpoints | For Down, early control, post-foreground control, then shared final control. Up-only has only the shared late control gate. | Preflight/wait checkpoints remain; finalizer keeps control before target, after target and shared final control. Up-only retains its surrounding path-specific controls. |
+| Focus, owner and modifier gates | Down-bearing packets only. | Down-bearing packets only. |
+| Lease-age sample | One enabled-lease sample for Down; none for Up-only. | One enabled-lease sample for Down; none for Up-only. |
+| Final-policy QPC | No production sample after the verdict. | Existing sample after the shared verdict, before sender. |
+
+Neither path checks foreground or retained owner for Up-only release packets;
+Up-only traffic also skips modifier observation and lease-age sampling. Exact
+target freshness still gates every Down. Pause, target change, interruption or
+an unauthorized boundary discards stale prepared work and replans through the
+existing path. Partial/zero/ambiguous SendInput progress or uncertain sender
+timestamps terminate and trigger tracked cleanup; packet work is not replayed.
+
+Execution-based parity coverage is in
+`prepared_and_strict_paths_match_shared_final_down_fault_matrix`, with real
+prepared and strict dispatch harnesses comparing attempts, typed outcome class,
+metrics, cursor, active/release masks, lease samples, ownership accounting and
+focus-pause state under post-modifier and post-lease injected races. Existing
+tests separately cover path-specific timing, Up-only and mixed packets,
+15-key chords, late normal Down, transport partial/zero and QPC failures,
+resume barriers, and independent H/G completion-floor forensics. Source-order
+checks remain supplementary; they are not the safety-equivalence evidence.
+
 ## Physical floors and waiting
 
 After a complete successful musical packet with trustworthy sender completion

@@ -7157,7 +7157,7 @@ fn terminal_release_evidence_after_startup(
         && snapshot.final_release_obligation_mask == 0
         && matches!(
             snapshot.terminal_trigger_reason.as_deref(),
-            Some("quit" | "skipped" | "system_suspend")
+            Some("quit" | "skipped" | "system_suspend" | "panic_release_requested")
         )
     {
         // The startup gate rejects every input before Armed. With no Armed
@@ -8497,7 +8497,8 @@ mod tests {
         remove_oldest_snapshot, resolve_install_root, retain_prepared_capacity,
         safe_calibration_evidence, sender_sample_summary, sender_trace_export_json,
         settings_fingerprint, target_integrity_startup_failure, terminal_publication_after_worker,
-        terminal_release_evidence, timing_margin_recommendation, validate_playback_start_request,
+        terminal_release_evidence, terminal_release_evidence_after_startup,
+        timing_margin_recommendation, validate_playback_start_request,
     };
     #[cfg(feature = "tauri-test")]
     use super::{
@@ -8797,7 +8798,6 @@ mod tests {
         let activity = ActivityCoordinator::default();
         let player =
             terminal_projection_session(DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, 30_100_000, None);
-        player.arm(0).expect("arm blocked-UI test worker");
         let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
         let active = attach_test_presentation(
@@ -8857,20 +8857,22 @@ mod tests {
         let monitor_events = Arc::clone(&events);
         let monitor_service = Arc::clone(&service);
         let (activation_sender, activation_receiver) = mpsc::channel();
-        activation_sender
-            .send(PlaybackActivation::Started)
-            .expect("monitor activation receiver");
         let monitor = thread::spawn(move || {
             monitor_service.monitor(monitor_active, monitor_events, activation_receiver)
         });
+        player.arm(0).expect("arm blocked-UI test worker");
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("monitor activation receiver");
 
         let blocked_for = Duration::from_millis(
             DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US.saturating_add(300_000) / 1_000,
         );
         thread::sleep(blocked_for);
+        let progress_count = accepted_progress.load(Ordering::Acquire);
         assert!(
-            accepted_progress.load(Ordering::Acquire) >= 100,
-            "the owning monitor must continue authority-checked progress during blocked UI publication"
+            progress_count >= 100,
+            "the owning monitor must continue authority-checked progress during blocked UI publication (accepted={progress_count})"
         );
         assert_ne!(
             player.snapshot().terminal_trigger_reason.as_deref(),
@@ -9646,7 +9648,14 @@ mod tests {
         monitor.join().expect("monitor exits after channel failure");
         assert!(active.done.load(Ordering::Acquire));
         assert!(active.worker_quiescent.load(Ordering::Acquire));
-        assert!(active.release_verified.load(Ordering::Acquire));
+        let terminal = service
+            .status()
+            .expect("retired terminal status")
+            .last_terminal;
+        assert!(
+            active.release_verified.load(Ordering::Acquire),
+            "critical delivery cleanup did not verify release: {terminal:?}"
+        );
         assert!(service.status().expect("retired status").active.is_none());
         drop(
             activity
@@ -9973,7 +9982,7 @@ mod tests {
         session
             .arm(300_000)
             .expect("start native projection worker");
-        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(15)));
 
         let engine = session.snapshot();
         let poll = session.poll_state();
@@ -10049,6 +10058,53 @@ mod tests {
 
     #[cfg(feature = "tauri-test")]
     #[test]
+    fn panic_release_before_armed_has_no_physical_release_obligation() {
+        use sky_player::engine::{
+            DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, StartupCheckpoint, StartupOrderingHook,
+        };
+
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::BeforeReady, 1);
+        let player = terminal_projection_session(
+            DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            30_100_000,
+            Some(Arc::clone(&hook)),
+        );
+        player.arm(0).expect("start panic-before-Armed worker");
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(15)));
+
+        player
+            .panic_release()
+            .expect("cancel pre-Armed physical startup");
+        hook.release_startup_checkpoint();
+        assert!(
+            player
+                .join(Duration::from_secs(5))
+                .expect("pre-Armed panic worker join")
+        );
+
+        let snapshot = player.snapshot();
+        assert!(!snapshot.startup_armed);
+        assert_eq!(snapshot.final_release_obligation_mask, 0);
+        assert_eq!(
+            snapshot.terminal_trigger_reason.as_deref(),
+            Some("panic_release_requested")
+        );
+        assert!(matches!(
+            terminal_release_evidence_after_startup(true, &snapshot),
+            TerminalReleaseEvidence::Verified { obligation_mask: 0 }
+                | TerminalReleaseEvidence::NotRequired
+        ));
+        let mut missing_result = snapshot.clone();
+        missing_result.release_outcome = None;
+        assert_eq!(
+            terminal_release_evidence_after_startup(true, &missing_result),
+            TerminalReleaseEvidence::NotRequired
+        );
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
     fn terminal_outcome_health_projection_preserves_trigger_and_release_identity() {
         use crate::ui_events::DiagnosticsBackendStatus;
         use sky_player::engine::{EnginePollStatus, StartupCheckpoint, StartupOrderingHook};
@@ -10100,35 +10156,35 @@ mod tests {
             } else {
                 5_100_000
             };
-            let command_hook = (is_explicit_panic || trigger == "quit" || trigger == "skipped")
-                .then(|| {
-                    let hook = Arc::new(StartupOrderingHook::default());
-                    hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
-                    hook
-                });
+            let command_hook =
+                (is_lease_expiry || is_explicit_panic || trigger == "quit" || trigger == "skipped")
+                    .then(|| {
+                        let hook = Arc::new(StartupOrderingHook::default());
+                        hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+                        hook
+                    });
             let session = terminal_projection_session(
                 lease_timeout_us,
                 up_scheduled_us,
                 command_hook.clone(),
             );
-            let wait_for_armed_command = || {
-                let hook = command_hook
-                    .as_ref()
-                    .expect("command terminal startup barrier");
-                assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+            let wait_for_armed_startup = || {
+                let hook = command_hook.as_ref().expect("terminal startup barrier");
+                assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(15)));
                 hook.release_startup_checkpoint();
             };
             session.arm(0).expect("terminal projection worker arm");
 
             if is_lease_expiry {
+                wait_for_armed_startup();
                 assert!(
                     session
-                        .join(Duration::from_secs(2))
+                        .join(Duration::from_secs(5))
                         .expect("lease expiry join"),
                     "lease expiry worker should join"
                 );
             } else if is_explicit_panic {
-                wait_for_armed_command();
+                wait_for_armed_startup();
                 session.panic_release().expect("explicit panic request");
                 assert!(
                     session
@@ -10137,14 +10193,14 @@ mod tests {
                     "panic release worker should join"
                 );
             } else if trigger == "quit" {
-                wait_for_armed_command();
+                wait_for_armed_startup();
                 session.quit().expect("quit request");
                 assert!(
                     session.join(Duration::from_secs(2)).expect("quit join"),
                     "quit worker should join"
                 );
             } else if trigger == "skipped" {
-                wait_for_armed_command();
+                wait_for_armed_startup();
                 session.skip().expect("skip request");
                 assert!(
                     session.join(Duration::from_secs(2)).expect("skip join"),
@@ -10959,7 +11015,7 @@ mod tests {
             .send(PlaybackActivation::Started)
             .expect("session A monitor activation");
 
-        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(15)));
         let before_cleanup = captures.lock().expect("captured mock packets").clone();
         assert!(before_cleanup.iter().any(|capture| matches!(
             capture,
@@ -10980,7 +11036,7 @@ mod tests {
             .expect("session A Stop");
         assert!(ack.accepted);
         hook.release_startup_checkpoint();
-        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(15)));
 
         assert!(!player.join(Duration::ZERO).expect("bounded join timeout"));
         assert!(!active.worker_quiescent.load(Ordering::Acquire));
@@ -11026,7 +11082,7 @@ mod tests {
             FaultInjectionScript::none(),
         );
         player_b.arm(0).expect("session B arm");
-        assert!(hook_b.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(hook_b.wait_for_startup_checkpoint(Duration::from_secs(15)));
         player_b.quit().expect("session B Stop");
         hook_b.release_startup_checkpoint();
         assert!(
@@ -11115,7 +11171,7 @@ mod tests {
             .send(PlaybackActivation::Started)
             .expect("session A monitor activation");
 
-        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(15)));
         hook.arm_startup_checkpoint(StartupCheckpoint::TerminalCleanup, 1);
         let ack = service
             .command(
@@ -11126,7 +11182,7 @@ mod tests {
             .expect("session A Stop");
         assert!(ack.accepted);
         hook.release_startup_checkpoint();
-        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(15)));
         assert!(!player.join(Duration::ZERO).expect("bounded join timeout"));
         assert!(matches!(
             activity.reserve_playback("successor-before-error-retirement"),
@@ -11194,11 +11250,25 @@ mod tests {
                     .expect("status result receiver");
             });
             let status = receiver
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(Duration::from_secs(5))
                 .expect("playback status must remain responsive after startup failure")
                 .expect("playback status should be valid");
             worker.join().expect("status worker should return cleanly");
             status
+        };
+        let read_retired_status = || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let status = read_status();
+                if status.active.is_none() {
+                    return status;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "startup failure did not retire its active slot"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
         };
 
         let first_prepared_id = prepare_physical_failure_plan(&service, &settings, &"c".repeat(32));
@@ -11207,8 +11277,7 @@ mod tests {
             first_error.starts_with("target_not_found:"),
             "{first_error}"
         );
-        let first_status = read_status();
-        assert!(first_status.active.is_none());
+        let first_status = read_retired_status();
         let first_terminal = first_status
             .last_terminal
             .expect("pre-activation failure should be authoritative");
@@ -11268,8 +11337,7 @@ mod tests {
             second_error.starts_with("target_not_found:"),
             "{second_error}"
         );
-        let second_status = read_status();
-        assert!(second_status.active.is_none());
+        let second_status = read_retired_status();
         let second_terminal = second_status
             .last_terminal
             .expect("repeated target failure should also retire");

@@ -6,12 +6,13 @@ use super::super::super::{
 use super::super::invoke_final_gate_race_hook;
 use super::super::physical_timing_guard::PhysicalTimingWindow;
 use super::super::{
-    DispatchPath, DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
-    FinalTargetSignals, TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal,
-    WorkerResources, WorkerRuntime, WorkerTimingState, enter_focus_pause, final_control_precheck,
-    final_down_target_admission, focus_matches, handle_final_focus_loss,
-    record_final_gate_rejection, signed_ticks_to_us, target_stamp_still_current,
-    trace_kind_for_packet_kind,
+    DispatchPath, FinalControlAdmission, FinalControlSignals, FinalDownVerdict, FinalTargetSignals,
+    TargetStamp, WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources,
+    WorkerRuntime, WorkerTimingState, apply_final_down_rejection, enter_focus_pause,
+    final_control_precheck, final_down_control_verdict, final_down_modifier_verdict,
+    final_down_post_modifier_verdict, final_down_target_admission, focus_matches,
+    handle_final_focus_loss, modifier_guard_rejection_step, owner_rejection_reason,
+    signed_ticks_to_us, target_stamp_still_current, trace_kind_for_packet_kind,
 };
 use super::DownBoundaryAdmission;
 use super::observation::BlockedUnfocusedObservation;
@@ -445,12 +446,8 @@ fn finalize_authored_down_admission(
         supervisor_expired,
         system_power: Some(system_power),
     };
-    if !matches!(
-        final_control_precheck(control_signals),
-        FinalControlAdmission::Allowed
-    ) {
-        runtime.verified_target = None;
-        record_final_gate_rejection(local_metrics, FinalGateRejection::Control);
+    if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(FinalDownVerdict::ControlRejected, runtime, local_metrics);
         return Ok(AdmissionOutcome::ControlRejected);
     }
     let view_has_down = view.packet_masks.down_mask != 0 || view.batch_kind == ActionKind::Down;
@@ -461,7 +458,7 @@ fn finalize_authored_down_admission(
                     .to_string(),
             ));
         };
-        match final_down_target_admission(FinalTargetSignals {
+        let target_verdict = final_down_target_admission(FinalTargetSignals {
             expected,
             require_focus: config.focus.require_focus,
             focus_active,
@@ -470,82 +467,81 @@ fn finalize_authored_down_admission(
             post_focus_race_hook: runtime.final_gate_post_focus_race_hook.as_ref(),
             #[cfg(any(test, feature = "test-support"))]
             post_focus_control_signals: Some(control_signals),
-        }) {
-            DownAdmission::Allowed => {}
-            DownAdmission::FocusLost => {
-                record_final_gate_rejection(local_metrics, FinalGateRejection::Focus);
-                handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)?;
-                return Ok(AdmissionOutcome::FocusLost);
-            }
-            DownAdmission::TargetChanged => {
-                runtime.verified_target = None;
-                runtime.invalidate_down_authorization();
-                record_final_gate_rejection(local_metrics, FinalGateRejection::Target);
-                return Ok(AdmissionOutcome::TargetChanged);
-            }
-            DownAdmission::OwnerMismatch => {
-                runtime.verified_target = None;
-                runtime.invalidate_down_authorization();
-                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
-                return Err(DispatchStep::TerminateStatic(
-                    "authored_down_owner_mismatch",
-                ));
-            }
-            DownAdmission::OwnerQueryUnavailable => {
-                runtime.verified_target = None;
-                runtime.invalidate_down_authorization();
-                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
-                return Err(DispatchStep::TerminateStatic(
-                    "authored_down_owner_query_unavailable",
-                ));
-            }
-            DownAdmission::OwnerIdentityAbsent => {
-                runtime.verified_target = None;
-                runtime.invalidate_down_authorization();
-                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
-                return Err(DispatchStep::TerminateStatic(
-                    "authored_down_owner_identity_absent",
-                ));
-            }
-            DownAdmission::OwnerIdentityStale => {
-                runtime.verified_target = None;
-                runtime.invalidate_down_authorization();
-                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
-                return Err(DispatchStep::TerminateStatic(
-                    "authored_down_owner_identity_stale",
-                ));
-            }
-            DownAdmission::OwnerProcessTerminated => {
-                runtime.verified_target = None;
-                runtime.invalidate_down_authorization();
-                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
-                return Err(DispatchStep::TerminateStatic(
-                    "authored_down_owner_process_terminated",
-                ));
-            }
-            DownAdmission::OwnerIdentityDrift => {
-                runtime.verified_target = None;
-                runtime.invalidate_down_authorization();
-                record_final_gate_rejection(local_metrics, FinalGateRejection::Owner);
-                return Err(DispatchStep::TerminateStatic(
-                    "authored_down_owner_identity_drift",
-                ));
-            }
+        });
+        if target_verdict != FinalDownVerdict::Allowed {
+            apply_final_down_rejection(target_verdict, runtime, local_metrics);
+            return authored_target_rejection_outcome(
+                target_verdict,
+                qpc_clock,
+                clock_state,
+                runtime,
+                progress_clock,
+            );
         }
     }
     if !final_atomic_revalidation(control_signals, runtime, local_metrics) {
         return Ok(AdmissionOutcome::ControlRejected);
     }
-    if let Some(rejection) = super::super::admission::modifier_guard_and_final_revalidation(
-        view_has_down, backend, preflight_target, config, focus_active, target,
-        control_signals,
-        #[cfg(any(test, feature = "test-support"))] quit_requested,
-        #[cfg(any(test, feature = "test-support"))] skip_requested,
-        #[cfg(any(test, feature = "test-support"))] panic_requested,
-        #[cfg(any(test, feature = "test-support"))] desired_pause,
-        #[cfg(any(test, feature = "test-support"))] system_power,
-        runtime, local_metrics, qpc_clock, lease_timeout_ticks, clock_state, progress_clock,
-    )? { return Ok(rejection); }
+    if view_has_down {
+        let modifier_verdict = final_down_modifier_verdict(backend);
+        if modifier_verdict != FinalDownVerdict::Allowed {
+            apply_final_down_rejection(modifier_verdict, runtime, local_metrics);
+            return match modifier_verdict {
+                FinalDownVerdict::ModifierHeld(mask) => {
+                    Err(modifier_guard_rejection_step(mask))
+                }
+                _ => Err(DispatchStep::TerminateStatic(
+                    "invalid modifier admission verdict",
+                )),
+            };
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        invoke_final_gate_race_hook(
+            runtime.final_gate_post_modifier_race_hook.as_ref(),
+            focus_active,
+            target,
+            quit_requested,
+            skip_requested,
+            panic_requested,
+            desired_pause,
+            system_power,
+        );
+        let Some(expected) = preflight_target else {
+            return Err(DispatchStep::TerminateStatic(
+                "modifier guard reached without frozen target proof",
+            ));
+        };
+        #[cfg(test)]
+        if let Some(hook) = runtime.final_lease_age_hook_for_test.as_deref() {
+            hook(supervisor_expired);
+        }
+        let verdict = final_down_post_modifier_verdict(
+            target,
+            expected,
+            config.focus.require_focus,
+            focus_active,
+            control_signals,
+            lease_timeout_ticks,
+            qpc_clock,
+            #[cfg(any(test, feature = "test-support"))]
+            runtime.final_gate_post_lease_race_hook.as_ref(),
+            #[cfg(test)]
+            &mut runtime.final_lease_qpc_sample_count_for_test,
+            #[cfg(test)]
+            &mut runtime.final_lease_qpc_sample_override_for_test,
+        )
+        .map_err(|_| DispatchStep::TerminateStatic("authored_down_qpc_failure"))?;
+        if verdict != FinalDownVerdict::Allowed {
+            apply_final_down_rejection(verdict, runtime, local_metrics);
+            return authored_post_modifier_rejection_outcome(
+                verdict,
+                qpc_clock,
+                clock_state,
+                runtime,
+                progress_clock,
+            );
+        }
+    }
     #[cfg(any(test, feature = "test-support"))]
     let final_policy_qpc = if test_direct_boundary {
         physical_target_qpc
@@ -565,19 +561,72 @@ fn finalize_authored_down_admission(
     })
 }
 
+#[cold]
+fn authored_target_rejection_outcome(
+    verdict: FinalDownVerdict,
+    qpc_clock: QpcClock,
+    clock_state: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    progress_clock: &SharedProgressClock,
+) -> Result<AdmissionOutcome, DispatchStep> {
+    match verdict {
+        FinalDownVerdict::FocusLost => {
+            handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)
+                .map(|()| AdmissionOutcome::FocusLost)
+        }
+        FinalDownVerdict::TargetChanged => Ok(AdmissionOutcome::TargetChanged),
+        FinalDownVerdict::OwnerRejected(failure) => Err(DispatchStep::TerminateStatic(
+            owner_rejection_reason(failure, false),
+        )),
+        FinalDownVerdict::Allowed => Err(DispatchStep::TerminateStatic(
+            "invalid final target admission verdict",
+        )),
+        _ => Err(DispatchStep::TerminateStatic(
+            "invalid final target admission verdict",
+        )),
+    }
+}
+
+#[cold]
+fn authored_post_modifier_rejection_outcome(
+    verdict: FinalDownVerdict,
+    qpc_clock: QpcClock,
+    clock_state: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    progress_clock: &SharedProgressClock,
+) -> Result<AdmissionOutcome, DispatchStep> {
+    match verdict {
+        FinalDownVerdict::ControlRejected => Ok(AdmissionOutcome::ControlRejected),
+        FinalDownVerdict::FocusLost => {
+            handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)
+                .map(|()| AdmissionOutcome::FocusLost)
+        }
+        FinalDownVerdict::TargetChanged => Ok(AdmissionOutcome::TargetChanged),
+        FinalDownVerdict::OwnerRejected(_) => Err(DispatchStep::TerminateStatic(
+            "authored_down_owner_changed_after_modifier_guard",
+        )),
+        FinalDownVerdict::ModifierHeld(mask) => Err(modifier_guard_rejection_step(mask)),
+        FinalDownVerdict::LeaseExpired => {
+            Err(DispatchStep::TerminateStatic("supervisor_lease_expired"))
+        }
+        FinalDownVerdict::LeaseUnproven => {
+            Err(DispatchStep::TerminateStatic("supervisor_lease_unproven"))
+        }
+        FinalDownVerdict::Allowed => Err(DispatchStep::TerminateStatic(
+            "invalid post-modifier admission verdict",
+        )),
+    }
+}
+
 fn final_atomic_revalidation(
     control_signals: FinalControlSignals<'_>,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
 ) -> bool {
-    if matches!(
-        final_control_precheck(control_signals),
-        FinalControlAdmission::Allowed
-    ) {
+    if final_down_control_verdict(control_signals) == FinalDownVerdict::Allowed {
         return true;
     }
-    runtime.verified_target = None;
-    record_final_gate_rejection(local_metrics, FinalGateRejection::Control);
+    apply_final_down_rejection(FinalDownVerdict::ControlRejected, runtime, local_metrics);
     false
 }
 

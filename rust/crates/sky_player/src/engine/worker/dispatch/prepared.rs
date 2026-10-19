@@ -1,66 +1,31 @@
 //! Normal prepared-frame precision envelope.
 
 use super::super::{
-    DownAdmission, FinalControlAdmission, FinalControlSignals, FinalTargetSignals,
-    PreparedDispatchFrame, QpcClock, RuntimeDispatchCoordinator, TargetStamp, TrackedKeyState,
-    WorkerConfig, WorkerHealthState, WorkerMetricsLocal, WorkerResources, WorkerRuntime,
-    WorkerTimingState, final_control_precheck, final_down_atomic_revalidation,
-    final_down_target_admission, focus_matches, handle_final_focus_loss,
-    modifier_guard_rejection_step, record_final_gate_rejection, record_sendinput_pre_call_lateness,
+    FinalControlSignals, FinalDownVerdict, FinalTargetSignals, PreparedDispatchFrame, QpcClock,
+    RuntimeDispatchCoordinator, TargetStamp, TrackedKeyState, WorkerConfig, WorkerHealthState,
+    WorkerMetricsLocal, WorkerResources, WorkerRuntime, WorkerTimingState,
+    apply_final_down_rejection, final_down_control_verdict, final_down_modifier_verdict,
+    final_down_post_modifier_verdict, final_down_target_admission, focus_matches,
+    handle_final_focus_loss, modifier_guard_rejection_step, owner_rejection_reason,
+    record_final_gate_rejection, record_sendinput_pre_call_lateness,
 };
 use super::authored::record_prepared_normal_send_outcome;
 use super::{AuthoredBatchView, DispatchStep, PendingObservationQueue};
 use crate::engine::shared::SessionTarget;
-use crate::engine::shared::{
-    SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseState, SystemPowerState,
-};
+use crate::engine::shared::{SharedProgressClock, SupervisorLeaseState, SystemPowerState};
 use crate::engine::telemetry::metrics::PrecisionPacketTimingObservation;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
-use sky_dispatch_win32::input::{ModifierKeyObservation, ModifierMask, SendTransactionOutcome};
+use sky_dispatch_win32::input::SendTransactionOutcome;
 use std::sync::atomic::AtomicBool;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PreparedNormalAdmission {
-    EarlyControl,
-    FocusLost,
-    TargetChanged,
-    LateControl,
-    OwnerMismatch,
-    OwnerQueryUnavailable,
-    OwnerIdentityAbsent,
-    OwnerIdentityStale,
-    OwnerProcessTerminated,
-    OwnerIdentityDrift,
-    ModifierHeld(ModifierMask),
-    SupervisorLeaseExpired,
-    SupervisorLeaseUnproven,
-}
-
-impl PreparedNormalAdmission {
-    fn from_down_admission(admission: DownAdmission) -> Option<Self> {
-        match admission {
-            DownAdmission::Allowed => None,
-            DownAdmission::FocusLost => Some(Self::FocusLost),
-            DownAdmission::TargetChanged => Some(Self::TargetChanged),
-            DownAdmission::OwnerMismatch => Some(Self::OwnerMismatch),
-            DownAdmission::OwnerQueryUnavailable => Some(Self::OwnerQueryUnavailable),
-            DownAdmission::OwnerIdentityAbsent => Some(Self::OwnerIdentityAbsent),
-            DownAdmission::OwnerIdentityStale => Some(Self::OwnerIdentityStale),
-            DownAdmission::OwnerProcessTerminated => Some(Self::OwnerProcessTerminated),
-            DownAdmission::OwnerIdentityDrift => Some(Self::OwnerIdentityDrift),
-        }
-    }
-}
-
 enum PreparedNormalPrecisionResult {
-    Rejected(PreparedNormalAdmission),
+    Rejected(FinalDownVerdict),
     Sent {
         result: sky_dispatch_win32::input::SendTransactionOutcome,
         final_policy_qpc: Option<QpcTicks>,
     },
 }
 
-use PreparedNormalAdmission::ModifierHeld;
 use PreparedNormalPrecisionResult::Rejected;
 
 /// The complete normal precision suffix.  The payload has already been
@@ -89,6 +54,9 @@ fn send_prepared_normal_precision_frame(
     #[cfg(any(test, feature = "test-support"))] post_modifier_race_hook: Option<
         &crate::engine::config::FinalGateRaceHook,
     >,
+    #[cfg(any(test, feature = "test-support"))] post_lease_race_hook: Option<
+        &crate::engine::config::FinalGateRaceHook,
+    >,
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     #[cfg(any(test, feature = "test-support"))] test_now_ticks: Option<QpcTicks>,
     #[cfg(test)] final_lease_qpc_sample_count: &mut u64,
@@ -107,12 +75,9 @@ fn send_prepared_normal_precision_frame(
             supervisor_expired,
             system_power: Some(system_power),
         };
-        if !matches!(
-            final_control_precheck(control_signals),
-            FinalControlAdmission::Allowed
-        ) {
+        if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
             return Ok(PreparedNormalPrecisionResult::Rejected(
-                PreparedNormalAdmission::EarlyControl,
+                FinalDownVerdict::ControlRejected,
             ));
         }
 
@@ -129,8 +94,8 @@ fn send_prepared_normal_precision_frame(
             #[cfg(any(test, feature = "test-support"))]
             post_focus_control_signals: Some(control_signals),
         });
-        if let Some(admission) = PreparedNormalAdmission::from_down_admission(down_admission) {
-            return Ok(PreparedNormalPrecisionResult::Rejected(admission));
+        if down_admission != FinalDownVerdict::Allowed {
+            return Ok(PreparedNormalPrecisionResult::Rejected(down_admission));
         }
     }
 
@@ -142,23 +107,16 @@ fn send_prepared_normal_precision_frame(
         supervisor_expired,
         system_power: Some(system_power),
     };
-    if !matches!(
-        final_control_precheck(control_signals),
-        FinalControlAdmission::Allowed
-    ) {
+    if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
         return Ok(PreparedNormalPrecisionResult::Rejected(
-            PreparedNormalAdmission::LateControl,
+            FinalDownVerdict::ControlRejected,
         ));
     }
 
     if has_down_events {
-        match backend.observe_modifiers_before_down() {
-            ModifierKeyObservation::NoHeldObserved => {}
-            ModifierKeyObservation::HeldObserved(mask) => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::ModifierHeld(mask),
-                ));
-            }
+        let modifier_verdict = final_down_modifier_verdict(backend);
+        if modifier_verdict != FinalDownVerdict::Allowed {
+            return Ok(PreparedNormalPrecisionResult::Rejected(modifier_verdict));
         }
         #[cfg(any(test, feature = "test-support"))]
         super::super::invoke_final_gate_race_hook(
@@ -172,45 +130,28 @@ fn send_prepared_normal_precision_frame(
             system_power,
         );
         let expected = preflight_target.expect("prepared Down target was checked above");
-        let authority =
-            final_down_atomic_revalidation(target, expected, require_focus, focus_active);
-        if let Some(admission) = PreparedNormalAdmission::from_down_admission(authority) {
-            return Ok(PreparedNormalPrecisionResult::Rejected(admission));
-        }
         #[cfg(test)]
         if let Some(hook) = final_lease_age_hook {
             hook(supervisor_expired);
         }
-        let lease_proof = super::super::final_down_lease_age_proof(
-            supervisor_expired,
+        let verdict = final_down_post_modifier_verdict(
+            target,
+            expected,
+            require_focus,
+            focus_active,
+            control_signals,
             lease_timeout_ticks,
             qpc_clock,
+            #[cfg(any(test, feature = "test-support"))]
+            post_lease_race_hook,
             #[cfg(test)]
             final_lease_qpc_sample_count,
             #[cfg(test)]
             final_lease_qpc_sample_override,
         )
         .map_err(|_| "prepared_down_qpc_failure")?;
-        match lease_proof.admission {
-            SupervisorLeaseAdmission::Fresh => {}
-            SupervisorLeaseAdmission::Expired => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::SupervisorLeaseExpired,
-                ));
-            }
-            SupervisorLeaseAdmission::Unproven => {
-                return Ok(PreparedNormalPrecisionResult::Rejected(
-                    PreparedNormalAdmission::SupervisorLeaseUnproven,
-                ));
-            }
-        }
-        if !matches!(
-            final_control_precheck(control_signals),
-            FinalControlAdmission::Allowed
-        ) {
-            return Ok(PreparedNormalPrecisionResult::Rejected(
-                PreparedNormalAdmission::LateControl,
-            ));
+        if verdict != FinalDownVerdict::Allowed {
+            return Ok(PreparedNormalPrecisionResult::Rejected(verdict));
         }
     }
 
@@ -251,95 +192,27 @@ fn finish_prepared_normal_precision_result(
             result,
             final_policy_qpc,
         } => Ok(Some((result, final_policy_qpc))),
-        Rejected(PreparedNormalAdmission::EarlyControl) => {
-            runtime.verified_target = None;
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Control);
-            Err(DispatchStep::Continue)
-        }
-        Rejected(PreparedNormalAdmission::FocusLost) => {
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Focus);
-            Ok(None)
-        }
-        Rejected(PreparedNormalAdmission::TargetChanged) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Target);
-            Err(DispatchStep::Continue)
-        }
-        Rejected(PreparedNormalAdmission::LateControl) => {
-            runtime.verified_target = None;
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Control);
-            Err(DispatchStep::Continue)
-        }
-        Rejected(PreparedNormalAdmission::OwnerMismatch) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
-            Err(DispatchStep::TerminateStatic(
-                "prepared_down_owner_mismatch",
-            ))
-        }
-        Rejected(PreparedNormalAdmission::OwnerQueryUnavailable) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
-            Err(DispatchStep::TerminateStatic(
-                "prepared_down_owner_query_unavailable",
-            ))
-        }
-        Rejected(PreparedNormalAdmission::OwnerIdentityAbsent) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
-            Err(DispatchStep::TerminateStatic(
-                "prepared_down_owner_identity_absent",
-            ))
-        }
-        Rejected(PreparedNormalAdmission::OwnerIdentityStale) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
-            Err(DispatchStep::TerminateStatic(
-                "prepared_down_owner_identity_stale",
-            ))
-        }
-        Rejected(PreparedNormalAdmission::OwnerProcessTerminated) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
-            Err(DispatchStep::TerminateStatic(
-                "prepared_down_owner_process_terminated",
-            ))
-        }
-        Rejected(PreparedNormalAdmission::OwnerIdentityDrift) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Owner);
-            Err(DispatchStep::TerminateStatic(
-                "prepared_down_owner_identity_drift",
-            ))
-        }
-        Rejected(ModifierHeld(mask)) => {
-            record_final_gate_rejection(local_metrics, super::super::FinalGateRejection::Modifier);
-            Err(modifier_guard_rejection_step(mask))
-        }
-        Rejected(PreparedNormalAdmission::SupervisorLeaseExpired) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(
-                local_metrics,
-                super::super::FinalGateRejection::LeaseExpired,
-            );
-            Err(DispatchStep::TerminateStatic("supervisor_lease_expired"))
-        }
-        Rejected(PreparedNormalAdmission::SupervisorLeaseUnproven) => {
-            runtime.verified_target = None;
-            runtime.invalidate_down_authorization();
-            record_final_gate_rejection(
-                local_metrics,
-                super::super::FinalGateRejection::LeaseUnproven,
-            );
-            Err(DispatchStep::TerminateStatic("supervisor_lease_unproven"))
+        Rejected(verdict) => {
+            apply_final_down_rejection(verdict, runtime, local_metrics);
+            match verdict {
+                FinalDownVerdict::ControlRejected | FinalDownVerdict::TargetChanged => {
+                    Err(DispatchStep::Continue)
+                }
+                FinalDownVerdict::FocusLost => Ok(None),
+                FinalDownVerdict::OwnerRejected(failure) => Err(DispatchStep::TerminateStatic(
+                    owner_rejection_reason(failure, true),
+                )),
+                FinalDownVerdict::ModifierHeld(mask) => Err(modifier_guard_rejection_step(mask)),
+                FinalDownVerdict::LeaseExpired => {
+                    Err(DispatchStep::TerminateStatic("supervisor_lease_expired"))
+                }
+                FinalDownVerdict::LeaseUnproven => {
+                    Err(DispatchStep::TerminateStatic("supervisor_lease_unproven"))
+                }
+                FinalDownVerdict::Allowed => {
+                    unreachable!("allowed final Down verdict cannot be rejected")
+                }
+            }
         }
     }
 }
@@ -447,6 +320,8 @@ pub(crate) fn dispatch_prepared_normal_frame(
         runtime.final_gate_post_focus_race_hook.as_ref(),
         #[cfg(any(test, feature = "test-support"))]
         runtime.final_gate_post_modifier_race_hook.as_ref(),
+        #[cfg(any(test, feature = "test-support"))]
+        runtime.final_gate_post_lease_race_hook.as_ref(),
         &mut resources.backend,
         #[cfg(any(test, feature = "test-support"))]
         test_inject_sender_start.then_some(now_ticks),
