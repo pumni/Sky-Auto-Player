@@ -88,12 +88,16 @@ impl NativePlaybackService {
             last_terminal: Arc::new(Mutex::new(None)),
             sender_trace_state: Arc::new(Mutex::new(SenderTraceState::default())),
             diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
-            preparation_cancel: Mutex::new(None),
+            prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity,
             #[cfg(test)]
             startup_failure: None,
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
+            #[cfg(test)]
+            prepare_before_publication_test_hook: Mutex::new(None),
+            #[cfg(test)]
+            prepare_before_model_test_hook: Mutex::new(None),
             #[cfg(all(test, feature = "tauri-test"))]
             monitor_progress_test_hook: None,
             #[cfg(all(test, feature = "tauri-test"))]
@@ -194,42 +198,147 @@ impl NativePlaybackService {
         Ok(completed.trace_json.clone())
     }
 
-    fn begin_preparation(&self) -> Result<Arc<AtomicBool>, String> {
+    pub(in crate::native_runtime) fn begin_preparation(&self) -> Result<Arc<AtomicBool>, String> {
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut active = self
-            .preparation_cancel
+            .prepare_publication
             .lock()
             .map_err(|_| "native Prepare cancellation lock poisoned".to_string())?;
-        if let Some(previous) = active.replace(Arc::clone(&cancelled)) {
+        if let Some(previous) = active.active_request.replace(Arc::clone(&cancelled)) {
             previous.store(true, Ordering::Release);
         }
         Ok(cancelled)
     }
 
-    fn finish_preparation(&self, cancelled: &Arc<AtomicBool>) {
-        if let Ok(mut active) = self.preparation_cancel.lock()
+    pub(in crate::native_runtime) fn finish_preparation(&self, cancelled: &Arc<AtomicBool>) {
+        if let Ok(mut active) = self.prepare_publication.lock()
             && active
+                .active_request
                 .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current, cancelled))
         {
-            *active = None;
+            active.active_request = None;
         }
     }
 
+    /// Snapshot source identity while holding the same short gate used by
+    /// source mutation, request supersession, and cache publication. `read`
+    /// may take catalog/settings locks but must not perform expensive work.
+    pub(in crate::native_runtime) fn capture_preparation_sources<T>(
+        &self,
+        cancelled: &Arc<AtomicBool>,
+        read: impl FnOnce() -> Result<(u64, String, T), String>,
+    ) -> Result<(u64, T), String> {
+        let mut publication = self
+            .prepare_publication
+            .lock()
+            .map_err(|_| "native Prepare publication lock poisoned".to_string())?;
+        Self::ensure_current_prepare(&publication, cancelled)?;
+        let (catalog_generation, settings_fingerprint, snapshot) = read()?;
+        self.synchronize_prepare_source_locked(
+            &mut publication,
+            catalog_generation,
+            settings_fingerprint,
+        );
+        Ok((publication.source_epoch, snapshot))
+    }
+
+    fn synchronize_prepare_source_locked(
+        &self,
+        publication: &mut PreparePublicationState,
+        catalog_generation: u64,
+        settings_fingerprint: String,
+    ) {
+        let catalog_changed = publication
+            .catalog_generation
+            .is_some_and(|current| current != catalog_generation);
+        let settings_changed = publication
+            .settings_fingerprint
+            .as_ref()
+            .is_some_and(|current| current != &settings_fingerprint);
+        if catalog_changed || settings_changed {
+            publication.source_epoch = publication.source_epoch.saturating_add(1);
+            if settings_changed {
+                #[cfg(test)]
+                self.settings_invalidation_count
+                    .fetch_add(1, Ordering::Relaxed);
+                if let Ok(mut prepared) = self.prepared.lock() {
+                    prepared.clear();
+                }
+            } else if catalog_changed && let Ok(mut prepared) = self.prepared.lock() {
+                prepared.retain(|(_, record)| record.generation == catalog_generation);
+            }
+        }
+        publication.catalog_generation = Some(catalog_generation);
+        publication.settings_fingerprint = Some(settings_fingerprint);
+    }
+
+    fn ensure_current_prepare(
+        publication: &PreparePublicationState,
+        cancelled: &Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        if cancelled.load(Ordering::Acquire)
+            || !publication
+                .active_request
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, cancelled))
+        {
+            return Err("playback preparation was superseded by a newer request".into());
+        }
+        Ok(())
+    }
+
+    fn ensure_prepare_source(
+        publication: &PreparePublicationState,
+        cancelled: &Arc<AtomicBool>,
+        source_epoch: u64,
+        generation: u64,
+        settings_fingerprint: &str,
+    ) -> Result<(), String> {
+        Self::ensure_current_prepare(publication, cancelled)?;
+        if publication.source_epoch != source_epoch
+            || publication.catalog_generation != Some(generation)
+            || publication.settings_fingerprint.as_deref() != Some(settings_fingerprint)
+        {
+            return Err("playback preparation source changed before publication".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(in crate::native_runtime) fn prepare(
         &self,
-        input: NativePreparedInput,
+        mut input: NativePreparedInput,
     ) -> Result<PreparedPlaybackDto, String> {
         let cancelled = self.begin_preparation()?;
-        let result = self.prepare_with_cancel(input, &cancelled);
+        let captured = self.capture_preparation_sources(&cancelled, || {
+            Ok((input.generation, input.settings_fingerprint.clone(), ()))
+        });
+        let result = match captured {
+            Ok((source_epoch, ())) => {
+                input.source_epoch = source_epoch;
+                self.prepare_with_token(input, &cancelled)
+            }
+            Err(error) => Err(error),
+        };
         self.finish_preparation(&cancelled);
+        result
+    }
+
+    pub(in crate::native_runtime) fn prepare_with_token(
+        &self,
+        input: NativePreparedInput,
+        cancelled: &Arc<AtomicBool>,
+    ) -> Result<PreparedPlaybackDto, String> {
+        let result = self.prepare_with_cancel(input, cancelled);
+        self.finish_preparation(cancelled);
         result
     }
 
     fn prepare_with_cancel(
         &self,
         input: NativePreparedInput,
-        cancelled: &AtomicBool,
+        cancelled: &Arc<AtomicBool>,
     ) -> Result<PreparedPlaybackDto, String> {
         if cancelled.load(Ordering::Acquire) {
             return Err("playback preparation was superseded by a newer request".into());
@@ -244,6 +353,7 @@ impl NativePlaybackService {
             timing_policy,
             timing_margin_recommendation,
             settings_fingerprint,
+            source_epoch,
         } = input;
         let detail = song_detail(&song_id, &song, &schedule, &risk);
         if !config.dry_run && schedule.impossible_same_key_repeats > 0 {
@@ -251,6 +361,12 @@ impl NativePlaybackService {
                 "Detected {} infeasible same-key repeat(s): the authored interval is shorter than the configured hold.",
                 schedule.impossible_same_key_repeats
             );
+            self.validate_prepare_source(
+                cancelled,
+                source_epoch,
+                generation,
+                &settings_fingerprint,
+            )?;
             return Ok(blocked_playback_dto(
                 &song_id,
                 config,
@@ -261,7 +377,7 @@ impl NativePlaybackService {
             ));
         }
         let fingerprint = plan_fingerprint(&song_id, &config, &schedule, &timing_policy)?;
-        let timing_advisory = timing_advisory::analyze_variant(
+        let timing_advisory = self.analyze_timing_variant(
             &schedule,
             &config,
             &timing_policy,
@@ -322,7 +438,7 @@ impl NativePlaybackService {
                     &recommended_schedule,
                     &recommended_policy,
                 )?;
-                let recommended_timing_advisory = timing_advisory::analyze_variant(
+                let recommended_timing_advisory = self.analyze_timing_variant(
                     &recommended_schedule,
                     &recommended_config,
                     &recommended_policy,
@@ -360,7 +476,7 @@ impl NativePlaybackService {
                 };
                 let dry_run_fingerprint =
                     plan_fingerprint(&song_id, &dry_run_config, &schedule, &timing_policy)?;
-                let dry_run_timing_advisory = timing_advisory::analyze_variant(
+                let dry_run_timing_advisory = self.analyze_timing_variant(
                     &schedule,
                     &dry_run_config,
                     &timing_policy,
@@ -404,9 +520,27 @@ impl NativePlaybackService {
             error_code: None,
             error_message: None,
         };
-        if cancelled.load(Ordering::Acquire) {
-            return Err("playback preparation was superseded by a newer request".into());
+        #[cfg(test)]
+        let publication_hook = self
+            .prepare_before_publication_test_hook
+            .lock()
+            .map_err(|_| "Prepare test hook lock poisoned".to_string())?
+            .take();
+        #[cfg(test)]
+        if let Some(hook) = publication_hook {
+            hook();
         }
+        let publication = self
+            .prepare_publication
+            .lock()
+            .map_err(|_| "native Prepare publication lock poisoned".to_string())?;
+        Self::ensure_prepare_source(
+            &publication,
+            cancelled,
+            source_epoch,
+            generation,
+            &settings_fingerprint,
+        )?;
         let mut prepared = self
             .prepared
             .lock()
@@ -424,6 +558,58 @@ impl NativePlaybackService {
         ));
         retain_prepared_capacity(&mut prepared);
         Ok(dto)
+    }
+
+    fn validate_prepare_source(
+        &self,
+        cancelled: &Arc<AtomicBool>,
+        source_epoch: u64,
+        generation: u64,
+        settings_fingerprint: &str,
+    ) -> Result<(), String> {
+        let publication = self
+            .prepare_publication
+            .lock()
+            .map_err(|_| "native Prepare publication lock poisoned".to_string())?;
+        Self::ensure_prepare_source(
+            &publication,
+            cancelled,
+            source_epoch,
+            generation,
+            settings_fingerprint,
+        )
+    }
+
+    fn analyze_timing_variant(
+        &self,
+        schedule: &ScheduleMetadata,
+        config: &PlaybackConfigDto,
+        policy: &MaterializedTimingPolicy,
+        fingerprint: &str,
+        cancelled: &AtomicBool,
+    ) -> crate::commands::WholeStreamTimingAdvisoryDto {
+        #[cfg(test)]
+        {
+            let hook = self
+                .prepare_before_model_test_hook
+                .lock()
+                .ok()
+                .and_then(|mut hook| hook.take());
+            timing_advisory::analyze_variant_with_model_hook(
+                schedule,
+                config,
+                policy,
+                fingerprint,
+                cancelled,
+                move || {
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                },
+            )
+        }
+        #[cfg(not(test))]
+        timing_advisory::analyze_variant(schedule, config, policy, fingerprint, cancelled)
     }
 
     pub(in crate::native_runtime) fn start(
@@ -1647,16 +1833,64 @@ impl NativePlaybackService {
         })
     }
 
-    pub(in crate::native_runtime) fn invalidate_catalog(&self, generation: u64) {
-        if let Ok(mut prepared) = self.prepared.lock() {
-            prepared.retain(|(_, record)| record.generation == generation);
+    #[cfg(test)]
+    fn invalidate_catalog(&self, generation: u64) {
+        if let Ok(mut publication) = self.prepare_publication.lock() {
+            self.invalidate_catalog_locked(&mut publication, generation, true);
         }
     }
 
-    pub(in crate::native_runtime) fn invalidate_settings(&self) {
+    #[cfg(test)]
+    fn invalidate_settings(&self) {
+        if let Ok(mut publication) = self.prepare_publication.lock() {
+            self.invalidate_settings_locked(&mut publication, None);
+        }
+    }
+
+    pub(in crate::native_runtime) fn invalidate_catalog_locked(
+        &self,
+        publication: &mut PreparePublicationState,
+        generation: u64,
+        invalidate: bool,
+    ) {
+        let changed = publication
+            .catalog_generation
+            .is_some_and(|current| current != generation);
+        publication.catalog_generation = Some(generation);
+        if invalidate || changed {
+            publication.source_epoch = publication.source_epoch.saturating_add(1);
+            if let Some(active) = &publication.active_request {
+                active.store(true, Ordering::Release);
+            }
+            if let Ok(mut prepared) = self.prepared.lock() {
+                prepared.retain(|(_, record)| record.generation == generation);
+            }
+        }
+    }
+
+    pub(in crate::native_runtime) fn set_settings_fingerprint_locked(
+        &self,
+        publication: &mut PreparePublicationState,
+        settings_fingerprint: String,
+    ) {
+        publication.settings_fingerprint = Some(settings_fingerprint);
+    }
+
+    pub(in crate::native_runtime) fn invalidate_settings_locked(
+        &self,
+        publication: &mut PreparePublicationState,
+        settings_fingerprint: Option<String>,
+    ) {
         #[cfg(test)]
         self.settings_invalidation_count
             .fetch_add(1, Ordering::Relaxed);
+        publication.source_epoch = publication.source_epoch.saturating_add(1);
+        if let Some(fingerprint) = settings_fingerprint {
+            publication.settings_fingerprint = Some(fingerprint);
+        }
+        if let Some(active) = &publication.active_request {
+            active.store(true, Ordering::Release);
+        }
         if let Ok(mut prepared) = self.prepared.lock() {
             prepared.clear();
         }
@@ -1738,12 +1972,16 @@ impl NativePlaybackServiceHandle {
             last_terminal: self.last_terminal.clone(),
             sender_trace_state: self.sender_trace_state.clone(),
             diagnostics_gate: self.diagnostics_gate.clone(),
-            preparation_cancel: Mutex::new(None),
+            prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity: self.activity.clone(),
             #[cfg(test)]
             startup_failure: None,
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
+            #[cfg(test)]
+            prepare_before_publication_test_hook: Mutex::new(None),
+            #[cfg(test)]
+            prepare_before_model_test_hook: Mutex::new(None),
             #[cfg(all(test, feature = "tauri-test"))]
             monitor_progress_test_hook: None,
             #[cfg(all(test, feature = "tauri-test"))]
@@ -2096,10 +2334,61 @@ pub(super) fn compile_dispatch_schedule(
 
 #[cfg(test)]
 mod preparation_cancellation_tests {
+    use super::super::{
+        NativePreparedInput, analyze_schedule_with_context, build_schedule_with_policy,
+        parse_song_json,
+    };
     use super::NativePlaybackService;
     use crate::app_state::ActivityCoordinator;
-    use std::sync::{Arc, mpsc};
+    use crate::commands::{PlaybackConfigDto, TimingMarginRecommendationDto};
+    use sky_app_core::timing::MaterializedTimingPolicy;
+    use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
+
+    fn input(generation: u64, settings_fingerprint: &str) -> NativePreparedInput {
+        let song = parse_song_json(
+            br#"{"name":"Prepare publication race","songNotes":[{"time":0,"key":"Key0"}]}"#,
+            "prepare-publication-race",
+        )
+        .expect("fixture song");
+        let config = PlaybackConfigDto {
+            hold_frames: 1.0,
+            timing_margin_us: 800,
+            tempo_scale: 1.0,
+            fps: 60,
+            dry_run: false,
+        };
+        let timing_policy = MaterializedTimingPolicy::from_user_margin(
+            config.fps,
+            config.hold_frames,
+            config.timing_margin_us,
+        )
+        .expect("fixture timing policy");
+        let schedule = build_schedule_with_policy(&song, config.tempo_scale, &timing_policy)
+            .expect("fixture schedule");
+        let risk = analyze_schedule_with_context(
+            &schedule,
+            Some(&song.notes),
+            config.hold_frames,
+            config.tempo_scale,
+        );
+        NativePreparedInput {
+            song_id: "prepare-publication-race".into(),
+            generation,
+            config,
+            song,
+            schedule,
+            risk,
+            timing_policy,
+            timing_margin_recommendation: TimingMarginRecommendationDto {
+                recommended_timing_margin_us: Some(800),
+                qualified: false,
+                source: "default_fallback".into(),
+            },
+            settings_fingerprint: settings_fingerprint.into(),
+            source_epoch: 0,
+        }
+    }
 
     #[test]
     fn newer_prepare_cancels_old_analysis_without_clearing_new_owner() {
@@ -2130,11 +2419,12 @@ mod preparation_cancellation_tests {
         continue_old.send(()).expect("resume old request");
         assert!(old_request.join().expect("first Prepare thread"));
         let active = service
-            .preparation_cancel
+            .prepare_publication
             .lock()
             .expect("Prepare cancellation owner lock");
         assert!(
             active
+                .active_request
                 .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current, &new_token))
         );
@@ -2142,10 +2432,125 @@ mod preparation_cancellation_tests {
         service.finish_preparation(&new_token);
         assert!(
             service
-                .preparation_cancel
+                .prepare_publication
                 .lock()
                 .expect("Prepare cancellation owner lock")
+                .active_request
                 .is_none()
         );
+    }
+
+    #[test]
+    fn superseding_request_before_cache_commit_cannot_publish_or_return_old_plan() {
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let entered_hook = Arc::clone(&entered);
+        let release_hook = Arc::clone(&release);
+        *service
+            .prepare_before_publication_test_hook
+            .lock()
+            .expect("publication hook") = Some(Arc::new(move || {
+            entered_hook.wait();
+            release_hook.wait();
+        }));
+
+        let old_service = Arc::clone(&service);
+        let old = thread::spawn(move || old_service.prepare(input(1, "settings-a")));
+        entered.wait();
+
+        // The old request has completed model work and is paused immediately
+        // before the atomic final check plus cache insertion.
+        let latest = service
+            .prepare(input(1, "settings-a"))
+            .expect("newer request publishes");
+        release.wait();
+
+        let old_result = old.join().expect("old Prepare thread");
+        assert!(
+            old_result
+                .expect_err("superseded request must not return an accepted plan")
+                .contains("superseded")
+        );
+        let prepared_id = latest.prepared_id.expect("latest prepared identity");
+        let cache = service.prepared.lock().expect("prepared cache");
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache[0].0, prepared_id);
+    }
+
+    #[test]
+    fn settings_invalidation_while_model_is_queued_cancels_stale_publication() {
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let entered_hook = Arc::clone(&entered);
+        let release_hook = Arc::clone(&release);
+        *service
+            .prepare_before_model_test_hook
+            .lock()
+            .expect("model hook") = Some(Arc::new(move || {
+            entered_hook.wait();
+            release_hook.wait();
+        }));
+
+        let old_service = Arc::clone(&service);
+        let old = thread::spawn(move || old_service.prepare(input(1, "settings-a")));
+        entered.wait();
+        service.invalidate_settings();
+        release.wait();
+
+        assert!(
+            old.join()
+                .expect("old Prepare thread")
+                .expect_err("settings invalidation rejects in-flight Prepare")
+                .contains("superseded")
+        );
+        assert!(service.prepared.lock().expect("prepared cache").is_empty());
+
+        let latest = service
+            .prepare(input(1, "settings-a"))
+            .expect("request after invalidation remains usable");
+        let prepared_id = latest.prepared_id.expect("latest prepared identity");
+        assert_eq!(service.prepared.lock().expect("prepared cache").len(), 1);
+        assert!(service.prepared.lock().expect("prepared cache")[0].0 == prepared_id);
+    }
+
+    #[test]
+    fn catalog_generation_invalidation_cancels_outstanding_prepare_and_keeps_new_generation() {
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let entered_hook = Arc::clone(&entered);
+        let release_hook = Arc::clone(&release);
+        *service
+            .prepare_before_model_test_hook
+            .lock()
+            .expect("model hook") = Some(Arc::new(move || {
+            entered_hook.wait();
+            release_hook.wait();
+        }));
+
+        let old_service = Arc::clone(&service);
+        let old = thread::spawn(move || old_service.prepare(input(1, "settings-a")));
+        entered.wait();
+        service.invalidate_catalog(2);
+        release.wait();
+
+        assert!(
+            old.join()
+                .expect("old Prepare thread")
+                .expect_err("catalog reload rejects old-generation Prepare")
+                .contains("superseded")
+        );
+        assert!(service.prepared.lock().expect("prepared cache").is_empty());
+
+        let latest = service
+            .prepare(input(2, "settings-a"))
+            .expect("new-generation request remains usable");
+        let prepared_id = latest.prepared_id.expect("latest prepared identity");
+        let cache = service.prepared.lock().expect("prepared cache");
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache[0].0, prepared_id);
+        assert_eq!(cache[0].1.generation, 2);
     }
 }

@@ -638,11 +638,24 @@ impl NativeCalibrationService {
                     drop(prepared);
                     return;
                 };
-                match prepared.commit() {
+                // Calibration changes the advisory input read by Prepare.
+                // Serialize its small cache rename and Prepare invalidation
+                // against source capture and cache publication.
+                let cache_commit = match self.playback.prepare_publication.lock() {
+                    Ok(mut prepare_publication) => match prepared.commit() {
+                        Ok(committed) => {
+                            self.playback
+                                .invalidate_settings_locked(&mut prepare_publication, None);
+                            Ok(committed)
+                        }
+                        Err(error) => Err(error),
+                    },
+                    Err(_) => Err("native Prepare publication lock poisoned".to_string()),
+                };
+                match cache_commit {
                     Ok((margin, samples)) => {
                         // Cache publication and prepared-plan invalidation precede
                         // the terminal event and release of the activity lease.
-                        self.playback.invalidate_settings();
                         self.finish_admitted(
                             publication,
                             &operation_id,
@@ -1902,6 +1915,11 @@ impl NativeDesktopRuntime {
         // refresh boundaries. Normal startup reads use the coherent in-memory
         // snapshot so background work cannot silently change startup state.
         crate::startup_telemetry::record("settings.reload.start");
+        let mut prepare_publication = self
+            .playback
+            .prepare_publication
+            .lock()
+            .map_err(|_| "native Prepare publication lock poisoned".to_string())?;
         let mut service = self
             .settings
             .lock()
@@ -1910,6 +1928,18 @@ impl NativeDesktopRuntime {
             .reload()
             .map_err(|error| format!("native settings reload failed: {error}"))?;
         let snapshot = service.snapshot().clone();
+        let fingerprint = settings_fingerprint(&snapshot)?;
+        if prepare_publication
+            .settings_fingerprint
+            .as_ref()
+            .is_some_and(|current| current != &fingerprint)
+        {
+            self.playback
+                .invalidate_settings_locked(&mut prepare_publication, Some(fingerprint));
+        } else {
+            self.playback
+                .set_settings_fingerprint_locked(&mut prepare_publication, fingerprint);
+        }
         crate::startup_telemetry::record("settings.reload.end");
         Ok(snapshot)
     }
@@ -1963,18 +1993,35 @@ impl NativeDesktopRuntime {
                     skip_version: value.skip_version,
                 }),
         };
+        // The Prepare publication gate precedes the settings lock everywhere
+        // settings can affect prepared plans. This makes mutation plus cache
+        // invalidation atomic with respect to Prepare's final publication.
+        let mut prepare_publication = self
+            .playback
+            .prepare_publication
+            .lock()
+            .map_err(|_| "native Prepare publication lock poisoned".to_string())?;
         let mut settings = self
             .settings
             .lock()
             .map_err(|_| "native settings lock poisoned".to_string())?;
+        let before_fingerprint = settings_fingerprint(settings.snapshot())?;
         let before_channel = settings.snapshot().update.channel.clone();
         let before_skip_version = settings.snapshot().update.skip_version.clone();
         let snapshot = settings.patch(&core_patch).map_err(settings_error)?.clone();
         let candidate_invalidation_needed = before_channel != snapshot.update.channel
             || before_skip_version != snapshot.update.skip_version;
+        let after_fingerprint = settings_fingerprint(&snapshot)?;
+        if !auto_play_only || before_fingerprint != after_fingerprint {
+            self.playback
+                .invalidate_settings_locked(&mut prepare_publication, Some(after_fingerprint));
+        } else {
+            self.playback
+                .set_settings_fingerprint_locked(&mut prepare_publication, after_fingerprint);
+        }
         drop(settings);
+        drop(prepare_publication);
         if !auto_play_only {
-            self.playback.invalidate_settings();
             self.invalidate_analysis_cache();
         }
         if candidate_invalidation_needed && let Some(update_service) = &self.update_service {
@@ -2663,6 +2710,14 @@ impl NativeDesktopRuntime {
         invalidate: bool,
         record_ready: bool,
     ) -> Result<(sky_app_core::catalog::CatalogSnapshot, usize), String> {
+        // Lock order: Prepare publication gate, then catalog state, then the
+        // bounded prepared-plan cache. Cache insertion uses publication gate
+        // then prepared-plan cache and never acquires catalog state.
+        let mut prepare_publication = self
+            .playback
+            .prepare_publication
+            .lock()
+            .map_err(|_| "native Prepare publication lock poisoned".to_string())?;
         let mut catalog = self
             .catalog
             .lock()
@@ -2682,16 +2737,24 @@ impl NativeDesktopRuntime {
         let library_total = catalog
             .index
             .count_allowed_ids(&catalog.library_membership, Some(snapshot.generation))
-            .map_err(catalog_error)?;
+            .map_err(catalog_error);
+        // Publish generation validity while the same gate still excludes a
+        // Prepare cache commit. This also cancels any analysis based on the
+        // previous generation.
+        self.playback.invalidate_catalog_locked(
+            &mut prepare_publication,
+            snapshot.generation,
+            invalidate,
+        );
         drop(catalog);
+        drop(prepare_publication);
         if invalidate {
             self.invalidate_analysis_cache();
-            self.playback.invalidate_catalog(snapshot.generation);
         }
         if record_ready {
             crate::startup_telemetry::record("catalog.ready");
         }
-        Ok((snapshot, library_total))
+        Ok((snapshot, library_total?))
     }
 
     fn cached_catalog_snapshot(&self) -> Result<Option<CatalogCache>, String> {
@@ -3290,48 +3353,75 @@ impl NativeDesktopRuntime {
         &self,
         request: crate::commands::PlaybackPrepareRequest,
     ) -> Result<PreparedPlaybackDto, String> {
-        self.ensure_catalog_loaded()?;
-        let catalog = self
-            .catalog
-            .lock()
-            .map_err(|_| "native catalog lock poisoned".to_string())?;
-        let entry = catalog
-            .index
-            .entry_for_song_id(&request.song_id, Some(request.generation))
-            .map_err(catalog_error)?;
-        let path = PathBuf::from(&entry.canonical_path);
-        let bytes = fs::read(&path).map_err(|error| format!("song read failed: {error}"))?;
-        let fallback = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or(&entry.row.title);
-        let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
-        let settings = self.settings_snapshot()?;
-        let policy = self.timing_policy(
-            request.config.fps,
-            request.config.hold_frames,
-            request.config.timing_margin_us,
-        )?;
-        let timing_margin_recommendation = self.timing_margin_recommendation();
-        let schedule = build_schedule_with_policy(&song, request.config.tempo_scale, &policy)
-            .map_err(|error| error.to_string())?;
-        let risk = analyze_schedule_with_context(
-            &schedule,
-            Some(&song.notes),
-            request.config.hold_frames,
-            request.config.tempo_scale,
-        );
-        self.playback.prepare(NativePreparedInput {
-            song_id: request.song_id,
-            generation: request.generation,
-            config: request.config,
-            song,
-            schedule,
-            risk,
-            timing_policy: policy,
-            timing_margin_recommendation,
-            settings_fingerprint: settings_fingerprint(&settings)?,
-        })
+        let cancelled = self.playback.begin_preparation()?;
+        let result = (|| {
+            self.ensure_catalog_loaded()?;
+            let (source_epoch, (path, fallback, source_fingerprint)) =
+                self.playback.capture_preparation_sources(&cancelled, || {
+                    let (path, fallback, generation) = {
+                        let catalog = self
+                            .catalog
+                            .lock()
+                            .map_err(|_| "native catalog lock poisoned".to_string())?;
+                        let entry = catalog
+                            .index
+                            .entry_for_song_id(&request.song_id, Some(request.generation))
+                            .map_err(catalog_error)?;
+                        (
+                            PathBuf::from(&entry.canonical_path),
+                            entry.row.title.clone(),
+                            catalog.index.generation(),
+                        )
+                    };
+                    let settings = self.settings_snapshot()?;
+                    let fingerprint = settings_fingerprint(&settings)?;
+                    Ok((
+                        generation,
+                        fingerprint.clone(),
+                        (path, fallback, fingerprint),
+                    ))
+                })?;
+
+            // The catalog and settings locks are no longer held across file
+            // I/O, parsing, schedule construction, or whole-stream analysis.
+            let bytes = fs::read(&path).map_err(|error| format!("song read failed: {error}"))?;
+            let fallback = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or(&fallback);
+            let song = parse_song_json(&bytes, fallback).map_err(|error| error.to_string())?;
+            let policy = self.timing_policy(
+                request.config.fps,
+                request.config.hold_frames,
+                request.config.timing_margin_us,
+            )?;
+            let timing_margin_recommendation = self.timing_margin_recommendation();
+            let schedule = build_schedule_with_policy(&song, request.config.tempo_scale, &policy)
+                .map_err(|error| error.to_string())?;
+            let risk = analyze_schedule_with_context(
+                &schedule,
+                Some(&song.notes),
+                request.config.hold_frames,
+                request.config.tempo_scale,
+            );
+            self.playback.prepare_with_token(
+                NativePreparedInput {
+                    song_id: request.song_id,
+                    generation: request.generation,
+                    config: request.config,
+                    song,
+                    schedule,
+                    risk,
+                    timing_policy: policy,
+                    timing_margin_recommendation,
+                    settings_fingerprint: source_fingerprint,
+                    source_epoch,
+                },
+                &cancelled,
+            )
+        })();
+        self.playback.finish_preparation(&cancelled);
+        result
     }
 
     fn timing_policy(
@@ -6424,6 +6514,7 @@ mod tests {
                     source: "default_fallback".into(),
                 },
                 settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+                source_epoch: 0,
             })
             .expect("physical fixture plan");
         assert_eq!(
@@ -6479,6 +6570,7 @@ mod tests {
                     source: "default_fallback".into(),
                 },
                 settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+                source_epoch: 0,
             })
             .expect("dry-run fixture plan");
         prepared.prepared_id.expect("prepared ID")
@@ -10825,6 +10917,7 @@ mod tests {
                     source: "default_fallback".into(),
                 },
                 settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+                source_epoch: 0,
             }
         }
 
@@ -11068,6 +11161,215 @@ mod tests {
                 )
                 .is_err()
         );
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_analysis() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-prepare-settings-race-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(
+            root.join("songs/demo.json"),
+            r#"{"name":"Demo","songNotes":[{"time":0,"key":"Key0"}]}"#,
+        )
+        .expect("song");
+        let runtime =
+            Arc::new(NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime"));
+        let generation = catalog_generation(&runtime);
+        let search = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"demo","offset":0,"limit":10,"generation":generation}),
+            )
+            .expect("search");
+        let song_id = search["items"][0]["song_id"]
+            .as_str()
+            .expect("song ID")
+            .to_owned();
+        let request = crate::commands::PlaybackPrepareRequest {
+            song_id,
+            generation,
+            config: PlaybackConfigDto {
+                hold_frames: 1.0,
+                timing_margin_us: 800,
+                tempo_scale: 1.0,
+                fps: 60,
+                dry_run: true,
+            },
+        };
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let entered_hook = Arc::clone(&entered);
+        let release_hook = Arc::clone(&release);
+        *runtime
+            .playback
+            .prepare_before_model_test_hook
+            .lock()
+            .expect("model hook") = Some(Arc::new(move || {
+            entered_hook.wait();
+            release_hook.wait();
+        }));
+
+        let prepare_runtime = Arc::clone(&runtime);
+        let prepare = thread::spawn(move || prepare_runtime.prepare_playback(request));
+        entered.wait();
+        runtime
+            .patch_settings(crate::commands::SettingsPatch {
+                palette: None,
+                telemetry_enabled: None,
+                verbose_hud: None,
+                playback_defaults: Some(crate::commands::PlaybackPatch {
+                    hold_frames: None,
+                    timing_margin_us: None,
+                    tempo_scale: Some(0.95),
+                    fps: None,
+                }),
+                auto_play: None,
+                update_preferences: None,
+            })
+            .expect("settings mutation completes while analysis is paused");
+        release.wait();
+        assert!(
+            prepare
+                .join()
+                .expect("Prepare worker")
+                .expect_err("settings mutation invalidates old source snapshot")
+                .contains("superseded")
+        );
+        assert!(
+            runtime
+                .playback
+                .prepared
+                .lock()
+                .expect("prepared cache")
+                .is_empty()
+        );
+
+        runtime.shutdown();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_reload_completes_while_prepare_model_is_paused_and_supersedes_it() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-prepare-catalog-race-{suffix}"));
+        fs::create_dir_all(root.join("songs")).expect("songs root");
+        fs::write(root.join("config.json"), "{\"schema_version\":3}\n").expect("config");
+        fs::write(
+            root.join("songs/demo.json"),
+            r#"{"name":"Demo","songNotes":[{"time":0,"key":"Key0"}]}"#,
+        )
+        .expect("song");
+        let runtime =
+            Arc::new(NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime"));
+        let generation = catalog_generation(&runtime);
+        let search = runtime
+            .dispatch(
+                "catalog.search",
+                serde_json::json!({"query":"demo","offset":0,"limit":10,"generation":generation}),
+            )
+            .expect("search");
+        let song_id = search["items"][0]["song_id"]
+            .as_str()
+            .expect("song ID")
+            .to_owned();
+        let request = crate::commands::PlaybackPrepareRequest {
+            song_id: song_id.clone(),
+            generation,
+            config: PlaybackConfigDto {
+                hold_frames: 1.0,
+                timing_margin_us: 800,
+                tempo_scale: 1.0,
+                fps: 60,
+                dry_run: true,
+            },
+        };
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let entered_hook = Arc::clone(&entered);
+        let release_hook = Arc::clone(&release);
+        *runtime
+            .playback
+            .prepare_before_model_test_hook
+            .lock()
+            .expect("model hook") = Some(Arc::new(move || {
+            entered_hook.wait();
+            release_hook.wait();
+        }));
+
+        let prepare_runtime = Arc::clone(&runtime);
+        let prepare = thread::spawn(move || prepare_runtime.prepare_playback(request));
+        entered.wait();
+        // This direct lock probe is deterministic: advisory analysis must not
+        // own the catalog mutex, and a reload must not wait for model work.
+        assert!(runtime.catalog.try_lock().is_ok());
+        let reload_runtime = Arc::clone(&runtime);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (reload_tx, reload_rx) = mpsc::channel();
+        let reload = thread::spawn(move || {
+            started_tx.send(()).expect("reload started marker");
+            let result =
+                reload_runtime.dispatch("catalog.reload", Value::Object(Default::default()));
+            reload_tx.send(result).expect("reload result");
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("reload thread started");
+        let reload_result = reload_rx.recv_timeout(Duration::from_secs(5));
+        if reload_result.is_err() {
+            release.wait();
+            let _ = prepare.join();
+            let _ = reload.join();
+            runtime.shutdown();
+            let _ = fs::remove_dir_all(root);
+            panic!("catalog reload waited for paused whole-stream analysis");
+        }
+        reload_result
+            .expect("reload result received")
+            .expect("catalog reload");
+        reload.join().expect("catalog reload thread");
+        let new_generation = catalog_generation(&runtime);
+        assert!(new_generation > generation);
+        release.wait();
+        assert!(
+            prepare
+                .join()
+                .expect("Prepare worker")
+                .expect_err("catalog generation invalidates old source snapshot")
+                .contains("superseded")
+        );
+        assert!(
+            runtime
+                .playback
+                .prepared
+                .lock()
+                .expect("prepared cache")
+                .is_empty()
+        );
+
+        let latest = runtime
+            .prepare_playback(crate::commands::PlaybackPrepareRequest {
+                song_id,
+                generation: new_generation,
+                config: PlaybackConfigDto {
+                    hold_frames: 1.0,
+                    timing_margin_us: 800,
+                    tempo_scale: 1.0,
+                    fps: 60,
+                    dry_run: true,
+                },
+            })
+            .expect("new-generation Prepare succeeds");
+        assert!(latest.prepared_id.is_some());
         runtime.shutdown();
         let _ = fs::remove_dir_all(root);
     }

@@ -90,6 +90,26 @@ pub(super) fn analyze_variant(
     )
 }
 
+#[cfg(test)]
+pub(super) fn analyze_variant_with_model_hook(
+    schedule: &ScheduleMetadata,
+    config: &PlaybackConfigDto,
+    policy: &MaterializedTimingPolicy,
+    plan_fingerprint: &str,
+    cancelled: &AtomicBool,
+    before_model: impl FnOnce(),
+) -> WholeStreamTimingAdvisoryDto {
+    analyze_variant_with_assumptions_and_hook(
+        schedule,
+        config,
+        policy,
+        plan_fingerprint,
+        cancelled,
+        TimingModelAssumptions::default(),
+        before_model,
+    )
+}
+
 fn analyze_variant_with_assumptions(
     schedule: &ScheduleMetadata,
     config: &PlaybackConfigDto,
@@ -97,6 +117,26 @@ fn analyze_variant_with_assumptions(
     plan_fingerprint: &str,
     cancelled: &AtomicBool,
     assumptions: TimingModelAssumptions,
+) -> WholeStreamTimingAdvisoryDto {
+    analyze_variant_with_assumptions_and_hook(
+        schedule,
+        config,
+        policy,
+        plan_fingerprint,
+        cancelled,
+        assumptions,
+        || {},
+    )
+}
+
+fn analyze_variant_with_assumptions_and_hook(
+    schedule: &ScheduleMetadata,
+    config: &PlaybackConfigDto,
+    policy: &MaterializedTimingPolicy,
+    plan_fingerprint: &str,
+    cancelled: &AtomicBool,
+    assumptions: TimingModelAssumptions,
+    before_model: impl FnOnce(),
 ) -> WholeStreamTimingAdvisoryDto {
     let mut result = empty_advisory(plan_fingerprint, assumptions, config.dry_run, None);
     if cancelled.load(Ordering::Acquire) {
@@ -214,6 +254,9 @@ fn analyze_variant_with_assumptions(
         });
     }
 
+    // Test callers can stop at the adapter/model boundary to deterministically
+    // exercise cancellation while an advisory analysis is in flight.
+    before_model();
     let report = match analyze_whole_stream_cancellable(
         &model_packets,
         assumptions.model_config(policy),

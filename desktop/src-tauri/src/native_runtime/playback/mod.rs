@@ -53,12 +53,16 @@ pub(super) struct NativePlaybackService {
     pub(super) last_terminal: Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
     pub(super) sender_trace_state: Arc<Mutex<SenderTraceState>>,
     pub(super) diagnostics_gate: Arc<DiagnosticsPublicationGate>,
-    pub(super) preparation_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    pub(super) prepare_publication: Mutex<PreparePublicationState>,
     pub(super) activity: ActivityCoordinator,
     #[cfg(test)]
     pub(super) startup_failure: Option<String>,
     #[cfg(test)]
     pub(super) settings_invalidation_count: AtomicU64,
+    #[cfg(test)]
+    pub(super) prepare_before_publication_test_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    #[cfg(test)]
+    pub(super) prepare_before_model_test_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) monitor_progress_test_hook: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     #[cfg(all(test, feature = "tauri-test"))]
@@ -133,6 +137,18 @@ pub(super) struct NativePreparedInput {
     pub(super) timing_policy: MaterializedTimingPolicy,
     pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub(super) settings_fingerprint: String,
+    pub(super) source_epoch: u64,
+}
+
+/// Prepare requests, source invalidation, and cache publication share this
+/// short-lived gate. Expensive compilation and advisory simulation never run
+/// while it is held.
+#[derive(Default)]
+pub(super) struct PreparePublicationState {
+    pub(super) active_request: Option<Arc<AtomicBool>>,
+    pub(super) source_epoch: u64,
+    pub(super) catalog_generation: Option<u64>,
+    pub(super) settings_fingerprint: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

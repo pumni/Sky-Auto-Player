@@ -102,6 +102,31 @@ too large, malformed, cancelled, or overflows, the advisory reports
 `unavailable`; the existing Prepare admission result is retained. Invalid or
 inconsistent model assumptions report `invalid_assumptions`.
 
+Prepare source capture, request ownership, invalidation, and cache publication
+also share a short-lived publication gate. Prepare captures the catalog
+generation, settings fingerprint, and source epoch under that gate, then drops
+the catalog and settings locks before file parsing, schedule construction, or
+advisory analysis. A newer Prepare, catalog replacement, settings mutation, or
+calibration-cache replacement takes the same gate and cancels the active
+request when its source identity changes. Settings invalidation clears the
+cache; catalog invalidation retains only entries from the new generation.
+
+The cache publication linearization point is the final source/owner check and
+prepared-cache insertion while holding the publication gate. Source mutations
+hold that gate across their mutation and invalidation, so no generation or
+fingerprint change can slip between the check and insertion. If publication
+wins first, a later mutation clears or filters that plan before returning. If
+supersession or invalidation wins first, the old request cannot publish or
+return a prepared plan. Auto Play-only changes keep their existing behavior:
+they update the settings snapshot without advancing the Prepare source epoch
+because the playback fingerprint is unchanged.
+
+The lock order is `Prepare publication gate -> catalog/settings state ->
+prepared-plan cache`. The expensive Prepare work holds none of these locks.
+The physical worker does not read the gate or source snapshots. This boundary
+is confined to offline Prepare and does not change the wire DTO or timing
+path.
+
 The status enum is additive and version-conscious:
 
 | Status | Meaning |
