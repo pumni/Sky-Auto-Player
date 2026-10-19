@@ -1985,8 +1985,6 @@ fn normal_prepared_overdue_boundaries_are_sent_once() {
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1, "lateness {lateness_us}us");
         assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
-        assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
-        assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
     }
 }
@@ -2008,8 +2006,6 @@ fn normal_prepared_overdue_boundaries_send_sequentially() {
 
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
-    assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
 }
 
@@ -2089,7 +2085,6 @@ fn prepared_mixed_late_sends_the_frozen_whole_packets() {
         ]
     );
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
 }
 
 #[test]
@@ -2113,7 +2108,6 @@ fn prepared_mixed_unobserved_down_sends_only_the_canonical_up_prefix() {
             sky_dispatch_win32::input::PhysicalPacket::new(0b001, 0b010),
         ]
     );
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
 }
 
@@ -2152,7 +2146,6 @@ fn prepared_no_catch_up_burst_matrix_is_exact_for_2_3_and_15_boundaries() {
         assert_eq!(calls.load(Ordering::SeqCst), boundary_count as u64);
         assert_eq!(harness.prepared_normal_backlog_count_for_test(), 0);
         assert_eq!(harness.prepared_up_prefix_recovery_sends_for_test(), 0);
-        assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
     }
 }
@@ -2269,31 +2262,29 @@ fn prepared_acceptance_counters_cover_late_normal_sends() {
         super::worker::DispatchStep::Dispatched
     ));
 
-    let mut sender_expiry = ProductionDispatchTestHarness::new_mixed_then_future_down();
-    sender_expiry.prepare_prepared_stream_for_test();
+    let mut late_current_down = ProductionDispatchTestHarness::new_mixed_then_future_down();
+    late_current_down.prepare_prepared_stream_for_test();
     assert!(matches!(
-        sender_expiry.dispatch_prepared_current_at_lateness_without_stream_for_test(0),
+        late_current_down.dispatch_prepared_current_at_lateness_without_stream_for_test(0),
         super::worker::DispatchStep::Dispatched
     ));
     assert!(matches!(
-        sender_expiry.dispatch_prepared_current_at_lateness_without_stream_for_test(20_000),
+        late_current_down.dispatch_prepared_current_at_lateness_without_stream_for_test(20_000),
         super::worker::DispatchStep::Dispatched
     ));
 
     assert_eq!(backlog.prepared_normal_backlog_count_for_test(), 0);
     assert_eq!(backlog.prepared_up_prefix_recovery_sends_for_test(), 0);
-    assert_eq!(backlog.prepared_normal_sender_expiry_count_for_test(), 0);
-    assert_eq!(sender_expiry.prepared_normal_backlog_count_for_test(), 0);
     assert_eq!(
-        sender_expiry.prepared_up_prefix_recovery_sends_for_test(),
+        late_current_down.prepared_normal_backlog_count_for_test(),
         0
     );
     assert_eq!(
-        sender_expiry.prepared_normal_sender_expiry_count_for_test(),
+        late_current_down.prepared_up_prefix_recovery_sends_for_test(),
         0
     );
     assert_eq!(backlog.timeline_rebase_count_for_test(), 0);
-    assert_eq!(sender_expiry.timeline_rebase_count_for_test(), 0);
+    assert_eq!(late_current_down.timeline_rebase_count_for_test(), 0);
 }
 
 #[test]
@@ -2343,7 +2334,6 @@ fn prepared_late_sequence_preserves_each_frozen_boundary() {
             sky_dispatch_win32::input::PhysicalPacket::new(0, 0b1000),
         ]
     );
-    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
 }
 
@@ -2444,8 +2434,6 @@ fn prepared_normal_down_lateness_matrix_keeps_one_transport_attempt() {
             0,
             "{label}: unobserved backlog"
         );
-        assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
-        assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
         assert_eq!(harness.timeline_rebase_count_for_test(), 0);
     }
 }
@@ -2547,8 +2535,6 @@ fn late_prepared_down_sends_each_unseen_boundary_without_catch_up() {
     }
     assert_eq!(harness.prepared_normal_backlog_count_for_test(), 0);
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
-    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(
         evidence.lock().expect("backlog transport evidence").len(),
         3
@@ -2593,8 +2579,6 @@ fn late_prepared_down_sends_each_unseen_boundary_without_catch_up() {
     let captured = evidence.lock().expect("causal transport evidence");
     assert_eq!(captured.len(), 4);
     assert!(captured.iter().all(|entry| entry.attempts == 1));
-    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
 }
 
@@ -7131,10 +7115,7 @@ fn fresh_focus_rejection_preserves_current_frame_and_miss_lifecycle_state() {
         "fresh rejection consumed the frame"
     );
     assert_eq!(harness.missed_unobserved_backlog_boundaries_for_test(), 0);
-    assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
     assert_eq!(harness.prepared_normal_backlog_count_for_test(), 0);
-    assert_eq!(harness.prepared_normal_sender_expiry_count_for_test(), 0);
-    assert_eq!(harness.final_sender_window_expirations_for_test(), 0);
     assert_eq!(harness.prepared_up_prefix_recovery_sends_for_test(), 0);
     assert_eq!(harness.timeline_rebase_count_for_test(), 0);
     assert_eq!(
@@ -11299,6 +11280,14 @@ fn strict_late_authorized_down_is_attempted_and_finishes() {
         "{snapshot:?}"
     );
     assert_eq!(snapshot.final_sender_window_expirations, 0, "{snapshot:?}");
+    assert_eq!(
+        snapshot.release_floor_infeasible_boundaries, 0,
+        "{snapshot:?}"
+    );
+    let progress = session.snapshot_lite();
+    assert_eq!(progress.missed_physical_window_boundaries, 0);
+    assert_eq!(progress.final_sender_window_expirations, 0);
+    assert_eq!(progress.release_floor_infeasible_boundaries, 0);
     assert_eq!(snapshot.active_count, 0, "{snapshot:?}");
     assert_eq!(snapshot.possibly_active_count, 0, "{snapshot:?}");
     assert_eq!(snapshot.failed_release_count, 0, "{snapshot:?}");

@@ -437,9 +437,7 @@ mod tests {
 
         assert!(metrics.last_missed_down_valid);
         assert_eq!(metrics.missed_down_boundaries, 1);
-        assert_eq!(metrics.missed_physical_window_boundaries, 0);
         assert_eq!(metrics.missed_unobserved_backlog_boundaries, 1);
-        assert_eq!(metrics.final_sender_window_expirations, 0);
         assert_eq!(metrics.last_missed_down_lateness_ticks, 7);
     }
 
@@ -458,10 +456,8 @@ mod tests {
         assert_eq!(metrics.missed_down_boundaries, 1);
         assert_eq!(metrics.missed_down_keys, 2);
         assert_eq!(
+            metrics.missed_down_boundaries,
             metrics.missed_unobserved_backlog_boundaries
-                + metrics.missed_physical_window_boundaries
-                + metrics.final_sender_window_expirations,
-            1
         );
     }
 

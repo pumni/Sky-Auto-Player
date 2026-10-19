@@ -632,14 +632,18 @@ snapshot counts and maxima are worker-local and independent of trace mode.
 See [real-time timing evidence](rt-dispatch-timing-evidence.md) for field
 boundaries, lower-bound semantics, bounded drops, and the offline risk model.
 
-These compatibility counters may remain in snapshots and UI DTOs:
+These public compatibility fields remain in Rust snapshots and the UI DTO with
+unchanged names, types, ordering, and numeric zero values:
 
-- `final_sender_window_expirations`;
-- `prepared_normal_sender_expirations`;
 - `missed_physical_window_boundaries`;
+- `final_sender_window_expirations`;
 - `release_floor_infeasible_boundaries`.
 
-They are deprecated, remain zero in production, and do not control execution.
+Their deprecated `WorkerMetricsLocal` storage had no production writers and has
+been removed. `prepared_normal_sender_expirations` was worker-local only and is
+also removed; it was not a Rust snapshot or UI DTO field. These counters do not
+control execution. The compatibility projections remain numeric zero, while
+active floor-delay, final-gate, lease, H/G, and release evidence stays available.
 Native telemetry schema version 19 reports authored and physical-floor
 differences, not absolute authored/floor QPC targets, and contains no
 latest-start field. Legacy deadline-rejection outcomes are historical

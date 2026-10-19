@@ -35,12 +35,15 @@ fields rather than active admission state and remain serialized as before.
 ### Deprecated and compatibility state
 
 `final_sender_window_expirations`, `prepared_normal_sender_expirations`,
-`missed_physical_window_boundaries`, and `release_floor_infeasible_boundaries` are deprecated
-zero-valued compatibility counters. They do not control execution. The first, third, and fourth
-remain in Rust snapshots and the desktop diagnostics DTO; the prepared-normal sender counter is
-worker-local and is not part of that DTO. Focused serialization coverage keeps the three desktop
-field names and values stable. Active physical timing outcomes are represented by floor-delay and
-final-gate metrics instead.
+`missed_physical_window_boundaries`, and `release_floor_infeasible_boundaries` had no production
+writers and do not control execution. Their dead `WorkerMetricsLocal` storage and test accessors
+have been removed. The first, third, and fourth fields remain in public Rust snapshots and the
+desktop diagnostics DTO with their existing names, types, order, and numeric zero projection; the
+prepared-normal sender counter had no public field and has no replacement storage. Golden
+serialization coverage keeps the desktop keys and zero values stable. Active physical timing
+outcomes are represented by floor-delay and final-gate metrics instead. See
+[`native-playback-ownership.md`](native-playback-ownership.md) for the producer/storage/reader/JSON
+matrix.
 
 ## Deterministic invariant coverage
 

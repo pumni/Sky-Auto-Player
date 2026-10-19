@@ -17,6 +17,7 @@ Historical plans, audit reports, issue text, and obsolete work orders do not ove
 
 - [architecture.md](architecture.md) — Native Tauri/Rust layering, dependency direction, module ownership, and unsafe boundary.
 - [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — Native real-time dispatch contract, thread split, hot-path constraints, and runtime boundary.
+- [native-playback-ownership.md](native-playback-ownership.md) — Tauri native playback module ownership, lock/lifetime map, DTO compatibility, and deprecated counter audit.
 - [final-down-admission-qualification.md](final-down-admission-qualification.md) — #483 shared final Down admission boundary, deterministic differential tests, Windows floor-oracle evidence, and native-run ledger.
 - [timing-principles.md](timing-principles.md) — Timing semantics, targets, measurement domains, and fail-closed behavior.
 - [rt-dispatch-timing-evidence.md](rt-dispatch-timing-evidence.md) — Timestamp provenance, production timing observations, offline risk model, and Windows A/B qualification plan.

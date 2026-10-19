@@ -563,7 +563,6 @@ fn production_normal_mixed_completion_floor_no_alloc() {
         "normal mixed completion-floor path made {allocs} allocation(s)"
     );
     assert!(matches!(classify_step, DispatchStep::Dispatched));
-    assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
     assert_eq!(
         packets.lock().expect("packet capture").as_slice(),
         &[PhysicalPacket::new(0, 1), PhysicalPacket::new(1, 2)]

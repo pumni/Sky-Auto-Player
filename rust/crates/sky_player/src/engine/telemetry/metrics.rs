@@ -135,17 +135,11 @@ pub struct WorkerMetricsLocal {
     pub missed_down_boundaries: u64,
     pub missed_down_keys: u64,
     pub missed_unobserved_backlog_boundaries: u64,
-    /// Deprecated compatibility counter; physical-window rejection is retired
-    /// and this remains zero in production.
-    pub missed_physical_window_boundaries: u64,
     /// Prepared-normal acceptance counters. These are distinct from
     /// authored/dynamic recovery counters so the deterministic report can
     /// prove the prepared miss resolver did not enter dynamic policy.
     pub prepared_up_prefix_recovery_sends: u64,
     pub prepared_normal_backlog_boundaries: u64,
-    /// Deprecated compatibility counter; prepared sender expiry is retired and
-    /// this remains zero in production.
-    pub prepared_normal_sender_expirations: u64,
     /// Final control and modifier gate rejections observed before the
     /// authoritative SendInput timestamp.
     pub final_gate_control_rejections: u64,
@@ -156,12 +150,6 @@ pub struct WorkerMetricsLocal {
     /// Final supervisor-lease gate rejections. The compatibility field name
     /// includes both expired and unproven lease outcomes.
     pub final_gate_lease_expirations: u64,
-    /// Deprecated compatibility counter; sender-window rejection is retired
-    /// and this remains zero in production.
-    pub final_sender_window_expirations: u64,
-    /// Deprecated compatibility counter; release floors never reject a Down
-    /// and this remains zero in production.
-    pub release_floor_infeasible_boundaries: u64,
     pub max_missed_lateness_ticks: u64,
     /// Counts one authored packet boundary when its fixed physical floor is
     /// later than the authored target. QPC timestamps and masks below retain
