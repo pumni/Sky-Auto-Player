@@ -88,6 +88,7 @@ impl NativePlaybackService {
             last_terminal: Arc::new(Mutex::new(None)),
             sender_trace_state: Arc::new(Mutex::new(SenderTraceState::default())),
             diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
+            preparation_cancel: Mutex::new(None),
             activity,
             #[cfg(test)]
             startup_failure: None,
@@ -193,10 +194,46 @@ impl NativePlaybackService {
         Ok(completed.trace_json.clone())
     }
 
+    fn begin_preparation(&self) -> Result<Arc<AtomicBool>, String> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut active = self
+            .preparation_cancel
+            .lock()
+            .map_err(|_| "native Prepare cancellation lock poisoned".to_string())?;
+        if let Some(previous) = active.replace(Arc::clone(&cancelled)) {
+            previous.store(true, Ordering::Release);
+        }
+        Ok(cancelled)
+    }
+
+    fn finish_preparation(&self, cancelled: &Arc<AtomicBool>) {
+        if let Ok(mut active) = self.preparation_cancel.lock()
+            && active
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, cancelled))
+        {
+            *active = None;
+        }
+    }
+
     pub(in crate::native_runtime) fn prepare(
         &self,
         input: NativePreparedInput,
     ) -> Result<PreparedPlaybackDto, String> {
+        let cancelled = self.begin_preparation()?;
+        let result = self.prepare_with_cancel(input, &cancelled);
+        self.finish_preparation(&cancelled);
+        result
+    }
+
+    fn prepare_with_cancel(
+        &self,
+        input: NativePreparedInput,
+        cancelled: &AtomicBool,
+    ) -> Result<PreparedPlaybackDto, String> {
+        if cancelled.load(Ordering::Acquire) {
+            return Err("playback preparation was superseded by a newer request".into());
+        }
         let NativePreparedInput {
             song_id,
             generation,
@@ -224,6 +261,16 @@ impl NativePlaybackService {
             ));
         }
         let fingerprint = plan_fingerprint(&song_id, &config, &schedule, &timing_policy)?;
+        let timing_advisory = timing_advisory::analyze_variant(
+            &schedule,
+            &config,
+            &timing_policy,
+            &fingerprint,
+            cancelled,
+        );
+        if cancelled.load(Ordering::Acquire) {
+            return Err("playback preparation was superseded by a newer request".into());
+        }
         let admission = if risk.severity == "low" {
             PlaybackAdmission::Ready
         } else {
@@ -243,6 +290,7 @@ impl NativePlaybackService {
             decision: PlaybackDecision::Proceed,
             config: config.clone(),
             plan_fingerprint: fingerprint.clone(),
+            timing_advisory: Some(timing_advisory),
         }];
         if risk.severity != "low" {
             decisions.push(RiskDecisionDto {
@@ -274,6 +322,16 @@ impl NativePlaybackService {
                     &recommended_schedule,
                     &recommended_policy,
                 )?;
+                let recommended_timing_advisory = timing_advisory::analyze_variant(
+                    &recommended_schedule,
+                    &recommended_config,
+                    &recommended_policy,
+                    &recommended_fingerprint,
+                    cancelled,
+                );
+                if cancelled.load(Ordering::Acquire) {
+                    return Err("playback preparation was superseded by a newer request".into());
+                }
                 variants.insert(
                     PlaybackDecision::UseRecommended,
                     NativePlaybackVariant {
@@ -288,6 +346,7 @@ impl NativePlaybackService {
                     decision: PlaybackDecision::UseRecommended,
                     config: recommended_config,
                     plan_fingerprint: recommended_fingerprint,
+                    timing_advisory: Some(recommended_timing_advisory),
                 });
                 decisions.push(RiskDecisionDto {
                     decision: PlaybackDecision::UseRecommended,
@@ -301,6 +360,16 @@ impl NativePlaybackService {
                 };
                 let dry_run_fingerprint =
                     plan_fingerprint(&song_id, &dry_run_config, &schedule, &timing_policy)?;
+                let dry_run_timing_advisory = timing_advisory::analyze_variant(
+                    &schedule,
+                    &dry_run_config,
+                    &timing_policy,
+                    &dry_run_fingerprint,
+                    cancelled,
+                );
+                if cancelled.load(Ordering::Acquire) {
+                    return Err("playback preparation was superseded by a newer request".into());
+                }
                 variants.insert(
                     PlaybackDecision::DryRun,
                     NativePlaybackVariant {
@@ -315,6 +384,7 @@ impl NativePlaybackService {
                     decision: PlaybackDecision::DryRun,
                     config: dry_run_config,
                     plan_fingerprint: dry_run_fingerprint,
+                    timing_advisory: Some(dry_run_timing_advisory),
                 });
                 decisions.push(RiskDecisionDto {
                     decision: PlaybackDecision::DryRun,
@@ -334,6 +404,9 @@ impl NativePlaybackService {
             error_code: None,
             error_message: None,
         };
+        if cancelled.load(Ordering::Acquire) {
+            return Err("playback preparation was superseded by a newer request".into());
+        }
         let mut prepared = self
             .prepared
             .lock()
@@ -1665,6 +1738,7 @@ impl NativePlaybackServiceHandle {
             last_terminal: self.last_terminal.clone(),
             sender_trace_state: self.sender_trace_state.clone(),
             diagnostics_gate: self.diagnostics_gate.clone(),
+            preparation_cancel: Mutex::new(None),
             activity: self.activity.clone(),
             #[cfg(test)]
             startup_failure: None,
@@ -1994,7 +2068,7 @@ pub(in crate::native_runtime) fn song_detail(
     }
 }
 
-pub(in crate::native_runtime) fn compile_dispatch_schedule(
+pub(super) fn compile_dispatch_schedule(
     schedule: &ScheduleMetadata,
 ) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
     let actions = schedule
@@ -2018,4 +2092,60 @@ pub(in crate::native_runtime) fn compile_dispatch_schedule(
         .collect::<Vec<_>>();
     compile_runtime_intents(&actions, &sky_app_core::song::SKY_SCAN_CODES)
         .map_err(|error| format!("native schedule compilation failed: {error}"))
+}
+
+#[cfg(test)]
+mod preparation_cancellation_tests {
+    use super::NativePlaybackService;
+    use crate::app_state::ActivityCoordinator;
+    use std::sync::{Arc, mpsc};
+    use std::thread;
+
+    #[test]
+    fn newer_prepare_cancels_old_analysis_without_clearing_new_owner() {
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let (started, started_rx) = mpsc::channel();
+        let (continue_old, continue_old_rx) = mpsc::channel();
+        let old_service = Arc::clone(&service);
+        let old_request = thread::spawn(move || {
+            let cancellation = old_service
+                .begin_preparation()
+                .expect("first Prepare cancellation token");
+            started
+                .send(Arc::clone(&cancellation))
+                .expect("publish token");
+            continue_old_rx.recv().expect("release first request");
+            let was_cancelled = cancellation.load(std::sync::atomic::Ordering::Acquire);
+            old_service.finish_preparation(&cancellation);
+            was_cancelled
+        });
+
+        let old_token = started_rx.recv().expect("first Prepare started");
+        let new_token = service
+            .begin_preparation()
+            .expect("newer Prepare cancellation token");
+        assert!(old_token.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!new_token.load(std::sync::atomic::Ordering::Acquire));
+
+        continue_old.send(()).expect("resume old request");
+        assert!(old_request.join().expect("first Prepare thread"));
+        let active = service
+            .preparation_cancel
+            .lock()
+            .expect("Prepare cancellation owner lock");
+        assert!(
+            active
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &new_token))
+        );
+        drop(active);
+        service.finish_preparation(&new_token);
+        assert!(
+            service
+                .preparation_cancel
+                .lock()
+                .expect("Prepare cancellation owner lock")
+                .is_none()
+        );
+    }
 }

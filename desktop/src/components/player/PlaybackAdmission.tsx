@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
 import { playbackIssuePresentation } from '../../state/store';
 import { admissionDecisionLabel } from './playerFormatting';
+import { TimingAdvisory } from './TimingAdvisory';
 
 interface PlaybackAdmissionProps {
   useStore: DesktopStoreHook;
@@ -32,7 +33,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
   if (admissionRequired && prepared) {
     return (
       <section
-        className="player-admission"
+        className="player-admission player-admission-confirmation"
         role="group"
         aria-labelledby="playback-confirmation-title"
         aria-describedby="playback-confirmation-reason"
@@ -43,20 +44,29 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
           <span id="playback-confirmation-reason" className="muted">
             {prepared.risk.reasons[0] ?? 'Review the selected song before starting.'}
           </span>
+          <span className="muted">
+            Review the offline timing estimate for each plan. It is informational and does not
+            change authored timing or playback admission.
+          </span>
         </div>
         <div className="admission-actions">
-          {prepared.decisions.map((decision, index) => (
-            <button
-              key={decision.decision}
-              className={`button${decision.decision === 'proceed' ? ' button-primary' : ''}`}
-              type="button"
-              disabled={transportOperation !== null}
-              ref={index === 0 ? admissionActionRef : undefined}
-              onClick={() => void start(decision.decision)}
-            >
-              {admissionDecisionLabel(decision.decision, decision.label)}
-            </button>
-          ))}
+          {prepared.decisions.map((decision, index) => {
+            const variant = prepared.variants.find((item) => item.decision === decision.decision);
+            return (
+              <div className="admission-option" key={decision.decision}>
+                <button
+                  className={`button${decision.decision === 'proceed' ? ' button-primary' : ''}`}
+                  type="button"
+                  disabled={transportOperation !== null}
+                  ref={index === 0 ? admissionActionRef : undefined}
+                  onClick={() => void start(decision.decision)}
+                >
+                  {admissionDecisionLabel(decision.decision, decision.label)}
+                </button>
+                <TimingAdvisory advisory={variant?.timing_advisory} />
+              </div>
+            );
+          })}
           <button
             className="button"
             type="button"
@@ -80,7 +90,27 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
           message: blockedMessage,
         }
       : null);
-  if (!presentedIssue) return null;
+  if (!presentedIssue) {
+    const readyAdvisory =
+      prepared?.admission === 'ready'
+        ? prepared.variants.find((variant) => variant.decision === 'proceed')?.timing_advisory
+        : undefined;
+    if (!readyAdvisory) return null;
+    return (
+      <section
+        className="player-admission player-admission-timing"
+        aria-label="Prepared playback timing advisory"
+      >
+        <div className="admission-copy">
+          <strong>Prepared timing advisory</strong>
+          <span className="muted">
+            This offline estimate is informational and does not affect playback admission.
+          </span>
+        </div>
+        <TimingAdvisory advisory={readyAdvisory} />
+      </section>
+    );
+  }
 
   const ownedSession = playback.sessionId !== null;
   const canStop =

@@ -10,7 +10,10 @@
 /// needed by the desktop adapter behind one typed facade.
 pub mod adapter_support {
     pub use sky_dispatch_core::compile::{CompileError, MAX_ACTIONS, MAX_REASON_BYTES};
-    pub use sky_dispatch_core::model::{ActionKind, KeyActionInput, MAX_KEYS, RuntimeSchedule};
+    pub use sky_dispatch_core::model::{
+        ActionKind, CompactIntent, CompiledBatch, CompiledPacket, KeyActionInput, MAX_KEYS,
+        RuntimeSchedule,
+    };
     pub use sky_dispatch_core::validation::ScheduleTimingError;
     pub use sky_dispatch_win32::calibration::{
         CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationError, HostFingerprint,

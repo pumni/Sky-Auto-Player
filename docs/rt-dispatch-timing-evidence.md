@@ -162,24 +162,25 @@ until tick 30. The corrected report uses tick 30 for both chord members.
 
 The estimates remain diagnostic: `C_i` is not an observed `SendInput`
 timestamp, and neither sender completion nor this model proves game input or
-audio reception. `analyze_whole_stream` currently has no Prepare-path caller.
-Attaching it to Prepare would expand `PreparedPlaybackDto` and the desktop
-projection/UI contract to describe assumptions and advisory meaning. This
-change leaves that as an explicit integration seam; any future presentation
-must remain advisory and must not gate Prepare, worker admission, waits, or
-musical input.
+audio reception. Native Prepare now calls the simulator through the bounded
+variant adapter documented in
+[`prepare-whole-stream-timing-advisory.md`](prepare-whole-stream-timing-advisory.md).
+That adapter limits action/packet count, work, and estimated working storage
+before constructing the model vector; it returns only compact summary fields
+on each variant DTO. It does not add analyzer work to dispatch, waits, final
+Down admission, or sender delivery.
 
-The result is labeled `guarantee: false`. Estimates never enter production
-admission, waiting, or scheduling and cannot rewrite authored targets. Model
-cost inputs are estimates rather than machine measurements. Boot constructs a
-prepared stream only when both the selected profile and timing configuration
-are non-strict. Strict/diagnostic dispatch uses the dynamic planner and its
-pending-release recovery branch. That branch remains because the source
-selects it and the current tests exercise its coalescing behavior; the
-prepared stream has no equivalence proof for it. In particular,
-`pending_release_equal_authored_boundary_sends_one_up_packet` verifies that a
-pending Up coalesces with an authored Up at the same boundary into one ordered
-packet.
+The result is labeled `guarantee: false`. Estimates never gate production
+admission or alter waiting/scheduling and cannot rewrite authored targets.
+Model cost inputs are illustrative assumptions rather than machine
+measurements. Boot constructs a prepared stream only when both the selected
+profile and timing configuration are non-strict. Strict/diagnostic dispatch
+uses the dynamic planner and its pending-release recovery branch. That branch
+remains because the source selects it and the current tests exercise its
+coalescing behavior; the prepared stream has no equivalence proof for it. In
+particular, `pending_release_equal_authored_boundary_sends_one_up_packet`
+verifies that a pending Up coalesces with an authored Up at the same boundary
+into one ordered packet.
 
 ## Windows A/B qualification plan
 

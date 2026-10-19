@@ -10783,6 +10783,177 @@ mod tests {
     }
 
     #[test]
+    fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_pressure() {
+        fn input(
+            song_id: &str,
+            song: &super::Song,
+            settings: &ApplicationSettings,
+            config: PlaybackConfigDto,
+            severity: &str,
+            recommendation: bool,
+        ) -> super::NativePreparedInput {
+            let timing_policy = MaterializedTimingPolicy::from_user_margin(
+                config.fps,
+                config.hold_frames,
+                config.timing_margin_us,
+            )
+            .expect("fixture timing policy");
+            let schedule = build_schedule_with_policy(song, config.tempo_scale, &timing_policy)
+                .expect("fixture schedule");
+            let mut risk = super::analyze_schedule_with_context(
+                &schedule,
+                Some(&song.notes),
+                config.hold_frames,
+                config.tempo_scale,
+            );
+            risk.severity = severity.into();
+            if recommendation {
+                risk.suggested_hold_frames = Some(1.25);
+                risk.suggested_tempo_scale = Some(0.9);
+            }
+            super::NativePreparedInput {
+                song_id: song_id.into(),
+                generation: 1,
+                config,
+                song: song.clone(),
+                schedule,
+                risk,
+                timing_policy,
+                timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
+                    recommended_timing_margin_us: Some(800),
+                    qualified: false,
+                    source: "default_fallback".into(),
+                },
+                settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
+            }
+        }
+
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let settings = ApplicationSettings::default();
+        let song = super::parse_song_json(
+            br#"{"name":"Variant advisory","songNotes":[{"time":0,"key":"Key0"}]}"#,
+            "variant-advisory",
+        )
+        .expect("fixture song");
+        let base_config = PlaybackConfigDto {
+            hold_frames: 1.0,
+            timing_margin_us: 800,
+            tempo_scale: 1.0,
+            fps: 60,
+            dry_run: false,
+        };
+
+        let ready = service
+            .prepare(input(
+                "variant-advisory",
+                &song,
+                &settings,
+                base_config.clone(),
+                "low",
+                false,
+            ))
+            .expect("modeled pressure remains a ready plan");
+        assert_eq!(ready.admission, crate::commands::PlaybackAdmission::Ready);
+        let ready_variant = ready.variants.first().expect("Proceed variant");
+        let ready_advisory = ready_variant
+            .timing_advisory
+            .as_ref()
+            .expect("Proceed advisory");
+        assert_eq!(
+            ready_advisory.status,
+            crate::commands::TimingAdvisoryStatus::ModeledRisk
+        );
+        assert_eq!(
+            ready_advisory.plan_fingerprint,
+            ready_variant.plan_fingerprint
+        );
+        assert_eq!(ready_variant.config.hold_frames, base_config.hold_frames);
+        assert_eq!(
+            ready_variant.config.timing_margin_us,
+            base_config.timing_margin_us
+        );
+        assert_eq!(ready_variant.config.tempo_scale, base_config.tempo_scale);
+        assert_eq!(ready_variant.config.fps, base_config.fps);
+        assert_eq!(ready_variant.config.dry_run, base_config.dry_run);
+        assert!(!ready_advisory.receiver_acknowledged);
+
+        let confirmation = service
+            .prepare(input(
+                "variant-advisory",
+                &song,
+                &settings,
+                base_config.clone(),
+                "medium",
+                true,
+            ))
+            .expect("confirmation variants");
+        assert_eq!(
+            confirmation.admission,
+            crate::commands::PlaybackAdmission::ConfirmationRequired
+        );
+        assert_eq!(confirmation.variants.len(), 3);
+        let prepared_id = confirmation
+            .prepared_id
+            .as_ref()
+            .expect("prepared plan identity");
+        let prepared = service.prepared.lock().expect("prepared plan queue");
+        let record = prepared
+            .iter()
+            .find(|(id, _)| id == prepared_id)
+            .map(|(_, record)| record)
+            .expect("retained prepared plan");
+        let mut fingerprints = std::collections::HashSet::new();
+        for variant_dto in &confirmation.variants {
+            let advisory = variant_dto
+                .timing_advisory
+                .as_ref()
+                .expect("variant advisory");
+            assert_eq!(advisory.plan_fingerprint, variant_dto.plan_fingerprint);
+            assert!(fingerprints.insert(variant_dto.plan_fingerprint.as_str()));
+            let native_variant = record
+                .variants
+                .get(&variant_dto.decision)
+                .expect("matching native variant");
+            assert_eq!(native_variant.fingerprint, variant_dto.plan_fingerprint);
+            assert_eq!(
+                native_variant.config.hold_frames,
+                variant_dto.config.hold_frames
+            );
+            assert_eq!(
+                native_variant.config.timing_margin_us,
+                variant_dto.config.timing_margin_us
+            );
+            assert_eq!(
+                native_variant.config.tempo_scale,
+                variant_dto.config.tempo_scale
+            );
+            assert_eq!(native_variant.config.fps, variant_dto.config.fps);
+            assert_eq!(native_variant.config.dry_run, variant_dto.config.dry_run);
+            assert!(!advisory.receiver_acknowledged);
+        }
+        let recommended = confirmation
+            .variants
+            .iter()
+            .find(|variant| variant.decision == crate::commands::PlaybackDecision::UseRecommended)
+            .expect("recommended variant");
+        assert_eq!(recommended.config.hold_frames, 1.25);
+        assert_eq!(recommended.config.tempo_scale, 0.9);
+        let dry_run = confirmation
+            .variants
+            .iter()
+            .find(|variant| variant.decision == crate::commands::PlaybackDecision::DryRun)
+            .expect("Dry Run variant");
+        assert!(dry_run.config.dry_run);
+        assert!(
+            dry_run
+                .timing_advisory
+                .as_ref()
+                .expect("Dry Run advisory")
+                .dry_run_is_hypothetical
+        );
+    }
+
+    #[test]
     fn event_hub_evicts_snapshots_before_lifecycle_events() {
         let mut hub = NativeEventHub::default();
         hub.publish(snapshot("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1))

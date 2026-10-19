@@ -5,6 +5,7 @@
 //! production packet.
 
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const INSTRUMENT_SLOT_COUNT: usize = 15;
 const INSTRUMENT_MASK: u16 = (1 << INSTRUMENT_SLOT_COUNT) - 1;
@@ -90,6 +91,7 @@ pub struct WholeStreamModelReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WholeStreamModelError {
+    Cancelled,
     ZeroQpcFrequency,
     InvalidPacketMask,
     InvalidPacketKind,
@@ -103,6 +105,7 @@ pub enum WholeStreamModelError {
 impl std::fmt::Display for WholeStreamModelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("whole-stream model analysis was cancelled"),
             Self::ZeroQpcFrequency => f.write_str("QPC frequency must be nonzero"),
             Self::InvalidPacketMask => {
                 f.write_str("packet masks exceed or overlap the instrument slots")
@@ -134,6 +137,26 @@ pub fn analyze_whole_stream(
     packets: &[ModelPacket],
     config: WholeStreamModelConfig,
 ) -> Result<WholeStreamModelReport, WholeStreamModelError> {
+    analyze_whole_stream_inner(packets, config, None)
+}
+
+/// Cancellable form used by bounded Prepare-time analysis. The caller must
+/// bound `packets` before calling; cancellation is checked before allocation,
+/// during the fixed-work packet loop, and before percentile sorting.
+pub fn analyze_whole_stream_cancellable(
+    packets: &[ModelPacket],
+    config: WholeStreamModelConfig,
+    cancelled: &AtomicBool,
+) -> Result<WholeStreamModelReport, WholeStreamModelError> {
+    analyze_whole_stream_inner(packets, config, Some(cancelled))
+}
+
+fn analyze_whole_stream_inner(
+    packets: &[ModelPacket],
+    config: WholeStreamModelConfig,
+    cancelled: Option<&AtomicBool>,
+) -> Result<WholeStreamModelReport, WholeStreamModelError> {
+    check_cancelled(cancelled)?;
     if config.qpc_frequency_hz == 0 {
         return Err(WholeStreamModelError::ZeroQpcFrequency);
     }
@@ -156,6 +179,9 @@ pub fn analyze_whole_stream(
     let mut previous_target: Option<(usize, u64)> = None;
 
     for (packet_index, packet) in packets.iter().copied().enumerate() {
+        if packet_index % 256 == 0 {
+            check_cancelled(cancelled)?;
+        }
         if let Some((previous_index, previous_ticks)) = previous_target
             && packet.authored_target_ticks < previous_ticks
         {
@@ -338,6 +364,7 @@ pub fn analyze_whole_stream(
         });
     }
 
+    check_cancelled(cancelled)?;
     let slack_ticks = percentiles(&mut slack_values);
     Ok(WholeStreamModelReport {
         model_kind: "offline_whole_stream_risk_estimate",
@@ -349,6 +376,14 @@ pub fn analyze_whole_stream(
         slack_ticks,
         packets: rows,
     })
+}
+
+fn check_cancelled(cancelled: Option<&AtomicBool>) -> Result<(), WholeStreamModelError> {
+    if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Acquire)) {
+        Err(WholeStreamModelError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 fn us_to_ticks_ceil(us: u64, frequency_hz: u64) -> Result<u64, WholeStreamModelError> {
@@ -388,7 +423,9 @@ mod tests {
     use super::{
         INSTRUMENT_SLOT_COUNT, ModelPacket, ModelPacketKind, SlackClass, TickPercentiles,
         WholeStreamModelConfig, WholeStreamModelError, analyze_whole_stream,
+        analyze_whole_stream_cancellable,
     };
+    use std::sync::atomic::AtomicBool;
 
     fn config() -> WholeStreamModelConfig {
         WholeStreamModelConfig {
@@ -517,6 +554,13 @@ mod tests {
             },
         );
         assert_eq!(overflow, Err(WholeStreamModelError::ArithmeticOverflow));
+    }
+
+    #[test]
+    fn cancellable_model_rejects_a_cancelled_request_before_allocating_rows() {
+        let cancelled = AtomicBool::new(true);
+        let result = analyze_whole_stream_cancellable(&[], config(), &cancelled);
+        assert_eq!(result, Err(WholeStreamModelError::Cancelled));
     }
 
     #[test]

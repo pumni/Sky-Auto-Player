@@ -4,6 +4,7 @@ mod diagnostics;
 mod presentation;
 mod retirement;
 mod session;
+mod timing_advisory;
 
 pub(super) use diagnostics::publish_diagnostics_snapshot_inner_cancellable;
 #[cfg(test)]
@@ -52,6 +53,7 @@ pub(super) struct NativePlaybackService {
     pub(super) last_terminal: Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
     pub(super) sender_trace_state: Arc<Mutex<SenderTraceState>>,
     pub(super) diagnostics_gate: Arc<DiagnosticsPublicationGate>,
+    pub(super) preparation_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub(super) activity: ActivityCoordinator,
     #[cfg(test)]
     pub(super) startup_failure: Option<String>,
