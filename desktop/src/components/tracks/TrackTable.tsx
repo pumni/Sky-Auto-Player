@@ -15,6 +15,22 @@ interface TrackTableProps {
   useStore: DesktopStoreHook;
 }
 
+function libraryScopeKey(library: DesktopStore['library']): string {
+  return JSON.stringify([
+    library.query,
+    library.source,
+    library.searchSource,
+    library.playlistAddMode?.playlistId ?? null,
+  ]);
+}
+
+interface PendingKeyboardNavigation {
+  id: number;
+  index: number;
+  searchRequestGeneration: number;
+  scopeKey: string;
+}
+
 export function TrackTable({ useStore }: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const scrollVisibilityRef = useScrollVisibility<HTMLDivElement>();
@@ -22,7 +38,8 @@ export function TrackTable({ useStore }: TrackTableProps) {
   const setViewport = useStore((store: DesktopStore) => store.setViewport);
   const selectSong = useStore((store: DesktopStore) => store.selectSong);
   const [keyboardIndex, setKeyboardIndex] = useState<number | null>(null);
-  const pendingKeyboardIndex = useRef<number | null>(null);
+  const pendingKeyboardNavigation = useRef<PendingKeyboardNavigation | null>(null);
+  const keyboardNavigationId = useRef(0);
   // TanStack Virtual exposes a mutable controller by design; React Compiler
   // must not memoize this third-party hook's return value.
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -52,6 +69,25 @@ export function TrackTable({ useStore }: TrackTableProps) {
   }, [first, last, setViewport]);
 
   useEffect(() => {
+    const previousLibrary = useStore.getState().library;
+    let previousScopeKey = libraryScopeKey(previousLibrary);
+    let previousSearchRequestGeneration = previousLibrary.searchRequestGeneration;
+    return useStore.subscribe((state) => {
+      const nextScopeKey = libraryScopeKey(state.library);
+      const scopeChanged = nextScopeKey !== previousScopeKey;
+      const searchRequestChanged =
+        state.library.searchRequestGeneration !== previousSearchRequestGeneration;
+      if (!scopeChanged && !searchRequestChanged) return;
+      previousScopeKey = nextScopeKey;
+      previousSearchRequestGeneration = state.library.searchRequestGeneration;
+      keyboardNavigationId.current += 1;
+      pendingKeyboardNavigation.current = null;
+      setKeyboardIndex(null);
+      if (scopeChanged && parentRef.current) parentRef.current.scrollTop = 0;
+    });
+  }, [useStore]);
+
+  useEffect(() => {
     let previousSongId = useStore.getState().playback.currentSong?.songId ?? null;
     return useStore.subscribe((state) => {
       const nextSongId = state.playback.currentSong?.songId ?? null;
@@ -72,42 +108,68 @@ export function TrackTable({ useStore }: TrackTableProps) {
   useEffect(() => {
     const grid = parentRef.current;
     if (!grid) return;
-    let selectedSongId: string | null | undefined;
-    const syncActiveDescendant = (nextSelectedSongId: string | null | undefined) => {
-      if (nextSelectedSongId === selectedSongId) return;
-      selectedSongId = nextSelectedSongId;
-      const row = selectRowAtIndex(
-        useStore.getState().library,
-        nextSelectedSongId
-          ? (useStore.getState().library.indexById.get(nextSelectedSongId) ?? -1)
-          : -1,
-      );
-      if (row) grid.setAttribute('aria-activedescendant', `song-row-${row.song_id}`);
+    const syncActiveDescendant = () => {
+      const selectedSongId = useStore.getState().library.selectedSongId;
+      const selectedRow = selectedSongId
+        ? document.getElementById(`song-row-${selectedSongId}`)
+        : null;
+      const activeDescendant =
+        selectedRow && grid.contains(selectedRow) && selectedRow.getAttribute('role') === 'row'
+          ? selectedRow.id
+          : null;
+      if (activeDescendant) grid.setAttribute('aria-activedescendant', activeDescendant);
       else grid.removeAttribute('aria-activedescendant');
     };
-    syncActiveDescendant(selectedSongId);
-    return useStore.subscribe((state) => {
-      syncActiveDescendant(state.library.selectedSongId);
-    });
+    const unsubscribe = useStore.subscribe(syncActiveDescendant);
+    // Virtual rows can unmount without a store selection change when the viewport moves.
+    const observer = new MutationObserver(syncActiveDescendant);
+    observer.observe(grid, { childList: true, subtree: true });
+    syncActiveDescendant();
+    return () => {
+      unsubscribe();
+      observer.disconnect();
+      grid.removeAttribute('aria-activedescendant');
+    };
   }, [useStore]);
 
   const moveActive = (nextIndex: number) => {
+    if (resultTotal === 0) return;
     const next = Math.max(0, Math.min(resultTotal - 1, nextIndex));
+    const library = useStore.getState().library;
+    const navigation: PendingKeyboardNavigation = {
+      id: ++keyboardNavigationId.current,
+      index: next,
+      searchRequestGeneration: library.searchRequestGeneration,
+      scopeKey: libraryScopeKey(library),
+    };
     setKeyboardIndex(next);
     virtualizer.scrollToIndex(next, { align: 'auto' });
-    const row = selectRowAtIndex(useStore.getState().library, next);
+    const row = selectRowAtIndex(library, next);
     if (row) {
-      pendingKeyboardIndex.current = null;
+      pendingKeyboardNavigation.current = null;
       void selectSong(row.song_id);
     } else {
-      pendingKeyboardIndex.current = next;
-      void setViewport(next, next).then(() => {
-        if (pendingKeyboardIndex.current !== next) return;
-        const loadedRow = selectRowAtIndex(useStore.getState().library, next);
-        if (!loadedRow) return;
-        pendingKeyboardIndex.current = null;
-        void selectSong(loadedRow.song_id);
-      });
+      pendingKeyboardNavigation.current = navigation;
+      void setViewport(next, next)
+        .then(() => {
+          if (pendingKeyboardNavigation.current?.id !== navigation.id) return;
+          const latestLibrary = useStore.getState().library;
+          if (
+            latestLibrary.searchRequestGeneration !== navigation.searchRequestGeneration ||
+            libraryScopeKey(latestLibrary) !== navigation.scopeKey
+          ) {
+            pendingKeyboardNavigation.current = null;
+            return;
+          }
+          const loadedRow = selectRowAtIndex(latestLibrary, navigation.index);
+          pendingKeyboardNavigation.current = null;
+          if (loadedRow) void selectSong(loadedRow.song_id);
+        })
+        .catch(() => {
+          if (pendingKeyboardNavigation.current?.id === navigation.id) {
+            pendingKeyboardNavigation.current = null;
+          }
+        });
     }
   };
 
@@ -117,13 +179,24 @@ export function TrackTable({ useStore }: TrackTableProps) {
     const selectedIndex = state.library.selectedSongId
       ? (state.library.indexById.get(state.library.selectedSongId) ?? -1)
       : -1;
-    const current = selectedIndex >= 0 ? selectedIndex : 0;
+    const pendingNavigation = pendingKeyboardNavigation.current;
+    const pendingMatchesCurrentResults =
+      pendingNavigation !== null &&
+      pendingNavigation.searchRequestGeneration === state.library.searchRequestGeneration &&
+      pendingNavigation.scopeKey === libraryScopeKey(state.library);
+    if (pendingNavigation && !pendingMatchesCurrentResults) {
+      pendingKeyboardNavigation.current = null;
+    }
+    const activeIndex = pendingMatchesCurrentResults
+      ? (pendingNavigation?.index ?? -1)
+      : selectedIndex;
+    const currentIndex = activeIndex >= 0 ? activeIndex : 0;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      moveActive(current + 1);
+      moveActive(currentIndex + 1);
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
-      moveActive(current - 1);
+      moveActive(currentIndex - 1);
     } else if (event.key === 'Home') {
       event.preventDefault();
       moveActive(0);
@@ -131,11 +204,8 @@ export function TrackTable({ useStore }: TrackTableProps) {
       event.preventDefault();
       moveActive(resultTotal - 1);
     } else if (event.key === 'Enter' || event.key === ' ') {
-      const row = selectRowAtIndex(state.library, current);
-      if (row) {
-        event.preventDefault();
-        void selectSong(row.song_id);
-      }
+      event.preventDefault();
+      moveActive(activeIndex < 0 ? 0 : activeIndex);
     }
   };
 

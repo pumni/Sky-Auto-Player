@@ -18,8 +18,13 @@ test('production bundle boots the mock shell and supports a representative flow'
   expect(featureChunks.size).toBe(0);
 
   await page.getByLabel('Search library').fill('Moonlit');
-  await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
-  await page.getByRole('row', { name: /Moonlit Village/ }).click();
+  const songsGrid = page.getByRole('grid', { name: 'Songs' });
+  await expect(songsGrid).toHaveAttribute('aria-rowcount', '2');
+  const moonlitRow = page.getByRole('row', { name: /Moonlit Village/ });
+  await expect(moonlitRow).toBeVisible();
+  await moonlitRow.locator('.track-title-text').click();
+  await expect(moonlitRow).toHaveAttribute('aria-selected', 'true');
+  await expect(songsGrid).toBeFocused();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByText('Low timing risk')).toBeVisible();
   expect(featureChunks.size).toBe(0);

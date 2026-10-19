@@ -278,6 +278,25 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         nextSource.kind === 'playlist' && current.playlistAddMode?.playlistId === nextSource.id
           ? { kind: 'smart', id: 'all' }
           : nextSource;
+      const scopeChanged =
+        current.query !== nextQuery ||
+        sourceKey(current.source) !== sourceKey(nextSource) ||
+        sourceKey(current.searchSource) !== sourceKey(nextSearchSource);
+      const nextSearchKey = cacheKey(nextSearchSource, nextQuery, current.generation);
+      const cachedFirstPage = pageCache.get(nextSearchKey)?.get(0);
+      const firstPageRequestKey = `${nextSearchKey}\u0000${0}`;
+      // Same-generation reconciliation may reuse the authoritative first page. A
+      // catalog reload publishes a newer generation, so its cache key necessarily misses.
+      if (
+        !scopeChanged &&
+        !current.error &&
+        (cachedFirstPage || pageRequests.has(firstPageRequestKey))
+      ) {
+        return;
+      }
+
+      const clearBrowserSelection = scopeChanged;
+      if (clearBrowserSelection) context.nextDetailRequestToken();
       const token = current.searchRequestGeneration + 1;
       set({
         library: {
@@ -285,6 +304,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           source: nextSource,
           searchSource: nextSearchSource,
           query: nextQuery,
+          selectedSongId: clearBrowserSelection ? null : current.selectedSongId,
           pages: new Map(),
           indexById: new Map(),
           resultTotal: 0,
@@ -292,13 +312,17 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           error: null,
           searchRequestGeneration: token,
         },
+        ...(clearBrowserSelection ? { details: { bySongId: new Map() } } : {}),
       });
       try {
         const result = await loadPage(nextQuery, nextSearchSource, 0, current.generation, token);
-        if (get().library.searchRequestGeneration !== token) return;
+        const latest = get().library;
+        if (latest.searchRequestGeneration !== token) return;
+        const generationChanged = latest.generation !== result.generation;
+        if (generationChanged) context.nextDetailRequestToken();
         set({
           library: {
-            ...get().library,
+            ...latest,
             catalogTotal:
               nextSearchSource.kind === 'smart' &&
               nextSearchSource.id === 'all' &&
@@ -308,9 +332,11 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             likedTotal: result.liked_total,
             resultTotal: result.total,
             generation: result.generation,
+            selectedSongId: generationChanged ? null : latest.selectedSongId,
             loading: false,
             error: null,
           },
+          ...(generationChanged ? { details: { bySongId: new Map() } } : {}),
         });
       } catch (error) {
         if (get().library.searchRequestGeneration !== token) return;
@@ -616,6 +642,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         invalidateSourceCache({ kind: 'playlist', id: playlistId });
         const active = get().library.source;
         if (active.kind === 'playlist' && active.id === playlistId) {
+          if (get().library.selectedSongId === songId) {
+            context.nextDetailRequestToken();
+            set({
+              library: { ...get().library, selectedSongId: null },
+              details: { bySongId: new Map() },
+            });
+          }
           await get().search();
         }
       } catch (error) {
@@ -713,6 +746,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           },
         });
         if (library.source.kind === 'smart' && library.source.id === 'liked') {
+          if (!liked && get().library.selectedSongId === songId) {
+            context.nextDetailRequestToken();
+            set({
+              library: { ...get().library, selectedSongId: null },
+              details: { bySongId: new Map() },
+            });
+          }
           await get().search();
         }
       } catch (error) {
