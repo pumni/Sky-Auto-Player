@@ -325,6 +325,87 @@ describe('desktop store', () => {
     expect(rowAt(store, 0)?.title).toBe('Aurora Landing');
   });
 
+  it('scopes browser selection to its search while preserving native Now Playing', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const selected = rowAt(store, 0);
+    if (!selected) throw new Error('mock library is empty');
+
+    await act(async () => store.getState().selectSong(selected.song_id));
+    const selectedDetail = selectSelectedDetail(store.getState());
+    expect(selectedDetail.value?.song_id).toBe(selected.song_id);
+    const requestGeneration = store.getState().library.searchRequestGeneration;
+
+    await act(async () => store.getState().search(''));
+    expect(store.getState().library.searchRequestGeneration).toBe(requestGeneration);
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+    expect(selectSelectedDetail(store.getState())).toBe(selectedDetail);
+
+    const library = store.getState().library;
+    store.setState({
+      playback: {
+        ...store.getState().playback,
+        sessionId: 'native-session',
+        state: 'playing',
+        currentSong: {
+          songId: selected.song_id,
+          title: selected.title,
+          liked: selected.liked,
+          durationUs: selected.duration_us,
+          formatLabel: selected.format_label,
+          noteCount: selected.note_count,
+          riskLevel: selected.risk_level,
+          generation: library.generation,
+        },
+      },
+    });
+
+    await act(async () => store.getState().search('Moonlit'));
+
+    expect(store.getState().library.selectedSongId).toBeNull();
+    expect(selectSelectedDetail(store.getState()).value).toBeNull();
+    expect(store.getState().details.bySongId.size).toBe(0);
+    expect(store.getState().playback.sessionId).toBe('native-session');
+    expect(store.getState().playback.currentSong?.songId).toBe(selected.song_id);
+    expect(selectNowPlayingSongId(store.getState())).toBe(selected.song_id);
+    expect(rowAt(store, 0)?.title).toBe('Moonlit Village');
+  });
+
+  it('clears browser selection when its source or playlist-add scope changes', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const firstCatalogRow = rowAt(store, 0);
+    if (!firstCatalogRow) throw new Error('mock library is empty');
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    if (store.getState().library.source.kind !== 'playlist') {
+      throw new Error('new playlist was not selected');
+    }
+
+    await act(async () => store.getState().addSongToPlaylist(playlistId, firstCatalogRow.song_id));
+    await act(async () => store.getState().selectSong(firstCatalogRow.song_id));
+    expect(store.getState().library.selectedSongId).toBe(firstCatalogRow.song_id);
+
+    await act(async () => store.getState().openPlaylistAdd(playlistId));
+    expect(store.getState().library.playlistAddMode).toEqual({ playlistId });
+    expect(store.getState().library.selectedSongId).toBeNull();
+    expect(selectSelectedDetail(store.getState()).value).toBeNull();
+
+    const availableRow = rowAt(store, 0);
+    if (!availableRow) throw new Error('All Songs was not loaded in playlist-add mode');
+    await act(async () => store.getState().selectSong(availableRow.song_id));
+    await act(async () => store.getState().exitPlaylistAdd());
+    expect(store.getState().library.playlistAddMode).toBeNull();
+    expect(store.getState().library.selectedSongId).toBeNull();
+
+    const playlistRow = rowAt(store, 0);
+    if (!playlistRow) throw new Error('playlist result was not restored');
+    await act(async () => store.getState().selectSong(playlistRow.song_id));
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'all' }));
+    expect(store.getState().library.selectedSongId).toBeNull();
+    expect(selectSelectedDetail(store.getState()).value).toBeNull();
+  });
+
   it('loads and selects a song beyond the native page limit', async () => {
     const bridge = createMockBridge();
     const requestedOffsets: number[] = [];

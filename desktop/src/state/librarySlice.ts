@@ -248,6 +248,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       if (get().bootstrapState !== 'ready' || get().library.error !== null) return;
       for (let attempt = 0; attempt < MAX_CATALOG_RECONCILIATION_ATTEMPTS; attempt += 1) {
         const requestedGeneration = get().library.generation;
+        invalidateSourceCache(get().library.searchSource);
         await get().search();
         const afterSearch = get().library;
         if (afterSearch.error !== null) return;
@@ -278,6 +279,16 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         nextSource.kind === 'playlist' && current.playlistAddMode?.playlistId === nextSource.id
           ? { kind: 'smart', id: 'all' }
           : nextSource;
+      const scopeChanged =
+        current.query !== nextQuery ||
+        sourceKey(current.source) !== sourceKey(nextSource) ||
+        sourceKey(current.searchSource) !== sourceKey(nextSearchSource);
+      const nextSearchKey = cacheKey(nextSearchSource, nextQuery, current.generation);
+      const cachedFirstPage = pageCache.get(nextSearchKey)?.get(0);
+      if (!scopeChanged && cachedFirstPage && !current.error) return;
+
+      const clearBrowserSelection = scopeChanged || current.selectedSongId !== null;
+      if (clearBrowserSelection) context.nextDetailRequestToken();
       const token = current.searchRequestGeneration + 1;
       set({
         library: {
@@ -285,6 +296,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           source: nextSource,
           searchSource: nextSearchSource,
           query: nextQuery,
+          selectedSongId: clearBrowserSelection ? null : current.selectedSongId,
           pages: new Map(),
           indexById: new Map(),
           resultTotal: 0,
@@ -292,6 +304,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           error: null,
           searchRequestGeneration: token,
         },
+        ...(clearBrowserSelection ? { details: { bySongId: new Map() } } : {}),
       });
       try {
         const result = await loadPage(nextQuery, nextSearchSource, 0, current.generation, token);
@@ -616,6 +629,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         invalidateSourceCache({ kind: 'playlist', id: playlistId });
         const active = get().library.source;
         if (active.kind === 'playlist' && active.id === playlistId) {
+          if (get().library.selectedSongId === songId) {
+            context.nextDetailRequestToken();
+            set({
+              library: { ...get().library, selectedSongId: null },
+              details: { bySongId: new Map() },
+            });
+          }
           await get().search();
         }
       } catch (error) {
@@ -713,6 +733,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
           },
         });
         if (library.source.kind === 'smart' && library.source.id === 'liked') {
+          if (!liked && get().library.selectedSongId === songId) {
+            context.nextDetailRequestToken();
+            set({
+              library: { ...get().library, selectedSongId: null },
+              details: { bySongId: new Map() },
+            });
+          }
           await get().search();
         }
       } catch (error) {

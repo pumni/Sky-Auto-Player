@@ -218,6 +218,80 @@ test('mock desktop vertical slice can search and inspect a song', async ({ page 
   await expect(page.getByText('Low timing risk')).toBeVisible();
 });
 
+test('search clears browser selection while Now Playing remains on the active song', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const playingRow = page.getByRole('row', { name: /Blue Bird/ });
+  await playingRow.click();
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+  await expect(page.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
+  if (await proceed.isVisible().catch(() => false)) await proceed.click();
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+
+  const search = page.getByLabel('Search library');
+  await search.fill('Moonlit');
+  const browsedRow = page.getByRole('row', { name: /Moonlit Village/ });
+  await expect(browsedRow).toBeVisible();
+  await expect(playingRow).toHaveCount(0);
+  await expect(search).toBeFocused();
+  await expect(page.getByText('Select a song to view details.')).toBeVisible();
+  await expect(browsedRow).toHaveAttribute('aria-selected', 'false');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+
+  await browsedRow.click();
+  await expect(browsedRow).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('heading', { name: 'Moonlit Village' })).toBeVisible();
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+});
+
+test('row selection returns focus to the grid and Like and menu actions stay isolated', async ({
+  page,
+}) => {
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Practice');
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+  await expect(createDialog).toBeHidden();
+  await navigator.getByRole('button', { name: 'All Songs' }).click();
+
+  const row = page.getByRole('row', { name: /Aurora Landing/ });
+  const grid = page.getByRole('grid', { name: 'Songs' });
+  await row.click();
+  await expect(row).toHaveAttribute('aria-selected', 'true');
+  await expect(grid).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  const nextRow = page.getByRole('row', { name: /Blue Bird/ });
+  await expect(nextRow).toHaveAttribute('aria-selected', 'true');
+  await expect(grid).toBeFocused();
+
+  const unselectedRow = page.getByRole('row', { name: /Candle Run/ });
+  const actionsButton = unselectedRow.getByRole('button', { name: 'More actions for Candle Run' });
+  await actionsButton.click();
+  const menu = page.getByRole('menu', { name: 'Actions for Candle Run' });
+  await menu.getByRole('menuitem', { name: 'Add to Practice' }).click();
+  await expect(unselectedRow).toHaveAttribute('aria-selected', 'false');
+  await expect(nextRow).toHaveAttribute('aria-selected', 'true');
+  await expect(actionsButton).toBeFocused();
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+
+  await unselectedRow.getByRole('button', { name: 'Add Candle Run to Liked Songs' }).click();
+  await expect(unselectedRow).toHaveAttribute('aria-selected', 'false');
+  await expect(nextRow).toHaveAttribute('aria-selected', 'true');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(
+    unselectedRow.getByRole('button', { name: 'Remove Candle Run from Liked Songs' }),
+  ).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('virtualized library pages beyond the first 200 songs', async ({ page }) => {
   const list = page.locator('.track-table');
   await expect(page.getByText('500 songs')).toBeVisible();
@@ -231,6 +305,62 @@ test('virtualized library pages beyond the first 200 songs', async ({ page }) =>
   await song.click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByRole('heading', { name: 'Song 401' })).toBeVisible();
+});
+
+test('virtualized grid navigation keeps its active descendant mounted across pages', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=120000');
+  const grid = page.getByRole('grid', { name: 'Songs' });
+  const list = page.locator('.track-table');
+
+  await grid.focus();
+  await page.keyboard.press('End');
+  const lastRow = page.getByRole('row', { name: /Song 500/ });
+  await expect(lastRow).toBeVisible();
+  await expect(lastRow).toHaveAttribute('aria-selected', 'true');
+  const lastRowId = await lastRow.getAttribute('id');
+  expect(lastRowId).toBeTruthy();
+  await expect(grid).toHaveAttribute('aria-activedescendant', lastRowId ?? '');
+  await expect
+    .poll(() =>
+      grid.evaluate((element) => {
+        const id = element.getAttribute('aria-activedescendant');
+        const activeRow = id ? document.getElementById(id) : null;
+        return Boolean(activeRow && element.contains(activeRow) && activeRow.isConnected);
+      }),
+    )
+    .toBe(true);
+
+  await list.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await expect(lastRow).toHaveCount(0);
+  await expect.poll(() => grid.getAttribute('aria-activedescendant')).toBeNull();
+
+  await grid.focus();
+  await page.keyboard.press('End');
+  await expect(lastRow).toHaveAttribute('aria-selected', 'true');
+  await expect(grid).toHaveAttribute('aria-activedescendant', lastRowId ?? '');
+  await page.keyboard.press('Home');
+  const firstRow = page.getByRole('row', { name: /Aurora Landing/ });
+  await expect(firstRow).toHaveAttribute('aria-selected', 'true');
+  const firstRowId = await firstRow.getAttribute('id');
+  expect(firstRowId).toBeTruthy();
+  await expect(grid).toHaveAttribute('aria-activedescendant', firstRowId ?? '');
+
+  await list.evaluate((element) => {
+    element.scrollTop = 400 * 46;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await expect(page.getByRole('row', { name: /Song 401/ })).toBeVisible();
+  const search = page.getByLabel('Search library');
+  await search.fill('Moonlit');
+  await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
+  await expect(firstRow).toHaveCount(0);
+  await expect.poll(() => grid.getAttribute('aria-activedescendant')).toBeNull();
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
 test('All Songs clears search while retaining the catalog count', async ({ page }) => {

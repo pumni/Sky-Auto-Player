@@ -1,9 +1,9 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Profiler } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import type { SongRow } from '../../bridge/DesktopBridge';
-import { createDesktopStore } from '../../state/store';
+import { createDesktopStore, selectRowAtIndex } from '../../state/store';
 import { TrackBrowser } from './TrackBrowser';
 import { TrackRow, VirtualTrackRow, formatDuration } from './TrackRow';
 import { TrackTable } from './TrackTable';
@@ -26,6 +26,7 @@ describe('Track Browser primitives', () => {
   it('formats duration and exposes note and liked semantics', () => {
     const onSelect = vi.fn();
     const onToggleLiked = vi.fn();
+    const onMenuAction = vi.fn();
     expect(formatDuration(null)).toBe('—');
     expect(formatDuration(125_000_000)).toBe('2:05');
 
@@ -38,6 +39,11 @@ describe('Track Browser primitives', () => {
         onFocus={vi.fn()}
         onSelect={onSelect}
         onToggleLiked={onToggleLiked}
+        actions={
+          <button type="button" aria-label="More actions" onClick={onMenuAction}>
+            More
+          </button>
+        }
       />,
     );
 
@@ -60,6 +66,9 @@ describe('Track Browser primitives', () => {
     expect(likeButton).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(likeButton);
     expect(onToggleLiked).toHaveBeenCalledOnce();
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(onMenuAction).toHaveBeenCalledOnce();
     expect(onSelect).not.toHaveBeenCalled();
     fireEvent.click(renderedRow);
     expect(onSelect).toHaveBeenCalledOnce();
@@ -150,6 +159,104 @@ describe('Track Browser primitives', () => {
     expect(tableRenders).toBe(initialRenders);
   });
 
+  it('returns focus to the grid after a row click and supports the next arrow selection', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+
+    render(<TrackTable useStore={store} />);
+    const grid = screen.getByRole('grid', { name: 'Songs' });
+    const firstRow = screen.getByRole('row', { name: /Aurora Landing/ });
+    const second = selectRowAtIndex(store.getState().library, 1);
+    if (!first || !second) throw new Error('mock library has fewer than two rows');
+
+    await act(async () => fireEvent.click(firstRow));
+    expect(grid).toHaveFocus();
+    await waitFor(() => expect(store.getState().library.selectedSongId).toBe(first.song_id));
+
+    await act(async () => fireEvent.keyDown(grid, { key: 'ArrowDown' }));
+    await waitFor(() => expect(store.getState().library.selectedSongId).toBe(second.song_id));
+    await waitFor(() =>
+      expect(grid).toHaveAttribute('aria-activedescendant', `song-row-${second.song_id}`),
+    );
+  });
+
+  it('omits the active descendant while its selected virtual row is not mounted', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const selected = selectRowAtIndex(store.getState().library, 0);
+    if (!selected) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    const loadedLibrary = store.getState().library;
+
+    render(<TrackTable useStore={store} />);
+    const grid = screen.getByRole('grid', { name: 'Songs' });
+    await waitFor(() =>
+      expect(grid).toHaveAttribute('aria-activedescendant', `song-row-${selected.song_id}`),
+    );
+
+    await act(async () => {
+      store.setState({
+        library: { ...store.getState().library, pages: new Map(), indexById: new Map() },
+      });
+    });
+    await waitFor(() => expect(grid).not.toHaveAttribute('aria-activedescendant'));
+
+    await act(async () => store.setState({ library: loadedLibrary }));
+    await waitFor(() =>
+      expect(grid).toHaveAttribute('aria-activedescendant', `song-row-${selected.song_id}`),
+    );
+  });
+
+  it('does not complete keyboard navigation against a newer search result set', async () => {
+    const bridge = createMockBridge();
+    const originalSearch = bridge.searchSongs;
+    let releaseOldPage!: () => void;
+    let signalOldPageRequested!: () => void;
+    let signalOldPageReturned!: () => void;
+    const oldPageRequested = new Promise<void>((resolve) => {
+      signalOldPageRequested = resolve;
+    });
+    const oldPageReturned = new Promise<void>((resolve) => {
+      signalOldPageReturned = resolve;
+    });
+    const oldPageRelease = new Promise<void>((resolve) => {
+      releaseOldPage = resolve;
+    });
+    bridge.searchSongs = async (request) => {
+      if (request.query === '' && request.offset === 400) {
+        signalOldPageRequested();
+        await oldPageRelease;
+        const result = await originalSearch(request);
+        signalOldPageReturned();
+        return result;
+      }
+      return originalSearch(request.query === 'filtered' ? { ...request, query: '' } : request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    render(<TrackTable useStore={store} />);
+    const grid = screen.getByRole('grid', { name: 'Songs' });
+    await act(async () => fireEvent.keyDown(grid, { key: 'End' }));
+    await oldPageRequested;
+
+    await act(async () => store.getState().search('filtered'));
+    await act(async () => store.getState().setViewport(400, 499));
+    expect(store.getState().library.pages.get(400)?.length).toBe(100);
+
+    await act(async () => {
+      releaseOldPage();
+      await oldPageReturned;
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(store.getState().library.query).toBe('filtered');
+    expect(store.getState().library.selectedSongId).toBeNull();
+  });
+
   it('updates only the previous and next selected virtual rows', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
@@ -194,6 +301,31 @@ describe('Track Browser primitives', () => {
 
     expect(screen.getByText('No songs found')).toBeInTheDocument();
     expect(screen.queryByRole('grid', { name: 'Songs' })).toBeNull();
+  });
+
+  it('clears stale selection on search failure and recovers on a later query', async () => {
+    const bridge = createMockBridge();
+    const originalSearch = bridge.searchSongs;
+    bridge.searchSongs = async (request) => {
+      if (request.query === 'broken') throw new Error('catalog search failed');
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    render(<TrackBrowser useStore={store} />);
+    await act(async () => store.getState().search('broken'));
+    expect(store.getState().library.selectedSongId).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('Library unavailable');
+    expect(screen.getByRole('alert')).toHaveTextContent('catalog search failed');
+
+    await act(async () => store.getState().search('Moonlit'));
+    expect(screen.getByRole('row', { name: /Moonlit Village/ })).toBeInTheDocument();
+    expect(store.getState().library.error).toBeNull();
+    expect(store.getState().library.selectedSongId).toBeNull();
   });
 
   it('renders a real browse CTA for an empty playlist', () => {

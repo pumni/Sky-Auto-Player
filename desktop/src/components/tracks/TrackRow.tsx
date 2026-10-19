@@ -32,6 +32,13 @@ function metadataStatus(state: SongRow['metadata_state']): {
     : { label: 'Metadata unavailable', value: 'Unavailable' };
 }
 
+function isInteractiveRowTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest('button, a[href], input, select, textarea, [contenteditable="true"]') !== null
+  );
+}
+
 export const TrackRow = memo(function TrackRow({
   index,
   row,
@@ -56,7 +63,11 @@ export const TrackRow = memo(function TrackRow({
       tabIndex={-1}
       style={style}
       onFocus={onFocus}
-      onClick={onSelect}
+      onClick={(event) => {
+        if (isInteractiveRowTarget(event.target)) return;
+        event.currentTarget.closest<HTMLElement>('[role="grid"]')?.focus({ preventScroll: true });
+        onSelect();
+      }}
     >
       <span className="track-cell track-cell-index" role="gridcell">
         {playing ? <Volume2 size={14} aria-hidden="true" /> : index + 1}
