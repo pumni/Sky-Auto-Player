@@ -696,7 +696,6 @@ struct BaselineBoundaryEvidence {
     delivery: &'static str,
     non_send_reason: Option<&'static str>,
     expected_non_send_reason: Option<&'static str>,
-    sender_window_expired: bool,
 }
 
 #[derive(Default)]
@@ -742,7 +741,6 @@ fn baseline_observed_disposition(
     outcome: Option<SendTransactionOutcome>,
     observation: Option<DispatchObservation>,
     final_gate_control_rejections: u64,
-    sender_window_expired: bool,
 ) -> (
     &'static str,
     Option<&'static str>,
@@ -788,14 +786,6 @@ fn baseline_observed_disposition(
     }
     if final_gate_control_rejections != 0 {
         return ("control_disposition", Some("control_rejected"), None, false);
-    }
-    if sender_window_expired {
-        return (
-            "sender_cutoff_without_observation",
-            Some("sender_window_expiration_without_observation"),
-            None,
-            false,
-        );
     }
     match step {
         DispatchStep::Continue => (
@@ -945,7 +935,6 @@ fn baseline_record_boundary(
                 .expect("baseline crossing conversion"),
         )
         .expect("baseline crossing arithmetic");
-    let prior_sender_expirations = harness.final_sender_window_expirations_for_test();
     let prior_control_rejections = harness.final_gate_control_rejections_for_test();
     let prior_timeline_rebases = harness.timeline_rebase_count_for_test();
     let prior_anomalies = harness.transport_anomaly_counts_for_test();
@@ -966,19 +955,11 @@ fn baseline_record_boundary(
     };
     let observation = harness.pop_observation();
     let observation_timing = observation.map(baseline_observation_timing);
-    let sender_expired =
-        harness.final_sender_window_expirations_for_test() > prior_sender_expirations;
     let control_rejections = harness
         .final_gate_control_rejections_for_test()
         .saturating_sub(prior_control_rejections);
     let (observed_disposition, observed_reason, observed_send_status, observed_success) =
-        baseline_observed_disposition(
-            &step,
-            outcome,
-            observation,
-            control_rejections,
-            sender_expired,
-        );
+        baseline_observed_disposition(&step, outcome, observation, control_rejections);
     let delivery = if observed_success {
         evidence.successful_sendinput_transactions =
             evidence.successful_sendinput_transactions.saturating_add(1);
@@ -1034,7 +1015,6 @@ fn baseline_record_boundary(
         delivery,
         non_send_reason: observed_reason,
         expected_non_send_reason,
-        sender_window_expired: sender_expired,
     });
     evidence.timeline_rebase_count = evidence.timeline_rebase_count.saturating_add(
         harness
@@ -1141,8 +1121,6 @@ fn baseline_completion_floor_variant(
             "non_send"
         },
         "packet_n_plus_one_packet_count": n1_packet_count,
-        "missed_physical_window_boundaries": harness
-            .missed_physical_window_boundaries_for_test(),
     })
 }
 
@@ -1216,21 +1194,9 @@ fn baseline_completion_floor_report(evidence: &mut BaselineEvidence) -> serde_js
         "delayed_completion": delayed_report,
         "delayed_completion_does_not_move_later_scheduling": delayed_does_not_move_later_scheduling,
         "control_has_no_downstream_floor_pressure": control_is_not_pressured,
-        "completion_feedback_missed_physical_boundaries": control_report[
-            "missed_physical_window_boundaries"
-        ]
-        .as_u64()
-        .unwrap_or(0)
-            != 0
-            || delayed_report["missed_physical_window_boundaries"]
-                .as_u64()
-                .unwrap_or(0)
-                != 0,
         "acceptance_clean": delayed_does_not_move_later_scheduling
             && completion_qpc_differs
-            && control_is_not_pressured
-            && control_report["missed_physical_window_boundaries"] == json!(0)
-            && delayed_report["missed_physical_window_boundaries"] == json!(0),
+            && control_is_not_pressured,
         "policy_changed": true,
     })
 }

@@ -1914,10 +1914,6 @@ impl ProductionDispatchTestHarness {
         self.runtime.chord_integrity_lost_count()
     }
 
-    pub fn final_sender_window_expirations_for_test(&self) -> u64 {
-        self.local_metrics.final_sender_window_expirations
-    }
-
     pub fn final_gate_control_rejections_for_test(&self) -> u64 {
         self.local_metrics.final_gate_control_rejections
     }
@@ -1932,10 +1928,6 @@ impl ProductionDispatchTestHarness {
 
     pub fn prepared_normal_backlog_count_for_test(&self) -> u64 {
         self.local_metrics.prepared_normal_backlog_boundaries
-    }
-
-    pub fn prepared_normal_sender_expiry_count_for_test(&self) -> u64 {
-        self.local_metrics.prepared_normal_sender_expirations
     }
 
     pub fn transport_anomaly_counts_for_test(&mut self) -> (u64, u64, u64) {
@@ -3797,10 +3789,6 @@ impl ProductionDispatchTestHarness {
         plan: &NextDispatchPlan,
     ) -> Result<Option<QpcTicks>, String> {
         physical_wait_target_for_plan(plan, &self.runtime)
-    }
-
-    pub fn missed_physical_window_boundaries_for_test(&self) -> u64 {
-        self.local_metrics.missed_physical_window_boundaries
     }
 
     /// Classify a frozen Down plan one QPC tick before its target without the

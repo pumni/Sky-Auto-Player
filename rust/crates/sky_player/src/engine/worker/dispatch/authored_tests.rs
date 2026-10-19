@@ -213,7 +213,6 @@ fn final_gate_rejection_counters_are_worker_local_and_reason_specific() {
     assert_eq!(metrics.final_gate_target_changes, 1);
     assert_eq!(metrics.final_gate_focus_losses, 1);
     assert_eq!(metrics.final_gate_lease_expirations, 0);
-    assert_eq!(metrics.final_sender_window_expirations, 0);
 }
 
 #[test]

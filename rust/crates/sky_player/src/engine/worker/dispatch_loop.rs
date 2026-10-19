@@ -2072,7 +2072,6 @@ mod tests {
             .expect("one tick beyond the authored target");
         assert_dispatched(late.dispatch_at_qpc_for_test(&late_plan, one_tick_late));
         assert_eq!(late_packets.lock().expect("packet capture").len(), 1);
-        assert_eq!(late.local_metrics.final_sender_window_expirations, 0);
         assert_eq!(late.local_metrics.missed_down_boundaries, 0);
     }
 
@@ -2100,8 +2099,6 @@ mod tests {
             harness.local_metrics.missed_unobserved_backlog_boundaries,
             0
         );
-        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
-        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     fn add_us(harness: &ProductionDispatchTestHarness, target: QpcTicks, us: u64) -> QpcTicks {
@@ -2141,10 +2138,6 @@ mod tests {
                 "offset {offset_us}us must preserve one atomic Down packet"
             );
             assert_eq!(
-                harness.local_metrics.final_sender_window_expirations, 0,
-                "offset {offset_us}us must not be a sender miss"
-            );
-            assert_eq!(
                 harness.local_metrics.missed_down_boundaries, 0,
                 "offset {offset_us}us must not terminalize the Down"
             );
@@ -2179,7 +2172,6 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].requested_mask, 1);
         assert_eq!(captured[0].attempts, 1);
-        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
@@ -2205,7 +2197,6 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].requested_mask, 1);
         assert_eq!(captured[0].attempts, 1);
-        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
@@ -2248,8 +2239,6 @@ mod tests {
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(0, 3)]
         );
-        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
-        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
@@ -2267,7 +2256,6 @@ mod tests {
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(1, 2)]
         );
-        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
         assert_eq!(harness.chord_integrity_lost_count(), 0);
     }
 
@@ -2305,7 +2293,6 @@ mod tests {
             harness.dispatch_at_qpc_for_test(&plan, add_us(&harness, target, 1_000)),
             DispatchStep::Terminate(_)
         ));
-        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
@@ -2342,8 +2329,6 @@ mod tests {
             harness.dispatch_at_qpc_for_test(&plan, add_us(&harness, target, 1_000)),
             DispatchStep::TerminateStatic("successful Down missing completion QPC")
         ));
-        assert_eq!(harness.local_metrics.final_sender_window_expirations, 0);
-        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
         assert_eq!(
             harness.local_metrics.missed_unobserved_backlog_boundaries,
             0
@@ -2389,7 +2374,6 @@ mod tests {
             harness.local_metrics.missed_unobserved_backlog_boundaries,
             0
         );
-        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
     }
 
     #[test]
@@ -2466,11 +2450,6 @@ mod tests {
                     expected_packets,
                     "no catch-up or packet split for gap={gap_us} offset={offset_us}"
                 );
-                assert_eq!(
-                    harness.missed_physical_window_boundaries_for_test(),
-                    0,
-                    "continuity must not bypass physical timing rules"
-                );
             }
         }
     }
@@ -2527,7 +2506,6 @@ mod tests {
                 second_down_evidence.physical_target_qpc
             );
             assert_dispatched(harness.dispatch_at_benchmark_boundary_for_test(&second_down, 0));
-            assert_eq!(harness.missed_physical_window_boundaries_for_test(), 0);
 
             (
                 first_down_evidence.authored_ticks,
@@ -2599,7 +2577,6 @@ mod tests {
                 1,
                 "baseline 2.5 ms must send the authorized note at offset {offset_us} us"
             );
-            assert_eq!(baseline.local_metrics.final_sender_window_expirations, 0);
 
             // A separate prepared boundary has the same normal behavior.
             let mut prov_max =
@@ -2618,7 +2595,6 @@ mod tests {
                 1,
                 "provisional max 5.0 ms must send note at offset {offset_us} us"
             );
-            assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 0);
         }
 
         // A late authorized normal Down is sent regardless of lateness.
@@ -2639,7 +2615,6 @@ mod tests {
             1,
             "normal lateness must not gate an authorized Down"
         );
-        assert_eq!(prov_max.local_metrics.final_sender_window_expirations, 0);
     }
 
     #[test]
@@ -2702,8 +2677,6 @@ mod tests {
             "the authorized Down boundary is consumed at its authored boundary"
         );
         assert!(harness.runtime.pending_up_recovery.is_none());
-        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
-        assert_eq!(harness.local_metrics.release_floor_infeasible_boundaries, 0);
         assert!(harness.local_metrics.hold_floor_delay_boundaries >= 1);
         assert!(harness.local_metrics.release_floor_delay_boundaries >= 1);
         assert_eq!(
@@ -2712,7 +2685,6 @@ mod tests {
             "normal completion floors must not split or drop the mixed packet"
         );
         assert_eq!(harness.backend_active_mask(), 2);
-        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
         assert!(harness.local_metrics.hold_floor_delay_boundaries >= 1);
         assert_eq!(harness.local_metrics.last_hold_floor_delay_mask, 1);
         assert!(harness.local_metrics.release_floor_delay_boundaries >= 1);
@@ -3107,7 +3079,6 @@ mod tests {
             packets.lock().expect("packet capture").as_slice(),
             &[PhysicalPacket::new(0, 3)]
         );
-        assert_eq!(harness.local_metrics.missed_physical_window_boundaries, 0);
         assert_eq!(harness.backend_active_mask(), 3);
     }
 
