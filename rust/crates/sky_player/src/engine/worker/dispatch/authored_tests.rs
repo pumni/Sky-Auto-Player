@@ -70,21 +70,25 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .expect("target crossing handoff");
     assert!(!finalizer.contains("wait_to_precision_boundary"));
     let control = finalizer
-        .find("final_control_precheck")
+        .find("final_down_control_verdict")
         .expect("final control gate");
     let target = finalizer
         .find("final_down_target_admission")
         .expect("final target/focus gate");
-    let modifier_helper = finalizer
-        .find("modifier_guard_and_final_revalidation")
-        .expect("fixed modifier guard and post-query authority gate");
+    let modifier_guard = finalizer
+        .find("final_down_modifier_verdict")
+        .expect("fixed modifier guard");
+    let post_modifier = finalizer
+        .find("final_down_post_modifier_verdict")
+        .expect("shared post-modifier authority policy");
     let pre_call = finalizer
         .find("let final_policy_qpc")
         .expect("final policy timestamp");
     assert!(crossing < control);
     assert!(control < target);
-    assert!(target < modifier_helper);
-    assert!(modifier_helper < pre_call);
+    assert!(target < modifier_guard);
+    assert!(modifier_guard < post_modifier);
+    assert!(post_modifier < pre_call);
     assert!(target < pre_call);
 
     let finalizer_body = finalizer
@@ -93,29 +97,28 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .expect("finalizer body");
     assert!(!finalizer_body.contains("foreground_window_matches"));
     assert!(!finalizer_body.contains("focus_matches_hwnd"));
-    assert!(!finalizer_body.contains("supervisor_lease_expired"));
+    assert!(!finalizer_body.contains("prove_down_age"));
     assert!(finalizer_body.contains("lease_timeout_ticks"));
-    assert!(finalizer_body.contains("qpc_clock, lease_timeout_ticks"));
+    assert!(finalizer_body.contains("lease_timeout_ticks,\n            qpc_clock"));
     assert!(!finalizer_body.contains("supervisor_heartbeat_ticks"));
 
     let admission = include_str!("../admission.rs");
-    let modifier_guard = admission
-        .split("pub(super) fn modifier_guard_and_final_revalidation")
+    let post_modifier_policy = admission
+        .split("pub(crate) fn final_down_post_modifier_verdict")
         .nth(1)
-        .expect("post-modifier admission helper");
-    let modifier = modifier_guard
-        .find("observe_modifiers_before_down")
-        .expect("fixed modifier guard");
-    let post_modifier_authority = modifier_guard
+        .expect("shared post-modifier policy")
+        .split("pub(crate) fn final_down_modifier_verdict")
+        .next()
+        .expect("shared post-modifier policy body");
+    let post_modifier_authority = post_modifier_policy
         .find("final_down_atomic_revalidation")
         .expect("post-modifier target/owner revalidation");
-    let lease_proof = modifier_guard
+    let lease_proof = post_modifier_policy
         .find("final_down_lease_age_proof")
         .expect("bounded final lease-age proof");
-    let final_control = modifier_guard
-        .find("final_control_precheck")
+    let final_control = post_modifier_policy
+        .find("final_down_control_verdict")
         .expect("post-modifier control revalidation");
-    assert!(modifier < post_modifier_authority);
     assert!(post_modifier_authority < lease_proof);
     assert!(lease_proof < final_control);
 
@@ -124,7 +127,7 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .nth(1)
         .expect("final target admission");
     let target_admission_body = target_admission
-        .split("pub(crate) fn enter_focus_pause")
+        .split("/// Recheck only bounded atomic target")
         .next()
         .expect("target admission body");
     let atomic_focus = target_admission_body
@@ -152,7 +155,7 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
         .nth(1)
         .expect("atomic target and owner revalidation");
     let final_atomic_body = final_atomic
-        .split("pub(super) fn modifier_guard_and_final_revalidation")
+        .split("/// The shared post-modifier authority gate")
         .next()
         .expect("atomic revalidation body");
     let atomic_target = final_atomic_body
@@ -179,11 +182,11 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
 fn final_gate_rejection_counters_are_worker_local_and_reason_specific() {
     let mut metrics = WorkerMetricsLocal::default();
     for reason in [
-        FinalGateRejection::Control,
-        FinalGateRejection::Target,
-        FinalGateRejection::Focus,
+        crate::engine::worker::FinalGateRejection::Control,
+        crate::engine::worker::FinalGateRejection::Target,
+        crate::engine::worker::FinalGateRejection::Focus,
     ] {
-        super::record_final_gate_rejection(&mut metrics, reason);
+        crate::engine::worker::record_final_gate_rejection(&mut metrics, reason);
     }
     assert_eq!(metrics.final_gate_control_rejections, 1);
     assert_eq!(metrics.final_gate_target_changes, 1);

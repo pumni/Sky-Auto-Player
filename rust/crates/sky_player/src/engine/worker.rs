@@ -25,13 +25,16 @@ mod wait;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use admission::invoke_final_gate_race_hook;
 pub(crate) use admission::{
-    DownAdmission, FinalControlAdmission, FinalControlSignals, FinalGateRejection,
-    FinalTargetSignals, TargetStamp, ensure_preflight_for_target, enter_focus_pause,
-    final_control_precheck, final_down_atomic_revalidation, final_down_lease_age_proof,
-    final_down_target_admission, focus_matches, focus_matches_hwnd, handle_final_focus_loss,
-    load_target_stamp, modifier_guard_rejection_step, record_final_gate_rejection,
+    FinalControlAdmission, FinalControlSignals, FinalDownVerdict, FinalGateRejection,
+    FinalTargetSignals, TargetStamp, apply_final_down_rejection, ensure_preflight_for_target,
+    enter_focus_pause, final_control_precheck, final_down_control_verdict,
+    final_down_modifier_verdict, final_down_post_modifier_verdict, final_down_target_admission,
+    focus_matches, focus_matches_hwnd, handle_final_focus_loss, load_target_stamp,
+    modifier_guard_rejection_step, owner_rejection_reason, record_final_gate_rejection,
     target_stamp_still_current, trace_kind_for_packet_kind,
 };
+#[cfg(test)]
+pub(crate) use admission::{OwnerAdmissionFailure, final_down_lease_age_proof};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
 #[cfg(test)]
@@ -388,6 +391,8 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_modifier_race_hook: Option<super::config::FinalGateRaceHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) final_gate_post_lease_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(test)]
     pub(crate) final_lease_qpc_sample_count_for_test: u64,
     #[cfg(test)]

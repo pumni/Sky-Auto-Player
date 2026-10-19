@@ -58,53 +58,34 @@ fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
             "normal precision suffix contains forbidden reference {forbidden}"
         );
     }
-    assert_eq!(
-        helper
-            .matches("DispatchStep::TerminateStatic(\"supervisor_lease_expired\")")
-            .count(),
-        1,
-        "expired lease must terminate through its fixed static reason"
-    );
-    assert_eq!(
-        helper
-            .matches("DispatchStep::TerminateStatic(\"supervisor_lease_unproven\")")
-            .count(),
-        1,
-        "unproven lease must terminate through its fixed static reason"
-    );
     let final_control = helper
-        .find("final_control_precheck")
+        .find("final_down_control_verdict")
         .expect("final control gate");
     assert_eq!(
-        helper.matches("final_control_precheck").count(),
-        3,
-        "Down keeps early, post-focus, and post-modifier control gates; UpOnly has only the shared late gate"
+        helper.matches("final_down_control_verdict").count(),
+        2,
+        "Down keeps early and post-focus controls; UpOnly has only the shared late gate"
     );
     let control_gates = helper
-        .match_indices("final_control_precheck")
+        .match_indices("final_down_control_verdict")
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     let target = helper
         .find("final_down_target_admission")
         .expect("modifier guard foreground and owner proof");
     let modifier = helper
-        .find("observe_modifiers_before_down")
+        .find("final_down_modifier_verdict")
         .expect("fixed modifier guard");
-    let final_authority = helper
-        .find("final_down_atomic_revalidation")
-        .expect("post-modifier guard revalidation");
-    let lease_age_proof = helper
-        .find("final_down_lease_age_proof")
-        .expect("bounded final Down lease-age proof");
+    let post_modifier = helper
+        .find("final_down_post_modifier_verdict")
+        .expect("shared post-modifier authority gate");
     let sender = helper
         .find("let result = backend.send_prepared_physical_packet_at_final_boundary")
         .expect("normal sender handoff");
     assert!(final_control < target);
     assert!(target < control_gates[1]);
     assert!(control_gates[1] < modifier);
-    assert!(modifier < final_authority);
-    assert!(final_authority < lease_age_proof);
-    assert!(lease_age_proof < control_gates[2]);
+    assert!(modifier < post_modifier);
     assert!(helper.contains("lease_timeout_ticks"));
     assert!(
         helper.contains("let final_policy_qpc = None;"),
@@ -119,14 +100,31 @@ fn normal_precision_envelope_has_no_dynamic_dispatch_references() {
         !helper.contains("qpc_clock.now("),
         "the prepared suffix must not add a post-gate QPC sample"
     );
-    assert!(
-        control_gates[2] < sender,
-        "final atomics must precede sender"
-    );
+    assert!(post_modifier < sender, "final atomics must precede sender");
     assert!(helper.contains("final_down_target_admission"));
     assert!(helper.contains("test_now_ticks"));
     assert!(!helper.contains("inline(never)"));
     assert!(!helper.contains("record_prepared_normal_send_outcome"));
+
+    let admission = include_str!("../admission.rs");
+    let shared_post_modifier = admission
+        .split("pub(crate) fn final_down_post_modifier_verdict")
+        .nth(1)
+        .expect("shared post-modifier authority gate")
+        .split("pub(crate) fn final_down_modifier_verdict")
+        .next()
+        .expect("shared post-modifier gate body");
+    let atomic = shared_post_modifier
+        .find("final_down_atomic_revalidation")
+        .expect("post-modifier target revalidation");
+    let lease = shared_post_modifier
+        .find("final_down_lease_age_proof")
+        .expect("single lease-age proof");
+    let final_control = shared_post_modifier
+        .find("final_down_control_verdict")
+        .expect("control check after lease proof");
+    assert!(atomic < lease);
+    assert!(lease < final_control);
 
     let precision_call = outer
         .find("let precision_result = send_prepared_normal_precision_frame")

@@ -39,6 +39,15 @@ $windowIntegrity = $false
 $resultCode = 2
 $head = $null
 
+Add-Type -TypeDefinition @"
+using System.Runtime.InteropServices;
+public static class NativeAcceptanceForegroundPermission {
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AllowSetForegroundWindow(uint processId);
+}
+"@
+
 function Wait-ReadyRecord {
     param([string]$Path, [System.Diagnostics.Process]$Process)
     $deadline = (Get-Date).AddSeconds(20)
@@ -108,6 +117,7 @@ try {
     $sinkProcess = Start-Process -FilePath $pwshPath -ArgumentList $sinkArgv -PassThru -WindowStyle Normal -RedirectStandardOutput (Join-Path $runDir 'sink.stdout.log') -RedirectStandardError (Join-Path $runDir 'sink.stderr.log')
     $sink = Wait-ReadyRecord $readyPath $sinkProcess
     Assert-SinkIdentity $sink $sessionId
+    $foregroundPermissionGranted = [NativeAcceptanceForegroundPermission]::AllowSetForegroundWindow([uint32]$sink.pid)
 
     if ($Scenario -eq 'focus-loss') {
         $probeArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'InertFocusProbe', '-RunId', $runId, '-ReadyFile', $probeReadyPath, '-EventLog', $probeEventsPath)
@@ -166,6 +176,7 @@ try {
         sink_pid = [int]$sink.pid
         sink_hwnd = [long]$sink.hwnd
         sink_event_log_id = $sink.event_log_id
+        foreground_permission_granted_to_sink = [bool]$foregroundPermissionGranted
     }
     $runConfig | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runConfigPath -Encoding UTF8
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $runDir 'runner.ps1')
@@ -249,6 +260,7 @@ try {
         status = $report.status
         reason = $report.reason
         event_log_id = $sink.event_log_id
+        foreground_permission_granted_to_sink = [bool]$foregroundPermissionGranted
         cursor_sequence_before_arm = $cursor
         cursor_offset_before_arm = [long]$details.sink_cursor_offset_before_arm
         first_authorized_sequence = $first

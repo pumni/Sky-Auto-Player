@@ -26,7 +26,6 @@ mod prepared_characterization_tests;
 mod recovery;
 pub(crate) mod timing;
 
-pub(super) use authored::AdmissionOutcome;
 pub(crate) use recovery::{DownMissReason, classify_missed_down_boundary};
 
 /// Outcome of one authored packet dispatch step.

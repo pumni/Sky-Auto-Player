@@ -3470,6 +3470,25 @@ impl ProductionDispatchTestHarness {
         self.runtime.final_gate_post_modifier_race_hook = Some(Arc::new(hook));
     }
 
+    /// Inject a hard-stop transition after the final lease proof and before
+    /// the last control check. The seam exists only in test-support builds.
+    pub fn set_post_lease_revalidation_race_hook<F>(&mut self, hook: F)
+    where
+        F: Fn(
+                &AtomicBool,
+                &SessionTarget,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+                &AtomicBool,
+                &SystemPowerState,
+            ) + Send
+            + Sync
+            + 'static,
+    {
+        self.runtime.final_gate_post_lease_race_hook = Some(Arc::new(hook));
+    }
+
     pub fn set_require_focus_for_test(&mut self, require_focus: bool) {
         self.config.focus.require_focus = require_focus;
     }
