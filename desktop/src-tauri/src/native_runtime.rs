@@ -75,11 +75,11 @@ use sky_player::engine::{
 use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, TryLockError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::ipc::Channel;
@@ -97,6 +97,7 @@ const CALIBRATION_PUBLICATION_RESERVE_SECONDS: f64 = 5.0;
 const PLAYBACK_JOIN_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const PLAYBACK_SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
 const EVENT_PUBLISHER_CLOSE_BUDGET: Duration = Duration::from_millis(50);
+const PLAYBACK_PRESENTATION_CRITICAL_CAPACITY: usize = 64;
 const DRY_RUN_TERMINAL_NONE: u8 = 0;
 const CALIBRATION_PARENT_EXIT_RESERVE_SECONDS: f64 = 1.0;
 const CALIBRATION_NATIVE_EXIT_RESERVE_SECONDS: f64 = 1.0;
@@ -108,6 +109,9 @@ type PlaybackJoinTestHook = Arc<dyn Fn(Duration) -> Result<bool, String> + Send 
 type PlaybackBeforeArmTestHook = Arc<dyn Fn() + Send + Sync>;
 #[cfg(all(test, feature = "tauri-test"))]
 type PlaybackRetiredTestHook = Arc<dyn Fn() + Send + Sync>;
+type PlaybackPresentationCompletion = Box<dyn FnOnce(Result<(), String>) + Send + 'static>;
+#[cfg(all(test, feature = "tauri-test"))]
+type PlaybackPresentationTestHook = Arc<dyn Fn(PlaybackPresentationStage) + Send + Sync>;
 const CALIBRATION_MIN_MEASUREMENT_SECONDS: f64 = 1.0;
 const CALIBRATION_MIN_NATIVE_TOTAL_SECONDS: f64 =
     CALIBRATION_NATIVE_CLEANUP_RESERVE_SECONDS + CALIBRATION_MIN_MEASUREMENT_SECONDS;
@@ -3524,6 +3528,8 @@ struct NativePlaybackService {
     settings_invalidation_count: AtomicU64,
     #[cfg(all(test, feature = "tauri-test"))]
     monitor_progress_test_hook: Option<Arc<dyn Fn(bool) + Send + Sync>>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    presentation_test_hook: Option<PlaybackPresentationTestHook>,
     #[cfg(test)]
     monitor_join_test_hook: Option<PlaybackJoinTestHook>,
     #[cfg(test)]
@@ -3696,6 +3702,282 @@ struct NativePreparedInput {
     settings_fingerprint: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(all(test, feature = "tauri-test"))]
+enum PlaybackPresentationStage {
+    BeforeWorkSelection,
+    SnapshotProjection,
+    DiagnosticsProjection,
+}
+
+#[derive(Clone, Copy)]
+struct PlaybackPresentationFrame {
+    order: u64,
+    elapsed_us: u64,
+    pre_roll_remaining_us: u64,
+    status: EnginePollStatus,
+}
+
+enum PlaybackPresentationMessage {
+    State {
+        order: u64,
+        state: PlaybackEventState,
+        message: Option<String>,
+        outcome: Option<String>,
+    },
+    Finalize {
+        order: u64,
+        finalization: PlaybackPresentationFinalization,
+        completed: PlaybackPresentationCompletion,
+    },
+}
+
+struct PlaybackPresentationFinalization {
+    state: PlaybackEventState,
+    message: Option<String>,
+    outcome: Option<String>,
+    publication: PlaybackTerminalPublication,
+}
+
+impl PlaybackPresentationMessage {
+    fn order(&self) -> u64 {
+        match self {
+            Self::State { order, .. } | Self::Finalize { order, .. } => *order,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PlaybackPresentationQueue {
+    latest_snapshot: Mutex<Option<PlaybackPresentationFrame>>,
+    next_order: AtomicU64,
+    snapshot_coalesced: AtomicU64,
+    snapshot_dropped: AtomicU64,
+    closed: AtomicBool,
+    failed: AtomicBool,
+    failure_reason: Mutex<Option<String>>,
+    worker_thread: OnceLock<thread::Thread>,
+}
+
+impl PlaybackPresentationQueue {
+    fn record_snapshot_drop(&self) {
+        self.snapshot_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn metrics(&self) -> PlaybackPresentationMetrics {
+        PlaybackPresentationMetrics {
+            snapshot_coalesced: self.snapshot_coalesced.load(Ordering::Acquire),
+            snapshot_dropped: self.snapshot_dropped.load(Ordering::Acquire),
+        }
+    }
+
+    fn record_failure(&self, reason: &str) {
+        self.failed.store(true, Ordering::Release);
+        self.closed.store(true, Ordering::Release);
+        if let Ok(mut failure_reason) = self.failure_reason.try_lock() {
+            failure_reason.get_or_insert_with(|| reason.to_string());
+        }
+    }
+
+    fn failure_reason(&self) -> Option<String> {
+        self.failure_reason
+            .try_lock()
+            .ok()
+            .and_then(|reason| reason.clone())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PlaybackPresentationMetrics {
+    snapshot_coalesced: u64,
+    snapshot_dropped: u64,
+}
+
+struct NativePlaybackPresentation {
+    critical: mpsc::SyncSender<PlaybackPresentationMessage>,
+    queue: Arc<PlaybackPresentationQueue>,
+    worker: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl NativePlaybackPresentation {
+    fn start(
+        active: &Arc<NativeActivePlayback>,
+        events: Arc<Mutex<NativeEventHub>>,
+        diagnostics_gate: Arc<DiagnosticsPublicationGate>,
+        #[cfg(all(test, feature = "tauri-test"))] test_hook: Option<PlaybackPresentationTestHook>,
+    ) -> Result<Arc<Self>, String> {
+        let (critical, receiver) = mpsc::sync_channel(PLAYBACK_PRESENTATION_CRITICAL_CAPACITY);
+        let queue = Arc::new(PlaybackPresentationQueue::default());
+        let weak_active = Arc::downgrade(active);
+        let worker_queue = Arc::clone(&queue);
+        let worker = thread::Builder::new()
+            .name("sky-native-playback-presentation".into())
+            .spawn(move || {
+                let current_thread = thread::current();
+                let _ = worker_queue.worker_thread.set(current_thread);
+                playback_presentation_worker(
+                    weak_active,
+                    events,
+                    diagnostics_gate,
+                    worker_queue,
+                    receiver,
+                    #[cfg(all(test, feature = "tauri-test"))]
+                    test_hook,
+                );
+            })
+            .map_err(|error| format!("could not start playback presentation consumer: {error}"))?;
+        Ok(Arc::new(Self {
+            critical,
+            queue,
+            worker: Mutex::new(Some(worker)),
+        }))
+    }
+
+    fn publish_state(
+        &self,
+        active: &NativeActivePlayback,
+        state: PlaybackEventState,
+        message: Option<String>,
+        outcome: Option<String>,
+    ) -> Result<(), String> {
+        let order = self.queue.next_order.fetch_add(1, Ordering::Relaxed) + 1;
+        self.try_publish_critical(
+            active,
+            PlaybackPresentationMessage::State {
+                order,
+                state,
+                message,
+                outcome,
+            },
+        )
+    }
+
+    fn publish_snapshot(
+        &self,
+        active: &NativeActivePlayback,
+        elapsed_us: u64,
+        pre_roll_remaining_us: u64,
+        status: EnginePollStatus,
+    ) -> bool {
+        if self.queue.closed.load(Ordering::Acquire) || active.done.load(Ordering::Acquire) {
+            self.queue.snapshot_dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let frame = PlaybackPresentationFrame {
+            order: self.queue.next_order.fetch_add(1, Ordering::Relaxed) + 1,
+            elapsed_us,
+            pre_roll_remaining_us,
+            status,
+        };
+        match self.queue.latest_snapshot.try_lock() {
+            Ok(mut latest) => {
+                if self.queue.closed.load(Ordering::Acquire) || active.done.load(Ordering::Acquire)
+                {
+                    self.queue.record_snapshot_drop();
+                    return false;
+                }
+                if latest.replace(frame).is_some() {
+                    self.queue
+                        .snapshot_coalesced
+                        .fetch_add(1, Ordering::Relaxed);
+                    self.queue.snapshot_dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                if let Some(worker) = self.queue.worker_thread.get() {
+                    worker.unpark();
+                }
+                true
+            }
+            Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => {
+                self.queue.snapshot_dropped.fetch_add(1, Ordering::Relaxed);
+                false
+            }
+        }
+    }
+
+    fn finalize(
+        &self,
+        active: &NativeActivePlayback,
+        finalization: PlaybackPresentationFinalization,
+        completed: PlaybackPresentationCompletion,
+    ) -> Result<(), String> {
+        let order = self.queue.next_order.fetch_add(1, Ordering::Relaxed) + 1;
+        self.try_publish_critical(
+            active,
+            PlaybackPresentationMessage::Finalize {
+                order,
+                finalization,
+                completed,
+            },
+        )
+    }
+
+    fn try_publish_critical(
+        &self,
+        active: &NativeActivePlayback,
+        message: PlaybackPresentationMessage,
+    ) -> Result<(), String> {
+        if self.queue.closed.load(Ordering::Acquire) || self.queue.failed.load(Ordering::Acquire) {
+            let error = self
+                .queue
+                .failure_reason()
+                .unwrap_or_else(|| "playback presentation consumer is closed".into());
+            self.fail(active, &error);
+            reject_presentation_message(message, &error);
+            return Err(error);
+        }
+        match self.critical.try_send(message) {
+            Ok(()) => {
+                if let Some(worker) = self.queue.worker_thread.get() {
+                    worker.unpark();
+                }
+                Ok(())
+            }
+            Err(mpsc::TrySendError::Full(message)) => {
+                let error = "playback presentation lifecycle queue overflow".to_string();
+                self.fail(active, &error);
+                reject_presentation_message(message, &error);
+                Err(error)
+            }
+            Err(mpsc::TrySendError::Disconnected(message)) => {
+                let error = "playback presentation consumer is unavailable".to_string();
+                self.fail(active, &error);
+                reject_presentation_message(message, &error);
+                Err(error)
+            }
+        }
+    }
+
+    fn fail(&self, active: &NativeActivePlayback, reason: &str) {
+        self.queue.record_failure(reason);
+        active.event_delivery_failure.store(true, Ordering::Release);
+        cleanup_failed_event_delivery(active);
+        if let Some(worker) = self.queue.worker_thread.get() {
+            worker.unpark();
+        }
+    }
+}
+
+fn reject_presentation_message(message: PlaybackPresentationMessage, error: &str) {
+    if let PlaybackPresentationMessage::Finalize { completed, .. } = message {
+        completed(Err(error.to_string()));
+    }
+}
+
+impl Drop for NativePlaybackPresentation {
+    fn drop(&mut self) {
+        self.queue.closed.store(true, Ordering::Release);
+        if let Some(worker) = self.queue.worker_thread.get() {
+            worker.unpark();
+        }
+        if let Ok(worker) = self.worker.get_mut()
+            && worker.as_ref().is_some_and(thread::JoinHandle::is_finished)
+            && let Some(worker) = worker.take()
+        {
+            let _ = worker.join();
+        }
+    }
+}
+
 struct NativeActivePlayback {
     activity: ActivityCoordinator,
     session_id: String,
@@ -3725,6 +4007,8 @@ struct NativeActivePlayback {
     worker_quiescent: AtomicBool,
     release_verified: AtomicBool,
     sequence: AtomicU64,
+    event_delivery_failure: Arc<AtomicBool>,
+    presentation: OnceLock<Arc<NativePlaybackPresentation>>,
 }
 
 impl NativeActivePlayback {
@@ -4148,6 +4432,8 @@ impl NativePlaybackService {
             settings_invalidation_count: AtomicU64::new(0),
             #[cfg(all(test, feature = "tauri-test"))]
             monitor_progress_test_hook: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            presentation_test_hook: None,
             #[cfg(test)]
             monitor_join_test_hook: None,
             #[cfg(test)]
@@ -4457,6 +4743,13 @@ impl NativePlaybackService {
             .cloned()
             .ok_or_else(|| "selected risk decision has no prepared plan".to_string())?;
         let session_id = opaque_native_id()?;
+        let event_delivery_failure = events
+            .lock()
+            .map_err(|_| "native event hub lock poisoned".to_string())?
+            .failure_flag();
+        if event_delivery_failure.load(Ordering::Acquire) {
+            return Err("native playback lifecycle delivery is unavailable".into());
+        }
         let activity_lease = if variant.config.dry_run {
             None
         } else {
@@ -4511,6 +4804,7 @@ impl NativePlaybackService {
                 // Match the Python supervisor's observable failure path:
                 // a start that cannot pass focus/target admission still
                 // has an ordered starting -> failed -> failed-event trace.
+                let (code, message) = physical_startup_failure(&error);
                 let failed_active = Arc::new(NativeActivePlayback {
                     activity: self.activity.clone(),
                     session_id: session_id.clone(),
@@ -4540,49 +4834,111 @@ impl NativePlaybackService {
                     worker_quiescent: AtomicBool::new(false),
                     release_verified: AtomicBool::new(false),
                     sequence: AtomicU64::new(0),
+                    event_delivery_failure: Arc::clone(&event_delivery_failure),
+                    presentation: OnceLock::new(),
                 });
-                let _ = publish_playback_state(
+                *active_slot = Some(Arc::clone(&failed_active));
+                let starting_result = publish_playback_state(
                     &events,
                     &failed_active,
                     PlaybackEventState::Starting,
                     None,
                     None,
                 );
-                let mut last_event_state = PlaybackEventState::Starting;
-                let (code, message) = physical_startup_failure(&error);
-                let fallback_publication = PlaybackTerminalPublication::Failed {
-                    code: code.into(),
-                    message: message.into(),
-                };
-                let publication = match publish_terminal_failure_state(
-                    &events,
-                    &failed_active,
-                    &mut last_event_state,
-                    code,
-                    message,
-                ) {
-                    Ok(publication) => publication,
-                    Err(_) => fallback_publication,
-                };
-                if let Err(error) = retire_pre_activation_failure(
-                    &self.last_terminal,
-                    &failed_active,
-                    TerminalRetirement {
+                drop(active_slot);
+                if let Err(publish_error) = starting_result {
+                    let retirement = TerminalRetirement {
                         quiescence: WorkerQuiescenceProof::NoWorkerStarted,
                         release: TerminalReleaseEvidence::NotRequired,
-                        publication: publication.clone(),
-                    },
-                ) {
-                    return Err(format!(
-                        "{code}: {message}; pre-activation retirement failed: {error}"
-                    ));
+                        publication: PlaybackTerminalPublication::Failed {
+                            code: "playback_start_publication_failed".into(),
+                            message: format!(
+                                "Playback could not publish its starting state: {publish_error}"
+                            ),
+                        },
+                    };
+                    let _ = release_terminal_ownership(
+                        &self.active,
+                        &self.last_terminal,
+                        &failed_active,
+                        retirement,
+                    );
+                    return Err(format!("{code}: {message}; {error}"));
                 }
-                let _ = publish_final_diagnostics_snapshot_for_active(
+
+                let presentation = match NativePlaybackPresentation::start(
+                    &failed_active,
+                    events.clone(),
+                    Arc::clone(&self.diagnostics_gate),
+                    #[cfg(all(test, feature = "tauri-test"))]
+                    self.presentation_test_hook.clone(),
+                ) {
+                    Ok(presentation) => presentation,
+                    Err(presentation_error) => {
+                        let retirement = TerminalRetirement {
+                            quiescence: WorkerQuiescenceProof::NoWorkerStarted,
+                            release: TerminalReleaseEvidence::NotRequired,
+                            publication: PlaybackTerminalPublication::Failed {
+                                code: "playback_presentation_start_failed".into(),
+                                message: presentation_error.clone(),
+                            },
+                        };
+                        let _ = release_terminal_resources(&failed_active, &retirement);
+                        let completed = terminal_presentation_completion(
+                            self.active.clone(),
+                            self.last_terminal.clone(),
+                            Arc::clone(&failed_active),
+                            retirement.clone(),
+                            PlaybackSessionState::Failed,
+                            #[cfg(all(test, feature = "tauri-test"))]
+                            self.monitor_retired_test_hook.clone(),
+                        );
+                        let _ = finalize_active_presentation(
+                            &events,
+                            &failed_active,
+                            &self.diagnostics_gate,
+                            PlaybackPresentationFinalization {
+                                state: PlaybackEventState::Failed,
+                                message: Some(presentation_error.clone()),
+                                outcome: None,
+                                publication: retirement.publication.clone(),
+                            },
+                            completed,
+                        );
+                        return Err(format!("{code}: {message}; {error}"));
+                    }
+                };
+                let _ = failed_active.presentation.set(presentation);
+                let retirement = TerminalRetirement {
+                    quiescence: WorkerQuiescenceProof::NoWorkerStarted,
+                    release: TerminalReleaseEvidence::NotRequired,
+                    publication: PlaybackTerminalPublication::Failed {
+                        code: code.into(),
+                        message: message.into(),
+                    },
+                };
+                let _ = release_terminal_resources(&failed_active, &retirement);
+                let completed = terminal_presentation_completion(
+                    self.active.clone(),
+                    self.last_terminal.clone(),
+                    Arc::clone(&failed_active),
+                    retirement.clone(),
+                    PlaybackSessionState::Failed,
+                    #[cfg(all(test, feature = "tauri-test"))]
+                    self.monitor_retired_test_hook.clone(),
+                );
+                let _ = finalize_active_presentation(
                     &events,
                     &failed_active,
                     &self.diagnostics_gate,
+                    PlaybackPresentationFinalization {
+                        state: PlaybackEventState::Failed,
+                        message: Some(message.to_string()),
+                        outcome: None,
+                        publication: retirement.publication.clone(),
+                    },
+                    completed,
                 );
-                let _ = publish_terminal_event(&events, &failed_active, &publication);
                 return Err(format!("{code}: {message}; {error}"));
             }
         };
@@ -4615,17 +4971,38 @@ impl NativePlaybackService {
             worker_quiescent: AtomicBool::new(false),
             release_verified: AtomicBool::new(false),
             sequence: AtomicU64::new(0),
+            event_delivery_failure: Arc::clone(&event_delivery_failure),
+            presentation: OnceLock::new(),
         });
-        if let Some(player) = &active.player
-            && let Ok(mut hub) = events.lock()
-        {
-            let _ = hub.register_playback_player(Arc::downgrade(player));
+        *active_slot = Some(active.clone());
+        if let Some(player) = &active.player {
+            let registration = match events.lock() {
+                Ok(mut hub) => hub.register_playback_player(Arc::downgrade(player)),
+                Err(_) => Err("native event hub lock poisoned".into()),
+            };
+            if let Err(error) = registration {
+                active.event_delivery_failure.store(true, Ordering::Release);
+                drop(active_slot);
+                let _ = set_playback_state(&active, PlaybackSessionState::Failed);
+                let _ = release_terminal_ownership(
+                    &self.active,
+                    &self.last_terminal,
+                    &active,
+                    TerminalRetirement {
+                        quiescence: WorkerQuiescenceProof::NoWorkerStarted,
+                        release: TerminalReleaseEvidence::NotRequired,
+                        publication: PlaybackTerminalPublication::Failed {
+                            code: "native_event_registration_failed".into(),
+                            message: error.clone(),
+                        },
+                    },
+                );
+                return Err(error);
+            }
         }
         if let Some(player) = &active.player {
             player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());
         }
-        *active_slot = Some(active.clone());
-        drop(active_slot);
         if active.physical
             && let Ok(mut trace_state) = self.sender_trace_state.lock()
         {
@@ -4634,6 +5011,7 @@ impl NativePlaybackService {
         if let Err(error) =
             publish_playback_state(&events, &active, PlaybackEventState::Starting, None, None)
         {
+            drop(active_slot);
             if active.physical
                 && let Ok(mut trace_state) = self.sender_trace_state.lock()
             {
@@ -4645,29 +5023,96 @@ impl NativePlaybackService {
                     None,
                 );
             }
-            let publication = PlaybackTerminalPublication::Failed {
-                code: "playback_start_publication_failed".into(),
-                message: format!("Playback could not publish its starting state: {error}"),
+            let retirement = TerminalRetirement {
+                quiescence: WorkerQuiescenceProof::NoWorkerStarted,
+                release: TerminalReleaseEvidence::NotRequired,
+                publication: PlaybackTerminalPublication::Failed {
+                    code: "playback_start_publication_failed".into(),
+                    message: format!("Playback could not publish its starting state: {error}"),
+                },
             };
-            let _ = set_playback_state(&active, PlaybackSessionState::Failed);
-            let _ = publish_playback_state(
-                &events,
-                &active,
-                PlaybackEventState::Failed,
-                Some(publication_message(&publication)),
-                None,
-            );
-            let _ = release_terminal_ownership(
-                &self.active,
-                &self.last_terminal,
-                &active,
-                TerminalRetirement {
+            let _ =
+                release_terminal_ownership(&self.active, &self.last_terminal, &active, retirement);
+            return Err(error);
+        }
+        drop(active_slot);
+
+        let presentation = match NativePlaybackPresentation::start(
+            &active,
+            events.clone(),
+            Arc::clone(&self.diagnostics_gate),
+            #[cfg(all(test, feature = "tauri-test"))]
+            self.presentation_test_hook.clone(),
+        ) {
+            Ok(presentation) => presentation,
+            Err(error) => {
+                let retirement = TerminalRetirement {
                     quiescence: WorkerQuiescenceProof::NoWorkerStarted,
                     release: TerminalReleaseEvidence::NotRequired,
-                    publication: publication.clone(),
+                    publication: PlaybackTerminalPublication::Failed {
+                        code: "playback_presentation_start_failed".into(),
+                        message: error.clone(),
+                    },
+                };
+                let _ = release_terminal_resources(&active, &retirement);
+                let completed = terminal_presentation_completion(
+                    self.active.clone(),
+                    self.last_terminal.clone(),
+                    active.clone(),
+                    retirement.clone(),
+                    PlaybackSessionState::Failed,
+                    #[cfg(all(test, feature = "tauri-test"))]
+                    self.monitor_retired_test_hook.clone(),
+                );
+                let _ = finalize_active_presentation(
+                    &events,
+                    &active,
+                    &self.diagnostics_gate,
+                    PlaybackPresentationFinalization {
+                        state: PlaybackEventState::Failed,
+                        message: Some(error.clone()),
+                        outcome: None,
+                        publication: retirement.publication.clone(),
+                    },
+                    completed,
+                );
+                return Err(error);
+            }
+        };
+        if active.presentation.set(presentation).is_err() {
+            active.event_delivery_failure.store(true, Ordering::Release);
+            let error = "playback presentation consumer was already attached".to_string();
+            cleanup_failed_event_delivery(&active);
+            let retirement = TerminalRetirement {
+                quiescence: WorkerQuiescenceProof::NoWorkerStarted,
+                release: TerminalReleaseEvidence::NotRequired,
+                publication: PlaybackTerminalPublication::Failed {
+                    code: "playback_presentation_attachment_failed".into(),
+                    message: error.clone(),
                 },
+            };
+            let _ = release_terminal_resources(&active, &retirement);
+            let completed = terminal_presentation_completion(
+                self.active.clone(),
+                self.last_terminal.clone(),
+                active.clone(),
+                retirement.clone(),
+                PlaybackSessionState::Failed,
+                #[cfg(all(test, feature = "tauri-test"))]
+                self.monitor_retired_test_hook.clone(),
             );
-            let _ = publish_terminal_event(&events, &active, &publication);
+            let _ = finalize_active_presentation(
+                &events,
+                &active,
+                &self.diagnostics_gate,
+                PlaybackPresentationFinalization {
+                    state: PlaybackEventState::Failed,
+                    message: Some(error.clone()),
+                    outcome: None,
+                    publication: retirement.publication.clone(),
+                },
+                completed,
+            );
             return Err(error);
         }
         let service = Arc::new(self.clone_handle());
@@ -4709,25 +5154,33 @@ impl NativePlaybackService {
                 code: "playback_supervisor_start_failed".into(),
                 message: message.clone(),
             };
-            let _ = set_playback_state(&active, PlaybackSessionState::Failed);
-            let _ = publish_playback_state(
+            let retirement = TerminalRetirement {
+                quiescence: WorkerQuiescenceProof::NoWorkerStarted,
+                release: TerminalReleaseEvidence::NotRequired,
+                publication,
+            };
+            let _ = release_terminal_resources(&active, &retirement);
+            let completed = terminal_presentation_completion(
+                self.active.clone(),
+                self.last_terminal.clone(),
+                active.clone(),
+                retirement.clone(),
+                PlaybackSessionState::Failed,
+                #[cfg(all(test, feature = "tauri-test"))]
+                self.monitor_retired_test_hook.clone(),
+            );
+            let _ = finalize_active_presentation(
                 &events,
                 &active,
-                PlaybackEventState::Failed,
-                Some(message.clone()),
-                None,
-            );
-            let _ = release_terminal_ownership(
-                &self.active,
-                &self.last_terminal,
-                &active,
-                TerminalRetirement {
-                    quiescence: WorkerQuiescenceProof::NoWorkerStarted,
-                    release: TerminalReleaseEvidence::NotRequired,
-                    publication: publication.clone(),
+                &self.diagnostics_gate,
+                PlaybackPresentationFinalization {
+                    state: PlaybackEventState::Failed,
+                    message: Some(message.clone()),
+                    outcome: None,
+                    publication: retirement.publication.clone(),
                 },
+                completed,
             );
-            let _ = publish_terminal_event(&events, &active, &publication);
             return Err(format!(
                 "failed to start native playback supervisor: {error}"
             ));
@@ -4741,23 +5194,9 @@ impl NativePlaybackService {
         {
             let activation = PlaybackActivation::Failed(error.clone());
             if activation_sender.send(activation).is_err() {
-                let message = format!("native worker startup failed: {error}");
-                let publication = PlaybackTerminalPublication::Failed {
-                    code: "native_worker_start_failed".into(),
-                    message: message.clone(),
-                };
-                let _ = set_playback_state(&active, PlaybackSessionState::Failed);
-                let _ = release_terminal_ownership(
-                    &self.active,
-                    &self.last_terminal,
-                    &active,
-                    TerminalRetirement {
-                        quiescence: WorkerQuiescenceProof::NoWorkerStarted,
-                        release: TerminalReleaseEvidence::NotRequired,
-                        publication: publication.clone(),
-                    },
-                );
-                let _ = publish_terminal_event(&events, &active, &publication);
+                let (closed_sender, activation_receiver) = mpsc::channel();
+                drop(closed_sender);
+                self.monitor(active.clone(), events.clone(), activation_receiver);
             }
             return Err(error);
         }
@@ -4766,6 +5205,9 @@ impl NativePlaybackService {
                 let _ = player.panic_release();
                 let _ = player.quit();
             }
+            let (closed_sender, activation_receiver) = mpsc::channel();
+            drop(closed_sender);
+            self.monitor(active.clone(), events.clone(), activation_receiver);
             return Err(
                 "native playback supervisor exited before worker activation was confirmed".into(),
             );
@@ -4938,33 +5380,37 @@ impl NativePlaybackService {
         match activation.recv() {
             Ok(PlaybackActivation::Failed(error)) => {
                 let message = format!("Native playback worker did not start: {error}");
-                let publication = PlaybackTerminalPublication::Failed {
-                    code: "native_worker_start_failed".into(),
-                    message: message.clone(),
-                };
-                let _ = set_playback_state(&active, PlaybackSessionState::Failed);
-                let _ = publish_playback_state(
-                    &events,
-                    &active,
-                    PlaybackEventState::Failed,
-                    Some(message),
-                    None,
-                );
                 let retirement = TerminalRetirement {
                     quiescence: WorkerQuiescenceProof::NoWorkerStarted,
                     release: TerminalReleaseEvidence::NotRequired,
-                    publication: publication.clone(),
+                    publication: PlaybackTerminalPublication::Failed {
+                        code: "native_worker_start_failed".into(),
+                        message: message.clone(),
+                    },
                 };
-                if release_terminal_ownership(
-                    &self.active,
-                    &self.last_terminal,
+                let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
+                let _ = release_terminal_resources(&active, &retirement);
+                let completed = terminal_presentation_completion(
+                    self.active.clone(),
+                    self.last_terminal.clone(),
+                    active.clone(),
+                    retirement.clone(),
+                    PlaybackSessionState::Failed,
+                    #[cfg(all(test, feature = "tauri-test"))]
+                    self.monitor_retired_test_hook.clone(),
+                );
+                let _ = finalize_active_presentation(
+                    &events,
                     &active,
-                    retirement,
-                )
-                .is_ok()
-                {
-                    let _ = publish_terminal_event(&events, &active, &publication);
-                }
+                    &self.diagnostics_gate,
+                    PlaybackPresentationFinalization {
+                        state: PlaybackEventState::Failed,
+                        message: Some(message.clone()),
+                        outcome: None,
+                        publication: retirement.publication.clone(),
+                    },
+                    completed,
+                );
                 return;
             }
             Ok(PlaybackActivation::Started) => {}
@@ -4984,11 +5430,11 @@ impl NativePlaybackService {
         let mut last_snapshot = Instant::now();
         let mut last_identity_check = Instant::now();
         let mut last_event_state = PlaybackEventState::Starting;
-        let mut event_delivery_failed = false;
+        let mut event_delivery_failed = active.event_delivery_failure.load(Ordering::Acquire);
         let mut identity_authority_invalidated = false;
         let mut stop_sent = false;
         let terminal_status = loop {
-            if !event_delivery_failed && native_event_delivery_failure(&events).is_some() {
+            if !event_delivery_failed && active.event_delivery_failure.load(Ordering::Acquire) {
                 event_delivery_failed = true;
                 cleanup_failed_event_delivery(&active);
             }
@@ -4999,7 +5445,7 @@ impl NativePlaybackService {
                 }
                 let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
                 if last_event_state != PlaybackEventState::Stopping {
-                    if publish_playback_state(
+                    if publish_active_playback_state(
                         &events,
                         &active,
                         PlaybackEventState::Stopping,
@@ -5058,6 +5504,26 @@ impl NativePlaybackService {
             if is_terminal_status(status) {
                 break Some(status);
             }
+            if active.event_delivery_failure.load(Ordering::Acquire) {
+                event_delivery_failed = true;
+                cleanup_failed_event_delivery(&active);
+            }
+            if !event_delivery_failed
+                && !active.stop_requested.load(Ordering::Acquire)
+                && !identity_authority_invalidated
+                && let Some(player) = &active.player
+            {
+                let progress_result = player.publish_supervisor_progress();
+                #[cfg(all(test, feature = "tauri-test"))]
+                if let Some(hook) = &self.monitor_progress_test_hook {
+                    hook(progress_result.is_ok());
+                }
+                if progress_result.is_err() {
+                    active.stop_requested.store(true, Ordering::Release);
+                    let _ = player.panic_release();
+                    let _ = player.quit();
+                }
+            }
             let event_state = if active.stop_requested.load(Ordering::Acquire) {
                 PlaybackEventState::Stopping
             } else {
@@ -5090,7 +5556,8 @@ impl NativePlaybackService {
                     *pending = None;
                 }
                 if !event_delivery_failed
-                    && publish_playback_state(&events, &active, event_state, None, None).is_err()
+                    && publish_active_playback_state(&events, &active, event_state, None, None)
+                        .is_err()
                 {
                     event_delivery_failed = true;
                     cleanup_failed_event_delivery(&active);
@@ -5098,56 +5565,26 @@ impl NativePlaybackService {
                 last_event_state = event_state;
             }
             if last_snapshot.elapsed() >= Duration::from_millis(100) {
-                if !event_delivery_failed
-                    && publish_playback_snapshot(
-                        &events,
-                        &active,
-                        elapsed,
-                        pre_roll_remaining,
-                        status,
-                    )
-                    .is_err()
-                {
-                    event_delivery_failed = true;
-                    cleanup_failed_event_delivery(&active);
-                }
-                if !event_delivery_failed
-                    && publish_diagnostics_snapshot_for_active(
-                        &events,
-                        &active,
-                        &self.diagnostics_gate,
-                    )
-                    .is_err()
-                {
-                    event_delivery_failed = true;
-                    cleanup_failed_event_delivery(&active);
+                if !event_delivery_failed {
+                    if let Some(presentation) = active.presentation.get() {
+                        presentation.publish_snapshot(&active, elapsed, pre_roll_remaining, status);
+                    } else {
+                        active.event_delivery_failure.store(true, Ordering::Release);
+                        event_delivery_failed = true;
+                        cleanup_failed_event_delivery(&active);
+                    }
                 }
                 last_snapshot = Instant::now();
             }
-            if !event_delivery_failed && native_event_delivery_failure(&events).is_some() {
+            if !event_delivery_failed && active.event_delivery_failure.load(Ordering::Acquire) {
                 event_delivery_failed = true;
                 cleanup_failed_event_delivery(&active);
-            }
-            if !event_delivery_failed
-                && !active.stop_requested.load(Ordering::Acquire)
-                && !identity_authority_invalidated
-                && let Some(player) = &active.player
-            {
-                let progress_result = player.publish_supervisor_progress();
-                #[cfg(all(test, feature = "tauri-test"))]
-                if let Some(hook) = &self.monitor_progress_test_hook {
-                    hook(progress_result.is_ok());
-                }
-                if progress_result.is_err() {
-                    active.stop_requested.store(true, Ordering::Release);
-                    let _ = player.panic_release();
-                    let _ = player.quit();
-                }
             }
             thread::sleep(Duration::from_millis(20));
         };
 
         let mut join_error = None;
+        let mut quiescence_notice_published = false;
         let retirement = loop {
             let joined = self.join_worker(&active, PLAYBACK_JOIN_RETRY_INTERVAL);
             if let Err(error) = &joined {
@@ -5174,7 +5611,7 @@ impl NativePlaybackService {
                 }
                 PlaybackHandoffDecision::AwaitQuiescence => {
                     let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
-                    if !event_delivery_failed {
+                    if !event_delivery_failed && !quiescence_notice_published {
                         let message = match &joined {
                             Err(error) => format!(
                                 "Native worker join is unconfirmed ({error}); its physical reservation remains held while shutdown is retried."
@@ -5182,7 +5619,7 @@ impl NativePlaybackService {
                             Ok(false) => "Waiting for native worker quiescence; physical activity remains reserved.".into(),
                             Ok(true) => unreachable!(),
                         };
-                        if publish_playback_state(
+                        if publish_active_playback_state(
                             &events,
                             &active,
                             PlaybackEventState::Stopping,
@@ -5194,6 +5631,7 @@ impl NativePlaybackService {
                             event_delivery_failed = true;
                             cleanup_failed_event_delivery(&active);
                         }
+                        quiescence_notice_published = true;
                     }
                     thread::sleep(PLAYBACK_JOIN_RETRY_INTERVAL);
                 }
@@ -5218,8 +5656,6 @@ impl NativePlaybackService {
         if terminal_state == PlaybackSessionState::Failed {
             active.stop_requested.store(true, Ordering::Release);
         }
-        let _ =
-            publish_final_diagnostics_snapshot_for_active(&events, &active, &self.diagnostics_gate);
         if active.physical
             && let Ok(mut trace_state) = self.sender_trace_state.lock()
         {
@@ -5234,16 +5670,11 @@ impl NativePlaybackService {
         let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
         let mut retirement_notice_published = false;
         loop {
-            match release_terminal_ownership(
-                &self.active,
-                &self.last_terminal,
-                &active,
-                retirement.clone(),
-            ) {
+            match release_terminal_resources(&active, &retirement) {
                 Ok(()) => break,
                 Err(error) => {
                     if !event_delivery_failed && !retirement_notice_published {
-                        retirement_notice_published = publish_playback_state(
+                        retirement_notice_published = publish_active_playback_state(
                             &events,
                             &active,
                             PlaybackEventState::Stopping,
@@ -5261,26 +5692,34 @@ impl NativePlaybackService {
                 }
             }
         }
-        let _ = set_playback_state(&active, terminal_state);
-        let _ = publish_playback_state(
+        let completed = terminal_presentation_completion(
+            self.active.clone(),
+            self.last_terminal.clone(),
+            active.clone(),
+            retirement.clone(),
+            terminal_state,
+            #[cfg(all(test, feature = "tauri-test"))]
+            self.monitor_retired_test_hook.clone(),
+        );
+        let _ = finalize_active_presentation(
             &events,
             &active,
-            terminal_event_state,
-            terminal_message,
-            terminal_outcome,
+            &self.diagnostics_gate,
+            PlaybackPresentationFinalization {
+                state: terminal_event_state,
+                message: terminal_message,
+                outcome: terminal_outcome,
+                publication: retirement.publication.clone(),
+            },
+            completed,
         );
-        let _ = publish_terminal_event(&events, &active, &retirement.publication);
-        #[cfg(all(test, feature = "tauri-test"))]
-        if let Some(hook) = &self.monitor_retired_test_hook {
-            hook();
-        }
     }
 
     fn command(
         &self,
         method: &str,
         session_id: String,
-        events: Arc<Mutex<NativeEventHub>>,
+        _events: Arc<Mutex<NativeEventHub>>,
     ) -> Result<PlaybackCommandAckDto, String> {
         let active = self
             .active
@@ -5347,7 +5786,6 @@ impl NativePlaybackService {
                 if let Some(player) = &active.player {
                     player.quit()?;
                 }
-                publish_playback_state(&events, &active, PlaybackEventState::Stopping, None, None)?;
             }
             "playback.pause" => {
                 if current != PlaybackSessionState::Playing {
@@ -5385,13 +5823,6 @@ impl NativePlaybackService {
                         .map_err(|_| "native playback pause lock poisoned".to_string())? =
                         Some(Instant::now());
                     set_playback_state(&active, PlaybackSessionState::Paused)?;
-                    publish_playback_state(
-                        &events,
-                        &active,
-                        PlaybackEventState::Paused,
-                        None,
-                        None,
-                    )?;
                 }
             }
             "playback.resume" => {
@@ -5438,13 +5869,6 @@ impl NativePlaybackService {
                             now.saturating_duration_since(paused_since);
                     }
                     set_playback_state(&active, PlaybackSessionState::Playing)?;
-                    publish_playback_state(
-                        &events,
-                        &active,
-                        PlaybackEventState::Playing,
-                        None,
-                        None,
-                    )?;
                 }
             }
             "playback.skip" => {
@@ -5499,7 +5923,7 @@ impl NativePlaybackService {
         }
     }
 
-    fn shutdown(&self, events: Arc<Mutex<NativeEventHub>>) -> bool {
+    fn shutdown(&self, _events: Arc<Mutex<NativeEventHub>>) -> bool {
         let active = self.active.lock().ok().and_then(|slot| slot.clone());
         if let Some(active) = active {
             let current = active.state.lock().ok().map(|state| *state);
@@ -5517,13 +5941,6 @@ impl NativePlaybackService {
                     *pending = None;
                 }
                 let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
-                let _ = publish_playback_state(
-                    &events,
-                    &active,
-                    PlaybackEventState::Stopping,
-                    None,
-                    None,
-                );
             } else {
                 active.request_dry_run_terminal(DryRunTerminalRequest::Quit);
                 active.stop_requested.store(true, Ordering::Release);
@@ -5589,6 +6006,8 @@ impl NativePlaybackServiceHandle {
             settings_invalidation_count: AtomicU64::new(0),
             #[cfg(all(test, feature = "tauri-test"))]
             monitor_progress_test_hook: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            presentation_test_hook: None,
             #[cfg(test)]
             monitor_join_test_hook: self.monitor_join_test_hook.clone(),
             #[cfg(all(test, feature = "tauri-test"))]
@@ -5685,6 +6104,7 @@ fn terminal_success_outcome(status: EnginePollStatus) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn publish_diagnostics_snapshot_for_active(
     events: &Arc<Mutex<NativeEventHub>>,
     active: &NativeActivePlayback,
@@ -5693,6 +6113,7 @@ fn publish_diagnostics_snapshot_for_active(
     publish_diagnostics_snapshot_inner(events, active, gate, false)
 }
 
+#[cfg(test)]
 fn publish_final_diagnostics_snapshot_for_active(
     events: &Arc<Mutex<NativeEventHub>>,
     active: &NativeActivePlayback,
@@ -5701,11 +6122,38 @@ fn publish_final_diagnostics_snapshot_for_active(
     publish_diagnostics_snapshot_inner(events, active, gate, true)
 }
 
+#[cfg(test)]
 fn publish_diagnostics_snapshot_inner(
     events: &Arc<Mutex<NativeEventHub>>,
     active: &NativeActivePlayback,
     gate: &DiagnosticsPublicationGate,
     final_sample: bool,
+) -> Result<(), String> {
+    publish_diagnostics_snapshot_inner_with_cancel(events, active, gate, final_sample, None)
+}
+
+fn publish_diagnostics_snapshot_inner_cancellable(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    gate: &DiagnosticsPublicationGate,
+    final_sample: bool,
+    cancelled: &AtomicBool,
+) -> Result<(), String> {
+    publish_diagnostics_snapshot_inner_with_cancel(
+        events,
+        active,
+        gate,
+        final_sample,
+        Some(cancelled),
+    )
+}
+
+fn publish_diagnostics_snapshot_inner_with_cancel(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    gate: &DiagnosticsPublicationGate,
+    final_sample: bool,
+    cancelled: Option<&AtomicBool>,
 ) -> Result<(), String> {
     let sample = active
         .player
@@ -5722,6 +6170,9 @@ fn publish_diagnostics_snapshot_inner(
     let completion_samples_available =
         sample.recent_latency_samples_available && !sample.recent_latencies_us.is_empty();
     let publish = |sequence| {
+        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Acquire)) {
+            return Ok(());
+        }
         let payload = crate::ui_events::DiagnosticsSnapshotDto {
             seq: sequence,
             physical_session: active.physical,
@@ -6043,6 +6494,347 @@ fn cleanup_failed_event_delivery(active: &NativeActivePlayback) {
     }
 }
 
+fn playback_presentation_worker(
+    active: std::sync::Weak<NativeActivePlayback>,
+    events: Arc<Mutex<NativeEventHub>>,
+    diagnostics_gate: Arc<DiagnosticsPublicationGate>,
+    queue: Arc<PlaybackPresentationQueue>,
+    receiver: mpsc::Receiver<PlaybackPresentationMessage>,
+    #[cfg(all(test, feature = "tauri-test"))] test_hook: Option<PlaybackPresentationTestHook>,
+) {
+    let mut pending_critical = None;
+    let mut pending_snapshot = None;
+    loop {
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(hook) = &test_hook {
+            hook(PlaybackPresentationStage::BeforeWorkSelection);
+        }
+
+        if pending_critical.is_none() {
+            pending_critical = receiver.try_recv().ok();
+        }
+        match queue.latest_snapshot.try_lock() {
+            Ok(mut latest) => {
+                if let Some(snapshot) = latest.take()
+                    && pending_snapshot.replace(snapshot).is_some()
+                {
+                    queue.snapshot_coalesced.fetch_add(1, Ordering::Relaxed);
+                    queue.record_snapshot_drop();
+                }
+            }
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Poisoned(poisoned)) => {
+                if poisoned.into_inner().take().is_some() {
+                    queue.record_snapshot_drop();
+                }
+                discard_pending_presentation_snapshot(&queue, &mut pending_snapshot);
+                queue.record_failure("playback presentation snapshot slot was poisoned");
+                if let Some(active) = active.upgrade() {
+                    active.event_delivery_failure.store(true, Ordering::Release);
+                    cleanup_failed_event_delivery(&active);
+                }
+                reject_queued_presentation_finalizers(
+                    &receiver,
+                    "playback presentation snapshot slot was poisoned",
+                );
+                report_presentation_snapshot_metrics(&queue, &events);
+                return;
+            }
+        }
+
+        let work = match (pending_critical.as_ref(), pending_snapshot.as_ref()) {
+            (Some(critical), Some(snapshot)) if critical.order() <= snapshot.order => {
+                Some(PresentationWork::Critical(
+                    pending_critical.take().expect("critical work is present"),
+                ))
+            }
+            (Some(_), Some(_)) => Some(PresentationWork::Snapshot(
+                pending_snapshot.take().expect("snapshot work is present"),
+            )),
+            (Some(_), None) => Some(PresentationWork::Critical(
+                pending_critical.take().expect("critical work is present"),
+            )),
+            (None, Some(_)) => Some(PresentationWork::Snapshot(
+                pending_snapshot.take().expect("snapshot work is present"),
+            )),
+            (None, None) => None,
+        };
+
+        let Some(work) = work else {
+            if queue.closed.load(Ordering::Acquire) {
+                discard_pending_presentation_snapshot(&queue, &mut pending_snapshot);
+                discard_latest_presentation_snapshot(&queue);
+                report_presentation_snapshot_metrics(&queue, &events);
+                return;
+            }
+            thread::park_timeout(Duration::from_millis(50));
+            continue;
+        };
+
+        let snapshot_work = matches!(&work, PresentationWork::Snapshot(_));
+        let mut snapshot_published = false;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            process_playback_presentation_work(
+                work,
+                &active,
+                &events,
+                &diagnostics_gate,
+                &queue,
+                &mut snapshot_published,
+                #[cfg(all(test, feature = "tauri-test"))]
+                &test_hook,
+            )
+        }));
+        match result {
+            Ok(Ok(true)) => {
+                discard_pending_presentation_snapshot(&queue, &mut pending_snapshot);
+                discard_latest_presentation_snapshot(&queue);
+                report_presentation_snapshot_metrics(&queue, &events);
+                return;
+            }
+            Ok(Ok(false)) => {}
+            Ok(Err(error)) => {
+                if snapshot_work && !snapshot_published {
+                    queue.record_snapshot_drop();
+                }
+                queue.record_failure(&error);
+                if let Some(active) = active.upgrade() {
+                    active.event_delivery_failure.store(true, Ordering::Release);
+                    cleanup_failed_event_delivery(&active);
+                }
+                if let Some(PlaybackPresentationMessage::Finalize { completed, .. }) =
+                    pending_critical.take()
+                {
+                    completed(Err(error));
+                }
+                reject_queued_presentation_finalizers(
+                    &receiver,
+                    "playback presentation consumer failed before finalization",
+                );
+                discard_pending_presentation_snapshot(&queue, &mut pending_snapshot);
+                discard_latest_presentation_snapshot(&queue);
+                report_presentation_snapshot_metrics(&queue, &events);
+                return;
+            }
+            Err(_) => {
+                if snapshot_work && !snapshot_published {
+                    queue.record_snapshot_drop();
+                }
+                queue.record_failure("playback presentation consumer panicked");
+                if let Some(active) = active.upgrade() {
+                    active.event_delivery_failure.store(true, Ordering::Release);
+                    cleanup_failed_event_delivery(&active);
+                }
+                if let Some(PlaybackPresentationMessage::Finalize { completed, .. }) =
+                    pending_critical.take()
+                {
+                    completed(Err(
+                        "playback presentation consumer panicked during finalization".into(),
+                    ));
+                }
+                reject_queued_presentation_finalizers(
+                    &receiver,
+                    "playback presentation consumer panicked before finalization",
+                );
+                discard_pending_presentation_snapshot(&queue, &mut pending_snapshot);
+                discard_latest_presentation_snapshot(&queue);
+                report_presentation_snapshot_metrics(&queue, &events);
+                return;
+            }
+        }
+    }
+}
+
+fn discard_pending_presentation_snapshot(
+    queue: &PlaybackPresentationQueue,
+    pending_snapshot: &mut Option<PlaybackPresentationFrame>,
+) {
+    if pending_snapshot.take().is_some() {
+        queue.record_snapshot_drop();
+    }
+}
+
+fn discard_latest_presentation_snapshot(queue: &PlaybackPresentationQueue) {
+    match queue.latest_snapshot.lock() {
+        Ok(mut snapshot) => {
+            if snapshot.take().is_some() {
+                queue.record_snapshot_drop();
+            }
+        }
+        Err(poisoned) => {
+            if poisoned.into_inner().take().is_some() {
+                queue.record_snapshot_drop();
+            }
+        }
+    }
+}
+
+fn report_presentation_snapshot_metrics(
+    queue: &PlaybackPresentationQueue,
+    events: &Arc<Mutex<NativeEventHub>>,
+) {
+    let session_metrics = queue.metrics();
+    let publisher_metrics = match events.lock() {
+        Ok(hub) => hub.snapshot_metrics(),
+        Err(poisoned) => poisoned.into_inner().snapshot_metrics(),
+    };
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "playback_presentation_snapshots session_coalesced={} session_dropped={} publisher_coalesced={} publisher_dropped={}",
+        session_metrics.snapshot_coalesced,
+        session_metrics.snapshot_dropped,
+        publisher_metrics.snapshot_coalesced,
+        publisher_metrics.snapshot_dropped,
+    );
+}
+
+fn reject_queued_presentation_finalizers(
+    receiver: &mpsc::Receiver<PlaybackPresentationMessage>,
+    error: &str,
+) {
+    while let Ok(message) = receiver.try_recv() {
+        reject_presentation_message(message, error);
+    }
+}
+
+enum PresentationWork {
+    Critical(PlaybackPresentationMessage),
+    Snapshot(PlaybackPresentationFrame),
+}
+
+fn process_playback_presentation_work(
+    work: PresentationWork,
+    active: &std::sync::Weak<NativeActivePlayback>,
+    events: &Arc<Mutex<NativeEventHub>>,
+    diagnostics_gate: &DiagnosticsPublicationGate,
+    queue: &PlaybackPresentationQueue,
+    snapshot_published: &mut bool,
+    #[cfg(all(test, feature = "tauri-test"))] test_hook: &Option<PlaybackPresentationTestHook>,
+) -> Result<bool, String> {
+    let Some(active) = active.upgrade() else {
+        if matches!(&work, PresentationWork::Snapshot(_)) {
+            queue.record_snapshot_drop();
+        }
+        return Ok(true);
+    };
+    match work {
+        PresentationWork::Snapshot(frame) => {
+            if queue.closed.load(Ordering::Acquire)
+                || active.done.load(Ordering::Acquire)
+                || active.event_delivery_failure.load(Ordering::Acquire)
+            {
+                queue.record_snapshot_drop();
+                return Ok(false);
+            }
+            #[cfg(all(test, feature = "tauri-test"))]
+            if let Some(hook) = test_hook {
+                hook(PlaybackPresentationStage::SnapshotProjection);
+            }
+            if queue.closed.load(Ordering::Acquire)
+                || active.done.load(Ordering::Acquire)
+                || active.event_delivery_failure.load(Ordering::Acquire)
+            {
+                queue.record_snapshot_drop();
+                return Ok(false);
+            }
+            publish_playback_snapshot_cancellable(
+                events,
+                &active,
+                frame.elapsed_us,
+                frame.pre_roll_remaining_us,
+                frame.status,
+                &queue.closed,
+            )?;
+            *snapshot_published = true;
+            if queue.closed.load(Ordering::Acquire)
+                || active.event_delivery_failure.load(Ordering::Acquire)
+            {
+                return Ok(false);
+            }
+            #[cfg(all(test, feature = "tauri-test"))]
+            if let Some(hook) = test_hook {
+                hook(PlaybackPresentationStage::DiagnosticsProjection);
+            }
+            if queue.closed.load(Ordering::Acquire) {
+                return Ok(false);
+            }
+            publish_diagnostics_snapshot_inner_cancellable(
+                events,
+                &active,
+                diagnostics_gate,
+                false,
+                &queue.closed,
+            )?;
+            Ok(false)
+        }
+        PresentationWork::Critical(PlaybackPresentationMessage::State {
+            state,
+            message,
+            outcome,
+            ..
+        }) => {
+            if queue.closed.load(Ordering::Acquire)
+                || active.event_delivery_failure.load(Ordering::Acquire)
+            {
+                return Ok(false);
+            }
+            publish_playback_state(events, &active, state, message, outcome)?;
+            Ok(false)
+        }
+        PresentationWork::Critical(PlaybackPresentationMessage::Finalize {
+            finalization,
+            completed,
+            ..
+        }) => {
+            if queue.closed.load(Ordering::Acquire)
+                || active.event_delivery_failure.load(Ordering::Acquire)
+            {
+                let error = queue.failure_reason().unwrap_or_else(|| {
+                    "playback presentation was already failed before finalization".into()
+                });
+                completed(Err(error.clone()));
+                return Err(error);
+            }
+            let finalization = catch_unwind(AssertUnwindSafe(|| {
+                #[cfg(all(test, feature = "tauri-test"))]
+                if let Some(hook) = test_hook {
+                    hook(PlaybackPresentationStage::DiagnosticsProjection);
+                }
+                publish_diagnostics_snapshot_inner_cancellable(
+                    events,
+                    &active,
+                    diagnostics_gate,
+                    true,
+                    &queue.closed,
+                )?;
+                if queue.closed.load(Ordering::Acquire) {
+                    return Err("playback presentation closed during final diagnostics".into());
+                }
+                publish_playback_state(
+                    events,
+                    &active,
+                    finalization.state,
+                    finalization.message,
+                    finalization.outcome,
+                )?;
+                publish_terminal_event(events, &active, &finalization.publication)
+            }))
+            .unwrap_or_else(|_| Err("playback presentation panicked during finalization".into()));
+            let completed_successfully = finalization.is_ok();
+            completed(finalization.clone());
+            if completed_successfully {
+                queue.closed.store(true, Ordering::Release);
+                Ok(true)
+            } else {
+                let error = finalization.expect_err("presentation finalization failed");
+                queue.record_failure(&error);
+                Err(error)
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
 fn native_event_delivery_failure(events: &Arc<Mutex<NativeEventHub>>) -> Option<String> {
     match events.lock() {
         Ok(hub) => hub.delivery_failure(),
@@ -6107,12 +6899,81 @@ fn publish_playback_state(
         .publish(event)
 }
 
+fn publish_active_playback_state(
+    _events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    state: PlaybackEventState,
+    message: Option<String>,
+    outcome: Option<String>,
+) -> Result<(), String> {
+    if let Some(presentation) = active.presentation.get() {
+        presentation.publish_state(active, state, message, outcome)
+    } else {
+        let _ = (state, message, outcome);
+        Err("playback presentation consumer is unavailable".into())
+    }
+}
+
+fn finalize_active_presentation(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    diagnostics_gate: &DiagnosticsPublicationGate,
+    finalization: PlaybackPresentationFinalization,
+    completed: PlaybackPresentationCompletion,
+) -> Result<(), String> {
+    if let Some(presentation) = active.presentation.get() {
+        presentation.finalize(active, finalization, completed)
+    } else {
+        let _ = (events, diagnostics_gate, finalization);
+        let error = "playback presentation consumer is unavailable".to_string();
+        completed(Err(error.clone()));
+        Err(error)
+    }
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
 fn publish_playback_snapshot(
     events: &Arc<Mutex<NativeEventHub>>,
     active: &NativeActivePlayback,
     elapsed_us: u64,
     pre_roll_remaining_us: u64,
     status: EnginePollStatus,
+) -> Result<(), String> {
+    publish_playback_snapshot_inner(
+        events,
+        active,
+        elapsed_us,
+        pre_roll_remaining_us,
+        status,
+        None,
+    )
+}
+
+fn publish_playback_snapshot_cancellable(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    elapsed_us: u64,
+    pre_roll_remaining_us: u64,
+    status: EnginePollStatus,
+    cancelled: &AtomicBool,
+) -> Result<(), String> {
+    publish_playback_snapshot_inner(
+        events,
+        active,
+        elapsed_us,
+        pre_roll_remaining_us,
+        status,
+        Some(cancelled),
+    )
+}
+
+fn publish_playback_snapshot_inner(
+    events: &Arc<Mutex<NativeEventHub>>,
+    active: &NativeActivePlayback,
+    elapsed_us: u64,
+    pre_roll_remaining_us: u64,
+    status: EnginePollStatus,
+    cancelled: Option<&AtomicBool>,
 ) -> Result<(), String> {
     let (focus_state, health, input_path_degraded, message) = if let Some(player) = &active.player {
         let snapshot = player.snapshot_lite();
@@ -6172,6 +7033,9 @@ fn publish_playback_snapshot(
             message,
         },
     };
+    if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Acquire)) {
+        return Ok(());
+    }
     events
         .lock()
         .map_err(|_| "native event hub lock poisoned".to_string())?
@@ -6533,30 +7397,6 @@ fn publish_terminal_poll_state(
     Ok(publication)
 }
 
-fn publish_terminal_failure_state(
-    events: &Arc<Mutex<NativeEventHub>>,
-    active: &NativeActivePlayback,
-    last_event_state: &mut PlaybackEventState,
-    code: &str,
-    message: &str,
-) -> Result<PlaybackTerminalPublication, String> {
-    set_playback_state(active, PlaybackSessionState::Failed)?;
-    if *last_event_state != PlaybackEventState::Failed {
-        publish_playback_state(
-            events,
-            active,
-            PlaybackEventState::Failed,
-            Some(message.into()),
-            None,
-        )?;
-        *last_event_state = PlaybackEventState::Failed;
-    }
-    Ok(PlaybackTerminalPublication::Failed {
-        code: code.into(),
-        message: message.into(),
-    })
-}
-
 fn physical_startup_failure(error: &str) -> (&'static str, &'static str) {
     if error.starts_with("suspend_resume_registration_failed") {
         (
@@ -6612,32 +7452,20 @@ fn publish_terminal_event(
     }
 }
 
-fn publication_message(publication: &PlaybackTerminalPublication) -> String {
-    match publication {
-        PlaybackTerminalPublication::Finished { message, .. }
-        | PlaybackTerminalPublication::Failed { message, .. } => message.clone(),
-    }
-}
-
 fn release_terminal_ownership(
     active_slot: &Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: &Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
     active: &Arc<NativeActivePlayback>,
     retirement: TerminalRetirement,
 ) -> Result<(), String> {
-    let mut slot = active_slot
-        .lock()
-        .map_err(|_| "native active-playback lock poisoned".to_string())?;
-    let mut terminal_slot = last_terminal
-        .lock()
-        .map_err(|_| "native terminal-session lock poisoned".to_string())?;
-    if !slot
-        .as_ref()
-        .is_some_and(|current| Arc::ptr_eq(current, active))
-    {
-        return Err("playback retirement no longer owns the active slot".into());
-    }
+    release_terminal_resources(active, &retirement)?;
+    clear_terminal_ownership(active_slot, last_terminal, active, retirement)
+}
 
+fn release_terminal_resources(
+    active: &Arc<NativeActivePlayback>,
+    retirement: &TerminalRetirement,
+) -> Result<(), String> {
     active.worker_quiescent.store(true, Ordering::Release);
     active.release_power_resources();
     active
@@ -6669,6 +7497,28 @@ fn release_terminal_ownership(
     active
         .release_verified
         .store(release_verified, Ordering::Release);
+    Ok(())
+}
+
+fn clear_terminal_ownership(
+    active_slot: &Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
+    last_terminal: &Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
+    active: &Arc<NativeActivePlayback>,
+    retirement: TerminalRetirement,
+) -> Result<(), String> {
+    let mut slot = active_slot
+        .lock()
+        .map_err(|_| "native active-playback lock poisoned".to_string())?;
+    let mut terminal_slot = last_terminal
+        .lock()
+        .map_err(|_| "native terminal-session lock poisoned".to_string())?;
+    if !slot
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, active))
+    {
+        return Err("playback retirement no longer owns the active slot".into());
+    }
+
     let terminal_status = playback_terminal_status(active, &retirement);
     *slot = None;
     *terminal_slot = Some(terminal_status);
@@ -6676,33 +7526,39 @@ fn release_terminal_ownership(
     Ok(())
 }
 
-fn retire_pre_activation_failure(
-    last_terminal: &Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
-    active: &Arc<NativeActivePlayback>,
-    retirement: TerminalRetirement,
-) -> Result<(), String> {
-    if retirement.quiescence != WorkerQuiescenceProof::NoWorkerStarted {
-        return Err("pre-activation retirement requires proof that no worker started".into());
-    }
-    active.worker_quiescent.store(true, Ordering::Release);
-    active.release_power_resources();
-    active
-        .pending
-        .lock()
-        .map_err(|_| "native playback control lock poisoned".to_string())?
-        .take();
-    active
-        .activity_lease
-        .lock()
-        .map_err(|_| "native playback activity lock poisoned".to_string())?
-        .take();
-    let terminal_status = playback_terminal_status(active, &retirement);
-    *last_terminal
-        .lock()
-        .map_err(|_| "native terminal-session lock poisoned".to_string())? = Some(terminal_status);
-    active.release_verified.store(true, Ordering::Release);
-    active.done.store(true, Ordering::Release);
-    Ok(())
+fn terminal_presentation_completion(
+    active_slot: Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
+    last_terminal: Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
+    active: Arc<NativeActivePlayback>,
+    mut retirement: TerminalRetirement,
+    terminal_state: PlaybackSessionState,
+    #[cfg(all(test, feature = "tauri-test"))] retired_hook: Option<PlaybackRetiredTestHook>,
+) -> PlaybackPresentationCompletion {
+    Box::new(move |presentation_result| {
+        if presentation_result.is_err() {
+            active.event_delivery_failure.store(true, Ordering::Release);
+        }
+        if set_playback_state(&active, terminal_state).is_err() {
+            retirement.publication = PlaybackTerminalPublication::Failed {
+                code: "playback_state_update_failed".into(),
+                message: "Playback terminal state could not be committed.".into(),
+            };
+            active.stop_requested.store(true, Ordering::Release);
+            active.event_delivery_failure.store(true, Ordering::Release);
+        }
+        loop {
+            if clear_terminal_ownership(&active_slot, &last_terminal, &active, retirement.clone())
+                .is_ok()
+            {
+                break;
+            }
+            thread::sleep(PLAYBACK_JOIN_RETRY_INTERVAL);
+        }
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(hook) = retired_hook {
+            hook();
+        }
+    })
 }
 
 fn playback_terminal_status(
@@ -7061,6 +7917,7 @@ struct NativeEventHubState {
     channel: Option<Channel<UiEvent>>,
     closed: bool,
     in_flight: bool,
+    in_flight_snapshot: bool,
     delivery_failure: Option<String>,
     playback_player: Option<std::sync::Weak<NativeDispatchSession>>,
 }
@@ -7070,6 +7927,48 @@ struct NativeEventQueue {
     state: Mutex<NativeEventHubState>,
     changed: Condvar,
     publisher_finished: AtomicBool,
+    delivery_failure: Arc<AtomicBool>,
+    snapshot_coalesced: AtomicU64,
+    snapshot_dropped: AtomicU64,
+}
+
+impl NativeEventQueue {
+    fn fail_delivery(
+        &self,
+        reason: &str,
+        in_flight_send_failed: bool,
+    ) -> Option<Arc<NativeDispatchSession>> {
+        self.delivery_failure.store(true, Ordering::Release);
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state
+            .delivery_failure
+            .get_or_insert_with(|| reason.to_string());
+        state.closed = true;
+        let buffered_snapshots = count_buffered_snapshots(&state.buffered);
+        if buffered_snapshots > 0 {
+            self.snapshot_dropped
+                .fetch_add(buffered_snapshots, Ordering::Relaxed);
+        }
+        if in_flight_send_failed && state.in_flight_snapshot {
+            self.snapshot_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        if in_flight_send_failed {
+            state.in_flight = false;
+            state.in_flight_snapshot = false;
+        }
+        state.channel = None;
+        state.buffered.clear();
+        let player = state
+            .playback_player
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        drop(state);
+        self.changed.notify_all();
+        player
+    }
 }
 
 pub(crate) struct NativeEventHub {
@@ -7092,15 +7991,27 @@ impl NativeEventHub {
         let is_snapshot = snapshot_key(&event).is_some();
         let mut failed_player = None;
         let result = {
-            let mut state = self
-                .queue
-                .state
-                .lock()
-                .map_err(|_| "native event queue lock poisoned".to_string())?;
+            let mut state = match self.queue.state.lock() {
+                Ok(state) => state,
+                Err(_) => {
+                    let player = self
+                        .queue
+                        .fail_delivery("native event queue lock poisoned", false);
+                    if let Some(player) = player {
+                        request_event_delivery_termination(&player);
+                    }
+                    return Err("native event queue lock poisoned".into());
+                }
+            };
             if state.closed {
+                state
+                    .delivery_failure
+                    .get_or_insert_with(|| "native event hub is closed".into());
+                self.queue.delivery_failure.store(true, Ordering::Release);
                 return Err("native event hub is closed".into());
             }
             if let Some(error) = &state.delivery_failure {
+                self.queue.delivery_failure.store(true, Ordering::Release);
                 return Err(error.clone());
             }
 
@@ -7111,11 +8022,19 @@ impl NativeEventHub {
                     .find(|candidate| snapshot_key(candidate).as_ref() == Some(&key))
             {
                 *existing = event;
+                self.queue
+                    .snapshot_coalesced
+                    .fetch_add(1, Ordering::Relaxed);
+                self.queue.snapshot_dropped.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             } else {
                 let occupied = state.buffered.len() + usize::from(state.in_flight);
                 let at_capacity = occupied >= MAX_NATIVE_EVENTS;
-                let has_room = !at_capacity || remove_oldest_snapshot(&mut state.buffered);
+                let evicted_snapshot = at_capacity && remove_oldest_snapshot(&mut state.buffered);
+                if evicted_snapshot {
+                    self.queue.snapshot_dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                let has_room = !at_capacity || evicted_snapshot;
                 if has_room {
                     state.buffered.push_back(event);
                     Ok(())
@@ -7124,10 +8043,12 @@ impl NativeEventHub {
                     // ordered lifecycle events leaves no older snapshot to
                     // evict, so this update is dropped without affecting the
                     // lifecycle delivery contract.
+                    self.queue.snapshot_dropped.fetch_add(1, Ordering::Relaxed);
                     Ok(())
                 } else {
                     let error = "native event hub lifecycle buffer overflow".to_string();
                     state.delivery_failure = Some(error.clone());
+                    self.queue.delivery_failure.store(true, Ordering::Release);
                     failed_player = state
                         .playback_player
                         .as_ref()
@@ -7145,11 +8066,18 @@ impl NativeEventHub {
 
     pub(crate) fn subscribe(&mut self, channel: Channel<UiEvent>) -> Result<(), String> {
         {
-            let state = self
-                .queue
-                .state
-                .lock()
-                .map_err(|_| "native event queue lock poisoned".to_string())?;
+            let state = match self.queue.state.lock() {
+                Ok(state) => state,
+                Err(_) => {
+                    if let Some(player) = self.queue.fail_delivery(
+                        "native event queue lock poisoned during subscription",
+                        false,
+                    ) {
+                        request_event_delivery_termination(&player);
+                    }
+                    return Err("native event queue lock poisoned".into());
+                }
+            };
             if state.closed {
                 return Err("native event hub is closed".into());
             }
@@ -7167,15 +8095,7 @@ impl NativeEventHub {
                 Ok(publisher) => self.publisher = Some(publisher),
                 Err(error) => {
                     let failure = format!("could not start native UI event publisher: {error}");
-                    let player = if let Ok(mut state) = self.queue.state.lock() {
-                        state.delivery_failure = Some(failure.clone());
-                        state
-                            .playback_player
-                            .as_ref()
-                            .and_then(std::sync::Weak::upgrade)
-                    } else {
-                        None
-                    };
+                    let player = self.queue.fail_delivery(&failure, false);
                     if let Some(player) = player {
                         request_event_delivery_termination(&player);
                     }
@@ -7184,11 +8104,18 @@ impl NativeEventHub {
             }
         }
 
-        let mut state = self
-            .queue
-            .state
-            .lock()
-            .map_err(|_| "native event queue lock poisoned".to_string())?;
+        let mut state = match self.queue.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                if let Some(player) = self
+                    .queue
+                    .fail_delivery("native event queue lock poisoned while subscribing", false)
+                {
+                    request_event_delivery_termination(&player);
+                }
+                return Err("native event queue lock poisoned".into());
+            }
+        };
         if state.closed {
             return Err("native event hub is closed".into());
         }
@@ -7202,11 +8129,16 @@ impl NativeEventHub {
         &mut self,
         player: std::sync::Weak<NativeDispatchSession>,
     ) -> Result<(), String> {
-        let mut state = self
-            .queue
-            .state
-            .lock()
-            .map_err(|_| "native event queue lock poisoned".to_string())?;
+        let mut state = match self.queue.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                self.queue.fail_delivery(
+                    "native event queue lock poisoned while registering playback",
+                    false,
+                );
+                return Err("native event queue lock poisoned".into());
+            }
+        };
         if state.closed {
             return Err("native event hub is closed".into());
         }
@@ -7214,18 +8146,76 @@ impl NativeEventHub {
         Ok(())
     }
 
+    fn failure_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.queue.delivery_failure)
+    }
+
+    fn snapshot_metrics(&self) -> PlaybackPresentationMetrics {
+        PlaybackPresentationMetrics {
+            snapshot_coalesced: self.queue.snapshot_coalesced.load(Ordering::Acquire),
+            snapshot_dropped: self.queue.snapshot_dropped.load(Ordering::Acquire),
+        }
+    }
+
+    #[cfg(test)]
     fn delivery_failure(&self) -> Option<String> {
         match self.queue.state.lock() {
-            Ok(state) => state.delivery_failure.clone(),
-            Err(_) => Some("native event queue lock poisoned".to_string()),
+            Ok(state) => state.delivery_failure.clone().or_else(|| {
+                self.queue
+                    .delivery_failure
+                    .load(Ordering::Acquire)
+                    .then(|| "native lifecycle event delivery failed".into())
+            }),
+            Err(_) => {
+                self.queue
+                    .fail_delivery("native event queue lock poisoned", false);
+                Some("native event queue lock poisoned".to_string())
+            }
         }
     }
 
     pub(crate) fn close(&mut self) {
-        if let Ok(mut state) = self.queue.state.lock() {
-            state.closed = true;
-            state.buffered.clear();
-            state.playback_player = None;
+        let player = match self.queue.state.lock() {
+            Ok(mut state) => {
+                state.closed = true;
+                let buffered_snapshots = count_buffered_snapshots(&state.buffered);
+                if buffered_snapshots > 0 {
+                    self.queue
+                        .snapshot_dropped
+                        .fetch_add(buffered_snapshots, Ordering::Relaxed);
+                }
+                state.buffered.clear();
+                let player = state
+                    .playback_player
+                    .as_ref()
+                    .and_then(std::sync::Weak::upgrade);
+                state.playback_player = None;
+                player
+            }
+            Err(poisoned) => {
+                self.queue.delivery_failure.store(true, Ordering::Release);
+                let mut state = poisoned.into_inner();
+                state.closed = true;
+                let buffered_snapshots = count_buffered_snapshots(&state.buffered);
+                if buffered_snapshots > 0 {
+                    self.queue
+                        .snapshot_dropped
+                        .fetch_add(buffered_snapshots, Ordering::Relaxed);
+                }
+                state.buffered.clear();
+                let player = state
+                    .playback_player
+                    .as_ref()
+                    .and_then(std::sync::Weak::upgrade);
+                state.playback_player = None;
+                player
+            }
+        };
+        if player.is_some() {
+            self.queue.delivery_failure.store(true, Ordering::Release);
+        }
+        if let Some(player) = player {
+            request_event_delivery_termination(&player);
         }
         self.queue.changed.notify_all();
 
@@ -7241,6 +8231,7 @@ impl NativeEventHub {
                 let _ = publisher.join();
             }
         }
+        report_native_event_snapshot_metrics(&self.queue);
     }
 
     #[cfg(test)]
@@ -7298,7 +8289,10 @@ fn publish_native_events(queue: Arc<NativeEventQueue>) {
         let (channel, event) = {
             let mut state = match queue.state.lock() {
                 Ok(state) => state,
-                Err(_) => break,
+                Err(_) => {
+                    fail_native_event_publisher(&queue, "native event queue lock poisoned");
+                    return;
+                }
             };
             loop {
                 if state.closed && state.buffered.is_empty() {
@@ -7314,13 +8308,16 @@ fn publish_native_events(queue: Arc<NativeEventQueue>) {
                     && let Some(event) = state.buffered.pop_front()
                 {
                     state.in_flight = true;
+                    state.in_flight_snapshot = snapshot_key(&event).is_some();
                     break (channel, event);
                 }
                 state = match queue.changed.wait(state) {
                     Ok(state) => state,
                     Err(_) => {
-                        queue.publisher_finished.store(true, Ordering::Release);
-                        queue.changed.notify_all();
+                        fail_native_event_publisher(
+                            &queue,
+                            "native event queue lock poisoned while waiting",
+                        );
                         return;
                     }
                 };
@@ -7334,36 +8331,48 @@ fn publish_native_events(queue: Arc<NativeEventQueue>) {
             });
         match sent {
             Ok(()) => {
-                if let Ok(mut state) = queue.state.lock() {
-                    state.in_flight = false;
+                match queue.state.lock() {
+                    Ok(mut state) => {
+                        state.in_flight = false;
+                        state.in_flight_snapshot = false;
+                    }
+                    Err(poisoned) => {
+                        let mut state = poisoned.into_inner();
+                        state.in_flight = false;
+                        state.in_flight_snapshot = false;
+                        drop(state);
+                        fail_native_event_publisher(
+                            &queue,
+                            "native event queue lock poisoned after channel delivery",
+                        );
+                        return;
+                    }
                 }
                 queue.changed.notify_all();
             }
             Err(error) => {
-                let player = if let Ok(mut state) = queue.state.lock() {
-                    state.in_flight = false;
-                    state.channel = None;
-                    state.closed = true;
-                    state.delivery_failure = Some(error);
-                    state.buffered.clear();
-                    state
-                        .playback_player
-                        .as_ref()
-                        .and_then(std::sync::Weak::upgrade)
-                } else {
-                    None
-                };
-                queue.changed.notify_all();
-                if let Some(player) = player {
-                    request_event_delivery_termination(&player);
-                }
-                queue.publisher_finished.store(true, Ordering::Release);
+                fail_native_event_publisher(&queue, &error);
                 return;
             }
         }
     }
+}
+
+fn fail_native_event_publisher(queue: &NativeEventQueue, reason: &str) {
+    if let Some(player) = queue.fail_delivery(reason, true) {
+        request_event_delivery_termination(&player);
+    }
     queue.publisher_finished.store(true, Ordering::Release);
-    queue.changed.notify_all();
+    report_native_event_snapshot_metrics(queue);
+}
+
+fn report_native_event_snapshot_metrics(queue: &NativeEventQueue) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "native_event_snapshots coalesced={} dropped={}",
+        queue.snapshot_coalesced.load(Ordering::Acquire),
+        queue.snapshot_dropped.load(Ordering::Acquire),
+    );
 }
 
 fn request_event_delivery_termination(player: &NativeDispatchSession) {
@@ -7407,6 +8416,13 @@ fn snapshot_key(event: &UiEvent) -> Option<(u8, String)> {
         UiEvent::CalibrationProgress { payload, .. } => Some((3, payload.operation_id.clone())),
         _ => None,
     }
+}
+
+fn count_buffered_snapshots(buffered: &VecDeque<UiEvent>) -> u64 {
+    buffered
+        .iter()
+        .filter(|event| snapshot_key(event).is_some())
+        .count() as u64
 }
 
 /// Match the Python diagnostics percentile contract.  Python's ``round``
@@ -7466,14 +8482,15 @@ mod tests {
         DiagnosticsBackendHealth, DiagnosticsPublicationGate, DryRunTerminalRequest,
         MAX_DECISION_COUNT, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS, MaterializedTimingPolicy,
         NativeActivePlayback, NativeCalibrationOperation, NativeCalibrationService,
-        NativeDesktopRuntime, NativeDiagnosticsSample, NativeEventHub, NativePlaybackService,
-        PlaybackActivation, PlaybackActiveStatusDto, PlaybackPendingControl,
+        NativeDesktopRuntime, NativeDiagnosticsSample, NativeEventHub, NativePlaybackPresentation,
+        NativePlaybackService, PLAYBACK_PRESENTATION_CRITICAL_CAPACITY, PlaybackActivation,
+        PlaybackActiveStatusDto, PlaybackPendingControl, PlaybackPresentationMetrics,
         PlaybackTerminalPublication, PlaybackTerminalStatusDto, SENDER_TRACE_CAPTURE_CAPACITY,
         SenderTraceState, TerminalReleaseEvidence, TerminalRetirement, TestSeams,
         WorkerQuiescenceProof, calibration_budget, compute_catalog_source_fingerprint,
         compute_catalog_source_static_fingerprint, decide_playback_handoff,
-        diagnostics_backend_status, native_event_delivery_failure, opaque_native_id, percentile_ms,
-        physical_startup_failure, plan_fingerprint, population_sigma_ms, publish_calibration_cache,
+        diagnostics_backend_status, opaque_native_id, percentile_ms, physical_startup_failure,
+        plan_fingerprint, population_sigma_ms, publish_calibration_cache,
         publish_diagnostics_snapshot_for_active, publish_final_diagnostics_snapshot_for_active,
         publish_playback_state, publish_retirement_barrier, publish_terminal_poll_result,
         recommended_calibrated_timing_margin_us, release_terminal_ownership,
@@ -7484,13 +8501,17 @@ mod tests {
     };
     #[cfg(feature = "tauri-test")]
     use super::{
-        NativeDispatchSession, playback_event_state, playback_health_from_snapshot,
-        publish_playback_snapshot,
+        EnginePollStatus, NativeDispatchSession, PlaybackPresentationStage,
+        PlaybackPresentationTestHook, native_event_delivery_failure, playback_event_state,
+        playback_health_from_snapshot, publish_playback_snapshot,
     };
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{
         CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest,
     };
+
+    #[cfg(feature = "tauri-test")]
+    type PlaybackPresentationTestGate = Arc<(Mutex<bool>, Condvar)>;
     use crate::power_lifecycle::PowerLifecycleDiagnostics;
     use crate::ui_events::{
         CalibrationMode, CalibrationState, DiagnosticsBackendStatus, PlaybackEventState,
@@ -7507,7 +8528,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-    use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
+    use std::sync::{Arc, Barrier, Condvar, Mutex, OnceLock, mpsc};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
     use tauri::ipc::{Channel, InvokeResponseBody};
@@ -7609,48 +8630,58 @@ mod tests {
         );
         player.arm(0).expect("arm mock native session");
 
-        let active = Arc::new(NativeActivePlayback {
-            activity: ActivityCoordinator::default(),
-            session_id: "a".repeat(32),
-            prepared_id: "b".repeat(32),
-            song_id: "c".repeat(32),
-            title: "Monitor lease runtime fixture".into(),
-            total_us: 30_100_000,
-            config: PlaybackConfigDto {
-                hold_frames: 1.0,
-                timing_margin_us: 800,
-                tempo_scale: 1.0,
-                fps: 60,
-                dry_run: false,
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let active = attach_test_presentation(
+            NativeActivePlayback {
+                activity: ActivityCoordinator::default(),
+                session_id: "a".repeat(32),
+                prepared_id: "b".repeat(32),
+                song_id: "c".repeat(32),
+                title: "Monitor lease runtime fixture".into(),
+                total_us: 30_100_000,
+                config: PlaybackConfigDto {
+                    hold_frames: 1.0,
+                    timing_margin_us: 800,
+                    tempo_scale: 1.0,
+                    fps: 60,
+                    dry_run: false,
+                },
+                timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
+                    .expect("runtime fixture timing policy"),
+                timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
+                    recommended_timing_margin_us: Some(800),
+                    qualified: false,
+                    source: "default_fallback".into(),
+                },
+                plan_fingerprint: "d".repeat(64),
+                physical: false,
+                activity_lease: Mutex::new(None),
+                target_hwnd: Some(0),
+                state: Mutex::new(PlaybackSessionState::Starting),
+                pending: Mutex::new(None),
+                player: Some(player.clone()),
+                power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
+                power_request: Mutex::new(None),
+                suspend_resume_registration: Mutex::new(None),
+                started_at: Instant::now(),
+                paused_since: Mutex::new(None),
+                paused_total: Mutex::new(Duration::ZERO),
+                stop_requested: AtomicBool::new(false),
+                dry_run_terminal_request: AtomicU8::new(DRY_RUN_TERMINAL_NONE),
+                done: AtomicBool::new(false),
+                worker_quiescent: AtomicBool::new(false),
+                release_verified: AtomicBool::new(false),
+                sequence: AtomicU64::new(0),
+                event_delivery_failure: Arc::new(AtomicBool::new(false)),
+                presentation: OnceLock::new(),
             },
-            timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
-                .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
-            plan_fingerprint: "d".repeat(64),
-            physical: false,
-            activity_lease: Mutex::new(None),
-            target_hwnd: Some(0),
-            state: Mutex::new(PlaybackSessionState::Starting),
-            pending: Mutex::new(None),
-            player: Some(player.clone()),
-            power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
-            power_request: Mutex::new(None),
-            suspend_resume_registration: Mutex::new(None),
-            started_at: Instant::now(),
-            paused_since: Mutex::new(None),
-            paused_total: Mutex::new(Duration::ZERO),
-            stop_requested: AtomicBool::new(false),
-            dry_run_terminal_request: AtomicU8::new(DRY_RUN_TERMINAL_NONE),
-            done: AtomicBool::new(false),
-            worker_quiescent: AtomicBool::new(false),
-            release_verified: AtomicBool::new(false),
-            sequence: AtomicU64::new(0),
-        });
+            &events,
+            Arc::clone(&diagnostics_gate),
+            None,
+        );
         let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+        service.diagnostics_gate = diagnostics_gate;
         *service.active.lock().expect("active playback slot") = Some(active.clone());
 
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
@@ -7675,7 +8706,6 @@ mod tests {
         }));
 
         let service = Arc::new(service);
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let (monitor_done_tx, monitor_done_rx) = mpsc::channel();
         let monitor_service = Arc::clone(&service);
         let monitor_active = Arc::clone(&active);
@@ -7756,7 +8786,7 @@ mod tests {
             Some("supervisor_lease_expired"),
             "resuming the monitor must not heal the expiry latch"
         );
-        assert!(active.done.load(Ordering::Acquire));
+        assert!(wait_for_playback_done(&active, Duration::from_secs(2)));
     }
 
     #[cfg(feature = "tauri-test")]
@@ -7768,8 +8798,16 @@ mod tests {
         let player =
             terminal_projection_session(DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, 30_100_000, None);
         player.arm(0).expect("arm blocked-UI test worker");
-        let active = Arc::new(tracked_test_active(Arc::clone(&player), activity.clone()));
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity.clone()),
+            &events,
+            Arc::clone(&diagnostics_gate),
+            None,
+        );
         let mut service = NativePlaybackService::new(activity.clone());
+        service.diagnostics_gate = diagnostics_gate;
         *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
         let accepted_progress = Arc::new(AtomicU64::new(0));
         let hook_progress = Arc::clone(&accepted_progress);
@@ -7805,12 +8843,6 @@ mod tests {
             Ok(())
         });
 
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
-        {
-            let mut hub = events.lock().expect("event hub");
-            hub.register_playback_player(Arc::downgrade(&player))
-                .expect("register monitored player");
-        }
         publish_playback_state(&events, &active, PlaybackEventState::Starting, None, None)
             .expect("queue starting state");
         {
@@ -7904,6 +8936,663 @@ mod tests {
 
     #[cfg(feature = "tauri-test")]
     #[test]
+    fn older_critical_events_preserve_the_freshest_pending_snapshot_in_order() {
+        let activity = ActivityCoordinator::default();
+        let player = presentation_projection_session(0, 30_100_000, 30_200_000);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let (test_hook, selection_entered, gate) =
+            blocked_presentation_hook(PlaybackPresentationStage::BeforeWorkSelection);
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity.clone()),
+            &events,
+            diagnostics_gate,
+            Some(test_hook),
+        );
+        selection_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("consumer is held before ordered work selection");
+
+        let presentation = active.presentation.get().expect("presentation consumer");
+        presentation
+            .publish_state(&active, PlaybackEventState::Starting, None, None)
+            .expect("first critical lifecycle event");
+        presentation
+            .publish_state(&active, PlaybackEventState::Paused, None, None)
+            .expect("second critical lifecycle event");
+        assert!(presentation.publish_snapshot(&active, 1_000, 0, EnginePollStatus::Playing,));
+        assert!(presentation.publish_snapshot(&active, 2_000, 0, EnginePollStatus::Paused,));
+        assert_eq!(
+            presentation.queue.metrics(),
+            PlaybackPresentationMetrics {
+                snapshot_coalesced: 1,
+                snapshot_dropped: 1,
+            },
+            "replacing a best-effort frame is counted before consumer selection"
+        );
+
+        release_test_gate(&gate);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while events.lock().expect("event hub").buffered_for_test().len() < 3
+            && Instant::now() < deadline
+        {
+            thread::yield_now();
+        }
+        let buffered = events.lock().expect("event hub").buffered_for_test();
+        assert_eq!(
+            buffered.len(),
+            3,
+            "both critical events and the latest frame publish"
+        );
+        assert!(matches!(
+            &buffered[0],
+            UiEvent::PlaybackStateChanged { payload, .. }
+                if payload.state == PlaybackEventState::Starting
+        ));
+        assert!(matches!(
+            &buffered[1],
+            UiEvent::PlaybackStateChanged { payload, .. }
+                if payload.state == PlaybackEventState::Paused
+        ));
+        assert!(matches!(
+            &buffered[2],
+            UiEvent::PlaybackSnapshot { payload, .. }
+                if payload.current_us == 2_000 && payload.state == PlaybackEventState::Paused
+        ));
+        assert_eq!(
+            presentation.queue.metrics(),
+            PlaybackPresentationMetrics {
+                snapshot_coalesced: 1,
+                snapshot_dropped: 1,
+            },
+            "selecting the earlier critical events must not silently discard the taken frame"
+        );
+
+        presentation.queue.closed.store(true, Ordering::Release);
+        if let Some(worker) = presentation.queue.worker_thread.get() {
+            worker.unpark();
+        }
+        if let Some(worker) = presentation
+            .worker
+            .lock()
+            .expect("presentation worker handle")
+            .take()
+        {
+            worker
+                .join()
+                .expect("presentation consumer exits after close");
+        }
+        events.lock().expect("event hub").close();
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn taken_snapshot_superseded_by_terminal_close_is_counted() {
+        let activity = ActivityCoordinator::default();
+        let player = presentation_projection_session(0, 30_100_000, 30_200_000);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let (test_hook, projection_entered, gate) =
+            blocked_presentation_hook(PlaybackPresentationStage::SnapshotProjection);
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity),
+            &events,
+            diagnostics_gate,
+            Some(test_hook),
+        );
+        let presentation = active.presentation.get().expect("presentation consumer");
+        assert!(presentation.publish_snapshot(&active, 3_000, 0, EnginePollStatus::Playing,));
+        projection_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("consumer has taken the frame and entered projection");
+
+        active.done.store(true, Ordering::Release);
+        presentation.queue.closed.store(true, Ordering::Release);
+        release_test_gate(&gate);
+        if let Some(worker) = presentation
+            .worker
+            .lock()
+            .expect("presentation worker handle")
+            .take()
+        {
+            worker
+                .join()
+                .expect("presentation consumer exits after terminal close");
+        }
+
+        assert_eq!(
+            presentation.queue.metrics(),
+            PlaybackPresentationMetrics {
+                snapshot_coalesced: 0,
+                snapshot_dropped: 1,
+            },
+            "a frame already taken by the worker must be counted when terminal closure supersedes it"
+        );
+        assert!(
+            events
+                .lock()
+                .expect("event hub")
+                .buffered_for_test()
+                .is_empty()
+        );
+        events.lock().expect("event hub").close();
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn newer_snapshot_coalesces_a_frame_held_behind_an_older_critical_event() {
+        let activity = ActivityCoordinator::default();
+        let player = presentation_projection_session(0, 30_100_000, 30_200_000);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let (test_hook, selection_entered, gate) =
+            blocked_presentation_hook(PlaybackPresentationStage::BeforeWorkSelection);
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity),
+            &events,
+            diagnostics_gate,
+            Some(test_hook),
+        );
+        selection_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("consumer is held before ordered work selection");
+
+        let presentation = active.presentation.get().expect("presentation consumer");
+        let events_guard = events
+            .lock()
+            .expect("hold event publication after selection");
+        presentation
+            .publish_state(&active, PlaybackEventState::Starting, None, None)
+            .expect("critical event before the snapshot");
+        assert!(presentation.publish_snapshot(&active, 1_000, 0, EnginePollStatus::Playing,));
+        release_test_gate(&gate);
+
+        let take_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot_taken = presentation
+                .queue
+                .latest_snapshot
+                .try_lock()
+                .is_ok_and(|slot| slot.is_none());
+            if snapshot_taken || Instant::now() >= take_deadline {
+                assert!(
+                    snapshot_taken,
+                    "consumer takes the frame before critical publication"
+                );
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(presentation.publish_snapshot(&active, 2_000, 0, EnginePollStatus::Playing,));
+        drop(events_guard);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while events.lock().expect("event hub").buffered_for_test().len() < 2
+            && Instant::now() < deadline
+        {
+            thread::yield_now();
+        }
+        let buffered = events.lock().expect("event hub").buffered_for_test();
+        assert_eq!(buffered.len(), 2);
+        assert!(matches!(
+            &buffered[0],
+            UiEvent::PlaybackStateChanged { payload, .. }
+                if payload.state == PlaybackEventState::Starting
+        ));
+        assert!(matches!(
+            &buffered[1],
+            UiEvent::PlaybackSnapshot { payload, .. }
+                if payload.current_us == 2_000
+        ));
+        assert_eq!(
+            presentation.queue.metrics(),
+            PlaybackPresentationMetrics {
+                snapshot_coalesced: 1,
+                snapshot_dropped: 1,
+            },
+            "a fresher frame supersedes the held frame with explicit accounting"
+        );
+
+        presentation.queue.closed.store(true, Ordering::Release);
+        if let Some(worker) = presentation.queue.worker_thread.get() {
+            worker.unpark();
+        }
+        if let Some(worker) = presentation
+            .worker
+            .lock()
+            .expect("presentation worker handle")
+            .take()
+        {
+            worker
+                .join()
+                .expect("presentation consumer exits after close");
+        }
+        events.lock().expect("event hub").close();
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn blocked_snapshot_projection_past_lease_keeps_supervisor_live() {
+        use sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US;
+
+        let activity = ActivityCoordinator::default();
+        let player = presentation_projection_session(
+            DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            30_100_000,
+            30_200_000,
+        );
+        player.set_focus_hint(true);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let (test_hook, presentation_entered, gate) =
+            blocked_presentation_hook(PlaybackPresentationStage::SnapshotProjection);
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity.clone()),
+            &events,
+            Arc::clone(&diagnostics_gate),
+            Some(test_hook),
+        );
+        let mut service = NativePlaybackService::new(activity.clone());
+        service.diagnostics_gate = diagnostics_gate;
+        *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+        let progress = Arc::new(AtomicU64::new(0));
+        let hook_progress = Arc::clone(&progress);
+        service.monitor_progress_test_hook = Some(Arc::new(move |accepted| {
+            if accepted {
+                hook_progress.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+        let service = Arc::new(service);
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor_service = Arc::clone(&service);
+        let (activation_sender, activation_receiver) = mpsc::channel();
+        let (done_sender, done_receiver) = mpsc::channel();
+        let monitor = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+            let _ = done_sender.send(());
+        });
+        player.arm(500_000).expect("arm presentation-stall player");
+        player.set_focus_hint(true);
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("monitor activation receiver");
+
+        presentation_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("snapshot projection reached its blocking barrier");
+        let started_at = Instant::now();
+        let progress_at_entry = progress.load(Ordering::Acquire);
+        let progress_deadline = Instant::now() + Duration::from_secs(5);
+        while progress
+            .load(Ordering::Acquire)
+            .saturating_sub(progress_at_entry)
+            < 160
+            && Instant::now() < progress_deadline
+        {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let progress_advanced = progress
+            .load(Ordering::Acquire)
+            .saturating_sub(progress_at_entry);
+        assert!(
+            started_at.elapsed() > Duration::from_secs(3),
+            "presentation remained blocked beyond the worker lease interval"
+        );
+        assert!(
+            progress_advanced >= 160,
+            "safety supervision kept progressing"
+        );
+        assert_ne!(
+            player.snapshot().terminal_trigger_reason.as_deref(),
+            Some("supervisor_lease_expired"),
+            "presentation stall must not age out an otherwise progressing supervisor"
+        );
+
+        let metrics = active
+            .presentation
+            .get()
+            .expect("presentation consumer")
+            .queue
+            .metrics();
+        assert!(metrics.snapshot_coalesced > 0);
+        assert!(metrics.snapshot_dropped >= metrics.snapshot_coalesced);
+
+        release_test_gate(&gate);
+        player.quit().expect("quit late-Down test worker");
+        assert!(done_receiver.recv_timeout(Duration::from_secs(5)).is_ok());
+        monitor.join().expect("monitor thread");
+        assert!(active.worker_quiescent.load(Ordering::Acquire));
+        assert!(active.release_verified.load(Ordering::Acquire));
+        assert!(wait_for_playback_done(&active, Duration::from_secs(2)));
+        events.lock().expect("event hub").close();
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn blocked_diagnostics_gate_past_lease_does_not_block_safety_progress() {
+        use sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US;
+
+        let activity = ActivityCoordinator::default();
+        let player = presentation_projection_session(
+            DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            30_100_000,
+            30_200_000,
+        );
+        player.set_focus_hint(true);
+        player.set_live_diagnostics_enabled(true);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        diagnostics_gate
+            .set_enabled(true)
+            .expect("enable diagnostics");
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let announced = Arc::new(AtomicBool::new(false));
+        let hook_announced = Arc::clone(&announced);
+        let test_hook: PlaybackPresentationTestHook = Arc::new(move |stage| {
+            if stage == PlaybackPresentationStage::DiagnosticsProjection
+                && !hook_announced.swap(true, Ordering::AcqRel)
+            {
+                entered_sender.send(()).expect("diagnostics hook receiver");
+            }
+        });
+        let gate_guard = diagnostics_gate
+            .state
+            .lock()
+            .expect("hold diagnostics gate");
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity.clone()),
+            &events,
+            Arc::clone(&diagnostics_gate),
+            Some(test_hook),
+        );
+        let mut service = NativePlaybackService::new(activity.clone());
+        service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+        *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+        let progress = Arc::new(AtomicU64::new(0));
+        let hook_progress = Arc::clone(&progress);
+        service.monitor_progress_test_hook = Some(Arc::new(move |accepted| {
+            if accepted {
+                hook_progress.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+        let service = Arc::new(service);
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor_service = Arc::clone(&service);
+        let (activation_sender, activation_receiver) = mpsc::channel();
+        let (done_sender, done_receiver) = mpsc::channel();
+        let monitor = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+            let _ = done_sender.send(());
+        });
+        player.arm(500_000).expect("arm diagnostics-gate player");
+        player.set_focus_hint(true);
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("monitor activation receiver");
+
+        entered_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("diagnostics sampling reached the gate barrier");
+        let started_at = Instant::now();
+        let progress_at_entry = progress.load(Ordering::Acquire);
+        let progress_deadline = Instant::now() + Duration::from_secs(5);
+        while progress
+            .load(Ordering::Acquire)
+            .saturating_sub(progress_at_entry)
+            < 160
+            && Instant::now() < progress_deadline
+        {
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(started_at.elapsed() > Duration::from_secs(3));
+        assert!(
+            progress
+                .load(Ordering::Acquire)
+                .saturating_sub(progress_at_entry)
+                >= 160,
+            "safety supervision must not take the diagnostics gate"
+        );
+        assert_ne!(
+            player.snapshot().terminal_trigger_reason.as_deref(),
+            Some("supervisor_lease_expired")
+        );
+        drop(gate_guard);
+        player.quit().expect("quit diagnostics-gate test worker");
+        assert!(done_receiver.recv_timeout(Duration::from_secs(5)).is_ok());
+        monitor.join().expect("monitor thread");
+        assert!(wait_for_playback_done(&active, Duration::from_secs(2)));
+        assert!(active.release_verified.load(Ordering::Acquire));
+        events.lock().expect("event hub").close();
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn blocked_terminal_presentation_does_not_hold_supervisor_after_release() {
+        let activity = ActivityCoordinator::default();
+        let player = presentation_projection_session(0, 30_100_000, 30_200_000);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let (test_hook, presentation_entered, gate) =
+            blocked_presentation_hook(PlaybackPresentationStage::DiagnosticsProjection);
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity.clone()),
+            &events,
+            Arc::clone(&diagnostics_gate),
+            Some(test_hook),
+        );
+        let mut service = NativePlaybackService::new(activity.clone());
+        service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+        *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+        let service = Arc::new(service);
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor_service = Arc::clone(&service);
+        let (activation_sender, activation_receiver) = mpsc::channel();
+        let (monitor_done_sender, monitor_done_receiver) = mpsc::channel();
+        let monitor = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+            let _ = monitor_done_sender.send(());
+        });
+        player
+            .arm(500_000)
+            .expect("arm terminal-presentation test worker");
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("monitor activation receiver");
+        presentation_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("presentation blocked before terminal request");
+
+        player.quit().expect("request terminal worker exit");
+        assert!(
+            monitor_done_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .is_ok(),
+            "safety supervisor must return without waiting for presentation finalization"
+        );
+        monitor.join().expect("monitor thread");
+        assert!(active.worker_quiescent.load(Ordering::Acquire));
+        assert!(active.release_verified.load(Ordering::Acquire));
+        assert!(!active.done.load(Ordering::Acquire));
+        assert!(
+            service
+                .status()
+                .expect("pending presentation status")
+                .active
+                .is_some()
+        );
+
+        release_test_gate(&gate);
+        assert!(wait_for_playback_done(&active, Duration::from_secs(2)));
+        let status = service.status().expect("retired presentation status");
+        assert!(status.active.is_none());
+        assert_eq!(
+            status.last_terminal.expect("terminal record").state,
+            PlaybackSessionState::Finished
+        );
+        events.lock().expect("event hub").close();
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn presentation_critical_queue_overflow_fails_closed_and_releases() {
+        let activity = ActivityCoordinator::default();
+        let player = presentation_projection_session(0, 30_100_000, 30_200_000);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let (test_hook, presentation_entered, gate) =
+            blocked_presentation_hook(PlaybackPresentationStage::SnapshotProjection);
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity.clone()),
+            &events,
+            Arc::clone(&diagnostics_gate),
+            Some(test_hook),
+        );
+        let mut service = NativePlaybackService::new(activity.clone());
+        service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+        *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+        let service = Arc::new(service);
+        let monitor_active = Arc::clone(&active);
+        let monitor_events = Arc::clone(&events);
+        let monitor_service = Arc::clone(&service);
+        let (activation_sender, activation_receiver) = mpsc::channel();
+        let (monitor_done_sender, monitor_done_receiver) = mpsc::channel();
+        let monitor = thread::spawn(move || {
+            monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+            let _ = monitor_done_sender.send(());
+        });
+        player.arm(500_000).expect("arm queue-overflow test worker");
+        activation_sender
+            .send(PlaybackActivation::Started)
+            .expect("monitor activation receiver");
+        presentation_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("snapshot projection blocks critical consumer");
+
+        let presentation = active.presentation.get().expect("presentation consumer");
+        for _ in 0..PLAYBACK_PRESENTATION_CRITICAL_CAPACITY {
+            presentation
+                .publish_state(&active, PlaybackEventState::Paused, None, None)
+                .expect("critical lifecycle item fits in bounded queue");
+        }
+        let overflow = presentation
+            .publish_state(&active, PlaybackEventState::Playing, None, None)
+            .expect_err("critical overflow must be observable");
+        assert!(overflow.contains("queue overflow"));
+        assert!(active.event_delivery_failure.load(Ordering::Acquire));
+
+        release_test_gate(&gate);
+        assert!(
+            monitor_done_receiver
+                .recv_timeout(Duration::from_secs(3))
+                .is_ok()
+        );
+        monitor.join().expect("monitor thread");
+        assert!(wait_for_playback_done(&active, Duration::from_secs(1)));
+        assert!(active.worker_quiescent.load(Ordering::Acquire));
+        assert!(active.release_verified.load(Ordering::Acquire));
+        let terminal = service
+            .status()
+            .expect("failed presentation status")
+            .last_terminal
+            .expect("failed terminal record");
+        assert_eq!(terminal.state, PlaybackSessionState::Failed);
+        assert!(terminal.failure_code.is_some());
+        events.lock().expect("event hub").close();
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn rapid_playback_sessions_queue_terminal_before_successor_starting() {
+        let activity = ActivityCoordinator::default();
+        let service = NativePlaybackService::new(activity);
+        let settings = ApplicationSettings::default();
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let mut session_ids = Vec::new();
+
+        for _ in 0..2 {
+            let prepared_id = prepare_dry_run_plan(&service, &settings, &"c".repeat(32));
+            let session = service
+                .start(
+                    PlaybackStartRequest {
+                        prepared_id,
+                        decisions: Vec::new(),
+                    },
+                    &settings,
+                    Arc::clone(&events),
+                )
+                .expect("start rapid dry-run session");
+            session_ids.push(session.session_id);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while service
+                .status()
+                .expect("rapid session status")
+                .active
+                .is_some()
+                && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                service
+                    .status()
+                    .expect("retired rapid session")
+                    .active
+                    .is_none(),
+                "session lifecycle finalization must release the successor barrier"
+            );
+        }
+
+        let buffered = events.lock().expect("event hub").buffered_for_test();
+        let first_terminal = buffered
+            .iter()
+            .position(|event| {
+                matches!(event, UiEvent::PlaybackFinished { payload, .. }
+                    if payload.session_id == session_ids[0])
+            })
+            .expect("first terminal event");
+        let second_starting = buffered
+            .iter()
+            .position(|event| {
+                matches!(event, UiEvent::PlaybackStateChanged { payload, .. }
+                    if payload.session_id == session_ids[1]
+                        && payload.state == PlaybackEventState::Starting)
+            })
+            .expect("successor Starting event");
+        assert!(first_terminal < second_starting);
+        for session_id in &session_ids {
+            let starting = buffered
+                .iter()
+                .position(|event| {
+                    matches!(event, UiEvent::PlaybackStateChanged { payload, .. }
+                        if &payload.session_id == session_id
+                            && payload.state == PlaybackEventState::Starting)
+                })
+                .expect("session Starting event");
+            let finished = buffered
+                .iter()
+                .position(|event| {
+                    matches!(event, UiEvent::PlaybackStateChanged { payload, .. }
+                        if &payload.session_id == session_id
+                            && payload.state == PlaybackEventState::Finished)
+                })
+                .expect("session Finished state event");
+            let terminal = buffered
+                .iter()
+                .position(|event| {
+                    matches!(event, UiEvent::PlaybackFinished { payload, .. }
+                        if &payload.session_id == session_id)
+                })
+                .expect("session terminal event");
+            assert!(starting < finished && finished < terminal);
+        }
+        events.lock().expect("event hub").close();
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
     fn failed_critical_channel_delivery_requests_tracked_terminal_cleanup() {
         use sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US;
 
@@ -7911,16 +9600,18 @@ mod tests {
         let player =
             terminal_projection_session(DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, 30_100_000, None);
         player.arm(0).expect("arm channel-failure test worker");
-        let active = Arc::new(tracked_test_active(Arc::clone(&player), activity.clone()));
-        let service = Arc::new(NativePlaybackService::new(activity.clone()));
-        *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
-
         let events = Arc::new(Mutex::new(NativeEventHub::default()));
-        {
-            let mut hub = events.lock().expect("event hub");
-            hub.register_playback_player(Arc::downgrade(&player))
-                .expect("register monitored player");
-        }
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        let active = attach_test_presentation(
+            tracked_test_active(Arc::clone(&player), activity.clone()),
+            &events,
+            Arc::clone(&diagnostics_gate),
+            None,
+        );
+        let mut service = NativePlaybackService::new(activity.clone());
+        service.diagnostics_gate = diagnostics_gate;
+        *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+        let service = Arc::new(service);
         publish_playback_state(&events, &active, PlaybackEventState::Starting, None, None)
             .expect("queue starting state");
         {
@@ -7977,6 +9668,35 @@ mod tests {
         up_scheduled_us: u64,
         startup_ordering_hook: Option<Arc<sky_player::engine::StartupOrderingHook>>,
     ) -> Arc<NativeDispatchSession> {
+        projection_session_with_down(
+            supervisor_lease_timeout_us,
+            100_000,
+            up_scheduled_us,
+            startup_ordering_hook,
+        )
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn presentation_projection_session(
+        supervisor_lease_timeout_us: u64,
+        down_scheduled_us: u64,
+        up_scheduled_us: u64,
+    ) -> Arc<NativeDispatchSession> {
+        projection_session_with_down(
+            supervisor_lease_timeout_us,
+            down_scheduled_us,
+            up_scheduled_us,
+            None,
+        )
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn projection_session_with_down(
+        supervisor_lease_timeout_us: u64,
+        down_scheduled_us: u64,
+        up_scheduled_us: u64,
+        startup_ordering_hook: Option<Arc<sky_player::engine::StartupOrderingHook>>,
+    ) -> Arc<NativeDispatchSession> {
         use sky_player::adapter_support::{
             ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
         };
@@ -7991,7 +9711,7 @@ mod tests {
                 KeyActionInput {
                     source_action_index: 0,
                     kind: DispatchActionKind::Down,
-                    scheduled_us: 100_000,
+                    scheduled_us: down_scheduled_us,
                     scan_codes: smallvec::smallvec![0x15],
                     reason: Arc::<str>::from("terminal-projection-down"),
                 },
@@ -8006,7 +9726,7 @@ mod tests {
             &sky_app_core::song::SKY_SCAN_CODES,
         )
         .expect("terminal projection schedule");
-        Arc::new(
+        let player = Arc::new(
             NativeDispatchSession::new_with_power_endpoint(
                 NativeSessionOptions {
                     schedule,
@@ -8065,7 +9785,14 @@ mod tests {
                     .expect("terminal projection power endpoint"),
             )
             .expect("terminal projection session"),
-        )
+        );
+        player.set_target_hwnd(123);
+        player
+            .bind_window_identity_authority(
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
+            )
+            .expect("bind test owner identity");
+        player
     }
 
     #[cfg(feature = "tauri-test")]
@@ -8110,6 +9837,8 @@ mod tests {
             worker_quiescent: AtomicBool::new(false),
             release_verified: AtomicBool::new(false),
             sequence: AtomicU64::new(0),
+            event_delivery_failure: Arc::new(AtomicBool::new(false)),
+            presentation: OnceLock::new(),
         }
     }
 
@@ -8128,6 +9857,109 @@ mod tests {
                 .expect("mock physical activity lease"),
         ));
         active
+    }
+
+    #[cfg(test)]
+    fn attach_test_presentation(
+        mut active: NativeActivePlayback,
+        events: &Arc<Mutex<NativeEventHub>>,
+        diagnostics_gate: Arc<DiagnosticsPublicationGate>,
+        #[cfg(feature = "tauri-test")] test_hook: Option<PlaybackPresentationTestHook>,
+    ) -> Arc<NativeActivePlayback> {
+        let failure_flag = events.lock().expect("test event hub").failure_flag();
+        active.event_delivery_failure = failure_flag;
+        let active = Arc::new(active);
+        if let Some(player) = &active.player {
+            events
+                .lock()
+                .expect("test event hub")
+                .register_playback_player(Arc::downgrade(player))
+                .expect("register test presentation player");
+        }
+        let presentation = NativePlaybackPresentation::start(
+            &active,
+            Arc::clone(events),
+            diagnostics_gate,
+            #[cfg(feature = "tauri-test")]
+            test_hook,
+        )
+        .expect("test presentation consumer");
+        assert!(active.presentation.set(presentation).is_ok());
+        active
+    }
+
+    #[cfg(test)]
+    fn attach_shared_test_presentation(
+        mut active: Arc<NativeActivePlayback>,
+        events: &Arc<Mutex<NativeEventHub>>,
+        diagnostics_gate: Arc<DiagnosticsPublicationGate>,
+        #[cfg(feature = "tauri-test")] test_hook: Option<PlaybackPresentationTestHook>,
+    ) -> Arc<NativeActivePlayback> {
+        let failure_flag = events.lock().expect("test event hub").failure_flag();
+        Arc::get_mut(&mut active)
+            .expect("shared test active playback must have one owner before presentation")
+            .event_delivery_failure = failure_flag;
+        if let Some(player) = &active.player {
+            events
+                .lock()
+                .expect("test event hub")
+                .register_playback_player(Arc::downgrade(player))
+                .expect("register shared test presentation player");
+        }
+        let presentation = NativePlaybackPresentation::start(
+            &active,
+            Arc::clone(events),
+            diagnostics_gate,
+            #[cfg(feature = "tauri-test")]
+            test_hook,
+        )
+        .expect("shared test presentation consumer");
+        assert!(active.presentation.set(presentation).is_ok());
+        active
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn blocked_presentation_hook(
+        blocked_stage: PlaybackPresentationStage,
+    ) -> (
+        PlaybackPresentationTestHook,
+        mpsc::Receiver<()>,
+        PlaybackPresentationTestGate,
+    ) {
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let hook_gate = Arc::clone(&gate);
+        let entered = Arc::new(AtomicBool::new(false));
+        let hook_entered = Arc::clone(&entered);
+        let hook: PlaybackPresentationTestHook = Arc::new(move |stage| {
+            if stage == blocked_stage && !hook_entered.swap(true, Ordering::AcqRel) {
+                entered_sender
+                    .send(())
+                    .expect("presentation hook entered receiver");
+                let (released, changed) = &*hook_gate;
+                let mut released = released.lock().expect("presentation hook gate");
+                while !*released {
+                    released = changed.wait(released).expect("presentation hook wait");
+                }
+            }
+        });
+        (hook, entered_receiver, gate)
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn release_test_gate(gate: &PlaybackPresentationTestGate) {
+        let (released, changed) = &**gate;
+        *released.lock().expect("test gate") = true;
+        changed.notify_all();
+    }
+
+    #[cfg(test)]
+    fn wait_for_playback_done(active: &NativeActivePlayback, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while !active.done.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        active.done.load(Ordering::Acquire)
     }
 
     #[cfg(feature = "tauri-test")]
@@ -8531,6 +10363,8 @@ mod tests {
             worker_quiescent: std::sync::atomic::AtomicBool::new(false),
             release_verified: std::sync::atomic::AtomicBool::new(false),
             sequence: std::sync::atomic::AtomicU64::new(0),
+            event_delivery_failure: Arc::new(AtomicBool::new(false)),
+            presentation: OnceLock::new(),
         })
     }
 
@@ -8769,21 +10603,29 @@ mod tests {
     #[test]
     fn event_delivery_failure_preserves_the_terminal_worker_outcome() {
         let activity = ActivityCoordinator::default();
-        let service = NativePlaybackService::new(activity);
-        let active = active_for_control(PlaybackSessionState::Playing, None);
+        let mut service = NativePlaybackService::new(activity);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+        let active = attach_shared_test_presentation(
+            active_for_control(PlaybackSessionState::Playing, None),
+            &events,
+            diagnostics_gate,
+            #[cfg(feature = "tauri-test")]
+            None,
+        );
         active.request_dry_run_terminal(DryRunTerminalRequest::Quit);
         active.stop_requested.store(true, Ordering::Release);
         *service.active.lock().expect("active session slot") = Some(active.clone());
-
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
         events.lock().expect("event hub").close();
         let (activation_sender, activation_receiver) = mpsc::channel();
         activation_sender
             .send(PlaybackActivation::Started)
             .expect("monitor activation receiver");
 
-        service.monitor(active, events, activation_receiver);
+        service.monitor(Arc::clone(&active), events, activation_receiver);
 
+        assert!(wait_for_playback_done(&active, Duration::from_secs(2)));
         let status = service
             .status()
             .expect("terminal status after event failure");
@@ -8798,7 +10640,16 @@ mod tests {
     #[test]
     fn recovered_join_error_cannot_be_masked_by_a_requested_stop() {
         let mut service = NativePlaybackService::new(ActivityCoordinator::default());
-        let active = active_for_control(PlaybackSessionState::Playing, None);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+        let active = attach_shared_test_presentation(
+            active_for_control(PlaybackSessionState::Playing, None),
+            &events,
+            diagnostics_gate,
+            #[cfg(feature = "tauri-test")]
+            None,
+        );
         active.request_dry_run_terminal(DryRunTerminalRequest::Quit);
         *service.active.lock().expect("active session slot") = Some(active.clone());
 
@@ -8811,14 +10662,14 @@ mod tests {
                 Ok(true)
             }
         }));
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let (activation_sender, activation_receiver) = mpsc::channel();
         activation_sender
             .send(PlaybackActivation::Started)
             .expect("monitor activation receiver");
 
-        service.monitor(active, events, activation_receiver);
+        service.monitor(Arc::clone(&active), events, activation_receiver);
 
+        assert!(wait_for_playback_done(&active, Duration::from_secs(2)));
         let terminal = service
             .status()
             .expect("terminal status after recovered join error")
@@ -8898,7 +10749,12 @@ mod tests {
             .expect_err("injected supervisor spawn failure");
 
         assert!(error.contains("injected playback supervisor spawn failure"));
-        let status = service.status().expect("status after supervisor failure");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut status = service.status().expect("status after supervisor failure");
+        while status.active.is_some() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+            status = service.status().expect("pending supervisor failure status");
+        }
         assert!(status.active.is_none());
         let terminal = status.last_terminal.expect("stored supervisor failure");
         assert_eq!(terminal.state, PlaybackSessionState::Failed);
@@ -9065,16 +10921,24 @@ mod tests {
         );
         let (retired_sender, retired_receiver) = mpsc::channel();
         let mut service = NativePlaybackService::new(activity.clone());
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        service.diagnostics_gate = Arc::clone(&diagnostics_gate);
         service.monitor_retired_test_hook = Some(Arc::new(move || {
             let _ = retired_sender.send(());
         }));
         let service = Arc::new(service);
-        let active = active_for_control_with_player(
-            PlaybackSessionState::Playing,
+        let active = attach_shared_test_presentation(
+            active_for_control_with_player(
+                PlaybackSessionState::Playing,
+                None,
+                true,
+                activity.clone(),
+                Some(Arc::clone(&player)),
+            ),
+            &events,
+            diagnostics_gate,
             None,
-            true,
-            activity.clone(),
-            Some(Arc::clone(&player)),
         );
         *active.activity_lease.lock().expect("activity lease slot") = Some(
             activity
@@ -9083,7 +10947,6 @@ mod tests {
         );
         *service.active.lock().expect("active slot") = Some(Arc::clone(&active));
 
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let (activation_sender, activation_receiver) = mpsc::channel();
         let monitor_service = Arc::clone(&service);
         let monitor_active = Arc::clone(&active);
@@ -9213,17 +11076,25 @@ mod tests {
             FaultInjectionScript::persistent_release(),
         );
         let mut service = NativePlaybackService::new(activity.clone());
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        service.diagnostics_gate = Arc::clone(&diagnostics_gate);
         let (retired_sender, retired_receiver) = mpsc::channel();
         service.monitor_retired_test_hook = Some(Arc::new(move || {
             let _ = retired_sender.send(());
         }));
         let service = Arc::new(service);
-        let active = active_for_control_with_player(
-            PlaybackSessionState::Playing,
+        let active = attach_shared_test_presentation(
+            active_for_control_with_player(
+                PlaybackSessionState::Playing,
+                None,
+                true,
+                activity.clone(),
+                Some(Arc::clone(&player)),
+            ),
+            &events,
+            diagnostics_gate,
             None,
-            true,
-            activity.clone(),
-            Some(Arc::clone(&player)),
         );
         *active.activity_lease.lock().expect("activity lease slot") = Some(
             activity
@@ -9232,7 +11103,6 @@ mod tests {
         );
         *service.active.lock().expect("active slot") = Some(Arc::clone(&active));
 
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
         let (activation_sender, activation_receiver) = mpsc::channel();
         let monitor_service = Arc::clone(&service);
         let monitor_active = Arc::clone(&active);
@@ -11128,6 +12998,13 @@ mod tests {
         assert!(
             matches!(buffered.front(), Some(UiEvent::PlaybackSnapshot { payload, .. }) if payload.seq == 2)
         );
+        assert_eq!(
+            hub.snapshot_metrics(),
+            PlaybackPresentationMetrics {
+                snapshot_coalesced: 1,
+                snapshot_dropped: 1,
+            }
+        );
 
         for index in 0..MAX_NATIVE_EVENTS {
             hub.publish(UiEvent::CatalogChanged {
@@ -11144,6 +13021,13 @@ mod tests {
         );
         assert_eq!(hub.buffered_for_test().len(), MAX_NATIVE_EVENTS);
         assert!(hub.delivery_failure().is_none());
+        assert_eq!(
+            hub.snapshot_metrics(),
+            PlaybackPresentationMetrics {
+                snapshot_coalesced: 1,
+                snapshot_dropped: 3,
+            }
+        );
         assert!(
             hub.publish(UiEvent::CatalogChanged {
                 v: 1,
@@ -11155,6 +13039,48 @@ mod tests {
             .is_err()
         );
         assert!(hub.delivery_failure().is_some());
+    }
+
+    #[test]
+    fn event_hub_counts_snapshot_eviction_on_close_and_failed_channel_send() {
+        let session_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut closed_hub = NativeEventHub::default();
+        closed_hub
+            .publish(snapshot(session_id, 1))
+            .expect("queue snapshot before close");
+        closed_hub.close();
+        assert_eq!(
+            closed_hub.snapshot_metrics(),
+            PlaybackPresentationMetrics {
+                snapshot_coalesced: 0,
+                snapshot_dropped: 1,
+            },
+            "closing the hub must account for snapshots it removes from the queue"
+        );
+
+        let mut failed_hub = NativeEventHub::default();
+        failed_hub
+            .publish(snapshot(session_id, 2))
+            .expect("queue snapshot before channel failure");
+        let failing_channel: Channel<UiEvent> =
+            Channel::new(|_| Err(std::io::Error::other("injected snapshot send failure").into()));
+        failed_hub
+            .subscribe(failing_channel)
+            .expect("subscribe failing channel");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !failed_hub.publisher_finished_for_test() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert!(failed_hub.publisher_finished_for_test());
+        assert_eq!(
+            failed_hub.snapshot_metrics(),
+            PlaybackPresentationMetrics {
+                snapshot_coalesced: 0,
+                snapshot_dropped: 1,
+            },
+            "a snapshot whose channel send fails must be counted as dropped"
+        );
+        failed_hub.close();
     }
 
     #[test]
@@ -12160,7 +14086,16 @@ mod tests {
     fn join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup() {
         let activity = ActivityCoordinator::default();
         let mut service = NativePlaybackService::new(activity.clone());
-        let active = active_for_control(PlaybackSessionState::Playing, None);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+        service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+        let active = attach_shared_test_presentation(
+            active_for_control(PlaybackSessionState::Playing, None),
+            &events,
+            diagnostics_gate,
+            #[cfg(feature = "tauri-test")]
+            None,
+        );
         *active.activity_lease.lock().expect("activity lease slot") = Some(
             activity
                 .reserve_playback(active.session_id.clone())
@@ -12168,7 +14103,6 @@ mod tests {
         );
         *service.active.lock().expect("active session slot") = Some(active.clone());
 
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
         service
             .command("playback.stop", active.session_id.clone(), events.clone())
             .expect("first Stop request");
@@ -12283,6 +14217,8 @@ mod tests {
             service
                 .command("playback.stop", active.session_id.clone(), events.clone())
                 .expect("stop");
+            publish_playback_state(&events, &active, PlaybackEventState::Stopping, None, None)
+                .expect("monitor queues stopping state");
             let mut last_event_state = match initial_state {
                 PlaybackSessionState::Starting => PlaybackEventState::Starting,
                 PlaybackSessionState::Playing => PlaybackEventState::Playing,
