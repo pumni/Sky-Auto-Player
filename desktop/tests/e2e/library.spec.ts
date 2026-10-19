@@ -30,10 +30,12 @@ async function expectWorkbenchWithinBounds(
     };
     return {
       viewportWidth: window.innerWidth,
+      presentation: document.querySelector<HTMLElement>('.workbench')?.dataset.utilityPresentation,
       workbench: box('.workbench'),
       navigator: box('.navigator-workbench-pane'),
       track: box('.track-browser-workbench-pane'),
       utility: box('.utility-workbench-pane'),
+      player: box('.player-bar'),
       rootMinWidth: getComputedStyle(document.documentElement).minWidth,
       bodyMinWidth: getComputedStyle(document.body).minWidth,
     };
@@ -51,14 +53,28 @@ async function expectWorkbenchWithinBounds(
     expect(geometry.track.width).toBeGreaterThanOrEqual(minimumTrackWidth);
   }
   if (geometry.utility && geometry.workbench) {
-    if (geometry.track) {
-      expect(geometry.track.x + geometry.track.width).toBeLessThanOrEqual(geometry.utility.x);
-    }
+    expect(geometry.utility.x).toBeGreaterThanOrEqual(geometry.workbench.x);
     expect(geometry.utility.x + geometry.utility.width).toBeLessThanOrEqual(
       geometry.workbench.x + geometry.workbench.width - 8,
     );
+    if (geometry.presentation === 'docked') {
+      if (geometry.track) {
+        expect(geometry.track.x + geometry.track.width).toBeLessThanOrEqual(geometry.utility.x);
+      }
+      expect(geometry.utility.width).toBeGreaterThanOrEqual(minimumUtilityWidth);
+      await expect(page.getByRole('separator', { name: 'Resize utility pane' })).toBeVisible();
+    } else {
+      expect(geometry.presentation).toBe('overlay');
+      expect(geometry.utility.width).toBeGreaterThanOrEqual(280);
+      expect(geometry.utility.width).toBeLessThanOrEqual(400);
+      expect(geometry.player).not.toBeNull();
+      if (geometry.player) expect(geometry.utility.bottom).toBeLessThanOrEqual(geometry.player.y);
+      await expect(page.locator('.utility-workbench-pane')).toHaveClass(/is-overlay/);
+      await expect(page.getByRole('separator', { name: 'Resize utility pane' })).toHaveCount(0);
+    }
     expect(Math.round(geometry.viewportWidth - geometry.utility.right)).toBeGreaterThanOrEqual(8);
-    expect(geometry.utility.width).toBeGreaterThanOrEqual(minimumUtilityWidth);
+  } else {
+    expect(geometry.presentation).toBe('closed');
   }
   expect(geometry.rootMinWidth).toBe('0px');
   expect(geometry.bodyMinWidth).toBe('0px');
@@ -582,7 +598,7 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('minimum viewport keeps an open utility pane inside the actual client rectangle', async ({
+test('minimum dockable viewport keeps the Inspector inside the actual client rectangle', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
@@ -590,6 +606,7 @@ test('minimum viewport keeps an open utility pane inside the actual client recta
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.locator('.utility-workbench-pane')).toBeVisible();
+  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
   await expect(page.getByRole('columnheader', { name: 'Notes' })).toBeHidden();
   await expect(page.getByRole('columnheader', { name: 'Liked' })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible();
@@ -602,21 +619,25 @@ test('minimum viewport keeps an open utility pane inside the actual client recta
   if (navigator) expect(Math.round(navigator.width)).toBe(56);
 });
 
-test('browser resilience margin does not clip the workbench below the native minimum', async ({
+test('narrow Inspector overlays the workbench without shrinking the Track Browser', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 780, height: 540 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.locator('.utility-workbench-pane')).toBeVisible();
-  await expectWorkbenchWithinBounds(page, 420, 0);
+  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
+  await expectWorkbenchWithinBounds(page);
 });
 
 test('desktop workbench fits the supported viewport matrix', async ({ page }) => {
   for (const viewport of [
+    { width: 640, height: 448 },
+    { width: 780, height: 540 },
     { width: 800, height: 560 },
     { width: 900, height: 600 },
     { width: 1024, height: 640 },
+    { width: 1366, height: 768 },
     { width: 1200, height: 760 },
     { width: 1440, height: 900 },
     { width: 1920, height: 1080 },
@@ -638,10 +659,23 @@ test('desktop workbench fits the supported viewport matrix', async ({ page }) =>
     expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
 
     await page.getByRole('button', { name: 'Open utility panel' }).click();
+    const expectedMode = viewport.width < 788 ? 'overlay' : 'docked';
+    await expect(page.locator('.workbench')).toHaveAttribute(
+      'data-utility-presentation',
+      expectedMode,
+    );
+    await expect(
+      page.getByRole('region', { name: 'Utility: Song Details', exact: true }),
+    ).toBeVisible();
+    await expectWorkbenchWithinBounds(page);
     await page.getByRole('tab', { name: 'Runtime' }).click();
     await expectWorkbenchWithinBounds(page);
     await expect(
       page.getByRole('region', { name: 'Utility: Diagnostics', exact: true }),
+    ).toBeVisible();
+    await page.getByRole('tab', { name: 'Details' }).click();
+    await expect(
+      page.getByRole('region', { name: 'Utility: Song Details', exact: true }),
     ).toBeVisible();
   }
 });

@@ -820,7 +820,8 @@
   outline-offset: 1px;
 }
 
-.player-tool-button[aria-pressed='true'] {
+.player-tool-button[aria-pressed='true'],
+.player-utility-button[aria-expanded='true'] {
   color: var(--accent);
 }
 

@@ -1,4 +1,12 @@
-import { lazy, Suspense, type ComponentProps, type ComponentType, type RefObject } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  type ComponentProps,
+  type ComponentType,
+  type RefObject,
+} from 'react';
 import { Tabs, TabPanel } from 'react-aria-components';
 import type { DesktopStoreHook, UtilityView } from '../../state/store';
 import { SongDetailsView } from './SongDetailsView';
@@ -18,31 +26,62 @@ type UtilityTabsProps = ComponentProps<typeof Tabs> & {
 const UtilityTabs = Tabs as unknown as ComponentType<UtilityTabsProps>;
 
 interface UtilityPaneProps {
+  presentationMode: 'docked' | 'overlay';
   utilityTriggerRef: RefObject<HTMLButtonElement | null>;
   useStore: DesktopStoreHook;
 }
 
-export function UtilityPane({ utilityTriggerRef, useStore }: UtilityPaneProps) {
+export function UtilityPane({ presentationMode, utilityTriggerRef, useStore }: UtilityPaneProps) {
   const utility = useStore((store) => store.utility);
   const closeUtility = useStore((store) => store.closeUtility);
   const setUtilityView = useStore((store) => store.setUtilityView);
-  if (!utility.open) return null;
+  const restoreFocus = useCallback(
+    (previousFocus: Element | null) => {
+      window.queueMicrotask(() => {
+        const trigger = utilityTriggerRef.current;
+        const currentFocus = document.activeElement;
+        if (
+          trigger?.isConnected &&
+          (currentFocus === previousFocus ||
+            currentFocus === document.body ||
+            !currentFocus?.isConnected)
+        ) {
+          trigger.focus();
+        }
+      });
+    },
+    [utilityTriggerRef],
+  );
 
-  const restoreFocus = () => {
-    window.queueMicrotask(() => utilityTriggerRef.current?.focus());
-  };
-  const close = () => {
+  const close = useCallback(() => {
+    const previousFocus = document.activeElement;
     closeUtility();
-    restoreFocus();
-  };
+    restoreFocus(previousFocus);
+  }, [closeUtility, restoreFocus]);
+
+  useEffect(() => {
+    if (presentationMode !== 'overlay' || !utility.open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      close();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [close, presentationMode, utility.open]);
+
+  if (!utility.open) return null;
 
   return (
     <section
+      id="utility-inspector"
       className="utility-surface"
       role="region"
+      tabIndex={-1}
       aria-label={`Utility: ${utility.activeView === 'diagnostics' ? 'Diagnostics' : 'Song Details'}`}
+      data-presentation-mode={presentationMode}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
+        if (event.key === 'Escape' && !event.defaultPrevented) {
           event.preventDefault();
           close();
         }

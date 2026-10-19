@@ -56,6 +56,9 @@ cargo xtask check rust
 cargo xtask check desktop
 ```
 
+- [desktop-workbench.md](desktop-workbench.md) — Desktop workbench regions, adaptive Inspector
+  presentation, keyboard/pointer interaction, focus, scrolling, and layout preferences.
+
 Packaging, Windows timing acceptance, release, and benchmark scripts are specialized evidence paths used when a change touches those boundaries.
 
 - [maintenance-test-pipeline-report.md](maintenance-test-pipeline-report.md) — Durable naming policy,

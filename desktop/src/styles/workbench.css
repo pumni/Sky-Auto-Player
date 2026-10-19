@@ -33,6 +33,16 @@
   container: utility / inline-size;
 }
 
+.utility-workbench-pane.is-overlay {
+  position: absolute;
+  z-index: 2;
+  inset-block: 0 var(--workbench-gap);
+  right: var(--workbench-gap);
+  max-width: calc(100% - var(--workbench-gap) - var(--workbench-gap));
+  border-color: var(--border-strong);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 28%);
+}
+
 .resizable-separator {
   position: relative;
   flex: 0 0 var(--workbench-gap);
@@ -1092,6 +1102,17 @@ body.is-resizing * {
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@container utility (max-width: 360px) {
+  .diagnostics-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diagnostics-lines li {
+    grid-template-columns: 72px 96px minmax(0, 1fr);
+    gap: 5px;
+  }
 }
 
 .diagnostics-lines .log-error {
