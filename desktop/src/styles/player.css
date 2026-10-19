@@ -552,6 +552,27 @@
   border-left-color: var(--danger-border);
 }
 
+.player-admission-confirmation {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(0, 1.8fr);
+  align-items: start;
+  max-height: min(72vh, 600px);
+  overflow: auto;
+}
+
+.player-admission-timing {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.65fr) minmax(0, 1.35fr);
+  align-items: start;
+  border-color: var(--border-subtle);
+  border-left-color: var(--border-subtle);
+}
+
+.player-admission-timing .admission-copy span {
+  color: var(--text-tertiary);
+  white-space: normal;
+}
+
 .player-admission-recoverable_status,
 .player-admission-conflict {
   border-color: var(--warning-border);
@@ -649,17 +670,52 @@
 }
 
 .admission-actions {
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  min-width: 0;
   gap: 7px;
 }
 
-.admission-actions .button {
+.admission-option {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 6px;
+}
+
+.admission-option > .button {
   min-height: 30px;
   padding-inline: 9px;
   font-size: 11px;
+  white-space: normal;
+}
+
+.timing-advisory {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.timing-advisory strong {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.timing-advisory details {
+  display: grid;
+  gap: 4px;
+}
+
+.timing-advisory summary {
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
 @media (max-width: 1100px) {
@@ -697,6 +753,14 @@
 }
 
 @media (max-width: 700px) {
+  .player-admission-confirmation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .player-admission-timing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .player-bar {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;

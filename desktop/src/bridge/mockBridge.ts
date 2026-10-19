@@ -30,6 +30,48 @@ import type {
   UpdateRetryAction,
   UpdateSnapshotPayload,
 } from './DesktopBridge';
+import type { WholeStreamTimingAdvisoryDto } from './generated';
+
+function mockTimingAdvisory(
+  fingerprint: string,
+  status: WholeStreamTimingAdvisoryDto['status'],
+  dryRun: boolean,
+): WholeStreamTimingAdvisoryDto {
+  const hasModeledPressure = status === 'modeled_risk';
+  return {
+    status,
+    plan_fingerprint: fingerprint,
+    explanation: hasModeledPressure
+      ? 'The illustrative model found 3 negative-slack packet(s), 2 H-floor and 1 G-floor displacement(s), and 2 head-of-line delay(s).'
+      : 'No lateness, H/G floor displacement, or head-of-line delay was modeled across 12 packets.',
+    total_packet_count: 12,
+    packet_count_inspected: 12,
+    packet_count_analyzed: 12,
+    packet_limit: 50_000,
+    work_limit_units: 3_000_000,
+    working_memory_limit_bytes: 67_108_864,
+    negative_slack_packet_count: hasModeledPressure ? 3 : 0,
+    h_floor_displaced_packet_count: hasModeledPressure ? 2 : 0,
+    max_h_floor_displacement_us: hasModeledPressure ? 24 : 0,
+    g_floor_displaced_packet_count: hasModeledPressure ? 1 : 0,
+    max_g_floor_displacement_us: hasModeledPressure ? 8 : 0,
+    head_of_line_packet_count: hasModeledPressure ? 2 : 0,
+    max_head_of_line_delay_us: hasModeledPressure ? 16 : 0,
+    effective_hold_floor_h_us: 17_467,
+    authored_release_gap_floor_g_us: 17_467,
+    physical_release_gap_floor_g_us: 16_667,
+    structural_same_key_cycle_minimum_us: 34_934,
+    assumptions: {
+      qpc_frequency_hz: 1_000_000,
+      estimated_sender_setup_us: 10,
+      estimated_per_input_us: 3,
+      estimated_post_send_us: 5,
+      estimated_metadata_cost_us: 1,
+    },
+    receiver_acknowledged: false,
+    dry_run_is_hypothetical: dryRun,
+  };
+}
 
 const MOCK_NATIVE: Bootstrap['native_build'] = {
   native_build_commit: 'mock-native-build',
@@ -117,6 +159,7 @@ function initialSettings(): Settings {
 }
 
 export interface MockBridgeOptions {
+  readyPlanAdvisoryStatus?: WholeStreamTimingAdvisoryDto['status'];
   playbackDurationMs?: number;
   startDelayMs?: number;
   startResponseDelayMs?: number;
@@ -192,6 +235,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   } | null = null;
   let playbackTimer: ReturnType<typeof setInterval> | null = null;
   const preparedConfigs = new Map<string, PlaybackConfig>();
+  const preparedVariantConfigs = new Map<string, Map<string, PlaybackConfig>>();
   const preparedSongIds = new Map<string, string>();
   let diagnosticsEnabled = false;
   let diagnosticsSeq = 0;
@@ -955,9 +999,24 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       const found = allRows().find((item) => item.song_id === request.songId);
       if (!found) throw new Error('song was not found');
       const risk = found.risk_level === 'low' ? 'low' : 'medium';
+      const proceedAdvisoryStatus =
+        risk === 'low' ? (options.readyPlanAdvisoryStatus ?? 'no_modeled_risk') : 'modeled_risk';
       const preparedId = `prepared-${++preparedPlaybackSequence}-${found.song_id}`;
       preparedConfigs.set(preparedId, request.config);
       preparedSongIds.set(preparedId, found.song_id);
+      const recommendedConfig: PlaybackConfig = {
+        ...request.config,
+        tempo_scale: request.config.tempo_scale * 0.9,
+      };
+      const dryRunConfig: PlaybackConfig = { ...request.config, dry_run: true };
+      preparedVariantConfigs.set(
+        preparedId,
+        new Map([
+          ['proceed', request.config],
+          ['use_recommended', recommendedConfig],
+          ['dry_run', dryRunConfig],
+        ]),
+      );
       return {
         prepared_id: preparedId,
         song: {
@@ -1012,6 +1071,11 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                   decision: 'proceed',
                   config: request.config,
                   plan_fingerprint: 'mock-plan',
+                  timing_advisory: mockTimingAdvisory(
+                    'mock-plan',
+                    proceedAdvisoryStatus,
+                    request.config.dry_run,
+                  ),
                 },
               ]
             : [
@@ -1019,16 +1083,27 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                   decision: 'proceed',
                   config: request.config,
                   plan_fingerprint: 'mock-plan',
+                  timing_advisory: mockTimingAdvisory(
+                    'mock-plan',
+                    'modeled_risk',
+                    request.config.dry_run,
+                  ),
                 },
                 {
                   decision: 'use_recommended',
-                  config: request.config,
+                  config: recommendedConfig,
                   plan_fingerprint: 'mock-recommended-plan',
+                  timing_advisory: mockTimingAdvisory(
+                    'mock-recommended-plan',
+                    'no_modeled_risk',
+                    request.config.dry_run,
+                  ),
                 },
                 {
                   decision: 'dry_run',
-                  config: { ...request.config, dry_run: true },
+                  config: dryRunConfig,
                   plan_fingerprint: 'mock-dry-run-plan',
+                  timing_advisory: mockTimingAdvisory('mock-dry-run-plan', 'modeled_risk', true),
                 },
               ],
         error_code: null,
@@ -1041,15 +1116,17 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         ...settings.playback_defaults,
         dry_run: false,
       };
-      const config = request.decisions.some((item) => item.decision === 'dry_run')
-        ? { ...baseConfig, dry_run: true }
-        : baseConfig;
+      const selectedDecision =
+        request.decisions.find((item) => item.accepted)?.decision ?? 'proceed';
+      const config =
+        preparedVariantConfigs.get(request.preparedId)?.get(selectedDecision) ?? baseConfig;
       const songId = preparedSongIds.get(request.preparedId);
       if (!songId) throw new Error('prepared playback is stale or already consumed');
       const song = allRows().find((item) => item.song_id === songId);
       if (!song) throw new Error('song was not found');
       preparedSongIds.delete(request.preparedId);
       preparedConfigs.delete(request.preparedId);
+      preparedVariantConfigs.delete(request.preparedId);
       if (options.startFailure) {
         throw new Error(`${options.startFailure.code}: ${options.startFailure.message}`);
       }

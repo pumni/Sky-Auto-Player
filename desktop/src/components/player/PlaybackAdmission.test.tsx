@@ -25,6 +25,62 @@ async function setupPlaying(emitSnapshots = true) {
 describe('PlaybackAdmission recovery actions', () => {
   afterEach(cleanup);
 
+  it('shows a fingerprint-matched advisory for every Prepare variant', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is empty');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+
+    const { container } = render(<PlaybackAdmission useStore={store} />);
+    expect(
+      screen.getByText(/informational and does not change authored timing/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Offline whole-stream timing advisory')).toHaveLength(3);
+    expect(
+      container.querySelector('[data-plan-fingerprint="mock-plan"]')?.getAttribute('data-status'),
+    ).toBe('modeled_risk');
+    expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
+      'Maximum displacement: H 24 µs · G 8 µs · HOL 16 µs',
+    );
+    expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
+      'Bounds: 50000 packets, 3000000 key-mask visits, and an estimated 64 MiB working set.',
+    );
+    expect(
+      container
+        .querySelector('[data-plan-fingerprint="mock-recommended-plan"]')
+        ?.getAttribute('data-status'),
+    ).toBe('no_modeled_risk');
+    expect(
+      container.querySelector('[data-plan-fingerprint="mock-dry-run-plan"]')?.textContent,
+    ).toContain('hypothetical for this dry-run');
+    expect(screen.getAllByText(/Sky does not acknowledge these estimates/)).toHaveLength(3);
+  });
+
+  it('shows ready-plan modeled pressure without disabling playback', async () => {
+    const store = createDesktopStore(createMockBridge({ readyPlanAdvisoryStatus: 'modeled_risk' }));
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 1);
+    if (!row) throw new Error('mock Library is empty');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+
+    expect(store.getState().playback.prepared?.admission).toBe('ready');
+    render(
+      <>
+        <PlayerTransport useStore={store} />
+        <PlaybackAdmission useStore={store} />
+      </>,
+    );
+    expect(
+      screen
+        .getByLabelText('Prepared playback timing advisory')
+        .querySelector('[data-plan-fingerprint="mock-plan"]'),
+    ).toHaveAttribute('data-status', 'modeled_risk');
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+  });
+
   it('reconciles a recoverable status issue and restores the normal Pause control', async () => {
     const { store } = await setupPlaying();
     act(() =>

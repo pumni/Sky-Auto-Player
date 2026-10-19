@@ -21,6 +21,7 @@ Historical plans, audit reports, issue text, and obsolete work orders do not ove
 - [final-down-admission-qualification.md](final-down-admission-qualification.md) — #483 shared final Down admission boundary, deterministic differential tests, Windows floor-oracle evidence, and native-run ledger.
 - [timing-principles.md](timing-principles.md) — Timing semantics, targets, measurement domains, and fail-closed behavior.
 - [rt-dispatch-timing-evidence.md](rt-dispatch-timing-evidence.md) — Timestamp provenance, production timing observations, offline risk model, and Windows A/B qualification plan.
+- [prepare-whole-stream-timing-advisory.md](prepare-whole-stream-timing-advisory.md) — Bounded Prepare-time whole-stream estimate, assumptions, variant identity, UI status, and limitations.
 - [dispatch-forensics-cost-qualification.md](dispatch-forensics-cost-qualification.md) — #476 ownership/cost audit, retained-design rationale, release component measurements, offline model, and Windows receive-only qualification.
 - [hold-frame-model.md](hold-frame-model.md) — User-selected FPS and authored hold materialization.
 - [tuning-presets.md](tuning-presets.md) — Native settings, playback preferences, and runtime tuning boundaries.
