@@ -60,10 +60,44 @@ After this correction, the focused dispatch test command passed with 43 passed,
 1 ignored, and 414 filtered out. The prepared/strict differential fault-matrix
 test passed with 1 passed and 457 filtered out. The native reports above were
 produced by code commit `904bbdfcdb8f4552122c0257cafc57e7f9cf92b6`; the
-correction changes only rejection-result mapping after authority has rejected
-the Down. In accordance with the updated foreground qualification direction,
-no further physical sessions were started for this error-path-only correction.
-No timing improvement is claimed.
+dispatch correction changes only rejection-result mapping after authority has
+rejected the Down. The later pre-Armed Panic case applies only when no input
+could have been emitted, no release result exists, and the tracked obligation
+mask is zero. Neither change affects an admitted Down. In accordance with the
+updated foreground qualification direction, no further physical sessions
+were started for these changes. No timing improvement is claimed.
+
+## Desktop lifecycle test scheduling
+
+The full `cargo xtask check all` gate at code commit
+`a7195b4af2c0d7d93a5feaf4bcaadda98465d83e` passed the static audit, Rust
+workspace, Bun checks, and end-to-end tests, then failed in the Tauri test
+group. Its first failure named
+`failed_critical_channel_delivery_requests_tracked_terminal_cleanup` and
+`physical_startup_target_failure_retires_without_reentrant_active_lock`.
+Repeated parallel runs exposed different deadline-sensitive lifecycle tests.
+The most recent default-parallel package
+run failed `blocked_ui_publication_past_lease_keeps_supervision_live_and_shutdown_releases`
+with 8 accepted renewals instead of 100; its exact isolated run passed. A run
+with four test threads failed the second-session startup checkpoint in
+`native_worker_cleanup_barrier_keeps_session_exclusive_until_join_and_release`.
+These checks use timing-sensitive mock workers and interfere with one another
+under parallel test scheduling on this 12-logical-processor host.
+
+The test setup now arms the blocked-UI worker only after its monitor is ready,
+uses an Armed checkpoint for lease-expiry projection, waits for asynchronous
+startup retirement, and gives mock worker checkpoints a larger bounded wait.
+The 100-renewal assertion remains unchanged. A startup race also showed that
+Panic can cancel a physical worker before Armed; when no release result exists
+and the tracked obligation mask is zero, the no-input startup case now records
+no release obligation. An Armed worker still requires normal verified release
+evidence. The new pre-Armed Panic regression covers both outcomes.
+
+The complete Tauri library test suite passed with
+`RUST_TEST_THREADS=1`: 271 passed. The final full repository gate uses the same
+test-thread setting to keep deadline-based fault tests deterministic; this is
+test-runner scheduling only and does not alter production worker scheduling or
+physical input behavior.
 
 ## Windows native evidence
 
