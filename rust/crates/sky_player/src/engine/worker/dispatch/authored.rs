@@ -470,25 +470,13 @@ fn finalize_authored_down_admission(
         });
         if target_verdict != FinalDownVerdict::Allowed {
             apply_final_down_rejection(target_verdict, runtime, local_metrics);
-            match target_verdict {
-                FinalDownVerdict::FocusLost => {
-                    handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)?;
-                    return Ok(AdmissionOutcome::FocusLost);
-                }
-                FinalDownVerdict::TargetChanged => {
-                    return Ok(AdmissionOutcome::TargetChanged);
-                }
-                FinalDownVerdict::OwnerRejected(failure) => {
-                    return Err(DispatchStep::TerminateStatic(owner_rejection_reason(
-                        failure, false,
-                    )));
-                }
-                _ => {
-                    return Err(DispatchStep::TerminateStatic(
-                        "invalid final target admission verdict",
-                    ));
-                }
-            }
+            return authored_target_rejection_outcome(
+                target_verdict,
+                qpc_clock,
+                clock_state,
+                runtime,
+                progress_clock,
+            );
         }
     }
     if !final_atomic_revalidation(control_signals, runtime, local_metrics) {
@@ -545,33 +533,13 @@ fn finalize_authored_down_admission(
         .map_err(|_| DispatchStep::TerminateStatic("authored_down_qpc_failure"))?;
         if verdict != FinalDownVerdict::Allowed {
             apply_final_down_rejection(verdict, runtime, local_metrics);
-            match verdict {
-                FinalDownVerdict::ControlRejected => {
-                    return Ok(AdmissionOutcome::ControlRejected);
-                }
-                FinalDownVerdict::FocusLost => {
-                    handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)?;
-                    return Ok(AdmissionOutcome::FocusLost);
-                }
-                FinalDownVerdict::TargetChanged => {
-                    return Ok(AdmissionOutcome::TargetChanged);
-                }
-                FinalDownVerdict::OwnerRejected(_) => {
-                    return Err(DispatchStep::TerminateStatic(
-                        "authored_down_owner_changed_after_modifier_guard",
-                    ));
-                }
-                FinalDownVerdict::ModifierHeld(mask) => {
-                    return Err(modifier_guard_rejection_step(mask));
-                }
-                FinalDownVerdict::LeaseExpired => {
-                    return Err(DispatchStep::TerminateStatic("supervisor_lease_expired"));
-                }
-                FinalDownVerdict::LeaseUnproven => {
-                    return Err(DispatchStep::TerminateStatic("supervisor_lease_unproven"));
-                }
-                FinalDownVerdict::Allowed => {}
-            }
+            return authored_post_modifier_rejection_outcome(
+                verdict,
+                qpc_clock,
+                clock_state,
+                runtime,
+                progress_clock,
+            );
         }
     }
     #[cfg(any(test, feature = "test-support"))]
@@ -591,6 +559,63 @@ fn finalize_authored_down_admission(
         target_crossing_qpc,
         final_policy_qpc,
     })
+}
+
+#[cold]
+fn authored_target_rejection_outcome(
+    verdict: FinalDownVerdict,
+    qpc_clock: QpcClock,
+    clock_state: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    progress_clock: &SharedProgressClock,
+) -> Result<AdmissionOutcome, DispatchStep> {
+    match verdict {
+        FinalDownVerdict::FocusLost => {
+            handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)
+                .map(|()| AdmissionOutcome::FocusLost)
+        }
+        FinalDownVerdict::TargetChanged => Ok(AdmissionOutcome::TargetChanged),
+        FinalDownVerdict::OwnerRejected(failure) => Err(DispatchStep::TerminateStatic(
+            owner_rejection_reason(failure, false),
+        )),
+        FinalDownVerdict::Allowed => Err(DispatchStep::TerminateStatic(
+            "invalid final target admission verdict",
+        )),
+        _ => Err(DispatchStep::TerminateStatic(
+            "invalid final target admission verdict",
+        )),
+    }
+}
+
+#[cold]
+fn authored_post_modifier_rejection_outcome(
+    verdict: FinalDownVerdict,
+    qpc_clock: QpcClock,
+    clock_state: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    progress_clock: &SharedProgressClock,
+) -> Result<AdmissionOutcome, DispatchStep> {
+    match verdict {
+        FinalDownVerdict::ControlRejected => Ok(AdmissionOutcome::ControlRejected),
+        FinalDownVerdict::FocusLost => {
+            handle_final_focus_loss(qpc_clock, clock_state, runtime, progress_clock)
+                .map(|()| AdmissionOutcome::FocusLost)
+        }
+        FinalDownVerdict::TargetChanged => Ok(AdmissionOutcome::TargetChanged),
+        FinalDownVerdict::OwnerRejected(_) => Err(DispatchStep::TerminateStatic(
+            "authored_down_owner_changed_after_modifier_guard",
+        )),
+        FinalDownVerdict::ModifierHeld(mask) => Err(modifier_guard_rejection_step(mask)),
+        FinalDownVerdict::LeaseExpired => {
+            Err(DispatchStep::TerminateStatic("supervisor_lease_expired"))
+        }
+        FinalDownVerdict::LeaseUnproven => {
+            Err(DispatchStep::TerminateStatic("supervisor_lease_unproven"))
+        }
+        FinalDownVerdict::Allowed => Err(DispatchStep::TerminateStatic(
+            "invalid post-modifier admission verdict",
+        )),
+    }
 }
 
 fn final_atomic_revalidation(

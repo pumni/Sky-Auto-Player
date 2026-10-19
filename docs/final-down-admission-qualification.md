@@ -45,6 +45,26 @@ owner changes, retained process identity failures, modifier state before and
 after its checkpoint, expired or unproven lease, QPC lease-read failure, and
 Stop, Skip, Panic, Pause, or Suspend arriving after lease observation.
 
+## Static audit correction
+
+The first `cargo xtask check all` attempt at documentation commit
+`783ec77810fd76dc594ae177fcbbf7503c1b21fe` stopped in the static architecture
+audit. It found `finalize_authored_down_admission` at 207 lines, over the
+180-line dispatch-function limit; later verification groups did not run in
+that attempt. The verdict-to-outcome mappings now live in two `#[cold]`
+rejection-only helpers, reducing that function to 177 lines. Calls to those
+helpers occur only after a non-Allowed verdict, so the accepted Down path keeps
+the same checks, order, QPC samples, and dispatch boundary.
+
+After this correction, the focused dispatch test command passed with 43 passed,
+1 ignored, and 414 filtered out. The prepared/strict differential fault-matrix
+test passed with 1 passed and 457 filtered out. The native reports above were
+produced by code commit `904bbdfcdb8f4552122c0257cafc57e7f9cf92b6`; the
+correction changes only rejection-result mapping after authority has rejected
+the Down. In accordance with the updated foreground qualification direction,
+no further physical sessions were started for this error-path-only correction.
+No timing improvement is claimed.
+
 ## Windows native evidence
 
 The native receive-only sink was run on Windows 11 Pro build 26300 with an AMD
