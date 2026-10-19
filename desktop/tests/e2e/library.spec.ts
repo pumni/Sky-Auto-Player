@@ -211,10 +211,15 @@ test('mock desktop vertical slice can search and inspect a song', async ({ page 
   const search = page.getByLabel('Search library');
   await search.focus();
   await search.fill('Moonlit');
-  await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toHaveCount(0);
+  const moonlitRow = page.getByRole('row', { name: /Moonlit Village/ });
+  await expect(moonlitRow).toBeVisible();
   await expect(search).toBeFocused();
-  await page.getByRole('row', { name: /Moonlit Village/ }).click();
+  await moonlitRow.locator('.track-title-text').click();
+  await expect(page.getByRole('grid', { name: 'Songs' })).toBeFocused();
+  await expect(moonlitRow).toHaveAttribute('aria-selected', 'true');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
+  await expect(moonlitRow).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByText('Low timing risk')).toBeVisible();
 });
 
@@ -224,7 +229,7 @@ test('search clears browser selection while Now Playing remains on the active so
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const playingRow = page.getByRole('row', { name: /Blue Bird/ });
-  await playingRow.click();
+  await playingRow.locator('.track-title-text').click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
@@ -244,7 +249,7 @@ test('search clears browser selection while Now Playing remains on the active so
   await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
 
-  await browsedRow.click();
+  await browsedRow.locator('.track-title-text').click();
   await expect(browsedRow).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('heading', { name: 'Moonlit Village' })).toBeVisible();
   await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
@@ -264,7 +269,7 @@ test('row selection returns focus to the grid and Like and menu actions stay iso
 
   const row = page.getByRole('row', { name: /Aurora Landing/ });
   const grid = page.getByRole('grid', { name: 'Songs' });
-  await row.click();
+  await row.locator('.track-title-text').click();
   await expect(row).toHaveAttribute('aria-selected', 'true');
   await expect(grid).toBeFocused();
   await page.keyboard.press('ArrowDown');

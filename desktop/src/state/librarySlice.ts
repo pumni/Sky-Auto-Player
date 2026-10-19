@@ -248,7 +248,6 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       if (get().bootstrapState !== 'ready' || get().library.error !== null) return;
       for (let attempt = 0; attempt < MAX_CATALOG_RECONCILIATION_ATTEMPTS; attempt += 1) {
         const requestedGeneration = get().library.generation;
-        invalidateSourceCache(get().library.searchSource);
         await get().search();
         const afterSearch = get().library;
         if (afterSearch.error !== null) return;
@@ -285,9 +284,16 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         sourceKey(current.searchSource) !== sourceKey(nextSearchSource);
       const nextSearchKey = cacheKey(nextSearchSource, nextQuery, current.generation);
       const cachedFirstPage = pageCache.get(nextSearchKey)?.get(0);
-      if (!scopeChanged && cachedFirstPage && !current.error) return;
+      const firstPageRequestKey = `${nextSearchKey}\u0000${0}`;
+      if (
+        !scopeChanged &&
+        !current.error &&
+        (cachedFirstPage || pageRequests.has(firstPageRequestKey))
+      ) {
+        return;
+      }
 
-      const clearBrowserSelection = scopeChanged || current.selectedSongId !== null;
+      const clearBrowserSelection = scopeChanged;
       if (clearBrowserSelection) context.nextDetailRequestToken();
       const token = current.searchRequestGeneration + 1;
       set({
@@ -308,10 +314,13 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       });
       try {
         const result = await loadPage(nextQuery, nextSearchSource, 0, current.generation, token);
-        if (get().library.searchRequestGeneration !== token) return;
+        const latest = get().library;
+        if (latest.searchRequestGeneration !== token) return;
+        const generationChanged = latest.generation !== result.generation;
+        if (generationChanged) context.nextDetailRequestToken();
         set({
           library: {
-            ...get().library,
+            ...latest,
             catalogTotal:
               nextSearchSource.kind === 'smart' &&
               nextSearchSource.id === 'all' &&
@@ -321,9 +330,11 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
             likedTotal: result.liked_total,
             resultTotal: result.total,
             generation: result.generation,
+            selectedSongId: generationChanged ? null : latest.selectedSongId,
             loading: false,
             error: null,
           },
+          ...(generationChanged ? { details: { bySongId: new Map() } } : {}),
         });
       } catch (error) {
         if (get().library.searchRequestGeneration !== token) return;
