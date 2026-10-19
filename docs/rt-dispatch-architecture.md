@@ -456,6 +456,18 @@ snapshot read guard or dispatch lock is held during `Channel::send`, so the
 blocking focus/manual-pause metrics write remains independent of subscriber
 time.
 
+The per-session snapshot handoff and app-scoped event queue count coalesced
+and dropped best-effort snapshots separately from critical lifecycle failure.
+At session retirement, the presentation worker reports its counters and the
+current app-queue counters in a one-line `playback_presentation_snapshots`
+diagnostic. App-queue totals are reported again as
+`native_event_snapshots` when the event hub closes. Operators can capture
+these lines by launching the desktop process with stderr attached; this does
+not add fields to the `UiEvent` wire contract or run on the safety monitor or
+physical sender. A coalesced or dropped snapshot does not imply lifecycle
+delivery failure. Confirmed failure of the shared lifecycle channel remains
+fail-closed.
+
 Shutdown requests worker cleanup before closing the event queue. Closing
 rejects new events and discards queued events; an already in-flight channel
 call may finish, but no later queued event is published after close. Shutdown
