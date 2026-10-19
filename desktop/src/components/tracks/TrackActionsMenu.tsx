@@ -1,5 +1,5 @@
 import { ListPlus, MoreHorizontal, MinusCircle } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Button, Menu, MenuItem, MenuTrigger, Popover } from 'react-aria-components';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
@@ -10,6 +10,7 @@ interface TrackActionsMenuProps {
 }
 
 export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [playlistIds, setPlaylistIds] = useState<string[]>([]);
   const playlistAddMode = useStore((store) => store.library.playlistAddMode);
@@ -17,10 +18,27 @@ export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
     setOpen(nextOpen);
     if (nextOpen) setPlaylistIds([...useStore.getState().libraryNavigation.playlistOrder]);
   };
+  const restoreGridFocusIfTriggerWasRemoved = () => {
+    window.requestAnimationFrame(() => {
+      if (triggerRef.current?.isConnected) return;
+      const activeElement = document.activeElement;
+      if (
+        activeElement instanceof HTMLElement &&
+        activeElement !== document.body &&
+        activeElement.isConnected
+      ) {
+        return;
+      }
+      document
+        .querySelector<HTMLElement>('[role="grid"][aria-label="Songs"]')
+        ?.focus({ preventScroll: true });
+    });
+  };
 
   return (
     <MenuTrigger isOpen={open} onOpenChange={onOpenChange}>
       <Button
+        ref={triggerRef}
         className="icon-button track-actions-button"
         aria-label={`More actions for ${row.title}`}
         title={`More actions for ${row.title}`}
@@ -39,6 +57,7 @@ export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
             ) {
               void state
                 .removeSongFromPlaylist(state.library.source.id, row.song_id)
+                .then(restoreGridFocusIfTriggerWasRemoved)
                 .catch(() => undefined);
               return;
             }

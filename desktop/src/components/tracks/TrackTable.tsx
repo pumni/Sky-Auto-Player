@@ -69,15 +69,21 @@ export function TrackTable({ useStore }: TrackTableProps) {
   }, [first, last, setViewport]);
 
   useEffect(() => {
-    let previousScopeKey = libraryScopeKey(useStore.getState().library);
+    const previousLibrary = useStore.getState().library;
+    let previousScopeKey = libraryScopeKey(previousLibrary);
+    let previousSearchRequestGeneration = previousLibrary.searchRequestGeneration;
     return useStore.subscribe((state) => {
       const nextScopeKey = libraryScopeKey(state.library);
-      if (nextScopeKey === previousScopeKey) return;
+      const scopeChanged = nextScopeKey !== previousScopeKey;
+      const searchRequestChanged =
+        state.library.searchRequestGeneration !== previousSearchRequestGeneration;
+      if (!scopeChanged && !searchRequestChanged) return;
       previousScopeKey = nextScopeKey;
+      previousSearchRequestGeneration = state.library.searchRequestGeneration;
       keyboardNavigationId.current += 1;
       pendingKeyboardNavigation.current = null;
       setKeyboardIndex(null);
-      if (parentRef.current) parentRef.current.scrollTop = 0;
+      if (scopeChanged && parentRef.current) parentRef.current.scrollTop = 0;
     });
   }, [useStore]);
 
@@ -173,7 +179,18 @@ export function TrackTable({ useStore }: TrackTableProps) {
     const selectedIndex = state.library.selectedSongId
       ? (state.library.indexById.get(state.library.selectedSongId) ?? -1)
       : -1;
-    const currentIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    const pendingNavigation = pendingKeyboardNavigation.current;
+    const pendingMatchesCurrentResults =
+      pendingNavigation !== null &&
+      pendingNavigation.searchRequestGeneration === state.library.searchRequestGeneration &&
+      pendingNavigation.scopeKey === libraryScopeKey(state.library);
+    if (pendingNavigation && !pendingMatchesCurrentResults) {
+      pendingKeyboardNavigation.current = null;
+    }
+    const activeIndex = pendingMatchesCurrentResults
+      ? (pendingNavigation?.index ?? -1)
+      : selectedIndex;
+    const currentIndex = activeIndex >= 0 ? activeIndex : 0;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       moveActive(currentIndex + 1);
@@ -188,7 +205,7 @@ export function TrackTable({ useStore }: TrackTableProps) {
       moveActive(resultTotal - 1);
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      moveActive(selectedIndex < 0 ? 0 : selectedIndex);
+      moveActive(activeIndex < 0 ? 0 : activeIndex);
     }
   };
 

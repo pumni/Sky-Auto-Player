@@ -285,6 +285,8 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
       const nextSearchKey = cacheKey(nextSearchSource, nextQuery, current.generation);
       const cachedFirstPage = pageCache.get(nextSearchKey)?.get(0);
       const firstPageRequestKey = `${nextSearchKey}\u0000${0}`;
+      // Same-generation reconciliation may reuse the authoritative first page. A
+      // catalog reload publishes a newer generation, so its cache key necessarily misses.
       if (
         !scopeChanged &&
         !current.error &&

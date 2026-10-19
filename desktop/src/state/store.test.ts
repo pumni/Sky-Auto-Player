@@ -371,6 +371,40 @@ describe('desktop store', () => {
     expect(rowAt(store, 0)?.title).toBe('Moonlit Village');
   });
 
+  it('reuses same-generation search cache and refetches during reload reconciliation', async () => {
+    const bridge = createMockBridge();
+    const originalSearch = bridge.searchSongs;
+    const searchRequests: SearchRequest[] = [];
+    bridge.searchSongs = async (request) => {
+      searchRequests.push(request);
+      return originalSearch(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const selected = rowAt(store, 0);
+    if (!selected) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(selected.song_id));
+    const initialRequestCount = searchRequests.length;
+
+    await act(async () => store.getState().search(''));
+
+    expect(searchRequests).toHaveLength(initialRequestCount);
+    expect(store.getState().library.selectedSongId).toBe(selected.song_id);
+    expect(selectSelectedDetail(store.getState()).value?.song_id).toBe(selected.song_id);
+
+    await act(async () => store.getState().reloadLibrary());
+    await waitFor(() => {
+      expect(store.getState().library.generation).toBe(2);
+      expect(store.getState().library.loading).toBe(false);
+      expect(store.getState().library.pages.get(0)?.length).toBeGreaterThan(0);
+    });
+
+    expect(searchRequests).toHaveLength(initialRequestCount + 1);
+    expect(searchRequests.at(-1)?.generation).toBe(2);
+    expect(store.getState().library.selectedSongId).toBeNull();
+    expect(selectSelectedDetail(store.getState()).value).toBeNull();
+  });
+
   it('clears browser selection when its source or playlist-add scope changes', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());

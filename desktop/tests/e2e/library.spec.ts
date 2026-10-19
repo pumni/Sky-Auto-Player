@@ -496,14 +496,23 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await expect(page.getByRole('row', { name: /Local Song B/ })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Practice', exact: true }).click();
-  await page
-    .getByRole('row', { name: /Aurora Landing/ })
+  const selectedPlaylistRow = page.getByRole('row', { name: /Aurora Landing/ });
+  const songsGrid = page.getByRole('grid', { name: 'Songs' });
+  await selectedPlaylistRow.click();
+  await expect(selectedPlaylistRow).toHaveAttribute('aria-selected', 'true');
+  await selectedPlaylistRow
     .getByRole('button', {
       name: 'More actions for Aurora Landing',
     })
     .click();
   await page.getByRole('menuitem', { name: 'Remove from playlist' }).click();
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toHaveCount(0);
+  await expect(songsGrid).toBeFocused();
+  await expect(songsGrid).not.toHaveAttribute('aria-activedescendant');
+  await expect(songsGrid.locator('[aria-selected="true"]')).toHaveCount(0);
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await expect(player.getByText('No song selected')).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeDisabled();
 
   await page.getByRole('button', { name: 'More actions for Practice' }).click();
   await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
