@@ -173,12 +173,13 @@ export function TrackTable({ useStore }: TrackTableProps) {
     const selectedIndex = state.library.selectedSongId
       ? (state.library.indexById.get(state.library.selectedSongId) ?? -1)
       : -1;
+    const currentIndex = selectedIndex >= 0 ? selectedIndex : 0;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      moveActive(selectedIndex < 0 ? 0 : selectedIndex + 1);
+      moveActive(currentIndex + 1);
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
-      moveActive(selectedIndex < 0 ? resultTotal - 1 : selectedIndex - 1);
+      moveActive(currentIndex - 1);
     } else if (event.key === 'Home') {
       event.preventDefault();
       moveActive(0);
