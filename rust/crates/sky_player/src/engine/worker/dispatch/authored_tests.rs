@@ -60,7 +60,24 @@ fn healthy_down_terminal_path_does_not_convert_ticks_to_microseconds() {
 
 #[test]
 fn final_gate_precedes_the_authoritative_pre_call_boundary() {
-    let source = include_str!("authored.rs");
+    assert_final_gate_source_order(include_str!("authored.rs"));
+}
+
+#[test]
+fn final_gate_source_order_accepts_lf_and_crlf_fixtures() {
+    let lf_source = include_str!("authored.rs").replace("\r\n", "\n");
+    let crlf_source = lf_source.replace('\n', "\r\n");
+    let old_line_ending_sensitive_match = "lease_timeout_ticks,\n            qpc_clock";
+
+    assert!(lf_source.contains(old_line_ending_sensitive_match));
+    assert!(!crlf_source.contains(old_line_ending_sensitive_match));
+    assert_final_gate_source_order(&lf_source);
+    assert_final_gate_source_order(&crlf_source);
+}
+
+fn assert_final_gate_source_order(source: &str) {
+    let normalized_source = source.replace("\r\n", "\n");
+    let source = normalized_source.as_str();
     let finalizer = source
         .split("fn finalize_authored_down_admission")
         .nth(1)
@@ -99,7 +116,11 @@ fn final_gate_precedes_the_authoritative_pre_call_boundary() {
     assert!(!finalizer_body.contains("focus_matches_hwnd"));
     assert!(!finalizer_body.contains("prove_down_age"));
     assert!(finalizer_body.contains("lease_timeout_ticks"));
-    assert!(finalizer_body.contains("lease_timeout_ticks,\n            qpc_clock"));
+    let compact_finalizer_body: String = finalizer_body
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(compact_finalizer_body.contains("lease_timeout_ticks,qpc_clock"));
     assert!(!finalizer_body.contains("supervisor_heartbeat_ticks"));
 
     let admission = include_str!("../admission.rs");
