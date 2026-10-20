@@ -60,7 +60,7 @@ import type {
   UpdateSnapshotPayload,
 } from './generated';
 
-export type PaletteId = 'aurora' | 'minimalist' | 'slate' | 'cyberpunk' | 'classic';
+export type PaletteId = 'graphite' | 'aurora' | 'minimalist' | 'slate' | 'cyberpunk' | 'classic';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
 export type NativeBuild = NativeBuildDto;
 export type PlaybackDefaults = PlaybackDefaultsDto;

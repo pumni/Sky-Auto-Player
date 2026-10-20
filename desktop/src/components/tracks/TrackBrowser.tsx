@@ -100,11 +100,15 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
                 ? `${formatSongCount(resultTotal)} in All Songs`
                 : formatSongCount(resultTotal)}
           </span>
-          {source.kind === 'smart' && source.id === 'all' && !isPlaylistAddMode && (
-            <span className="track-browser-guidance">
-              Create a playlist to collect songs or import local sheets.
-            </span>
-          )}
+          {source.kind === 'smart' &&
+            source.id === 'all' &&
+            !isPlaylistAddMode &&
+            !loading &&
+            resultTotal === 0 && (
+              <span className="track-browser-guidance">
+                Create a playlist to collect songs or import local sheets.
+              </span>
+            )}
         </div>
         {isPlaylist && !isPlaylistAddMode && (
           <div className="playlist-actions">

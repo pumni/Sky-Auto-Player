@@ -78,7 +78,11 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
               Dry run
             </span>
           )}
-          <span className="muted">{trackSubtitle}</span>
+          <span
+            className={`muted player-track-status${active ? ' is-active' : ''}${sessionStatusConcern !== null ? ' is-attention' : ''}`}
+          >
+            {trackSubtitle}
+          </span>
         </div>
       </div>
       {likeSongId && (currentSong || fallbackIdentity) && (

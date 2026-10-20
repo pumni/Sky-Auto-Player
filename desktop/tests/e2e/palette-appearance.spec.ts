@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-const palettes = ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
+const palettes = ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
 type Palette = (typeof palettes)[number];
 
 const auroraTokenNames = [
@@ -25,6 +25,18 @@ const auroraTokenNames = [
 ] as const;
 
 const expected = {
+  graphite: {
+    controlBorder: '#7d8591',
+    selectionBg: '#272632',
+    accent: '#7663b8',
+    accentHover: '#705aaa',
+    borderStrong: '#394049',
+    canvas: '#121416',
+    surfaceRaised: '#25292f',
+    onAccent: '#ffffff',
+    focusRing: '#a99af7',
+    onDanger: '#ffffff',
+  },
   aurora: {
     controlBorder: '#617390',
     selectionBg: '#152132',
@@ -324,26 +336,31 @@ test('all palette tokens and contrast gates match the locked contract', async ({
   await selectPalette(page, 'aurora');
 });
 
-test('Graphite preview tokens meet contrast targets without joining saved palette choices', async ({
+test('Graphite is the new-install palette and persists through the appearance settings surface', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /Open update/ })).toBeVisible();
-  await expect.poll(() => page.locator('html').getAttribute('data-palette')).toBe('aurora');
+  await expect.poll(() => page.locator('html').getAttribute('data-palette')).toBe('graphite');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
   const palette = settings.getByLabel('Color palette');
-  await expect(palette).toHaveValue('aurora');
-  await expect(palette.locator('option')).toHaveCount(5);
-  await expect(palette.locator('option[value="graphite"]')).toHaveCount(0);
+  await expect(palette).toHaveValue('graphite');
+  await expect(palette.locator('option')).toHaveCount(6);
+  await expect(palette.locator('option[value="graphite"]')).toHaveCount(1);
+  await palette.selectOption('slate');
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'slate');
+  await palette.selectOption('graphite');
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
   await settings.getByRole('button', { name: 'Close settings' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-palette', 'aurora');
-
-  await page.locator('html').evaluate((root) => root.setAttribute('data-palette', 'graphite'));
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+  await expect(page.getByLabel('Color palette')).toHaveValue('graphite');
+  await page.getByRole('button', { name: 'Close settings' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
 
   const graphiteTokens = {
@@ -619,7 +636,7 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
-  await selectPalette(page, 'cyberpunk');
+  await selectPalette(page, 'graphite');
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
   await expect
     .poll(() => page.evaluate(() => window.matchMedia('(forced-colors: active)').matches))

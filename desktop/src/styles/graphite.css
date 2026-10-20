@@ -1,0 +1,554 @@
+html[data-palette='graphite'] {
+  --radius-region: 0px;
+  --radius-panel: 8px;
+  --radius-dialog: 10px;
+}
+
+/* Keep the three workbench areas on one quiet surface, divided by fine rules. */
+html[data-palette='graphite'] .workbench-pane {
+  border: 0;
+  border-radius: 0;
+  background: var(--surface-panel);
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane,
+html[data-palette='graphite'] .track-browser-workbench-pane {
+  box-shadow: inset -1px 0 var(--border-subtle);
+}
+
+html[data-palette='graphite'] .utility-workbench-pane {
+  background: var(--surface-secondary);
+}
+
+html[data-palette='graphite'] .utility-workbench-pane.is-overlay {
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-secondary);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 34%);
+}
+
+/* Text and controls use the same hierarchy throughout the workbench. */
+html[data-palette='graphite'] .library-navigator h2 {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+html[data-palette='graphite'] .library-nav-item {
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .library-nav-item-count,
+html[data-palette='graphite'] .track-browser-count,
+html[data-palette='graphite'] .track-cell-index,
+html[data-palette='graphite'] .track-cell-notes,
+html[data-palette='graphite'] .track-cell-duration {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .library-section-heading {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+html[data-palette='graphite'] .library-empty-playlists p {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .library-empty-playlists-create {
+  min-height: 34px;
+  border-color: var(--control-border);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .library-nav-action-row,
+html[data-palette='graphite'] .library-nav-item,
+html[data-palette='graphite'] .settings-nav-item,
+html[data-palette='graphite'] .library-menu-item,
+html[data-palette='graphite'] .track-row,
+html[data-palette='graphite'] .utility-view-tabs [role='tab'],
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'] {
+  transition: none;
+}
+
+html[data-palette='graphite'] .library-nav-action-row:hover,
+html[data-palette='graphite'] .library-nav-item:hover,
+html[data-palette='graphite'] .library-more-button:hover,
+html[data-palette='graphite'] .library-more-button:focus-visible,
+html[data-palette='graphite'] .library-menu-item:hover,
+html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+html[data-palette='graphite'] .track-browser-header h1 {
+  color: var(--text-primary);
+  font-size: var(--type-page-heading);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+html[data-palette='graphite'] .track-browser-guidance {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .track-table-frame {
+  margin-inline: 0;
+}
+
+html[data-palette='graphite'] .track-table-header {
+  height: 36px;
+  border-bottom-color: var(--border-strong);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+html[data-palette='graphite'] .track-row {
+  border-radius: 2px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .track-row:hover {
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite'] .track-row.is-selected {
+  border-left-color: var(--selection-indicator);
+  color: var(--text-primary);
+  background: var(--selection-bg);
+}
+
+html[data-palette='graphite'] .track-row.is-playing:not(.is-selected) {
+  border-left-color: var(--border-strong);
+  color: var(--text-primary);
+  background: var(--surface-secondary);
+}
+
+html[data-palette='graphite'] .track-row.is-playing .track-cell-index {
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .track-cell-notes,
+html[data-palette='graphite'] .track-cell-duration {
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .track-metadata-status.is-error,
+html[data-palette='graphite'] .library-inline-error {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .track-actions-button,
+html[data-palette='graphite'] .track-like-button {
+  min-width: 30px;
+  min-height: 30px;
+}
+
+/* The Inspector reads as a pane; section rules carry structure without nested cards. */
+html[data-palette='graphite'] .utility-surface {
+  background: var(--surface-secondary);
+}
+
+html[data-palette='graphite'] .utility-header {
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 14px 14px 0;
+}
+
+html[data-palette='graphite'] .utility-header h2 {
+  color: var(--text-primary);
+  font-size: 16px;
+}
+
+html[data-palette='graphite'] .utility-view-tabs [role='tab'],
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'] {
+  min-height: 34px;
+  padding-inline: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .utility-view-tabs [role='tab'][aria-selected='true'],
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'][aria-selected='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+}
+
+html[data-palette='graphite'] .song-details-view > *,
+html[data-palette='graphite'] .diagnostics-view > * {
+  margin-inline: 14px;
+}
+
+html[data-palette='graphite'] .song-details-heading {
+  padding-bottom: 12px;
+}
+
+html[data-palette='graphite'] .song-details-context,
+html[data-palette='graphite'] .utility-section-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.07em;
+}
+
+html[data-palette='graphite'] .song-details-heading h3 {
+  margin-top: 4px;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+html[data-palette='graphite'] .song-details-heading .muted {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .utility-risk-summary {
+  margin-top: 12px;
+  padding-block: 8px;
+  border-left-width: 2px;
+  background: transparent;
+}
+
+html[data-palette='graphite'] .utility-risk-summary strong,
+html[data-palette='graphite'] .utility-risk-level {
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .utility-section {
+  margin-top: 14px;
+  padding-bottom: 14px;
+}
+
+html[data-palette='graphite'] .utility-section h4 {
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .utility-section p,
+html[data-palette='graphite'] .utility-section li,
+html[data-palette='graphite'] .utility-note {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+html[data-palette='graphite'] .recommendation-grid dt {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .recommendation-grid dd {
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .diagnostics-view > .diagnostics-tabs {
+  margin-inline: 14px;
+}
+
+html[data-palette='graphite'] .diagnostics-playback-summary strong {
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .diagnostics-playback-summary span,
+html[data-palette='graphite'] .diagnostics-sender-summary span,
+html[data-palette='graphite'] .diagnostics-metric span,
+html[data-palette='graphite'] .diagnostics-status,
+html[data-palette='graphite'] .diagnostics-plot figcaption {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .diagnostics-sender-summary {
+  border-left-width: 2px;
+}
+
+html[data-palette='graphite'] .diagnostics-sender-summary strong,
+html[data-palette='graphite'] .diagnostics-metric strong {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .diagnostics-metric-group h4 {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .diagnostics-lines li {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .diagnostics-lines strong {
+  font-size: 11px;
+}
+
+html[data-palette='graphite'] .diagnostics-empty-state strong {
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .diagnostics-empty-state span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* The Player Dock keeps its fixed geometry; only its visual priority changes. */
+html[data-palette='graphite'] .player-bar {
+  border-top-color: var(--border-strong);
+  background: var(--surface-panel);
+}
+
+html[data-palette='graphite'] .player-track-icon {
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .player-track-copy strong {
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .player-track-copy .player-identity-label,
+html[data-palette='graphite'] .player-track-copy .player-dry-run-label {
+  font-size: 11px;
+}
+
+html[data-palette='graphite'] .player-track-status,
+html[data-palette='graphite'] .player-transport-status,
+html[data-palette='graphite'] .player-timeline-labels {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .player-track-copy .player-identity-label {
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .player-track-copy .player-dry-run-label {
+  color: var(--text-primary);
+}
+
+html[data-palette='graphite'] .player-track-status.is-active {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .player-track-status.is-attention {
+  color: var(--warning-fg);
+}
+
+html[data-palette='graphite'] .player-risk {
+  font-size: 12px;
+}
+
+html[data-palette='graphite']
+  .player-tools
+  .icon-button:hover:not(:disabled):not([aria-pressed='true']),
+html[data-palette='graphite']
+  .player-tools
+  .icon-button:focus-visible:not(:disabled):not([aria-pressed='true']) {
+  color: var(--text-primary);
+}
+
+html[data-palette='graphite'] .player-utility-button[aria-expanded='true'] {
+  color: var(--text-primary);
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite'] .profile-fields label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .profile-fields select {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .profile-test-explanation {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .player-admission {
+  border-radius: 6px;
+}
+
+html[data-palette='graphite'] .admission-copy strong {
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .admission-copy span,
+html[data-palette='graphite'] .admission-recovery-action {
+  font-size: 12px;
+}
+
+/* Settings, menus, and dialogs share the same quiet surfaces and control edges. */
+html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
+html[data-palette='graphite'] .icon-button.icon-button-boxed,
+html[data-palette='graphite'] .update-indicator,
+html[data-palette='graphite'] .playlist-add-songs-button,
+html[data-palette='graphite'] .diagnostics-export-button {
+  border-color: var(--control-border);
+  background: var(--surface-raised);
+}
+
+html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger):hover:not(:disabled),
+html[data-palette='graphite'] .icon-button.icon-button-boxed:hover:not(:disabled),
+html[data-palette='graphite'] .update-indicator:hover,
+html[data-palette='graphite'] .playlist-add-songs-button:hover:not(:disabled),
+html[data-palette='graphite'] .diagnostics-export-button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite']
+  .button:not(.button-primary):not(.button-danger):active:not(:disabled),
+html[data-palette='graphite'] .icon-button.icon-button-boxed:active:not(:disabled) {
+  background: var(--control-pressed);
+}
+
+html[data-palette='graphite'] .settings-dialog,
+html[data-palette='graphite'] .library-dialog {
+  border-color: var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-panel);
+}
+
+html[data-palette='graphite'] .settings-nav-item {
+  min-height: 36px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .settings-nav-item.is-active {
+  border-left-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--selection-bg);
+}
+
+html[data-palette='graphite'] .settings-section label:not(.checkbox-row),
+html[data-palette='graphite'] .checkbox-row {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .settings-section select,
+html[data-palette='graphite'] .settings-section input:not([type='checkbox']),
+html[data-palette='graphite'] .library-dialog-form input {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .caption-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+html[data-palette='graphite'] .settings-section select:focus-visible,
+html[data-palette='graphite'] .settings-section input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+html[data-palette='graphite'] .settings-note,
+html[data-palette='graphite'] .timing-margin-recommendation,
+html[data-palette='graphite'] .auto-play-switch-description {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .library-menu-popover,
+html[data-palette='graphite'] .track-menu-popover,
+html[data-palette='graphite'] .profile-popover {
+  border-color: var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 34%);
+}
+
+html[data-palette='graphite'] .library-menu-item {
+  min-height: 36px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .library-menu-item svg {
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .library-menu-item.is-danger,
+html[data-palette='graphite'] .library-menu-item.is-danger svg {
+  color: var(--danger-fg);
+}
+
+html[data-palette='graphite'] .library-menu-item small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .library-dialog-form label {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .library-confirm-message {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* Preserve visible system colors and focus outlines in Windows forced-colors mode. */
+@media (forced-colors: active) {
+  html[data-palette='graphite'] .workbench-pane,
+  html[data-palette='graphite'] .utility-surface,
+  html[data-palette='graphite'] .player-bar,
+  html[data-palette='graphite'] .settings-dialog,
+  html[data-palette='graphite'] .library-dialog {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  html[data-palette='graphite'] .navigator-workbench-pane,
+  html[data-palette='graphite'] .track-browser-workbench-pane {
+    box-shadow: inset -1px 0 CanvasText;
+  }
+
+  html[data-palette='graphite'] .track-row.is-selected,
+  html[data-palette='graphite'] .library-nav-item.is-active,
+  html[data-palette='graphite'] .settings-nav-item.is-active {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  html[data-palette='graphite'] .track-row.is-playing:not(.is-selected) {
+    border-left-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+
+  html[data-palette='graphite'] .track-row.is-playing .track-cell-index,
+  html[data-palette='graphite'] .library-nav-item.is-active .library-nav-item-icon {
+    color: HighlightText;
+  }
+
+  html[data-palette='graphite'] .button-danger,
+  html[data-palette='graphite'] .player-transport .player-primary-action {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  html[data-palette='graphite'] button:focus-visible,
+  html[data-palette='graphite'] input:focus-visible,
+  html[data-palette='graphite'] select:focus-visible,
+  html[data-palette='graphite'] [role='tab']:focus-visible,
+  html[data-palette='graphite'] [role='separator']:focus-visible,
+  html[data-palette='graphite'] .global-search:focus-within {
+    outline-color: Highlight;
+  }
+}

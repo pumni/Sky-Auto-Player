@@ -73,8 +73,8 @@ describe('SettingsPanel playback timing', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('Could not save settings.'),
     );
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
-    expect(store.getState().settings?.palette).toBe('aurora');
-    expect(palette).toHaveValue('aurora');
+    expect(store.getState().settings?.palette).toBe('graphite');
+    expect(palette).toHaveValue('graphite');
 
     await act(async () => {
       fireEvent.change(palette, { target: { value: 'classic' } });

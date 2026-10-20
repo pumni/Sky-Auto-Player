@@ -83,7 +83,7 @@ html[data-color-mode='dark'] {
   color-scheme: dark;
 }
 
-/* Playwright-only preview palette; native settings intentionally expose the five palettes above. */
+/* Graphite is the default palette for newly initialized appearance settings. */
 html[data-palette='graphite'] {
   --canvas: #121416;
   --surface-panel: #191c20;

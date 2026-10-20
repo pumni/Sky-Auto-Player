@@ -333,12 +333,10 @@ test('playlist onboarding exposes create and import actions in expanded and coll
     const emptyGuidance = navigator.locator('.library-empty-playlists');
     if (width === 640) {
       await expect(expandToggle).toBeVisible();
-      await expect(page.locator('.track-browser-guidance')).toContainText(
-        'Create a playlist to collect songs or import local sheets.',
-      );
+      await expect(page.locator('.track-browser-guidance')).toHaveCount(0);
     } else {
       await expect(expandedToggle).toBeVisible();
-      await expect(emptyGuidance).toContainText('import local sheet files and folders');
+      await expect(emptyGuidance.locator('p')).toHaveCount(0);
       await expect(emptyGuidance.getByRole('button', { name: 'Create playlist' })).toBeVisible();
       await expandedToggle.click();
       await expect(expandToggle).toBeVisible();
@@ -367,7 +365,27 @@ test('playlist onboarding exposes create and import actions in expanded and coll
   }
 });
 
-test('playlist onboarding supports browse and import without changing Now Playing', async ({
+test('empty catalog keeps playlist onboarding while a populated catalog stays uncluttered', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  await expect(page.locator('.track-browser-guidance')).toHaveCount(0);
+  await expect(page.locator('.library-empty-playlists p')).toHaveCount(0);
+
+  await page.goto('/?mockLibraryState=empty');
+  await expect(page.locator('.empty-state strong')).toHaveText('Your catalog is empty');
+  await expect(page.locator('.track-browser-guidance')).toContainText(
+    'Create a playlist to collect songs or import local sheets.',
+  );
+  await expect(page.locator('.library-empty-playlists p')).toContainText(
+    'import local sheet files',
+  );
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('populated library keeps playlist actions available without repeated onboarding text', async ({
   page,
 }, testInfo: TestInfo) => {
   const navigator = page.getByRole('navigation', { name: 'Library' });
@@ -381,15 +399,14 @@ test('playlist onboarding supports browse and import without changing Now Playin
   };
 
   await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.track-browser-guidance')).toContainText(
-    'Create a playlist to collect songs or import local sheets.',
-  );
-  await capture('before-empty-library-640x448');
+  await expect(page.locator('.track-browser-guidance')).toHaveCount(0);
+  await capture('before-playlist-creation-640x448');
   await page.setViewportSize({ width: 1366, height: 768 });
-  await expect(navigator.locator('.library-empty-playlists')).toContainText(
-    'import local sheet files and folders',
-  );
-  await capture('before-empty-library-1366x768');
+  await expect(navigator.locator('.library-empty-playlists p')).toHaveCount(0);
+  await expect(
+    navigator.locator('.library-empty-playlists').getByRole('button', { name: 'Create playlist' }),
+  ).toBeVisible();
+  await capture('before-playlist-creation-1366x768');
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.setViewportSize({ width: 640, height: 448 });
@@ -2144,7 +2161,7 @@ test('all supported palettes round-trip through the settings surface', async ({ 
   await settingsButton.click();
   await page.getByRole('button', { name: 'Appearance' }).click();
   const palette = page.getByLabel('Color palette');
-  for (const id of ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
+  for (const id of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
     await palette.selectOption(id);
     await expect(page.locator('html')).toHaveAttribute('data-palette', id);
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
