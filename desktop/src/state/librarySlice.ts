@@ -593,8 +593,6 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         });
         if (count > 0) await syncCatalogGeneration(result.catalog_generation);
         return count;
-      } catch (error) {
-        throw error;
       } finally {
         setLibraryMutationPending(key, false);
       }
@@ -613,8 +611,6 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         });
         if (count > 0) await syncCatalogGeneration(result.catalog_generation);
         return count;
-      } catch (error) {
-        throw error;
       } finally {
         setLibraryMutationPending(key, false);
       }
