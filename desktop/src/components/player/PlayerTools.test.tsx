@@ -51,4 +51,30 @@ describe('PlayerTools playback modes and profile', () => {
     expect(within(dialog).queryByRole('switch', { name: 'Auto Play' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Auto Play' })).not.toBeInTheDocument();
   });
+
+  it('explains and starts the existing dry-run action without physical input', async () => {
+    const bridge = createMockBridge({ playbackDurationMs: 120_000, startDelayMs: 1 });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const row = store.getState().library.pages.get(0)?.[1];
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    render(<PlayerTools useStore={store} />);
+
+    await act(async () =>
+      screen.getByRole('button', { name: 'Configure playback profile' }).click(),
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
+    expect(
+      within(dialog).getByText(
+        'Tests the current profile with dry-run playback; no physical keyboard input is sent.',
+      ),
+    ).toBeInTheDocument();
+    await act(async () =>
+      within(dialog).getByRole('button', { name: 'Test playback (no input)' }).click(),
+    );
+
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    expect(store.getState().playback.context?.dryRun).toBe(true);
+  });
 });

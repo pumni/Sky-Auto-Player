@@ -74,6 +74,8 @@ export const TrackRow = memo(function TrackRow({
       </span>
       <span className="track-cell track-cell-title" role="gridcell" title={row.title}>
         <span className="track-title-text">{row.title}</span>
+        {selected && <span className="visually-hidden">Selected for inspection</span>}
+        {playing && <span className="visually-hidden">Now Playing</span>}
         {actions}
       </span>
       <span className="track-cell track-cell-liked" role="gridcell">

@@ -29,6 +29,7 @@ describe('PlayerTrackInfo', () => {
 
     render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(songA.title)).toBeInTheDocument();
+    expect(screen.getByText('Now Playing')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add to Liked Songs' }));
@@ -47,6 +48,7 @@ describe('PlayerTrackInfo', () => {
 
     render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
+    expect(screen.getByText('Selected')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
   });
 
@@ -69,5 +71,31 @@ describe('PlayerTrackInfo', () => {
     expect(screen.getByText(row.title)).toBeInTheDocument();
     expect(screen.getByText(/TXT ·/)).toBeInTheDocument();
     expect(screen.queryByText('Playback error')).not.toBeInTheDocument();
+  });
+
+  it('labels the known session song without claiming playback when native status is uncertain', async () => {
+    const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 1);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    act(() =>
+      store.setState({
+        playback: {
+          ...store.getState().playback,
+          error: 'Playback status is unavailable: Mock IPC disconnected.',
+        },
+      }),
+    );
+
+    render(<PlayerTrackInfo useStore={store} />);
+
+    expect(screen.getByText(row.title)).toBeInTheDocument();
+    expect(screen.getByText('Session song')).toBeInTheDocument();
+    expect(screen.getByText('Playback status uncertain')).toBeInTheDocument();
+    expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
   });
 });

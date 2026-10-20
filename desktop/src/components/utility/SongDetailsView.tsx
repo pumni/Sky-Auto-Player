@@ -54,6 +54,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
       role={detail.state === 'fatal' ? 'alert' : undefined}
     >
       <div className="song-details-heading">
+        <span className="song-details-context">Selected for inspection</span>
         <h3 id="song-details-title" title={song?.title ?? selectedRow.title}>
           {selectedRow.title}
         </h3>
@@ -103,8 +104,9 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
       </section>
 
       <p className="utility-note">
-        Use the Player Bar to test playback without input or request playback with the selected
-        settings.
+        Test playback (no input) in Playback profile tests the current settings using dry-run
+        playback, which sends no physical keyboard input. Use Play to request normal playback with
+        the selected settings.
       </p>
     </section>
   );

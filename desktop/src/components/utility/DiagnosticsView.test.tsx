@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiagnosticsSnapshot } from '../../bridge/DesktopBridge';
 import { assertMissReasonAccounting } from '../../bridge/diagnosticsTestUtils';
 import { createMockBridge } from '../../bridge/mockBridge';
-import { createDesktopStore } from '../../state/store';
+import { createDesktopStore, selectRowAtIndex } from '../../state/store';
 import { DiagnosticsView } from './DiagnosticsView';
 
 function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnapshot {
@@ -106,6 +106,106 @@ describe('DiagnosticsView', () => {
       screen.getByText('Runtime timing and input-health metrics appear when playback starts.'),
     ).toBeInTheDocument();
     expect(screen.queryByText('Completion p50')).toBeNull();
+  });
+
+  it('reports an active native session while waiting for its matching snapshot', () => {
+    const store = createDesktopStore(createMockBridge());
+    store.setState({
+      diagnostics: { ...store.getState().diagnostics, enabled: true },
+      playback: {
+        ...store.getState().playback,
+        sessionId: 'm'.repeat(32),
+        state: 'playing',
+      },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Playback status: Playing')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for session diagnostics')).toBeInTheDocument();
+    expect(screen.queryByText('No active playback session')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+    expect(screen.getByText('Waiting for session diagnostics')).toBeInTheDocument();
+  });
+
+  it('shows a failed target admission as a playback failure', () => {
+    const store = createDesktopStore(createMockBridge());
+    store.setState({
+      diagnostics: { ...store.getState().diagnostics, enabled: true },
+      playback: {
+        ...store.getState().playback,
+        state: 'failed',
+        error: 'target_integrity_mismatch: Sky is running with different permissions.',
+      },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(screen.getByText('Playback status: Playback failed')).toBeInTheDocument();
+    expect(screen.getByText('Playback failed')).toBeInTheDocument();
+    expect(screen.getByText(/different permissions/)).toBeInTheDocument();
+  });
+
+  it('labels uncertain native status and keeps dry-run sender metrics unmeasured', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 1);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback({ dry_run: true }));
+
+    const prepared = store.getState().playback;
+    const context = prepared.preparedContext;
+    const identity = prepared.preparedIdentity;
+    if (!context || !identity) throw new Error('dry-run playback context was not prepared');
+    const sessionId = 'd'.repeat(32);
+    store.setState({
+      diagnostics: {
+        ...store.getState().diagnostics,
+        enabled: true,
+        samples: [
+          snapshot({
+            session_id: sessionId,
+            sender_sample_count: 3,
+            max_sendinput_pre_call_lateness_us: 320,
+            final_gate_focus_losses: 2,
+          }),
+        ],
+      },
+      playback: {
+        ...prepared,
+        sessionId,
+        state: 'playing',
+        currentSong: identity,
+        context: { ...context, dryRun: true },
+        error: 'Playback status is unavailable: simulated confirmation gap.',
+      },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+
+    expect(
+      screen.getByText('Playback status: Native playback status uncertain'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(`Last confirmed session song: ${row.title}`)).toBeInTheDocument();
+    expect(screen.getByText('Mode: Dry run · no physical input sent')).toBeInTheDocument();
+    expect(screen.getByText('Sender-side status: Not measured')).toBeInTheDocument();
+    expect(screen.getByText('Sender samples').parentElement).toHaveTextContent('Not measured');
+    expect(screen.getByText('Sender backend').parentElement).toHaveTextContent('Not measured');
+    expect(screen.getByText('Completion p50').parentElement).toHaveTextContent('Not measured');
+    expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent(
+      'Not measured',
+    );
+    expect(screen.getByText('Missed Down boundaries').parentElement).toHaveTextContent(
+      'Not measured',
+    );
+    expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
+    expect(screen.queryByText('320 μs')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+    expect(screen.getByText('No physical timing samples in dry run')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /SendInput pre-call lateness/ })).toBeNull();
   });
 
   it('uses boundary-accurate labels and sender-side timing metrics', () => {

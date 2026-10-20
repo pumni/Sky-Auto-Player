@@ -161,26 +161,34 @@ describe('PlaybackAdmission recovery actions', () => {
     expect(store.getState().playback.error).toContain('No active playback session was created');
   });
 
-  it('keeps a typed target failure actionable without showing a misleading Stop action', async () => {
-    const store = createDesktopStore(createMockBridge());
-    await act(async () => store.getState().initialize());
-    const row = selectRowAtIndex(store.getState().library, 0);
-    if (!row) throw new Error('mock Library is empty');
-    await act(async () => store.getState().selectSong(row.song_id));
-    act(() =>
-      store.setState({
-        playback: {
-          ...store.getState().playback,
-          state: 'failed',
-          error: 'target_not_found: Open Sky and make sure its window is visible, then try again.',
-        },
-      }),
-    );
+  it.each([
+    [
+      'target_not_found',
+      'Sky window was not found',
+      'Open Sky and make sure its window is visible, then try again.',
+    ],
+    [
+      'target_integrity_mismatch',
+      'Sky is running with different permissions',
+      'Run both applications at the same permission level.',
+    ],
+    ['target_focus_failed', 'Sky could not be focused', 'Focus the Sky window and try again.'],
+  ])(
+    'keeps %s actionable without showing a misleading Stop action',
+    async (code, title, message) => {
+      const store = createDesktopStore(createMockBridge({ startFailure: { code, message } }));
+      await act(async () => store.getState().initialize());
+      const row = selectRowAtIndex(store.getState().library, 1);
+      if (!row) throw new Error('mock Library is empty');
+      await act(async () => store.getState().selectSong(row.song_id));
+      await act(async () => store.getState().prepareSelectedPlayback());
+      await act(async () => store.getState().startPreparedPlayback());
 
-    render(<PlaybackAdmission useStore={store} />);
-    expect(screen.getByRole('alert')).toHaveTextContent('Sky window was not found');
-    expect(screen.getByText(/Open Sky and make sure its window is visible/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Stop playback' })).not.toBeInTheDocument();
-  });
+      render(<PlaybackAdmission useStore={store} />);
+      expect(screen.getByRole('alert')).toHaveTextContent(title);
+      expect(screen.getByText(message)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+      expect(screen.queryByRole('button', { name: 'Stop playback' })).not.toBeInTheDocument();
+    },
+  );
 });

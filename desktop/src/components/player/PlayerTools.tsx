@@ -97,6 +97,9 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                   patchSettings={patchSettings}
                 />
               </div>
+              <p className="profile-test-explanation">
+                Tests the current profile with dry-run playback; no physical keyboard input is sent.
+              </p>
               <button
                 className="button profile-test-action"
                 type="button"
