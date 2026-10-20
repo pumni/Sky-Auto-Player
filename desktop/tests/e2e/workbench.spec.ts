@@ -4,6 +4,24 @@ import { getUtilityPresentationMode } from '../../src/components/workbench/useWo
 
 const workbenchStorageKey = 'sky.ui.workbench.v5';
 
+type InspectorHeaderElementGeometry = {
+  x: number;
+  right: number;
+  y: number;
+  height: number;
+  width: number;
+  alignSelf: string;
+  display: string;
+  widthStyle: string;
+  minWidth: string;
+  boxSizing: string;
+  flex: string;
+  gridTemplateColumns: string;
+  paddingInline: string;
+};
+
+type InspectorHeaderGeometry = Record<string, InspectorHeaderElementGeometry | null>;
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() => window.localStorage.clear());
@@ -56,6 +74,50 @@ async function readWorkbenchGeometry(page: Page) {
         height: document.documentElement.scrollHeight,
       },
     };
+  });
+}
+
+async function readInspectorHeaderGeometry(page: Page) {
+  return page.evaluate(() => {
+    const selectors = [
+      '.utility-workbench-pane',
+      '.utility-surface',
+      '.utility-tabs',
+      '.utility-header',
+      '.utility-header-title',
+      '.utility-close-button',
+      '.utility-close-button svg',
+      '.utility-view-tabs',
+      '.utility-content',
+      '.utility-empty p',
+      '.song-details-heading h3',
+    ];
+    return Object.fromEntries(
+      selectors.map((selector) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (!element) return [selector, null];
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return [
+          selector,
+          {
+            x: rect.x,
+            right: rect.right,
+            y: rect.y,
+            height: rect.height,
+            width: rect.width,
+            alignSelf: style.alignSelf,
+            display: style.display,
+            widthStyle: style.width,
+            minWidth: style.minWidth,
+            boxSizing: style.boxSizing,
+            flex: style.flex,
+            gridTemplateColumns: style.gridTemplateColumns,
+            paddingInline: `${style.paddingLeft} ${style.paddingRight}`,
+          },
+        ];
+      }),
+    ) as InspectorHeaderGeometry;
   });
 }
 
@@ -224,6 +286,290 @@ test('compact Inspector supports focus restoration, resize continuity, and outsi
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'closed');
   await expect(trigger).toBeFocused();
+});
+
+test('Inspector header geometry stays stable across empty, selected, cleared, and Runtime states', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await page.evaluate(() => window.localStorage.clear());
+    await page.reload();
+    const trigger = page.locator('.player-utility-button');
+    await trigger.click();
+    const inspector = page.locator('#utility-inspector');
+    await expect(inspector).toBeVisible();
+    await inspector.getByRole('tab', { name: 'Details' }).click();
+    await expect(page.getByText('Select a song to view details.')).toBeVisible();
+    const presentation = getUtilityPresentationMode(viewport.width, true, 'graphite');
+    await expectInspectorGeometry(page, presentation);
+
+    const measurements: Partial<
+      Record<'empty' | 'selected' | 'cleared' | 'runtime', InspectorHeaderGeometry>
+    > = {};
+    const record = async (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
+      measurements[state] = await readInspectorHeaderGeometry(page);
+    };
+    await record('empty');
+    if (viewport.width === 1366) {
+      await page.screenshot({
+        path: 'test-results/final-polish-k-inspector-empty-1366x768.png',
+        animations: 'disabled',
+      });
+    }
+
+    const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
+    await selectedRow.locator('.track-title-text').click();
+    await expect(inspector.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+    await expectInspectorGeometry(page, presentation);
+    await record('selected');
+    if (viewport.width === 1366) {
+      await page.screenshot({
+        path: 'test-results/final-polish-k-inspector-selected-1366x768.png',
+        animations: 'disabled',
+      });
+    }
+
+    await page.getByRole('searchbox', { name: 'Search All Songs' }).fill('Moonlit');
+    await expect(page.getByText('Select a song to view details.')).toBeVisible();
+    await expectInspectorGeometry(page, presentation);
+    await record('cleared');
+
+    await inspector.getByRole('tab', { name: 'Runtime' }).click();
+    await expect(page.getByRole('region', { name: 'Utility: Diagnostics' })).toBeVisible();
+    await expectInspectorGeometry(page, presentation);
+    await record('runtime');
+
+    const geometryFor = (state: 'empty' | 'selected' | 'cleared' | 'runtime', selector: string) => {
+      const geometry = measurements[state]?.[selector];
+      if (!geometry) throw new Error(`${selector} missing in ${state} Inspector state`);
+      return geometry;
+    };
+    const baselineHeader = geometryFor('empty', '.utility-header');
+    const baselineTabs = geometryFor('empty', '.utility-view-tabs');
+    const baselineTitle = geometryFor('empty', '.utility-header-title');
+    const baselineClose = geometryFor('empty', '.utility-close-button');
+    const baselineCloseIcon = geometryFor('empty', '.utility-close-button svg');
+    const baselineSurface = geometryFor('empty', '.utility-surface');
+    for (const state of ['selected', 'cleared', 'runtime'] as const) {
+      const header = geometryFor(state, '.utility-header');
+      const tabs = geometryFor(state, '.utility-view-tabs');
+      const headerTitle = geometryFor(state, '.utility-header-title');
+      const close = geometryFor(state, '.utility-close-button');
+      const closeIcon = geometryFor(state, '.utility-close-button svg');
+      const surface = geometryFor(state, '.utility-surface');
+      expect(Math.abs(header.x - baselineHeader.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(header.y - baselineHeader.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(header.width - baselineHeader.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(header.height - baselineHeader.height)).toBeLessThanOrEqual(1);
+      expect(Math.abs(tabs.x - baselineTabs.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(tabs.y - baselineTabs.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(tabs.height - baselineTabs.height)).toBeLessThanOrEqual(1);
+      expect(Math.abs(tabs.width - baselineTabs.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(headerTitle.x - baselineTitle.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(headerTitle.width - baselineTitle.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(close.x - baselineClose.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(close.y - baselineClose.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(closeIcon.x - baselineCloseIcon.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(closeIcon.y - baselineCloseIcon.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(close.width - 32)).toBeLessThanOrEqual(0.1);
+      expect(Math.abs(close.height - 32)).toBeLessThanOrEqual(0.1);
+      expect(Math.abs(surface.width - baselineSurface.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(close.right - (header.right - 14))).toBeLessThanOrEqual(1);
+      expect(Math.abs(tabs.x - (header.x + 14))).toBeLessThanOrEqual(1);
+      expect(Math.abs(tabs.right - (header.right - 14))).toBeLessThanOrEqual(1);
+    }
+    expect(
+      Math.abs(
+        geometryFor('empty', '.utility-empty p').y -
+          geometryFor('selected', '.song-details-heading h3').y,
+      ),
+    ).toBeLessThanOrEqual(1);
+    const widthOverflow = await page.evaluate(() =>
+      [
+        '.utility-surface',
+        '.utility-tabs',
+        '.utility-header',
+        '.utility-view-tabs',
+        '.utility-content',
+      ].map((selector) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        return element ? element.scrollWidth <= element.clientWidth + 1 : false;
+      }),
+    );
+    expect(widthOverflow.every(Boolean)).toBe(true);
+
+    const measuredSelectors = [
+      '.utility-workbench-pane',
+      '.utility-surface',
+      '.utility-tabs',
+      '.utility-header',
+      '.utility-header-title',
+      '.utility-close-button',
+      '.utility-close-button svg',
+      '.utility-view-tabs',
+      '.utility-content',
+    ];
+    const measuredBounds = Object.fromEntries(
+      Object.entries(measurements).map(([state, elements]) => [
+        state,
+        Object.fromEntries(
+          measuredSelectors.map((selector) => {
+            const element = elements?.[selector];
+            return [
+              selector,
+              element && {
+                x: element.x,
+                right: element.right,
+                y: element.y,
+                height: element.height,
+                width: element.width,
+              },
+            ];
+          }),
+        ),
+      ]),
+    );
+    const computedStyles = Object.fromEntries(
+      measuredSelectors.map((selector) => {
+        const element = measurements.empty?.[selector];
+        return [
+          selector,
+          element && {
+            alignSelf: element.alignSelf,
+            display: element.display,
+            width: element.widthStyle,
+            minWidth: element.minWidth,
+            boxSizing: element.boxSizing,
+            flex: element.flex,
+            gridTemplateColumns: element.gridTemplateColumns,
+            paddingInline: element.paddingInline,
+          },
+        ];
+      }),
+    );
+    console.info(
+      `INSPECTOR_METRICS ${viewport.width}x${viewport.height} ${JSON.stringify({ measuredBounds, computedStyles })}`,
+    );
+
+    if (presentation === 'overlay') {
+      await expect(inspector).not.toHaveAttribute('aria-modal');
+      await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.workbench')).toHaveAttribute(
+        'data-utility-presentation',
+        'closed',
+      );
+      await expect(trigger).toBeFocused();
+      await trigger.click();
+      await expect(inspector).toBeVisible();
+      await inspector.getByRole('button', { name: 'Close utility' }).click();
+      await expect(trigger).toBeFocused();
+      await expect(page.locator('.workbench')).toHaveAttribute(
+        'data-utility-presentation',
+        'closed',
+      );
+    }
+  }
+});
+
+test('compact Player Dock presents one readable dry-run status without moving transport controls', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 640, height: 448 });
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
+  if (await proceed.isVisible().catch(() => false)) await proceed.click();
+  const title = player.locator('.player-track-copy strong');
+  const status = player.locator('.player-track-status');
+  await expect(title).toHaveText('Blue Bird');
+  await expect(status).toHaveText('Playing');
+  await expect(status).toHaveCount(1);
+  await expect(player.getByText('Now Playing', { exact: true })).toHaveCount(0);
+
+  await page.getByRole('row', { name: /Candle Run/ }).click();
+  await expect(title).toHaveText('Blue Bird');
+  await expect(status).toHaveText('Playing');
+  await expect(page.getByRole('row', { name: /Candle Run/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await player.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+
+  await player.getByRole('button', { name: 'Configure playback profile' }).click();
+  await page
+    .getByRole('dialog', { name: 'Playback profile' })
+    .getByRole('button', { name: 'Test playback (no input)' })
+    .click();
+
+  await expect(title).toHaveText('Blue Bird');
+  await expect(status).toHaveText('Dry run · Playing');
+  await expect(status).toHaveAttribute('aria-label', /No physical input is sent/);
+  await expect(status).toHaveCount(1);
+  await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Add to Liked Songs' })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Auto Play' })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Configure playback profile' })).toBeVisible();
+  await expect(player.getByRole('button', { name: 'Open utility panel' })).toBeVisible();
+
+  const geometry = await page.evaluate(() => {
+    const getRect = (selector: string) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      return rect
+        ? { x: rect.x, y: rect.y, right: rect.right, width: rect.width, height: rect.height }
+        : null;
+    };
+    const statusElement = document.querySelector<HTMLElement>('.player-track-status');
+    return {
+      dock: getRect('.player-bar'),
+      title: getRect('.player-track-copy strong'),
+      status: getRect('.player-track-status'),
+      transport: getRect('.player-transport'),
+      statusMetrics: statusElement
+        ? {
+            display: getComputedStyle(statusElement).display,
+            whiteSpace: getComputedStyle(statusElement).whiteSpace,
+            clientHeight: statusElement.clientHeight,
+            scrollHeight: statusElement.scrollHeight,
+            clientWidth: statusElement.clientWidth,
+            scrollWidth: statusElement.scrollWidth,
+          }
+        : null,
+      primary: getRect('.player-transport .player-primary-action'),
+    };
+  });
+  expect(geometry.dock?.height).toBe(92);
+  expect(geometry.title).not.toBeNull();
+  expect(geometry.status).not.toBeNull();
+  expect(geometry.transport).not.toBeNull();
+  expect(geometry.primary).not.toBeNull();
+  if (geometry.title && geometry.status && geometry.transport && geometry.primary) {
+    expect(geometry.status.y).toBeGreaterThan(geometry.title.y);
+    expect(geometry.status.y + geometry.status.height).toBeLessThanOrEqual(
+      geometry.dock!.y + geometry.dock!.height,
+    );
+    expect(geometry.status.right).toBeLessThanOrEqual(geometry.transport.x);
+    expect(geometry.primary.x + geometry.primary.width / 2).toBeCloseTo(
+      geometry.transport.x + geometry.transport.width / 2,
+      0,
+    );
+  }
+  expect(geometry.statusMetrics?.display).not.toBe('grid');
+  expect(geometry.statusMetrics?.whiteSpace).toBe('nowrap');
+  expect(geometry.statusMetrics?.scrollHeight).toBeLessThanOrEqual(
+    (geometry.statusMetrics?.clientHeight ?? 0) + 1,
+  );
+  expect(geometry.statusMetrics?.scrollWidth).toBeLessThanOrEqual(
+    (geometry.statusMetrics?.clientWidth ?? 0) + 1,
+  );
 });
 
 test('active Runtime tab and focus survive docked-to-overlay viewport transitions', async ({

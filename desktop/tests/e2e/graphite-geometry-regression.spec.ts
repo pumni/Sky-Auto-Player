@@ -19,7 +19,7 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-dry-run-label')).toBeVisible();
+  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
 
   const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
   await selectedRow.click();
@@ -93,7 +93,6 @@ async function computedAppearance(page: Page, view: string) {
       trackHeaderDivider: '.track-table-header',
       playerDock: '.player-bar',
       playerTrack: '.player-track-copy strong',
-      playerMode: '.player-track-copy .player-dry-run-label',
       playerStatus: '.player-track-copy .player-track-status',
       libraryCollapseButton: '.library-collapse-button',
     };
@@ -258,7 +257,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       compactSearch.evaluate((input: HTMLInputElement) => input.matches(':focus-visible')),
     )
     .toBe(true);
-  await expect(compactPlayer.locator('.player-dry-run-label')).toHaveText('Dry run');
+  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
   await expect(compactInspector).toBeVisible();
   const compactInspectorBox = await compactInspector.boundingBox();
   expect(compactInspectorBox).not.toBeNull();
@@ -409,7 +408,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     });
     expect(populated.elements.playerTrack).toMatchObject({ fontSize: '14px', fontWeight: '600' });
     expect(populated.elements.playerDock?.height).toBe('92px');
-    expect(populated.elements.playerMode).toMatchObject({ fontSize: '11px', fontWeight: '600' });
+    expect(populated.elements.playerStatus).toMatchObject({ fontSize: '12px', fontWeight: '600' });
     expect(compact.elements.search).toMatchObject({
       borderTopWidth: '1px',
       borderTopColor: 'rgb(61, 63, 67)',

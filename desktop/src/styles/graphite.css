@@ -605,24 +605,10 @@ html[data-palette='graphite'] .player-track-copy strong {
   font-weight: 600;
 }
 
-html[data-palette='graphite'] .player-track-copy .player-identity-label,
-html[data-palette='graphite'] .player-track-copy .player-dry-run-label {
-  font-size: 11px;
-  font-weight: 600;
-}
-
 html[data-palette='graphite'] .player-track-status,
 html[data-palette='graphite'] .player-transport-status,
 html[data-palette='graphite'] .player-timeline-labels {
   font-size: 12px;
-}
-
-html[data-palette='graphite'] .player-track-copy .player-identity-label {
-  color: var(--text-secondary);
-}
-
-html[data-palette='graphite'] .player-track-copy .player-dry-run-label {
-  color: var(--text-secondary);
 }
 
 html[data-palette='graphite'] .player-track-status.is-active {
@@ -659,17 +645,7 @@ html[data-palette='graphite'] .player-track-status.is-attention {
     gap: 4px;
   }
 
-  html[data-palette='graphite'] .player-track-subtitle.is-active {
-    display: grid;
-    grid-template-columns: max-content max-content;
-    gap: 3px;
-  }
-
-  html[data-palette='graphite'] .player-track-subtitle.is-active .player-track-status {
-    grid-column: 1 / -1;
-    display: inline-block;
-    width: max-content;
-    min-width: max-content;
+  html[data-palette='graphite'] .player-track-status {
     font-size: 11px;
   }
 }

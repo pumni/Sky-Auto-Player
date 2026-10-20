@@ -55,7 +55,7 @@ async function startDryRunWithSelection(page: Page) {
     'true',
   );
   await expect(playingRow).toHaveAttribute('aria-current', 'true');
-  await expect(player.locator('.player-dry-run-label')).toHaveText('Dry run');
+  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
   return player;
 }
 
@@ -408,7 +408,7 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   const compactInspector = await openDetails(page);
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
   await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
-  await expect(compactPlayer.locator('.player-dry-run-label')).toHaveText('Dry run');
+  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
   await expect(compactInspector).toBeVisible();
   await page.getByRole('row', { name: /Aurora Landing/ }).hover({ position: { x: 24, y: 23 } });
   measurements['640x448'] = await readWorkspaceGeometry(page);

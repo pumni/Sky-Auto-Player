@@ -708,8 +708,7 @@ test('idle Graphite selection stays distinct from native Now Playing', async ({ 
   await expect(playingRow).not.toHaveAttribute('aria-current', 'true');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
   await expect(player.locator('.player-track-status')).toHaveText('Ready to play');
-  await expect(player.locator('.player-identity-label')).toHaveCount(0);
-  await expect(player.locator('.player-dry-run-label')).toHaveCount(0);
+  await expect(player.locator('.player-track-status')).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
@@ -1528,8 +1527,7 @@ test('natural finish retires the old session and starts the next context song', 
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
-  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
-  await expect(player.getByText('Now Playing', { exact: true })).toBeVisible();
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
   const transition = player.getByRole('status');
   await expect(async () => {
     const statusText = await transition.textContent().catch(() => null);
@@ -1705,8 +1703,7 @@ test('browsing and liking another Library row keeps Player Bar identity on Now P
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
-  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
-  await expect(player.getByText('Now Playing', { exact: true })).toBeVisible();
+  await expect(player.locator('.player-track-status')).toHaveText('Playing');
 
   const selectedRow = page.getByRole('row', { name: /Candle Run/ });
   await selectedRow.click();
@@ -1754,11 +1751,10 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
     ).toBeVisible();
     await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
 
-    await expect(player.getByText('Now Playing', { exact: true })).toBeVisible();
-    const dryRun = player.getByText('Dry run', { exact: true });
-    await expect(dryRun).toBeVisible();
-    await expect(dryRun).toHaveAttribute('title', 'Dry run; no physical input is sent');
-    const playbackStatus = player.getByText('Playing', { exact: true });
+    const playbackStatus = player.locator('.player-track-status');
+    await expect(playbackStatus).toHaveText('Dry run · Playing');
+    await expect(playbackStatus).toHaveAttribute('aria-label', /No physical input is sent/);
+    await expect(playbackStatus).toHaveCount(1);
     const playbackStatusLayout = await playbackStatus.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
@@ -1778,23 +1774,22 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
       `Player Dock playback status layout: ${JSON.stringify(playbackStatusLayout)}`,
     ).toBeVisible();
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
-    const dryRunBox = await dryRun.boundingBox();
+    const titleBox = await player.locator('.player-track-copy strong').boundingBox();
     const trackInfoBox = await player.locator('.player-track-info').boundingBox();
     const transportBox = await player.locator('.player-transport').boundingBox();
-    expect(dryRunBox).not.toBeNull();
+    expect(titleBox).not.toBeNull();
     expect(trackInfoBox).not.toBeNull();
     expect(transportBox).not.toBeNull();
-    if (dryRunBox && trackInfoBox && transportBox) {
-      expect(dryRunBox.x).toBeGreaterThanOrEqual(trackInfoBox.x);
-      expect(dryRunBox.x + dryRunBox.width).toBeLessThanOrEqual(
-        trackInfoBox.x + trackInfoBox.width,
-      );
+    if (titleBox && trackInfoBox && transportBox) {
+      expect(titleBox.x).toBeGreaterThanOrEqual(trackInfoBox.x);
+      expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(trackInfoBox.x + trackInfoBox.width);
       expect(trackInfoBox.x + trackInfoBox.width).toBeLessThanOrEqual(transportBox.x);
     }
     if (viewport.width <= 800) {
       const statusBox = await playbackStatus.boundingBox();
       expect(statusBox).not.toBeNull();
-      if (statusBox && dryRunBox) expect(statusBox.y).toBeGreaterThan(dryRunBox.y);
+      expect(statusBox).not.toBeNull();
+      if (statusBox && titleBox) expect(statusBox.y).toBeGreaterThan(titleBox.y);
     }
     await page.getByRole('row', { name: /Blue Bird/ }).click();
     await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
@@ -1843,8 +1838,7 @@ test('physical playback omits the dry-run indicator at responsive viewport sizes
     await page.setViewportSize(viewport);
     await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
     const player = await startSelectedSong(page);
-    await expect(player.getByText('Playing', { exact: true })).toBeVisible();
-    await expect(player.locator('.player-dry-run-label')).toHaveCount(0);
+    await expect(player.locator('.player-track-status')).toHaveText('Playing');
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
   }
 });

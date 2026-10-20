@@ -22,7 +22,7 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-dry-run-label')).toHaveText('Dry run');
+  await expect(player.locator('.player-track-status')).toHaveText('Dry run · Playing');
 
   const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
   await selectedRow.click();
@@ -263,7 +263,7 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
   const compactPlayer = await startDryRunWithSelection(page);
   const overlay = await openInspector(page, 'Details');
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
-  await expect(compactPlayer.locator('.player-dry-run-label')).toHaveText('Dry run');
+  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Dry run · Playing');
   await expect(overlay).toBeVisible();
   const compactSearch = page.getByRole('searchbox', { name: 'Search All Songs' });
   await compactSearch.evaluate((input: HTMLInputElement) => input.blur());

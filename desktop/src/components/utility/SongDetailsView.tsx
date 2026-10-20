@@ -31,10 +31,9 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
       <section
         ref={scrollRef}
         className="song-details-view scroll-surface utility-empty"
-        aria-labelledby="song-details-title"
+        aria-label="Song details"
         tabIndex={0}
       >
-        <h3 id="song-details-title">Song Details</h3>
         <p className="muted">Select a song to view details.</p>
       </section>
     );

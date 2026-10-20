@@ -662,6 +662,8 @@ body.is-resizing * {
 .utility-surface {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -679,9 +681,11 @@ body.is-resizing * {
   grid-template-areas:
     'title close'
     'tabs tabs';
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 32px;
   align-items: start;
   flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
   min-width: 0;
   gap: 10px;
   margin-bottom: 12px;
@@ -700,6 +704,11 @@ body.is-resizing * {
 
 .utility-close-button {
   grid-area: close;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  box-sizing: border-box;
   justify-self: end;
   align-self: center;
   border: 0;
@@ -709,6 +718,9 @@ body.is-resizing * {
 .utility-view-tabs {
   display: flex;
   grid-area: tabs;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
   gap: 2px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -737,6 +749,8 @@ body.is-resizing * {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
   min-width: 0;
   min-height: 0;
 }
@@ -744,6 +758,8 @@ body.is-resizing * {
 .utility-content {
   display: flex;
   flex: 1 1 auto;
+  width: 100%;
+  box-sizing: border-box;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -812,8 +828,11 @@ body.is-resizing * {
 
 .utility-empty {
   align-content: start;
-  gap: 8px;
-  padding-top: 34px;
+  padding-top: 4px;
+}
+
+.utility-empty p {
+  margin-block: 0;
 }
 
 .song-details-heading {

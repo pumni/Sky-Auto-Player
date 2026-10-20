@@ -54,35 +54,13 @@
   font-size: 11px;
 }
 
-.player-track-subtitle {
-  display: flex;
+.player-track-subtitle,
+.player-track-status {
+  display: block;
   min-width: 0;
-  align-items: baseline;
-  gap: 5px;
 }
 
-.player-track-copy .player-identity-label {
-  flex: 0 0 auto;
-  overflow: visible;
-  color: var(--text-primary);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-overflow: clip;
-  text-transform: uppercase;
-}
-
-.player-track-copy .player-dry-run-label {
-  flex: 0 0 auto;
-  overflow: visible;
-  color: var(--text-primary);
-  font-size: 9px;
-  font-weight: 700;
-  text-overflow: clip;
-}
-
-.player-track-subtitle .muted {
-  min-width: 0;
+.player-track-status {
   text-overflow: ellipsis;
 }
 

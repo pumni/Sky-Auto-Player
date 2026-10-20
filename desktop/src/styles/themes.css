@@ -148,8 +148,6 @@ html[data-palette='graphite'] .update-indicator {
   border-color: var(--control-border);
 }
 
-html[data-palette='graphite'] .player-track-copy .player-identity-label,
-html[data-palette='graphite'] .player-track-copy .player-dry-run-label,
 html[data-palette='graphite'] .player-risk {
   font-size: 11px;
 }

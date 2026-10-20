@@ -6,6 +6,8 @@ export function formatPlayerDuration(value: number): string {
 }
 
 export function playerStateLabel(state: string): string {
+  if (state === 'starting') return 'Starting…';
+  if (state === 'stopping') return 'Stopping…';
   const label = state.replaceAll('_', ' ');
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
