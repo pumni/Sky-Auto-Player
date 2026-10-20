@@ -4,7 +4,11 @@ import { LibraryNavigator } from '../library/LibraryNavigator';
 import { TrackBrowser } from '../tracks/TrackBrowser';
 import { UtilityPane } from '../utility/UtilityPane';
 import { ResizableSeparator } from './ResizableSeparator';
-import { useWorkbenchLayout } from './useWorkbenchLayout';
+import {
+  getUtilityOverlayWidth,
+  getUtilityPresentationMode,
+  useWorkbenchLayout,
+} from './useWorkbenchLayout';
 import { WorkbenchPane } from './WorkbenchPane';
 
 interface WorkbenchProps {
@@ -40,7 +44,27 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const workbenchRef = useRef<HTMLElement>(null);
   const viewportWidth = useWorkbenchWidth(workbenchRef);
   const utility = useStore((store) => store.utility);
-  const layout = useWorkbenchLayout(viewportWidth, utility.open);
+  const presentationMode = getUtilityPresentationMode(viewportWidth, utility.open);
+  const utilityDocked = presentationMode === 'docked';
+  const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth);
+  const layout = useWorkbenchLayout(viewportWidth, utilityDocked);
+  const previousUtilityOpenRef = useRef(utility.open);
+
+  useEffect(() => {
+    const openedFromClosed = utility.open && !previousUtilityOpenRef.current;
+    previousUtilityOpenRef.current = utility.open;
+    if (!openedFromClosed || presentationMode !== 'overlay') return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const surface = workbenchRef.current?.querySelector<HTMLElement>('.utility-surface');
+      const activeTab = surface?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      const firstControl = surface?.querySelector<HTMLElement>(
+        'button:not([disabled]), [tabindex="0"]',
+      );
+      (activeTab ?? firstControl ?? surface)?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [presentationMode, utility.open]);
 
   return (
     <main
@@ -48,6 +72,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       className={`workbench${utility.open ? ' has-utility' : ''}`}
       aria-label="Music sheet workbench"
       data-layout-fits={layout.geometry.fits ? 'true' : 'false'}
+      data-utility-presentation={presentationMode}
     >
       <WorkbenchPane
         className={`navigator-workbench-pane${layout.navigatorCollapsed ? ' is-collapsed' : ''}`}
@@ -79,21 +104,31 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       </WorkbenchPane>
       {utility.open && (
         <>
-          <ResizableSeparator
-            label="Resize utility pane"
-            value={layout.utilityWidth}
-            min={Math.min(280, layout.utilityWidth)}
-            max={layout.utilityWidthMax}
-            defaultValue={320}
-            direction={-1}
-            onChange={(value) => layout.setUtilityWidth(value)}
-            onCommit={(value) => layout.setUtilityWidth(value, true)}
-          />
+          {utilityDocked && (
+            <ResizableSeparator
+              label="Resize utility pane"
+              value={layout.utilityWidth}
+              min={Math.min(280, layout.utilityWidth)}
+              max={layout.utilityWidthMax}
+              defaultValue={320}
+              direction={-1}
+              onChange={(value) => layout.setUtilityWidth(value)}
+              onCommit={(value) => layout.setUtilityWidth(value, true)}
+            />
+          )}
           <WorkbenchPane
-            className="utility-workbench-pane"
-            style={{ flex: `0 0 ${layout.utilityWidth}px` }}
+            className={`utility-workbench-pane${presentationMode === 'overlay' ? ' is-overlay' : ''}`}
+            style={
+              presentationMode === 'overlay'
+                ? { width: utilityOverlayWidth }
+                : { flex: `0 0 ${layout.utilityWidth}px` }
+            }
           >
-            <UtilityPane useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+            <UtilityPane
+              presentationMode={utilityDocked ? 'docked' : 'overlay'}
+              useStore={useStore}
+              utilityTriggerRef={utilityTriggerRef}
+            />
           </WorkbenchPane>
         </>
       )}

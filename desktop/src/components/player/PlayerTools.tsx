@@ -117,7 +117,8 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         type="button"
         aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
         title={utility.open ? 'Close utility panel' : 'Open utility panel'}
-        aria-pressed={utility.open}
+        aria-expanded={utility.open}
+        aria-controls={utility.open ? 'utility-inspector' : undefined}
         ref={utilityTriggerRef}
         onClick={() => toggleUtility()}
       >

@@ -47,6 +47,9 @@ export type WorkbenchLayoutStateV4 = WorkbenchPreferencesV5;
 export const MIN_TRACK_BROWSER_WIDTH = 420;
 export const WORKBENCH_GUTTER = 8;
 export const OUTER_INLINE_PADDING = WORKBENCH_GUTTER * 2;
+export const MAX_UTILITY_OVERLAY_WIDTH = 400;
+
+export type UtilityPresentationMode = 'closed' | 'docked' | 'overlay';
 
 interface WorkbenchGeometryInput {
   viewportWidth: number;
@@ -92,6 +95,20 @@ export function getUtilityWidthMin(viewportWidth: number): number {
   return Math.min(MIN_UTILITY_WIDTH, getUtilityWidthMax(viewportWidth));
 }
 
+export function getUtilityPresentationMode(
+  viewportWidth: number,
+  utilityOpen: boolean,
+): UtilityPresentationMode {
+  if (!utilityOpen) return 'closed';
+  return getUtilityWidthMax(viewportWidth) >= MIN_UTILITY_WIDTH ? 'docked' : 'overlay';
+}
+
+export function getUtilityOverlayWidth(viewportWidth: number): number {
+  const availableWidth = Math.max(0, Math.floor(viewportWidth) - OUTER_INLINE_PADDING);
+  const responsiveWidth = Math.max(MIN_UTILITY_WIDTH, Math.floor(viewportWidth / 2));
+  return Math.min(MAX_UTILITY_OVERLAY_WIDTH, responsiveWidth, availableWidth);
+}
+
 export function solveWorkbenchGeometry({
   viewportWidth,
   navigatorWidth,
@@ -119,13 +136,13 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
-export function useWorkbenchLayout(viewportWidth: number, utilityOpen = false) {
+export function useWorkbenchLayout(viewportWidth: number, utilityDocked = false) {
   const [layout, setLayout] = useState<WorkbenchPreferencesV5>(() => loadWorkbenchPreferences());
   // Keep queued event updates composable between renders without side effects in the updater.
   const pendingLayoutRef = useRef(layout);
 
   const utilityWidthMax = getUtilityWidthMax(viewportWidth);
-  const effectiveUtilityWidth = utilityOpen
+  const effectiveUtilityWidth = utilityDocked
     ? clamp(layout.utilityWidth, getUtilityWidthMin(viewportWidth), utilityWidthMax)
     : 0;
   const navigatorMax = getNavigatorWidthMax(viewportWidth, effectiveUtilityWidth);

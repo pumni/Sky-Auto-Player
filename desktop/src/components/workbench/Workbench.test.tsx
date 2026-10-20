@@ -13,6 +13,8 @@ import {
   loadWorkbenchLayout,
   MIN_NAVIGATOR_WIDTH,
   getUtilityWidthMax,
+  getUtilityOverlayWidth,
+  getUtilityPresentationMode,
   solveWorkbenchGeometry,
   updateWorkbenchPreferences,
   WORKBENCH_STORAGE_KEY,
@@ -290,6 +292,25 @@ describe('workbench layout persistence', () => {
     expect(minimum.fits).toBe(true);
     expect(COMPACT_NAVIGATOR_WIDTH).toBe(56);
     expect(getNavigatorWidthMax(920)).toBeGreaterThanOrEqual(MIN_NAVIGATOR_WIDTH);
+  });
+
+  it('chooses docked presentation only when the minimum inspector width fits', () => {
+    for (const viewportWidth of [1920, 1366, 1024, 900, 800, 788]) {
+      expect(getUtilityPresentationMode(viewportWidth, true)).toBe('docked');
+    }
+    for (const viewportWidth of [787, 780, 640]) {
+      expect(getUtilityPresentationMode(viewportWidth, true)).toBe('overlay');
+    }
+    expect(getUtilityPresentationMode(640, false)).toBe('closed');
+    expect(getUtilityWidthMax(788)).toBe(280);
+    expect(getUtilityWidthMax(787)).toBe(279);
+  });
+
+  it('computes a compact overlay width independently from docked width preferences', () => {
+    expect(getUtilityOverlayWidth(640)).toBe(320);
+    expect(getUtilityOverlayWidth(780)).toBe(390);
+    expect(getUtilityOverlayWidth(400)).toBe(280);
+    expect(getUtilityOverlayWidth(250)).toBe(234);
   });
 
   it('combines rapid functional updates while persisting only explicit commits', () => {

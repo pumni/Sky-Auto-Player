@@ -32,6 +32,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
         ref={scrollRef}
         className="song-details-view scroll-surface utility-empty"
         aria-labelledby="song-details-title"
+        tabIndex={0}
       >
         <h3 id="song-details-title">Song Details</h3>
         <p className="muted">Select a song to view details.</p>
@@ -49,6 +50,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
       className="song-details-view scroll-surface"
       aria-labelledby="song-details-title"
       aria-busy={detail.state === 'loading'}
+      tabIndex={0}
       role={detail.state === 'fatal' ? 'alert' : undefined}
     >
       <div className="song-details-heading">
