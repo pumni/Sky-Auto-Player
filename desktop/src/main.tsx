@@ -25,6 +25,7 @@ const mockDurations = (
   .filter((value) => Number.isFinite(value) && value > 0)
   .map((value) => Math.min(value, 120_000));
 const mockParams = new URLSearchParams(window.location.search);
+const mockUpdateState = mockParams.get('mockUpdateState');
 const mockStartDelay = Number(mockParams.get('mockStartDelayMs'));
 const mockStartResponseDelay = Number(mockParams.get('mockStartResponseDelayMs'));
 const mockStatusQueryFailures = Number(mockParams.get('mockStatusQueryFailures'));
@@ -65,6 +66,15 @@ const createBrowserBridge = async () => {
       : {}),
     ...(Number.isFinite(mockStatusQueryFailures) && mockStatusQueryFailures > 0
       ? { statusQueryFailures: Math.min(mockStatusQueryFailures, 10) }
+      : {}),
+    ...(mockUpdateState === 'current'
+      ? {
+          updateSnapshot: {
+            state: 'current' as const,
+            current_version: '4.0.0-alpha.1-mock',
+            available_version: null,
+          },
+        }
       : {}),
     ...(mockParams.get('mockNeverCreateSession') === '1' ? { neverCreateSession: true } : {}),
     ...(mockParams.get('mockDropPlaybackSnapshots') === '1' ? { emitSnapshots: false } : {}),

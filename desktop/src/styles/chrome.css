@@ -1,18 +1,37 @@
 .app-titlebar {
+  --titlebar-side-width: 260px;
   position: relative;
   z-index: 2;
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) minmax(240px, 520px) minmax(0, 1fr) auto auto;
+  grid-template-columns:
+    minmax(var(--titlebar-side-width), 1fr)
+    minmax(0, min(520px, calc(100vw - var(--titlebar-side-width) - var(--titlebar-side-width))))
+    minmax(var(--titlebar-side-width), 1fr);
   align-items: center;
   min-width: 0;
   height: var(--titlebar-height);
-  padding-left: 10px;
+  padding: 0;
   border-bottom: 0;
   background: var(--canvas);
 }
 
+.app-titlebar[data-update-available='false'] {
+  --titlebar-side-width: 226px;
+}
+
+.app-titlebar-leading {
+  display: flex;
+  grid-column: 1;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding-left: 10px;
+}
+
 .app-titlebar-brand {
   display: grid;
+  flex: 0 0 32px;
   place-items: center;
   width: 32px;
   height: 32px;
@@ -26,19 +45,22 @@
 }
 
 .titlebar-drag-space {
+  flex: 1 1 auto;
   min-width: 0;
   height: 100%;
 }
 
+.titlebar-drag-space-trailing {
+  display: none;
+}
+
 .global-search {
-  position: absolute;
-  top: 7px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: relative;
+  grid-column: 2;
   display: flex;
   align-items: center;
   width: 100%;
-  width: min(520px, calc(100% - 440px));
+  max-width: 520px;
   min-width: 0;
   height: 34px;
   gap: 8px;
@@ -51,6 +73,11 @@
 
 .global-search:focus-within {
   border-color: var(--focus-ring);
+}
+
+html[data-palette='graphite'] .global-search:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .global-search input {
@@ -77,12 +104,20 @@
 
 .app-titlebar-actions {
   display: flex;
-  grid-column: 5;
   align-items: center;
-  justify-self: end;
   min-width: 0;
   gap: 4px;
-  margin-left: 8px;
+  padding-inline: 4px;
+}
+
+.app-titlebar-end {
+  display: flex;
+  grid-column: 3;
+  align-items: stretch;
+  justify-self: end;
+  min-width: 0;
+  height: var(--titlebar-height);
+  padding-left: 8px;
 }
 
 .app-titlebar-actions .icon-button,
@@ -124,10 +159,8 @@
 
 .window-caption-controls {
   display: flex;
-  grid-column: 6;
   align-self: stretch;
   height: var(--titlebar-height);
-  margin-left: 10px;
 }
 
 .caption-glyph {
@@ -195,22 +228,37 @@
 }
 
 @media (max-width: 1100px) {
-  .app-titlebar {
-    grid-template-columns: 40px minmax(0, 1fr) minmax(220px, 360px) minmax(0, 1fr) auto auto;
-    padding-left: 6px;
-  }
-
   .app-titlebar-actions {
     gap: 2px;
-    margin-left: 4px;
   }
 
   .global-search kbd {
     display: none;
   }
+}
+
+@media (max-width: 700px) {
+  .app-titlebar {
+    grid-template-columns:
+      96px
+      minmax(0, min(520px, calc(100vw - 96px - var(--titlebar-side-width) - 24px)))
+      minmax(24px, 1fr)
+      auto;
+  }
 
   .global-search {
-    width: min(360px, calc(100% - 420px));
+    grid-column: 2;
+  }
+
+  .titlebar-drag-space-trailing {
+    display: block;
+    grid-column: 3;
+    min-width: 0;
+    height: 100%;
+  }
+
+  .app-titlebar-end {
+    grid-column: 4;
   }
 }
 
@@ -224,6 +272,10 @@
   .global-search:focus-within {
     outline: 2px solid Highlight;
     outline-offset: -2px;
+  }
+
+  html[data-palette='graphite'] .global-search:focus-within {
+    outline-color: Highlight;
   }
 
   .caption-button-close:hover {

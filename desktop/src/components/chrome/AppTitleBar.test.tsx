@@ -35,6 +35,12 @@ describe('AppTitleBar', () => {
     };
     render(<AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />);
 
+    const titlebar = screen.getByRole('banner', { name: 'Sky Auto Player' });
+    expect(titlebar).toHaveAttribute('data-update-available', 'true');
+    expect(titlebar.querySelector('.titlebar-drag-space')).toHaveAttribute(
+      'data-tauri-drag-region',
+      'true',
+    );
     expect(screen.getByPlaceholderText('Search All Songs…')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Minimize window' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Maximize window' })).toBeInTheDocument();
@@ -73,6 +79,8 @@ describe('AppTitleBar', () => {
 
     render(<AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />);
     expect(screen.queryByRole('button', { name: /Open update/ })).toBeNull();
+    const titlebar = screen.getByRole('banner', { name: 'Sky Auto Player' });
+    expect(titlebar).toHaveAttribute('data-update-available', 'false');
 
     act(() => {
       useStore.setState({
@@ -85,6 +93,7 @@ describe('AppTitleBar', () => {
     });
 
     const indicator = await screen.findByRole('button', { name: 'Open update 4.0.2' });
+    expect(titlebar).toHaveAttribute('data-update-available', 'true');
     expect(indicator.closest('.update-indicator-shell')).toHaveAttribute(
       'title',
       'Update available: 4.0.2. Open update details.',

@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="458" viewBox="0 0 720 458" role="img" aria-labelledby="title description">
+  <title id="title">Graphite Workbench candidate palette</title>
+  <desc id="description">Semantic surface, border, text, accent, and focus colors proposed for the non-persisted Graphite preview.</desc>
+  <rect width="720" height="398" fill="#121416" />
+  <text x="18" y="30" fill="#dce1e8" font-family="Segoe UI, sans-serif" font-size="18" font-weight="600">Graphite Workbench · V1 preview</text>
+  <text x="18" y="49" fill="#a9b2bd" font-family="Segoe UI, sans-serif" font-size="11">Candidate tokens for owner screenshot review</text>
+
+  <g font-family="Segoe UI, sans-serif" font-size="11">
+    <g transform="translate(18 68)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#121416" stroke="#394049" />
+      <text x="44" y="21" fill="#dce1e8">Canvas</text><text x="44" y="35" fill="#a9b2bd">#121416</text>
+    </g>
+    <g transform="translate(193 68)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#191c20" stroke="#394049" />
+      <text x="44" y="21" fill="#dce1e8">Pane</text><text x="44" y="35" fill="#a9b2bd">#191C20</text>
+    </g>
+    <g transform="translate(368 68)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#16191d" stroke="#394049" />
+      <text x="44" y="21" fill="#dce1e8">Secondary</text><text x="44" y="35" fill="#a9b2bd">#16191D</text>
+    </g>
+    <g transform="translate(543 68)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#25292f" stroke="#394049" />
+      <text x="44" y="21" fill="#dce1e8">Raised</text><text x="44" y="35" fill="#a9b2bd">#25292F</text>
+    </g>
+
+    <g transform="translate(18 145)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#2c3138" stroke="#394049" />
+      <text x="44" y="21" fill="#dce1e8">Hover</text><text x="44" y="35" fill="#a9b2bd">#2C3138</text>
+    </g>
+    <g transform="translate(193 145)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#353b44" stroke="#394049" />
+      <text x="44" y="21" fill="#dce1e8">Pressed</text><text x="44" y="35" fill="#a9b2bd">#353B44</text>
+    </g>
+    <g transform="translate(368 145)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#272632" stroke="#7663b8" />
+      <text x="44" y="21" fill="#dce1e8">Selection</text><text x="44" y="35" fill="#a9b2bd">#272632</text>
+    </g>
+    <g transform="translate(543 145)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#121416" stroke="#2c3036" />
+      <text x="44" y="21" fill="#dce1e8">Quiet border</text><text x="44" y="35" fill="#a9b2bd">#2C3036</text>
+    </g>
+
+    <g transform="translate(18 222)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#121416" stroke="#394049" />
+      <text x="44" y="21" fill="#dce1e8">Strong border</text><text x="44" y="35" fill="#a9b2bd">#394049</text>
+    </g>
+    <g transform="translate(193 222)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#121416" stroke="#7d8591" />
+      <text x="44" y="21" fill="#dce1e8">Control border</text><text x="44" y="35" fill="#a9b2bd">#7D8591</text>
+    </g>
+    <g transform="translate(368 222)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#dce1e8" />
+      <text x="44" y="21" fill="#dce1e8">Primary text</text><text x="44" y="35" fill="#a9b2bd">#DCE1E8</text>
+    </g>
+    <g transform="translate(543 222)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#a9b2bd" />
+      <text x="44" y="21" fill="#dce1e8">Secondary text</text><text x="44" y="35" fill="#a9b2bd">#A9B2BD</text>
+    </g>
+
+    <g transform="translate(18 299)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#8993a1" />
+      <text x="44" y="21" fill="#dce1e8">Tertiary text</text><text x="44" y="35" fill="#a9b2bd">#8993A1</text>
+    </g>
+    <g transform="translate(193 299)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#7663b8" />
+      <text x="44" y="21" fill="#dce1e8">Accent</text><text x="44" y="35" fill="#a9b2bd">#7663B8</text>
+    </g>
+    <g transform="translate(368 299)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#705aaa" />
+      <text x="44" y="21" fill="#dce1e8">Accent hover</text><text x="44" y="35" fill="#a9b2bd">#705AAA</text>
+    </g>
+    <g transform="translate(543 299)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#a99af7" />
+      <text x="44" y="21" fill="#dce1e8">Focus ring</text><text x="44" y="35" fill="#a9b2bd">#A99AF7</text>
+    </g>
+    <g transform="translate(18 376)">
+      <rect width="160" height="68" rx="5" fill="#191c20" stroke="#2c3036" />
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="#ffffff" />
+      <text x="44" y="21" fill="#dce1e8">On accent</text><text x="44" y="35" fill="#a9b2bd">#FFFFFF</text>
+    </g>
+  </g>
+</svg>

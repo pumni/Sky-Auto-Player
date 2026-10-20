@@ -179,6 +179,35 @@ async function styleValue(
   );
 }
 
+async function expectedSystemColor(
+  page: Page,
+  property: 'color' | 'backgroundColor' | 'borderTopColor' | 'borderLeftColor' | 'outlineColor',
+  value: string,
+) {
+  return page.evaluate(
+    ({ property: styleProperty, value: color }) => {
+      const probe = document.createElement('span');
+      probe.style[styleProperty] = color;
+      document.body.append(probe);
+      const resolved = getComputedStyle(probe)[styleProperty];
+      probe.remove();
+      return resolved;
+    },
+    { property, value },
+  );
+}
+
+async function expectForcedColor(
+  page: Page,
+  locator: Locator,
+  property: 'color' | 'backgroundColor' | 'borderTopColor' | 'borderLeftColor' | 'outlineColor',
+  value: string,
+) {
+  await expect
+    .poll(() => styleValue(locator, property))
+    .toBe(await expectedSystemColor(page, property, value));
+}
+
 async function assertBorderUsesToken(
   page: Page,
   locator: Locator,
@@ -293,6 +322,138 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     await expect.poll(() => token(page, name)).toBe(auroraTokens[index]);
   }
   await selectPalette(page, 'aurora');
+});
+
+test('Graphite preview tokens meet contrast targets without joining saved palette choices', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Open update/ })).toBeVisible();
+  await expect.poll(() => page.locator('html').getAttribute('data-palette')).toBe('aurora');
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
+  const palette = settings.getByLabel('Color palette');
+  await expect(palette).toHaveValue('aurora');
+  await expect(palette.locator('option')).toHaveCount(5);
+  await expect(palette.locator('option[value="graphite"]')).toHaveCount(0);
+  await settings.getByRole('button', { name: 'Close settings' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'aurora');
+
+  await page.locator('html').evaluate((root) => root.setAttribute('data-palette', 'graphite'));
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
+
+  const graphiteTokens = {
+    '--canvas': '#121416',
+    '--surface-panel': '#191c20',
+    '--surface-secondary': '#16191d',
+    '--surface-raised': '#25292f',
+    '--control-hover': '#2c3138',
+    '--control-pressed': '#353b44',
+    '--selection-bg': '#272632',
+    '--border-subtle': '#2c3036',
+    '--border-strong': '#394049',
+    '--control-border': '#7d8591',
+    '--text-primary': '#dce1e8',
+    '--text-secondary': '#a9b2bd',
+    '--text-tertiary': '#8993a1',
+    '--accent': '#7663b8',
+    '--accent-hover': '#705aaa',
+    '--on-accent': '#ffffff',
+    '--focus-ring': '#a99af7',
+  } as const;
+  for (const [name, value] of Object.entries(graphiteTokens)) {
+    await expect.poll(() => token(page, name)).toBe(value);
+  }
+  for (const [name, value] of Object.entries(stableStatusTokens)) {
+    await expect.poll(() => token(page, name)).toBe(value);
+  }
+  for (const [name, value] of Object.entries({
+    '--type-body': '14px',
+    '--type-page-heading': '20px',
+    '--type-section-heading': '16px',
+    '--type-control-label': '14px',
+    '--type-metadata': '12px',
+  })) {
+    await expect.poll(() => token(page, name)).toBe(value);
+  }
+
+  const colors = {
+    canvas: await resolvedTokenColor(page, '--canvas'),
+    panel: await resolvedTokenColor(page, '--surface-panel'),
+    secondary: await resolvedTokenColor(page, '--surface-secondary'),
+    raised: await resolvedTokenColor(page, '--surface-raised'),
+    selected: await resolvedTokenColor(page, '--selection-bg'),
+    controlBorder: await resolvedTokenColor(page, '--control-border'),
+    accent: await resolvedTokenColor(page, '--accent'),
+    accentHover: await resolvedTokenColor(page, '--accent-hover'),
+    onAccent: await resolvedTokenColor(page, '--on-accent'),
+    focus: await resolvedTokenColor(page, '--focus-ring'),
+    primary: await resolvedTokenColor(page, '--text-primary'),
+    secondaryText: await resolvedTokenColor(page, '--text-secondary'),
+    tertiary: await resolvedTokenColor(page, '--text-tertiary'),
+  };
+  for (const surface of [
+    colors.canvas,
+    colors.panel,
+    colors.secondary,
+    colors.raised,
+    colors.selected,
+  ]) {
+    expect(contrastRatio(colors.primary, surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.secondaryText, surface)).toBeGreaterThanOrEqual(4.5);
+  }
+  for (const surface of [
+    colors.canvas,
+    colors.panel,
+    colors.secondary,
+    colors.raised,
+    colors.selected,
+  ]) {
+    expect(contrastRatio(colors.tertiary, surface)).toBeGreaterThanOrEqual(4.5);
+  }
+  expect(contrastRatio(colors.controlBorder, colors.canvas)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(colors.controlBorder, colors.panel)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(colors.controlBorder, colors.raised)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(colors.accent, colors.selected)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(colors.accent, colors.panel)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(colors.onAccent, colors.accent)).toBeGreaterThanOrEqual(4.5);
+  expect(contrastRatio(colors.onAccent, colors.accentHover)).toBeGreaterThanOrEqual(4.5);
+  expect(contrastRatio(colors.focus, colors.canvas)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(colors.focus, colors.panel)).toBeGreaterThanOrEqual(3);
+
+  const selectedRow = page.getByRole('row', { name: /Aurora Landing/ });
+  await selectedRow.click();
+  await assertBackgroundUsesToken(page, selectedRow, '--selection-bg');
+  await assertBorderUsesToken(page, selectedRow, '--accent', 'borderLeftColor');
+  const update = page.locator('.update-indicator');
+  await assertBorderUsesToken(page, update, '--control-border');
+  await update.hover();
+  await assertBackgroundUsesToken(page, update, '--control-hover');
+  const stop = page.getByRole('button', { name: 'Stop', exact: true });
+  await expect(stop).toBeDisabled();
+  await expect.poll(() => stop.evaluate((button) => getComputedStyle(button).opacity)).toBe('0.58');
+
+  const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+  await search.focus();
+  await expect
+    .poll(() => search.evaluate((input) => getComputedStyle(input.parentElement!).outlineWidth))
+    .toBe('2px');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
+  const highlight = await expectedSystemColor(page, 'outlineColor', 'Highlight');
+  await search.focus();
+  await expect
+    .poll(() => search.evaluate((input) => getComputedStyle(input.parentElement!).outlineColor))
+    .toBe(highlight);
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  const forcedSelectedRow = page.locator('.track-row.is-selected');
+  await expectForcedColor(page, forcedSelectedRow, 'backgroundColor', 'Highlight');
+  await expectForcedColor(page, forcedSelectedRow, 'color', 'HighlightText');
 });
 
 test('semantic consumers and interaction states use the locked hierarchy', async ({ page }) => {
