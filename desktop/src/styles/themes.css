@@ -85,7 +85,7 @@ html[data-color-mode='dark'] {
 
 /* Graphite is the default palette for newly initialized appearance settings. */
 html[data-palette='graphite'] {
-  --workbench-content: #121314;
+  --workbench-content: #18191b;
   --workbench-navigation: #191a1b;
   --workbench-inspector: #191a1b;
   --chrome-surface: #191a1b;
@@ -93,7 +93,7 @@ html[data-palette='graphite'] {
   --workbench-pressed: #303133;
   --workbench-selected: #25242c;
   --workbench-divider: #2a2b2c;
-  --workbench-pane-edge: #3a3d40;
+  --workbench-pane-edge: #313336;
   --workbench-pane-radius: 6px;
   --workbench-overlay-edge: #72777d;
   --workbench-overlay-radius: 6px;
@@ -105,9 +105,12 @@ html[data-palette='graphite'] {
   --workbench-accent: #8270c7;
   --workbench-accent-hover: #9281d4;
   --workbench-focus: #b2a5e9;
+  --workbench-search-surface: #202123;
+  --workbench-search-idle-edge: #3d3f43;
+  --workbench-search-focus: #9688c6;
   --titlebar-height: 40px;
   --workbench-gap: 4px;
-  --canvas: var(--workbench-content);
+  --canvas: #121314;
   --surface-panel: var(--workbench-navigation);
   --surface-secondary: var(--workbench-inspector);
   --surface-raised: #242526;

@@ -100,7 +100,7 @@ const expected = {
 } satisfies Record<Palette, Record<string, string>>;
 
 const graphiteRoleTokens = {
-  '--workbench-content': '#121314',
+  '--workbench-content': '#18191b',
   '--workbench-navigation': '#191a1b',
   '--workbench-inspector': '#191a1b',
   '--chrome-surface': '#191a1b',
@@ -116,6 +116,9 @@ const graphiteRoleTokens = {
   '--workbench-accent': '#8270c7',
   '--workbench-accent-hover': '#9281d4',
   '--workbench-focus': '#b2a5e9',
+  '--workbench-search-surface': '#202123',
+  '--workbench-search-idle-edge': '#3d3f43',
+  '--workbench-search-focus': '#9688c6',
 } as const;
 
 const stableStatusTokens = {

@@ -11,18 +11,18 @@ html[data-palette='graphite'] .app-titlebar {
 }
 
 html[data-palette='graphite'] .global-search {
-  border-color: var(--workbench-control-boundary);
-  background: var(--workbench-content);
+  border-color: var(--workbench-search-idle-edge);
+  background: var(--workbench-search-surface);
 }
 
 html[data-palette='graphite'] .global-search:focus-within {
-  border-color: var(--workbench-control-boundary);
+  border-color: var(--workbench-search-idle-edge);
   outline: 0;
   box-shadow: none;
 }
 
 html[data-palette='graphite'] .global-search:has(input:focus-visible) {
-  outline: 2px solid var(--workbench-focus);
+  outline: 2px solid var(--workbench-search-focus);
   outline-offset: 1px;
 }
 

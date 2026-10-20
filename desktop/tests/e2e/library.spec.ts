@@ -787,8 +787,21 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   expect(trackPane).not.toBeNull();
   expect(playerBar).not.toBeNull();
   if (navigatorPane && trackPane && playerBar) {
-    expect(Math.round(trackPane.x - (navigatorPane.x + navigatorPane.width))).toBe(8);
-    expect(Math.round(playerBar.y - (navigatorPane.y + navigatorPane.height))).toBe(8);
+    const geometry = await page.evaluate(() => ({
+      cssGutter: Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+      ),
+      solverGutter: Number.parseFloat(
+        document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',
+      ),
+    }));
+    expect(geometry.solverGutter).toBe(geometry.cssGutter);
+    expect(Math.round(trackPane.x - (navigatorPane.x + navigatorPane.width))).toBe(
+      geometry.cssGutter,
+    );
+    expect(Math.round(playerBar.y - (navigatorPane.y + navigatorPane.height))).toBe(
+      geometry.cssGutter,
+    );
   }
   const titlebar = await page.locator('.app-titlebar').boundingBox();
   expect(titlebar).not.toBeNull();
@@ -831,7 +844,7 @@ test('minimum dockable viewport keeps the Inspector inside the actual client rec
 test('narrow Inspector overlays the workbench without shrinking the Track Browser', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 780, height: 540 });
+  await page.setViewportSize({ width: 771, height: 540 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.locator('.utility-workbench-pane')).toBeVisible();
