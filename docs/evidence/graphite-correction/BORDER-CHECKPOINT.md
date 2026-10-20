@@ -96,7 +96,7 @@ Captured from the actual Windows `sky_desktop_shell.exe` window at application s
 
 [Actual Tauri dev window PNG](border-restored/native-tauri-window.png)
 
-The first launch attempt found the pre-existing Vite server on port 1420; closing the old app and stopping its dev process released the port. The clean run then reached the native `Running sky_desktop_shell.exe` stage. After capturing, the dev terminal was stopped with `Ctrl+C` and the app window closed. Another full-screen application remained foreground, so the app was not raised or sent input; Windows `PrintWindow` captured only the Sky Auto Player window. This verifies native launch and appearance at the host's maximized size, not physical DPI, titlebar drag or native input behavior.
+The first launch attempt found the pre-existing Vite server on port 1420. After closing its old app/dev runner and confirming the port was released, the clean run served Vite and reached the native `Running sky_desktop_shell.exe` stage. After capturing, `Ctrl+C` was sent to the dev terminal. Its watcher respawned the app once, so the verified Sky Auto Player dev process tree was stopped and the window/port were checked closed. Another full-screen application remained foreground, so the app was not raised or sent input; Windows `PrintWindow` captured only the Sky Auto Player window. This verifies native startup and appearance at the host's maximized size, not physical DPI, titlebar drag or native input behavior.
 
 ## Verification evidence
 
