@@ -8,7 +8,7 @@ Please approve these Graphite preview screenshots as the visual basis for V2, or
 
 The screenshots are real browser captures of the desktop app using its deterministic mock bridge. Both variants use the same 500-track library and state: Update is available, Search is focused, Candle Run is playing in dry-run mode, and Blue Bird is selected for inspection. The 640 px Inspector is a compact overlay; the wider captures use the docked Inspector. Each Runtime image shows the dry-run no-input status.
 
-Baseline source: `36422ad2ea524269cc524b9642a65655290e9284`. Preview source: the final implementation commit recorded below. Screenshots use logical CSS viewports at 100% browser scale; titlebar geometry tests also cover simulated device scale factors of 100%, 125%, and 150%.
+Baseline source: `36422ad2ea524269cc524b9642a65655290e9284`. Preview implementation source: `846a17f35926ba22a62909b973cc4c8a5724a3c9`. Screenshots use logical CSS viewports at 100% browser scale; titlebar geometry tests also cover simulated device scale factors of 100%, 125%, and 150%.
 
 | CSS viewport | Before: workbench                     | Graphite: workbench                     | Before: Runtime                     | Graphite: Runtime                     |
 | ------------ | ------------------------------------- | --------------------------------------- | ----------------------------------- | ------------------------------------- |
