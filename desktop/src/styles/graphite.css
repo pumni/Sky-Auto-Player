@@ -200,11 +200,12 @@ html[data-palette='graphite'] .track-browser-header {
   gap: 8px;
   margin: 0;
   padding-inline: 12px;
-  background: var(--workbench-navigation);
+  background: var(--workbench-content);
 }
 
 html[data-palette='graphite'] .track-browser {
   padding: 0;
+  background: var(--workbench-content);
 }
 
 html[data-palette='graphite'] .track-browser-heading {
@@ -224,7 +225,7 @@ html[data-palette='graphite'] .track-browser-source-label {
   min-height: 26px;
   padding-inline: 8px;
   border-radius: var(--radius-control);
-  background: var(--surface-raised);
+  background: var(--workbench-content);
 }
 
 html[data-palette='graphite'] .track-browser-source-label h1 {
@@ -269,8 +270,14 @@ html[data-palette='graphite'] .track-table-frame {
   margin-inline: 0;
 }
 
+html[data-palette='graphite'] .track-table {
+  background: var(--workbench-content);
+}
+
 html[data-palette='graphite'] .track-table-header {
   height: 32px;
+  padding-inline-start: 18px;
+  padding-inline-end: 12px;
   border-bottom-color: var(--workbench-divider);
   background: var(--workbench-content);
   font-size: 11px;
@@ -336,10 +343,16 @@ html[data-palette='graphite'] .track-table-header {
   html[data-palette='graphite'] .track-browser-heading {
     gap: 6px;
   }
+
+  html[data-palette='graphite'] .track-table-header {
+    padding-inline-start: 12px;
+    padding-inline-end: 6px;
+  }
 }
 
 html[data-palette='graphite'] .track-row {
-  inset-inline: var(--workbench-row-inset);
+  inset-inline-start: var(--workbench-row-inset);
+  inset-inline-end: 0;
   padding-inline-start: 10px;
   padding-inline-end: 12px;
   border-radius: var(--workbench-row-radius);
@@ -357,8 +370,14 @@ html[data-palette='graphite'] .track-row {
 
 @container track-browser (max-width: 440px) {
   html[data-palette='graphite'] .track-row {
-    inset-inline: var(--workbench-row-inset-narrow);
+    inset-inline-start: var(--workbench-row-inset-narrow);
+    inset-inline-end: 0;
     padding-inline-start: 2px;
+    padding-inline-end: 4px;
+  }
+
+  html[data-palette='graphite'] .track-table-header {
+    padding-inline-start: 8px;
     padding-inline-end: 4px;
   }
 }

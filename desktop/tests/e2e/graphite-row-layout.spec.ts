@@ -136,6 +136,9 @@ async function readGeometry(page: Page, viewportName: string) {
               right: gridRect.right,
               clientWidth: grid?.clientWidth ?? null,
               offsetWidth: grid?.offsetWidth ?? null,
+              clientHeight: grid?.clientHeight ?? null,
+              offsetHeight: grid?.offsetHeight ?? null,
+              scrollHeight: grid?.scrollHeight ?? null,
               scrollWidth: grid?.scrollWidth ?? null,
               clientLeft: grid?.clientLeft ?? null,
               clientRight:
@@ -180,7 +183,10 @@ async function readGeometry(page: Page, viewportName: string) {
       })(),
       surfaces: {
         browser: styleFor('.track-browser-workbench-pane'),
+        browserSection: styleFor('.track-browser'),
         browserHeader: styleFor('.track-browser-header'),
+        sourceLabel: styleFor('.track-browser-source-label'),
+        table: styleFor('.track-table'),
         columnHeader: styleFor('.track-table-header'),
         columnRule: styleFor('.track-table-header'),
       },
@@ -242,7 +248,14 @@ function expectRowGeometry(
   if (!frame || !scrollport || !header || !pane || browserWidth === null) {
     throw new Error('Track Browser grid geometry is unavailable');
   }
-  const expectedInset = browserWidth <= 440 ? 4 : 6;
+  const compactColumns = browserWidth <= 440;
+  const narrowColumns = browserWidth > 440 && browserWidth <= 520;
+  const expectedInset = compactColumns ? 4 : 6;
+  const expectedRowPadding = compactColumns
+    ? { left: 2, right: 4, headerLeft: 8, headerRight: 4 }
+    : narrowColumns
+      ? { left: 4, right: 6, headerLeft: 12, headerRight: 6 }
+      : { left: 10, right: 12, headerLeft: 18, headerRight: 12 };
   expect(Math.abs(frame.x - (scrollport.x + scrollport.clientLeft!))).toBeLessThanOrEqual(1);
   expect(Math.abs(frame.width - scrollport.clientWidth!)).toBeLessThanOrEqual(1);
   expect(Math.abs(frame.right - scrollport.clientRight!)).toBeLessThanOrEqual(1);
@@ -261,7 +274,17 @@ function expectRowGeometry(
     if (!row?.rect) throw new Error(`The ${key} row has no bounding box`);
     expect(row.rowFillInsets).not.toBeNull();
     expect(Math.abs(row.rowFillInsets!.left - expectedInset)).toBeLessThanOrEqual(2);
-    expect(Math.abs(row.rowFillInsets!.right - expectedInset)).toBeLessThanOrEqual(2);
+    expect(Math.abs(row.rowFillInsets!.right)).toBeLessThanOrEqual(1);
+    expect(row.style.insetInlineStart).toBe(`${expectedInset}px`);
+    expect(row.style.insetInlineEnd).toBe('0px');
+    expect(row.style.paddingInlineStart).toBe(`${expectedRowPadding.left}px`);
+    expect(row.style.paddingInlineEnd).toBe(`${expectedRowPadding.right}px`);
+    expect(geometry.surfaces.columnHeader?.paddingInlineStart).toBe(
+      `${expectedRowPadding.headerLeft}px`,
+    );
+    expect(geometry.surfaces.columnHeader?.paddingInlineEnd).toBe(
+      `${expectedRowPadding.headerRight}px`,
+    );
     const paneLeftInset = row.rect.x - (pane.x + 1);
     const paneRightInset = pane.right - 1 - row.rect.right;
     expect(Math.abs(paneLeftInset - row.rowFillInsets!.left)).toBeLessThanOrEqual(1);
@@ -320,6 +343,7 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
   evidence.push(await readGeometry(page, 'populated-1366x768'));
   await scrollbarSimulation.evaluate((style) => style.remove());
+  const wideNativeScrollbar = await readGeometry(page, 'populated-1366x768-native-scrollbar');
 
   const likeButton = hoveredRow.getByRole('button', { name: /Add Aurora Landing to Liked Songs/ });
   await expect(likeButton).toBeVisible();
@@ -375,15 +399,24 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   const collapsed = evidence[1] as Awaited<ReturnType<typeof readGeometry>>;
   const compact = evidence[2] as Awaited<ReturnType<typeof readGeometry>>;
   expectRowGeometry(wide, true);
-  for (const geometry of [collapsed, compact]) expectRowGeometry(geometry);
-  for (const geometry of [wide, collapsed, compact]) {
+  for (const geometry of [wideNativeScrollbar, collapsed, compact]) expectRowGeometry(geometry);
+  for (const geometry of [wide, wideNativeScrollbar, collapsed, compact]) {
     expect(geometry.horizontalOverflow).toBe(false);
     expect(geometry.trackGridHorizontalOverflow).toBe(false);
   }
 
-  expect(wide.surfaces.browser?.backgroundColor).toBe('rgb(21, 22, 24)');
-  expect(wide.surfaces.browserHeader?.backgroundColor).toBe('rgb(25, 26, 27)');
-  expect(wide.surfaces.columnHeader?.backgroundColor).toBe('rgb(21, 22, 24)');
+  for (const geometry of [wide, wideNativeScrollbar, collapsed, compact]) {
+    for (const surface of [
+      geometry.surfaces.browser,
+      geometry.surfaces.browserSection,
+      geometry.surfaces.browserHeader,
+      geometry.surfaces.sourceLabel,
+      geometry.surfaces.table,
+      geometry.surfaces.columnHeader,
+    ]) {
+      expect(surface?.backgroundColor).toBe('rgb(21, 22, 24)');
+    }
+  }
   expect(wide.surfaces.columnRule?.borderBottomColor).toBe('rgb(42, 43, 44)');
   expect(wide.rows.selected?.style.backgroundColor).toBe('rgb(37, 36, 44)');
   expect(wide.rows.hovered?.style.backgroundColor).toBe('rgb(34, 35, 36)');
@@ -433,6 +466,18 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
     .toBeLessThanOrEqual(440);
   const narrowGeometry = await readGeometry(page, 'narrow-browser-container');
   expectRowGeometry(narrowGeometry);
+  expect(narrowGeometry.horizontalOverflow).toBe(false);
+  expect(narrowGeometry.trackGridHorizontalOverflow).toBe(false);
+  for (const surface of [
+    narrowGeometry.surfaces.browser,
+    narrowGeometry.surfaces.browserSection,
+    narrowGeometry.surfaces.browserHeader,
+    narrowGeometry.surfaces.sourceLabel,
+    narrowGeometry.surfaces.table,
+    narrowGeometry.surfaces.columnHeader,
+  ]) {
+    expect(surface?.backgroundColor).toBe('rgb(21, 22, 24)');
+  }
   evidence.push(narrowGeometry);
   await pane.evaluate((element, flex) => {
     element.style.flex = flex;
@@ -453,6 +498,7 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
 
   await page.getByRole('button', { name: 'Close utility panel' }).click();
   await page.setViewportSize({ width: 800, height: 560 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '800');
   await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
   await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
   const restoredPreference = await page.evaluate(
@@ -492,4 +538,63 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
     workbenchPreferenceKey,
   );
   expect(preferenceAfter).toBe('expanded');
+
+  await openApp(page, { width: 1366, height: 768 });
+  await startDryRunWithSelection(page);
+  const widePane = page.locator('.track-browser-workbench-pane');
+  const originalWideFlex = await widePane.evaluate((element) => element.style.flex);
+  await widePane.evaluate((element) => {
+    element.style.flex = '0 0 502px';
+  });
+  const mediumBrowserWidth = () =>
+    widePane.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return (
+        element.getBoundingClientRect().width -
+        Number.parseFloat(style.borderLeftWidth) -
+        Number.parseFloat(style.borderRightWidth)
+      );
+    });
+  await expect.poll(mediumBrowserWidth).toBeGreaterThan(440);
+  await expect.poll(mediumBrowserWidth).toBeLessThanOrEqual(520);
+  await page.getByRole('row', { name: /Aurora Landing/ }).hover();
+  const mediumGeometry = await readGeometry(page, 'medium-browser-container');
+  expectRowGeometry(mediumGeometry);
+  expect(mediumGeometry.horizontalOverflow).toBe(false);
+  expect(mediumGeometry.trackGridHorizontalOverflow).toBe(false);
+  for (const surface of [
+    mediumGeometry.surfaces.browser,
+    mediumGeometry.surfaces.browserSection,
+    mediumGeometry.surfaces.browserHeader,
+    mediumGeometry.surfaces.sourceLabel,
+    mediumGeometry.surfaces.table,
+    mediumGeometry.surfaces.columnHeader,
+  ]) {
+    expect(surface?.backgroundColor).toBe('rgb(21, 22, 24)');
+  }
+  await widePane.evaluate((element, flex) => {
+    element.style.flex = flex;
+  }, originalWideFlex);
+
+  await page.getByRole('searchbox', { name: 'Search All Songs' }).fill('no graphite match 9472');
+  await expect(page.getByText('No songs match your search', { exact: true })).toBeVisible();
+  const emptyStateGeometry = await page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
+    const browser = document.querySelector<HTMLElement>('.track-browser');
+    const empty = document.querySelector<HTMLElement>('.empty-state');
+    return {
+      documentWidth: document.documentElement.scrollWidth,
+      rowCount: document.querySelectorAll('.track-row').length,
+      hasScrollport: document.querySelector('.track-table') !== null,
+      paneBackground: pane ? getComputedStyle(pane).backgroundColor : null,
+      browserBackground: browser ? getComputedStyle(browser).backgroundColor : null,
+      emptyBackground: empty ? getComputedStyle(empty).backgroundColor : null,
+    };
+  });
+  expect(emptyStateGeometry.documentWidth).toBeLessThanOrEqual(1366);
+  expect(emptyStateGeometry.rowCount).toBe(0);
+  expect(emptyStateGeometry.hasScrollport).toBe(false);
+  expect(emptyStateGeometry.paneBackground).toBe('rgb(21, 22, 24)');
+  expect(emptyStateGeometry.browserBackground).toBe('rgb(21, 22, 24)');
+  expect(emptyStateGeometry.emptyBackground).toBe('rgba(0, 0, 0, 0)');
 });

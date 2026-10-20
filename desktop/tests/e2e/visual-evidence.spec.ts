@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 const captureStage = process.env.GRAPHITE_WORKSPACE_CAPTURE;
+const requestedCaptureViews = process.env.GRAPHITE_WORKSPACE_CAPTURE_VIEWS?.split(',')
+  .map((view) => view.trim())
+  .filter(Boolean);
 const evidenceDirectory = resolve(process.cwd(), 'test-results/graphite-workspace-checkpoint');
 const workbenchPreferenceKey = 'sky.ui.workbench.v5';
 const playlistName = 'Evening Practice Playlist With A Long Descriptive Name';
@@ -104,6 +107,10 @@ async function capture(page: Page, name: string) {
     path: resolve(evidenceDirectory, name),
     animations: 'disabled',
   });
+}
+
+function shouldCapture(view: string) {
+  return !requestedCaptureViews?.length || requestedCaptureViews.includes(view);
 }
 
 async function readWorkspaceGeometry(page: Page) {
@@ -307,6 +314,9 @@ async function readWorkspaceGeometry(page: Page) {
             ? {
                 clientWidth: trackTable.clientWidth,
                 offsetWidth: trackTable.offsetWidth,
+                clientHeight: trackTable.clientHeight,
+                offsetHeight: trackTable.offsetHeight,
+                scrollHeight: trackTable.scrollHeight,
                 scrollWidth: trackTable.scrollWidth,
                 clientLeft: trackTable.clientLeft,
                 reservedInline: trackTable.offsetWidth - trackTable.clientWidth,
@@ -336,6 +346,8 @@ async function readWorkspaceGeometry(page: Page) {
         header: computed('.track-browser-header'),
         sourceLabel: computed('.track-browser-source-label'),
         canvas: computed('.track-browser-workbench-pane'),
+        browserSection: computed('.track-browser'),
+        table: computed('.track-table'),
         tableHeader: computed('.track-table-header'),
       },
       documentWidth: document.documentElement.scrollWidth,
@@ -353,7 +365,7 @@ test.skip(
   'manual visual evidence capture; set GRAPHITE_WORKSPACE_CAPTURE=candidate',
 );
 
-test('captures the Graphite G workspace views on request', async ({ page }) => {
+test('captures selected Graphite workspace evidence views on request', async ({ page }) => {
   test.setTimeout(120_000);
   expect(captureStage).toBe('candidate');
 
@@ -383,13 +395,13 @@ test('captures the Graphite G workspace views on request', async ({ page }) => {
   measurements['1366x768ClassicScrollbar'] = classicScrollbarGeometry;
   await classicScrollbarSimulation.evaluate((style) => style.remove());
   measurements['1366x768'] = await readWorkspaceGeometry(page);
-  await capture(page, 'candidate-populated-1366x768.png');
+  if (shouldCapture('populated')) await capture(page, 'candidate-populated-1366x768.png');
 
   await openApp(page, { width: 800, height: 560 }, 'collapsed');
   await startDryRunWithSelection(page);
   await page.getByRole('row', { name: /Aurora Landing/ }).hover();
   measurements['800x560'] = await readWorkspaceGeometry(page);
-  await capture(page, 'candidate-workbench-800x560.png');
+  if (shouldCapture('compact')) await capture(page, 'candidate-workbench-800x560.png');
 
   await openApp(page, { width: 640, height: 448 }, 'expanded');
   const compactPlayer = await startDryRunWithSelection(page);
@@ -400,14 +412,14 @@ test('captures the Graphite G workspace views on request', async ({ page }) => {
   await expect(compactInspector).toBeVisible();
   await page.getByRole('row', { name: /Aurora Landing/ }).hover({ position: { x: 24, y: 23 } });
   measurements['640x448'] = await readWorkspaceGeometry(page);
-  await capture(page, 'candidate-overlay-640x448.png');
+  if (shouldCapture('overlay')) await capture(page, 'candidate-overlay-640x448.png');
 
   await openApp(page, { width: 640, height: 448 });
   await createLongPlaylistAndOpenMenu(page);
   const playlistTitle = page.getByRole('heading', { name: playlistName });
   await expect(playlistTitle).toHaveAttribute('title', playlistName);
   measurements['playlist-640x448'] = await readWorkspaceGeometry(page);
-  await capture(page, 'candidate-playlist-add-menu-640x448.png');
+  if (shouldCapture('playlist')) await capture(page, 'candidate-playlist-add-menu-640x448.png');
 
   await openApp(page, { width: 1366, height: 768 }, 'expanded', true);
   const runtimePlayer = await startDryRunWithSelection(page);
@@ -433,17 +445,13 @@ test('captures the Graphite G workspace views on request', async ({ page }) => {
           ?.textContent?.trim() ?? null,
     };
   });
-  await capture(page, 'candidate-runtime-diagnostics-1366x768.png');
+  if (shouldCapture('runtime')) await capture(page, 'candidate-runtime-diagnostics-1366x768.png');
 
   mkdirSync(evidenceDirectory, { recursive: true });
   await import('node:fs/promises').then(({ writeFile }) =>
-    Promise.all(
-      ['candidate-measurements.json', 'correction-h-after.json'].map((filename) =>
-        writeFile(
-          resolve(evidenceDirectory, filename),
-          `${JSON.stringify(measurements, null, 2)}\n`,
-        ),
-      ),
+    writeFile(
+      resolve(evidenceDirectory, 'candidate-measurements.json'),
+      `${JSON.stringify(measurements, null, 2)}\n`,
     ),
   );
 });
