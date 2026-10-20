@@ -92,7 +92,11 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
               <span>Back to playlist</span>
             </Button>
           )}
-          <h1 id="track-browser-title">{heading}</h1>
+          <div className="track-browser-source-label">
+            <h1 id="track-browser-title" title={heading}>
+              {heading}
+            </h1>
+          </div>
           <span className="track-browser-count">
             {loading
               ? 'Updating…'

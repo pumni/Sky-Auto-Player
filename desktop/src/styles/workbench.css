@@ -566,6 +566,10 @@ body.is-resizing * {
   gap: 2px;
 }
 
+.track-browser-source-label {
+  display: contents;
+}
+
 .track-browser-back-button {
   justify-self: start;
   min-height: 26px;

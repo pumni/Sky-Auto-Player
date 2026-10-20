@@ -157,21 +157,86 @@ html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
 
 html[data-palette='graphite'] .track-browser-header h1 {
   color: var(--text-primary);
-  font-size: var(--type-page-heading);
+  font-size: var(--workbench-source-title-size);
+  line-height: 18px;
   font-weight: 600;
   letter-spacing: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 html[data-palette='graphite'] .track-browser-header {
-  background: var(--workbench-track-header);
+  box-sizing: border-box;
+  position: relative;
+  height: var(--workbench-source-header-height);
+  min-height: 0;
+  flex-basis: var(--workbench-source-header-height);
+  gap: 8px;
+  margin: 0;
+  padding-inline: 12px;
+  background: var(--workbench-navigation);
+}
+
+html[data-palette='graphite'] .track-browser {
+  padding: 0;
+}
+
+html[data-palette='graphite'] .track-browser-heading {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 8px;
+}
+
+html[data-palette='graphite'] .track-browser-source-label {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 26px;
+  padding-inline: 8px;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+html[data-palette='graphite'] .track-browser-source-label h1 {
+  min-width: 0;
+}
+
+html[data-palette='graphite'] .track-browser.is-playlist .track-browser-heading {
+  gap: 6px;
+}
+
+html[data-palette='graphite'] .track-browser-back-button {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  white-space: nowrap;
 }
 
 html[data-palette='graphite'] .track-browser-count {
+  flex: 0 0 auto;
+  margin: 0;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--workbench-source-count-size);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+html[data-palette='graphite'] .track-browser-count::before {
+  content: '·';
+  margin-inline: 0 6px;
+  color: var(--text-tertiary);
 }
 
 html[data-palette='graphite'] .track-browser-guidance {
+  position: absolute;
+  top: 100%;
+  inset-inline-start: 12px;
+  margin: 4px 0 0;
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -181,12 +246,72 @@ html[data-palette='graphite'] .track-table-frame {
 }
 
 html[data-palette='graphite'] .track-table-header {
-  height: 36px;
+  height: 32px;
   border-bottom-color: var(--workbench-divider);
-  background: var(--workbench-track-columns);
+  background: var(--workbench-content);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
+}
+
+@media (max-width: 900px) {
+  html[data-palette='graphite'] {
+    --workbench-source-header-height: 32px;
+    --workbench-source-title-size: 13px;
+    --workbench-source-count-size: 11px;
+  }
+
+  html[data-palette='graphite'] .track-browser-header {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  html[data-palette='graphite'] .track-browser-guidance {
+    inset-inline-start: 8px;
+  }
+
+  html[data-palette='graphite'] .track-browser-source-label {
+    min-height: 24px;
+    padding-inline: 6px;
+  }
+
+  html[data-palette='graphite'] .track-browser-header h1 {
+    line-height: 16px;
+  }
+
+  html[data-palette='graphite'] .track-browser-heading {
+    gap: 6px;
+  }
+}
+
+@container track-browser (max-width: 520px) {
+  html[data-palette='graphite'] .track-browser-header {
+    --workbench-source-header-height: 32px;
+    --workbench-source-title-size: 13px;
+    --workbench-source-count-size: 11px;
+  }
+
+  html[data-palette='graphite'] .track-browser-header {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  html[data-palette='graphite'] .track-browser-guidance {
+    inset-inline-start: 8px;
+  }
+
+  html[data-palette='graphite'] .track-browser-source-label {
+    min-height: 24px;
+    padding-inline: 6px;
+  }
+
+  html[data-palette='graphite'] .track-browser-header h1 {
+    line-height: 16px;
+  }
+
+  html[data-palette='graphite'] .track-browser-heading {
+    gap: 6px;
+  }
 }
 
 html[data-palette='graphite'] .track-row {

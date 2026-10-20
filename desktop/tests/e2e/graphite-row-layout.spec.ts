@@ -1,13 +1,5 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
-const variant = process.env.GRAPHITE_ROW_GEOMETRY_VARIANT ?? 'candidate';
-const evidenceDirectory = resolve(
-  process.cwd(),
-  '../docs/evidence/graphite-correction/checkpoint-f',
-  variant ?? 'unselected',
-);
 const workbenchPreferenceKey = 'sky.ui.workbench.v5';
 
 async function openApp(
@@ -68,13 +60,6 @@ async function openInspector(page: Page) {
   await expect(inspector).toBeVisible();
   await inspector.getByRole('tab', { name: 'Details' }).click();
   return inspector;
-}
-
-async function capture(page: Page, name: string, locator?: Locator) {
-  mkdirSync(evidenceDirectory, { recursive: true });
-  const path = resolve(evidenceDirectory, `${name}.png`);
-  if (locator) await locator.screenshot({ path, animations: 'disabled' });
-  else await page.screenshot({ path, animations: 'disabled' });
 }
 
 async function readGeometry(page: Page, viewportName: string) {
@@ -220,7 +205,7 @@ function expectRowGeometry(geometry: Awaited<ReturnType<typeof readGeometry>>) {
   }
 }
 
-test('captures and verifies Graphite row surfaces, collapsed navigation, and dock geometry', async ({
+test('Graphite row surfaces, collapsed navigation, and dock geometry remain functional', async ({
   page,
 }) => {
   test.setTimeout(60_000);
@@ -235,14 +220,8 @@ test('captures and verifies Graphite row surfaces, collapsed navigation, and doc
   const hoveredRow = page.getByRole('row', { name: /Aurora Landing/ });
   await hoveredRow.hover();
   await expect.poll(() => hoveredRow.evaluate((row) => row.matches(':hover'))).toBe(true);
-  if (variant === 'candidate') {
-    await expect(details.locator('.song-details-context')).toHaveCount(0);
-    await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
-  }
-  await capture(page, 'populated-1366x768');
-  await capture(page, 'hovered-row-1366x768', hoveredRow);
-  await capture(page, 'selected-row-1366x768', page.locator('.track-row.is-selected'));
-  await capture(page, 'playing-row-1366x768', page.locator('.track-row.is-playing'));
+  await expect(details.locator('.song-details-context')).toHaveCount(0);
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
   evidence.push(await readGeometry(page, 'populated-1366x768'));
 
   const likeButton = hoveredRow.getByRole('button', { name: /Add Aurora Landing to Liked Songs/ });
@@ -277,9 +256,6 @@ test('captures and verifies Graphite row surfaces, collapsed navigation, and doc
   await expect.poll(() => everydayHovered.evaluate((row) => row.matches(':hover'))).toBe(true);
   await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect(everydayPlayer.locator('.player-dry-run-label')).toBeVisible();
-  await capture(page, 'collapsed-800x560');
-  await capture(page, 'collapsed-navigator-800x560', page.locator('.navigator-workbench-pane'));
-  await capture(page, 'player-dock-800x560', everydayPlayer);
   evidence.push(await readGeometry(page, 'collapsed-800x560'));
 
   await openApp(page, { width: 640, height: 448 }, 'expanded');
@@ -290,150 +266,132 @@ test('captures and verifies Graphite row surfaces, collapsed navigation, and doc
   await expect.poll(() => compactHovered.evaluate((row) => row.matches(':hover'))).toBe(true);
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
   await expect(compactPlayer.locator('.player-dry-run-label')).toHaveText('Dry run');
-  if (variant === 'candidate') {
-    await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
-  } else {
-    await expect(page.getByRole('button', { name: 'Collapse library navigator' })).toBeVisible();
-  }
+  await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   const savedPreference = await page.evaluate(
     (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
     workbenchPreferenceKey,
   );
-  if (variant === 'candidate') expect(savedPreference).toBe('expanded');
-  await capture(page, 'compact-overlay-640x448');
-  await capture(page, 'compact-navigator-640x448', page.locator('.navigator-workbench-pane'));
-  await capture(page, 'compact-player-dock-640x448', compactPlayer);
+  expect(savedPreference).toBe('expanded');
   evidence.push(await readGeometry(page, 'compact-overlay-640x448'));
 
-  if (variant === 'candidate') {
-    const wide = evidence[0] as Awaited<ReturnType<typeof readGeometry>>;
-    const collapsed = evidence[1] as Awaited<ReturnType<typeof readGeometry>>;
-    const compact = evidence[2] as Awaited<ReturnType<typeof readGeometry>>;
-    for (const geometry of [wide, collapsed, compact]) expectRowGeometry(geometry);
-    for (const geometry of [wide, collapsed, compact]) {
-      expect(geometry.horizontalOverflow).toBe(false);
-      expect(geometry.trackGridHorizontalOverflow).toBe(false);
-    }
-
-    expect(wide.surfaces.browser?.backgroundColor).toBe('rgb(24, 25, 27)');
-    expect(wide.surfaces.browserHeader?.backgroundColor).toBe('rgb(29, 30, 32)');
-    expect(wide.surfaces.columnHeader?.backgroundColor).toBe('rgb(27, 28, 30)');
-    expect(wide.surfaces.columnRule?.borderBottomColor).toBe('rgb(42, 43, 44)');
-    expect(wide.rows.selected?.style.backgroundColor).toBe('rgb(37, 36, 44)');
-    expect(wide.rows.hovered?.style.backgroundColor).toBe('rgb(34, 35, 36)');
-    expect(wide.rows.playing?.ariaCurrent).toBe('true');
-    expect(wide.rows.selected?.ariaSelected).toBe('true');
-    expect(wide.identities).toMatchObject({
-      dockTitle: 'Candle Run',
-      detailsTitle: 'Blue Bird',
-      detailsContext: null,
-      dryRun: 'Dry run',
-    });
-
-    expect(collapsed.panes.navigator?.width).toBeCloseTo(48, 0);
-    for (const tile of collapsed.navigatorTiles) {
-      expect(tile.rect?.width).toBeCloseTo(40, 0);
-      expect(tile.rect?.height).toBeCloseTo(40, 0);
-      const pane = collapsed.panes.navigator;
-      if (!pane || !tile.rect) throw new Error('Collapsed navigator tile geometry is unavailable');
-      expect(
-        Math.abs(tile.rect.x + tile.rect.width / 2 - (pane.x + pane.width / 2)),
-      ).toBeLessThanOrEqual(1);
-    }
-    expect(collapsed.identities.dryRun).toBe('Dry run');
-    expect(collapsed.panes.inspector).toBeNull();
-
-    expect(compact.panes.navigator?.width).toBeCloseTo(48, 0);
-    expect(compact.panes.inspector).not.toBeNull();
-    expect(compact.identities.dryRun).toBe('Dry run');
-    expect(compact.savedNavigatorPreference).toBe('expanded');
-
-    const pane = page.locator('.track-browser-workbench-pane');
-    const originalFlex = await pane.evaluate((element) => element.style.flex);
-    await pane.evaluate((element) => {
-      element.style.flex = '0 0 438px';
-    });
-    await expect
-      .poll(() =>
-        pane.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return (
-            element.getBoundingClientRect().width -
-            Number.parseFloat(style.borderLeftWidth) -
-            Number.parseFloat(style.borderRightWidth)
-          );
-        }),
-      )
-      .toBeLessThanOrEqual(440);
-    const narrowGeometry = await readGeometry(page, 'narrow-browser-container');
-    expectRowGeometry(narrowGeometry);
-    evidence.push(narrowGeometry);
-    await pane.evaluate((element, flex) => {
-      element.style.flex = flex;
-    }, originalFlex);
+  const wide = evidence[0] as Awaited<ReturnType<typeof readGeometry>>;
+  const collapsed = evidence[1] as Awaited<ReturnType<typeof readGeometry>>;
+  const compact = evidence[2] as Awaited<ReturnType<typeof readGeometry>>;
+  for (const geometry of [wide, collapsed, compact]) expectRowGeometry(geometry);
+  for (const geometry of [wide, collapsed, compact]) {
+    expect(geometry.horizontalOverflow).toBe(false);
+    expect(geometry.trackGridHorizontalOverflow).toBe(false);
   }
 
-  mkdirSync(evidenceDirectory, { recursive: true });
-  writeFileSync(
-    resolve(evidenceDirectory, 'computed-geometry.json'),
-    `${JSON.stringify({ variant, evidence }, null, 2)}\n`,
-    'utf8',
+  expect(wide.surfaces.browser?.backgroundColor).toBe('rgb(24, 25, 27)');
+  expect(wide.surfaces.browserHeader?.backgroundColor).toBe('rgb(25, 26, 27)');
+  expect(wide.surfaces.columnHeader?.backgroundColor).toBe('rgb(24, 25, 27)');
+  expect(wide.surfaces.columnRule?.borderBottomColor).toBe('rgb(42, 43, 44)');
+  expect(wide.rows.selected?.style.backgroundColor).toBe('rgb(37, 36, 44)');
+  expect(wide.rows.hovered?.style.backgroundColor).toBe('rgb(34, 35, 36)');
+  expect(wide.rows.playing?.ariaCurrent).toBe('true');
+  expect(wide.rows.selected?.ariaSelected).toBe('true');
+  expect(wide.identities).toMatchObject({
+    dockTitle: 'Candle Run',
+    detailsTitle: 'Blue Bird',
+    detailsContext: null,
+    dryRun: 'Dry run',
+  });
+
+  expect(collapsed.panes.navigator?.width).toBeCloseTo(48, 0);
+  for (const tile of collapsed.navigatorTiles) {
+    expect(tile.rect?.width).toBeCloseTo(40, 0);
+    expect(tile.rect?.height).toBeCloseTo(40, 0);
+    const pane = collapsed.panes.navigator;
+    if (!pane || !tile.rect) throw new Error('Collapsed navigator tile geometry is unavailable');
+    expect(
+      Math.abs(tile.rect.x + tile.rect.width / 2 - (pane.x + pane.width / 2)),
+    ).toBeLessThanOrEqual(1);
+  }
+  expect(collapsed.identities.dryRun).toBe('Dry run');
+  expect(collapsed.panes.inspector).toBeNull();
+
+  expect(compact.panes.navigator?.width).toBeCloseTo(48, 0);
+  expect(compact.panes.inspector).not.toBeNull();
+  expect(compact.identities.dryRun).toBe('Dry run');
+  expect(compact.savedNavigatorPreference).toBe('expanded');
+
+  const pane = page.locator('.track-browser-workbench-pane');
+  const originalFlex = await pane.evaluate((element) => element.style.flex);
+  await pane.evaluate((element) => {
+    element.style.flex = '0 0 438px';
+  });
+  await expect
+    .poll(() =>
+      pane.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return (
+          element.getBoundingClientRect().width -
+          Number.parseFloat(style.borderLeftWidth) -
+          Number.parseFloat(style.borderRightWidth)
+        );
+      }),
+    )
+    .toBeLessThanOrEqual(440);
+  const narrowGeometry = await readGeometry(page, 'narrow-browser-container');
+  expectRowGeometry(narrowGeometry);
+  evidence.push(narrowGeometry);
+  await pane.evaluate((element, flex) => {
+    element.style.flex = flex;
+  }, originalFlex);
+
+  await page.getByRole('button', { name: 'Expand library navigator' }).click();
+  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  const manuallyExpandedNavigator = await page.locator('.navigator-workbench-pane').boundingBox();
+  expect(manuallyExpandedNavigator?.width).toBeCloseTo(208, 0);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(640);
+  const preferenceDuringExpansion = await page.evaluate(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+    workbenchPreferenceKey,
+  );
+  expect(preferenceDuringExpansion).toBe('expanded');
+
+  await page.getByRole('button', { name: 'Close utility panel' }).click();
+  await page.setViewportSize({ width: 800, height: 560 });
+  await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
+  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  const restoredPreference = await page.evaluate(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+    workbenchPreferenceKey,
+  );
+  expect(restoredPreference).toBe('expanded');
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '640');
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  const preferenceAfterReturn = await page.evaluate(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+    workbenchPreferenceKey,
+  );
+  expect(preferenceAfterReturn).toBe('expanded');
+
+  await openApp(page, { width: 1366, height: 768 });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  const idlePlayer = page.getByRole('contentinfo', { name: 'Player controls' });
+  await expect(idlePlayer.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(idlePlayer.locator('.player-track-status')).toHaveText('Ready to play');
+  await expect(idlePlayer.locator('.player-identity-label')).toHaveCount(0);
+  await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
   );
 
-  if (variant === 'candidate') {
-    await page.getByRole('button', { name: 'Expand library navigator' }).click();
-    await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
-    const manuallyExpandedNavigator = await page.locator('.navigator-workbench-pane').boundingBox();
-    expect(manuallyExpandedNavigator?.width).toBeCloseTo(208, 0);
-    await expect
-      .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
-      .toBeLessThanOrEqual(640);
-    const preferenceDuringExpansion = await page.evaluate(
-      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
-      workbenchPreferenceKey,
-    );
-    expect(preferenceDuringExpansion).toBe('expanded');
-
-    await page.getByRole('button', { name: 'Close utility panel' }).click();
-    await page.setViewportSize({ width: 800, height: 560 });
-    await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
-    await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
-    const restoredPreference = await page.evaluate(
-      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
-      workbenchPreferenceKey,
-    );
-    expect(restoredPreference).toBe('expanded');
-    await page.setViewportSize({ width: 640, height: 448 });
-    await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '640');
-    await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
-    const preferenceAfterReturn = await page.evaluate(
-      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
-      workbenchPreferenceKey,
-    );
-    expect(preferenceAfterReturn).toBe('expanded');
-
-    await openApp(page, { width: 1366, height: 768 });
-    await page.getByRole('row', { name: /Blue Bird/ }).click();
-    const idlePlayer = page.getByRole('contentinfo', { name: 'Player controls' });
-    await expect(idlePlayer.locator('.player-track-copy strong')).toHaveText('Blue Bird');
-    await expect(idlePlayer.locator('.player-track-status')).toHaveText('Ready to play');
-    await expect(idlePlayer.locator('.player-identity-label')).toHaveCount(0);
-    await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-
-    const preferenceBefore = await page.evaluate(
-      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
-      workbenchPreferenceKey,
-    );
-    expect(preferenceBefore).toBe('expanded');
-    await page.setViewportSize({ width: 800, height: 560 });
-    await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
-    const preferenceAfter = await page.evaluate(
-      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
-      workbenchPreferenceKey,
-    );
-    expect(preferenceAfter).toBe('expanded');
-  }
+  const preferenceBefore = await page.evaluate(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+    workbenchPreferenceKey,
+  );
+  expect(preferenceBefore).toBe('expanded');
+  await page.setViewportSize({ width: 800, height: 560 });
+  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  const preferenceAfter = await page.evaluate(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+    workbenchPreferenceKey,
+  );
+  expect(preferenceAfter).toBe('expanded');
 });

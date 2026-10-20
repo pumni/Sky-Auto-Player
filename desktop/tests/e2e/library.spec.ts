@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { getUtilityPresentationMode } from '../../src/components/workbench/useWorkbenchLayout';
 
 test.beforeEach(async ({ page }) => {
@@ -399,26 +399,16 @@ test('empty catalog keeps playlist onboarding while a populated catalog stays un
 
 test('populated library keeps playlist actions available without repeated onboarding text', async ({
   page,
-}, testInfo: TestInfo) => {
+}) => {
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  const capture = async (name: string) => {
-    const path = testInfo.outputPath(`${name}.png`);
-    await page.screenshot({ path, animations: 'disabled' });
-    await testInfo.attach(name, {
-      path,
-      contentType: 'image/png',
-    });
-  };
 
   await page.setViewportSize({ width: 640, height: 448 });
   await expect(page.locator('.track-browser-guidance')).toHaveCount(0);
-  await capture('before-playlist-creation-640x448');
   await page.setViewportSize({ width: 1366, height: 768 });
   await expect(navigator.locator('.library-empty-playlists p')).toHaveCount(0);
   await expect(
     navigator.locator('.library-empty-playlists').getByRole('button', { name: 'Create playlist' }),
   ).toBeVisible();
-  await capture('before-playlist-creation-1366x768');
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.setViewportSize({ width: 640, height: 448 });
@@ -431,9 +421,7 @@ test('populated library keeps playlist actions available without repeated onboar
   await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
   await expect(page.getByText('This playlist is empty')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add songs' })).toBeVisible();
-  await capture('after-empty-playlist-640x448');
   await page.setViewportSize({ width: 1366, height: 768 });
-  await capture('after-empty-playlist-1366x768');
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.getByRole('button', { name: 'Add songs' }).click();
@@ -462,13 +450,250 @@ test('populated library keeps playlist actions available without repeated onboar
   await expect(page.locator('.track-browser-count')).toHaveText('1 song');
   await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
-  await capture('after-import-1366x768');
   await expectNoSeriousAccessibilityViolations(page);
 
   await page.setViewportSize({ width: 640, height: 448 });
-  await capture('after-import-640x448');
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
   await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
+});
+
+test('Graphite workspace header compacts by viewport and browser width over one canvas', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.locator('.track-browser-header')).toBeVisible();
+    await expect(page.locator('.track-row').first()).toBeVisible();
+    const geometry = await page.evaluate(() => {
+      const rect = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (!element) return null;
+        const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
+        return { x, y, width, height, right, bottom };
+      };
+      const style = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (!element) return null;
+        const computed = getComputedStyle(element);
+        return {
+          background: computed.backgroundColor,
+          fontSize: computed.fontSize,
+          fontWeight: computed.fontWeight,
+          borderBottomWidth: computed.borderBottomWidth,
+          borderBottomColor: computed.borderBottomColor,
+        };
+      };
+      const browser = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
+      return {
+        viewportWidth: innerWidth,
+        browserWidth: browser?.clientWidth ?? 0,
+        browserScrollWidth: browser?.scrollWidth ?? 0,
+        documentWidth: document.documentElement.scrollWidth,
+        header: rect('.track-browser-header'),
+        source: rect('.track-browser-source-label'),
+        title: rect('.track-browser-header h1'),
+        count: rect('.track-browser-count'),
+        columnHeader: rect('.track-table-header'),
+        firstSong: rect('.track-row'),
+        headingTag: document.querySelector('.track-browser h1')?.tagName ?? null,
+        headerTablists: document.querySelectorAll('.track-browser-header [role="tablist"]').length,
+        headerStyle: style('.track-browser-header'),
+        sourceStyle: style('.track-browser-source-label'),
+        titleStyle: style('.track-browser-header h1'),
+        countStyle: style('.track-browser-count'),
+        browserStyle: style('.track-browser-workbench-pane'),
+        columnStyle: style('.track-table-header'),
+      };
+    });
+
+    expect(geometry.header).not.toBeNull();
+    expect(geometry.source).not.toBeNull();
+    expect(geometry.title).not.toBeNull();
+    expect(geometry.count).not.toBeNull();
+    expect(geometry.columnHeader).not.toBeNull();
+    expect(geometry.firstSong).not.toBeNull();
+    if (
+      !geometry.header ||
+      !geometry.source ||
+      !geometry.title ||
+      !geometry.count ||
+      !geometry.columnHeader ||
+      !geometry.firstSong
+    ) {
+      throw new Error('Graphite workspace header geometry is incomplete');
+    }
+
+    const expectedHeaderHeight = viewport.width <= 900 || geometry.browserWidth <= 520 ? 32 : 40;
+    expect(geometry.header.height).toBe(expectedHeaderHeight);
+    expect(geometry.columnHeader.height).toBe(32);
+    expect(geometry.firstSong.height).toBe(46);
+    expect(geometry.firstSong.y).toBeCloseTo(geometry.columnHeader.bottom, 0);
+    expect(
+      Math.abs(
+        geometry.title.y + geometry.title.height / 2 - geometry.count.y - geometry.count.height / 2,
+      ),
+    ).toBeLessThanOrEqual(1);
+    expect(geometry.headingTag).toBe('H1');
+    expect(geometry.headerTablists).toBe(0);
+    expect(geometry.headerStyle?.background).toBe('rgb(25, 26, 27)');
+    expect(geometry.sourceStyle?.background).toBe('rgb(36, 37, 38)');
+    expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '14px' : '13px');
+    expect(geometry.titleStyle?.fontWeight).toBe('600');
+    expect(geometry.countStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '12px' : '11px');
+    expect(geometry.browserStyle?.background).toBe('rgb(24, 25, 27)');
+    expect(geometry.columnStyle?.background).toBe('rgb(24, 25, 27)');
+    expect(geometry.columnStyle?.borderBottomWidth).toBe('1px');
+    expect(geometry.columnStyle?.borderBottomColor).toBe('rgb(42, 43, 44)');
+    expect(geometry.browserScrollWidth).toBeLessThanOrEqual(geometry.browserWidth);
+    expect(geometry.documentWidth).toBeLessThanOrEqual(viewport.width);
+    await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
+    await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
+  }
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const browserPane = page.locator('.track-browser-workbench-pane');
+  const previousFlex = await browserPane.evaluate((element) => element.style.flex);
+  await browserPane.evaluate((element) => {
+    element.style.flex = '0 0 520px';
+  });
+  await expect
+    .poll(() => browserPane.evaluate((element) => element.clientWidth))
+    .toBeLessThanOrEqual(520);
+  await expect(page.locator('.track-browser-header')).toHaveCSS('height', '32px');
+  await expect(page.locator('.track-browser-header h1')).toHaveCSS('font-size', '13px');
+  await browserPane.evaluate((element, flex) => {
+    element.style.flex = flex;
+  }, previousFlex);
+});
+
+test('compact playlist source keeps Add, Import, Back, long-name access, and hit targets', async ({
+  page,
+}) => {
+  const playlistName = 'Evening Practice Playlist With A Long Descriptive Name';
+  await page.setViewportSize({ width: 640, height: 448 });
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.locator('.library-add-button').click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill(playlistName);
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+
+  const heading = page.getByRole('heading', { name: playlistName });
+  const addButton = page.getByRole('button', { name: 'Add songs' });
+  await expect(heading).toBeVisible();
+  await expect(heading).toHaveAttribute('title', playlistName);
+  await expect(addButton).toBeVisible();
+  await expect(addButton).toBeEnabled();
+  const headerLayout = await page.evaluate(() => {
+    const header = document.querySelector<HTMLElement>('.track-browser-header');
+    const label = document.querySelector<HTMLElement>('.track-browser-source-label');
+    const count = document.querySelector<HTMLElement>('.track-browser-count');
+    const add = document.querySelector<HTMLElement>('.playlist-add-songs-button');
+    if (!header || !label || !count || !add) return null;
+    const box = (element: HTMLElement) => {
+      const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
+      return { x, y, width, height, right, bottom };
+    };
+    return { header: box(header), label: box(label), count: box(count), add: box(add) };
+  });
+  expect(headerLayout).not.toBeNull();
+  if (headerLayout) {
+    expect(headerLayout.header.height).toBe(32);
+    expect(headerLayout.label.right).toBeLessThanOrEqual(headerLayout.add.x);
+    expect(headerLayout.count.right).toBeLessThanOrEqual(headerLayout.add.x);
+    expect(headerLayout.label.y).toBeGreaterThanOrEqual(headerLayout.header.y);
+    expect(headerLayout.label.bottom).toBeLessThanOrEqual(headerLayout.header.bottom);
+  }
+
+  await addButton.click();
+  const menu = page.getByRole('menu', { name: 'Add songs' });
+  for (const name of ['Browse All Songs…', 'Import files…', 'Import folder…']) {
+    const item = menu.getByRole('menuitem', { name });
+    await expect(item).toBeVisible();
+    const box = await item.boundingBox();
+    expect(box).not.toBeNull();
+    if (box) {
+      const receivesPointer = await page.evaluate(
+        ({ x, y }) => document.elementFromPoint(x, y)?.closest('[role="menuitem"]') !== null,
+        { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+      );
+      expect(receivesPointer).toBe(true);
+    }
+  }
+  await menu.getByRole('menuitem', { name: 'Import files…' }).click();
+  await expect(page.getByRole('status')).toHaveText(
+    'Import complete: 1 song found in Evening Practice Playlist With A Long Descriptive Name.',
+  );
+  await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
+
+  await addButton.click();
+  await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
+  const addHeading = page.getByRole('heading', {
+    name: `Add songs to ${playlistName}`,
+  });
+  await expect(addHeading).toBeVisible();
+  await expect(addHeading).toHaveAttribute('title', `Add songs to ${playlistName}`);
+  const backButton = page.getByRole('button', { name: 'Back to playlist' });
+  await expect(backButton).toBeVisible();
+  await expect(page.getByText('500 songs in All Songs', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('searchbox', { name: `Search All Songs to add to ${playlistName}` }),
+  ).toBeVisible();
+  const addModeHeader = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return null;
+      const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
+      return { x, y, width, height, right, bottom };
+    };
+    return {
+      header: box('.track-browser-header'),
+      back: box('.track-browser-back-button'),
+      source: box('.track-browser-source-label'),
+      count: box('.track-browser-count'),
+    };
+  });
+  expect(addModeHeader.header?.height).toBe(32);
+  expect(addModeHeader.back).not.toBeNull();
+  expect(addModeHeader.source).not.toBeNull();
+  expect(addModeHeader.count).not.toBeNull();
+  if (addModeHeader.back && addModeHeader.source && addModeHeader.count && addModeHeader.header) {
+    expect(addModeHeader.back.right).toBeLessThanOrEqual(addModeHeader.source.x);
+    expect(addModeHeader.source.right).toBeLessThanOrEqual(addModeHeader.count.x);
+    expect(addModeHeader.count.right).toBeLessThanOrEqual(addModeHeader.header.right);
+    expect(addModeHeader.back.y).toBeGreaterThanOrEqual(addModeHeader.header.y);
+    expect(addModeHeader.back.bottom).toBeLessThanOrEqual(addModeHeader.header.bottom);
+  }
+  const backHitTargeted = await backButton.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    const target = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return target === button || button.contains(target);
+  });
+  expect(backHitTargeted).toBe(true);
+  await backButton.click();
+  await expect(heading).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('idle Graphite selection stays distinct from native Now Playing', async ({ page }) => {
+  const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
+  const playingRow = page.getByRole('row', { name: /Candle Run/ });
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+
+  await selectedRow.click();
+  await expect(selectedRow).toHaveAttribute('aria-selected', 'true');
+  await expect(playingRow).not.toHaveAttribute('aria-current', 'true');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.locator('.player-track-status')).toHaveText('Ready to play');
+  await expect(player.locator('.player-identity-label')).toHaveCount(0);
+  await expect(player.locator('.player-dry-run-label')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Open utility panel' }).click();
+  await expect(page.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+  await expect(page.locator('.song-details-context')).toHaveCount(0);
 });
 
 test('selected, hovered, and focused rows reveal actions without showing them on every row', async ({
@@ -504,20 +729,42 @@ test('selected, hovered, and focused rows reveal actions without showing them on
   await expect
     .poll(() => otherLike.evaluate((button) => getComputedStyle(button).opacity))
     .toBe('1');
+  const likeBox = await otherLike.boundingBox();
+  expect(likeBox).not.toBeNull();
+  if (likeBox) {
+    await expect
+      .poll(() =>
+        page.evaluate(
+          ({ x, y }) => document.elementFromPoint(x, y)?.closest('.track-like-button') !== null,
+          { x: likeBox.x + likeBox.width / 2, y: likeBox.y + likeBox.height / 2 },
+        ),
+      )
+      .toBe(true);
+  }
+  await otherLike.click();
+  const toggledLike = otherRow.locator('.track-like-button');
+  await expect(toggledLike).toHaveAttribute('aria-pressed', 'true');
+  await expect(otherRow).toHaveAttribute('aria-selected', 'false');
+  await expect(firstRow).toHaveAttribute('aria-selected', 'true');
+  await page.getByLabel('Search All Songs').focus();
   await page.getByLabel('Search All Songs').hover();
   await expect
     .poll(() => otherMenu.evaluate((button) => getComputedStyle(button).opacity))
     .toBe('0');
   await expect
-    .poll(() => otherLike.evaluate((button) => getComputedStyle(button).opacity))
-    .toBe('0');
+    .poll(() => toggledLike.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('1');
 
   await otherMenu.focus();
   await expect
     .poll(() => otherMenu.evaluate((button) => getComputedStyle(button).opacity))
     .toBe('1');
   await otherMenu.press('Enter');
-  await expect(page.getByRole('menu', { name: 'Actions for Blue Bird' })).toBeVisible();
+  const menu = page.getByRole('menu', { name: 'Actions for Blue Bird' });
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(otherMenu).toBeFocused();
   await expect(otherRow).toHaveAttribute('aria-selected', 'false');
   await expect(firstRow).toHaveAttribute('aria-selected', 'true');
 });
@@ -768,10 +1015,76 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
   ).toBe(true);
   const pane = await page.locator('.navigator-workbench-pane').boundingBox();
   expect(pane).not.toBeNull();
-  if (pane) expect(Math.round(pane.width)).toBe(48);
+  if (pane) {
+    expect(Math.round(pane.width)).toBe(48);
+    const tiles = await navigator
+      .locator('.library-nav-item, .library-add-button.is-collapsed, .library-collapse-button')
+      .evaluateAll((elements) =>
+        elements.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        }),
+      );
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.width).toBeCloseTo(40, 0);
+      expect(tile.height).toBeCloseTo(40, 0);
+      expect(Math.abs(tile.x + tile.width / 2 - (pane.x + pane.width / 2))).toBeLessThanOrEqual(1);
+    }
+  }
+  await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
+  await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
 
   await navigator.getByRole('button', { name: 'Expand library navigator' }).click();
   await expect(navigator.getByText('Your Library')).toBeVisible();
+});
+
+test('Graphite automatic compact navigation preserves the saved expanded preference', async ({
+  page,
+}) => {
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      'sky.ui.workbench.v5',
+      JSON.stringify({
+        version: 5,
+        navigatorPreference: 'expanded',
+        expandedNavigatorWidth: 240,
+        utilityWidth: 320,
+        utilityOpen: false,
+      }),
+    );
+  });
+  await page.reload();
+  const preference = () =>
+    page.evaluate(
+      () =>
+        JSON.parse(window.localStorage.getItem('sky.ui.workbench.v5') ?? 'null')
+          ?.navigatorPreference,
+    );
+
+  await expect.poll(preference).toBe('expanded');
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
+  await expect.poll(preference).toBe('expanded');
+
+  await navigator.getByRole('button', { name: 'Expand library navigator' }).click();
+  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  await expect(page.locator('.workbench')).toHaveAttribute('data-layout-fits', 'true');
+  await expect.poll(preference).toBe('expanded');
+
+  await page.setViewportSize({ width: 800, height: 560 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '800');
+  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  await expect.poll(preference).toBe('expanded');
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '640');
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect.poll(preference).toBe('expanded');
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(640);
 });
 
 test('minimum viewport keeps the workbench and Player Bar bounded', async ({ page }) => {
@@ -1401,7 +1714,7 @@ test('browsing and liking another Library row keeps Player Bar identity on Now P
 
 test('dry-run playback is labeled in the dock and explains that no physical input is sent', async ({
   page,
-}, testInfo: TestInfo) => {
+}) => {
   for (const viewport of [
     { width: 640, height: 448 },
     { width: 800, height: 560 },
@@ -1419,14 +1732,6 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
         'Tests the current profile with dry-run playback; no physical keyboard input is sent.',
       ),
     ).toBeVisible();
-    if (viewport.width === 1366) {
-      const profilePath = testInfo.outputPath('dry-run-profile-1366x768.png');
-      await page.screenshot({ path: profilePath });
-      await testInfo.attach('Dry-run profile explanation', {
-        path: profilePath,
-        contentType: 'image/png',
-      });
-    }
     await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
 
     await expect(player.getByText('Now Playing', { exact: true })).toBeVisible();
@@ -1485,12 +1790,6 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
     await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
     await expect(details.locator('.song-details-context')).toHaveCount(0);
 
-    const screenshotPath = testInfo.outputPath(`dry-run-${viewport.width}x${viewport.height}.png`);
-    await page.screenshot({ path: screenshotPath });
-    await testInfo.attach(`Dry run ${viewport.width}x${viewport.height}`, {
-      path: screenshotPath,
-      contentType: 'image/png',
-    });
     await expectNoSeriousAccessibilityViolations(page);
 
     await page.getByRole('tab', { name: 'Runtime' }).click();
@@ -1500,14 +1799,6 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
     await expect(
       diagnostics.getByText('Mode: Dry run · no physical input sent', { exact: true }),
     ).toBeVisible();
-    const diagnosticsPath = testInfo.outputPath(
-      `diagnostics-${viewport.width}x${viewport.height}.png`,
-    );
-    await page.screenshot({ path: diagnosticsPath });
-    await testInfo.attach(`Runtime diagnostics ${viewport.width}x${viewport.height}`, {
-      path: diagnosticsPath,
-      contentType: 'image/png',
-    });
     await expectNoSeriousAccessibilityViolations(page);
 
     const playerBox = await player.boundingBox();
