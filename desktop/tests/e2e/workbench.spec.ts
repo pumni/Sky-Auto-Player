@@ -337,7 +337,9 @@ test('long Song Details content scrolls independently in the compact overlay', a
   await detailsContent.focus();
   await expect(detailsContent).toBeFocused();
   await page.keyboard.press('PageDown');
-  expect(await detailsContent.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect
+    .poll(() => detailsContent.evaluate((element) => element.scrollTop), { timeout: 1_000 })
+    .toBeGreaterThan(0);
   expect(await trackTable.evaluate((element) => element.scrollTop)).toBe(
     contentSize.trackScrollTop,
   );
