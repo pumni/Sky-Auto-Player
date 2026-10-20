@@ -69,7 +69,7 @@ This checkpoint only corrects pane edges and proves their geometry in the three 
 
 ## Reproducing the local Tauri preview
 
-V2 code is on the existing feature branch and is not included in `main` or a published installer. The branch was fetched from `origin`; its local and remote heads matched before this correction. For an exact reproduction, compare the checkout with the **current `headRefOid` on Draft PR #503** before launching. The corrected application source is the border-restoration implementation in that PR; the historical checkpoint SHA above is the before-image source.
+V2 code is on the existing feature branch and is not included in `main` or a published installer. The branch was fetched from `origin`; its local and remote heads matched before this correction. For an exact reproduction, compare the checkout with the **current `headRefOid` on Draft PR #503** before launching. The corrected application source SHA used by the native capture is `b02e951dd13f93ca6697f7538cadb5e7c3b05928`; an evidence-only commit may be on top of that source commit. The historical checkpoint SHA above is the before-image source.
 
 From PowerShell at the repository root:
 
@@ -92,7 +92,11 @@ Graphite is the default only for newly initialized appearance settings. Existing
 
 ### Native Tauri capture
 
-<!-- Filled only if the Windows Tauri dev run and app-window capture succeed. -->
+Captured from the actual Windows `sky_desktop_shell.exe` window at application source HEAD `b02e951dd13f93ca6697f7538cadb5e7c3b05928`. After closing the pre-existing dev window and releasing its stale Vite server on port 1420, a clean `bun run tauri:dev` from `desktop/` started Vite and compiled/launched the native app. The running app read the existing `%LOCALAPPDATA%\io.github.pumni.skyautoplayer\config.json`; its saved palette was already `graphite`. This was a read-only check; no app settings or user data were changed. The capture is the maximized native window at 1936 × 1096 host pixels, with the user's real 96-song library. It is supplementary native evidence, not part of the fixture-matched Playwright pairs.
+
+[Actual Tauri dev window PNG](border-restored/native-tauri-window.png)
+
+The first launch attempt found the pre-existing Vite server on port 1420; closing the old app and stopping its dev process released the port. The clean run then reached the native `Running sky_desktop_shell.exe` stage. After capturing, the dev terminal was stopped with `Ctrl+C` and the app window closed. Another full-screen application remained foreground, so the app was not raised or sent input; Windows `PrintWindow` captured only the Sky Auto Player window. This verifies native launch and appearance at the host's maximized size, not physical DPI, titlebar drag or native input behavior.
 
 ## Verification evidence
 
