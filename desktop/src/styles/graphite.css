@@ -344,13 +344,17 @@ html[data-palette='graphite'] .player-track-status.is-attention {
     gap: 4px;
   }
 
-  html[data-palette='graphite'] .player-track-subtitle {
-    flex-wrap: wrap;
+  html[data-palette='graphite'] .player-track-subtitle.is-active {
+    display: grid;
+    grid-template-columns: max-content max-content;
     gap: 3px;
   }
 
-  html[data-palette='graphite'] .player-track-status.is-active {
-    flex: 0 0 100%;
+  html[data-palette='graphite'] .player-track-subtitle.is-active .player-track-status {
+    grid-column: 1 / -1;
+    display: inline-block;
+    width: max-content;
+    min-width: max-content;
     font-size: 11px;
   }
 }

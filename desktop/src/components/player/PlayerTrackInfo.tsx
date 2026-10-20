@@ -71,7 +71,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       </span>
       <div className="player-track-copy">
         <strong title={title}>{title}</strong>
-        <div className="player-track-subtitle">
+        <div className={`player-track-subtitle${active ? ' is-active' : ''}`}>
           {identityLabel && <span className="player-identity-label">{identityLabel}</span>}
           {active && playback.context?.dryRun && (
             <span className="player-dry-run-label" title="Dry run; no physical input is sent">

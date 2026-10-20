@@ -1353,7 +1353,25 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
     const dryRun = player.getByText('Dry run', { exact: true });
     await expect(dryRun).toBeVisible();
     await expect(dryRun).toHaveAttribute('title', 'Dry run; no physical input is sent');
-    await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+    const playbackStatus = player.getByText('Playing', { exact: true });
+    const playbackStatusLayout = await playbackStatus.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return {
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        display: style.display,
+        minWidth: style.minWidth,
+        gridColumn: style.gridColumn,
+        palette: document.documentElement.dataset.palette,
+      };
+    });
+    if (!(await playbackStatus.isVisible())) {
+      console.error(`Player Dock playback status layout: ${JSON.stringify(playbackStatusLayout)}`);
+    }
+    await expect(
+      playbackStatus,
+      `Player Dock playback status layout: ${JSON.stringify(playbackStatusLayout)}`,
+    ).toBeVisible();
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
     const dryRunBox = await dryRun.boundingBox();
     const trackInfoBox = await player.locator('.player-track-info').boundingBox();
@@ -1369,7 +1387,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
       expect(trackInfoBox.x + trackInfoBox.width).toBeLessThanOrEqual(transportBox.x);
     }
     if (viewport.width === 640) {
-      const statusBox = await player.getByText('Playing', { exact: true }).boundingBox();
+      const statusBox = await playbackStatus.boundingBox();
       expect(statusBox).not.toBeNull();
       if (statusBox && dryRunBox) expect(statusBox.y).toBeGreaterThan(dryRunBox.y);
     }
