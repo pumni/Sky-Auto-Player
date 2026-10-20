@@ -126,6 +126,33 @@ export function LibraryNavigator({
                 />
               );
             })}
+            {navigation.loadState === 'ready' && navigation.playlistOrder.length === 0 && (
+              <div className="library-empty-playlists">
+                <p>
+                  Create a playlist to collect catalog songs or import local sheet files and
+                  folders.
+                </p>
+                <button
+                  className="button library-empty-playlists-create"
+                  type="button"
+                  onClick={() => setCreateOpen(true)}
+                >
+                  Create playlist
+                </button>
+              </div>
+            )}
+            {navigation.loadState === 'error' && (
+              <div className="library-empty-playlists" role="status">
+                <p>Playlists couldn’t be loaded.</p>
+                <button
+                  className="button library-empty-playlists-create"
+                  type="button"
+                  onClick={() => void useStore.getState().loadLibraryNavigation()}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
           </LibrarySection>
         </div>
       )}

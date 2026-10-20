@@ -191,8 +191,8 @@ export interface DesktopStore {
   createPlaylist: (name: string) => Promise<void>;
   renamePlaylist: (playlistId: string, name: string) => Promise<void>;
   deletePlaylist: (playlistId: string) => Promise<void>;
-  importLocalFilesToPlaylist: (playlistId: string) => Promise<void>;
-  importLocalFolderToPlaylist: (playlistId: string) => Promise<void>;
+  importLocalFilesToPlaylist: (playlistId: string) => Promise<number | null>;
+  importLocalFolderToPlaylist: (playlistId: string) => Promise<number | null>;
   addSongToPlaylist: (playlistId: string, songId: string) => Promise<void>;
   removeSongFromPlaylist: (playlistId: string, songId: string) => Promise<void>;
   setSongLiked: (songId: string, liked: boolean) => Promise<void>;

@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -224,7 +224,7 @@ async function startSelectedSong(page: Page) {
 
 test('mock desktop vertical slice can search and inspect a song', async ({ page }) => {
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
-  const search = page.getByLabel('Search library');
+  const search = page.getByLabel('Search All Songs');
   await search.focus();
   await search.fill('Moonlit');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toHaveCount(0);
@@ -254,7 +254,7 @@ test('search clears browser selection while Now Playing remains on the active so
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
   await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
 
-  const search = page.getByLabel('Search library');
+  const search = page.getByLabel('Search All Songs');
   await search.fill('Moonlit');
   const browsedRow = page.getByRole('row', { name: /Moonlit Village/ });
   await expect(browsedRow).toBeVisible();
@@ -276,7 +276,7 @@ test('row selection returns focus to the grid and Like and menu actions stay iso
   page,
 }) => {
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+  await navigator.locator('.library-add-button').click();
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
   await createDialog.getByLabel('Playlist name').fill('Practice');
   await createDialog.getByRole('button', { name: 'Create' }).click();
@@ -311,6 +311,186 @@ test('row selection returns focus to the grid and Like and menu actions stay iso
   await expect(
     unselectedRow.getByRole('button', { name: 'Remove Candle Run from Liked Songs' }),
   ).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('playlist onboarding exposes create and import actions in expanded and collapsed layouts', async ({
+  page,
+}) => {
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+
+  for (const [width, height] of [
+    [640, 448],
+    [800, 560],
+    [1366, 768],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    const expandedToggle = navigator.getByRole('button', {
+      name: 'Collapse library navigator',
+    });
+    const expandToggle = navigator.getByRole('button', {
+      name: 'Expand library navigator',
+    });
+    const emptyGuidance = navigator.locator('.library-empty-playlists');
+    if (width === 640) {
+      await expect(expandToggle).toBeVisible();
+      await expect(page.locator('.track-browser-guidance')).toContainText(
+        'Create a playlist to collect songs or import local sheets.',
+      );
+    } else {
+      await expect(expandedToggle).toBeVisible();
+      await expect(emptyGuidance).toContainText('import local sheet files and folders');
+      await expect(emptyGuidance.getByRole('button', { name: 'Create playlist' })).toBeVisible();
+      await expandedToggle.click();
+      await expect(expandToggle).toBeVisible();
+    }
+    const collapsedCreate = navigator.locator('.library-navigator-footer .library-add-button');
+    await expect(collapsedCreate).toBeVisible();
+    await collapsedCreate.click();
+    const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+    await expect(createDialog).toBeVisible();
+    await createDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(createDialog).toBeHidden();
+    await expect(collapsedCreate).toBeFocused();
+    if (width > 640) await expect(expandToggle).toBeVisible();
+
+    if (width > 640) {
+      await expandToggle.click();
+    }
+    const geometry = await page.evaluate(() => ({
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      documentHeight: document.documentElement.scrollHeight,
+      viewportHeight: window.innerHeight,
+    }));
+    expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+    expect(geometry.documentHeight).toBeLessThanOrEqual(geometry.viewportHeight);
+  }
+});
+
+test('playlist onboarding supports browse and import without changing Now Playing', async ({
+  page,
+}, testInfo: TestInfo) => {
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  const capture = async (name: string) => {
+    const path = testInfo.outputPath(`${name}.png`);
+    await page.screenshot({ path, animations: 'disabled' });
+    await testInfo.attach(name, {
+      path,
+      contentType: 'image/png',
+    });
+  };
+
+  await page.setViewportSize({ width: 640, height: 448 });
+  await expect(page.locator('.track-browser-guidance')).toContainText(
+    'Create a playlist to collect songs or import local sheets.',
+  );
+  await capture('before-empty-library-640x448');
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await expect(navigator.locator('.library-empty-playlists')).toContainText(
+    'import local sheet files and folders',
+  );
+  await capture('before-empty-library-1366x768');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.setViewportSize({ width: 640, height: 448 });
+  await navigator.locator('.library-add-button').click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Practice');
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+  await expect(createDialog).toBeHidden();
+  await expect(navigator.locator('.library-add-button')).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
+  await expect(page.getByText('This playlist is empty')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add songs' })).toBeVisible();
+  await capture('after-empty-playlist-640x448');
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await capture('after-empty-playlist-1366x768');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
+  await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
+  const addSearch = page.getByRole('searchbox', {
+    name: 'Search All Songs to add to Practice',
+  });
+  await addSearch.fill('Moonlit');
+  const catalogRow = page.getByRole('row', { name: /Moonlit Village/ });
+  await expect(catalogRow).toBeVisible();
+  await expect(addSearch).toBeFocused();
+  await page.getByRole('button', { name: 'Back to playlist' }).click();
+  await expect(page.getByText('This playlist is empty')).toBeVisible();
+
+  await navigator.getByRole('button', { name: 'All Songs' }).click();
+  const player = await startSelectedSong(page);
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+
+  await navigator.getByRole('button', { name: 'Practice', exact: true }).click();
+  await page.getByRole('button', { name: 'Add songs' }).click();
+  await page.getByRole('menuitem', { name: 'Import files…' }).click();
+  await expect(page.getByRole('status')).toHaveText('Import complete: 1 song found in Practice.');
+  await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
+  await expect(page.locator('.track-browser-count')).toHaveText('1 song');
+  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+  await capture('after-import-1366x768');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.setViewportSize({ width: 640, height: 448 });
+  await capture('after-import-640x448');
+  await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
+});
+
+test('selected, hovered, and focused rows reveal actions without showing them on every row', async ({
+  page,
+}) => {
+  const firstRow = page.getByRole('row', { name: /Aurora Landing/ });
+  const firstMenu = firstRow.getByRole('button', { name: 'More actions for Aurora Landing' });
+  const firstLike = firstRow.getByRole('button', { name: 'Add Aurora Landing to Liked Songs' });
+  const otherRow = page.getByRole('row', { name: /Blue Bird/ });
+  const otherMenu = otherRow.getByRole('button', { name: 'More actions for Blue Bird' });
+  const otherLike = otherRow.getByRole('button', { name: 'Add Blue Bird to Liked Songs' });
+
+  await expect
+    .poll(() => firstMenu.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('0');
+  await expect
+    .poll(() => firstLike.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('0');
+
+  await firstRow.click();
+  await expect(firstRow).toHaveAttribute('aria-selected', 'true');
+  await expect
+    .poll(() => firstMenu.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('1');
+  await expect
+    .poll(() => firstLike.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('1');
+
+  await otherRow.hover();
+  await expect
+    .poll(() => otherMenu.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('1');
+  await expect
+    .poll(() => otherLike.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('1');
+  await page.getByLabel('Search All Songs').hover();
+  await expect
+    .poll(() => otherMenu.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('0');
+  await expect
+    .poll(() => otherLike.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('0');
+
+  await otherMenu.focus();
+  await expect
+    .poll(() => otherMenu.evaluate((button) => getComputedStyle(button).opacity))
+    .toBe('1');
+  await otherMenu.press('Enter');
+  await expect(page.getByRole('menu', { name: 'Actions for Blue Bird' })).toBeVisible();
+  await expect(otherRow).toHaveAttribute('aria-selected', 'false');
+  await expect(firstRow).toHaveAttribute('aria-selected', 'true');
 });
 
 test('virtualized library pages beyond the first 200 songs', async ({ page }) => {
@@ -376,7 +556,7 @@ test('virtualized grid navigation keeps its active descendant mounted across pag
     element.dispatchEvent(new Event('scroll'));
   });
   await expect(page.getByRole('row', { name: /Song 401/ })).toBeVisible();
-  const search = page.getByLabel('Search library');
+  const search = page.getByLabel('Search All Songs');
   await search.fill('Moonlit');
   await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
   await expect(firstRow).toHaveCount(0);
@@ -387,18 +567,18 @@ test('virtualized grid navigation keeps its active descendant mounted across pag
 test('All Songs clears search while retaining the catalog count', async ({ page }) => {
   const navigatorItem = page.getByRole('button', { name: 'All Songs' });
   await expect(navigatorItem).toContainText('500');
-  await page.getByLabel('Search library').fill('Moonlit');
+  await page.getByLabel('Search All Songs').fill('Moonlit');
   await expect(page.getByText('1 song')).toBeVisible();
   await expect(navigatorItem).toContainText('500');
   await navigatorItem.click();
-  await expect(page.getByLabel('Search library')).toHaveValue('');
+  await expect(page.getByLabel('Search All Songs')).toHaveValue('');
   await expect(page.getByText('500 songs')).toBeVisible();
   await expect(navigatorItem).toContainText('500');
 });
 
 test('keeps slash local to the New Playlist name field', async ({ page }) => {
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+  await navigator.locator('.library-add-button').click();
 
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
   const nameInput = createDialog.getByLabel('Playlist name');
@@ -410,7 +590,7 @@ test('keeps slash local to the New Playlist name field', async ({ page }) => {
   await createDialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(createDialog).toBeHidden();
 
-  const search = page.getByLabel('Search library');
+  const search = page.getByLabel('Search All Songs');
   await page.keyboard.press('/');
   await expect(search).toBeFocused();
 });
@@ -436,7 +616,7 @@ test('Liked Songs is a real source with Player Bar save behavior', async ({ page
 
 test('Playlists support create, rename, delete, and membership actions', async ({ page }) => {
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+  await navigator.locator('.library-add-button').click();
 
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
   await createDialog.getByLabel('Playlist name').fill('Practice');
@@ -450,7 +630,7 @@ test('Playlists support create, rename, delete, and membership actions', async (
   await expect(page.getByRole('menuitem', { name: 'Add songs' })).toBeVisible();
   await page.getByRole('menuitem', { name: 'Add songs' }).click();
   await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
-  await expect(page.getByText(/available in All Songs/)).toBeVisible();
+  await expect(page.getByText(/in All Songs/)).toBeVisible();
   await expect(navigator.locator('.library-nav-action-row.is-active')).toContainText('Practice');
   await page.getByRole('button', { name: 'Back to playlist' }).click();
 
@@ -475,7 +655,7 @@ test('Playlists support create, rename, delete, and membership actions', async (
 test('Add songs keeps local imports inside the selected playlist', async ({ page }) => {
   const navigator = page.getByRole('navigation', { name: 'Library' });
 
-  await navigator.getByRole('button', { name: 'Create playlist' }).click();
+  await navigator.locator('.library-add-button').click();
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
   await createDialog.getByLabel('Playlist name').fill('Practice');
   await createDialog.getByRole('button', { name: 'Create' }).click();
@@ -484,7 +664,7 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await page.getByRole('button', { name: 'Add songs' }).click();
   await page.getByRole('menuitem', { name: 'Browse All Songs…' }).click();
   await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
-  await expect(page.getByText(/available in All Songs/)).toBeVisible();
+  await expect(page.getByText(/in All Songs/)).toBeVisible();
   await expect(page.getByPlaceholder('Search All Songs…')).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
   const existingSong = page.getByRole('row', { name: /Aurora Landing/ });
@@ -1026,7 +1206,7 @@ test('Now Playing does not pull a browsed search context back to the playback co
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
 
-  await page.getByLabel('Search library').fill('Song');
+  await page.getByLabel('Search All Songs').fill('Song');
   const list = page.locator('.track-table');
   await expect(page.locator('.track-browser-count')).toHaveText('488 songs');
   await list.evaluate((element) => {
@@ -1046,7 +1226,7 @@ test('natural Auto Play continues its frozen context after browsing a search', a
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
 
-  const search = page.getByLabel('Search library');
+  const search = page.getByLabel('Search All Songs');
   await search.fill('Moonlit');
   await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
 
@@ -1341,7 +1521,7 @@ test('Titlebar search and Player primary control share the application center ax
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/');
   const viewportCenter = 1920 / 2;
-  const searchBox = await page.getByLabel('Search library').boundingBox();
+  const searchBox = await page.getByLabel('Search All Songs').boundingBox();
   const idleBox = await page.getByRole('button', { name: 'Play', exact: true }).boundingBox();
   expect(searchBox).not.toBeNull();
   expect(idleBox).not.toBeNull();

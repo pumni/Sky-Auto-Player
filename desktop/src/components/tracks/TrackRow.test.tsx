@@ -376,7 +376,7 @@ describe('Track Browser primitives', () => {
 
     render(<TrackBrowser useStore={store} />);
 
-    expect(screen.getByText('No songs found')).toBeInTheDocument();
+    expect(screen.getByText('Your catalog is empty')).toBeInTheDocument();
     expect(screen.queryByRole('grid', { name: 'Songs' })).toBeNull();
   });
 
@@ -425,6 +425,7 @@ describe('Track Browser primitives', () => {
     render(<TrackBrowser useStore={store} />);
 
     expect(screen.getByRole('heading', { name: 'Practice' })).toBeInTheDocument();
+    expect(screen.getByText('This playlist is empty')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Browse All Songs…' })).toBeInTheDocument();
   });
 });

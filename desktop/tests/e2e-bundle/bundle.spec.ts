@@ -17,7 +17,7 @@ test('production bundle boots the mock shell and supports a representative flow'
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
   expect(featureChunks.size).toBe(0);
 
-  await page.getByLabel('Search library').fill('Moonlit');
+  await page.getByLabel('Search All Songs').fill('Moonlit');
   const songsGrid = page.getByRole('grid', { name: 'Songs' });
   await expect(songsGrid).toHaveAttribute('aria-rowcount', '2');
   const moonlitRow = page.getByRole('row', { name: /Moonlit Village/ });

@@ -65,6 +65,11 @@
   background: var(--selection-bg);
 }
 
+.track-row.is-selected .track-actions-button,
+.track-row.is-selected .track-like-button {
+  opacity: 1;
+}
+
 .track-row.is-playing:not(.is-selected) {
   border-left-color: var(--accent);
   color: var(--text-primary);

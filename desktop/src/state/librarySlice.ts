@@ -1,5 +1,6 @@
 import type {
   DesktopBridge,
+  LibraryPlaylistImportResult,
   LibraryNavigation,
   LibrarySource,
   SearchRequest,
@@ -113,6 +114,14 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
   const errorMessage = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
 
+  const importedSongCount = (result: LibraryPlaylistImportResult | null | undefined): number => {
+    const count = result?.imported_song_count;
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error('The import did not return a valid result.');
+    }
+    return count;
+  };
+
   const updateNavigation = (navigation: LibraryNavigation) => {
     const pendingMutations = get().libraryNavigation.pendingMutations;
     set({
@@ -148,6 +157,7 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
         likedTotal: result.liked_total,
         resultTotal: result.total,
         generation: result.generation,
+        loading: result.offset === 0 ? false : current.loading,
       },
     });
     return true;
@@ -572,17 +582,18 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
 
     async importLocalFilesToPlaylist(playlistId) {
       const key = `playlist:${playlistId}:import:file`;
-      if (!setLibraryMutationPending(key, true)) return;
+      if (!setLibraryMutationPending(key, true)) return null;
       setLibraryError(null);
       context.invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
       try {
         const result = await bridge.importLocalFilesToPlaylist(playlistId);
+        const count = importedSongCount(result);
         set({
           libraryNavigation: updatePlaylistSummary(get().libraryNavigation, result.playlist),
         });
-        if (result.imported_song_count > 0) await syncCatalogGeneration(result.catalog_generation);
+        if (count > 0) await syncCatalogGeneration(result.catalog_generation);
+        return count;
       } catch (error) {
-        setLibraryError(errorMessage(error));
         throw error;
       } finally {
         setLibraryMutationPending(key, false);
@@ -591,17 +602,18 @@ export function createLibrarySlice(context: LibrarySliceContext): LibrarySlice {
 
     async importLocalFolderToPlaylist(playlistId) {
       const key = `playlist:${playlistId}:import:folder`;
-      if (!setLibraryMutationPending(key, true)) return;
+      if (!setLibraryMutationPending(key, true)) return null;
       setLibraryError(null);
       context.invalidatePlaybackMembershipContext({ kind: 'playlist', id: playlistId });
       try {
         const result = await bridge.importLocalFolderToPlaylist(playlistId);
+        const count = importedSongCount(result);
         set({
           libraryNavigation: updatePlaylistSummary(get().libraryNavigation, result.playlist),
         });
-        if (result.imported_song_count > 0) await syncCatalogGeneration(result.catalog_generation);
+        if (count > 0) await syncCatalogGeneration(result.catalog_generation);
+        return count;
       } catch (error) {
-        setLibraryError(errorMessage(error));
         throw error;
       } finally {
         setLibraryMutationPending(key, false);

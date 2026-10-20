@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { PlaylistAddSongsMenu } from './PlaylistAddSongsMenu';
@@ -14,7 +14,9 @@ describe('PlaylistAddSongsMenu', () => {
     await act(async () => store.getState().createPlaylist('Practice'));
     const playlistId = store.getState().library.source.id;
 
-    render(<PlaylistAddSongsMenu playlistId={playlistId} useStore={store} />);
+    render(
+      <PlaylistAddSongsMenu playlistId={playlistId} useStore={store} onImportFeedback={vi.fn()} />,
+    );
     const trigger = screen.getByRole('button', { name: 'Add songs' });
     trigger.focus();
     fireEvent.keyDown(trigger, { key: 'Enter' });

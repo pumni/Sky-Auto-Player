@@ -298,6 +298,26 @@ body.is-resizing * {
   min-width: 0;
 }
 
+.library-empty-playlists {
+  display: grid;
+  min-width: 0;
+  margin: 8px 8px 0;
+  gap: 9px;
+}
+
+.library-empty-playlists p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.library-empty-playlists-create {
+  justify-content: center;
+  min-height: 32px;
+  font-size: 12px;
+}
+
 .library-collapsed-launchers {
   display: grid;
   gap: 6px;
@@ -583,6 +603,30 @@ body.is-resizing * {
   color: var(--text-tertiary);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.track-browser-guidance {
+  max-width: 420px;
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.playlist-import-feedback {
+  flex: 0 0 auto;
+  margin: -3px 18px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.playlist-import-feedback.is-complete {
+  color: var(--success-fg);
+}
+
+.playlist-import-feedback.is-error {
+  color: var(--danger-fg);
 }
 
 .empty-state {

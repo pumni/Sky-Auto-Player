@@ -74,4 +74,46 @@ describe('GlobalSearch', () => {
     });
     expect(input).toHaveValue('');
   });
+
+  it('names the active search scope for catalog, playlist, and add-songs mode', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    render(<GlobalSearch useStore={store} />);
+
+    expect(screen.getByRole('searchbox', { name: 'Search All Songs' })).toHaveAttribute(
+      'placeholder',
+      'Search All Songs…',
+    );
+
+    await act(async () => store.getState().createPlaylist('Practice'));
+    const playlistId = store.getState().library.source.id;
+    expect(screen.getByRole('searchbox', { name: 'Search Practice' })).toHaveAttribute(
+      'placeholder',
+      'Search Practice…',
+    );
+
+    await act(async () => store.getState().openPlaylistAdd(playlistId));
+    const addSearch = screen.getByRole('searchbox', {
+      name: 'Search All Songs to add to Practice',
+    });
+    expect(addSearch).toHaveAttribute('placeholder', 'Search All Songs…');
+    fireEvent.change(addSearch, { target: { value: 'Moonlit' } });
+    await waitFor(() => {
+      expect(store.getState().library.query).toBe('Moonlit');
+      expect(store.getState().library.searchSource).toEqual({ kind: 'smart', id: 'all' });
+    });
+    expect(addSearch).toHaveValue('Moonlit');
+
+    await act(async () => store.getState().exitPlaylistAdd());
+    expect(screen.getByRole('searchbox', { name: 'Search Practice' })).toHaveAttribute(
+      'placeholder',
+      'Search Practice…',
+    );
+
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'liked' }));
+    expect(screen.getByRole('searchbox', { name: 'Search Liked Songs' })).toHaveAttribute(
+      'placeholder',
+      'Search Liked Songs…',
+    );
+  });
 });
