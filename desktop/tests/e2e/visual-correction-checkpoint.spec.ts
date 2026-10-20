@@ -10,8 +10,11 @@ const evidenceDirectory = resolve(
 );
 
 test.skip(
-  variant !== 'pr-current' && variant !== 'candidate',
-  'Set GRAPHITE_CORRECTION_VARIANT to pr-current or candidate to capture Checkpoint A.',
+  variant !== 'pr-current' &&
+    variant !== 'candidate' &&
+    variant !== 'checkpoint-current' &&
+    variant !== 'border-restored',
+  'Set GRAPHITE_CORRECTION_VARIANT to capture a named Graphite correction checkpoint.',
 );
 
 async function openApp(page: Page, width: number, height: number) {
@@ -75,6 +78,10 @@ async function computedAppearance(page: Page, view: string) {
       '--border-subtle',
       '--border-strong',
       '--control-border',
+      '--workbench-pane-edge',
+      '--workbench-pane-radius',
+      '--workbench-overlay-edge',
+      '--workbench-overlay-radius',
       '--text-primary',
       '--text-secondary',
       '--text-tertiary',
@@ -107,6 +114,8 @@ async function computedAppearance(page: Page, view: string) {
       senderStatus: '.diagnostics-sender-summary strong',
       runtimeMetricLabel: '.diagnostics-metric span',
       runtimeMetricValue: '.diagnostics-metric strong',
+      navigatorSectionDivider: '.library-secondary-sections',
+      trackHeaderDivider: '.track-table-header',
       playerDock: '.player-bar',
       playerTrack: '.player-track-copy strong',
       playerMode: '.player-track-copy .player-dry-run-label',
@@ -125,11 +134,24 @@ async function computedAppearance(page: Page, view: string) {
         height: style.height,
         borderBottomWidth: style.borderBottomWidth,
         borderTopWidth: style.borderTopWidth,
+        borderRightWidth: style.borderRightWidth,
+        borderLeftWidth: style.borderLeftWidth,
         borderTopColor: style.borderTopColor,
+        borderRightColor: style.borderRightColor,
+        borderBottomColor: style.borderBottomColor,
         borderLeftColor: style.borderLeftColor,
+        borderRadius: style.borderRadius,
+        boxShadow: style.boxShadow,
+        boxSizing: style.boxSizing,
         outlineWidth: style.outlineWidth,
         outlineColor: style.outlineColor,
       };
+    };
+    const readBounds = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return null;
+      const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
+      return { x, y, width, height, right, bottom };
     };
     const rootStyle = getComputedStyle(document.documentElement);
     return {
@@ -138,6 +160,18 @@ async function computedAppearance(page: Page, view: string) {
       tokens: Object.fromEntries(
         tokenNames.map((name) => [name, rootStyle.getPropertyValue(name).trim()]),
       ),
+      geometry: {
+        workbench: readBounds('.workbench'),
+        navigator: readBounds('.navigator-workbench-pane'),
+        trackBrowser: readBounds('.track-browser-workbench-pane'),
+        inspector: readBounds('.utility-workbench-pane'),
+        separators: Array.from(document.querySelectorAll<HTMLElement>('.resizable-separator')).map(
+          (element) => {
+            const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
+            return { x, y, width, height, right, bottom };
+          },
+        ),
+      },
       elements: Object.fromEntries(
         Object.entries(selectors).map(([name, selector]) => [name, readStyle(selector)]),
       ),
@@ -161,6 +195,16 @@ test('captures the three matched Graphite visual correction states', async ({ pa
   await search.focus();
   await expect(search).toBeFocused();
   appearances.push(await computedAppearance(page, 'populated-docked'));
+  if (variant === 'border-restored') {
+    const navigatorBorderHit = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>('.navigator-workbench-pane');
+      if (!pane) return false;
+      const rect = pane.getBoundingClientRect();
+      const target = document.elementFromPoint(rect.x + 0.5, rect.y + rect.height / 2);
+      return target === pane || pane.contains(target);
+    });
+    expect(navigatorBorderHit).toBe(true);
+  }
   await capture(page, 'populated-1366x768');
 
   await openApp(page, 640, 448);
@@ -192,6 +236,16 @@ test('captures the three matched Graphite visual correction states', async ({ pa
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
     .toBeLessThanOrEqual(640);
   appearances.push(await computedAppearance(page, 'compact-overlay'));
+  if (variant === 'border-restored') {
+    const overlayBorderHit = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>('.utility-workbench-pane.is-overlay');
+      if (!pane) return false;
+      const rect = pane.getBoundingClientRect();
+      const target = document.elementFromPoint(rect.x + 0.5, rect.y + rect.height / 2);
+      return target === pane || pane.contains(target);
+    });
+    expect(overlayBorderHit).toBe(true);
+  }
   await capture(page, 'compact-640x448');
 
   await openApp(page, 1366, 768);
@@ -215,13 +269,15 @@ test('captures the three matched Graphite visual correction states', async ({ pa
     'utf8',
   );
 
-  if (variant === 'candidate') {
+  if (variant === 'candidate' || variant === 'border-restored') {
     const populated = appearances[0] as {
       tokens: Record<string, string>;
       elements: Record<string, Record<string, string> | null>;
+      geometry: Record<string, unknown>;
     };
     const compact = appearances[1] as {
       elements: Record<string, Record<string, string> | null>;
+      geometry: Record<string, unknown>;
     };
     const runtimeAppearance = appearances[2] as {
       elements: Record<string, Record<string, string> | null>;
@@ -239,6 +295,10 @@ test('captures the three matched Graphite visual correction states', async ({ pa
       '--border-subtle': '#2a2b2c',
       '--border-strong': '#393b3e',
       '--control-border': '#72777d',
+      '--workbench-pane-edge': '#3a3d40',
+      '--workbench-pane-radius': '6px',
+      '--workbench-overlay-edge': '#72777d',
+      '--workbench-overlay-radius': '6px',
       '--text-primary': '#d4d4d4',
       '--text-secondary': '#a6a6a6',
       '--text-tertiary': '#929292',
@@ -252,6 +312,46 @@ test('captures the three matched Graphite visual correction states', async ({ pa
     expect(populated.elements.navigator?.backgroundColor).toBe('rgb(25, 26, 27)');
     expect(populated.elements.trackBrowser?.backgroundColor).toBe('rgb(18, 19, 20)');
     expect(populated.elements.inspector?.backgroundColor).toBe('rgb(25, 26, 27)');
+    for (const paneName of ['navigator', 'trackBrowser', 'inspector']) {
+      const pane = populated.elements[paneName];
+      expect(pane, `${paneName} is present`).not.toBeNull();
+      expect(pane).toMatchObject({
+        borderTopWidth: '1px',
+        borderRightWidth: '1px',
+        borderBottomWidth: '1px',
+        borderLeftWidth: '1px',
+        borderTopColor: 'rgb(58, 61, 64)',
+        borderRightColor: 'rgb(58, 61, 64)',
+        borderBottomColor: 'rgb(58, 61, 64)',
+        borderLeftColor: 'rgb(58, 61, 64)',
+        borderRadius: '6px',
+        boxSizing: 'border-box',
+      });
+      expect(pane?.boxShadow).toBe('none');
+    }
+    expect(populated.elements.navigatorSectionDivider).toMatchObject({
+      borderTopWidth: '1px',
+      borderTopColor: 'rgb(42, 43, 44)',
+    });
+    expect(populated.elements.trackHeaderDivider).toMatchObject({
+      borderBottomWidth: '1px',
+      borderBottomColor: 'rgb(42, 43, 44)',
+    });
+    const populatedGeometry = populated.geometry as {
+      navigator: { x: number; right: number };
+      trackBrowser: { x: number; right: number };
+      inspector: { x: number; right: number; width: number };
+      separators: Array<{ x: number; right: number; width: number }>;
+    };
+    expect(populatedGeometry.separators).toHaveLength(2);
+    expect(populatedGeometry.separators.map(({ width }) => width)).toEqual([8, 8]);
+    expect(populatedGeometry.separators[0].x).toBeCloseTo(populatedGeometry.navigator.right, 1);
+    expect(populatedGeometry.separators[0].right).toBeCloseTo(populatedGeometry.trackBrowser.x, 1);
+    expect(populatedGeometry.separators[1].x).toBeCloseTo(populatedGeometry.trackBrowser.right, 1);
+    expect(populatedGeometry.separators[1].right).toBeCloseTo(populatedGeometry.inspector.x, 1);
+    expect(populatedGeometry.inspector.x).toBeGreaterThanOrEqual(0);
+    expect(populatedGeometry.inspector.width).toBeGreaterThanOrEqual(280);
+    expect(populatedGeometry.inspector.right).toBeLessThanOrEqual(1366);
     expect(populated.elements.playerDock?.backgroundColor).toBe('rgb(25, 26, 27)');
     expect(populated.elements.selectedRow?.backgroundColor).toBe('rgb(37, 36, 44)');
     expect(populated.elements.playingRow?.backgroundColor).toBe('rgb(25, 26, 27)');
@@ -293,6 +393,34 @@ test('captures the three matched Graphite visual correction states', async ({ pa
       outlineWidth: '2px',
       outlineColor: 'rgb(178, 165, 233)',
     });
+    expect(compact.elements.inspector).toMatchObject({
+      borderTopWidth: '1px',
+      borderRightWidth: '1px',
+      borderBottomWidth: '1px',
+      borderLeftWidth: '1px',
+      borderTopColor: 'rgb(114, 119, 125)',
+      borderRightColor: 'rgb(114, 119, 125)',
+      borderBottomColor: 'rgb(114, 119, 125)',
+      borderLeftColor: 'rgb(114, 119, 125)',
+      borderRadius: '6px',
+      boxSizing: 'border-box',
+    });
+    const compactGeometry = compact.geometry as {
+      workbench: { bottom: number };
+      inspector: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        right: number;
+        bottom: number;
+      };
+    };
+    expect(compactGeometry.inspector.width).toBeGreaterThanOrEqual(280);
+    expect(compactGeometry.inspector.x).toBeGreaterThanOrEqual(0);
+    expect(compactGeometry.inspector.y).toBeGreaterThanOrEqual(48);
+    expect(compactGeometry.inspector.right).toBeLessThanOrEqual(640);
+    expect(compactGeometry.inspector.bottom).toBeLessThanOrEqual(compactGeometry.workbench.bottom);
     expect(runtimeAppearance.elements.runtimeStatus).toMatchObject({
       fontSize: '13px',
       fontWeight: '600',

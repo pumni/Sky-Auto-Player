@@ -1,4 +1,10 @@
-# Graphite v2.1 — Checkpoint A
+# Border-restoration checkpoint
+
+**Current review package:** [BORDER-CHECKPOINT.md](BORDER-CHECKPOINT.md). This is the owner-requested comparison of the rejected borderless checkpoint against the restored Graphite pane outlines. The new captures, computed styles, local Tauri preview instructions, and remaining-differences inventory are in that file.
+
+The Checkpoint A material below is retained as historical evidence only. The owner rejected its borderless appearance; it is not an approved V2 visual direction.
+
+## Archived: original Checkpoint A
 
 **Status:** candidate for Lead visual review. This is not Visual Gate #2 and does not authorize the remaining V2 styling.
 
@@ -10,60 +16,60 @@ The left images show the real PR #503 appearance at reviewed source `1fae9f53185
 
 The Navigator is expanded. Candle Run is playing in dry-run while Blue Bird is selected for inspection. Search is focused and Update is visible.
 
-| PR #503 current | Graphite v2.1 candidate |
-| --- | --- |
+| PR #503 current                                                                                                                                            | Graphite v2.1 candidate                                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Full-size PNG](pr-current/populated-1366x768.png)<br><img src="pr-current/populated-1366x768.png" width="650" alt="Current PR appearance at 1366 by 768"> | [Full-size PNG](candidate/populated-1366x768.png)<br><img src="candidate/populated-1366x768.png" width="650" alt="Graphite v2.1 candidate at 1366 by 768"> |
 
 ### 640 × 448 — Update visible, keyboard-focused Search, overlay Inspector, Dry run
 
 The compact overlay remains inside the workbench bounds. Search receives focus through the `/` keyboard shortcut. The dock explicitly identifies Dry run.
 
-| PR #503 current | Graphite v2.1 candidate |
-| --- | --- |
+| PR #503 current                                                                                                                                     | Graphite v2.1 candidate                                                                                                                             |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Full-size PNG](pr-current/compact-640x448.png)<br><img src="pr-current/compact-640x448.png" width="480" alt="Current PR appearance at 640 by 448"> | [Full-size PNG](candidate/compact-640x448.png)<br><img src="candidate/compact-640x448.png" width="480" alt="Graphite v2.1 candidate at 640 by 448"> |
 
 ### 1366 × 768 — Runtime Diagnostics, dry-run sender details
 
 Candle Run is playing while Blue Bird remains selected. Runtime shows the no-physical-input statement, sender availability, sender sample/backend values, and timing metrics.
 
-| PR #503 current | Graphite v2.1 candidate |
-| --- | --- |
+| PR #503 current                                                                                                                                                                 | Graphite v2.1 candidate                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [Full-size PNG](pr-current/runtime-dry-run-1366x768.png)<br><img src="pr-current/runtime-dry-run-1366x768.png" width="650" alt="Current PR Runtime Diagnostics at 1366 by 768"> | [Full-size PNG](candidate/runtime-dry-run-1366x768.png)<br><img src="candidate/runtime-dry-run-1366x768.png" width="650" alt="Graphite v2.1 candidate Runtime Diagnostics at 1366 by 768"> |
 
 The captured computed styles are available for the [current PR](pr-current/computed-styles.json) and [candidate](candidate/computed-styles.json). The candidate screenshot files are exactly 640 × 448 or 1366 × 768 pixels as named.
 
 ## Locked palette and rendered roles
 
-| Role | Candidate value | Use in these captures |
-| --- | --- | --- |
-| Track Browser canvas | `#121314` | Main content and Search field |
-| Navigator, Inspector, titlebar, Player Dock | `#191A1B` | Secondary workbench rails and chrome |
-| Raised surface | `#242526` | Raised controls |
-| Hover / pressed | `#222324` / `#303133` | Neutral interaction feedback |
-| Selected row | `#25242C` | Selected Blue Bird background, without a purple stripe |
-| Structural divider | `#2A2B2C` | One-pixel pane, section, and dock boundaries |
-| Overlay edge / control boundary | `#393B3E` / `#72777D` | Compact Inspector edge / identifiable controls |
-| Primary / secondary / tertiary text | `#D4D4D4` / `#A6A6A6` / `#929292` | Selected data / regular content / metadata |
-| Accent / hover / keyboard focus | `#8270C7` / `#9281D4` / `#B2A5E9` | Meaningful active states / primary hover / focus-visible |
-| Text on accent-filled primary control | `#121314` | Player primary transport control |
+| Role                                        | Candidate value                   | Use in these captures                                    |
+| ------------------------------------------- | --------------------------------- | -------------------------------------------------------- |
+| Track Browser canvas                        | `#121314`                         | Main content and Search field                            |
+| Navigator, Inspector, titlebar, Player Dock | `#191A1B`                         | Secondary workbench rails and chrome                     |
+| Raised surface                              | `#242526`                         | Raised controls                                          |
+| Hover / pressed                             | `#222324` / `#303133`             | Neutral interaction feedback                             |
+| Selected row                                | `#25242C`                         | Selected Blue Bird background, without a purple stripe   |
+| Structural divider                          | `#2A2B2C`                         | One-pixel pane, section, and dock boundaries             |
+| Overlay edge / control boundary             | `#393B3E` / `#72777D`             | Compact Inspector edge / identifiable controls           |
+| Primary / secondary / tertiary text         | `#D4D4D4` / `#A6A6A6` / `#929292` | Selected data / regular content / metadata               |
+| Accent / hover / keyboard focus             | `#8270C7` / `#9281D4` / `#B2A5E9` | Meaningful active states / primary hover / focus-visible |
+| Text on accent-filled primary control       | `#121314`                         | Player primary transport control                         |
 
 The live computed backgrounds are titlebar `rgb(25, 26, 27)`, Navigator `rgb(25, 26, 27)`, Track Browser `rgb(18, 19, 20)`, Inspector `rgb(25, 26, 27)`, and Player Dock `rgb(25, 26, 27)`. Search has a one-pixel `rgb(114, 119, 125)` boundary and a two-pixel `rgb(178, 165, 233)` focus ring. Candidate selected and playing row backgrounds compute to `rgb(37, 36, 44)` and `rgb(25, 26, 27)` respectively.
 
 ## Computed text hierarchy
 
-| Component | Candidate computed size / weight | Role |
-| --- | --- | --- |
-| Navigator title | 13px / 600 | Primary rail heading |
-| Navigator items | 13px / 500 | Regular navigation labels |
-| Playlist group label | 11px / 600, 0.04em tracking | Quiet section label |
-| Track Browser heading | 18px / 600 | Main page heading |
-| Result count | 12px / 400 | Tertiary metadata |
-| Column headings | 11px / 600 | Secondary labels |
-| Regular / selected song title | 13px / 500 / 13px / 600 | Secondary / primary content |
-| Inspector title / tabs | 14px / 600 / 12px / 500 | Utility hierarchy |
-| Selected song heading | 14px / 600 | Inspector primary data |
+| Component                                      | Candidate computed size / weight     | Role                                   |
+| ---------------------------------------------- | ------------------------------------ | -------------------------------------- |
+| Navigator title                                | 13px / 600                           | Primary rail heading                   |
+| Navigator items                                | 13px / 500                           | Regular navigation labels              |
+| Playlist group label                           | 11px / 600, 0.04em tracking          | Quiet section label                    |
+| Track Browser heading                          | 18px / 600                           | Main page heading                      |
+| Result count                                   | 12px / 400                           | Tertiary metadata                      |
+| Column headings                                | 11px / 600                           | Secondary labels                       |
+| Regular / selected song title                  | 13px / 500 / 13px / 600              | Secondary / primary content            |
+| Inspector title / tabs                         | 14px / 600 / 12px / 500              | Utility hierarchy                      |
+| Selected song heading                          | 14px / 600                           | Inspector primary data                 |
 | Runtime status / sender status / metric values | 13px / 600 / 12px / 600 / 12px / 600 | Clear diagnostics without larger cards |
-| Player track / identity and Dry run | 14px / 600 / 11px / 600 | Playback identity and mode |
+| Player track / identity and Dry run            | 14px / 600 / 11px / 600              | Playback identity and mode             |
 
 The captured song rows remain exactly 46px high, and the Player Dock remains 92px high. The font stack remains Segoe UI Variable / Segoe UI.
 
