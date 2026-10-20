@@ -85,28 +85,44 @@ html[data-color-mode='dark'] {
 
 /* Graphite is the default palette for newly initialized appearance settings. */
 html[data-palette='graphite'] {
-  --canvas: #121416;
-  --surface-panel: #191c20;
-  --surface-secondary: #16191d;
-  --surface-raised: #25292f;
-  --control-hover: #2c3138;
-  --control-pressed: #353b44;
-  --selection-bg: #272632;
+  --workbench-content: #121314;
+  --workbench-navigation: #191a1b;
+  --workbench-inspector: #191a1b;
+  --chrome-surface: #191a1b;
+  --workbench-hover: #222324;
+  --workbench-pressed: #303133;
+  --workbench-selected: #25242c;
+  --workbench-divider: #2a2b2c;
+  --workbench-critical-edge: #393b3e;
+  --workbench-control-boundary: #72777d;
+  --workbench-text-primary: #d4d4d4;
+  --workbench-text-secondary: #a6a6a6;
+  --workbench-text-tertiary: #929292;
+  --workbench-accent: #8270c7;
+  --workbench-accent-hover: #9281d4;
+  --workbench-focus: #b2a5e9;
+  --canvas: var(--workbench-content);
+  --surface-panel: var(--workbench-navigation);
+  --surface-secondary: var(--workbench-inspector);
+  --surface-raised: #242526;
+  --control-hover: var(--workbench-hover);
+  --control-pressed: var(--workbench-pressed);
+  --selection-bg: var(--workbench-selected);
   --selection-indicator: var(--accent);
-  --border-subtle: #2c3036;
-  --border-strong: #394049;
-  --control-border: #7d8591;
-  --text-primary: #dce1e8;
-  --text-secondary: #a9b2bd;
-  --text-tertiary: #8993a1;
-  --accent: #7663b8;
-  --accent-hover: #705aaa;
-  --on-accent: #ffffff;
-  --focus-ring: #a99af7;
-  --type-body: 14px;
-  --type-page-heading: 20px;
-  --type-section-heading: 16px;
-  --type-control-label: 14px;
+  --border-subtle: var(--workbench-divider);
+  --border-strong: var(--workbench-critical-edge);
+  --control-border: var(--workbench-control-boundary);
+  --text-primary: var(--workbench-text-primary);
+  --text-secondary: var(--workbench-text-secondary);
+  --text-tertiary: var(--workbench-text-tertiary);
+  --accent: var(--workbench-accent);
+  --accent-hover: var(--workbench-accent-hover);
+  --on-accent: #121314;
+  --focus-ring: var(--workbench-focus);
+  --type-body: 13px;
+  --type-page-heading: 18px;
+  --type-section-heading: 14px;
+  --type-control-label: 13px;
   --type-metadata: 12px;
 }
 
