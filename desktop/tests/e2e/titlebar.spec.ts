@@ -163,6 +163,10 @@ async function expectNonOverlappingGeometry(
   expectedDpr: number,
   updateAvailable: boolean,
 ) {
+  await expect(page.locator('.workbench')).toHaveAttribute(
+    'data-workbench-width',
+    String(page.viewportSize()?.width),
+  );
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -198,11 +202,16 @@ async function expectNonOverlappingGeometry(
     bottomInset: 4,
     paneGap: 4,
   });
-  expect(geometry.workbench.separators).toHaveLength(1);
-  expect(geometry.workbench.separators[0]).toMatchObject({
-    width: 4,
-    acquisition: [true, true, true],
-  });
+  if (geometry.viewport.width === 640) {
+    // Graphite automatically collapses and disables Navigator resizing at the compact threshold.
+    expect(geometry.workbench.separators).toHaveLength(0);
+  } else {
+    expect(geometry.workbench.separators).toHaveLength(1);
+    expect(geometry.workbench.separators[0]).toMatchObject({
+      width: 4,
+      acquisition: [true, true, true],
+    });
+  }
 
   const search = geometry.boxes.search;
   const drag = geometry.boxes.drag;

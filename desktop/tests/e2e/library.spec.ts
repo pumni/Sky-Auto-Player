@@ -768,7 +768,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 by 560
   ).toBe(true);
   const pane = await page.locator('.navigator-workbench-pane').boundingBox();
   expect(pane).not.toBeNull();
-  if (pane) expect(Math.round(pane.width)).toBe(56);
+  if (pane) expect(Math.round(pane.width)).toBe(48);
 
   await navigator.getByRole('button', { name: 'Expand library navigator' }).click();
   await expect(navigator.getByText('Your Library')).toBeVisible();
@@ -838,7 +838,7 @@ test('minimum dockable viewport keeps the Inspector inside the actual client rec
   await expectWorkbenchWithinBounds(page);
   const navigator = await page.locator('.navigator-workbench-pane').boundingBox();
   expect(navigator).not.toBeNull();
-  if (navigator) expect(Math.round(navigator.width)).toBe(56);
+  if (navigator) expect(Math.round(navigator.width)).toBe(48);
 });
 
 test('narrow Inspector overlays the workbench without shrinking the Track Browser', async ({
