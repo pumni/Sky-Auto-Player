@@ -45,6 +45,7 @@
 
 .resizable-separator {
   position: relative;
+  z-index: 1;
   flex: 0 0 var(--workbench-gap);
   min-height: 0;
   cursor: col-resize;
@@ -52,9 +53,16 @@
   user-select: none;
 }
 
+.resizable-separator::before {
+  position: absolute;
+  inset: 0 -2px;
+  content: '';
+}
+
 .resizable-separator span {
   position: absolute;
-  inset: 0 3px;
+  inset: 0 auto 0 50%;
+  transform: translateX(-50%);
   border-left: 1px solid transparent;
   transition: border-color 120ms ease;
 }

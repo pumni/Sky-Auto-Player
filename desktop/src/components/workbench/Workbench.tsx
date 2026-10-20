@@ -44,10 +44,13 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const workbenchRef = useRef<HTMLElement>(null);
   const viewportWidth = useWorkbenchWidth(workbenchRef);
   const utility = useStore((store) => store.utility);
-  const presentationMode = getUtilityPresentationMode(viewportWidth, utility.open);
+  const palette = useStore(
+    (store) => store.settings?.palette ?? store.bootstrap?.settings.palette ?? 'graphite',
+  );
+  const presentationMode = getUtilityPresentationMode(viewportWidth, utility.open, palette);
   const utilityDocked = presentationMode === 'docked';
-  const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth);
-  const layout = useWorkbenchLayout(viewportWidth, utilityDocked);
+  const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth, palette);
+  const layout = useWorkbenchLayout(viewportWidth, utilityDocked, palette);
   const previousUtilityOpenRef = useRef(utility.open);
 
   useEffect(() => {
@@ -73,6 +76,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       aria-label="Music sheet workbench"
       data-layout-fits={layout.geometry.fits ? 'true' : 'false'}
       data-utility-presentation={presentationMode}
+      data-workbench-gap={layout.geometry.gutter}
     >
       <WorkbenchPane
         className={`navigator-workbench-pane${layout.navigatorCollapsed ? ' is-collapsed' : ''}`}

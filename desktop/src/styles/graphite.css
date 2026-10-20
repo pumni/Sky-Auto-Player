@@ -6,7 +6,7 @@ html[data-palette='graphite'] {
 
 /* The workbench uses semantic surface roles; pane geometry remains owned by layout.css. */
 html[data-palette='graphite'] .app-titlebar {
-  border-bottom: 1px solid var(--workbench-divider);
+  border-bottom: 0;
   background: var(--chrome-surface);
 }
 
@@ -406,9 +406,18 @@ html[data-palette='graphite']
   .player-shuffle-action.is-active:hover:not(:disabled),
 html[data-palette='graphite']
   .player-transport
-  .player-shuffle-action.is-active:focus-visible:not(:disabled),
+  .player-shuffle-action.is-active:focus-visible:not(:disabled) {
+  color: var(--text-primary);
+}
+
 html[data-palette='graphite'] .player-tool-button[aria-pressed='true'] {
   color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .player-tool-button[aria-pressed='true']:hover:not(:disabled),
+html[data-palette='graphite']
+  .player-tool-button[aria-pressed='true']:focus-visible:not(:disabled) {
+  color: var(--text-primary);
 }
 
 html[data-palette='graphite'] .player-track-status.is-attention {

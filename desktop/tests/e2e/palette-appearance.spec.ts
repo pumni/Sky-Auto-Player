@@ -305,6 +305,52 @@ test('all palette tokens and contrast gates match the locked contract', async ({
   for (const palette of palettes) {
     await page.goto('/');
     await selectPalette(page, palette);
+    const expectedGutter = palette === 'graphite' ? 4 : 8;
+    await expect(page.locator('.workbench')).toHaveAttribute(
+      'data-workbench-gap',
+      String(expectedGutter),
+    );
+    const geometry = await page.evaluate(() => {
+      const bounds = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        const rect = element?.getBoundingClientRect();
+        return rect
+          ? {
+              x: rect.x,
+              y: rect.y,
+              right: rect.right,
+              width: rect.width,
+              height: rect.height,
+              bottom: rect.bottom,
+            }
+          : null;
+      };
+      return {
+        gutter: Number.parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+        ),
+        solverGutter: Number.parseFloat(
+          document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',
+        ),
+        titlebarHeight: bounds('.app-titlebar')?.height,
+        navigator: bounds('.navigator-workbench-pane'),
+        track: bounds('.track-browser-workbench-pane'),
+        player: bounds('.player-bar'),
+        separatorWidths: Array.from(
+          document.querySelectorAll<HTMLElement>('.resizable-separator'),
+        ).map((separator) => separator.getBoundingClientRect().width),
+      };
+    });
+    expect(geometry.gutter).toBe(expectedGutter);
+    expect(geometry.solverGutter).toBe(expectedGutter);
+    expect(geometry.titlebarHeight).toBe(palette === 'graphite' ? 40 : 48);
+    expect(geometry.navigator).toMatchObject({ x: expectedGutter, width: 240 });
+    expect(geometry.track?.x).toBe(expectedGutter * 2 + 240);
+    expect(geometry.track?.right).toBe(1366 - expectedGutter);
+    expect(geometry.track?.bottom).toBe(768 - 92 - expectedGutter);
+    expect(geometry.player?.y).toBe(768 - 92);
+    expect(geometry.separatorWidths).toEqual([expectedGutter]);
+
     const values = expected[palette];
     for (const [name, value] of Object.entries({
       '--control-border': values.controlBorder,

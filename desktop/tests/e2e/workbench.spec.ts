@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { getUtilityPresentationMode } from '../../src/components/workbench/useWorkbenchLayout';
 
 const workbenchStorageKey = 'sky.ui.workbench.v5';
 
@@ -36,6 +37,10 @@ async function readWorkbenchGeometry(page: Page) {
     const workbench = document.querySelector<HTMLElement>('.workbench');
     return {
       mode: workbench?.dataset.utilityPresentation ?? 'missing',
+      gutter: Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+      ),
+      solverGutter: Number.parseFloat(workbench?.dataset.workbenchGap ?? 'NaN'),
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
@@ -72,11 +77,15 @@ async function expectInspectorGeometry(page: Page, mode: 'docked' | 'overlay') {
     throw new Error('Workbench geometry is incomplete');
   }
 
+  expect(geometry.solverGutter).toBe(geometry.gutter);
+
   expect(geometry.navigator.right).toBeLessThanOrEqual(geometry.track.x);
   expect(geometry.track.width).toBeGreaterThanOrEqual(420);
   expect(geometry.inspector.x).toBeGreaterThanOrEqual(geometry.workbench.x);
-  expect(geometry.inspector.right).toBeLessThanOrEqual(geometry.workbench.right - 8);
-  expect(geometry.inspector.bottom).toBeLessThanOrEqual(geometry.player.y);
+  expect(geometry.inspector.right).toBeLessThanOrEqual(geometry.workbench.right - geometry.gutter);
+  expect(geometry.inspector.bottom).toBeLessThanOrEqual(
+    geometry.workbench.bottom - geometry.gutter,
+  );
   expect(geometry.document.width).toBeLessThanOrEqual(geometry.viewport.width);
   expect(geometry.document.height).toBeLessThanOrEqual(geometry.viewport.height);
   await expect(page.locator('.workbench')).toHaveAttribute('data-layout-fits', 'true');
@@ -128,7 +137,7 @@ test('Inspector presentation preserves the workbench across the logical viewport
     const trigger = page.locator('.player-utility-button');
     await trigger.click();
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    const mode = viewport.width < 788 ? 'overlay' : 'docked';
+    const mode = getUtilityPresentationMode(viewport.width, true, 'graphite');
     await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', mode);
     const details = page.getByRole('region', { name: 'Utility: Song Details' });
     await expect(details).toBeVisible();
@@ -287,7 +296,9 @@ test('resizing never rewrites persisted widths or the user open preference', asy
 
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
-      const expectedMode = utilityOpen ? (viewport.width < 788 ? 'overlay' : 'docked') : 'closed';
+      const expectedMode = utilityOpen
+        ? getUtilityPresentationMode(viewport.width, true, 'graphite')
+        : 'closed';
       await expect(page.locator('.workbench')).toHaveAttribute(
         'data-utility-presentation',
         expectedMode,

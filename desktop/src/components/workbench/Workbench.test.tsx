@@ -5,6 +5,7 @@ import { ResizableSeparator } from './ResizableSeparator';
 import {
   DEFAULT_NAVIGATOR_WIDTH,
   COMPACT_NAVIGATOR_WIDTH,
+  getWorkbenchGutter,
   getNavigatorWidthMax,
   LEGACY_WORKBENCH_STORAGE_KEY,
   LEGACY_WORKBENCH_V4_STORAGE_KEY,
@@ -292,6 +293,48 @@ describe('workbench layout persistence', () => {
     expect(minimum.fits).toBe(true);
     expect(COMPACT_NAVIGATOR_WIDTH).toBe(56);
     expect(getNavigatorWidthMax(920)).toBeGreaterThanOrEqual(MIN_NAVIGATOR_WIDTH);
+  });
+
+  it('uses Graphite spacing in layout math and preserves legacy palette geometry', () => {
+    const legacyPalettes = ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
+    expect(getWorkbenchGutter('graphite')).toBe(4);
+    for (const palette of legacyPalettes) expect(getWorkbenchGutter(palette)).toBe(8);
+
+    const graphite = solveWorkbenchGeometry({
+      viewportWidth: 1366,
+      navigatorWidth: 240,
+      utilityWidth: 320,
+      palette: 'graphite',
+    });
+    expect(graphite).toMatchObject({
+      outerInlinePadding: 8,
+      gutter: 4,
+      separatorSpace: 8,
+      navigatorWidth: 240,
+      trackBrowserWidth: 790,
+      utilityWidth: 320,
+      fits: true,
+    });
+
+    const legacy = solveWorkbenchGeometry({
+      viewportWidth: 1366,
+      navigatorWidth: 240,
+      utilityWidth: 320,
+      palette: 'slate',
+    });
+    expect(legacy).toMatchObject({
+      outerInlinePadding: 16,
+      gutter: 8,
+      separatorSpace: 16,
+      trackBrowserWidth: 774,
+      fits: true,
+    });
+    expect(getUtilityWidthMax(772, 'graphite')).toBe(280);
+    expect(getUtilityWidthMax(771, 'graphite')).toBe(279);
+    expect(getUtilityPresentationMode(772, true, 'graphite')).toBe('docked');
+    expect(getUtilityPresentationMode(771, true, 'graphite')).toBe('overlay');
+    expect(getUtilityPresentationMode(788, true, 'slate')).toBe('docked');
+    expect(getUtilityPresentationMode(787, true, 'slate')).toBe('overlay');
   });
 
   it('chooses docked presentation only when the minimum inspector width fits', () => {

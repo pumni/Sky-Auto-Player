@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { getUtilityPresentationMode } from '../../src/components/workbench/useWorkbenchLayout';
 
 type EvidenceVariant = 'before' | 'graphite-v1' | 'graphite-v2';
 
@@ -104,7 +105,7 @@ test('captures matched Graphite Workbench approval states', async ({ page }) => 
     await expect(search).toBeFocused();
     await expect(page.locator('.workbench')).toHaveAttribute(
       'data-utility-presentation',
-      viewport.width < 788 ? 'overlay' : 'docked',
+      getUtilityPresentationMode(viewport.width, true, 'graphite'),
     );
     await capture(page, `populated-${viewport.width}x${viewport.height}`);
 

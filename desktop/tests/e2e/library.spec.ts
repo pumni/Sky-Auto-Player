@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
+import { getUtilityPresentationMode } from '../../src/components/workbench/useWorkbenchLayout';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -31,6 +32,12 @@ async function expectWorkbenchWithinBounds(
     return {
       viewportWidth: window.innerWidth,
       presentation: document.querySelector<HTMLElement>('.workbench')?.dataset.utilityPresentation,
+      gutter: Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+      ),
+      solverGutter: Number.parseFloat(
+        document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',
+      ),
       workbench: box('.workbench'),
       navigator: box('.navigator-workbench-pane'),
       track: box('.track-browser-workbench-pane'),
@@ -45,17 +52,18 @@ async function expectWorkbenchWithinBounds(
   expect(geometry.navigator).not.toBeNull();
   expect(geometry.track).not.toBeNull();
   if (geometry.workbench && geometry.navigator && geometry.track) {
+    expect(geometry.solverGutter).toBe(geometry.gutter);
     expect(geometry.navigator.x).toBeGreaterThanOrEqual(geometry.workbench.x);
     expect(geometry.navigator.x + geometry.navigator.width).toBeLessThanOrEqual(geometry.track.x);
     expect(geometry.track.x + geometry.track.width).toBeLessThanOrEqual(
-      geometry.workbench.x + geometry.workbench.width - 8,
+      geometry.workbench.x + geometry.workbench.width - geometry.gutter,
     );
     expect(geometry.track.width).toBeGreaterThanOrEqual(minimumTrackWidth);
   }
   if (geometry.utility && geometry.workbench) {
     expect(geometry.utility.x).toBeGreaterThanOrEqual(geometry.workbench.x);
     expect(geometry.utility.x + geometry.utility.width).toBeLessThanOrEqual(
-      geometry.workbench.x + geometry.workbench.width - 8,
+      geometry.workbench.x + geometry.workbench.width - geometry.gutter,
     );
     if (geometry.presentation === 'docked') {
       if (geometry.track) {
@@ -68,11 +76,15 @@ async function expectWorkbenchWithinBounds(
       expect(geometry.utility.width).toBeGreaterThanOrEqual(280);
       expect(geometry.utility.width).toBeLessThanOrEqual(400);
       expect(geometry.player).not.toBeNull();
-      if (geometry.player) expect(geometry.utility.bottom).toBeLessThanOrEqual(geometry.player.y);
+      if (geometry.player) {
+        expect(geometry.utility.bottom).toBeLessThanOrEqual(geometry.player.y - geometry.gutter);
+      }
       await expect(page.locator('.utility-workbench-pane')).toHaveClass(/is-overlay/);
       await expect(page.getByRole('separator', { name: 'Resize utility pane' })).toHaveCount(0);
     }
-    expect(Math.round(geometry.viewportWidth - geometry.utility.right)).toBeGreaterThanOrEqual(8);
+    expect(Math.round(geometry.viewportWidth - geometry.utility.right)).toBeGreaterThanOrEqual(
+      geometry.gutter,
+    );
   } else {
     expect(geometry.presentation).toBe('closed');
   }
@@ -856,7 +868,7 @@ test('desktop workbench fits the supported viewport matrix', async ({ page }) =>
     expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
 
     await page.getByRole('button', { name: 'Open utility panel' }).click();
-    const expectedMode = viewport.width < 788 ? 'overlay' : 'docked';
+    const expectedMode = getUtilityPresentationMode(viewport.width, true, 'graphite');
     await expect(page.locator('.workbench')).toHaveAttribute(
       'data-utility-presentation',
       expectedMode,
@@ -964,7 +976,7 @@ test('five transport controls and right dock keep their order and geometry at su
   }
 });
 
-test('enabled dock and transport controls brighten without boxes or layout movement', async ({
+test('dock and transport toggles show palette-specific active state without layout movement', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
@@ -985,6 +997,8 @@ test('enabled dock and transport controls brighten without boxes or layout movem
       const accentHover = getComputedStyle(probe).color;
       probe.style.color = 'var(--text-tertiary)';
       const tertiary = getComputedStyle(probe).color;
+      probe.style.color = 'var(--text-secondary)';
+      const secondary = getComputedStyle(probe).color;
       probe.remove();
       return {
         color: style.color,
@@ -998,6 +1012,8 @@ test('enabled dock and transport controls brighten without boxes or layout movem
         accent,
         accentHover,
         tertiary,
+        secondary,
+        palette: document.documentElement.dataset.palette,
       };
     });
 
@@ -1039,28 +1055,49 @@ test('enabled dock and transport controls brighten without boxes or layout movem
   expect(stopAfter.y).toBe(stopBefore.y);
 
   const shuffle = player.getByRole('button', { name: 'Shuffle', exact: true });
+  const inactiveShuffle = await measureStyle(shuffle);
+  await expect(shuffle).toHaveAttribute('aria-pressed', 'false');
   await shuffle.click();
+  await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
+  const activeShuffleTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
+    style.palette === 'graphite' ? style.primary : style.accent;
   await expect
     .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
-    .toBe((await measureStyle(shuffle)).accent);
+    .toBe(activeShuffleTone(await measureStyle(shuffle)));
   const activeShuffleBefore = await measureStyle(shuffle);
-  expect(activeShuffleBefore.color).toBe(activeShuffleBefore.accent);
+  expect(activeShuffleBefore.color).toBe(activeShuffleTone(activeShuffleBefore));
+  expect(activeShuffleBefore.color).not.toBe(inactiveShuffle.color);
+  expect(activeShuffleBefore.background).toBe('rgba(0, 0, 0, 0)');
+  expect(activeShuffleBefore.x).toBe(inactiveShuffle.x);
+  expect(activeShuffleBefore.y).toBe(inactiveShuffle.y);
   await shuffle.hover();
   await expect
     .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
-    .toBe((await measureStyle(shuffle)).accent);
+    .toBe(activeShuffleTone(await measureStyle(shuffle)));
   const activeShuffleAfter = await measureStyle(shuffle);
-  expect(activeShuffleAfter.color).toBe(activeShuffleAfter.accent);
+  expect(activeShuffleAfter.color).toBe(activeShuffleTone(activeShuffleAfter));
+
+  await shuffle.focus();
+  await expect(shuffle).toBeFocused();
+  await shuffle.press('Space');
+  await expect(shuffle).toHaveAttribute('aria-pressed', 'false');
+  await shuffle.press('Space');
+  await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
+  expect((await measureStyle(shuffle)).color).toBe(activeShuffleTone(await measureStyle(shuffle)));
 
   const autoPlay = player.getByRole('button', { name: 'Auto Play' });
   const autoPlayBefore = await measureStyle(autoPlay);
-  expect(autoPlayBefore.color).toBe(autoPlayBefore.accent);
+  const activeAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
+    style.palette === 'graphite' ? style.secondary : style.accent;
+  const hoveredAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
+    style.palette === 'graphite' ? style.primary : style.accentHover;
+  expect(autoPlayBefore.color).toBe(activeAutoPlayTone(autoPlayBefore));
   await autoPlay.hover();
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
-    .toBe(autoPlayBefore.accentHover);
+    .toBe(hoveredAutoPlayTone(autoPlayBefore));
   const autoPlayHover = await measureStyle(autoPlay);
-  expect(autoPlayHover.color).toBe(autoPlayHover.accentHover);
+  expect(autoPlayHover.color).toBe(hoveredAutoPlayTone(autoPlayHover));
   expect(autoPlayHover.background).toBe('rgba(0, 0, 0, 0)');
   expect(autoPlayHover.borderTop).toBe('0px');
   expect(autoPlayHover.x).toBe(autoPlayBefore.x);
@@ -1080,6 +1117,36 @@ test('enabled dock and transport controls brighten without boxes or layout movem
     .toBe(autoPlayOff.primary);
   const autoPlayOffHover = await measureStyle(autoPlay);
   expect(autoPlayOffHover.color).toBe(autoPlayOffHover.primary);
+
+  await page.mouse.move(0, 0);
+  await autoPlay.focus();
+  await autoPlay.press('Space');
+  await expect(autoPlay).toBeFocused();
+  await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
+  expect((await measureStyle(autoPlay)).color).toBe((await measureStyle(autoPlay)).primary);
+  await autoPlay.press('Space');
+  await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
+
+  await page.mouse.move(0, 0);
+  await shuffle.evaluate((element: HTMLButtonElement) => element.blur());
+  await autoPlay.evaluate((element: HTMLButtonElement) => element.blur());
+  for (const palette of ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
+    await page.locator('html').evaluate((root, selected) => {
+      root.setAttribute('data-palette', selected);
+    }, palette);
+    await expect
+      .poll(async () => {
+        const style = await measureStyle(shuffle);
+        return style.color === style.accent;
+      })
+      .toBe(true);
+    await expect
+      .poll(async () => {
+        const style = await measureStyle(autoPlay);
+        return style.color === style.tertiary;
+      })
+      .toBe(true);
+  }
 });
 
 test('Player transport geometry stays fixed when song timing labels appear', async ({ page }) => {
@@ -1766,30 +1833,23 @@ test('Player Bar keeps a centered controls row and separate timeline at supporte
     await expect(shuffle).toHaveAttribute('aria-pressed', 'false');
     await shuffle.click();
     await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
-    await expect
-      .poll(async () => shuffle.evaluate((element) => getComputedStyle(element).color), {
-        timeout: 2_000,
-      })
-      .toBe(
-        await player.evaluate((element) => {
-          const probe = document.createElement('span');
-          probe.style.color = 'var(--accent)';
-          element.append(probe);
-          const color = getComputedStyle(probe).color;
-          probe.remove();
-          return color;
-        }),
-      );
-    const activeShuffleColor = await shuffle.evaluate((element) => getComputedStyle(element).color);
-    const accentColor = await player.evaluate((element) => {
+    const activeShuffleTone = await shuffle.evaluate((element) => {
+      const token =
+        document.documentElement.dataset.palette === 'graphite' ? '--text-primary' : '--accent';
       const probe = document.createElement('span');
-      probe.style.color = 'var(--accent)';
-      element.append(probe);
+      probe.style.color = `var(${token})`;
+      document.body.append(probe);
       const color = getComputedStyle(probe).color;
       probe.remove();
       return color;
     });
-    expect(activeShuffleColor).toBe(accentColor);
+    await expect
+      .poll(async () => shuffle.evaluate((element) => getComputedStyle(element).color), {
+        timeout: 2_000,
+      })
+      .toBe(activeShuffleTone);
+    const activeShuffleColor = await shuffle.evaluate((element) => getComputedStyle(element).color);
+    expect(activeShuffleColor).toBe(activeShuffleTone);
     expectStablePlayerBar(idle, await readPlayerBarGeometry(page));
 
     await player.getByRole('button', { name: 'Play', exact: true }).click();

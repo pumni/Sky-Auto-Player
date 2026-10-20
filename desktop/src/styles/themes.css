@@ -105,6 +105,8 @@ html[data-palette='graphite'] {
   --workbench-accent: #8270c7;
   --workbench-accent-hover: #9281d4;
   --workbench-focus: #b2a5e9;
+  --titlebar-height: 40px;
+  --workbench-gap: 4px;
   --canvas: var(--workbench-content);
   --surface-panel: var(--workbench-navigation);
   --surface-secondary: var(--workbench-inspector);

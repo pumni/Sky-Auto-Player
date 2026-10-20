@@ -26,6 +26,7 @@ async function createLongPlaylistSource(page: Page, updateAvailable: boolean) {
 async function readTitlebarGeometry(page: Page) {
   return page.evaluate(() => {
     const selectors = {
+      titlebar: '.app-titlebar',
       search: '.global-search',
       update: '.update-indicator',
       reload: 'button[aria-label="Reload library"]',
@@ -56,6 +57,27 @@ async function readTitlebarGeometry(page: Page) {
         height: rect.height,
       };
     }
+    const workbench = document.querySelector<HTMLElement>('.workbench');
+    const navigator = document.querySelector<HTMLElement>('.navigator-workbench-pane');
+    const trackBrowser = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
+    const workbenchRect = workbench?.getBoundingClientRect();
+    const navigatorRect = navigator?.getBoundingClientRect();
+    const trackBrowserRect = trackBrowser?.getBoundingClientRect();
+    const separators = Array.from(
+      document.querySelectorAll<HTMLElement>('.resizable-separator:not(.is-disabled)'),
+    ).map((separator) => {
+      const rect = separator.getBoundingClientRect();
+      const centerY = rect.y + rect.height / 2;
+      const hit = (x: number) => {
+        const target = document.elementFromPoint(x, centerY);
+        return target === separator || (target !== null && separator.contains(target));
+      };
+      return {
+        width: rect.width,
+        acquisition: [hit(rect.x - 1.5), hit(rect.x + rect.width / 2), hit(rect.right + 1.5)],
+      };
+    });
+
     return {
       boxes,
       viewport: {
@@ -83,6 +105,36 @@ async function readTitlebarGeometry(page: Page) {
               .getBoundingClientRect().height,
           }
         : null,
+      workbench: {
+        fits: workbench?.dataset.layoutFits,
+        gutter: workbench?.dataset.workbenchGap,
+        cssGutter: getComputedStyle(document.documentElement)
+          .getPropertyValue('--workbench-gap')
+          .trim(),
+        separators,
+        leftInset: workbenchRect && navigatorRect ? navigatorRect.x - workbenchRect.x : null,
+        rightInset:
+          workbenchRect && trackBrowserRect ? workbenchRect.right - trackBrowserRect.right : null,
+        bottomInset:
+          workbenchRect && trackBrowserRect ? workbenchRect.bottom - trackBrowserRect.bottom : null,
+        paneGap:
+          navigatorRect && trackBrowserRect ? trackBrowserRect.x - navigatorRect.right : null,
+        bounds: {
+          workbench: workbenchRect
+            ? { x: workbenchRect.x, width: workbenchRect.width, right: workbenchRect.right }
+            : null,
+          navigator: navigatorRect
+            ? { x: navigatorRect.x, width: navigatorRect.width, right: navigatorRect.right }
+            : null,
+          trackBrowser: trackBrowserRect
+            ? {
+                x: trackBrowserRect.x,
+                width: trackBrowserRect.width,
+                right: trackBrowserRect.right,
+              }
+            : null,
+        },
+      },
     };
   });
 }
@@ -111,6 +163,17 @@ async function expectNonOverlappingGeometry(
   expectedDpr: number,
   updateAvailable: boolean,
 ) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const workbench = document.querySelector<HTMLElement>('.workbench');
+        const trackBrowser = workbench?.querySelector<HTMLElement>('.track-browser-workbench-pane');
+        return Boolean(
+          trackBrowser && trackBrowser.getBoundingClientRect().right <= innerWidth - 4,
+        );
+      }),
+    )
+    .toBe(true);
   const geometry = await readTitlebarGeometry(page);
   expect(geometry.viewport).toEqual({
     width: geometry.viewport.width,
@@ -121,6 +184,25 @@ async function expectNonOverlappingGeometry(
   expect(geometry.updateAvailable).toBe(String(updateAvailable));
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewport.width);
   expect(geometry.dragRegion).toBe('true');
+  expect(geometry.boxes.titlebar?.height).toBe(40);
+  expect(geometry.boxes.search?.height).toBeGreaterThanOrEqual(34);
+  expect(
+    geometry.workbench,
+    `Workbench geometry at ${geometry.viewport.width}×${geometry.viewport.height}, DPR ${expectedDpr}: ${JSON.stringify(geometry.workbench)}`,
+  ).toMatchObject({
+    fits: 'true',
+    gutter: '4',
+    cssGutter: '4px',
+    leftInset: 4,
+    rightInset: 4,
+    bottomInset: 4,
+    paneGap: 4,
+  });
+  expect(geometry.workbench.separators).toHaveLength(1);
+  expect(geometry.workbench.separators[0]).toMatchObject({
+    width: 4,
+    acquisition: [true, true, true],
+  });
 
   const search = geometry.boxes.search;
   const drag = geometry.boxes.drag;
@@ -148,7 +230,8 @@ async function expectNonOverlappingGeometry(
   }
 
   const occupied = Object.entries(geometry.boxes).filter(
-    ([name, box]) => name !== 'drag' && name !== 'trailingDrag' && box !== null,
+    ([name, box]) =>
+      name !== 'titlebar' && name !== 'drag' && name !== 'trailingDrag' && box !== null,
   ) as Array<[string, NonNullable<(typeof geometry.boxes)[string]>]>;
   for (const [name, box] of occupied) {
     expect(box.x, `${name} starts inside the viewport`).toBeGreaterThanOrEqual(0);
@@ -177,7 +260,7 @@ async function expectNonOverlappingGeometry(
       name === 'minimize' || name === 'maximize' || name === 'close' ? 46 : 34,
     );
     expect(box.height, `${name} has a visible height`).toBeGreaterThanOrEqual(
-      name === 'minimize' || name === 'maximize' || name === 'close' ? 48 : 34,
+      name === 'minimize' || name === 'maximize' || name === 'close' ? 40 : 34,
     );
   }
 }
