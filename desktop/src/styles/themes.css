@@ -82,6 +82,56 @@ html[data-palette='classic'] {
 html[data-color-mode='dark'] {
   color-scheme: dark;
 }
+
+/* Playwright-only preview palette; native settings intentionally expose the five palettes above. */
+html[data-palette='graphite'] {
+  --canvas: #121416;
+  --surface-panel: #191c20;
+  --surface-secondary: #16191d;
+  --surface-raised: #25292f;
+  --control-hover: #2c3138;
+  --control-pressed: #353b44;
+  --selection-bg: #272632;
+  --selection-indicator: var(--accent);
+  --border-subtle: #2c3036;
+  --border-strong: #394049;
+  --control-border: #7d8591;
+  --text-primary: #dce1e8;
+  --text-secondary: #a9b2bd;
+  --text-tertiary: #8993a1;
+  --accent: #7663b8;
+  --accent-hover: #705aaa;
+  --on-accent: #ffffff;
+  --focus-ring: #a99af7;
+  --type-body: 14px;
+  --type-page-heading: 20px;
+  --type-section-heading: 16px;
+  --type-control-label: 14px;
+  --type-metadata: 12px;
+}
+
+html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
+html[data-palette='graphite'] .icon-button.icon-button-boxed,
+html[data-palette='graphite'] .update-indicator {
+  border-color: var(--control-border);
+}
+
+html[data-palette='graphite'] .player-track-copy .player-identity-label,
+html[data-palette='graphite'] .player-track-copy .player-dry-run-label,
+html[data-palette='graphite'] .player-risk {
+  font-size: 11px;
+}
+
+@media (forced-colors: active) {
+  html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
+  html[data-palette='graphite'] .icon-button.icon-button-boxed,
+  html[data-palette='graphite'] .update-indicator {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: ButtonFace;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

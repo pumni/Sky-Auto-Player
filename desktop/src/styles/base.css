@@ -5,7 +5,7 @@ body {
 }
 body {
   font-family: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
-  font-size: 14px;
+  font-size: var(--type-body);
   line-height: 1.45;
 }
 button,
@@ -26,15 +26,15 @@ p {
   margin: 0;
 }
 h1 {
-  font-size: 22px;
+  font-size: var(--type-page-heading);
   line-height: 1.2;
 }
 h2 {
-  font-size: 16px;
+  font-size: var(--type-section-heading);
   line-height: 1.25;
 }
 h3 {
-  font-size: 13px;
+  font-size: var(--type-control-label);
   letter-spacing: 0.02em;
 }
 .muted {
@@ -70,7 +70,7 @@ h3 {
 }
 .eyebrow {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-metadata);
   font-weight: 700;
   letter-spacing: 0.12em;
 }

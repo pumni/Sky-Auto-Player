@@ -35,61 +35,75 @@ export function AppTitleBar({
   const updateVersion = update.availableVersion ?? 'new version';
 
   return (
-    <header className="app-titlebar" aria-label="Sky Auto Player" data-tauri-drag-region="deep">
-      <div className="app-titlebar-brand">
-        <img
-          className="app-titlebar-icon"
-          src={brandMark32Url}
-          srcSet={`${brandMark32Url} 1x, ${brandMark40Url} 1.25x, ${brandMark48Url} 1.5x, ${brandMark64Url} 2x`}
-          sizes="24px"
-          alt=""
-          width="24"
-          height="24"
-          draggable={false}
-        />
-        <span className="visually-hidden">Sky Auto Player</span>
+    <header
+      className="app-titlebar"
+      aria-label="Sky Auto Player"
+      data-tauri-drag-region="deep"
+      data-update-available={update.state === 'available' ? 'true' : 'false'}
+    >
+      <div className="app-titlebar-leading" data-tauri-drag-region="deep">
+        <div className="app-titlebar-brand">
+          <img
+            className="app-titlebar-icon"
+            src={brandMark32Url}
+            srcSet={`${brandMark32Url} 1x, ${brandMark40Url} 1.25x, ${brandMark48Url} 1.5x, ${brandMark64Url} 2x`}
+            sizes="24px"
+            alt=""
+            width="24"
+            height="24"
+            draggable={false}
+          />
+          <span className="visually-hidden">Sky Auto Player</span>
+        </div>
+        <div className="titlebar-drag-space" aria-hidden="true" data-tauri-drag-region="true" />
       </div>
-      <div className="titlebar-drag-space" aria-hidden="true" />
       <GlobalSearch {...(searchInputRef ? { inputRef: searchInputRef } : {})} useStore={useStore} />
-      <div className="app-titlebar-actions" data-tauri-drag-region="false">
-        {update.state === 'available' && (
-          <span
-            className="update-indicator-shell"
-            title={`Update available: ${updateVersion}. Open update details.`}
-          >
-            <Button
-              className="update-indicator"
-              aria-label={`Open update ${updateVersion}`}
-              onPress={() => setUpdateDialogOpen(true)}
+      <div
+        className="titlebar-drag-space-trailing"
+        aria-hidden="true"
+        data-tauri-drag-region="true"
+      />
+      <div className="app-titlebar-end" data-tauri-drag-region="false">
+        <div className="app-titlebar-actions" data-tauri-drag-region="false">
+          {update.state === 'available' && (
+            <span
+              className="update-indicator-shell"
+              title={`Update available: ${updateVersion}. Open update details.`}
             >
-              <Download size={15} aria-hidden="true" />
-              <span className="update-indicator-dot" aria-hidden="true" />
-              <span className="visually-hidden">Update available</span>
-            </Button>
-          </span>
-        )}
-        <Button
-          className="icon-button"
-          aria-label="Reload library"
-          title="Reload library"
-          onPress={() => void reload()}
-        >
-          <ListRestart size={17} aria-hidden="true" />
-        </Button>
-        <Button
-          ref={settingsTriggerRef}
-          className="icon-button"
-          aria-label="Open settings"
-          title="Open settings"
-          onPress={() => {
-            onSettingsOpen?.();
-            setSettingsOpen(true);
-          }}
-        >
-          <Settings size={17} aria-hidden="true" />
-        </Button>
+              <Button
+                className="update-indicator"
+                aria-label={`Open update ${updateVersion}`}
+                onPress={() => setUpdateDialogOpen(true)}
+              >
+                <Download size={15} aria-hidden="true" />
+                <span className="update-indicator-dot" aria-hidden="true" />
+                <span className="visually-hidden">Update available</span>
+              </Button>
+            </span>
+          )}
+          <Button
+            className="icon-button"
+            aria-label="Reload library"
+            title="Reload library"
+            onPress={() => void reload()}
+          >
+            <ListRestart size={17} aria-hidden="true" />
+          </Button>
+          <Button
+            ref={settingsTriggerRef}
+            className="icon-button"
+            aria-label="Open settings"
+            title="Open settings"
+            onPress={() => {
+              onSettingsOpen?.();
+              setSettingsOpen(true);
+            }}
+          >
+            <Settings size={17} aria-hidden="true" />
+          </Button>
+        </div>
+        <WindowCaptionControls controls={controls} />
       </div>
-      <WindowCaptionControls controls={controls} />
     </header>
   );
 }
