@@ -339,6 +339,20 @@ html[data-palette='graphite'] .player-track-status.is-attention {
   color: var(--warning-fg);
 }
 
+@media (max-width: 700px) {
+  html[data-palette='graphite'] .player-track-info {
+    gap: 4px;
+  }
+
+  html[data-palette='graphite'] .player-track-subtitle {
+    gap: 3px;
+  }
+
+  html[data-palette='graphite'] .player-track-status {
+    font-size: 11px;
+  }
+}
+
 html[data-palette='graphite'] .player-risk {
   font-size: 12px;
 }
