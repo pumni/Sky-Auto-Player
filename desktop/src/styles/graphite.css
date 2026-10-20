@@ -11,6 +11,7 @@ html[data-palette='graphite'] .app-titlebar {
 }
 
 html[data-palette='graphite'] .global-search {
+  flex-basis: min(480px, 42vw);
   border-color: var(--workbench-search-idle-edge);
   background: var(--workbench-search-surface);
 }
@@ -275,14 +276,27 @@ html[data-palette='graphite'] .track-table {
 }
 
 html[data-palette='graphite'] .track-table-header {
+  --track-table-header-content-padding-start: 18px;
+  --track-table-header-content-padding-end: 12px;
   height: 32px;
-  padding-inline-start: 18px;
-  padding-inline-end: 12px;
-  border-bottom-color: var(--workbench-divider);
+  padding-inline-start: var(--track-table-header-content-padding-start);
+  padding-inline-end: var(--track-table-header-content-padding-end);
+  border-bottom: 0;
   background: var(--workbench-content);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
+}
+
+html[data-palette='graphite'] .track-table-header::after {
+  position: absolute;
+  inset-inline-start: var(--track-table-header-content-padding-start);
+  inset-inline-end: var(--track-table-header-content-padding-end);
+  bottom: 0;
+  height: 1px;
+  background: var(--workbench-divider);
+  content: '';
+  pointer-events: none;
 }
 
 @media (max-width: 900px) {
@@ -345,8 +359,8 @@ html[data-palette='graphite'] .track-table-header {
   }
 
   html[data-palette='graphite'] .track-table-header {
-    padding-inline-start: 12px;
-    padding-inline-end: 6px;
+    --track-table-header-content-padding-start: 12px;
+    --track-table-header-content-padding-end: 6px;
   }
 }
 
@@ -377,8 +391,8 @@ html[data-palette='graphite'] .track-row {
   }
 
   html[data-palette='graphite'] .track-table-header {
-    padding-inline-start: 8px;
-    padding-inline-end: 4px;
+    --track-table-header-content-padding-start: 8px;
+    --track-table-header-content-padding-end: 4px;
   }
 }
 

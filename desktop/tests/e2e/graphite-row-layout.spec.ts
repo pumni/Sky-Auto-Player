@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 const workbenchPreferenceKey = 'sky.ui.workbench.v5';
@@ -112,6 +114,11 @@ async function readGeometry(page: Page, viewportName: string) {
     const gridRect = grid?.getBoundingClientRect();
     const frameRect = frameElement?.getBoundingClientRect();
     const headerRect = headerElement?.getBoundingClientRect();
+    const dividerStyle = headerElement ? getComputedStyle(headerElement, '::after') : null;
+    const dividerStart = Number.parseFloat(dividerStyle?.insetInlineStart ?? '0');
+    const dividerEnd = Number.parseFloat(dividerStyle?.insetInlineEnd ?? '0');
+    const dividerHeight = Number.parseFloat(dividerStyle?.height ?? '0');
+    const dividerBottom = Number.parseFloat(dividerStyle?.bottom ?? '0');
     return {
       view: name,
       viewport: { width: innerWidth, height: innerHeight },
@@ -166,9 +173,25 @@ async function readGeometry(page: Page, viewportName: string) {
               x: headerRect.x,
               y: headerRect.y,
               width: headerRect.width,
+              height: headerRect.height,
               right: headerRect.right,
+              bottom: headerRect.bottom,
             }
           : null,
+        divider:
+          headerRect && dividerStyle
+            ? {
+                x: headerRect.x + dividerStart,
+                y: headerRect.bottom - dividerBottom - dividerHeight,
+                width: headerRect.width - dividerStart - dividerEnd,
+                height: dividerHeight,
+                right: headerRect.right - dividerEnd,
+                color: dividerStyle.backgroundColor,
+                content: dividerStyle.content,
+                pointerEvents: dividerStyle.pointerEvents,
+                position: dividerStyle.position,
+              }
+            : null,
       },
       navigatorTiles: tiles.map((tile) => ({ rect: getRect(tile), style: getStyle(tile) })),
       trackBrowserContainerWidth: (() => {
@@ -256,11 +279,27 @@ function expectRowGeometry(
     : narrowColumns
       ? { left: 4, right: 6, headerLeft: 12, headerRight: 6 }
       : { left: 10, right: 12, headerLeft: 18, headerRight: 12 };
+  const divider = geometry.trackGrid.divider;
   expect(Math.abs(frame.x - (scrollport.x + scrollport.clientLeft!))).toBeLessThanOrEqual(1);
   expect(Math.abs(frame.width - scrollport.clientWidth!)).toBeLessThanOrEqual(1);
   expect(Math.abs(frame.right - scrollport.clientRight!)).toBeLessThanOrEqual(1);
   expect(Math.abs(frame.x - header.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(frame.right - header.right)).toBeLessThanOrEqual(1);
+  expect(header.height).toBe(32);
+  expect(geometry.surfaces.columnRule?.borderBottomWidth).toBe('0px');
+  expect(divider).not.toBeNull();
+  if (!divider) throw new Error('Graphite table divider pseudo-element is unavailable');
+  expect(divider).toMatchObject({
+    x: header.x + expectedRowPadding.headerLeft,
+    y: header.bottom - 1,
+    width: header.width - expectedRowPadding.headerLeft - expectedRowPadding.headerRight,
+    height: 1,
+    right: header.right - expectedRowPadding.headerRight,
+    color: 'rgb(42, 43, 44)',
+    content: '""',
+    pointerEvents: 'none',
+    position: 'absolute',
+  });
   expect(scrollport.classicScrollbarReservation).toBeGreaterThanOrEqual(0);
   if (requireClassicScrollbar) {
     expect(scrollport.classicScrollbarReservation).toBeGreaterThan(0);
@@ -324,6 +363,27 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   const player = await startDryRunWithSelection(page);
   const details = await openInspector(page);
   await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+  mkdirSync(resolve(process.cwd(), 'test-results'), { recursive: true });
+  await page.screenshot({
+    path: resolve(process.cwd(), 'test-results/graphite-workbench-1366x768.png'),
+    animations: 'disabled',
+  });
+  await page.setViewportSize({ width: 789, height: 555 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '789');
+  await page.keyboard.press('/');
+  const nativeLikeSearch = page.getByRole('searchbox', { name: 'Search All Songs' });
+  await expect(nativeLikeSearch).toBeFocused();
+  const nativeLikeHoveredRow = page.getByRole('row', { name: /Aurora Landing/ });
+  await nativeLikeHoveredRow.hover({ position: { x: 24, y: 23 } });
+  await expect.poll(() => nativeLikeHoveredRow.evaluate((row) => row.matches(':hover'))).toBe(true);
+  const nativeLikeGeometry = await readGeometry(page, 'native-like-789x555');
+  expectRowGeometry(nativeLikeGeometry);
+  await page.screenshot({
+    path: resolve(process.cwd(), 'test-results/graphite-workbench-789x555.png'),
+    animations: 'disabled',
+  });
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '1366');
   const scrollbarSimulation = await page.addStyleTag({
     content: `
       .track-table {
@@ -400,7 +460,7 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   const compact = evidence[2] as Awaited<ReturnType<typeof readGeometry>>;
   expectRowGeometry(wide, true);
   for (const geometry of [wideNativeScrollbar, collapsed, compact]) expectRowGeometry(geometry);
-  for (const geometry of [wide, wideNativeScrollbar, collapsed, compact]) {
+  for (const geometry of [wide, wideNativeScrollbar, collapsed, compact, nativeLikeGeometry]) {
     expect(geometry.horizontalOverflow).toBe(false);
     expect(geometry.trackGridHorizontalOverflow).toBe(false);
   }
@@ -417,7 +477,8 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
       expect(surface?.backgroundColor).toBe('rgb(21, 22, 24)');
     }
   }
-  expect(wide.surfaces.columnRule?.borderBottomColor).toBe('rgb(42, 43, 44)');
+  expect(wide.surfaces.columnRule?.borderBottomWidth).toBe('0px');
+  expect(wide.trackGrid.divider?.color).toBe('rgb(42, 43, 44)');
   expect(wide.rows.selected?.style.backgroundColor).toBe('rgb(37, 36, 44)');
   expect(wide.rows.hovered?.style.backgroundColor).toBe('rgb(34, 35, 36)');
   expect(wide.rows.playing?.ariaCurrent).toBe('true');
@@ -572,6 +633,26 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   ]) {
     expect(surface?.backgroundColor).toBe('rgb(21, 22, 24)');
   }
+  const dividerReport = (geometry: Awaited<ReturnType<typeof readGeometry>>) => ({
+    view: geometry.view,
+    browserWidth: geometry.trackBrowserContainerWidth,
+    header: geometry.trackGrid.header,
+    headerPadding: {
+      left: geometry.surfaces.columnHeader?.paddingInlineStart,
+      right: geometry.surfaces.columnHeader?.paddingInlineEnd,
+    },
+    divider: geometry.trackGrid.divider,
+    classicScrollbarReservation: geometry.trackGrid.scrollport?.classicScrollbarReservation,
+    selectedRowFillInsets: geometry.rows.selected?.rowFillInsets,
+  });
+  console.log(
+    `Graphite divider/scrollbar geometry: ${JSON.stringify({
+      nativeLike: dividerReport(nativeLikeGeometry),
+      wideClassicScrollbar: dividerReport(wide),
+      medium: dividerReport(mediumGeometry),
+      narrow: dividerReport(narrowGeometry),
+    })}`,
+  );
   await widePane.evaluate((element, flex) => {
     element.style.flex = flex;
   }, originalWideFlex);

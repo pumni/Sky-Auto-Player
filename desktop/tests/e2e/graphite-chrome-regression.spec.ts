@@ -1,12 +1,17 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function openApp(page: Page, width: number, height: number) {
+async function openApp(page: Page, width: number, height: number, updateAvailable = true) {
   await page.setViewportSize({ width, height });
   if (page.url().startsWith('http')) await page.evaluate(() => window.localStorage.clear());
-  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const updateQuery = updateAvailable ? '' : '&mockUpdateState=current';
+  await page.goto(`/?mockPlaybackDurationMs=120000&mockStartDelayMs=10${updateQuery}`);
   await expect(page.locator('.app-shell')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
   await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
+  await expect(page.locator('.app-titlebar')).toHaveAttribute(
+    'data-update-available',
+    String(updateAvailable),
+  );
 }
 
 async function startDryRunWithSelection(page: Page) {
@@ -355,4 +360,106 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   expect(compact.geometry.inspector.bottom).toBe(compact.geometry.workbench.bottom - expected.gap);
   expect(compact.overflow.documentWidth).toBeLessThanOrEqual(640);
   expect(compact.overflow.fits).toBe('true');
+});
+
+test('Graphite Search uses a responsive preferred width and stays centered in the free titlebar span', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const viewports = [640, 789, 800, 1024, 1366].map((width) => ({
+    width,
+    height:
+      width === 640 ? 448 : width === 789 ? 555 : width === 800 ? 560 : width === 1024 ? 640 : 768,
+  }));
+
+  for (const updateAvailable of [true, false]) {
+    await openApp(page, 1366, 768, updateAvailable);
+    const measurements: Array<{
+      width: number;
+      searchWidth: number;
+      expectedWidth: number;
+      centerError: number;
+      leadingDragWidth: number;
+      trailingDragWidth: number;
+    }> = [];
+
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await expect(page.locator('.workbench')).toHaveAttribute(
+        'data-workbench-width',
+        String(viewport.width),
+      );
+      const geometry = await page.evaluate(() => {
+        const bounds = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) return null;
+          const rect = element.getBoundingClientRect();
+          return { x: rect.x, right: rect.right, width: rect.width, height: rect.height };
+        };
+        const search = bounds('.global-search');
+        const leading = bounds('.app-titlebar-leading');
+        const end = bounds('.app-titlebar-end');
+        const drag = bounds('.titlebar-drag-space');
+        const trailingDrag = bounds('.titlebar-drag-space-trailing');
+        if (!search || !leading || !end || !drag || !trailingDrag) return null;
+        const midpoint = (leading.right + end.x) / 2;
+        return {
+          search,
+          centerError: Math.abs(search.x + search.width / 2 - midpoint),
+          drag,
+          trailingDrag,
+          dragRegion: document
+            .querySelector('.titlebar-drag-space')
+            ?.getAttribute('data-tauri-drag-region'),
+          trailingDragRegion: document
+            .querySelector('.titlebar-drag-space-trailing')
+            ?.getAttribute('data-tauri-drag-region'),
+          documentWidth: document.documentElement.scrollWidth,
+        };
+      });
+      expect(geometry).not.toBeNull();
+      if (!geometry) throw new Error('Graphite titlebar geometry is unavailable');
+      const expectedWidth = Math.min(480, viewport.width * 0.42);
+      expect(Math.abs(geometry.search.width - expectedWidth)).toBeLessThanOrEqual(4);
+      expect(geometry.search.height).toBe(34);
+      expect(geometry.centerError).toBeLessThanOrEqual(2);
+      expect(geometry.drag.width).toBeGreaterThanOrEqual(24);
+      expect(geometry.trailingDrag.width).toBeGreaterThanOrEqual(24);
+      expect(geometry.dragRegion).toBe('true');
+      expect(geometry.trailingDragRegion).toBe('true');
+      expect(geometry.search.x).toBeGreaterThanOrEqual(geometry.drag.right - 0.5);
+      expect(geometry.search.right).toBeLessThanOrEqual(geometry.trailingDrag.x + 0.5);
+      expect(geometry.trailingDrag.right).toBeLessThanOrEqual(viewport.width - 0.5);
+      expect(geometry.documentWidth).toBeLessThanOrEqual(viewport.width);
+      await expect(page.locator('.app-titlebar')).toHaveAttribute(
+        'data-update-available',
+        String(updateAvailable),
+      );
+      if (updateAvailable) {
+        await expect(page.getByRole('button', { name: /Open update/ })).toBeVisible();
+      } else {
+        await expect(page.locator('.update-indicator')).toHaveCount(0);
+      }
+      measurements.push({
+        width: viewport.width,
+        searchWidth: Number(geometry.search.width.toFixed(2)),
+        expectedWidth: Number(expectedWidth.toFixed(2)),
+        centerError: Number(geometry.centerError.toFixed(2)),
+        leadingDragWidth: Number(geometry.drag.width.toFixed(2)),
+        trailingDragWidth: Number(geometry.trailingDrag.width.toFixed(2)),
+      });
+    }
+
+    if (updateAvailable) {
+      await page.keyboard.press('/');
+      const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+      await expect(search).toBeFocused();
+      await expect
+        .poll(() => search.evaluate((input: HTMLInputElement) => input.matches(':focus-visible')))
+        .toBe(true);
+    }
+    console.log(
+      `Graphite Search geometry (Update ${updateAvailable ? 'on' : 'off'}): ${JSON.stringify(measurements)}`,
+    );
+  }
 });
