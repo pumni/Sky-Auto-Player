@@ -40,9 +40,9 @@ Additional crops compare the Inspector overlay ([V1](graphite-v1/closeup-inspect
 
 ## Verification
 
-- `cargo xtask check all` — passed at source commit `09337de6e3e6b5d3b0c5cb4a2a8eda1f1ef5fd50`, including static/security, Rust, full desktop E2E, and native desktop checks.
+- `cargo xtask check all` — passed at source commit `85fd4dedb3354f98210e581c3aa608638c582e46`, including static/security, Rust, full desktop E2E, and native desktop checks.
 - `bun run test:e2e:bundle` — passed at the same source commit; the production bundle booted and completed the representative browser flow.
-- `bun run test:e2e visual-workbench-evidence.spec.ts --reporter=line` — passed for both V1 (`GRAPHITE_WORKBENCH_VARIANT=graphite-v1`) and V2 (`GRAPHITE_WORKBENCH_VARIANT=graphite-v2`); 27 captures per variant. V2 was refreshed from `09337de6e3e6b5d3b0c5cb4a2a8eda1f1ef5fd50`.
+- `bun run test:e2e visual-workbench-evidence.spec.ts --reporter=line` — passed for both V1 (`GRAPHITE_WORKBENCH_VARIANT=graphite-v1`) and V2 (`GRAPHITE_WORKBENCH_VARIANT=graphite-v2`); 27 captures per variant. V2 was refreshed from `85fd4dedb3354f98210e581c3aa608638c582e46`.
 - Focused browser runs passed for titlebar geometry, palette contrast and forced colors, compact/docked Inspector behavior, and the updated populated-library and Player Dock interaction expectations.
 - Focused settings tests passed for Graphite as the missing-file default, previous saved palette round-trips, and Aurora fallback for existing settings with no valid palette.
 
@@ -67,12 +67,12 @@ Additional crops compare the Inspector overlay ([V1](graphite-v1/closeup-inspect
 ## Capture provenance and limits
 
 - V1 appearance source: exact V1-approved baseline commit `e91c1562e748f6c9f0be40df33d6564dc423e447`.
-- V2 implementation source: `09337de6e3e6b5d3b0c5cb4a2a8eda1f1ef5fd50`; the V2 screenshots were refreshed from this exact source commit.
+- V2 implementation source: `85fd4dedb3354f98210e581c3aa608638c582e46`; the V2 screenshots were refreshed from this exact source commit.
 - Both sets were captured by Playwright from the application's actual React workbench, with identical viewport sizes, mock catalog content, and state sequences. They are not synthetic UI mockups.
 - The detached V1 capture checkout received temporary browser-mock fixture options for empty-catalog and degraded-diagnostics states. That temporary patch changed no visual components, styles, or production behavior.
 - The evidence browser uses the mock bridge. “Physical playback” and degraded diagnostics show the real UI state with deterministic mock data; the capture does not send physical keyboard input. Dry-run captures explicitly show `Mode: Dry run · no physical input sent`.
 - V1 Graphite was only a CSS preview. Its Settings screenshot therefore still shows Aurora selected in persisted settings; V2 shows Graphite as the saved palette. This difference is part of the palette-integration change.
-- At 640 CSS px, compact spacing keeps Now Playing, Dry run, and Playing visible within the fixed 92 px Player Dock. Runtime carries the full no-physical-input explanation and status detail.
+- At 640 CSS px, compact spacing puts Playing below Now Playing and Dry run, keeping all three legible within the fixed 92 px Player Dock. Runtime carries the full no-physical-input explanation and status detail.
 - Browser captures do not replace the separate titlebar geometry, pointer-hit, forced-colors, and responsive Playwright checks; they also do not reproduce OS window shadows or hardware DPI rasterization.
 
 ## Owner approval requested
