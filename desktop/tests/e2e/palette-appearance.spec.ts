@@ -417,7 +417,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   );
   await expandNavigator.click();
 
-  const createPlaylist = navigator.getByRole('button', { name: 'Create playlist' });
+  const createPlaylist = navigator.locator('.library-add-button');
   await createPlaylist.hover();
   await assertBackgroundUsesToken(page, createPlaylist, '--control-hover');
   await pressAndReadBackground(

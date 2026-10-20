@@ -5,13 +5,45 @@ import type { DesktopStoreHook } from '../../state/store';
 interface PlaylistAddSongsMenuProps {
   playlistId: string;
   useStore: DesktopStoreHook;
+  onImportFeedback: (feedback: PlaylistImportFeedback | null) => void;
 }
 
-export function PlaylistAddSongsMenu({ playlistId, useStore }: PlaylistAddSongsMenuProps) {
+export type PlaylistImportKind = 'files' | 'folder';
+
+export type PlaylistImportFeedback =
+  | { state: 'pending'; kind: PlaylistImportKind }
+  | { state: 'complete'; kind: PlaylistImportKind; importedSongCount: number }
+  | { state: 'empty'; kind: PlaylistImportKind }
+  | { state: 'error'; kind: PlaylistImportKind };
+
+export function PlaylistAddSongsMenu({
+  playlistId,
+  useStore,
+  onImportFeedback,
+}: PlaylistAddSongsMenuProps) {
   const openPlaylistAdd = useStore((store) => store.openPlaylistAdd);
   const importFiles = useStore((store) => store.importLocalFilesToPlaylist);
   const importFolder = useStore((store) => store.importLocalFolderToPlaylist);
   const pending = useStore((store) => store.libraryNavigation.pendingMutations);
+
+  const runImport = async (
+    kind: PlaylistImportKind,
+    action: (targetPlaylistId: string) => Promise<number | null>,
+  ) => {
+    onImportFeedback({ state: 'pending', kind });
+    try {
+      const importedSongCount = await action(playlistId);
+      if (importedSongCount === null) {
+        onImportFeedback(null);
+      } else if (importedSongCount === 0) {
+        onImportFeedback({ state: 'empty', kind });
+      } else {
+        onImportFeedback({ state: 'complete', kind, importedSongCount });
+      }
+    } catch {
+      onImportFeedback({ state: 'error', kind });
+    }
+  };
 
   return (
     <MenuTrigger>
@@ -33,7 +65,7 @@ export function PlaylistAddSongsMenu({ playlistId, useStore }: PlaylistAddSongsM
           <MenuItem
             id="import-files-to-playlist"
             isDisabled={pending.has(`playlist:${playlistId}:import:file`)}
-            onAction={() => void importFiles(playlistId).catch(() => undefined)}
+            onAction={() => void runImport('files', importFiles)}
             className="library-menu-item"
           >
             <FilePlus2 size={15} aria-hidden="true" />
@@ -42,7 +74,7 @@ export function PlaylistAddSongsMenu({ playlistId, useStore }: PlaylistAddSongsM
           <MenuItem
             id="import-folder-to-playlist"
             isDisabled={pending.has(`playlist:${playlistId}:import:folder`)}
-            onAction={() => void importFolder(playlistId).catch(() => undefined)}
+            onAction={() => void runImport('folder', importFolder)}
             className="library-menu-item"
           >
             <FilePlus2 size={15} aria-hidden="true" />

@@ -9,24 +9,42 @@ interface GlobalSearchProps {
 
 export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
   const query = useStore((store: DesktopStore) => store.library.query);
+  const source = useStore((store: DesktopStore) => store.library.source);
   const playlistAddMode = useStore((store: DesktopStore) => store.library.playlistAddMode);
+  const playlistName = useStore((store: DesktopStore) => {
+    const playlistId =
+      store.library.playlistAddMode?.playlistId ??
+      (store.library.source.kind === 'playlist' ? store.library.source.id : null);
+    return playlistId
+      ? (store.libraryNavigation.playlistsById.get(playlistId)?.name ?? 'playlist')
+      : null;
+  });
+  const searchLabel = playlistAddMode
+    ? `Search All Songs to add to ${playlistName ?? 'playlist'}`
+    : source.kind === 'playlist'
+      ? `Search ${playlistName ?? 'playlist'}`
+      : source.id === 'liked'
+        ? 'Search Liked Songs'
+        : 'Search All Songs';
   return (
     <SearchInput
       key={playlistAddMode?.playlistId ?? 'library'}
       query={query}
       {...(inputRef ? { inputRef } : {})}
       useStore={useStore}
-      playlistAddMode={playlistAddMode !== null}
+      searchLabel={searchLabel}
+      placeholder={playlistAddMode ? 'Search All Songs…' : `${searchLabel}…`}
     />
   );
 }
 
 interface SearchInputProps extends GlobalSearchProps {
   query: string;
-  playlistAddMode: boolean;
+  searchLabel: string;
+  placeholder: string;
 }
 
-function SearchInput({ inputRef, query, useStore, playlistAddMode }: SearchInputProps) {
+function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: SearchInputProps) {
   const search = useStore((store) => store.search);
   const [draft, setDraft] = useState(query);
   const submittedQueryRef = useRef<string | null>(null);
@@ -52,17 +70,15 @@ function SearchInput({ inputRef, query, useStore, playlistAddMode }: SearchInput
   return (
     <label className="global-search" data-tauri-drag-region="false">
       <Search size={16} aria-hidden="true" />
-      <span className="visually-hidden">
-        {playlistAddMode ? 'Search All Songs' : 'Search library'}
-      </span>
+      <span className="visually-hidden">{searchLabel}</span>
       <input
         ref={inputRef}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder={playlistAddMode ? 'Search All Songs…' : 'Search library…'}
+        placeholder={placeholder}
         type="search"
         spellCheck={false}
-        aria-label={playlistAddMode ? 'Search All Songs' : 'Search library'}
+        aria-label={searchLabel}
         data-tauri-drag-region="false"
       />
       <kbd aria-hidden="true">/</kbd>
