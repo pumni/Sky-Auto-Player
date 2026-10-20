@@ -810,6 +810,14 @@ body.is-resizing * {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.song-details-context {
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .song-details-heading h3 {
   overflow: hidden;
   font-size: 16px;
@@ -957,6 +965,26 @@ body.is-resizing * {
   padding: 9px 10px;
   border-left: 3px solid var(--accent);
   background: var(--surface-secondary);
+}
+
+.diagnostics-playback-summary {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  margin-bottom: 12px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.diagnostics-playback-summary strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.diagnostics-playback-summary span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .diagnostics-sender-summary strong {

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { playbackIssuePresentation, playbackSessionStatusConcern } from '../../state/store';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 
@@ -24,6 +25,93 @@ function formatEventTime(timestamp: number): string {
   });
 }
 
+function playbackStatusLabel(playback: DesktopStore['playback']): string {
+  const issue = playbackIssuePresentation(playback);
+  const statusConcern = playbackSessionStatusConcern(playback);
+  if (statusConcern === 'recoverable_status') {
+    return 'Native playback status uncertain';
+  }
+  if (statusConcern === 'conflict') return 'Native playback session conflict';
+  if (issue?.kind === 'target_failure' || issue?.kind === 'playback_failure') {
+    return 'Playback failed';
+  }
+  if (playback.prepared?.admission === 'confirmation_required') return 'Confirmation required';
+
+  switch (playback.transportOperation) {
+    case 'preparing':
+      return 'Preparing playback';
+    case 'starting':
+      return 'Starting playback';
+    case 'pausing':
+      return 'Pausing playback';
+    case 'resuming':
+      return 'Resuming playback';
+    case 'stopping':
+      return 'Stopping playback';
+    case 'advancing':
+      return 'Starting next song';
+    case 'restarting':
+      return 'Restarting song';
+  }
+
+  if (playback.startRequestId !== null) return 'Waiting for native playback confirmation';
+  switch (playback.state) {
+    case 'starting':
+      return 'Starting playback';
+    case 'playing':
+      return 'Playing';
+    case 'paused':
+      return 'Paused';
+    case 'stopping':
+      return 'Stopping playback';
+    case 'finished':
+      return 'Playback finished';
+    case 'failed':
+      return 'Playback failed';
+    default:
+      return playback.prepared ? 'Prepared' : 'No active playback session';
+  }
+}
+
+function PlaybackSessionSummary({ playback }: { playback: DesktopStore['playback'] }) {
+  const status = playbackStatusLabel(playback);
+  const isActive = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
+  const sessionStatusConcern = playbackSessionStatusConcern(playback);
+  const dryRun = playback.context?.dryRun ?? playback.prepared?.config.dry_run ?? null;
+  const hasPlaybackContext =
+    playback.state !== 'idle' ||
+    playback.transportOperation !== null ||
+    playback.startRequestId !== null ||
+    playback.prepared !== null ||
+    playback.currentSong !== null ||
+    playback.error !== null;
+
+  if (!hasPlaybackContext) return null;
+
+  return (
+    <section className="diagnostics-playback-summary" aria-label="Playback identity and status">
+      <strong>Playback status: {status}</strong>
+      {playback.currentSong && (
+        <span>
+          {sessionStatusConcern !== null
+            ? 'Last confirmed session song'
+            : isActive
+              ? 'Now Playing'
+              : 'Last session song'}
+          : {playback.currentSong.title}
+        </span>
+      )}
+      {playback.prepared?.song &&
+        playback.prepared.song.song_id !== playback.currentSong?.songId && (
+          <span>Prepared: {playback.prepared.song.title}</span>
+        )}
+      {dryRun !== null && (isActive || playback.prepared) && (
+        <span>Mode: {dryRun ? 'Dry run · no physical input sent' : 'Physical input'}</span>
+      )}
+    </section>
+  );
+}
+
 function DiagnosticsEmptyState({
   title,
   detail,
@@ -44,9 +132,11 @@ function DiagnosticsEmptyState({
 function TimingPlot({
   samples,
   hasActiveSession,
+  dryRun,
 }: {
   samples: DesktopStore['diagnostics']['samples'];
   hasActiveSession: boolean;
+  dryRun: boolean;
 }) {
   const width = 560;
   const height = 132;
@@ -61,6 +151,22 @@ function TimingPlot({
       <DiagnosticsEmptyState
         title="No active playback session"
         detail="Sender-side timing samples appear when playback starts."
+      />
+    );
+  }
+  if (dryRun) {
+    return (
+      <DiagnosticsEmptyState
+        title="No physical timing samples in dry run"
+        detail="Dry-run playback sends no physical input, so sender timing is not measured."
+      />
+    );
+  }
+  if (samples.length === 0) {
+    return (
+      <DiagnosticsEmptyState
+        title="Waiting for session diagnostics"
+        detail="Native playback is active; its matching diagnostics snapshot has not arrived yet."
       />
     );
   }
@@ -165,11 +271,10 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const eventsScrollRef = useScrollVisibility<HTMLDivElement>();
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
   const playbackIsActive = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
-  const activeSession =
-    diagnostics.enabled &&
-    playbackIsActive &&
-    playback.sessionId !== null &&
-    latest?.session_id === playback.sessionId;
+  const nativeSessionActive =
+    diagnostics.enabled && playbackIsActive && playback.sessionId !== null;
+  const activeSession = nativeSessionActive && latest?.session_id === playback.sessionId;
+  const dryRun = playback.context?.dryRun ?? playback.prepared?.config.dry_run ?? false;
   const backendMetricsAvailable = latest !== undefined && latest.backend_status !== 'unavailable';
   const visibleTraceExportIdentity =
     traceExportIdentity !== null &&
@@ -177,25 +282,33 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
       ? traceExportIdentity
       : null;
   const playerMetric = (value: number): string =>
-    !backendMetricsAvailable || latest?.player_attached !== true ? 'Unavailable' : String(value);
+    dryRun
+      ? 'Not measured'
+      : !backendMetricsAvailable || latest?.player_attached !== true
+        ? 'Unavailable'
+        : String(value);
   const senderSampleMetric = (value: number | null | undefined): string =>
-    !backendMetricsAvailable
-      ? 'Unavailable'
-      : latest?.player_attached !== true
+    dryRun
+      ? 'Not measured'
+      : !backendMetricsAvailable
         ? 'Unavailable'
-        : latest?.sender_sample_count === 0
-          ? 'No samples'
-          : value === null || value === undefined
-            ? 'Unavailable'
-            : String(value);
+        : latest?.player_attached !== true
+          ? 'Unavailable'
+          : latest?.sender_sample_count === 0
+            ? 'No samples'
+            : value === null || value === undefined
+              ? 'Unavailable'
+              : String(value);
   const backendMeasure = (value: number | null, unit: string): string =>
-    !backendMetricsAvailable
-      ? 'Unavailable'
-      : latest?.player_attached !== true
+    dryRun
+      ? 'Not measured'
+      : !backendMetricsAvailable
         ? 'Unavailable'
-        : latest?.sender_sample_count === 0
-          ? 'No samples'
-          : measure(value, unit, 0);
+        : latest?.player_attached !== true
+          ? 'Unavailable'
+          : latest?.sender_sample_count === 0
+            ? 'No samples'
+            : measure(value, unit, 0);
   const senderSuppressionCount = latest
     ? latest.missed_down_boundaries +
       latest.final_gate_control_rejections +
@@ -206,43 +319,49 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
   const transportFailureCount = latest
     ? latest.sendinput_partial_events + latest.sendinput_zero_progress_failures
     : 0;
-  const senderSummary = !backendMetricsAvailable
+  const senderSummary = dryRun
     ? {
-        status: 'Unavailable',
-        detail: 'Sender-side diagnostics are unavailable for this dispatch profile.',
+        status: 'Not measured',
+        detail:
+          'Dry-run playback sends no physical input; sender health and timing are not measured.',
       }
-    : latest?.physical_session && !latest.player_attached
+    : !backendMetricsAvailable
       ? {
-          status: 'Error',
-          detail: 'The physical session is active, but no native player is attached.',
+          status: 'Unavailable',
+          detail: 'Sender-side diagnostics are unavailable for this dispatch profile.',
         }
-      : latest?.last_error
+      : latest?.physical_session && !latest.player_attached
         ? {
             status: 'Error',
-            detail: `Last error: ${latest.last_error}`,
+            detail: 'The physical session is active, but no native player is attached.',
           }
-        : latest?.backend_status === 'error'
+        : latest?.last_error
           ? {
               status: 'Error',
-              detail: 'Sender-side backend reported an error.',
+              detail: `Last error: ${latest.last_error}`,
             }
-          : latest?.backend_status === 'degraded'
+          : latest?.backend_status === 'error'
             ? {
-                status: 'Attention',
-                detail: 'Sender-side backend reported degraded health.',
+                status: 'Error',
+                detail: 'Sender-side backend reported an error.',
               }
-            : latest?.player_attached && latest.sender_sample_count === 0
+            : latest?.backend_status === 'degraded'
               ? {
-                  status: 'Waiting',
-                  detail:
-                    'The physical player is attached; no SendInput call has been sampled yet.',
+                  status: 'Attention',
+                  detail: 'Sender-side backend reported degraded health.',
                 }
-              : senderSuppressionCount === 0 && transportFailureCount === 0
-                ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
-                : {
-                    status: 'Attention',
-                    detail: `${latest?.missed_physical_window_boundaries ?? 0} physical-window expirations; ${latest?.final_sender_window_expirations ?? 0} sender-window expirations; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
-                  };
+              : latest?.player_attached && latest.sender_sample_count === 0
+                ? {
+                    status: 'Waiting',
+                    detail:
+                      'The physical player is attached; no SendInput call has been sampled yet.',
+                  }
+                : senderSuppressionCount === 0 && transportFailureCount === 0
+                  ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
+                  : {
+                      status: 'Attention',
+                      detail: `${latest?.missed_physical_window_boundaries ?? 0} physical-window expirations; ${latest?.final_sender_window_expirations ?? 0} sender-window expirations; ${latest?.final_gate_focus_losses ?? 0} focus rejections; ${transportFailureCount} SendInput transport failures.`,
+                    };
   const handleExportSenderTrace = async () => {
     setTraceExporting(true);
     setTraceExportError(null);
@@ -290,6 +409,7 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
           {diagnostics.error}
         </p>
       )}
+      {diagnostics.enabled && <PlaybackSessionSummary playback={playback} />}
       <div className="diagnostics-export">
         <button
           className="diagnostics-export-button"
@@ -328,10 +448,30 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
               title="Diagnostics disabled"
               detail="Open Runtime diagnostics to inspect sender-side timing and input-health metrics."
             />
+          ) : !nativeSessionActive ? (
+            <DiagnosticsEmptyState
+              title={
+                playback.state === 'finished'
+                  ? 'No active playback session'
+                  : playbackStatusLabel(playback)
+              }
+              detail={
+                playback.startRequestId !== null || playback.transportOperation === 'starting'
+                  ? 'Waiting for native playback confirmation before showing session diagnostics.'
+                  : playback.transportOperation === 'preparing'
+                    ? 'Playback is being prepared; session diagnostics appear after it starts.'
+                    : playback.prepared?.admission === 'confirmation_required'
+                      ? 'Review and confirm playback before a native session can start.'
+                      : playback.state === 'failed'
+                        ? (playback.error ??
+                          'Playback failed before an active session was confirmed.')
+                        : 'Runtime timing and input-health metrics appear when playback starts.'
+              }
+            />
           ) : !activeSession || !latest ? (
             <DiagnosticsEmptyState
-              title="No active playback session"
-              detail="Runtime timing and input-health metrics appear when playback starts."
+              title="Waiting for session diagnostics"
+              detail="Native playback is active; its matching diagnostics snapshot has not arrived yet."
             />
           ) : (
             <>
@@ -340,13 +480,26 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 <span>{senderSummary.detail}</span>
               </section>
               <MetricGroup title="Sender availability">
-                <Metric label="Physical session" value={latest.physical_session ? 'Yes' : 'No'} />
-                <Metric label="Player attached" value={latest.player_attached ? 'Yes' : 'No'} />
+                <Metric
+                  label="Physical session"
+                  value={
+                    dryRun ? 'Not applicable (dry run)' : latest.physical_session ? 'Yes' : 'No'
+                  }
+                />
+                <Metric
+                  label="Player attached"
+                  value={
+                    dryRun ? 'Not applicable (dry run)' : latest.player_attached ? 'Yes' : 'No'
+                  }
+                />
                 <Metric
                   label="Sender samples"
                   value={senderSampleMetric(latest.sender_sample_count)}
                 />
-                <Metric label="Sender backend" value={backendStatusLabel(latest.backend_status)} />
+                <Metric
+                  label="Sender backend"
+                  value={dryRun ? 'Not measured' : backendStatusLabel(latest.backend_status)}
+                />
               </MetricGroup>
               <MetricGroup title="Timing">
                 <Metric label="Completion p50" value={backendMeasure(latest.p50_ms, 'ms')} />
@@ -481,7 +634,7 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 />
                 <Metric
                   label="Maximum hold-floor delay"
-                  value={measure(latest.max_hold_floor_delay_us, 'µs', 0)}
+                  value={dryRun ? 'Not measured' : measure(latest.max_hold_floor_delay_us, 'µs', 0)}
                 />
                 <Metric
                   label="Release-floor delayed boundaries"
@@ -493,7 +646,9 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
                 />
                 <Metric
                   label="Maximum release-floor delay"
-                  value={measure(latest.max_release_floor_delay_us, 'µs', 0)}
+                  value={
+                    dryRun ? 'Not measured' : measure(latest.max_release_floor_delay_us, 'µs', 0)
+                  }
                 />
               </MetricGroup>
               <MetricGroup title="Input transport">
@@ -578,7 +733,8 @@ export function DiagnosticsView({ useStore }: DiagnosticsViewProps) {
         <TabPanel id="timing" className="diagnostics-panel">
           <TimingPlot
             samples={activeSession ? diagnostics.samples : []}
-            hasActiveSession={activeSession}
+            hasActiveSession={nativeSessionActive}
+            dryRun={nativeSessionActive && dryRun}
           />
         </TabPanel>
         <TabPanel

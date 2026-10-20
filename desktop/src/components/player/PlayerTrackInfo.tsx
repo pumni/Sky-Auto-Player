@@ -1,6 +1,6 @@
 import { Heart, Music2 } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
-import { selectSongById } from '../../state/store';
+import { playbackSessionStatusConcern, selectSongById } from '../../state/store';
 import { formatPlayerDuration, playerStateLabel } from './playerFormatting';
 
 interface PlayerTrackInfoProps {
@@ -19,6 +19,8 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
     ['starting', 'playing', 'paused', 'stopping'].includes(store.playback.state),
   );
   const playbackState = useStore((store) => store.playback.state);
+  const playback = useStore((store) => store.playback);
+  const sessionStatusConcern = playbackSessionStatusConcern(playback);
   const playbackError = useStore((store) => store.playback.error);
   const setSongLiked = useStore((store) => store.setSongLiked);
 
@@ -42,10 +44,25 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
     !currentSong && !selectedSongId
       ? 'Select a song from your Library'
       : active
-        ? playerStateLabel(playbackState)
+        ? sessionStatusConcern === 'recoverable_status'
+          ? 'Playback status uncertain'
+          : sessionStatusConcern === 'conflict'
+            ? 'Native session conflict'
+            : playerStateLabel(playbackState)
         : currentSong && playbackState === 'idle' && !playbackError
           ? 'Ready to play'
           : metadata;
+  const identityLabel = currentSong
+    ? active
+      ? sessionStatusConcern !== null
+        ? 'Session song'
+        : 'Now Playing'
+      : 'Last played'
+    : preparedSong
+      ? 'Prepared'
+      : fallbackIdentity
+        ? 'Selected'
+        : null;
 
   return (
     <div className="player-track-info">
@@ -54,7 +71,15 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       </span>
       <div className="player-track-copy">
         <strong title={title}>{title}</strong>
-        <span className="muted">{trackSubtitle}</span>
+        <div className="player-track-subtitle">
+          {identityLabel && <span className="player-identity-label">{identityLabel}</span>}
+          {active && playback.context?.dryRun && (
+            <span className="player-dry-run-label" title="Dry run; no physical input is sent">
+              Dry run
+            </span>
+          )}
+          <span className="muted">{trackSubtitle}</span>
+        </div>
       </div>
       {likeSongId && (currentSong || fallbackIdentity) && (
         <button

@@ -112,6 +112,20 @@ export function playbackIssuePresentation(
   return { kind: 'playback_failure', title: 'Playback failed', message };
 }
 
+export function playbackSessionStatusConcern(
+  playback: Pick<
+    DesktopStore['playback'],
+    'error' | 'sessionId' | 'startRequestId' | 'state' | 'statusRetryPending'
+  >,
+): 'recoverable_status' | 'conflict' | null {
+  const issue = playbackIssuePresentation(playback);
+  if (playback.statusRetryPending || issue?.kind === 'recoverable_status') {
+    return 'recoverable_status';
+  }
+  if (issue?.kind === 'conflict') return 'conflict';
+  return null;
+}
+
 export function selectSelectedDetail(
   store: Pick<DesktopStore, 'library' | 'details'>,
 ): DetailEntry {

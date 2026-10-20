@@ -16,6 +16,7 @@ export {
   nextPlaybackPosition,
   playbackContextMatchesLibrary,
   playbackIssuePresentation,
+  playbackSessionStatusConcern,
   playbackContextIndexAt,
   previousPlaybackPosition,
   selectNowPlayingSongId,

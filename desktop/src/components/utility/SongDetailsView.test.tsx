@@ -37,6 +37,10 @@ describe('SongDetailsView', () => {
     await act(async () => store.getState().selectSong(first.song_id));
     const { container } = render(<SongDetailsView useStore={store} />);
     expect(screen.getByRole('heading', { name: first.title })).toBeInTheDocument();
+    expect(screen.getByText('Selected for inspection')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Test playback \(no input\).*dry-run playback.*physical keyboard input/i),
+    ).toBeInTheDocument();
     const sectionCount = container.querySelectorAll('.utility-section').length;
 
     const pending = store.getState().selectSong(second.song_id);
