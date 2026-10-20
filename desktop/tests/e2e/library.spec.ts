@@ -608,8 +608,21 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
     expect(headerLayout.label.bottom).toBeLessThanOrEqual(headerLayout.header.bottom);
   }
 
-  await addButton.click();
+  await addButton.focus();
+  await page.keyboard.press('Enter');
   const menu = page.getByRole('menu', { name: 'Add songs' });
+  const firstMenuItem = menu.getByRole('menuitem', { name: 'Browse All Songs…' });
+  await expect(firstMenuItem).toBeVisible();
+  await expect(firstMenuItem).toBeFocused();
+  await expectNoSeriousAccessibilityViolations(page);
+  const menuBounds = await menu.boundingBox();
+  expect(menuBounds).not.toBeNull();
+  if (menuBounds) {
+    expect(menuBounds.x).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.y).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(640);
+    expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(448);
+  }
   for (const name of ['Browse All Songs…', 'Import files…', 'Import folder…']) {
     const item = menu.getByRole('menuitem', { name });
     await expect(item).toBeVisible();
@@ -623,6 +636,13 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
       expect(receivesPointer).toBe(true);
     }
   }
+
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(addButton).toBeFocused();
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await addButton.click();
   await menu.getByRole('menuitem', { name: 'Import files…' }).click();
   await expect(page.getByRole('status')).toHaveText(
     'Import complete: 1 song found in Evening Practice Playlist With A Long Descriptive Name.',

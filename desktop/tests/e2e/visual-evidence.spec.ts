@@ -66,6 +66,17 @@ async function openDetails(page: Page) {
   return inspector;
 }
 
+async function openRuntimeDiagnostics(page: Page) {
+  const utilityToggle = page.locator('.player-utility-button');
+  await expect(utilityToggle).toBeVisible();
+  if ((await utilityToggle.getAttribute('aria-expanded')) !== 'true') await utilityToggle.click();
+  const inspector = page.locator('.utility-surface');
+  await expect(inspector).toBeVisible();
+  await inspector.getByRole('tab', { name: 'Runtime' }).click();
+  await expect(page.getByRole('region', { name: 'Utility: Diagnostics' })).toBeVisible();
+  return inspector;
+}
+
 async function createLongPlaylistAndOpenMenu(page: Page) {
   const createPlaylist = page.getByRole('button', { name: 'Create playlist' });
   if (await createPlaylist.isVisible()) {
@@ -181,6 +192,32 @@ test('captures the Graphite G workspace views on request', async ({ page }) => {
   await expect(playlistTitle).toHaveAttribute('title', playlistName);
   measurements['playlist-640x448'] = await readWorkspaceGeometry(page);
   await capture(page, 'candidate-playlist-add-menu-640x448.png');
+
+  await openApp(page, { width: 1366, height: 768 }, 'expanded', true);
+  const runtimePlayer = await startDryRunWithSelection(page);
+  const runtime = await openRuntimeDiagnostics(page);
+  await expect(
+    runtime.getByText('Mode: Dry run · no physical input sent', { exact: true }),
+  ).toBeVisible();
+  await expect(runtime.getByText('Sender samples', { exact: true })).toBeVisible();
+  await expect(runtimePlayer.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  measurements['runtime-1366x768'] = await page.evaluate(() => {
+    const inspector = document.querySelector<HTMLElement>('.utility-surface');
+    const rect = inspector?.getBoundingClientRect();
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      inspector: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+      playbackSummary:
+        document.querySelector('.diagnostics-playback-summary')?.textContent?.trim() ?? null,
+      senderSummary:
+        document.querySelector('.diagnostics-sender-summary')?.textContent?.trim() ?? null,
+      senderSamples:
+        [...document.querySelectorAll('.diagnostics-metric')]
+          .find((metric) => metric.textContent?.includes('Sender samples'))
+          ?.textContent?.trim() ?? null,
+    };
+  });
+  await capture(page, 'candidate-runtime-diagnostics-1366x768.png');
 
   mkdirSync(evidenceDirectory, { recursive: true });
   await import('node:fs/promises').then(({ writeFile }) =>
