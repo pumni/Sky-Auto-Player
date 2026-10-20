@@ -75,8 +75,9 @@
 .player-track-copy .player-dry-run-label {
   flex: 0 0 auto;
   overflow: visible;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-size: 9px;
+  font-weight: 700;
   text-overflow: clip;
 }
 
@@ -782,10 +783,6 @@
   }
 
   .player-track-icon {
-    display: none;
-  }
-
-  .player-track-copy .player-dry-run-label {
     display: none;
   }
 

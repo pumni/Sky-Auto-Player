@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
-import { playbackIssuePresentation } from '../../state/store';
+import { playbackIssuePresentation, playbackSessionStatusConcern } from '../../state/store';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 
@@ -27,10 +27,11 @@ function formatEventTime(timestamp: number): string {
 
 function playbackStatusLabel(playback: DesktopStore['playback']): string {
   const issue = playbackIssuePresentation(playback);
-  if (playback.statusRetryPending || issue?.kind === 'recoverable_status') {
+  const statusConcern = playbackSessionStatusConcern(playback);
+  if (statusConcern === 'recoverable_status') {
     return 'Native playback status uncertain';
   }
-  if (issue?.kind === 'conflict') return 'Native playback session conflict';
+  if (statusConcern === 'conflict') return 'Native playback session conflict';
   if (issue?.kind === 'target_failure' || issue?.kind === 'playback_failure') {
     return 'Playback failed';
   }
@@ -75,9 +76,7 @@ function playbackStatusLabel(playback: DesktopStore['playback']): string {
 function PlaybackSessionSummary({ playback }: { playback: DesktopStore['playback'] }) {
   const status = playbackStatusLabel(playback);
   const isActive = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
-  const issue = playbackIssuePresentation(playback);
-  const sessionStatusUncertain =
-    playback.statusRetryPending || issue?.kind === 'recoverable_status';
+  const sessionStatusConcern = playbackSessionStatusConcern(playback);
   const dryRun = playback.context?.dryRun ?? playback.prepared?.config.dry_run ?? null;
   const hasPlaybackContext =
     playback.state !== 'idle' ||
@@ -94,7 +93,7 @@ function PlaybackSessionSummary({ playback }: { playback: DesktopStore['playback
       <strong>Playback status: {status}</strong>
       {playback.currentSong && (
         <span>
-          {sessionStatusUncertain
+          {sessionStatusConcern !== null
             ? 'Last confirmed session song'
             : isActive
               ? 'Now Playing'

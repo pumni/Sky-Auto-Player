@@ -1334,10 +1334,23 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
 
     await expect(player.getByText('Now Playing', { exact: true })).toBeVisible();
     const dryRun = player.getByText('Dry run', { exact: true });
-    if (viewport.width > 960) await expect(dryRun).toBeVisible();
-    else await expect(dryRun).toBeHidden();
+    await expect(dryRun).toBeVisible();
     await expect(dryRun).toHaveAttribute('title', 'Dry run; no physical input is sent');
     await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+    expectPlayerBarGeometry(await readPlayerBarGeometry(page));
+    const dryRunBox = await dryRun.boundingBox();
+    const trackInfoBox = await player.locator('.player-track-info').boundingBox();
+    const transportBox = await player.locator('.player-transport').boundingBox();
+    expect(dryRunBox).not.toBeNull();
+    expect(trackInfoBox).not.toBeNull();
+    expect(transportBox).not.toBeNull();
+    if (dryRunBox && trackInfoBox && transportBox) {
+      expect(dryRunBox.x).toBeGreaterThanOrEqual(trackInfoBox.x);
+      expect(dryRunBox.x + dryRunBox.width).toBeLessThanOrEqual(
+        trackInfoBox.x + trackInfoBox.width,
+      );
+      expect(trackInfoBox.x + trackInfoBox.width).toBeLessThanOrEqual(transportBox.x);
+    }
     await page.getByRole('row', { name: /Blue Bird/ }).click();
     await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
     await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
@@ -1385,6 +1398,23 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
     }
     await player.getByRole('button', { name: 'Stop' }).click();
     await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+  }
+});
+
+test('physical playback omits the dry-run indicator at responsive viewport sizes', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 640, height: 448 },
+    { width: 800, height: 560 },
+    { width: 1366, height: 768 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+    const player = await startSelectedSong(page);
+    await expect(player.getByText('Playing', { exact: true })).toBeVisible();
+    await expect(player.locator('.player-dry-run-label')).toHaveCount(0);
+    expectPlayerBarGeometry(await readPlayerBarGeometry(page));
   }
 });
 

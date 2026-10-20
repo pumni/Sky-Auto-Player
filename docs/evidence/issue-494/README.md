@@ -11,10 +11,10 @@ In each workbench capture, Candle Run is the native playback identity and Blue B
 inspection. The updated dock labels the active identity, while Song Details identifies the browsing
 selection. At 640×448, the Inspector remains a temporary overlay and the Player Dock remains visible.
 
-| Viewport | Before | After |
-| --- | --- | --- |
-| 640×448 | ![Before at 640 by 448](before-workbench-640x448.png) | ![After at 640 by 448](after-workbench-640x448.png) |
-| 800×560 | ![Before at 800 by 560](before-workbench-800x560.png) | ![After at 800 by 560](after-workbench-800x560.png) |
+| Viewport | Before                                                  | After                                                 |
+| -------- | ------------------------------------------------------- | ----------------------------------------------------- |
+| 640×448  | ![Before at 640 by 448](before-workbench-640x448.png)   | ![After at 640 by 448](after-workbench-640x448.png)   |
+| 800×560  | ![Before at 800 by 560](before-workbench-800x560.png)   | ![After at 800 by 560](after-workbench-800x560.png)   |
 | 1366×768 | ![Before at 1366 by 768](before-workbench-1366x768.png) | ![After at 1366 by 768](after-workbench-1366x768.png) |
 
 ## No-input playback action
@@ -25,6 +25,17 @@ points users to this action.
 
 - Before: [Playback profile at 1366×768](before-no-input-profile-1366x768.png)
 - After: [Playback profile at 1366×768](after-no-input-profile-1366x768.png)
+
+## Dry-run mode in the Player Dock
+
+The updated dock keeps its `Dry run` cue visible while playback is active at every supported
+viewport below. At compact widths, lower-priority playback subtitle text may ellipsize; the mode
+indicator and five transport controls remain visible and within the dock. The same responsive E2E
+also starts normal physical mock playback at each size and confirms the dry-run cue is absent.
+
+- [Dry-run dock at 640×448](after-dry-run-dock-640x448.png)
+- [Dry-run dock at 800×560](after-dry-run-dock-800x560.png)
+- [Dry-run dock at 1366×768](after-dry-run-dock-1366x768.png)
 
 ## Runtime hierarchy
 

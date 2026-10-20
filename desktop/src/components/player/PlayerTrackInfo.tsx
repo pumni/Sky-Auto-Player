@@ -1,6 +1,6 @@
 import { Heart, Music2 } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
-import { selectSongById } from '../../state/store';
+import { playbackSessionStatusConcern, selectSongById } from '../../state/store';
 import { formatPlayerDuration, playerStateLabel } from './playerFormatting';
 
 interface PlayerTrackInfoProps {
@@ -20,9 +20,8 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   );
   const playbackState = useStore((store) => store.playback.state);
   const playback = useStore((store) => store.playback);
+  const sessionStatusConcern = playbackSessionStatusConcern(playback);
   const playbackError = useStore((store) => store.playback.error);
-  const sessionStatusUncertain =
-    playback.statusRetryPending || playback.error?.startsWith('Playback status is unavailable:');
   const setSongLiked = useStore((store) => store.setSongLiked);
 
   const fallbackIdentity = selectedRow;
@@ -45,15 +44,17 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
     !currentSong && !selectedSongId
       ? 'Select a song from your Library'
       : active
-        ? sessionStatusUncertain
+        ? sessionStatusConcern === 'recoverable_status'
           ? 'Playback status uncertain'
-          : playerStateLabel(playbackState)
+          : sessionStatusConcern === 'conflict'
+            ? 'Native session conflict'
+            : playerStateLabel(playbackState)
         : currentSong && playbackState === 'idle' && !playbackError
           ? 'Ready to play'
           : metadata;
   const identityLabel = currentSong
     ? active
-      ? sessionStatusUncertain
+      ? sessionStatusConcern !== null
         ? 'Session song'
         : 'Now Playing'
       : 'Last played'
