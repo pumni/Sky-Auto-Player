@@ -345,10 +345,12 @@ html[data-palette='graphite'] .player-track-status.is-attention {
   }
 
   html[data-palette='graphite'] .player-track-subtitle {
+    flex-wrap: wrap;
     gap: 3px;
   }
 
-  html[data-palette='graphite'] .player-track-status {
+  html[data-palette='graphite'] .player-track-status.is-active {
+    flex: 0 0 100%;
     font-size: 11px;
   }
 }

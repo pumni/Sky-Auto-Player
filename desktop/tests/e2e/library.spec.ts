@@ -1368,6 +1368,11 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
       );
       expect(trackInfoBox.x + trackInfoBox.width).toBeLessThanOrEqual(transportBox.x);
     }
+    if (viewport.width === 640) {
+      const statusBox = await player.getByText('Playing', { exact: true }).boundingBox();
+      expect(statusBox).not.toBeNull();
+      if (statusBox && dryRunBox) expect(statusBox.y).toBeGreaterThan(dryRunBox.y);
+    }
     await page.getByRole('row', { name: /Blue Bird/ }).click();
     await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
     await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
