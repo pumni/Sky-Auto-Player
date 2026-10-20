@@ -339,7 +339,7 @@ html[data-palette='graphite'] .player-track-status.is-attention {
   color: var(--warning-fg);
 }
 
-@media (max-width: 700px) {
+@media (max-width: 960px) {
   html[data-palette='graphite'] .player-track-info {
     gap: 4px;
   }

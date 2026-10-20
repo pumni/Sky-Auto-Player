@@ -1386,7 +1386,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
       );
       expect(trackInfoBox.x + trackInfoBox.width).toBeLessThanOrEqual(transportBox.x);
     }
-    if (viewport.width === 640) {
+    if (viewport.width <= 800) {
       const statusBox = await playbackStatus.boundingBox();
       expect(statusBox).not.toBeNull();
       if (statusBox && dryRunBox) expect(statusBox.y).toBeGreaterThan(dryRunBox.y);
