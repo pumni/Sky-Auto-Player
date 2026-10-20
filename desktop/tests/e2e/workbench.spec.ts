@@ -315,6 +315,59 @@ test('resizing never rewrites persisted widths or the user open preference', asy
   }
 });
 
+test('Graphite overlay width is responsive and preserves docked width preferences', async ({
+  page,
+}) => {
+  for (const utilityWidth of [280, 320, 380]) {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    const preference = {
+      version: 5,
+      navigatorPreference: 'expanded',
+      expandedNavigatorWidth: 240,
+      utilityWidth,
+      utilityOpen: true,
+    };
+    await page.evaluate(
+      ({ key, value }) => window.localStorage.setItem(key, JSON.stringify(value)),
+      { key: workbenchStorageKey, value: preference },
+    );
+    await page.reload();
+    await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+    const dockedPane = page.locator('.utility-workbench-pane');
+    await expect(dockedPane).toBeVisible();
+    await expect
+      .poll(() => dockedPane.evaluate((element) => element.getBoundingClientRect().width))
+      .toBe(utilityWidth);
+    const preferenceBeforeOverlay = await page.evaluate(
+      (key) => window.localStorage.getItem(key),
+      workbenchStorageKey,
+    );
+
+    await page.setViewportSize({ width: 640, height: 448 });
+    await expect(page.locator('.workbench')).toHaveAttribute(
+      'data-utility-presentation',
+      'overlay',
+    );
+    await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '640');
+    await expect
+      .poll(() => dockedPane.evaluate((element) => element.getBoundingClientRect().width))
+      .toBe(288);
+    await expect(page.getByRole('region', { name: 'Utility: Song Details' })).toBeVisible();
+    await expect
+      .poll(() => page.evaluate((key) => window.localStorage.getItem(key), workbenchStorageKey))
+      .toBe(preferenceBeforeOverlay);
+
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+    await expect
+      .poll(() => dockedPane.evaluate((element) => element.getBoundingClientRect().width))
+      .toBe(utilityWidth);
+    await expect
+      .poll(() => page.evaluate((key) => window.localStorage.getItem(key), workbenchStorageKey))
+      .toBe(preferenceBeforeOverlay);
+  }
+});
+
 test('long Song Details content scrolls independently in the compact overlay', async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 448 });
   await page.goto('/');

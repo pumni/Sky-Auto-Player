@@ -107,13 +107,117 @@ async function capture(page: Page, name: string) {
 }
 
 async function readWorkspaceGeometry(page: Page) {
-  return page.evaluate(() => {
+  return page.evaluate((preferenceKey) => {
     const rect = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);
       if (!element) return null;
       const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
       return { x, y, width, height, right, bottom };
     };
+    const trackTable = document.querySelector<HTMLElement>('.track-table');
+    const trackFrame = document.querySelector<HTMLElement>('.track-table-frame');
+    const browserPane = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
+    const tableHeader = document.querySelector<HTMLElement>('.track-table-header');
+    const headerCells = Array.from(
+      document.querySelectorAll<HTMLElement>('.track-table-header [role="columnheader"]'),
+    ).filter((cell) => getComputedStyle(cell).display !== 'none');
+    const rowMeasurements = (selector: string) => {
+      const row = document.querySelector<HTMLElement>(selector);
+      const rowRect = row?.getBoundingClientRect();
+      const paneRect = browserPane?.getBoundingClientRect();
+      const paneStyle = browserPane ? getComputedStyle(browserPane) : null;
+      const classicScrollbarReservation =
+        trackTable && tableStyle
+          ? trackTable.offsetWidth -
+            trackTable.clientWidth -
+            trackTable.clientLeft -
+            Number.parseFloat(tableStyle.borderRightWidth)
+          : 0;
+      const contentLeft = paneRect
+        ? paneRect.left + Number.parseFloat(paneStyle?.borderLeftWidth ?? '0')
+        : null;
+      const contentRight = paneRect
+        ? paneRect.right - Number.parseFloat(paneStyle?.borderRightWidth ?? '0')
+        : null;
+      const cells = row
+        ? Array.from(row.querySelectorAll<HTMLElement>('[role="gridcell"]')).filter(
+            (cell) => getComputedStyle(cell).display !== 'none',
+          )
+        : [];
+      return {
+        rect: rowRect
+          ? {
+              x: rowRect.x,
+              y: rowRect.y,
+              width: rowRect.width,
+              height: rowRect.height,
+              right: rowRect.right,
+              bottom: rowRect.bottom,
+            }
+          : null,
+        paneEdgeInsets:
+          rowRect && contentLeft !== null && contentRight !== null
+            ? { left: rowRect.left - contentLeft, right: contentRight - rowRect.right }
+            : null,
+        rowFillInsets:
+          rowRect && frameRect
+            ? { left: rowRect.left - frameRect.left, right: frameRect.right - rowRect.right }
+            : null,
+        scrollbarCompensatedPaneInsets:
+          rowRect && contentLeft !== null && contentRight !== null
+            ? {
+                left: rowRect.left - contentLeft,
+                right: contentRight - rowRect.right - classicScrollbarReservation,
+              }
+            : null,
+        cells: cells.map((cell, index) => {
+          const cellRect = cell.getBoundingClientRect();
+          const headerRect = headerCells[index]?.getBoundingClientRect();
+          return {
+            name:
+              headerCells[index]?.textContent?.trim() ||
+              headerCells[index]?.getAttribute('aria-label') ||
+              `column-${index + 1}`,
+            row: { x: cellRect.x, width: cellRect.width, right: cellRect.right },
+            header: headerRect
+              ? { x: headerRect.x, width: headerRect.width, right: headerRect.right }
+              : null,
+            delta: headerRect
+              ? {
+                  left: cellRect.left - headerRect.left,
+                  right: cellRect.right - headerRect.right,
+                  width: cellRect.width - headerRect.width,
+                }
+              : null,
+          };
+        }),
+      };
+    };
+    const tableStyle = trackTable ? getComputedStyle(trackTable) : null;
+    const paneStyle = browserPane ? getComputedStyle(browserPane) : null;
+    const tableRect = trackTable?.getBoundingClientRect();
+    const frameRect = trackFrame?.getBoundingClientRect();
+    const headerRect = tableHeader?.getBoundingClientRect();
+    const titlebar = document.querySelector<HTMLElement>('.app-titlebar');
+    const titlebarLeading = document.querySelector<HTMLElement>('.app-titlebar-leading');
+    const titlebarBrand = document.querySelector<HTMLElement>('.app-titlebar-brand');
+    const titlebarSearch = document.querySelector<HTMLElement>('.global-search');
+    const titlebarEnd = document.querySelector<HTMLElement>('.app-titlebar-end');
+    const titlebarLeadingRect = titlebarLeading?.getBoundingClientRect();
+    const titlebarBrandRect = titlebarBrand?.getBoundingClientRect();
+    const titlebarSearchRect = titlebarSearch?.getBoundingClientRect();
+    const titlebarEndRect = titlebarEnd?.getBoundingClientRect();
+    const collapseButton = document.querySelector<HTMLElement>('.library-collapse-button');
+    const collapseStyle = collapseButton ? getComputedStyle(collapseButton) : null;
+    const inspectorPane = document.querySelector<HTMLElement>('.utility-workbench-pane');
+    const inspectorStyle = inspectorPane ? getComputedStyle(inspectorPane) : null;
+    const utilityPreferenceText = localStorage.getItem(preferenceKey);
+    const utilityPreference = utilityPreferenceText ? JSON.parse(utilityPreferenceText) : null;
+    const rootStyle = getComputedStyle(document.documentElement);
+    const freeRegionMidpoint =
+      titlebarBrandRect && titlebarEndRect
+        ? (titlebarBrandRect.right + titlebarEndRect.left) / 2
+        : null;
     const computed = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);
       if (!element) return null;
@@ -128,7 +232,57 @@ async function readWorkspaceGeometry(page: Page) {
       };
     };
     return {
-      viewport: { width: innerWidth, height: innerHeight },
+      viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+      semanticTokens: {
+        workbenchContent: rootStyle.getPropertyValue('--workbench-content').trim(),
+        chromeSurface: rootStyle.getPropertyValue('--chrome-surface').trim(),
+        paneEdge: rootStyle.getPropertyValue('--workbench-pane-edge').trim(),
+        controlHover: rootStyle.getPropertyValue('--control-hover').trim(),
+        controlBorder: rootStyle.getPropertyValue('--control-border').trim(),
+        textPrimary: rootStyle.getPropertyValue('--text-primary').trim(),
+        textSecondary: rootStyle.getPropertyValue('--text-secondary').trim(),
+        focusRing: rootStyle.getPropertyValue('--focus-ring').trim(),
+      },
+      titlebar: {
+        rect: rect('.app-titlebar'),
+        leading: rect('.app-titlebar-leading'),
+        brand: rect('.app-titlebar-brand'),
+        search: rect('.global-search'),
+        trailingActions: rect('.app-titlebar-end'),
+        leftDrag: rect('.titlebar-drag-space'),
+        rightDrag: rect('.titlebar-drag-space-trailing'),
+        freeRegionMidpoint,
+        searchMidpoint: titlebarSearchRect
+          ? titlebarSearchRect.left + titlebarSearchRect.width / 2
+          : null,
+        searchCenterError:
+          freeRegionMidpoint !== null && titlebarSearchRect
+            ? Math.abs(titlebarSearchRect.left + titlebarSearchRect.width / 2 - freeRegionMidpoint)
+            : null,
+        updateAvailable: titlebar?.dataset.updateAvailable ?? null,
+        searchFocused: document.activeElement === document.querySelector('.global-search input'),
+      },
+      collapseButton: {
+        rect: rect('.library-collapse-button'),
+        borderColor: collapseStyle?.borderColor ?? null,
+        borderWidth: collapseStyle?.borderWidth ?? null,
+        backgroundColor: collapseStyle?.backgroundColor ?? null,
+        color: collapseStyle?.color ?? null,
+        outlineWidth: collapseStyle?.outlineWidth ?? null,
+        outlineColor: collapseStyle?.outlineColor ?? null,
+        outlineOffset: collapseStyle?.outlineOffset ?? null,
+        boxShadow: collapseStyle?.boxShadow ?? null,
+      },
+      inspector: {
+        presentation:
+          document.querySelector<HTMLElement>('.workbench')?.dataset.utilityPresentation ?? null,
+        rect: rect('.utility-workbench-pane'),
+        widthStyle: inspectorPane?.style.width || null,
+        persistedDockWidth: utilityPreference?.utilityWidth ?? null,
+        borderColor: inspectorStyle?.borderColor ?? null,
+        borderWidth: inspectorStyle?.borderWidth ?? null,
+        borderRadius: inspectorStyle?.borderRadius ?? null,
+      },
       browserContainer: rect('.track-browser-workbench-pane'),
       browserSection: rect('.track-browser'),
       sourceHeader: rect('.track-browser-header'),
@@ -137,6 +291,47 @@ async function readWorkspaceGeometry(page: Page) {
       count: rect('.track-browser-count'),
       tableHeader: rect('.track-table-header'),
       firstSong: rect('.track-row'),
+      trackCanvas: {
+        pane: rect('.track-browser-workbench-pane'),
+        scrollport: tableRect
+          ? { x: tableRect.x, y: tableRect.y, width: tableRect.width, right: tableRect.right }
+          : null,
+        frame: frameRect
+          ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, right: frameRect.right }
+          : null,
+        columnHeader: headerRect
+          ? { x: headerRect.x, y: headerRect.y, width: headerRect.width, right: headerRect.right }
+          : null,
+        scrollportMetrics:
+          trackTable && tableStyle
+            ? {
+                clientWidth: trackTable.clientWidth,
+                offsetWidth: trackTable.offsetWidth,
+                scrollWidth: trackTable.scrollWidth,
+                clientLeft: trackTable.clientLeft,
+                reservedInline: trackTable.offsetWidth - trackTable.clientWidth,
+                computedBorderLeft: tableStyle.borderLeftWidth,
+                computedBorderRight: tableStyle.borderRightWidth,
+                actualClassicScrollbarReservation:
+                  trackTable.offsetWidth -
+                  trackTable.clientWidth -
+                  trackTable.clientLeft -
+                  Number.parseFloat(tableStyle.borderRightWidth),
+              }
+            : null,
+        paneBorders: paneStyle
+          ? {
+              left: paneStyle.borderLeftWidth,
+              right: paneStyle.borderRightWidth,
+              boxSizing: paneStyle.boxSizing,
+            }
+          : null,
+        rows: {
+          selected: rowMeasurements('.track-row.is-selected'),
+          playing: rowMeasurements('.track-row.is-playing:not(.is-selected)'),
+          hovered: rowMeasurements('.track-row:hover'),
+        },
+      },
       surfaces: {
         header: computed('.track-browser-header'),
         sourceLabel: computed('.track-browser-source-label'),
@@ -150,7 +345,7 @@ async function readWorkspaceGeometry(page: Page) {
       browserHeaderTablists: document.querySelectorAll('.track-browser-header [role="tablist"]')
         .length,
     };
-  });
+  }, workbenchPreferenceKey);
 }
 
 test.skip(
@@ -168,11 +363,31 @@ test('captures the Graphite G workspace views on request', async ({ page }) => {
   const wideInspector = await openDetails(page);
   await expect(wideInspector.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
   await expect(widePlayer.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await page.getByRole('row', { name: /Aurora Landing/ }).hover();
+  const classicScrollbarSimulation = await page.addStyleTag({
+    content: `
+      .track-table {
+        overflow-y: scroll !important;
+        scrollbar-gutter: stable !important;
+        scrollbar-width: auto !important;
+      }
+      .track-table::-webkit-scrollbar {
+        width: 16px !important;
+      }
+    `,
+  });
+  const classicScrollbarGeometry = await readWorkspaceGeometry(page);
+  expect(
+    classicScrollbarGeometry.trackCanvas.scrollportMetrics?.actualClassicScrollbarReservation,
+  ).toBeGreaterThan(0);
+  measurements['1366x768ClassicScrollbar'] = classicScrollbarGeometry;
+  await classicScrollbarSimulation.evaluate((style) => style.remove());
   measurements['1366x768'] = await readWorkspaceGeometry(page);
   await capture(page, 'candidate-populated-1366x768.png');
 
   await openApp(page, { width: 800, height: 560 }, 'collapsed');
   await startDryRunWithSelection(page);
+  await page.getByRole('row', { name: /Aurora Landing/ }).hover();
   measurements['800x560'] = await readWorkspaceGeometry(page);
   await capture(page, 'candidate-workbench-800x560.png');
 
@@ -183,6 +398,7 @@ test('captures the Graphite G workspace views on request', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect(compactPlayer.locator('.player-dry-run-label')).toHaveText('Dry run');
   await expect(compactInspector).toBeVisible();
+  await page.getByRole('row', { name: /Aurora Landing/ }).hover({ position: { x: 24, y: 23 } });
   measurements['640x448'] = await readWorkspaceGeometry(page);
   await capture(page, 'candidate-overlay-640x448.png');
 
@@ -221,9 +437,13 @@ test('captures the Graphite G workspace views on request', async ({ page }) => {
 
   mkdirSync(evidenceDirectory, { recursive: true });
   await import('node:fs/promises').then(({ writeFile }) =>
-    writeFile(
-      resolve(evidenceDirectory, 'candidate-measurements.json'),
-      `${JSON.stringify(measurements, null, 2)}\n`,
+    Promise.all(
+      ['candidate-measurements.json', 'correction-h-after.json'].map((filename) =>
+        writeFile(
+          resolve(evidenceDirectory, filename),
+          `${JSON.stringify(measurements, null, 2)}\n`,
+        ),
+      ),
     ),
   );
 });

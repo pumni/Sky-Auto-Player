@@ -302,7 +302,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
     shell: 'rgb(25, 26, 27)',
     titlebar: 'rgb(25, 26, 27)',
     navigator: 'rgb(25, 26, 27)',
-    trackBrowser: 'rgb(24, 25, 27)',
+    trackBrowser: 'rgb(21, 22, 24)',
     inspector: 'rgb(25, 26, 27)',
     playerDock: 'rgb(25, 26, 27)',
     workbenchDivider: '#2a2b2c',

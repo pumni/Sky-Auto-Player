@@ -95,6 +95,7 @@ async function computedAppearance(page: Page, view: string) {
       playerTrack: '.player-track-copy strong',
       playerMode: '.player-track-copy .player-dry-run-label',
       playerStatus: '.player-track-copy .player-track-status',
+      libraryCollapseButton: '.library-collapse-button',
     };
     const readStyle = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);
@@ -119,7 +120,9 @@ async function computedAppearance(page: Page, view: string) {
         boxShadow: style.boxShadow,
         boxSizing: style.boxSizing,
         outlineWidth: style.outlineWidth,
+        outlineStyle: style.outlineStyle,
         outlineColor: style.outlineColor,
+        outlineOffset: style.outlineOffset,
       };
     };
     const readBounds = (selector: string) => {
@@ -169,6 +172,64 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
   await expect(details.getByRole('heading', { name: 'Song Details' })).toBeVisible();
   const search = page.getByRole('searchbox', { name: 'Search All Songs' });
+  const collapseButton = page.getByRole('button', { name: 'Collapse library navigator' });
+  await page.mouse.move(0, 0);
+  const idleCollapseStyle = await collapseButton.evaluate((button) => {
+    const style = getComputedStyle(button);
+    return {
+      borderColor: style.borderColor,
+      backgroundColor: style.backgroundColor,
+      color: style.color,
+      boxShadow: style.boxShadow,
+    };
+  });
+  expect(idleCollapseStyle).toEqual({
+    borderColor: 'rgba(0, 0, 0, 0)',
+    backgroundColor: 'rgba(0, 0, 0, 0)',
+    color: 'rgb(166, 166, 166)',
+    boxShadow: 'none',
+  });
+  await collapseButton.hover();
+  const hoverCollapseStyle = await collapseButton.evaluate((button) => {
+    const style = getComputedStyle(button);
+    return {
+      borderColor: style.borderColor,
+      backgroundColor: style.backgroundColor,
+      color: style.color,
+      boxShadow: style.boxShadow,
+    };
+  });
+  expect(hoverCollapseStyle).toEqual({
+    borderColor: 'rgba(0, 0, 0, 0)',
+    backgroundColor: 'rgb(34, 35, 36)',
+    color: 'rgb(212, 212, 212)',
+    boxShadow: 'none',
+  });
+  await page.mouse.move(0, 0);
+  await page.locator('.library-add-button').focus();
+  await page.keyboard.press('Tab');
+  await expect(collapseButton).toBeFocused();
+  const focusCollapseStyle = await collapseButton.evaluate((button) => {
+    const style = getComputedStyle(button);
+    return {
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      outlineColor: style.outlineColor,
+      outlineOffset: style.outlineOffset,
+      boxShadow: style.boxShadow,
+    };
+  });
+  expect(focusCollapseStyle).toEqual({
+    outlineWidth: '2px',
+    outlineStyle: 'solid',
+    outlineColor: 'rgb(178, 165, 233)',
+    outlineOffset: '1px',
+    boxShadow: 'none',
+  });
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
   await search.focus();
   await expect(search).toBeFocused();
   appearances.push(await computedAppearance(page, 'populated-docked'));
@@ -246,7 +307,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     };
     const tokens = populated.tokens;
     expect(tokens).toMatchObject({
-      '--workbench-content': '#18191b',
+      '--workbench-content': '#151618',
       '--workbench-navigation': '#191a1b',
       '--workbench-inspector': '#191a1b',
       '--chrome-surface': '#191a1b',
@@ -272,7 +333,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
 
     expect(populated.elements.titlebar?.backgroundColor).toBe('rgb(25, 26, 27)');
     expect(populated.elements.navigator?.backgroundColor).toBe('rgb(25, 26, 27)');
-    expect(populated.elements.trackBrowser?.backgroundColor).toBe('rgb(24, 25, 27)');
+    expect(populated.elements.trackBrowser?.backgroundColor).toBe('rgb(21, 22, 24)');
     expect(populated.elements.inspector?.backgroundColor).toBe('rgb(25, 26, 27)');
     for (const paneName of ['navigator', 'trackBrowser', 'inspector']) {
       const pane = populated.elements[paneName];
@@ -380,7 +441,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
         bottom: number;
       };
     };
-    expect(compactGeometry.inspector.width).toBeGreaterThanOrEqual(280);
+    expect(compactGeometry.inspector.width).toBe(288);
     expect(compactGeometry.inspector.x).toBeGreaterThanOrEqual(0);
     expect(compactGeometry.inspector.y).toBeGreaterThanOrEqual(40);
     expect(compactGeometry.inspector.right).toBeLessThanOrEqual(640);

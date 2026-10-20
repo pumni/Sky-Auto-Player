@@ -424,6 +424,12 @@ describe('workbench layout persistence', () => {
     expect(getUtilityOverlayWidth(780)).toBe(390);
     expect(getUtilityOverlayWidth(400)).toBe(280);
     expect(getUtilityOverlayWidth(250)).toBe(234);
+    expect(getUtilityOverlayWidth(640, 'graphite')).toBe(288);
+    expect(getUtilityOverlayWidth(800, 'graphite')).toBe(352);
+    expect(getUtilityOverlayWidth(400, 'graphite')).toBe(288);
+    expect(getUtilityOverlayWidth(250, 'graphite')).toBe(242);
+    expect(getUtilityOverlayWidth(640, 'slate')).toBe(320);
+    expect(getUtilityOverlayWidth(780, 'slate')).toBe(390);
   });
 
   it('combines rapid functional updates while persisting only explicit commits', () => {

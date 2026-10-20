@@ -100,7 +100,7 @@ const expected = {
 } satisfies Record<Palette, Record<string, string>>;
 
 const graphiteRoleTokens = {
-  '--workbench-content': '#18191b',
+  '--workbench-content': '#151618',
   '--workbench-navigation': '#191a1b',
   '--workbench-inspector': '#191a1b',
   '--chrome-surface': '#191a1b',
@@ -717,7 +717,7 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   const selectedRow = page.locator('.track-row.is-selected');
   const systemColor = async (
-    property: 'color' | 'backgroundColor' | 'borderLeftColor' | 'outlineColor',
+    property: 'color' | 'backgroundColor' | 'borderTopColor' | 'borderLeftColor' | 'outlineColor',
     value: string,
   ) =>
     page.evaluate(
@@ -733,7 +733,7 @@ test('forced colors retain system-state mappings and no palette leakage', async 
     );
   const expectSystemColor = async (
     locator: Locator,
-    property: 'color' | 'backgroundColor' | 'borderLeftColor' | 'outlineColor',
+    property: 'color' | 'backgroundColor' | 'borderTopColor' | 'borderLeftColor' | 'outlineColor',
     value: string,
   ) => {
     const expected = await systemColor(property, value);
@@ -746,6 +746,15 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   };
   await expectSystemColor(selectedRow, 'backgroundColor', 'Highlight');
   await expectSystemColor(selectedRow, 'color', 'HighlightText');
+
+  const collapseButton = page.getByRole('button', { name: 'Collapse library navigator' });
+  await expectSystemColor(collapseButton, 'borderTopColor', 'ButtonText');
+  await expectSystemColor(collapseButton, 'color', 'ButtonText');
+  await expectSystemColor(collapseButton, 'backgroundColor', 'ButtonFace');
+  await page.locator('.library-add-button').focus();
+  await page.keyboard.press('Tab');
+  await expect(collapseButton).toBeFocused();
+  await expectSystemColor(collapseButton, 'outlineColor', 'Highlight');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });

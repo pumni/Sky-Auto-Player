@@ -55,8 +55,8 @@ export function AppTitleBar({
           />
           <span className="visually-hidden">Sky Auto Player</span>
         </div>
-        <div className="titlebar-drag-space" aria-hidden="true" data-tauri-drag-region="true" />
       </div>
+      <div className="titlebar-drag-space" aria-hidden="true" data-tauri-drag-region="true" />
       <GlobalSearch {...(searchInputRef ? { inputRef: searchInputRef } : {})} useStore={useStore} />
       <div
         className="titlebar-drag-space-trailing"

@@ -85,7 +85,7 @@ html[data-color-mode='dark'] {
 
 /* Graphite is the default palette for newly initialized appearance settings. */
 html[data-palette='graphite'] {
-  --workbench-content: #18191b;
+  --workbench-content: #151618;
   --workbench-source-header-height: 40px;
   --workbench-source-title-size: 14px;
   --workbench-source-count-size: 12px;

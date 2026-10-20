@@ -544,8 +544,8 @@ test('Graphite workspace header compacts by viewport and browser width over one 
     expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '14px' : '13px');
     expect(geometry.titleStyle?.fontWeight).toBe('600');
     expect(geometry.countStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '12px' : '11px');
-    expect(geometry.browserStyle?.background).toBe('rgb(24, 25, 27)');
-    expect(geometry.columnStyle?.background).toBe('rgb(24, 25, 27)');
+    expect(geometry.browserStyle?.background).toBe('rgb(21, 22, 24)');
+    expect(geometry.columnStyle?.background).toBe('rgb(21, 22, 24)');
     expect(geometry.columnStyle?.borderBottomWidth).toBe('1px');
     expect(geometry.columnStyle?.borderBottomColor).toBe('rgb(42, 43, 44)');
     expect(geometry.browserScrollWidth).toBeLessThanOrEqual(geometry.browserWidth);
@@ -2081,18 +2081,25 @@ test('target startup failures keep their actionable message at supported viewpor
   }
 });
 
-test('Titlebar search and Player primary control share the application center axis', async ({
+test('Titlebar Search uses the available center axis and Player controls stay viewport-centered', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/');
+  await expect(page.locator('.app-titlebar')).toBeVisible();
   const viewportCenter = 1920 / 2;
+  const titlebarFreeCenter = await page.evaluate(() => {
+    const leading = document.querySelector<HTMLElement>('.app-titlebar-leading');
+    const trailing = document.querySelector<HTMLElement>('.app-titlebar-end');
+    if (!leading || !trailing) throw new Error('Titlebar occupied boundaries are unavailable');
+    return (leading.getBoundingClientRect().right + trailing.getBoundingClientRect().left) / 2;
+  });
   const searchBox = await page.getByLabel('Search All Songs').boundingBox();
   const idleBox = await page.getByRole('button', { name: 'Play', exact: true }).boundingBox();
   expect(searchBox).not.toBeNull();
   expect(idleBox).not.toBeNull();
   if (searchBox && idleBox) {
-    expect(Math.abs(searchBox.x + searchBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
+    expect(Math.abs(searchBox.x + searchBox.width / 2 - titlebarFreeCenter)).toBeLessThanOrEqual(2);
     expect(Math.abs(idleBox.x + idleBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
   }
 

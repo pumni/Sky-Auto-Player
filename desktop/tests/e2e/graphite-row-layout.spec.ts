@@ -106,6 +106,12 @@ async function readGeometry(page: Page, viewportName: string) {
     const preference = preferenceText ? JSON.parse(preferenceText) : null;
     const documentWidth = document.documentElement.scrollWidth;
     const grid = document.querySelector<HTMLElement>('.track-table');
+    const frameElement = document.querySelector<HTMLElement>('.track-table-frame');
+    const headerElement = document.querySelector<HTMLElement>('.track-table-header');
+    const gridStyle = grid ? getComputedStyle(grid) : null;
+    const gridRect = grid?.getBoundingClientRect();
+    const frameRect = frameElement?.getBoundingClientRect();
+    const headerRect = headerElement?.getBoundingClientRect();
     return {
       view: name,
       viewport: { width: innerWidth, height: innerHeight },
@@ -120,6 +126,46 @@ async function readGeometry(page: Page, viewportName: string) {
         trackBrowser: rectFor('.track-browser-workbench-pane'),
         inspector: rectFor('.utility-workbench-pane'),
         dock: rectFor('.player-bar'),
+      },
+      trackGrid: {
+        scrollport: gridRect
+          ? {
+              x: gridRect.x,
+              y: gridRect.y,
+              width: gridRect.width,
+              right: gridRect.right,
+              clientWidth: grid?.clientWidth ?? null,
+              offsetWidth: grid?.offsetWidth ?? null,
+              scrollWidth: grid?.scrollWidth ?? null,
+              clientLeft: grid?.clientLeft ?? null,
+              clientRight:
+                gridRect && grid ? gridRect.left + grid.clientLeft + grid.clientWidth : null,
+              scrollbarGutter: gridStyle?.scrollbarGutter ?? null,
+              classicScrollbarReservation:
+                grid && gridStyle
+                  ? grid.offsetWidth -
+                    grid.clientWidth -
+                    grid.clientLeft -
+                    Number.parseFloat(gridStyle.borderRightWidth)
+                  : null,
+            }
+          : null,
+        frame: frameRect
+          ? {
+              x: frameRect.x,
+              y: frameRect.y,
+              width: frameRect.width,
+              right: frameRect.right,
+            }
+          : null,
+        header: headerRect
+          ? {
+              x: headerRect.x,
+              y: headerRect.y,
+              width: headerRect.width,
+              right: headerRect.right,
+            }
+          : null,
       },
       navigatorTiles: tiles.map((tile) => ({ rect: getRect(tile), style: getStyle(tile) })),
       trackBrowserContainerWidth: (() => {
@@ -155,6 +201,13 @@ async function readGeometry(page: Page, viewportName: string) {
             key,
             {
               rect: getRect(row),
+              rowFillInsets:
+                row instanceof HTMLElement && frameRect
+                  ? {
+                      left: row.getBoundingClientRect().left - frameRect.left,
+                      right: frameRect.right - row.getBoundingClientRect().right,
+                    }
+                  : null,
               style: getStyle(row),
               ariaSelected: row instanceof HTMLElement ? row.getAttribute('aria-selected') : null,
               ariaCurrent: row instanceof HTMLElement ? row.getAttribute('aria-current') : null,
@@ -177,17 +230,44 @@ async function readGeometry(page: Page, viewportName: string) {
   }, viewportName);
 }
 
-function expectRowGeometry(geometry: Awaited<ReturnType<typeof readGeometry>>) {
-  const frame = geometry.panes.trackBrowser;
+function expectRowGeometry(
+  geometry: Awaited<ReturnType<typeof readGeometry>>,
+  requireClassicScrollbar = false,
+) {
+  const frame = geometry.trackGrid.frame;
+  const scrollport = geometry.trackGrid.scrollport;
+  const header = geometry.trackGrid.header;
+  const pane = geometry.panes.trackBrowser;
   const browserWidth = geometry.trackBrowserContainerWidth;
-  if (!frame || browserWidth === null) throw new Error('Track Browser geometry is unavailable');
+  if (!frame || !scrollport || !header || !pane || browserWidth === null) {
+    throw new Error('Track Browser grid geometry is unavailable');
+  }
   const expectedInset = browserWidth <= 440 ? 4 : 6;
+  expect(Math.abs(frame.x - (scrollport.x + scrollport.clientLeft!))).toBeLessThanOrEqual(1);
+  expect(Math.abs(frame.width - scrollport.clientWidth!)).toBeLessThanOrEqual(1);
+  expect(Math.abs(frame.right - scrollport.clientRight!)).toBeLessThanOrEqual(1);
+  expect(Math.abs(frame.x - header.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(frame.right - header.right)).toBeLessThanOrEqual(1);
+  expect(scrollport.classicScrollbarReservation).toBeGreaterThanOrEqual(0);
+  if (requireClassicScrollbar) {
+    expect(scrollport.classicScrollbarReservation).toBeGreaterThan(0);
+  }
+  expect(geometry.trackGrid.scrollport!.scrollWidth).toBeLessThanOrEqual(
+    geometry.trackGrid.scrollport!.clientWidth + 1,
+  );
 
   for (const key of ['selected', 'playing', 'hovered'] as const) {
     const row = geometry.rows[key];
     if (!row?.rect) throw new Error(`The ${key} row has no bounding box`);
-    expect(row.rect.x - (frame.x + 1)).toBeCloseTo(expectedInset, 0);
-    expect(frame.right - 1 - row.rect.right).toBeCloseTo(expectedInset, 0);
+    expect(row.rowFillInsets).not.toBeNull();
+    expect(Math.abs(row.rowFillInsets!.left - expectedInset)).toBeLessThanOrEqual(2);
+    expect(Math.abs(row.rowFillInsets!.right - expectedInset)).toBeLessThanOrEqual(2);
+    const paneLeftInset = row.rect.x - (pane.x + 1);
+    const paneRightInset = pane.right - 1 - row.rect.right;
+    expect(Math.abs(paneLeftInset - row.rowFillInsets!.left)).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(paneRightInset - row.rowFillInsets!.right - scrollport.classicScrollbarReservation!),
+    ).toBeLessThanOrEqual(1);
     expect(row.rect.height).toBeCloseTo(46, 0);
     expect(row.style.borderRadius).toBe('4px');
     row.cellRects.forEach((cell: { x: number; width: number } | null, index: number) => {
@@ -200,6 +280,10 @@ function expectRowGeometry(geometry: Awaited<ReturnType<typeof readGeometry>>) {
       expect(
         Math.abs(cell.width - header.width),
         `${geometry.view} ${key} cell ${index} width`,
+      ).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(cell.x + cell.width - (header.x + header.width)),
+        `${geometry.view} ${key} cell ${index} right`,
       ).toBeLessThanOrEqual(2);
     });
   }
@@ -217,12 +301,25 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   const player = await startDryRunWithSelection(page);
   const details = await openInspector(page);
   await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+  const scrollbarSimulation = await page.addStyleTag({
+    content: `
+      .track-table {
+        overflow-y: scroll !important;
+        scrollbar-gutter: stable !important;
+        scrollbar-width: auto !important;
+      }
+      .track-table::-webkit-scrollbar {
+        width: 16px !important;
+      }
+    `,
+  });
   const hoveredRow = page.getByRole('row', { name: /Aurora Landing/ });
   await hoveredRow.hover();
   await expect.poll(() => hoveredRow.evaluate((row) => row.matches(':hover'))).toBe(true);
   await expect(details.locator('.song-details-context')).toHaveCount(0);
   await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
   evidence.push(await readGeometry(page, 'populated-1366x768'));
+  await scrollbarSimulation.evaluate((style) => style.remove());
 
   const likeButton = hoveredRow.getByRole('button', { name: /Add Aurora Landing to Liked Songs/ });
   await expect(likeButton).toBeVisible();
@@ -277,15 +374,16 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   const wide = evidence[0] as Awaited<ReturnType<typeof readGeometry>>;
   const collapsed = evidence[1] as Awaited<ReturnType<typeof readGeometry>>;
   const compact = evidence[2] as Awaited<ReturnType<typeof readGeometry>>;
-  for (const geometry of [wide, collapsed, compact]) expectRowGeometry(geometry);
+  expectRowGeometry(wide, true);
+  for (const geometry of [collapsed, compact]) expectRowGeometry(geometry);
   for (const geometry of [wide, collapsed, compact]) {
     expect(geometry.horizontalOverflow).toBe(false);
     expect(geometry.trackGridHorizontalOverflow).toBe(false);
   }
 
-  expect(wide.surfaces.browser?.backgroundColor).toBe('rgb(24, 25, 27)');
+  expect(wide.surfaces.browser?.backgroundColor).toBe('rgb(21, 22, 24)');
   expect(wide.surfaces.browserHeader?.backgroundColor).toBe('rgb(25, 26, 27)');
-  expect(wide.surfaces.columnHeader?.backgroundColor).toBe('rgb(24, 25, 27)');
+  expect(wide.surfaces.columnHeader?.backgroundColor).toBe('rgb(21, 22, 24)');
   expect(wide.surfaces.columnRule?.borderBottomColor).toBe('rgb(42, 43, 44)');
   expect(wide.rows.selected?.style.backgroundColor).toBe('rgb(37, 36, 44)');
   expect(wide.rows.hovered?.style.backgroundColor).toBe('rgb(34, 35, 36)');

@@ -27,6 +27,7 @@ async function readTitlebarGeometry(page: Page) {
   return page.evaluate(() => {
     const selectors = {
       titlebar: '.app-titlebar',
+      leading: '.app-titlebar-leading',
       search: '.global-search',
       update: '.update-indicator',
       reload: 'button[aria-label="Reload library"]',
@@ -36,6 +37,7 @@ async function readTitlebarGeometry(page: Page) {
       close: 'button[aria-label="Close window"]',
       drag: '.titlebar-drag-space',
       trailingDrag: '.titlebar-drag-space-trailing',
+      end: '.app-titlebar-end',
     } as const;
     const boxes: Record<
       string,
@@ -105,6 +107,23 @@ async function readTitlebarGeometry(page: Page) {
               .getBoundingClientRect().height,
           }
         : null,
+      searchFreeRegion: (() => {
+        const leadingRight = boxes.leading?.right;
+        const endLeft = boxes.end?.x;
+        const search = boxes.search;
+        if (leadingRight === null || leadingRight === undefined || endLeft === null || !search) {
+          return null;
+        }
+        const midpoint = (leadingRight + endLeft) / 2;
+        const searchMidpoint = search.x + search.width / 2;
+        return {
+          left: leadingRight,
+          right: endLeft,
+          midpoint,
+          searchMidpoint,
+          centerError: Math.abs(searchMidpoint - midpoint),
+        };
+      })(),
       workbench: {
         fits: workbench?.dataset.layoutFits,
         gutter: workbench?.dataset.workbenchGap,
@@ -190,6 +209,7 @@ async function expectNonOverlappingGeometry(
   expect(geometry.dragRegion).toBe('true');
   expect(geometry.boxes.titlebar?.height).toBe(40);
   expect(geometry.boxes.search?.height).toBeGreaterThanOrEqual(34);
+  expect(geometry.trailingDragRegion).toBe('true');
   expect(
     geometry.workbench,
     `Workbench geometry at ${geometry.viewport.width}×${geometry.viewport.height}, DPR ${expectedDpr}: ${JSON.stringify(geometry.workbench)}`,
@@ -215,32 +235,44 @@ async function expectNonOverlappingGeometry(
 
   const search = geometry.boxes.search;
   const drag = geometry.boxes.drag;
+  const trailingDrag = geometry.boxes.trailingDrag;
+  const leading = geometry.boxes.leading;
+  const end = geometry.boxes.end;
   expect(search).not.toBeNull();
   expect(drag).not.toBeNull();
-  if (!search || !drag) throw new Error('Titlebar search or drag region is missing');
-  expect(drag.width).toBeGreaterThanOrEqual(48);
-  expect(drag.height).toBeGreaterThanOrEqual(geometry.boxes.search?.height ?? 0);
+  expect(trailingDrag).not.toBeNull();
+  expect(leading).not.toBeNull();
+  expect(end).not.toBeNull();
+  if (!search || !drag || !trailingDrag || !leading || !end) {
+    throw new Error('Titlebar search, drag region, or occupied boundary is missing');
+  }
+  expect(drag.width).toBeGreaterThanOrEqual(24);
+  expect(trailingDrag.width).toBeGreaterThanOrEqual(24);
+  expect(drag.height).toBeGreaterThanOrEqual(search.height);
+  expect(trailingDrag.height).toBeGreaterThanOrEqual(search.height);
+  expect(leading.right).toBeLessThanOrEqual(drag.x + 0.5);
+  expect(drag.right).toBeLessThanOrEqual(search.x + 0.5);
+  expect(search.right).toBeLessThanOrEqual(trailingDrag.x + 0.5);
+  expect(trailingDrag.right).toBeLessThanOrEqual(end.x + 0.5);
+  expect(geometry.searchFreeRegion).not.toBeNull();
+  expect(geometry.searchFreeRegion!.centerError).toBeLessThanOrEqual(1);
   expect(geometry.searchInput?.width).toBeGreaterThan(48);
   if (geometry.viewport.width <= 700) {
-    const trailingDrag = geometry.boxes.trailingDrag;
     const firstRightControl = geometry.boxes.update ?? geometry.boxes.reload;
-    expect(trailingDrag).not.toBeNull();
-    expect(geometry.trailingDragRegion).toBe('true');
-    expect(trailingDrag?.width).toBeGreaterThanOrEqual(24);
     expect(search.width).toBeGreaterThanOrEqual(260);
     if (firstRightControl) {
       expect(search.right).toBeLessThanOrEqual(firstRightControl.x - 24);
     }
-  } else {
-    expect(Math.abs(search.x + search.width / 2 - geometry.viewport.width / 2)).toBeLessThanOrEqual(
-      0.5,
-    );
-    expect(geometry.boxes.trailingDrag).toBeNull();
   }
 
   const occupied = Object.entries(geometry.boxes).filter(
     ([name, box]) =>
-      name !== 'titlebar' && name !== 'drag' && name !== 'trailingDrag' && box !== null,
+      name !== 'titlebar' &&
+      name !== 'drag' &&
+      name !== 'trailingDrag' &&
+      name !== 'leading' &&
+      name !== 'end' &&
+      box !== null,
   ) as Array<[string, NonNullable<(typeof geometry.boxes)[string]>]>;
   for (const [name, box] of occupied) {
     expect(box.x, `${name} starts inside the viewport`).toBeGreaterThanOrEqual(0);
@@ -293,9 +325,7 @@ test('titlebar stays collision-free and pointer-operable across viewport, update
           await page.setViewportSize(viewport);
           await expectNonOverlappingGeometry(page, deviceScaleFactor, updateAvailable);
           await expectPointerCenter(page, page.locator('.titlebar-drag-space'));
-          if (viewport.width <= 700) {
-            await expectPointerCenter(page, page.locator('.titlebar-drag-space-trailing'));
-          }
+          await expectPointerCenter(page, page.locator('.titlebar-drag-space-trailing'));
 
           const searchInput = page.locator('.global-search input');
           await expectPointerCenter(page, searchInput);

@@ -62,6 +62,30 @@ html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-co
   min-height: var(--workbench-compact-navigator-tile);
 }
 
+html[data-palette='graphite'] .icon-button.icon-button-boxed.library-collapse-button {
+  border-color: transparent;
+  color: var(--text-secondary);
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-palette='graphite']
+  .icon-button.icon-button-boxed.library-collapse-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite']
+  .icon-button.icon-button-boxed.library-collapse-button:active:not(:disabled) {
+  background: var(--control-pressed);
+}
+
+html[data-palette='graphite'] .icon-button.icon-button-boxed.library-collapse-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
 html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-nav-item {
   width: var(--workbench-compact-navigator-tile);
   height: var(--workbench-compact-navigator-tile);
@@ -802,6 +826,26 @@ html[data-palette='graphite'] .library-confirm-message {
     border-left-color: CanvasText;
     color: CanvasText;
     background: Canvas;
+  }
+
+  html[data-palette='graphite'] .icon-button.icon-button-boxed.library-collapse-button {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: ButtonFace;
+  }
+
+  html[data-palette='graphite']
+    .icon-button.icon-button-boxed.library-collapse-button:hover:not(:disabled),
+  html[data-palette='graphite']
+    .icon-button.icon-button-boxed.library-collapse-button:active:not(:disabled) {
+    border-color: ButtonText;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  html[data-palette='graphite']
+    .icon-button.icon-button-boxed.library-collapse-button:focus-visible {
+    outline-color: Highlight;
   }
 
   html[data-palette='graphite'] .track-row.is-playing .track-cell-index,

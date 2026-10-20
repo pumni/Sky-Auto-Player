@@ -271,8 +271,8 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
   appearances.push(appearance);
   await expectAccessibility(page, appearance);
   const expected = {
-    workbenchContent: '#18191b',
-    browser: 'rgb(24, 25, 27)',
+    workbenchContent: '#151618',
+    browser: 'rgb(21, 22, 24)',
     paneEdge: 'rgb(49, 51, 54)',
     searchSurface: 'rgb(32, 33, 35)',
     searchSurfaceToken: '#202123',

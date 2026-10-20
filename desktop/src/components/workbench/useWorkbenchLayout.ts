@@ -49,6 +49,9 @@ export const MIN_TRACK_BROWSER_WIDTH = 420;
 export const WORKBENCH_GUTTER = 8;
 export const OUTER_INLINE_PADDING = WORKBENCH_GUTTER * 2;
 export const MAX_UTILITY_OVERLAY_WIDTH = 400;
+export const GRAPHITE_MIN_UTILITY_OVERLAY_WIDTH = 288;
+export const GRAPHITE_MAX_UTILITY_OVERLAY_WIDTH = 352;
+export const GRAPHITE_UTILITY_OVERLAY_WIDTH_FRACTION = 0.45;
 export const GRAPHITE_COMPACT_NAVIGATOR_WIDTH = 48;
 export const GRAPHITE_AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH = 640;
 
@@ -140,6 +143,16 @@ export function getUtilityOverlayWidth(
   palette: PaletteId = 'classic',
 ): number {
   const availableWidth = Math.max(0, Math.floor(viewportWidth) - outerInlinePadding(palette));
+  if (palette === 'graphite') {
+    const responsiveWidth = Math.min(
+      GRAPHITE_MAX_UTILITY_OVERLAY_WIDTH,
+      Math.max(
+        GRAPHITE_MIN_UTILITY_OVERLAY_WIDTH,
+        Math.floor(viewportWidth * GRAPHITE_UTILITY_OVERLAY_WIDTH_FRACTION),
+      ),
+    );
+    return Math.min(availableWidth, responsiveWidth);
+  }
   const responsiveWidth = Math.max(MIN_UTILITY_WIDTH, Math.floor(viewportWidth / 2));
   return Math.min(MAX_UTILITY_OVERLAY_WIDTH, responsiveWidth, availableWidth);
 }
