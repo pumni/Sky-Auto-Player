@@ -1,0 +1,439 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+
+const variant = process.env.GRAPHITE_ROW_GEOMETRY_VARIANT ?? 'candidate';
+const evidenceDirectory = resolve(
+  process.cwd(),
+  '../docs/evidence/graphite-correction/checkpoint-f',
+  variant ?? 'unselected',
+);
+const workbenchPreferenceKey = 'sky.ui.workbench.v5';
+
+async function openApp(
+  page: Page,
+  viewport: { width: number; height: number },
+  navigatorPreference: 'expanded' | 'collapsed' = 'expanded',
+) {
+  await page.setViewportSize(viewport);
+  await page.addInitScript(
+    ({ key, preference }) => {
+      window.localStorage.clear();
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({
+          version: 5,
+          navigatorPreference: preference,
+          expandedNavigatorWidth: 240,
+          utilityWidth: 320,
+          utilityOpen: false,
+        }),
+      );
+    },
+    { key: workbenchPreferenceKey, preference: navigatorPreference },
+  );
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  await expect(page.locator('.app-shell')).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
+  await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
+}
+
+async function startDryRunWithSelection(page: Page) {
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Candle Run/ }).click();
+  await player.getByRole('button', { name: 'Configure playback profile' }).click();
+  await page
+    .getByRole('dialog', { name: 'Playback profile' })
+    .getByRole('button', { name: 'Test playback (no input)' })
+    .click();
+  await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('row', { name: /Candle Run/ })).toHaveAttribute(
+    'aria-current',
+    'true',
+  );
+  await expect(player.locator('.player-dry-run-label')).toHaveText('Dry run');
+  return player;
+}
+
+async function openInspector(page: Page) {
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  const trigger = player.getByRole('button', { name: 'Open utility panel' });
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
+  const inspector = page.locator('.utility-surface');
+  await expect(inspector).toBeVisible();
+  await inspector.getByRole('tab', { name: 'Details' }).click();
+  return inspector;
+}
+
+async function capture(page: Page, name: string, locator?: Locator) {
+  mkdirSync(evidenceDirectory, { recursive: true });
+  const path = resolve(evidenceDirectory, `${name}.png`);
+  if (locator) await locator.screenshot({ path, animations: 'disabled' });
+  else await page.screenshot({ path, animations: 'disabled' });
+}
+
+async function readGeometry(page: Page, viewportName: string) {
+  return page.evaluate((name) => {
+    const getRect = (element: Element | null) => {
+      if (!(element instanceof HTMLElement)) return null;
+      const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
+      return { x, y, width, height, right, bottom };
+    };
+    const getStyle = (element: Element | null) => {
+      if (!(element instanceof HTMLElement)) return null;
+      const style = getComputedStyle(element);
+      return {
+        backgroundColor: style.backgroundColor,
+        color: style.color,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        borderRadius: style.borderRadius,
+        borderLeftWidth: style.borderLeftWidth,
+        borderLeftColor: style.borderLeftColor,
+        borderBottomWidth: style.borderBottomWidth,
+        borderBottomColor: style.borderBottomColor,
+        paddingInlineStart: style.paddingInlineStart,
+        paddingInlineEnd: style.paddingInlineEnd,
+        insetInlineStart: style.insetInlineStart,
+        insetInlineEnd: style.insetInlineEnd,
+      };
+    };
+    const rectFor = (selector: string) => getRect(document.querySelector(selector));
+    const styleFor = (selector: string) => getStyle(document.querySelector(selector));
+    const headerCells = Array.from(
+      document.querySelectorAll<HTMLElement>('.track-table-header [role="columnheader"]'),
+    ).filter((cell) => getComputedStyle(cell).display !== 'none');
+    const selected = document.querySelector('.track-row.is-selected');
+    const playing = document.querySelector('.track-row.is-playing');
+    const hovered = document.querySelector('.track-row:hover');
+    const navigator = document.querySelector('.navigator-workbench-pane');
+    const tiles = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '.navigator-workbench-pane.is-collapsed .library-nav-item, .navigator-workbench-pane.is-collapsed .library-add-button, .navigator-workbench-pane.is-collapsed .library-collapse-button',
+      ),
+    );
+    const preferenceText = localStorage.getItem('sky.ui.workbench.v5');
+    const preference = preferenceText ? JSON.parse(preferenceText) : null;
+    const documentWidth = document.documentElement.scrollWidth;
+    const grid = document.querySelector<HTMLElement>('.track-table');
+    return {
+      view: name,
+      viewport: { width: innerWidth, height: innerHeight },
+      palette: document.documentElement.dataset.palette,
+      savedNavigatorPreference: preference?.navigatorPreference ?? null,
+      documentWidth,
+      horizontalOverflow: documentWidth > innerWidth,
+      trackGridHorizontalOverflow: grid ? grid.scrollWidth > grid.clientWidth + 1 : false,
+      panes: {
+        workbench: rectFor('.workbench'),
+        navigator: getRect(navigator),
+        trackBrowser: rectFor('.track-browser-workbench-pane'),
+        inspector: rectFor('.utility-workbench-pane'),
+        dock: rectFor('.player-bar'),
+      },
+      navigatorTiles: tiles.map((tile) => ({ rect: getRect(tile), style: getStyle(tile) })),
+      trackBrowserContainerWidth: (() => {
+        const pane = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
+        if (!pane) return null;
+        const style = getComputedStyle(pane);
+        return (
+          pane.getBoundingClientRect().width -
+          Number.parseFloat(style.borderLeftWidth) -
+          Number.parseFloat(style.borderRightWidth)
+        );
+      })(),
+      surfaces: {
+        browser: styleFor('.track-browser-workbench-pane'),
+        browserHeader: styleFor('.track-browser-header'),
+        columnHeader: styleFor('.track-table-header'),
+        columnRule: styleFor('.track-table-header'),
+      },
+      rows: Object.fromEntries(
+        [
+          ['selected', selected],
+          ['playing', playing],
+          ['hovered', hovered],
+        ].map(([key, row]) => {
+          const headerRects = headerCells.map(getRect);
+          const rowCells =
+            row instanceof HTMLElement
+              ? Array.from(row.querySelectorAll<HTMLElement>('[role="gridcell"]'))
+                  .filter((cell) => getComputedStyle(cell).display !== 'none')
+                  .map(getRect)
+              : [];
+          return [
+            key,
+            {
+              rect: getRect(row),
+              style: getStyle(row),
+              ariaSelected: row instanceof HTMLElement ? row.getAttribute('aria-selected') : null,
+              ariaCurrent: row instanceof HTMLElement ? row.getAttribute('aria-current') : null,
+              cellRects: rowCells,
+              headerCellRects: headerRects,
+            },
+          ];
+        }),
+      ),
+      identities: {
+        dockTitle: document.querySelector('.player-track-copy strong')?.textContent ?? null,
+        dockLabels: Array.from(
+          document.querySelectorAll('.player-identity-label, .player-track-status'),
+        ).map((element) => element.textContent?.trim() ?? ''),
+        detailsContext: document.querySelector('.song-details-context')?.textContent ?? null,
+        detailsTitle: document.querySelector('.song-details-heading h3')?.textContent ?? null,
+        dryRun: document.querySelector('.player-dry-run-label')?.textContent ?? null,
+      },
+    };
+  }, viewportName);
+}
+
+function expectRowGeometry(geometry: Awaited<ReturnType<typeof readGeometry>>) {
+  const frame = geometry.panes.trackBrowser;
+  const browserWidth = geometry.trackBrowserContainerWidth;
+  if (!frame || browserWidth === null) throw new Error('Track Browser geometry is unavailable');
+  const expectedInset = browserWidth <= 440 ? 4 : 6;
+
+  for (const key of ['selected', 'playing', 'hovered'] as const) {
+    const row = geometry.rows[key];
+    if (!row?.rect) throw new Error(`The ${key} row has no bounding box`);
+    expect(row.rect.x - (frame.x + 1)).toBeCloseTo(expectedInset, 0);
+    expect(frame.right - 1 - row.rect.right).toBeCloseTo(expectedInset, 0);
+    expect(row.rect.height).toBeCloseTo(46, 0);
+    expect(row.style.borderRadius).toBe('4px');
+    row.cellRects.forEach((cell: { x: number; width: number } | null, index: number) => {
+      const header = row.headerCellRects[index];
+      if (!cell || !header) throw new Error('A row or header cell has no bounding box');
+      expect(
+        Math.abs(cell.x - header.x),
+        `${geometry.view} ${key} cell ${index} x`,
+      ).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(cell.width - header.width),
+        `${geometry.view} ${key} cell ${index} width`,
+      ).toBeLessThanOrEqual(2);
+    });
+  }
+}
+
+test('captures and verifies Graphite row surfaces, collapsed navigation, and dock geometry', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  page.setDefaultTimeout(8_000);
+  page.setDefaultNavigationTimeout(8_000);
+  const evidence: unknown[] = [];
+
+  await openApp(page, { width: 1366, height: 768 });
+  const player = await startDryRunWithSelection(page);
+  const details = await openInspector(page);
+  await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+  const hoveredRow = page.getByRole('row', { name: /Aurora Landing/ });
+  await hoveredRow.hover();
+  await expect.poll(() => hoveredRow.evaluate((row) => row.matches(':hover'))).toBe(true);
+  if (variant === 'candidate') {
+    await expect(details.locator('.song-details-context')).toHaveCount(0);
+    await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  }
+  await capture(page, 'populated-1366x768');
+  await capture(page, 'hovered-row-1366x768', hoveredRow);
+  await capture(page, 'selected-row-1366x768', page.locator('.track-row.is-selected'));
+  await capture(page, 'playing-row-1366x768', page.locator('.track-row.is-playing'));
+  evidence.push(await readGeometry(page, 'populated-1366x768'));
+
+  const likeButton = hoveredRow.getByRole('button', { name: /Add Aurora Landing to Liked Songs/ });
+  await expect(likeButton).toBeVisible();
+  const likeTarget = await likeButton.boundingBox();
+  expect(likeTarget).not.toBeNull();
+  if (likeTarget) {
+    const hit = await page.evaluate(
+      ({ x, y }) => {
+        const element = document.elementFromPoint(x, y);
+        return element?.closest('.track-like-button') !== null;
+      },
+      { x: likeTarget.x + likeTarget.width / 2, y: likeTarget.y + likeTarget.height / 2 },
+    );
+    expect(hit).toBe(true);
+  }
+  await likeButton.focus();
+  await expect(likeButton).toBeFocused();
+  await likeButton.click();
+  await expect(hoveredRow).toHaveAttribute('aria-selected', 'false');
+  const moreButton = hoveredRow.getByRole('button', { name: 'More actions for Aurora Landing' });
+  await moreButton.focus();
+  await expect(moreButton).toBeFocused();
+  await moreButton.click();
+  await expect(page.getByRole('menu', { name: 'Actions for Aurora Landing' })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await openApp(page, { width: 800, height: 560 }, 'collapsed');
+  const everydayPlayer = await startDryRunWithSelection(page);
+  const everydayHovered = page.getByRole('row', { name: /Aurora Landing/ });
+  await everydayHovered.hover();
+  await expect.poll(() => everydayHovered.evaluate((row) => row.matches(':hover'))).toBe(true);
+  await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
+  await expect(everydayPlayer.locator('.player-dry-run-label')).toBeVisible();
+  await capture(page, 'collapsed-800x560');
+  await capture(page, 'collapsed-navigator-800x560', page.locator('.navigator-workbench-pane'));
+  await capture(page, 'player-dock-800x560', everydayPlayer);
+  evidence.push(await readGeometry(page, 'collapsed-800x560'));
+
+  await openApp(page, { width: 640, height: 448 }, 'expanded');
+  const compactPlayer = await startDryRunWithSelection(page);
+  await openInspector(page);
+  const compactHovered = page.getByRole('row', { name: /Aurora Landing/ });
+  await compactHovered.hover({ position: { x: 24, y: 23 } });
+  await expect.poll(() => compactHovered.evaluate((row) => row.matches(':hover'))).toBe(true);
+  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
+  await expect(compactPlayer.locator('.player-dry-run-label')).toHaveText('Dry run');
+  if (variant === 'candidate') {
+    await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
+  } else {
+    await expect(page.getByRole('button', { name: 'Collapse library navigator' })).toBeVisible();
+  }
+  const savedPreference = await page.evaluate(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+    workbenchPreferenceKey,
+  );
+  if (variant === 'candidate') expect(savedPreference).toBe('expanded');
+  await capture(page, 'compact-overlay-640x448');
+  await capture(page, 'compact-navigator-640x448', page.locator('.navigator-workbench-pane'));
+  await capture(page, 'compact-player-dock-640x448', compactPlayer);
+  evidence.push(await readGeometry(page, 'compact-overlay-640x448'));
+
+  if (variant === 'candidate') {
+    const wide = evidence[0] as Awaited<ReturnType<typeof readGeometry>>;
+    const collapsed = evidence[1] as Awaited<ReturnType<typeof readGeometry>>;
+    const compact = evidence[2] as Awaited<ReturnType<typeof readGeometry>>;
+    for (const geometry of [wide, collapsed, compact]) expectRowGeometry(geometry);
+    for (const geometry of [wide, collapsed, compact]) {
+      expect(geometry.horizontalOverflow).toBe(false);
+      expect(geometry.trackGridHorizontalOverflow).toBe(false);
+    }
+
+    expect(wide.surfaces.browser?.backgroundColor).toBe('rgb(24, 25, 27)');
+    expect(wide.surfaces.browserHeader?.backgroundColor).toBe('rgb(29, 30, 32)');
+    expect(wide.surfaces.columnHeader?.backgroundColor).toBe('rgb(27, 28, 30)');
+    expect(wide.surfaces.columnRule?.borderBottomColor).toBe('rgb(42, 43, 44)');
+    expect(wide.rows.selected?.style.backgroundColor).toBe('rgb(37, 36, 44)');
+    expect(wide.rows.hovered?.style.backgroundColor).toBe('rgb(34, 35, 36)');
+    expect(wide.rows.playing?.ariaCurrent).toBe('true');
+    expect(wide.rows.selected?.ariaSelected).toBe('true');
+    expect(wide.identities).toMatchObject({
+      dockTitle: 'Candle Run',
+      detailsTitle: 'Blue Bird',
+      detailsContext: null,
+      dryRun: 'Dry run',
+    });
+
+    expect(collapsed.panes.navigator?.width).toBeCloseTo(48, 0);
+    for (const tile of collapsed.navigatorTiles) {
+      expect(tile.rect?.width).toBeCloseTo(40, 0);
+      expect(tile.rect?.height).toBeCloseTo(40, 0);
+      const pane = collapsed.panes.navigator;
+      if (!pane || !tile.rect) throw new Error('Collapsed navigator tile geometry is unavailable');
+      expect(
+        Math.abs(tile.rect.x + tile.rect.width / 2 - (pane.x + pane.width / 2)),
+      ).toBeLessThanOrEqual(1);
+    }
+    expect(collapsed.identities.dryRun).toBe('Dry run');
+    expect(collapsed.panes.inspector).toBeNull();
+
+    expect(compact.panes.navigator?.width).toBeCloseTo(48, 0);
+    expect(compact.panes.inspector).not.toBeNull();
+    expect(compact.identities.dryRun).toBe('Dry run');
+    expect(compact.savedNavigatorPreference).toBe('expanded');
+
+    const pane = page.locator('.track-browser-workbench-pane');
+    const originalFlex = await pane.evaluate((element) => element.style.flex);
+    await pane.evaluate((element) => {
+      element.style.flex = '0 0 438px';
+    });
+    await expect
+      .poll(() =>
+        pane.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return (
+            element.getBoundingClientRect().width -
+            Number.parseFloat(style.borderLeftWidth) -
+            Number.parseFloat(style.borderRightWidth)
+          );
+        }),
+      )
+      .toBeLessThanOrEqual(440);
+    const narrowGeometry = await readGeometry(page, 'narrow-browser-container');
+    expectRowGeometry(narrowGeometry);
+    evidence.push(narrowGeometry);
+    await pane.evaluate((element, flex) => {
+      element.style.flex = flex;
+    }, originalFlex);
+  }
+
+  mkdirSync(evidenceDirectory, { recursive: true });
+  writeFileSync(
+    resolve(evidenceDirectory, 'computed-geometry.json'),
+    `${JSON.stringify({ variant, evidence }, null, 2)}\n`,
+    'utf8',
+  );
+
+  if (variant === 'candidate') {
+    await page.getByRole('button', { name: 'Expand library navigator' }).click();
+    await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+    const manuallyExpandedNavigator = await page.locator('.navigator-workbench-pane').boundingBox();
+    expect(manuallyExpandedNavigator?.width).toBeCloseTo(208, 0);
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+      .toBeLessThanOrEqual(640);
+    const preferenceDuringExpansion = await page.evaluate(
+      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+      workbenchPreferenceKey,
+    );
+    expect(preferenceDuringExpansion).toBe('expanded');
+
+    await page.getByRole('button', { name: 'Close utility panel' }).click();
+    await page.setViewportSize({ width: 800, height: 560 });
+    await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
+    await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+    const restoredPreference = await page.evaluate(
+      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+      workbenchPreferenceKey,
+    );
+    expect(restoredPreference).toBe('expanded');
+    await page.setViewportSize({ width: 640, height: 448 });
+    await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '640');
+    await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+    const preferenceAfterReturn = await page.evaluate(
+      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+      workbenchPreferenceKey,
+    );
+    expect(preferenceAfterReturn).toBe('expanded');
+
+    await openApp(page, { width: 1366, height: 768 });
+    await page.getByRole('row', { name: /Blue Bird/ }).click();
+    const idlePlayer = page.getByRole('contentinfo', { name: 'Player controls' });
+    await expect(idlePlayer.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+    await expect(idlePlayer.locator('.player-track-status')).toHaveText('Ready to play');
+    await expect(idlePlayer.locator('.player-identity-label')).toHaveCount(0);
+    await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    const preferenceBefore = await page.evaluate(
+      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+      workbenchPreferenceKey,
+    );
+    expect(preferenceBefore).toBe('expanded');
+    await page.setViewportSize({ width: 800, height: 560 });
+    await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+    const preferenceAfter = await page.evaluate(
+      (key) => JSON.parse(window.localStorage.getItem(key) ?? 'null')?.navigatorPreference,
+      workbenchPreferenceKey,
+    );
+    expect(preferenceAfter).toBe('expanded');
+  }
+});

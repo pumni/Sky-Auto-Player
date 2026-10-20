@@ -86,6 +86,12 @@ html[data-color-mode='dark'] {
 /* Graphite is the default palette for newly initialized appearance settings. */
 html[data-palette='graphite'] {
   --workbench-content: #18191b;
+  --workbench-track-header: #1d1e20;
+  --workbench-track-columns: #1b1c1e;
+  --workbench-row-inset: 6px;
+  --workbench-row-inset-narrow: 4px;
+  --workbench-row-radius: 4px;
+  --workbench-compact-navigator-tile: 40px;
   --workbench-navigation: #191a1b;
   --workbench-inspector: #191a1b;
   --chrome-surface: #191a1b;

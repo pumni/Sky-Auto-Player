@@ -49,6 +49,12 @@ export const MIN_TRACK_BROWSER_WIDTH = 420;
 export const WORKBENCH_GUTTER = 8;
 export const OUTER_INLINE_PADDING = WORKBENCH_GUTTER * 2;
 export const MAX_UTILITY_OVERLAY_WIDTH = 400;
+export const GRAPHITE_COMPACT_NAVIGATOR_WIDTH = 48;
+export const GRAPHITE_AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH = 640;
+
+export function getCompactNavigatorWidth(palette: PaletteId = 'classic'): number {
+  return palette === 'graphite' ? GRAPHITE_COMPACT_NAVIGATOR_WIDTH : COMPACT_NAVIGATOR_WIDTH;
+}
 
 export function getWorkbenchGutter(palette: PaletteId = 'classic'): number {
   return palette === 'graphite' ? 4 : WORKBENCH_GUTTER;
@@ -111,7 +117,7 @@ export function getUtilityWidthMax(viewportWidth: number, palette: PaletteId = '
     viewportWidth -
     outerInlinePadding(palette) -
     gutter * 2 -
-    COMPACT_NAVIGATOR_WIDTH -
+    getCompactNavigatorWidth(palette) -
     MIN_TRACK_BROWSER_WIDTH;
   return Math.min(MAX_UTILITY_WIDTH, Math.max(0, Math.floor(available)));
 }
@@ -173,8 +179,12 @@ export function useWorkbenchLayout(
   viewportWidth: number,
   utilityDocked = false,
   palette: PaletteId = 'classic',
+  viewportRevision = 0,
 ) {
   const [layout, setLayout] = useState<WorkbenchPreferencesV5>(() => loadWorkbenchPreferences());
+  const [narrowExpansionOverrideRevision, setNarrowExpansionOverrideRevision] = useState<
+    number | null
+  >(null);
   // Keep queued event updates composable between renders without side effects in the updater.
   const pendingLayoutRef = useRef(layout);
 
@@ -183,11 +193,16 @@ export function useWorkbenchLayout(
     ? clamp(layout.utilityWidth, getUtilityWidthMin(viewportWidth, palette), utilityWidthMax)
     : 0;
   const navigatorMax = getNavigatorWidthMax(viewportWidth, effectiveUtilityWidth, palette);
+  const narrowGraphiteWindow =
+    palette === 'graphite' && viewportWidth <= GRAPHITE_AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH;
+  const narrowExpansionOverride =
+    narrowGraphiteWindow && narrowExpansionOverrideRevision === viewportRevision;
   const navigatorCollapsed =
     layout.navigatorPreference === 'collapsed' ||
+    (narrowGraphiteWindow && !narrowExpansionOverride) ||
     availableNavigatorWidth(viewportWidth, effectiveUtilityWidth, palette) < MIN_NAVIGATOR_WIDTH;
   const navigatorWidth = navigatorCollapsed
-    ? COMPACT_NAVIGATOR_WIDTH
+    ? getCompactNavigatorWidth(palette)
     : clamp(layout.expandedNavigatorWidth, MIN_NAVIGATOR_WIDTH, navigatorMax);
   const geometry = solveWorkbenchGeometry({
     viewportWidth,
@@ -221,8 +236,12 @@ export function useWorkbenchLayout(
     geometry,
     setNavigatorWidth: (width: number, persist = false) =>
       update({ expandedNavigatorWidth: width, navigatorPreference: 'expanded' }, persist),
-    setNavigatorPreference: (preference: NavigatorPreference, persist = false) =>
-      update({ navigatorPreference: preference }, persist),
+    setNavigatorPreference: (preference: NavigatorPreference, persist = false) => {
+      setNarrowExpansionOverrideRevision(
+        narrowGraphiteWindow && preference === 'expanded' ? viewportRevision : null,
+      );
+      update({ navigatorPreference: preference }, persist);
+    },
     setUtilityWidth: (width: number, persist = false) => update({ utilityWidth: width }, persist),
     resetNavigatorWidth: () =>
       update(

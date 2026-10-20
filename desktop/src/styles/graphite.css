@@ -53,6 +53,33 @@ html[data-palette='graphite'] .utility-workbench-pane.is-overlay {
   box-shadow: 0 10px 28px rgb(0 0 0 / 34%);
 }
 
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-navigator {
+  padding-inline: 3px;
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-collapse-button {
+  width: var(--workbench-compact-navigator-tile);
+  min-height: var(--workbench-compact-navigator-tile);
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-nav-item {
+  width: var(--workbench-compact-navigator-tile);
+  height: var(--workbench-compact-navigator-tile);
+  min-height: var(--workbench-compact-navigator-tile);
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-collapsed-launchers {
+  width: var(--workbench-compact-navigator-tile);
+}
+
+html[data-palette='graphite']
+  .navigator-workbench-pane.is-collapsed
+  .library-add-button.is-collapsed {
+  width: var(--workbench-compact-navigator-tile);
+  height: var(--workbench-compact-navigator-tile);
+  min-height: var(--workbench-compact-navigator-tile);
+}
+
 /* Navigator is a quiet rail; only its active source gets a leading accent. */
 html[data-palette='graphite'] .library-navigator h2 {
   color: var(--text-primary);
@@ -135,6 +162,10 @@ html[data-palette='graphite'] .track-browser-header h1 {
   letter-spacing: 0;
 }
 
+html[data-palette='graphite'] .track-browser-header {
+  background: var(--workbench-track-header);
+}
+
 html[data-palette='graphite'] .track-browser-count {
   color: var(--text-tertiary);
   font-size: 12px;
@@ -152,17 +183,35 @@ html[data-palette='graphite'] .track-table-frame {
 html[data-palette='graphite'] .track-table-header {
   height: 36px;
   border-bottom-color: var(--workbench-divider);
-  background: var(--workbench-content);
+  background: var(--workbench-track-columns);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
 }
 
 html[data-palette='graphite'] .track-row {
-  border-radius: 0;
+  inset-inline: var(--workbench-row-inset);
+  padding-inline-start: 10px;
+  padding-inline-end: 12px;
+  border-radius: var(--workbench-row-radius);
   color: var(--text-secondary);
   font-size: 13px;
   font-weight: 500;
+}
+
+@container track-browser (max-width: 520px) {
+  html[data-palette='graphite'] .track-row {
+    padding-inline-start: 4px;
+    padding-inline-end: 6px;
+  }
+}
+
+@container track-browser (max-width: 440px) {
+  html[data-palette='graphite'] .track-row {
+    inset-inline: var(--workbench-row-inset-narrow);
+    padding-inline-start: 2px;
+    padding-inline-end: 4px;
+  }
 }
 
 html[data-palette='graphite'] .track-row:hover {
@@ -243,7 +292,6 @@ html[data-palette='graphite'] .song-details-heading {
   padding-bottom: 12px;
 }
 
-html[data-palette='graphite'] .song-details-context,
 html[data-palette='graphite'] .utility-section-label {
   color: var(--text-tertiary);
   font-size: 11px;

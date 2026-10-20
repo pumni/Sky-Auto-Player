@@ -3,9 +3,11 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ResizableSeparator } from './ResizableSeparator';
 import {
+  GRAPHITE_AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH,
   DEFAULT_NAVIGATOR_WIDTH,
   COMPACT_NAVIGATOR_WIDTH,
   getWorkbenchGutter,
+  getCompactNavigatorWidth,
   getNavigatorWidthMax,
   LEGACY_WORKBENCH_STORAGE_KEY,
   LEGACY_WORKBENCH_V4_STORAGE_KEY,
@@ -40,6 +42,26 @@ function LayoutUpdateHarness() {
       </button>
       <button type="button" onClick={() => layout.setUtilityWidth(410, true)}>
         Commit utility width
+      </button>
+    </>
+  );
+}
+
+function ResponsiveNavigatorHarness({
+  viewportWidth,
+  viewportRevision = 0,
+}: {
+  viewportWidth: number;
+  viewportRevision?: number;
+}) {
+  const layout = useWorkbenchLayout(viewportWidth, false, 'graphite', viewportRevision);
+  return (
+    <>
+      <output data-testid="responsive-navigator">
+        {`${layout.navigatorCollapsed}:${layout.navigatorWidth}:${layout.navigatorPreference}:${layout.expandedNavigatorWidth}`}
+      </output>
+      <button type="button" onClick={() => layout.setNavigatorPreference('expanded')}>
+        Expand navigator
       </button>
     </>
   );
@@ -292,7 +314,55 @@ describe('workbench layout persistence', () => {
     expect(minimum.trackBrowserWidth).toBe(420);
     expect(minimum.fits).toBe(true);
     expect(COMPACT_NAVIGATOR_WIDTH).toBe(56);
+    expect(getCompactNavigatorWidth('graphite')).toBe(48);
+    expect(getCompactNavigatorWidth('aurora')).toBe(56);
     expect(getNavigatorWidthMax(920)).toBeGreaterThanOrEqual(MIN_NAVIGATOR_WIDTH);
+  });
+
+  it('uses the Graphite compact rail width in inspector limits and preserves legacy width', () => {
+    const legacyPalettes = ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
+    for (const palette of legacyPalettes) expect(getCompactNavigatorWidth(palette)).toBe(56);
+
+    expect(getUtilityWidthMax(800, 'graphite')).toBe(316);
+    const graphite = solveWorkbenchGeometry({
+      viewportWidth: 800,
+      navigatorWidth: getCompactNavigatorWidth('graphite'),
+      utilityWidth: getUtilityWidthMax(800, 'graphite'),
+      palette: 'graphite',
+    });
+    expect(graphite).toMatchObject({ navigatorWidth: 48, trackBrowserWidth: 420, fits: true });
+  });
+
+  it('automatically collapses at 640 without persisting or changing the saved preference', () => {
+    window.localStorage.setItem(
+      WORKBENCH_STORAGE_KEY,
+      JSON.stringify({
+        version: 5,
+        navigatorPreference: 'expanded',
+        expandedNavigatorWidth: 286,
+        utilityWidth: 320,
+        utilityOpen: false,
+      }),
+    );
+    const write = vi.spyOn(Storage.prototype, 'setItem');
+    const { rerender } = render(<ResponsiveNavigatorHarness viewportWidth={640} />);
+
+    expect(screen.getByTestId('responsive-navigator')).toHaveTextContent('true:48:expanded:286');
+    expect(write).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand navigator' }));
+    expect(screen.getByTestId('responsive-navigator')).toHaveTextContent('false:208:expanded:286');
+    expect(write).not.toHaveBeenCalled();
+
+    rerender(<ResponsiveNavigatorHarness viewportWidth={800} viewportRevision={1} />);
+    expect(screen.getByTestId('responsive-navigator')).toHaveTextContent('false:286:expanded:286');
+    expect(write).not.toHaveBeenCalled();
+
+    rerender(<ResponsiveNavigatorHarness viewportWidth={640} viewportRevision={2} />);
+    expect(screen.getByTestId('responsive-navigator')).toHaveTextContent('true:48:expanded:286');
+    expect(write).not.toHaveBeenCalled();
+    expect(loadWorkbenchLayout().navigatorPreference).toBe('expanded');
+    expect(GRAPHITE_AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH).toBe(640);
   });
 
   it('uses Graphite spacing in layout math and preserves legacy palette geometry', () => {
@@ -329,10 +399,10 @@ describe('workbench layout persistence', () => {
       trackBrowserWidth: 774,
       fits: true,
     });
-    expect(getUtilityWidthMax(772, 'graphite')).toBe(280);
-    expect(getUtilityWidthMax(771, 'graphite')).toBe(279);
-    expect(getUtilityPresentationMode(772, true, 'graphite')).toBe('docked');
-    expect(getUtilityPresentationMode(771, true, 'graphite')).toBe('overlay');
+    expect(getUtilityWidthMax(764, 'graphite')).toBe(280);
+    expect(getUtilityWidthMax(763, 'graphite')).toBe(279);
+    expect(getUtilityPresentationMode(764, true, 'graphite')).toBe('docked');
+    expect(getUtilityPresentationMode(763, true, 'graphite')).toBe('overlay');
     expect(getUtilityPresentationMode(788, true, 'slate')).toBe('docked');
     expect(getUtilityPresentationMode(787, true, 'slate')).toBe('overlay');
   });

@@ -16,33 +16,48 @@ interface WorkbenchProps {
   useStore: DesktopStoreHook;
 }
 
-function useWorkbenchWidth(workbenchRef: RefObject<HTMLElement | null>): number {
-  const [width, setWidth] = useState(() => window.innerWidth);
+interface WorkbenchMeasurement {
+  width: number;
+  revision: number;
+}
+
+function useWorkbenchWidth(workbenchRef: RefObject<HTMLElement | null>): WorkbenchMeasurement {
+  const [measurement, setMeasurement] = useState<WorkbenchMeasurement>(() => ({
+    width: window.innerWidth,
+    revision: 0,
+  }));
   useEffect(() => {
     const workbench = workbenchRef.current;
     if (!workbench) return undefined;
 
     const update = () => {
       const measuredWidth = Math.floor(workbench.getBoundingClientRect().width);
-      setWidth(measuredWidth > 0 ? measuredWidth : window.innerWidth);
+      const width = measuredWidth > 0 ? measuredWidth : window.innerWidth;
+      setMeasurement((previous) =>
+        previous.width === width ? previous : { width, revision: previous.revision + 1 },
+      );
     };
     update();
+    window.addEventListener('resize', update);
 
     if (typeof ResizeObserver !== 'undefined') {
       const observer = new ResizeObserver(update);
       observer.observe(workbench);
-      return () => observer.disconnect();
+      return () => {
+        observer.disconnect();
+        window.removeEventListener('resize', update);
+      };
     }
 
-    window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
   }, [workbenchRef]);
-  return width;
+  return measurement;
 }
 
 export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const workbenchRef = useRef<HTMLElement>(null);
-  const viewportWidth = useWorkbenchWidth(workbenchRef);
+  const viewport = useWorkbenchWidth(workbenchRef);
+  const viewportWidth = viewport.width;
   const utility = useStore((store) => store.utility);
   const palette = useStore(
     (store) => store.settings?.palette ?? store.bootstrap?.settings.palette ?? 'graphite',
@@ -50,7 +65,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const presentationMode = getUtilityPresentationMode(viewportWidth, utility.open, palette);
   const utilityDocked = presentationMode === 'docked';
   const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth, palette);
-  const layout = useWorkbenchLayout(viewportWidth, utilityDocked, palette);
+  const layout = useWorkbenchLayout(viewportWidth, utilityDocked, palette, viewport.revision);
   const previousUtilityOpenRef = useRef(utility.open);
 
   useEffect(() => {
@@ -77,6 +92,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       data-layout-fits={layout.geometry.fits ? 'true' : 'false'}
       data-utility-presentation={presentationMode}
       data-workbench-gap={layout.geometry.gutter}
+      data-workbench-width={viewportWidth}
     >
       <WorkbenchPane
         className={`navigator-workbench-pane${layout.navigatorCollapsed ? ' is-collapsed' : ''}`}

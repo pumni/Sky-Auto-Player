@@ -844,7 +844,7 @@ test('minimum dockable viewport keeps the Inspector inside the actual client rec
 test('narrow Inspector overlays the workbench without shrinking the Track Browser', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 771, height: 540 });
+  await page.setViewportSize({ width: 763, height: 540 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open utility panel' }).click();
   await expect(page.locator('.utility-workbench-pane')).toBeVisible();
@@ -1386,7 +1386,7 @@ test('browsing and liking another Library row keeps Player Bar identity on Now P
   await player.getByRole('button', { name: 'Open utility panel' }).click();
   const details = page.getByRole('tabpanel', { name: 'Details' });
   await expect(details.getByRole('heading', { name: 'Candle Run' })).toBeVisible();
-  await expect(details.getByText('Selected for inspection', { exact: true })).toBeVisible();
+  await expect(details.locator('.song-details-context')).toHaveCount(0);
 
   await player.getByRole('button', { name: 'Pause' }).click();
   await expect(player.getByRole('button', { name: 'Resume' })).toBeVisible();
@@ -1483,7 +1483,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
     }
     const details = page.getByRole('tabpanel', { name: 'Details' });
     await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
-    await expect(details.getByText('Selected for inspection', { exact: true })).toBeVisible();
+    await expect(details.locator('.song-details-context')).toHaveCount(0);
 
     const screenshotPath = testInfo.outputPath(`dry-run-${viewport.width}x${viewport.height}.png`);
     await page.screenshot({ path: screenshotPath });

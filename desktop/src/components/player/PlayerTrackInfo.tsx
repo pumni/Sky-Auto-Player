@@ -49,9 +49,15 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           : sessionStatusConcern === 'conflict'
             ? 'Native session conflict'
             : playerStateLabel(playbackState)
-        : currentSong && playbackState === 'idle' && !playbackError
+        : !currentSong &&
+            !preparedSong &&
+            fallbackIdentity &&
+            playbackState === 'idle' &&
+            !playbackError
           ? 'Ready to play'
-          : metadata;
+          : currentSong && playbackState === 'idle' && !playbackError
+            ? 'Ready to play'
+            : metadata;
   const identityLabel = currentSong
     ? active
       ? sessionStatusConcern !== null
@@ -60,9 +66,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       : 'Last played'
     : preparedSong
       ? 'Prepared'
-      : fallbackIdentity
-        ? 'Selected'
-        : null;
+      : null;
 
   return (
     <div className="player-track-info">

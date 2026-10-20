@@ -54,7 +54,6 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
       role={detail.state === 'fatal' ? 'alert' : undefined}
     >
       <div className="song-details-heading">
-        <span className="song-details-context">Selected for inspection</span>
         <h3 id="song-details-title" title={song?.title ?? selectedRow.title}>
           {selectedRow.title}
         </h3>

@@ -47,9 +47,10 @@ describe('PlayerTrackInfo', () => {
     if (!row) throw new Error('mock Library is too small');
     await act(async () => store.getState().selectSong(row.song_id));
 
-    render(<PlayerTrackInfo useStore={store} />);
+    const { container } = render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
-    expect(screen.getByText('Selected')).toBeInTheDocument();
+    expect(screen.getByText('Ready to play')).toBeInTheDocument();
+    expect(container.querySelector('.player-identity-label')).toBeNull();
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
   });
 

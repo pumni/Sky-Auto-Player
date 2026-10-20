@@ -818,14 +818,6 @@ body.is-resizing * {
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.song-details-context {
-  color: var(--text-primary);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .song-details-heading h3 {
   overflow: hidden;
   font-size: 16px;
