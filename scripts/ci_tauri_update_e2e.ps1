@@ -24,37 +24,14 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $candidateCargoPath = Join-Path $repoRoot 'desktop/src-tauri/Cargo.toml'
 $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
+$identityHelperPath = Join-Path $PSScriptRoot 'updater_candidate_source_identity.ps1'
+. $identityHelperPath
 $previousVersion = '4.1.3'
-$cargoSource = [IO.File]::ReadAllText($candidateCargoPath)
-$lockSource = [IO.File]::ReadAllText($lockPath)
+$cargoSourceBytes = [IO.File]::ReadAllBytes($candidateCargoPath)
+$lockSourceBytes = [IO.File]::ReadAllBytes($lockPath)
 
-function Convert-FixtureCargoVersion {
-  param(
-    [Parameter(Mandatory = $true)] [string]$Source,
-    [Parameter(Mandatory = $true)] [string]$Version
-  )
-  $pattern = [regex]::new('(?m)^(version = ")[^"]+("(?=\r?$))')
-  if ($pattern.Matches($Source).Count -ne 1) {
-    throw 'Updater fixture could not uniquely locate the desktop Cargo package version'
-  }
-  return $pattern.Replace($Source, ('${1}' + $Version + '${2}'), 1)
-}
-
-function Convert-FixtureLockVersion {
-  param(
-    [Parameter(Mandatory = $true)] [string]$Source,
-    [Parameter(Mandatory = $true)] [string]$Version
-  )
-  $pattern = [regex]::new('(?s)(\[\[package\]\]\r?\nname = "sky_desktop_shell"\r?\nversion = ")[^"]+("(?=\r?\n))')
-  if ($pattern.Matches($Source).Count -ne 1) {
-    throw 'Updater fixture could not uniquely locate the desktop Cargo.lock package version'
-  }
-  return $pattern.Replace($Source, ('${1}' + $Version + '${2}'), 1)
-}
-
-# Regression for the release-prep transition: the previous-v4 bridge must stay
-# pinned to alpha.1 even when the canonical candidate source has already moved
-# to an RC (or any later canonical SemVer).
+# The previous-v4 bridge keeps its explicit historical identity when the
+# canonical candidate source moves to a later release version.
 $syntheticCargo = "[package]`nname = `"sky_desktop_shell`"`nversion = `"4.0.0-rc.1`"`n"
 $syntheticLock = "[[package]]`nname = `"sky_desktop_shell`"`nversion = `"4.0.0-rc.1`"`n"
 $expectedCargo = "[package]`nname = `"sky_desktop_shell`"`nversion = `"$previousVersion`"`n"
@@ -92,15 +69,24 @@ try {
     $PSBoundParameters.ContainsKey('BridgeIdentifier') -or
     $PSBoundParameters.ContainsKey('BridgeSentinelId') -or
     $PSBoundParameters.ContainsKey('BridgeSentinelSha256')
-  if (-not $providedBridge) {
-    $bridgeCargo = Convert-FixtureCargoVersion -Source $cargoSource -Version $previousVersion
-    $bridgeLock = Convert-FixtureLockVersion -Source $lockSource -Version $previousVersion
-    [IO.File]::WriteAllText($candidateCargoPath, $bridgeCargo, [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText($lockPath, $bridgeLock, [Text.UTF8Encoding]::new($false))
-  }
-
-  & (Join-Path $PSScriptRoot 'ci_tauri_update_e2e_core.ps1') @invokeArgs
+  $coreScriptPath = Join-Path $PSScriptRoot 'ci_tauri_update_e2e_core.ps1'
+  $invokeCore = {
+    param([hashtable]$CoreArguments)
+    & $coreScriptPath @CoreArguments
+  }.GetNewClosure()
+  Invoke-CandidateUpdaterFixture `
+    -RepoRoot $repoRoot `
+    -CoreArguments $invokeArgs `
+    -ProvidedBridge $providedBridge `
+    -HistoricalBridgeVersion $previousVersion `
+    -InvokeCore $invokeCore
 } finally {
-  [IO.File]::WriteAllText($candidateCargoPath, $cargoSource, [Text.UTF8Encoding]::new($false))
-  [IO.File]::WriteAllText($lockPath, $lockSource, [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllBytes($candidateCargoPath, $cargoSourceBytes)
+  [IO.File]::WriteAllBytes($lockPath, $lockSourceBytes)
+  if ((Get-UpdaterFileSha256 -Bytes ([IO.File]::ReadAllBytes($candidateCargoPath))) -ne
+    (Get-UpdaterFileSha256 -Bytes $cargoSourceBytes) -or
+    (Get-UpdaterFileSha256 -Bytes ([IO.File]::ReadAllBytes($lockPath))) -ne
+    (Get-UpdaterFileSha256 -Bytes $lockSourceBytes)) {
+    throw 'Updater fixture wrapper failed to restore canonical Cargo manifest bytes'
+  }
 }
