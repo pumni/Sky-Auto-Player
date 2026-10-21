@@ -1,5 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
 
+type TrackHeaderDividerRule = {
+  height: string;
+  backgroundColor: string;
+  left: number;
+  right: number;
+  width: number;
+  headerWidth: number;
+  paddingLeft: number;
+  paddingRight: number;
+};
+
 async function openApp(page: Page, width: number, height: number) {
   await page.setViewportSize({ width, height });
   if (page.url().startsWith('http')) await page.evaluate(() => window.localStorage.clear());
@@ -131,8 +142,25 @@ async function computedAppearance(page: Page, view: string) {
       return { x, y, width, height, right, bottom };
     };
     const rootStyle = getComputedStyle(document.documentElement);
+    const trackHeader = document.querySelector<HTMLElement>('.track-table-header');
+    const trackHeaderRule = (() => {
+      if (!trackHeader) return null;
+      const headerStyle = getComputedStyle(trackHeader);
+      const ruleStyle = getComputedStyle(trackHeader, '::after');
+      return {
+        height: ruleStyle.height,
+        backgroundColor: ruleStyle.backgroundColor,
+        left: Number.parseFloat(ruleStyle.left),
+        right: Number.parseFloat(ruleStyle.right),
+        width: Number.parseFloat(ruleStyle.width),
+        headerWidth: trackHeader.getBoundingClientRect().width,
+        paddingLeft: Number.parseFloat(headerStyle.paddingLeft),
+        paddingRight: Number.parseFloat(headerStyle.paddingRight),
+      };
+    })();
     return {
       view: viewName,
+      trackHeaderRule,
       viewport: { width: innerWidth, height: innerHeight },
       tokens: Object.fromEntries(
         tokenNames.map((name) => [name, rootStyle.getPropertyValue(name).trim()]),
@@ -296,10 +324,12 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       tokens: Record<string, string>;
       elements: Record<string, Record<string, string> | null>;
       geometry: Record<string, unknown>;
+      trackHeaderRule: TrackHeaderDividerRule | null;
     };
     const compact = appearances[1] as {
       elements: Record<string, Record<string, string> | null>;
       geometry: Record<string, unknown>;
+      trackHeaderRule: TrackHeaderDividerRule | null;
     };
     const runtimeAppearance = appearances[2] as {
       elements: Record<string, Record<string, string> | null>;
@@ -355,10 +385,18 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       borderTopWidth: '1px',
       borderTopColor: 'rgb(42, 43, 44)',
     });
-    expect(populated.elements.trackHeaderDivider).toMatchObject({
-      borderBottomWidth: '1px',
-      borderBottomColor: 'rgb(42, 43, 44)',
-    });
+    // The Graphite divider is inset within the header, not an edge-to-edge border.
+    for (const appearance of [populated, compact]) {
+      expect(appearance.elements.trackHeaderDivider?.borderBottomWidth).toBe('0px');
+      const rule = appearance.trackHeaderRule;
+      expect(rule).not.toBeNull();
+      if (!rule) throw new Error('Graphite column-header divider is missing');
+      expect(rule.height).toBe('1px');
+      expect(rule.backgroundColor).toBe('rgb(42, 43, 44)');
+      expect(rule.left).toBeCloseTo(rule.paddingLeft, 1);
+      expect(rule.right).toBeCloseTo(rule.paddingRight, 1);
+      expect(rule.left + rule.width + rule.right).toBeCloseTo(rule.headerWidth, 1);
+    }
     const populatedGeometry = populated.geometry as {
       navigator: { x: number; right: number };
       trackBrowser: { x: number; right: number };

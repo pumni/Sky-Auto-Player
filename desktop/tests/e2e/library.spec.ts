@@ -488,7 +488,24 @@ test('Graphite workspace header compacts by viewport and browser width over one 
         };
       };
       const browser = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
+      const tableHeader = document.querySelector<HTMLElement>('.track-table-header');
+      const divider = (() => {
+        if (!tableHeader) return null;
+        const headerStyle = getComputedStyle(tableHeader);
+        const ruleStyle = getComputedStyle(tableHeader, '::after');
+        return {
+          height: ruleStyle.height,
+          backgroundColor: ruleStyle.backgroundColor,
+          left: Number.parseFloat(ruleStyle.left),
+          right: Number.parseFloat(ruleStyle.right),
+          width: Number.parseFloat(ruleStyle.width),
+          headerWidth: tableHeader.getBoundingClientRect().width,
+          paddingLeft: Number.parseFloat(headerStyle.paddingLeft),
+          paddingRight: Number.parseFloat(headerStyle.paddingRight),
+        };
+      })();
       return {
+        divider,
         viewportWidth: innerWidth,
         browserWidth: browser?.clientWidth ?? 0,
         browserScrollWidth: browser?.scrollWidth ?? 0,
@@ -539,15 +556,23 @@ test('Graphite workspace header compacts by viewport and browser width over one 
     ).toBeLessThanOrEqual(1);
     expect(geometry.headingTag).toBe('H1');
     expect(geometry.headerTablists).toBe(0);
-    expect(geometry.headerStyle?.background).toBe('rgb(25, 26, 27)');
-    expect(geometry.sourceStyle?.background).toBe('rgb(36, 37, 38)');
+    expect(geometry.headerStyle?.background).toBe('rgb(21, 22, 24)');
+    expect(geometry.sourceStyle?.background).toBe('rgb(21, 22, 24)');
     expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '14px' : '13px');
     expect(geometry.titleStyle?.fontWeight).toBe('600');
     expect(geometry.countStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '12px' : '11px');
     expect(geometry.browserStyle?.background).toBe('rgb(21, 22, 24)');
     expect(geometry.columnStyle?.background).toBe('rgb(21, 22, 24)');
-    expect(geometry.columnStyle?.borderBottomWidth).toBe('1px');
-    expect(geometry.columnStyle?.borderBottomColor).toBe('rgb(42, 43, 44)');
+    expect(geometry.columnStyle?.borderBottomWidth).toBe('0px');
+    expect(geometry.divider).not.toBeNull();
+    if (!geometry.divider) throw new Error('Graphite inset column divider is missing');
+    expect(geometry.divider.height).toBe('1px');
+    expect(geometry.divider.backgroundColor).toBe('rgb(42, 43, 44)');
+    expect(geometry.divider.left).toBeCloseTo(geometry.divider.paddingLeft, 1);
+    expect(geometry.divider.right).toBeCloseTo(geometry.divider.paddingRight, 1);
+    expect(
+      geometry.divider.left + geometry.divider.width + geometry.divider.right,
+    ).toBeCloseTo(geometry.divider.headerWidth, 1);
     expect(geometry.browserScrollWidth).toBeLessThanOrEqual(geometry.browserWidth);
     expect(geometry.documentWidth).toBeLessThanOrEqual(viewport.width);
     await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
