@@ -1430,14 +1430,18 @@ test('dock and transport toggles show palette-specific active state without layo
   await shuffle.click();
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
   const activeShuffleTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.palette === 'graphite' ? style.primary : style.accent;
+    style.palette === 'graphite' ? style.accentHover : style.accent;
   await expect
     .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
   const activeShuffleBefore = await measureStyle(shuffle);
   expect(activeShuffleBefore.color).toBe(activeShuffleTone(activeShuffleBefore));
   expect(activeShuffleBefore.color).not.toBe(inactiveShuffle.color);
-  expect(activeShuffleBefore.background).toBe('rgba(0, 0, 0, 0)');
+  expect(activeShuffleBefore.background).toBe(
+    activeShuffleBefore.palette === 'graphite'
+      ? 'rgba(130, 112, 199, 0.18)'
+      : 'rgba(0, 0, 0, 0)',
+  );
   expect(activeShuffleBefore.x).toBe(inactiveShuffle.x);
   expect(activeShuffleBefore.y).toBe(inactiveShuffle.y);
   await shuffle.hover();
@@ -1446,6 +1450,11 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
   const activeShuffleAfter = await measureStyle(shuffle);
   expect(activeShuffleAfter.color).toBe(activeShuffleTone(activeShuffleAfter));
+  expect(activeShuffleAfter.background).toBe(
+    activeShuffleAfter.palette === 'graphite'
+      ? 'rgba(130, 112, 199, 0.26)'
+      : 'rgba(0, 0, 0, 0)',
+  );
 
   await shuffle.focus();
   await expect(shuffle).toBeFocused();
@@ -1458,17 +1467,22 @@ test('dock and transport toggles show palette-specific active state without layo
   const autoPlay = player.getByRole('button', { name: 'Auto Play' });
   const autoPlayBefore = await measureStyle(autoPlay);
   const activeAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.palette === 'graphite' ? style.secondary : style.accent;
+    style.palette === 'graphite' ? style.accentHover : style.accent;
   const hoveredAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
-    style.palette === 'graphite' ? style.primary : style.accentHover;
+    style.accentHover;
   expect(autoPlayBefore.color).toBe(activeAutoPlayTone(autoPlayBefore));
+  expect(autoPlayBefore.background).toBe(
+    autoPlayBefore.palette === 'graphite' ? 'rgba(130, 112, 199, 0.18)' : 'rgba(0, 0, 0, 0)',
+  );
   await autoPlay.hover();
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
     .toBe(hoveredAutoPlayTone(autoPlayBefore));
   const autoPlayHover = await measureStyle(autoPlay);
   expect(autoPlayHover.color).toBe(hoveredAutoPlayTone(autoPlayHover));
-  expect(autoPlayHover.background).toBe('rgba(0, 0, 0, 0)');
+  expect(autoPlayHover.background).toBe(
+    autoPlayHover.palette === 'graphite' ? 'rgba(130, 112, 199, 0.26)' : 'rgba(0, 0, 0, 0)',
+  );
   expect(autoPlayHover.borderTop).toBe('0px');
   expect(autoPlayHover.x).toBe(autoPlayBefore.x);
   expect(autoPlayHover.y).toBe(autoPlayBefore.y);
@@ -1481,6 +1495,7 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe((await measureStyle(autoPlay)).tertiary);
   const autoPlayOff = await measureStyle(autoPlay);
   expect(autoPlayOff.color).toBe(autoPlayOff.tertiary);
+  expect(autoPlayOff.background).toBe('rgba(0, 0, 0, 0)');
   await autoPlay.hover();
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
@@ -1493,7 +1508,9 @@ test('dock and transport toggles show palette-specific active state without layo
   await autoPlay.press('Space');
   await expect(autoPlay).toBeFocused();
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
-  expect((await measureStyle(autoPlay)).color).toBe((await measureStyle(autoPlay)).primary);
+  expect((await measureStyle(autoPlay)).color).toBe(
+    activeAutoPlayTone(await measureStyle(autoPlay)),
+  );
   await autoPlay.press('Space');
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
 

@@ -616,24 +616,24 @@ html[data-palette='graphite'] .player-track-status.is-active {
   font-weight: 600;
 }
 
-html[data-palette='graphite'] .player-transport .player-shuffle-action.is-active,
-html[data-palette='graphite']
-  .player-transport
-  .player-shuffle-action.is-active:hover:not(:disabled),
-html[data-palette='graphite']
-  .player-transport
-  .player-shuffle-action.is-active:focus-visible:not(:disabled) {
-  color: var(--text-primary);
+/* ON modes share a quiet tinted surface; OFF modes remain unfilled. */
+html[data-palette='graphite'] .player-transport .player-shuffle-action[aria-pressed='true'],
+html[data-palette='graphite'] .player-auto-play-button[aria-pressed='true'] {
+  color: var(--accent-hover);
+  background: rgb(130 112 199 / 18%);
 }
 
-html[data-palette='graphite'] .player-tool-button[aria-pressed='true'] {
-  color: var(--text-secondary);
-}
-
-html[data-palette='graphite'] .player-tool-button[aria-pressed='true']:hover:not(:disabled),
 html[data-palette='graphite']
-  .player-tool-button[aria-pressed='true']:focus-visible:not(:disabled) {
-  color: var(--text-primary);
+  .player-transport
+  .player-shuffle-action[aria-pressed='true']:hover:not(:disabled),
+html[data-palette='graphite']
+  .player-transport
+  .player-shuffle-action[aria-pressed='true']:focus-visible:not(:disabled),
+html[data-palette='graphite'] .player-auto-play-button[aria-pressed='true']:hover:not(:disabled),
+html[data-palette='graphite']
+  .player-auto-play-button[aria-pressed='true']:focus-visible:not(:disabled) {
+  color: var(--accent-hover);
+  background: rgb(130 112 199 / 26%);
 }
 
 html[data-palette='graphite'] .player-track-status.is-attention {
@@ -812,6 +812,22 @@ html[data-palette='graphite'] .library-confirm-message {
 
 /* Preserve visible system colors and focus outlines in Windows forced-colors mode. */
 @media (forced-colors: active) {
+  html[data-palette='graphite'] .player-transport .player-shuffle-action[aria-pressed='true'],
+  html[data-palette='graphite'] .player-auto-play-button[aria-pressed='true'],
+  html[data-palette='graphite']
+    .player-transport
+    .player-shuffle-action[aria-pressed='true']:hover:not(:disabled),
+  html[data-palette='graphite']
+    .player-transport
+    .player-shuffle-action[aria-pressed='true']:focus-visible:not(:disabled),
+  html[data-palette='graphite']
+    .player-auto-play-button[aria-pressed='true']:hover:not(:disabled),
+  html[data-palette='graphite']
+    .player-auto-play-button[aria-pressed='true']:focus-visible:not(:disabled) {
+    color: HighlightText;
+    background: Highlight;
+  }
+
   html[data-palette='graphite'] .workbench-pane,
   html[data-palette='graphite'] .utility-surface,
   html[data-palette='graphite'] .player-bar,
