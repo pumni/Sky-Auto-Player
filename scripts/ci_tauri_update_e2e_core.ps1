@@ -5,6 +5,7 @@ param(
   [string]$CandidateInstallerPath,
   [string]$CandidateSignaturePath,
   [string]$CandidateVersion,
+  [string]$CandidateSourceSha,
   [string]$CandidatePublicKeyPath,
   [string]$BridgeRootPath,
   [string]$BridgeInstallerPath,
@@ -24,6 +25,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $desktopRoot = Join-Path $repoRoot 'desktop'
 $tauriConfigPath = Join-Path $desktopRoot 'src-tauri/tauri.conf.json'
+. (Join-Path $PSScriptRoot 'updater_candidate_source_identity.ps1')
 . (Join-Path $PSScriptRoot 'v4_nsis_smoke_boundary.ps1')
 $smokeScope = $null
 $runnerTemp = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
@@ -106,9 +108,21 @@ if ($providedCandidate) {
     [string]::IsNullOrWhiteSpace($CandidatePublicKeyPath)) {
     throw 'Provided-candidate updater qualification requires installer, signature, version, and public-key paths'
   }
-  & cargo xtask version check --version $CandidateVersion *> $null
-  if ($LASTEXITCODE -ne 0) {
-    throw "Provided-candidate updater qualification received a non-canonical or source-mismatched SemVer: $CandidateVersion"
+  if ([string]::IsNullOrWhiteSpace($CandidateSourceSha)) {
+    try {
+      [void](Get-CandidateSourceIdentity -RepoRoot $repoRoot -CandidateVersion $CandidateVersion)
+    } catch {
+      throw "Provided-candidate updater qualification received a non-canonical or source-mismatched SemVer: $CandidateVersion. $($_.Exception.Message)"
+    }
+  } else {
+    try {
+      [void](Assert-CandidateSourceIdentity `
+        -RepoRoot $repoRoot `
+        -CandidateVersion $CandidateVersion `
+        -SourceSha $CandidateSourceSha)
+    } catch {
+      throw "Provided-candidate updater qualification received a non-canonical or source-mismatched SemVer: $CandidateVersion. $($_.Exception.Message)"
+    }
   }
 }
 $candidateVersion = if ($providedCandidate) { $CandidateVersion } else { '4.0.0-alpha.2' }

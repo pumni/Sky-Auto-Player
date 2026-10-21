@@ -36,6 +36,156 @@ $latestGuard = (Get-Content -LiteralPath $latestGuardPath -Raw) + (Get-Content -
 
 function Fail([string]$Message) { throw "FAILED: $Message" }
 
+. (Join-Path $PSScriptRoot 'updater_candidate_source_identity.ps1')
+
+function Get-UpdaterRegressionState {
+    $cargoPath = Join-Path $repoRoot 'desktop/src-tauri/Cargo.toml'
+    $lockPath = Join-Path $repoRoot 'rust/Cargo.lock'
+    $status = @(& git status --porcelain --untracked-files=all 2>$null)
+    if ($LASTEXITCODE -ne 0) { Fail 'could not capture Git worktree state for updater source identity regression' }
+    [pscustomobject]@{
+        CargoSha = Get-UpdaterFileSha256 -Bytes ([IO.File]::ReadAllBytes($cargoPath))
+        LockSha = Get-UpdaterFileSha256 -Bytes ([IO.File]::ReadAllBytes($lockPath))
+        GitStatus = $status -join "`n"
+    }
+}
+
+function Assert-UpdaterRegressionState($Before, [string]$Scenario) {
+    $after = Get-UpdaterRegressionState
+    if ($after.CargoSha -cne $Before.CargoSha -or
+        $after.LockSha -cne $Before.LockSha -or
+        $after.GitStatus -cne $Before.GitStatus) {
+        Fail "$Scenario changed tracked Cargo manifest bytes or Git worktree state"
+    }
+}
+
+$candidateSourceCargo = [IO.File]::ReadAllText((Join-Path $repoRoot 'desktop/src-tauri/Cargo.toml'))
+$candidateSourceVersion = Get-CargoPackageVersion -ManifestSource $candidateSourceCargo
+$candidateSourceIdentity = Get-CandidateSourceIdentity `
+    -RepoRoot $repoRoot `
+    -CandidateVersion $candidateSourceVersion
+$sourceIdentityTempRoot = Join-Path ([IO.Path]::GetTempPath()) ('sky-updater-source-identity-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $sourceIdentityTempRoot -Force | Out-Null
+try {
+    $candidateInstallerName = "Sky Auto Player_$candidateSourceVersion`_x64-setup.exe"
+    $candidateInstallerPath = Join-Path $sourceIdentityTempRoot $candidateInstallerName
+    $candidateSignaturePath = "$candidateInstallerPath.sig"
+    $candidatePublicKeyPath = Join-Path $sourceIdentityTempRoot 'candidate-public-key.txt'
+    $fixtureTargetPath = Join-Path $sourceIdentityTempRoot 'fixture-target'
+    [IO.File]::WriteAllBytes($candidateInstallerPath, [byte[]](0x53, 0x4B, 0x59, 0x34))
+    [IO.File]::WriteAllText($candidateSignaturePath, 'frozen test signature')
+    [IO.File]::WriteAllText($candidatePublicKeyPath, 'frozen test public key')
+    $candidateCoreArguments = @{
+        FixtureTargetDir = $fixtureTargetPath
+        CandidateInstallerPath = $candidateInstallerPath
+        CandidateSignaturePath = $candidateSignaturePath
+        CandidateVersion = $candidateSourceVersion
+        CandidatePublicKeyPath = $candidatePublicKeyPath
+    }
+    $sourceStateBeforePass = Get-UpdaterRegressionState
+    $passCallbackState = @{ Invoked = $false }
+    $passResult = Invoke-CandidateUpdaterFixture `
+        -RepoRoot $repoRoot `
+        -CoreArguments $candidateCoreArguments `
+        -ProvidedBridge $false `
+        -HistoricalBridgeVersion '4.1.3' `
+        -InvokeCore {
+            param([hashtable]$CoreArguments)
+            $passCallbackState.Invoked = $true
+            if ($CoreArguments.CandidateVersion -cne $candidateSourceVersion -or
+                $CoreArguments.CandidateSourceSha -cne $candidateSourceIdentity.SourceSha -or
+                $CoreArguments.ContainsKey('BridgeRootPath') -or
+                -not (Test-Path -LiteralPath $CoreArguments.CandidateInstallerPath -PathType Leaf) -or
+                -not (Test-Path -LiteralPath $CoreArguments.CandidateSignaturePath -PathType Leaf)) {
+                Fail 'production fallback did not pass the frozen candidate identity without bridge inputs'
+            }
+            $headIdentity = Assert-CandidateSourceIdentity `
+                -RepoRoot $repoRoot `
+                -CandidateVersion $CoreArguments.CandidateVersion `
+                -SourceSha $CoreArguments.CandidateSourceSha
+            if ($headIdentity.Version -cne $candidateSourceVersion) {
+                Fail 'candidate identity did not resolve from the checked-out Git HEAD'
+            }
+            $bridgeCargoVersion = Get-CargoPackageVersion -ManifestSource ([IO.File]::ReadAllText((Join-Path $repoRoot 'desktop/src-tauri/Cargo.toml')))
+            $bridgeLock = [IO.File]::ReadAllText((Join-Path $repoRoot 'rust/Cargo.lock'))
+            $bridgeLockMatch = [regex]::Match($bridgeLock, '(?s)\[\[package\]\]\r?\nname = "sky_desktop_shell"\r?\nversion = "([^"]+)"')
+            if ($bridgeCargoVersion -cne '4.1.3' -or -not $bridgeLockMatch.Success -or $bridgeLockMatch.Groups[1].Value -cne '4.1.3') {
+                Fail 'historical bridge source did not remain pinned to its explicit 4.1.3 identity'
+            }
+            return 'fallback-candidate-pass'
+        }.GetNewClosure()
+    if (-not $passCallbackState.Invoked -or @($passResult) -notcontains 'fallback-candidate-pass') {
+        Fail 'production no-bridge candidate fallback did not complete its executable regression'
+    }
+    Assert-UpdaterRegressionState $sourceStateBeforePass 'successful updater fallback'
+
+    $failureCallbackState = @{ Invoked = $false }
+    $sourceStateBeforeFailure = Get-UpdaterRegressionState
+    try {
+        Invoke-CandidateUpdaterFixture `
+            -RepoRoot $repoRoot `
+            -CoreArguments $candidateCoreArguments `
+            -ProvidedBridge $false `
+            -HistoricalBridgeVersion '4.1.3' `
+            -InvokeCore {
+                param([hashtable]$CoreArguments)
+                $failureCallbackState.Invoked = $true
+                [void](Assert-CandidateSourceIdentity `
+                    -RepoRoot $repoRoot `
+                    -CandidateVersion $CoreArguments.CandidateVersion `
+                    -SourceSha $CoreArguments.CandidateSourceSha)
+                throw 'expected updater fixture failure regression'
+            }.GetNewClosure()
+        Fail 'updater fallback failure regression unexpectedly succeeded'
+    } catch {
+        if ($_.Exception.Message -notmatch 'expected updater fixture failure regression') { throw }
+    }
+    if (-not $failureCallbackState.Invoked) { Fail 'updater fallback failure regression did not reach the core invocation' }
+    Assert-UpdaterRegressionState $sourceStateBeforeFailure 'failed updater fallback'
+
+    $versionMatch = [regex]::Match($candidateSourceVersion, '^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$')
+    if (-not $versionMatch.Success -or [int64]$versionMatch.Groups[3].Value -eq [int64]::MaxValue) {
+        Fail 'candidate source version cannot produce a deterministic mismatch regression'
+    }
+    $mismatchedCandidateVersion = '{0}.{1}.{2}' -f $versionMatch.Groups[1].Value, $versionMatch.Groups[2].Value, ([int64]$versionMatch.Groups[3].Value + 1)
+    $mismatchedCoreArguments = @{}
+    foreach ($name in $candidateCoreArguments.Keys) { $mismatchedCoreArguments[$name] = $candidateCoreArguments[$name] }
+    $mismatchedCoreArguments.CandidateVersion = $mismatchedCandidateVersion
+    $sourceStateBeforeMismatch = Get-UpdaterRegressionState
+    $mismatchCallbackState = @{ Invoked = $false }
+    try {
+        Invoke-CandidateUpdaterFixture `
+            -RepoRoot $repoRoot `
+            -CoreArguments $mismatchedCoreArguments `
+            -ProvidedBridge $false `
+            -HistoricalBridgeVersion '4.1.3' `
+            -InvokeCore {
+                param([hashtable]$CoreArguments)
+                $mismatchCallbackState.Invoked = $true
+            }.GetNewClosure()
+        Fail 'mismatched candidate version was accepted by updater fallback'
+    } catch {
+        if ($_.Exception.Message -notmatch 'does not match the release manifest at Git HEAD') { throw }
+    }
+    if ($mismatchCallbackState.Invoked) { Fail 'mismatched candidate reached the updater core callback' }
+    Assert-UpdaterRegressionState $sourceStateBeforeMismatch 'rejected updater candidate mismatch'
+
+    $sourceStateBeforeDirectCoreMismatch = Get-UpdaterRegressionState
+    $directCoreArguments = @{}
+    foreach ($name in $candidateCoreArguments.Keys) { $directCoreArguments[$name] = $candidateCoreArguments[$name] }
+    $directCoreArguments.CandidateVersion = $mismatchedCandidateVersion
+    try {
+        & $fixtureCorePath @directCoreArguments
+        Fail 'direct updater core invocation accepted a source-mismatched candidate'
+    } catch {
+        if ($_.Exception.Message -notmatch 'source-mismatched SemVer') { throw }
+    }
+    Assert-UpdaterRegressionState $sourceStateBeforeDirectCoreMismatch 'direct updater core mismatch rejection'
+    Write-Host "Updater candidate source identity regression: PASS (candidate=$candidateSourceVersion; historical bridge 4.1.3; pass/fail restoration; direct mismatch rejection)"
+} finally {
+    Remove-Item -LiteralPath $sourceIdentityTempRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 foreach ($source in @(
     [pscustomobject]@{ Name = "release workflow"; Text = $workflow },
     [pscustomobject]@{ Name = "release pipeline"; Text = $pipeline },
