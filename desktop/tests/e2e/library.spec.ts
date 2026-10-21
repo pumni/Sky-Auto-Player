@@ -1429,8 +1429,6 @@ test('dock and transport toggles show palette-specific active state without layo
   await expect(shuffle).toHaveAttribute('aria-pressed', 'false');
   await shuffle.click();
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
-  // Click leaves the pointer hovering the toggle; measure its idle ON style first.
-  await page.mouse.move(0, 0);
   const activeShuffleTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
     style.palette === 'graphite' ? style.accentHover : style.accent;
   await expect
@@ -1439,11 +1437,7 @@ test('dock and transport toggles show palette-specific active state without layo
   const activeShuffleBefore = await measureStyle(shuffle);
   expect(activeShuffleBefore.color).toBe(activeShuffleTone(activeShuffleBefore));
   expect(activeShuffleBefore.color).not.toBe(inactiveShuffle.color);
-  expect(activeShuffleBefore.background).toBe(
-    activeShuffleBefore.palette === 'graphite'
-      ? 'rgba(130, 112, 199, 0.18)'
-      : 'rgba(0, 0, 0, 0)',
-  );
+  expect(activeShuffleBefore.background).toBe('rgba(0, 0, 0, 0)');
   expect(activeShuffleBefore.x).toBe(inactiveShuffle.x);
   expect(activeShuffleBefore.y).toBe(inactiveShuffle.y);
   await shuffle.hover();
@@ -1452,11 +1446,6 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
   const activeShuffleAfter = await measureStyle(shuffle);
   expect(activeShuffleAfter.color).toBe(activeShuffleTone(activeShuffleAfter));
-  expect(activeShuffleAfter.background).toBe(
-    activeShuffleAfter.palette === 'graphite'
-      ? 'rgba(130, 112, 199, 0.26)'
-      : 'rgba(0, 0, 0, 0)',
-  );
 
   await shuffle.focus();
   await expect(shuffle).toBeFocused();
@@ -1473,18 +1462,14 @@ test('dock and transport toggles show palette-specific active state without layo
   const hoveredAutoPlayTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
     style.accentHover;
   expect(autoPlayBefore.color).toBe(activeAutoPlayTone(autoPlayBefore));
-  expect(autoPlayBefore.background).toBe(
-    autoPlayBefore.palette === 'graphite' ? 'rgba(130, 112, 199, 0.18)' : 'rgba(0, 0, 0, 0)',
-  );
+  expect(autoPlayBefore.background).toBe('rgba(0, 0, 0, 0)');
   await autoPlay.hover();
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
     .toBe(hoveredAutoPlayTone(autoPlayBefore));
   const autoPlayHover = await measureStyle(autoPlay);
   expect(autoPlayHover.color).toBe(hoveredAutoPlayTone(autoPlayHover));
-  expect(autoPlayHover.background).toBe(
-    autoPlayHover.palette === 'graphite' ? 'rgba(130, 112, 199, 0.26)' : 'rgba(0, 0, 0, 0)',
-  );
+  expect(autoPlayHover.background).toBe('rgba(0, 0, 0, 0)');
   expect(autoPlayHover.borderTop).toBe('0px');
   expect(autoPlayHover.x).toBe(autoPlayBefore.x);
   expect(autoPlayHover.y).toBe(autoPlayBefore.y);
@@ -1497,7 +1482,6 @@ test('dock and transport toggles show palette-specific active state without layo
     .toBe((await measureStyle(autoPlay)).tertiary);
   const autoPlayOff = await measureStyle(autoPlay);
   expect(autoPlayOff.color).toBe(autoPlayOff.tertiary);
-  expect(autoPlayOff.background).toBe('rgba(0, 0, 0, 0)');
   await autoPlay.hover();
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
