@@ -1429,6 +1429,8 @@ test('dock and transport toggles show palette-specific active state without layo
   await expect(shuffle).toHaveAttribute('aria-pressed', 'false');
   await shuffle.click();
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
+  // Click leaves the pointer hovering the toggle; measure its idle ON style first.
+  await page.mouse.move(0, 0);
   const activeShuffleTone = (style: Awaited<ReturnType<typeof measureStyle>>) =>
     style.palette === 'graphite' ? style.accentHover : style.accent;
   await expect
