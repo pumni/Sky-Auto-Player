@@ -2536,7 +2536,7 @@ function Test-TimestampFormattingFailClosedAndCultureInvariance {
 
 function New-V4SimplifiedTestFixture {
     param(
-        [string]$Version = "4.1.4",
+        [string]$Version = $packageVersion,
         [string]$Channel = "stable",
         [string]$SourceSha = ""
     )
@@ -2653,12 +2653,12 @@ class V4SimplifiedMockContext {
     [bool]$PatchTimeoutWithRemotePublished = $false
     [bool]$PatchFailStillDraft = $false
     [bool]$FailPostPublishGet = $false
-    [string]$Tag = "v4.1.4"
-    [string]$Version = "4.1.4"
+    [string]$Tag
+    [string]$Version
     [string]$SourceSha = ""
     [string]$RunId = "35292682626"
-    [string]$InstallerName = "Sky.Auto.Player_4.1.4_x64-setup.exe"
-    [string]$SignatureName = "Sky.Auto.Player_4.1.4_x64-setup.exe.sig"
+    [string]$InstallerName
+    [string]$SignatureName
     [string]$InstallerSha = ""
     [string]$SignatureSha = ""
 }
