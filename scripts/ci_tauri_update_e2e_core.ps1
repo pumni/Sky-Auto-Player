@@ -106,15 +106,12 @@ if ($providedCandidate) {
     [string]::IsNullOrWhiteSpace($CandidatePublicKeyPath)) {
     throw 'Provided-candidate updater qualification requires installer, signature, version, and public-key paths'
   }
-  & cargo xtask version check --version $CandidateVersion --no-repo-match *> $null
+  & cargo xtask version check --version $CandidateVersion *> $null
   if ($LASTEXITCODE -ne 0) {
-    throw "Provided-candidate updater qualification received a non-canonical SemVer: $CandidateVersion"
+    throw "Provided-candidate updater qualification received a non-canonical or source-mismatched SemVer: $CandidateVersion"
   }
 }
 $candidateVersion = if ($providedCandidate) { $CandidateVersion } else { '4.0.0-alpha.2' }
-if ($providedCandidate -and $candidateVersion -cne '4.1.4') {
-  throw "Package migration qualification requires the exact candidate 4.1.4, received $candidateVersion"
-}
 
 function Get-HigherSemVer([string]$Version) {
   $match = [regex]::Match($Version, '^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
@@ -150,7 +147,7 @@ $candidatePublisher = 'pumni'
 $previousBridgeVersion = if ([string]::IsNullOrWhiteSpace($BridgeVersion)) { '4.1.3' } else { $BridgeVersion }
 if ([string]$tauriConfig.identifier -cne $permanentIdentifier -or
   [string]$tauriConfig.bundle.publisher -cne $candidatePublisher) {
-  throw 'Updater candidate source identity is not the exact 4.1.4 / pumni package contract'
+  throw 'Updater candidate source identifier or publisher does not match the canonical pumni package contract'
 }
 $oldAppDataRoot = [Environment]::GetEnvironmentVariable('SKY_APP_DATA_ROOT', 'Process')
 $cargoSource = [IO.File]::ReadAllText($candidateCargoPath)
