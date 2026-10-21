@@ -3,12 +3,35 @@
 Windows 11 music-sheet player for Sky: Children of the Light. The desktop application reads JSON,
 skysheet, and TXT sheets and emits gameplay keyboard input through Windows `SendInput`.
 
-## External mutation boundary
+## Git workflow and external mutation boundary
 
-Do not create, publish, close, merge, retarget, or otherwise mutate remote branches, pull requests,
-issues, releases, or other externally visible project state unless the user's current request
-explicitly authorizes that external action. Ordinary local work (source edits, local investigation,
-targeted tests, formatting) within the requested scope does not require separate authorization.
+Work through task-scoped branches rather than committing directly to `main`.
+
+When the user has explicitly assigned an implementation task, the normal workflow may include,
+without a second confirmation:
+
+- creating or updating a task-specific remote branch;
+- pushing commits that stay within the assigned task scope;
+- opening or updating a Draft pull request for that branch;
+- updating PR descriptions, checklists, and task evidence that belong to the same assigned work.
+
+Keep externally visible changes narrow and attributable to the assigned task. Do not use an
+implementation request as authorization for unrelated issue, branch, PR, release, or repository
+maintenance.
+
+The following actions still require explicit user authorization in the current session:
+
+- merging or auto-merging a pull request;
+- force-pushing or rewriting history on shared/protected branches;
+- deleting remote branches;
+- retargeting a pull request to a different base branch;
+- publishing, editing, or deleting releases/tags;
+- changing repository settings, branch protection, secrets, permissions, or CI administration;
+- creating, closing, or materially changing unrelated issues or project-management state.
+
+Before pushing task work, preserve unrelated local changes, sync the intended base branch, and record
+the base SHA used for the task. Keep pull requests in Draft while implementation or required
+verification is incomplete.
 
 ## Security and input boundary
 
