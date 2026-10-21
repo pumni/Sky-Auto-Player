@@ -44,7 +44,7 @@
         "name": "missing_file",
         "input": null,
         "normalized": {
-          "palette": "aurora",
+          "palette": "graphite",
           "ui_background_mode": "transparent",
           "playback_defaults": {
             "hold_frames": 1.0,
@@ -85,7 +85,7 @@
         },
         "migrated": {
           "schema_version": 9,
-          "palette": "aurora",
+          "palette": "graphite",
           "auto_play": true,
           "default_timing_margin_us": 500,
           "default_hold_frames": 1.0

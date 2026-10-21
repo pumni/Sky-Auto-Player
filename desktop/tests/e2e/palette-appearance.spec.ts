@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-const palettes = ['aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
+const palettes = ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'] as const;
 type Palette = (typeof palettes)[number];
 
 const auroraTokenNames = [
@@ -25,6 +25,18 @@ const auroraTokenNames = [
 ] as const;
 
 const expected = {
+  graphite: {
+    controlBorder: '#72777d',
+    selectionBg: '#25242c',
+    accent: '#8270c7',
+    accentHover: '#9281d4',
+    borderStrong: '#393b3e',
+    canvas: '#121314',
+    surfaceRaised: '#242526',
+    onAccent: '#121314',
+    focusRing: '#b2a5e9',
+    onDanger: '#ffffff',
+  },
   aurora: {
     controlBorder: '#617390',
     selectionBg: '#152132',
@@ -86,6 +98,28 @@ const expected = {
     onDanger: '#ffffff',
   },
 } satisfies Record<Palette, Record<string, string>>;
+
+const graphiteRoleTokens = {
+  '--workbench-content': '#151618',
+  '--workbench-navigation': '#191a1b',
+  '--workbench-inspector': '#191a1b',
+  '--chrome-surface': '#191a1b',
+  '--workbench-hover': '#222324',
+  '--workbench-pressed': '#303133',
+  '--workbench-selected': '#25242c',
+  '--workbench-divider': '#2a2b2c',
+  '--workbench-critical-edge': '#393b3e',
+  '--workbench-control-boundary': '#72777d',
+  '--workbench-text-primary': '#d4d4d4',
+  '--workbench-text-secondary': '#a6a6a6',
+  '--workbench-text-tertiary': '#929292',
+  '--workbench-accent': '#8270c7',
+  '--workbench-accent-hover': '#9281d4',
+  '--workbench-focus': '#b2a5e9',
+  '--workbench-search-surface': '#202123',
+  '--workbench-search-idle-edge': '#3d3f43',
+  '--workbench-search-focus': '#9688c6',
+} as const;
 
 const stableStatusTokens = {
   '--success-fg': '#56d69a',
@@ -274,6 +308,52 @@ test('all palette tokens and contrast gates match the locked contract', async ({
   for (const palette of palettes) {
     await page.goto('/');
     await selectPalette(page, palette);
+    const expectedGutter = palette === 'graphite' ? 4 : 8;
+    await expect(page.locator('.workbench')).toHaveAttribute(
+      'data-workbench-gap',
+      String(expectedGutter),
+    );
+    const geometry = await page.evaluate(() => {
+      const bounds = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        const rect = element?.getBoundingClientRect();
+        return rect
+          ? {
+              x: rect.x,
+              y: rect.y,
+              right: rect.right,
+              width: rect.width,
+              height: rect.height,
+              bottom: rect.bottom,
+            }
+          : null;
+      };
+      return {
+        gutter: Number.parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
+        ),
+        solverGutter: Number.parseFloat(
+          document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',
+        ),
+        titlebarHeight: bounds('.app-titlebar')?.height,
+        navigator: bounds('.navigator-workbench-pane'),
+        track: bounds('.track-browser-workbench-pane'),
+        player: bounds('.player-bar'),
+        separatorWidths: Array.from(
+          document.querySelectorAll<HTMLElement>('.resizable-separator'),
+        ).map((separator) => separator.getBoundingClientRect().width),
+      };
+    });
+    expect(geometry.gutter).toBe(expectedGutter);
+    expect(geometry.solverGutter).toBe(expectedGutter);
+    expect(geometry.titlebarHeight).toBe(palette === 'graphite' ? 40 : 48);
+    expect(geometry.navigator).toMatchObject({ x: expectedGutter, width: 240 });
+    expect(geometry.track?.x).toBe(expectedGutter * 2 + 240);
+    expect(geometry.track?.right).toBe(1366 - expectedGutter);
+    expect(geometry.track?.bottom).toBe(768 - 92 - expectedGutter);
+    expect(geometry.player?.y).toBe(768 - 92);
+    expect(geometry.separatorWidths).toEqual([expectedGutter]);
+
     const values = expected[palette];
     for (const [name, value] of Object.entries({
       '--control-border': values.controlBorder,
@@ -283,6 +363,11 @@ test('all palette tokens and contrast gates match the locked contract', async ({
       '--border-strong': values.borderStrong,
     })) {
       await expect.poll(() => token(page, name)).toBe(value);
+    }
+    if (palette === 'graphite') {
+      for (const [name, value] of Object.entries(graphiteRoleTokens)) {
+        await expect.poll(() => token(page, name)).toBe(value);
+      }
     }
     for (const [name, value] of Object.entries(stableStatusTokens)) {
       await expect.poll(() => token(page, name)).toBe(value);
@@ -324,46 +409,51 @@ test('all palette tokens and contrast gates match the locked contract', async ({
   await selectPalette(page, 'aurora');
 });
 
-test('Graphite preview tokens meet contrast targets without joining saved palette choices', async ({
+test('Graphite is the new-install palette and persists through the appearance settings surface', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /Open update/ })).toBeVisible();
-  await expect.poll(() => page.locator('html').getAttribute('data-palette')).toBe('aurora');
+  await expect.poll(() => page.locator('html').getAttribute('data-palette')).toBe('graphite');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
   const palette = settings.getByLabel('Color palette');
-  await expect(palette).toHaveValue('aurora');
-  await expect(palette.locator('option')).toHaveCount(5);
-  await expect(palette.locator('option[value="graphite"]')).toHaveCount(0);
+  await expect(palette).toHaveValue('graphite');
+  await expect(palette.locator('option')).toHaveCount(6);
+  await expect(palette.locator('option[value="graphite"]')).toHaveCount(1);
+  await palette.selectOption('slate');
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'slate');
+  await palette.selectOption('graphite');
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
   await settings.getByRole('button', { name: 'Close settings' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-palette', 'aurora');
-
-  await page.locator('html').evaluate((root) => root.setAttribute('data-palette', 'graphite'));
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+  await expect(page.getByLabel('Color palette')).toHaveValue('graphite');
+  await page.getByRole('button', { name: 'Close settings' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
 
   const graphiteTokens = {
-    '--canvas': '#121416',
-    '--surface-panel': '#191c20',
-    '--surface-secondary': '#16191d',
-    '--surface-raised': '#25292f',
-    '--control-hover': '#2c3138',
-    '--control-pressed': '#353b44',
-    '--selection-bg': '#272632',
-    '--border-subtle': '#2c3036',
-    '--border-strong': '#394049',
-    '--control-border': '#7d8591',
-    '--text-primary': '#dce1e8',
-    '--text-secondary': '#a9b2bd',
-    '--text-tertiary': '#8993a1',
-    '--accent': '#7663b8',
-    '--accent-hover': '#705aaa',
-    '--on-accent': '#ffffff',
-    '--focus-ring': '#a99af7',
+    '--canvas': '#121314',
+    '--surface-panel': '#191a1b',
+    '--surface-secondary': '#191a1b',
+    '--surface-raised': '#242526',
+    '--control-hover': '#222324',
+    '--control-pressed': '#303133',
+    '--selection-bg': '#25242c',
+    '--border-subtle': '#2a2b2c',
+    '--border-strong': '#393b3e',
+    '--control-border': '#72777d',
+    '--text-primary': '#d4d4d4',
+    '--text-secondary': '#a6a6a6',
+    '--text-tertiary': '#929292',
+    '--accent': '#8270c7',
+    '--accent-hover': '#9281d4',
+    '--on-accent': '#121314',
+    '--focus-ring': '#b2a5e9',
   } as const;
   for (const [name, value] of Object.entries(graphiteTokens)) {
     await expect.poll(() => token(page, name)).toBe(value);
@@ -372,10 +462,10 @@ test('Graphite preview tokens meet contrast targets without joining saved palett
     await expect.poll(() => token(page, name)).toBe(value);
   }
   for (const [name, value] of Object.entries({
-    '--type-body': '14px',
-    '--type-page-heading': '20px',
-    '--type-section-heading': '16px',
-    '--type-control-label': '14px',
+    '--type-body': '13px',
+    '--type-page-heading': '18px',
+    '--type-section-heading': '14px',
+    '--type-control-label': '13px',
     '--type-metadata': '12px',
   })) {
     await expect.poll(() => token(page, name)).toBe(value);
@@ -428,7 +518,7 @@ test('Graphite preview tokens meet contrast targets without joining saved palett
   const selectedRow = page.getByRole('row', { name: /Aurora Landing/ });
   await selectedRow.click();
   await assertBackgroundUsesToken(page, selectedRow, '--selection-bg');
-  await assertBorderUsesToken(page, selectedRow, '--accent', 'borderLeftColor');
+  await expect(styleValue(selectedRow, 'borderLeftColor')).resolves.toBe('rgba(0, 0, 0, 0)');
   const update = page.locator('.update-indicator');
   await assertBorderUsesToken(page, update, '--control-border');
   await update.hover();
@@ -619,7 +709,7 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
-  await selectPalette(page, 'cyberpunk');
+  await selectPalette(page, 'graphite');
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
   await expect
     .poll(() => page.evaluate(() => window.matchMedia('(forced-colors: active)').matches))
@@ -627,7 +717,7 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   const selectedRow = page.locator('.track-row.is-selected');
   const systemColor = async (
-    property: 'color' | 'backgroundColor' | 'borderLeftColor' | 'outlineColor',
+    property: 'color' | 'backgroundColor' | 'borderTopColor' | 'borderLeftColor' | 'outlineColor',
     value: string,
   ) =>
     page.evaluate(
@@ -643,7 +733,7 @@ test('forced colors retain system-state mappings and no palette leakage', async 
     );
   const expectSystemColor = async (
     locator: Locator,
-    property: 'color' | 'backgroundColor' | 'borderLeftColor' | 'outlineColor',
+    property: 'color' | 'backgroundColor' | 'borderTopColor' | 'borderLeftColor' | 'outlineColor',
     value: string,
   ) => {
     const expected = await systemColor(property, value);
@@ -656,6 +746,15 @@ test('forced colors retain system-state mappings and no palette leakage', async 
   };
   await expectSystemColor(selectedRow, 'backgroundColor', 'Highlight');
   await expectSystemColor(selectedRow, 'color', 'HighlightText');
+
+  const collapseButton = page.getByRole('button', { name: 'Collapse library navigator' });
+  await expectSystemColor(collapseButton, 'borderTopColor', 'ButtonText');
+  await expectSystemColor(collapseButton, 'color', 'ButtonText');
+  await expectSystemColor(collapseButton, 'backgroundColor', 'ButtonFace');
+  await page.locator('.library-add-button').focus();
+  await page.keyboard.press('Tab');
+  await expect(collapseButton).toBeFocused();
+  await expectSystemColor(collapseButton, 'outlineColor', 'Highlight');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });

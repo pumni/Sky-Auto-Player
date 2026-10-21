@@ -77,7 +77,7 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
       ) {
         throw new Error('packaged GUI library store postcondition failed');
       }
-      const expectedPalette = state.settings?.palette ?? 'aurora';
+      const expectedPalette = state.settings?.palette ?? 'graphite';
       const smokePalette = expectedPalette === 'aurora' ? 'slate' : 'aurora';
       const patched = await bridge.patchSettings({ palette: smokePalette });
       if (patched.palette !== smokePalette) {

@@ -103,7 +103,7 @@ describe('desktop store', () => {
 
     expect(getSettings).not.toHaveBeenCalled();
     expect(store.getState().settings).toMatchObject({
-      palette: 'aurora',
+      palette: 'graphite',
       auto_play: true,
       verbose_hud: false,
     });

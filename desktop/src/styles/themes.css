@@ -83,30 +83,62 @@ html[data-color-mode='dark'] {
   color-scheme: dark;
 }
 
-/* Playwright-only preview palette; native settings intentionally expose the five palettes above. */
+/* Graphite is the default palette for newly initialized appearance settings. */
 html[data-palette='graphite'] {
-  --canvas: #121416;
-  --surface-panel: #191c20;
-  --surface-secondary: #16191d;
-  --surface-raised: #25292f;
-  --control-hover: #2c3138;
-  --control-pressed: #353b44;
-  --selection-bg: #272632;
+  --workbench-content: #151618;
+  --workbench-source-header-height: 40px;
+  --workbench-source-title-size: 14px;
+  --workbench-source-count-size: 12px;
+  --workbench-row-inset: 6px;
+  --workbench-row-inset-narrow: 4px;
+  --workbench-row-radius: 4px;
+  --workbench-compact-navigator-tile: 40px;
+  --workbench-navigation: #191a1b;
+  --workbench-inspector: #191a1b;
+  --chrome-surface: #191a1b;
+  --workbench-hover: #222324;
+  --workbench-pressed: #303133;
+  --workbench-selected: #25242c;
+  --workbench-divider: #2a2b2c;
+  --workbench-pane-edge: #313336;
+  --workbench-pane-radius: 6px;
+  --workbench-overlay-edge: #72777d;
+  --workbench-overlay-radius: 6px;
+  --workbench-critical-edge: #393b3e;
+  --workbench-control-boundary: #72777d;
+  --workbench-text-primary: #d4d4d4;
+  --workbench-text-secondary: #a6a6a6;
+  --workbench-text-tertiary: #929292;
+  --workbench-accent: #8270c7;
+  --workbench-accent-hover: #9281d4;
+  --workbench-focus: #b2a5e9;
+  --workbench-search-surface: #202123;
+  --workbench-search-idle-edge: #3d3f43;
+  --workbench-search-focus: #9688c6;
+  --titlebar-height: 40px;
+  --workbench-gap: 4px;
+  --canvas: #121314;
+  --surface-panel: var(--workbench-navigation);
+  --surface-secondary: var(--workbench-inspector);
+  --surface-raised: #242526;
+  --control-hover: var(--workbench-hover);
+  --control-pressed: var(--workbench-pressed);
+  --selection-bg: var(--workbench-selected);
   --selection-indicator: var(--accent);
-  --border-subtle: #2c3036;
-  --border-strong: #394049;
-  --control-border: #7d8591;
-  --text-primary: #dce1e8;
-  --text-secondary: #a9b2bd;
-  --text-tertiary: #8993a1;
-  --accent: #7663b8;
-  --accent-hover: #705aaa;
-  --on-accent: #ffffff;
-  --focus-ring: #a99af7;
-  --type-body: 14px;
-  --type-page-heading: 20px;
-  --type-section-heading: 16px;
-  --type-control-label: 14px;
+  --border-subtle: var(--workbench-divider);
+  --border-strong: var(--workbench-critical-edge);
+  --control-border: var(--workbench-control-boundary);
+  --text-primary: var(--workbench-text-primary);
+  --text-secondary: var(--workbench-text-secondary);
+  --text-tertiary: var(--workbench-text-tertiary);
+  --accent: var(--workbench-accent);
+  --accent-hover: var(--workbench-accent-hover);
+  --on-accent: #121314;
+  --focus-ring: var(--workbench-focus);
+  --type-body: 13px;
+  --type-page-heading: 18px;
+  --type-section-heading: 14px;
+  --type-control-label: 13px;
   --type-metadata: 12px;
 }
 
@@ -116,8 +148,6 @@ html[data-palette='graphite'] .update-indicator {
   border-color: var(--control-border);
 }
 
-html[data-palette='graphite'] .player-track-copy .player-identity-label,
-html[data-palette='graphite'] .player-track-copy .player-dry-run-label,
 html[data-palette='graphite'] .player-risk {
   font-size: 11px;
 }

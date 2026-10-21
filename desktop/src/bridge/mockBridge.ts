@@ -30,6 +30,7 @@ import type {
   UpdateRetryAction,
   UpdateSnapshotPayload,
 } from './DesktopBridge';
+import type { DiagnosticsBackend } from './DesktopBridge';
 import type { WholeStreamTimingAdvisoryDto } from './generated';
 
 function mockTimingAdvisory(
@@ -130,7 +131,7 @@ const rows = Array.from({ length: 500 }, (_, index) =>
 
 function initialSettings(): Settings {
   return {
-    palette: 'aurora',
+    palette: 'graphite',
     ui_background_mode: 'opaque',
     playback_defaults: {
       hold_frames: 1,
@@ -159,6 +160,8 @@ function initialSettings(): Settings {
 }
 
 export interface MockBridgeOptions {
+  catalogRows?: SearchResult['items'];
+  diagnosticsBackendStatus?: DiagnosticsBackend;
   readyPlanAdvisoryStatus?: WholeStreamTimingAdvisoryDto['status'];
   playbackDurationMs?: number;
   startDelayMs?: number;
@@ -199,6 +202,7 @@ export interface MockBridgeOptions {
 }
 
 export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge {
+  const catalogRows = options.catalogRows ?? rows;
   const defaultPlaybackDurationMs = Math.max(50, options.playbackDurationMs ?? 15_000);
   const playbackDurationsMs = options.playbackDurationsMs?.map((duration) =>
     Math.max(50, duration),
@@ -354,11 +358,14 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         final_gate_lease_expirations: 1,
         sendinput_partial_events: 1,
         sendinput_zero_progress_failures: 1,
-        backend_status: 'healthy',
+        backend_status: options.diagnosticsBackendStatus ?? 'healthy',
         release_max_us: 0,
         release_late_2ms: 0,
         session_id: activeSession?.sessionId ?? null,
-        last_error: null,
+        last_error:
+          options.diagnosticsBackendStatus === 'error'
+            ? 'Mock sender backend reported an error.'
+            : null,
         power_request_created: true,
         power_request_active: true,
         power_request_create_failures: 0,
@@ -500,7 +507,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       },
     });
   };
-  const allRows = () => [...rows, ...localRows.values()];
+  const allRows = () => [...catalogRows, ...localRows.values()];
   const updatePlaylist = (playlistId: string, songIds: string[]) => {
     const playlist = playlists.find((item) => item.id === playlistId);
     if (!playlist) throw new Error('playlist was not found');
@@ -518,7 +525,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     const importedSongIds = [...localRows.keys()].slice(0, kind === 'folder' ? 2 : 1);
     const playlist = updatePlaylist(playlistId, importedSongIds);
     generation += 1;
-    emit({ v: 1, name: 'catalog.changed', payload: { generation, total: rows.length } });
+    emit({ v: 1, name: 'catalog.changed', payload: { generation, total: catalogRows.length } });
     return {
       playlist,
       imported_song_count: importedSongIds.length,
@@ -560,7 +567,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
             ? allRows().filter((item) =>
                 playlistMembership.get(request.source.id)?.has(item.song_id),
               )
-            : rows;
+            : catalogRows;
       const filtered = query
         ? sourceRows.filter((item) => item.title.toLocaleLowerCase().includes(query))
         : sourceRows;
@@ -608,8 +615,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     },
     async reloadLibrary() {
       generation += 1;
-      emit({ v: 1, name: 'catalog.changed', payload: { generation, total: rows.length } });
-      return { generation, total: rows.length };
+      emit({ v: 1, name: 'catalog.changed', payload: { generation, total: catalogRows.length } });
+      return { generation, total: catalogRows.length };
     },
     async setLibraryViewport(request: ViewportRequest): Promise<ViewportResult> {
       if (request.generation !== generation) throw new Error('catalog generation is stale');
@@ -622,8 +629,8 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         items: (request.songIds.length > 0
           ? request.songIds
               .map((songId) => allRows().find((item) => item.song_id === songId))
-              .filter((item): item is (typeof rows)[number] => item !== undefined)
-          : rows.slice(request.firstIndex, request.lastIndex + 1)
+              .filter((item): item is (typeof catalogRows)[number] => item !== undefined)
+          : catalogRows.slice(request.firstIndex, request.lastIndex + 1)
         ).map((item) => ({ ...item, liked: likedSongIds.has(item.song_id) })),
       };
     },

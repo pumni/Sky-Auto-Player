@@ -15,6 +15,7 @@ import './styles/tracks.css';
 import './styles/player.css';
 import './styles/overlays.css';
 import './styles/themes.css';
+import './styles/graphite.css';
 
 recordStartupTelemetry('frontend.entry');
 const mockDurations = (
@@ -25,6 +26,11 @@ const mockDurations = (
   .filter((value) => Number.isFinite(value) && value > 0)
   .map((value) => Math.min(value, 120_000));
 const mockParams = new URLSearchParams(window.location.search);
+const mockLibraryState = mockParams.get('mockLibraryState');
+const diagnosticsStatuses = ['healthy', 'degraded', 'unavailable', 'error'] as const;
+const mockDiagnosticsStatus = diagnosticsStatuses.find(
+  (status) => status === mockParams.get('mockDiagnosticsStatus'),
+);
 const mockUpdateState = mockParams.get('mockUpdateState');
 const mockStartDelay = Number(mockParams.get('mockStartDelayMs'));
 const mockStartResponseDelay = Number(mockParams.get('mockStartResponseDelayMs'));
@@ -50,6 +56,8 @@ const mockStartFailures: Record<string, { code: string; message: string }> = {
 const createBrowserBridge = async () => {
   const { createMockBridge } = await import('./bridge/mockBridge');
   return createMockBridge({
+    ...(mockLibraryState === 'empty' ? { catalogRows: [] } : {}),
+    ...(mockDiagnosticsStatus ? { diagnosticsBackendStatus: mockDiagnosticsStatus } : {}),
     ...(mockDurations.length === 1 && mockDurations[0] !== undefined
       ? { playbackDurationMs: mockDurations[0] }
       : mockDurations.length > 1 && mockDurations[0] !== undefined

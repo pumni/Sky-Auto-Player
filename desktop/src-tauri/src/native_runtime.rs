@@ -10703,9 +10703,10 @@ mod tests {
         settings.telemetry_enabled = true;
         let default_settings_fingerprint =
             settings_fingerprint(&settings).expect("settings fingerprint");
+        // New settings use Graphite, which is part of the existing fingerprint payload.
         assert_eq!(
             default_settings_fingerprint,
-            "70ad53c4560991aa6ed42009862ad945ec70f682a75a0a079af338e669d3e94c"
+            "73e9c1c107100df2167fd6cfc7365c62207d5b946ac05996323896e2c9ddd939"
         );
         let mut auto_play_changed = settings.clone();
         auto_play_changed.playback_behavior.auto_play = false;

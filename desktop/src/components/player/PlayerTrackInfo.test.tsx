@@ -30,7 +30,12 @@ describe('PlayerTrackInfo', () => {
 
     render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(songA.title)).toBeInTheDocument();
-    expect(screen.getByText('Now Playing')).toBeInTheDocument();
+    expect(screen.getByText('Playing', { selector: '.player-track-status' })).toBeInTheDocument();
+    expect(document.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(document.querySelector('.player-identity-label')).toBeNull();
+    expect(document.querySelector('.player-dry-run-label')).toBeNull();
+    expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: `Playback for ${songA.title}` })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add to Liked Songs' }));
@@ -47,13 +52,15 @@ describe('PlayerTrackInfo', () => {
     if (!row) throw new Error('mock Library is too small');
     await act(async () => store.getState().selectSong(row.song_id));
 
-    render(<PlayerTrackInfo useStore={store} />);
+    const { container } = render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
-    expect(screen.getByText('Selected')).toBeInTheDocument();
+    expect(screen.getByText('Ready to play')).toBeInTheDocument();
+    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(container.querySelector('.player-identity-label')).toBeNull();
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
   });
 
-  it('keeps song metadata in the track line when a separate playback error is shown', async () => {
+  it('keeps one authoritative status in the track line when an error is shown separately', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 1);
@@ -70,7 +77,11 @@ describe('PlayerTrackInfo', () => {
 
     render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
-    expect(screen.getByText(/TXT ·/)).toBeInTheDocument();
+    expect(
+      screen.getByText('Ready to play', { selector: '.player-track-status' }),
+    ).toBeInTheDocument();
+    expect(document.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(screen.queryByText(/TXT ·/)).not.toBeInTheDocument();
     expect(screen.queryByText('Playback error')).not.toBeInTheDocument();
   });
 
@@ -95,8 +106,11 @@ describe('PlayerTrackInfo', () => {
     render(<PlayerTrackInfo useStore={store} />);
 
     expect(screen.getByText(row.title)).toBeInTheDocument();
-    expect(screen.getByText('Session song')).toBeInTheDocument();
-    expect(screen.getByText('Playback status uncertain')).toBeInTheDocument();
+    expect(
+      screen.getByText('Playback status uncertain', { selector: '.player-track-status' }),
+    ).toBeInTheDocument();
+    expect(document.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(screen.queryByText('Session song')).not.toBeInTheDocument();
     expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
   });
 
@@ -157,12 +171,124 @@ describe('PlayerTrackInfo', () => {
       const runtime = within(screen.getByRole('region', { name: 'Playback identity and status' }));
 
       expect(dock.getByText(row.title)).toBeInTheDocument();
-      expect(dock.getByText('Session song')).toBeInTheDocument();
-      expect(dock.getByText(dockStatus)).toBeInTheDocument();
+      expect(dock.getByText(dockStatus, { selector: '.player-track-status' })).toBeInTheDocument();
+      expect(dockElement.querySelectorAll('.player-track-status')).toHaveLength(1);
+      expect(dock.queryByText('Session song')).not.toBeInTheDocument();
       expect(dock.queryByText('Now Playing')).not.toBeInTheDocument();
       expect(dock.queryByText('Playing')).not.toBeInTheDocument();
       expect(runtime.getByText(`Playback status: ${runtimeStatus}`)).toBeInTheDocument();
       expect(runtime.getByText(`Last confirmed session song: ${row.title}`)).toBeInTheDocument();
     },
   );
+
+  it('shows a library prompt when no song identity is known', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+
+    const { container } = render(<PlayerTrackInfo useStore={store} />);
+    expect(screen.getByText('Select a song from your Library')).toBeInTheDocument();
+    expect(screen.getByText('No song selected')).toBeInTheDocument();
+    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+  });
+
+  it.each([
+    ['starting', 'Starting…'],
+    ['playing', 'Playing'],
+    ['paused', 'Paused'],
+    ['stopping', 'Stopping…'],
+  ] as const)('shows one native %s status', async (state, label) => {
+    const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    act(() =>
+      store.setState({
+        playback: { ...store.getState().playback, state },
+      }),
+    );
+
+    const { container } = render(<PlayerTrackInfo useStore={store} />);
+    expect(screen.getByText(row.title)).toBeInTheDocument();
+    expect(screen.getByText(label, { selector: '.player-track-status' })).toBeInTheDocument();
+    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
+  });
+
+  it('keeps dry-run playback and the no-input explanation in one accessible status', async () => {
+    const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback({ dry_run: true }));
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+
+    const { container } = render(<PlayerTrackInfo useStore={store} />);
+    const status = container.querySelector<HTMLElement>('.player-track-status');
+    expect(status).not.toBeNull();
+    expect(status).toHaveTextContent('Dry run · Playing');
+    expect(status).toHaveAttribute(
+      'aria-label',
+      `${row.title}: Dry run · Playing. No physical input is sent.`,
+    );
+    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+  });
+
+  it('keeps dry-run truth when native status confirmation is uncertain', async () => {
+    const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback({ dry_run: true }));
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    act(() =>
+      store.setState({
+        playback: {
+          ...store.getState().playback,
+          error: 'Playback status is unavailable: Mock IPC disconnected.',
+        },
+      }),
+    );
+
+    const { container } = render(<PlayerTrackInfo useStore={store} />);
+    const status = container.querySelector<HTMLElement>('.player-track-status');
+    expect(status).toHaveTextContent('Dry run · Playback status uncertain');
+    expect(status).toHaveAttribute(
+      'aria-label',
+      expect.stringContaining('No physical input is sent.'),
+    );
+    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+  });
+
+  it('labels a prepared song and preserves last-played meaning after Stop', async () => {
+    const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+
+    const prepared = render(<PlayerTrackInfo useStore={store} />);
+    expect(screen.getByText('Prepared', { selector: '.player-track-status' })).toBeInTheDocument();
+    expect(prepared.container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    prepared.unmount();
+
+    await act(async () => store.getState().startPreparedPlayback('proceed'));
+    await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
+    await act(async () => store.getState().stopPlayback());
+    await waitFor(() => expect(store.getState().playback.state).toBe('idle'));
+    const { container } = render(<PlayerTrackInfo useStore={store} />);
+    expect(screen.getByText(row.title)).toBeInTheDocument();
+    expect(
+      screen.getByText('Last played', { selector: '.player-track-status' }),
+    ).toBeInTheDocument();
+    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+  });
 });

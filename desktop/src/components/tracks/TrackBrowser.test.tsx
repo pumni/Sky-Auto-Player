@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import type { LibraryPlaylistImportResult } from '../../bridge/DesktopBridge';
@@ -25,6 +25,30 @@ describe('TrackBrowser playlist import feedback', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: action }));
     });
   }
+
+  it('keeps the source row and accessible loading status while data is pending', async () => {
+    const { store } = await createPlaylistFixture();
+    await act(async () => {
+      store.setState({
+        library: {
+          ...store.getState().library,
+          loading: true,
+          resultTotal: 0,
+        },
+      });
+    });
+    render(<TrackBrowser useStore={store} />);
+
+    const heading = screen.getByRole('heading', { name: 'Practice' });
+    const header = heading.closest('header');
+    expect(header).not.toBeNull();
+    if (!header) throw new Error('Track Browser header is missing');
+    expect(within(header).getByRole('heading', { name: 'Practice' })).toBeInTheDocument();
+    expect(within(header).getByText('Updating…')).toBeInTheDocument();
+    expect(header.querySelector('[role="tablist"]')).toBeNull();
+    expect(screen.getByRole('status')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('Loading library…')).toBeInTheDocument();
+  });
 
   it('names the empty playlist search scope and lets the user clear it', async () => {
     const { store } = await createPlaylistFixture();

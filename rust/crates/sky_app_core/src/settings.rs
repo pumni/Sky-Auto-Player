@@ -22,7 +22,14 @@ pub const DEFAULT_SONGS_DIR: &str = "songs";
 pub const DEFAULT_UPDATE_INTERVAL_S: i64 = 86_400;
 pub const MAX_SKIP_VERSION_BYTES: usize = 128;
 
-pub const PALETTE_IDS: [&str; 5] = ["aurora", "minimalist", "slate", "cyberpunk", "classic"];
+pub const PALETTE_IDS: [&str; 6] = [
+    "graphite",
+    "aurora",
+    "minimalist",
+    "slate",
+    "cyberpunk",
+    "classic",
+];
 pub const BACKGROUND_MODES: [&str; 2] = ["transparent", "painted"];
 pub const DEFAULT_PROCESS_NAMES: [&str; 2] = ["Sky.exe", "Sky Children of the Light.exe"];
 
@@ -172,7 +179,7 @@ pub struct ApplicationSettings {
 impl Default for ApplicationSettings {
     fn default() -> Self {
         Self {
-            palette: "aurora".into(),
+            palette: "graphite".into(),
             ui_background_mode: "transparent".into(),
             playback_defaults: PlaybackDefaults::default(),
             playback_behavior: PlaybackBehaviorSettings::default(),
@@ -556,7 +563,7 @@ mod tests {
     #[test]
     fn defaults_match_current_python_normalized_defaults() {
         let settings = normalize_settings(ApplicationSettings::default());
-        assert_eq!(settings.palette, "aurora");
+        assert_eq!(settings.palette, "graphite");
         assert_eq!(settings.playback_defaults.fps, 60);
         assert_eq!(
             settings.playback_defaults.timing_margin_us,
@@ -609,6 +616,27 @@ mod tests {
     }
 
     #[test]
+    fn palette_patch_accepts_graphite_and_all_saved_palettes() {
+        for palette in PALETTE_IDS {
+            let settings = apply_patch(
+                &ApplicationSettings::default(),
+                &SettingsPatch {
+                    palette: Some(palette.into()),
+                    ..Default::default()
+                },
+            )
+            .expect("known palette");
+            assert_eq!(settings.palette, palette);
+        }
+
+        let invalid_saved = ApplicationSettings {
+            palette: "unknown".into(),
+            ..ApplicationSettings::default()
+        };
+        assert_eq!(normalize_settings(invalid_saved).palette, "aurora");
+    }
+
+    #[test]
     fn timing_margin_patch_accepts_boundaries_and_steps_but_rejects_other_values_atomically() {
         let defaults = ApplicationSettings::default();
         for value in [0, 100, 800, 3_000] {
@@ -641,7 +669,7 @@ mod tests {
             assert!(
                 matches!(error, SettingsError::InvalidField { field, .. } if field == "timing_margin_us")
             );
-            assert_eq!(defaults.palette, "aurora");
+            assert_eq!(defaults.palette, "graphite");
         }
 
         let mut service = SettingsService::load(MemoryStore::default()).expect("load settings");

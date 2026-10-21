@@ -92,7 +92,11 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
               <span>Back to playlist</span>
             </Button>
           )}
-          <h1 id="track-browser-title">{heading}</h1>
+          <div className="track-browser-source-label">
+            <h1 id="track-browser-title" title={heading}>
+              {heading}
+            </h1>
+          </div>
           <span className="track-browser-count">
             {loading
               ? 'Updating…'
@@ -100,11 +104,15 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
                 ? `${formatSongCount(resultTotal)} in All Songs`
                 : formatSongCount(resultTotal)}
           </span>
-          {source.kind === 'smart' && source.id === 'all' && !isPlaylistAddMode && (
-            <span className="track-browser-guidance">
-              Create a playlist to collect songs or import local sheets.
-            </span>
-          )}
+          {source.kind === 'smart' &&
+            source.id === 'all' &&
+            !isPlaylistAddMode &&
+            !loading &&
+            resultTotal === 0 && (
+              <span className="track-browser-guidance">
+                Create a playlist to collect songs or import local sheets.
+              </span>
+            )}
         </div>
         {isPlaylist && !isPlaylistAddMode && (
           <div className="playlist-actions">

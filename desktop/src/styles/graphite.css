@@ -1,0 +1,884 @@
+html[data-palette='graphite'] {
+  --radius-region: 0px;
+  --radius-panel: 8px;
+  --radius-dialog: 10px;
+}
+
+/* The workbench uses semantic surface roles; pane geometry remains owned by layout.css. */
+html[data-palette='graphite'] .app-titlebar {
+  border-bottom: 0;
+  background: var(--chrome-surface);
+}
+
+html[data-palette='graphite'] .global-search {
+  flex-basis: min(480px, 42vw);
+  border-color: var(--workbench-search-idle-edge);
+  background: var(--workbench-search-surface);
+}
+
+html[data-palette='graphite'] .global-search:focus-within {
+  border-color: var(--workbench-search-idle-edge);
+  outline: 0;
+  box-shadow: none;
+}
+
+html[data-palette='graphite'] .global-search:has(input:focus-visible) {
+  outline: 2px solid var(--workbench-search-focus);
+  outline-offset: 1px;
+}
+
+html[data-palette='graphite'] .workbench-pane {
+  border: 1px solid var(--workbench-pane-edge);
+  border-radius: var(--workbench-pane-radius);
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane {
+  background: var(--workbench-navigation);
+  box-shadow: none;
+}
+
+html[data-palette='graphite'] .track-browser-workbench-pane {
+  background: var(--workbench-content);
+  box-shadow: none;
+}
+
+html[data-palette='graphite'] .utility-workbench-pane {
+  background: var(--workbench-inspector);
+  box-shadow: none;
+}
+
+html[data-palette='graphite'] .utility-workbench-pane.is-overlay {
+  border: 1px solid var(--workbench-overlay-edge);
+  border-radius: var(--workbench-overlay-radius);
+  background: var(--workbench-inspector);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 34%);
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-navigator {
+  padding-inline: 3px;
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-collapse-button {
+  width: var(--workbench-compact-navigator-tile);
+  min-height: var(--workbench-compact-navigator-tile);
+}
+
+html[data-palette='graphite'] .icon-button.icon-button-boxed.library-collapse-button {
+  border-color: transparent;
+  color: var(--text-secondary);
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-palette='graphite']
+  .icon-button.icon-button-boxed.library-collapse-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite']
+  .icon-button.icon-button-boxed.library-collapse-button:active:not(:disabled) {
+  background: var(--control-pressed);
+}
+
+html[data-palette='graphite'] .icon-button.icon-button-boxed.library-collapse-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-nav-item {
+  width: var(--workbench-compact-navigator-tile);
+  height: var(--workbench-compact-navigator-tile);
+  min-height: var(--workbench-compact-navigator-tile);
+}
+
+html[data-palette='graphite'] .navigator-workbench-pane.is-collapsed .library-collapsed-launchers {
+  width: var(--workbench-compact-navigator-tile);
+}
+
+html[data-palette='graphite']
+  .navigator-workbench-pane.is-collapsed
+  .library-add-button.is-collapsed {
+  width: var(--workbench-compact-navigator-tile);
+  height: var(--workbench-compact-navigator-tile);
+  min-height: var(--workbench-compact-navigator-tile);
+}
+
+/* Navigator is a quiet rail; only its active source gets a leading accent. */
+html[data-palette='graphite'] .library-navigator h2 {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .library-nav-item {
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+html[data-palette='graphite'] .library-nav-item[data-icon-tone='liked'] .library-nav-item-icon,
+html[data-palette='graphite'] .library-nav-item.is-active .library-nav-item-icon,
+html[data-palette='graphite'] .library-nav-item.is-active:hover .library-nav-item-icon {
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .library-secondary-sections {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--workbench-divider);
+}
+
+html[data-palette='graphite'] .library-nav-item-count,
+html[data-palette='graphite'] .track-browser-count,
+html[data-palette='graphite'] .track-cell-index,
+html[data-palette='graphite'] .track-cell-notes,
+html[data-palette='graphite'] .track-cell-duration {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .library-section-heading {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+html[data-palette='graphite'] .library-empty-playlists p {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .library-empty-playlists-create {
+  min-height: 34px;
+  border-color: var(--control-border);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .library-nav-action-row,
+html[data-palette='graphite'] .library-nav-item,
+html[data-palette='graphite'] .settings-nav-item,
+html[data-palette='graphite'] .library-menu-item,
+html[data-palette='graphite'] .track-row,
+html[data-palette='graphite'] .utility-view-tabs [role='tab'],
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'] {
+  transition: none;
+}
+
+html[data-palette='graphite'] .library-nav-action-row:hover,
+html[data-palette='graphite'] .library-nav-item:hover,
+html[data-palette='graphite'] .library-more-button:hover,
+html[data-palette='graphite'] .library-more-button:focus-visible,
+html[data-palette='graphite'] .library-menu-item:hover,
+html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite'] .library-menu-item[data-focused='true'] {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+html[data-palette='graphite'] .track-browser-header h1 {
+  color: var(--text-primary);
+  font-size: var(--workbench-source-title-size);
+  line-height: 18px;
+  font-weight: 600;
+  letter-spacing: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-palette='graphite'] .track-browser-header {
+  box-sizing: border-box;
+  position: relative;
+  height: var(--workbench-source-header-height);
+  min-height: 0;
+  flex-basis: var(--workbench-source-header-height);
+  gap: 8px;
+  margin: 0;
+  padding-inline: 12px;
+  background: var(--workbench-content);
+}
+
+html[data-palette='graphite'] .track-browser {
+  padding: 0;
+  background: var(--workbench-content);
+}
+
+html[data-palette='graphite'] .track-browser-heading {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 8px;
+}
+
+html[data-palette='graphite'] .track-browser-source-label {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 26px;
+  padding-inline: 8px;
+  border-radius: var(--radius-control);
+  background: var(--workbench-content);
+}
+
+html[data-palette='graphite'] .track-browser-source-label h1 {
+  min-width: 0;
+}
+
+html[data-palette='graphite'] .track-browser.is-playlist .track-browser-heading {
+  gap: 6px;
+}
+
+html[data-palette='graphite'] .track-browser-back-button {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+html[data-palette='graphite'] .track-browser-count {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--workbench-source-count-size);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+html[data-palette='graphite'] .track-browser-count::before {
+  content: '·';
+  margin-inline: 0 6px;
+  color: var(--text-tertiary);
+}
+
+html[data-palette='graphite'] .track-browser-guidance {
+  position: absolute;
+  top: 100%;
+  inset-inline-start: 12px;
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .track-table-frame {
+  margin-inline: 0;
+}
+
+html[data-palette='graphite'] .track-table {
+  background: var(--workbench-content);
+}
+
+html[data-palette='graphite'] .track-table-header {
+  --track-table-header-content-padding-start: 18px;
+  --track-table-header-content-padding-end: 12px;
+  height: 32px;
+  padding-inline-start: var(--track-table-header-content-padding-start);
+  padding-inline-end: var(--track-table-header-content-padding-end);
+  border-bottom: 0;
+  background: var(--workbench-content);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+html[data-palette='graphite'] .track-table-header::after {
+  position: absolute;
+  inset-inline-start: var(--track-table-header-content-padding-start);
+  inset-inline-end: var(--track-table-header-content-padding-end);
+  bottom: 0;
+  height: 1px;
+  background: var(--workbench-divider);
+  content: '';
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  html[data-palette='graphite'] {
+    --workbench-source-header-height: 32px;
+    --workbench-source-title-size: 13px;
+    --workbench-source-count-size: 11px;
+  }
+
+  html[data-palette='graphite'] .track-browser-header {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  html[data-palette='graphite'] .track-browser-guidance {
+    inset-inline-start: 8px;
+  }
+
+  html[data-palette='graphite'] .track-browser-source-label {
+    min-height: 24px;
+    padding-inline: 6px;
+  }
+
+  html[data-palette='graphite'] .track-browser-header h1 {
+    line-height: 16px;
+  }
+
+  html[data-palette='graphite'] .track-browser-heading {
+    gap: 6px;
+  }
+}
+
+@container track-browser (max-width: 520px) {
+  html[data-palette='graphite'] .track-browser-header {
+    --workbench-source-header-height: 32px;
+    --workbench-source-title-size: 13px;
+    --workbench-source-count-size: 11px;
+  }
+
+  html[data-palette='graphite'] .track-browser-header {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  html[data-palette='graphite'] .track-browser-guidance {
+    inset-inline-start: 8px;
+  }
+
+  html[data-palette='graphite'] .track-browser-source-label {
+    min-height: 24px;
+    padding-inline: 6px;
+  }
+
+  html[data-palette='graphite'] .track-browser-header h1 {
+    line-height: 16px;
+  }
+
+  html[data-palette='graphite'] .track-browser-heading {
+    gap: 6px;
+  }
+
+  html[data-palette='graphite'] .track-table-header {
+    --track-table-header-content-padding-start: 12px;
+    --track-table-header-content-padding-end: 6px;
+  }
+}
+
+html[data-palette='graphite'] .track-row {
+  inset-inline-start: var(--workbench-row-inset);
+  inset-inline-end: 0;
+  padding-inline-start: 10px;
+  padding-inline-end: 12px;
+  border-radius: var(--workbench-row-radius);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+@container track-browser (max-width: 520px) {
+  html[data-palette='graphite'] .track-row {
+    padding-inline-start: 4px;
+    padding-inline-end: 6px;
+  }
+}
+
+@container track-browser (max-width: 440px) {
+  html[data-palette='graphite'] .track-row {
+    inset-inline-start: var(--workbench-row-inset-narrow);
+    inset-inline-end: 0;
+    padding-inline-start: 2px;
+    padding-inline-end: 4px;
+  }
+
+  html[data-palette='graphite'] .track-table-header {
+    --track-table-header-content-padding-start: 8px;
+    --track-table-header-content-padding-end: 4px;
+  }
+}
+
+html[data-palette='graphite'] .track-row:hover {
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite'] .track-row.is-selected {
+  border-left-color: transparent;
+  color: var(--text-primary);
+  background: var(--selection-bg);
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .track-row.is-playing:not(.is-selected) {
+  border-left-color: var(--workbench-divider);
+  color: var(--text-secondary);
+  background: var(--workbench-navigation);
+}
+
+html[data-palette='graphite'] .track-row.is-playing .track-cell-index {
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .track-cell-notes,
+html[data-palette='graphite'] .track-cell-duration {
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .track-metadata-status.is-error,
+html[data-palette='graphite'] .library-inline-error {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .track-actions-button,
+html[data-palette='graphite'] .track-like-button {
+  min-width: 30px;
+  min-height: 30px;
+}
+
+/* The Inspector reads as a supporting rail; section rules carry its structure. */
+html[data-palette='graphite'] .utility-surface {
+  background: var(--workbench-inspector);
+}
+
+html[data-palette='graphite'] .utility-header {
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 14px 14px 0;
+}
+
+html[data-palette='graphite'] .utility-header h2 {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .utility-view-tabs [role='tab'],
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'] {
+  min-height: 34px;
+  padding-inline: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+html[data-palette='graphite'] .utility-view-tabs [role='tab'][aria-selected='true'],
+html[data-palette='graphite'] .diagnostics-tabs [role='tab'][aria-selected='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+}
+
+html[data-palette='graphite'] .song-details-view > *,
+html[data-palette='graphite'] .diagnostics-view > * {
+  margin-inline: 14px;
+}
+
+html[data-palette='graphite'] .song-details-heading {
+  padding-bottom: 12px;
+}
+
+html[data-palette='graphite'] .utility-section-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+html[data-palette='graphite'] .song-details-heading h3 {
+  margin-top: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+html[data-palette='graphite'] .song-details-heading .muted {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .utility-risk-summary {
+  margin-top: 12px;
+  padding-block: 8px;
+  border-left: 0;
+  padding-left: 0;
+  background: transparent;
+}
+
+html[data-palette='graphite'] .utility-risk-summary strong,
+html[data-palette='graphite'] .utility-risk-level {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .utility-section {
+  margin-top: 14px;
+  padding-bottom: 14px;
+}
+
+html[data-palette='graphite'] .utility-section h4 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .utility-section p,
+html[data-palette='graphite'] .utility-section li,
+html[data-palette='graphite'] .utility-note {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+html[data-palette='graphite'] .recommendation-grid dt {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .recommendation-grid dd {
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .diagnostics-view > .diagnostics-tabs {
+  margin-inline: 14px;
+}
+
+html[data-palette='graphite'] .diagnostics-playback-summary strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .diagnostics-playback-summary span,
+html[data-palette='graphite'] .diagnostics-sender-summary span,
+html[data-palette='graphite'] .diagnostics-metric span,
+html[data-palette='graphite'] .diagnostics-status,
+html[data-palette='graphite'] .diagnostics-plot figcaption {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .diagnostics-sender-summary {
+  border-left-width: 2px;
+  border-left-color: var(--workbench-divider);
+  background: transparent;
+}
+
+html[data-palette='graphite'] .diagnostics-sender-summary strong,
+html[data-palette='graphite'] .diagnostics-metric strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .diagnostics-metric-group h4 {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .diagnostics-lines li {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .diagnostics-lines strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .diagnostics-empty-state strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .diagnostics-empty-state span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* The Player Dock shares the chrome surface and keeps its fixed transport geometry. */
+html[data-palette='graphite'] .player-bar {
+  border-top-color: var(--workbench-divider);
+  background: var(--chrome-surface);
+}
+
+html[data-palette='graphite'] .player-track-icon {
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .player-track-copy strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .player-track-status,
+html[data-palette='graphite'] .player-transport-status,
+html[data-palette='graphite'] .player-timeline-labels {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .player-track-status.is-active {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+html[data-palette='graphite'] .player-transport .player-shuffle-action.is-active,
+html[data-palette='graphite']
+  .player-transport
+  .player-shuffle-action.is-active:hover:not(:disabled),
+html[data-palette='graphite']
+  .player-transport
+  .player-shuffle-action.is-active:focus-visible:not(:disabled) {
+  color: var(--accent-hover);
+}
+
+html[data-palette='graphite'] .player-tool-button[aria-pressed='true'] {
+  color: var(--accent-hover);
+}
+
+html[data-palette='graphite'] .player-tool-button[aria-pressed='true']:hover:not(:disabled),
+html[data-palette='graphite']
+  .player-tool-button[aria-pressed='true']:focus-visible:not(:disabled) {
+  color: var(--accent-hover);
+}
+
+html[data-palette='graphite'] .player-track-status.is-attention {
+  color: var(--warning-fg);
+}
+
+@media (max-width: 960px) {
+  html[data-palette='graphite'] .player-track-info {
+    gap: 4px;
+  }
+
+  html[data-palette='graphite'] .player-track-status {
+    font-size: 11px;
+  }
+}
+
+html[data-palette='graphite'] .player-risk {
+  font-size: 12px;
+}
+
+html[data-palette='graphite']
+  .player-tools
+  .icon-button:hover:not(:disabled):not([aria-pressed='true']),
+html[data-palette='graphite']
+  .player-tools
+  .icon-button:focus-visible:not(:disabled):not([aria-pressed='true']) {
+  color: var(--text-primary);
+}
+
+html[data-palette='graphite'] .player-utility-button[aria-expanded='true'] {
+  color: var(--text-primary);
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite'] .profile-fields label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .profile-fields select {
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .profile-test-explanation {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .player-admission {
+  border-radius: 6px;
+}
+
+html[data-palette='graphite'] .admission-copy strong {
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .admission-copy span,
+html[data-palette='graphite'] .admission-recovery-action {
+  font-size: 12px;
+}
+
+/* Settings, menus, and dialogs share the same quiet surfaces and control edges. */
+html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger),
+html[data-palette='graphite'] .icon-button.icon-button-boxed,
+html[data-palette='graphite'] .update-indicator,
+html[data-palette='graphite'] .playlist-add-songs-button,
+html[data-palette='graphite'] .diagnostics-export-button {
+  border-color: var(--control-border);
+  background: var(--surface-raised);
+}
+
+html[data-palette='graphite'] .button:not(.button-primary):not(.button-danger):hover:not(:disabled),
+html[data-palette='graphite'] .icon-button.icon-button-boxed:hover:not(:disabled),
+html[data-palette='graphite'] .update-indicator:hover,
+html[data-palette='graphite'] .playlist-add-songs-button:hover:not(:disabled),
+html[data-palette='graphite'] .diagnostics-export-button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+html[data-palette='graphite']
+  .button:not(.button-primary):not(.button-danger):active:not(:disabled),
+html[data-palette='graphite'] .icon-button.icon-button-boxed:active:not(:disabled) {
+  background: var(--control-pressed);
+}
+
+html[data-palette='graphite'] .settings-dialog,
+html[data-palette='graphite'] .library-dialog {
+  border-color: var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-panel);
+}
+
+html[data-palette='graphite'] .settings-nav-item {
+  min-height: 36px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .settings-nav-item.is-active {
+  border-left-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--selection-bg);
+}
+
+html[data-palette='graphite'] .settings-section label:not(.checkbox-row),
+html[data-palette='graphite'] .checkbox-row {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .settings-section select,
+html[data-palette='graphite'] .settings-section input:not([type='checkbox']),
+html[data-palette='graphite'] .library-dialog-form input {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+html[data-palette='graphite'] .caption-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+html[data-palette='graphite'] .settings-section select:focus-visible,
+html[data-palette='graphite'] .settings-section input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+html[data-palette='graphite'] .settings-note,
+html[data-palette='graphite'] .timing-margin-recommendation,
+html[data-palette='graphite'] .auto-play-switch-description {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .library-menu-popover,
+html[data-palette='graphite'] .track-menu-popover,
+html[data-palette='graphite'] .profile-popover {
+  border-color: var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 34%);
+}
+
+html[data-palette='graphite'] .library-menu-item {
+  min-height: 36px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .library-menu-item svg {
+  color: var(--text-secondary);
+}
+
+html[data-palette='graphite'] .library-menu-item.is-danger,
+html[data-palette='graphite'] .library-menu-item.is-danger svg {
+  color: var(--danger-fg);
+}
+
+html[data-palette='graphite'] .library-menu-item small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+html[data-palette='graphite'] .library-dialog-form label {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+html[data-palette='graphite'] .library-confirm-message {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* Preserve visible system colors and focus outlines in Windows forced-colors mode. */
+@media (forced-colors: active) {
+  html[data-palette='graphite'] .workbench-pane,
+  html[data-palette='graphite'] .utility-surface,
+  html[data-palette='graphite'] .player-bar,
+  html[data-palette='graphite'] .settings-dialog,
+  html[data-palette='graphite'] .library-dialog {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  html[data-palette='graphite'] .track-row.is-selected,
+  html[data-palette='graphite'] .library-nav-item.is-active,
+  html[data-palette='graphite'] .settings-nav-item.is-active {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  html[data-palette='graphite'] .track-row.is-playing:not(.is-selected) {
+    border-left-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+
+  html[data-palette='graphite'] .icon-button.icon-button-boxed.library-collapse-button {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: ButtonFace;
+  }
+
+  html[data-palette='graphite']
+    .icon-button.icon-button-boxed.library-collapse-button:hover:not(:disabled),
+  html[data-palette='graphite']
+    .icon-button.icon-button-boxed.library-collapse-button:active:not(:disabled) {
+    border-color: ButtonText;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  html[data-palette='graphite']
+    .icon-button.icon-button-boxed.library-collapse-button:focus-visible {
+    outline-color: Highlight;
+  }
+
+  html[data-palette='graphite'] .track-row.is-playing .track-cell-index,
+  html[data-palette='graphite'] .library-nav-item.is-active .library-nav-item-icon {
+    color: HighlightText;
+  }
+
+  html[data-palette='graphite'] .button-danger,
+  html[data-palette='graphite'] .player-transport .player-primary-action {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  html[data-palette='graphite'] button:focus-visible,
+  html[data-palette='graphite'] input:focus-visible,
+  html[data-palette='graphite'] select:focus-visible,
+  html[data-palette='graphite'] [role='tab']:focus-visible,
+  html[data-palette='graphite'] [role='separator']:focus-visible,
+  html[data-palette='graphite'] .global-search:focus-within {
+    outline-color: Highlight;
+  }
+
+  html[data-palette='graphite'] .global-search:has(input:focus-visible) {
+    outline-color: Highlight;
+  }
+}

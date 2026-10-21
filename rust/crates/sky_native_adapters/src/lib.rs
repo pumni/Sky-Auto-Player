@@ -456,8 +456,9 @@ impl JsonSettingsStore {
 
 impl SettingsStore for JsonSettingsStore {
     fn load(&self) -> Result<ApplicationSettings, SettingsError> {
+        let is_new_settings_file = !self.path.exists();
         let raw = self.read_object();
-        let migrated = migrate_raw(&raw);
+        let migrated = migrate_raw(&raw, is_new_settings_file);
         if migrated != raw {
             let encoded = serde_json::to_vec_pretty(&Value::Object(migrated.clone()))
                 .map_err(|error| SettingsError::Storage(error.to_string()))?;
@@ -1207,13 +1208,19 @@ fn settings_from_raw(raw: &Map<String, Value>) -> ApplicationSettings {
     normalize_settings(settings)
 }
 
-fn migrate_raw(raw: &Map<String, Value>) -> Map<String, Value> {
+fn migrate_raw(raw: &Map<String, Value>, is_new_settings_file: bool) -> Map<String, Value> {
     let mut migrated = raw.clone();
     let palette = raw
         .get("palette")
         .or_else(|| raw.get("theme"))
         .map(python_string)
-        .unwrap_or_else(|| "aurora".into());
+        .unwrap_or_else(|| {
+            if is_new_settings_file {
+                ApplicationSettings::default().palette
+            } else {
+                "aurora".into()
+            }
+        });
     let fps = resolve_fps(
         raw.get("game_fps")
             .and_then(python_int)
@@ -1775,6 +1782,73 @@ mod tests {
         assert_eq!(patched_raw["palette"], "cyberpunk");
         assert!(patched_raw.get("theme").is_none());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn graphite_is_the_new_settings_default_and_saved_palettes_round_trip() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sky-settings-palette-round-trip-{suffix}"));
+        let path = root.join("config.json");
+        fs::create_dir_all(&root).expect("temp root");
+        let store = JsonSettingsStore::new(&path);
+
+        let fresh = store.load().expect("initialize new settings");
+        assert_eq!(fresh.palette, "graphite");
+        let fresh_raw = serde_json::from_slice::<Value>(&fs::read(&path).expect("read defaults"))
+            .expect("valid defaults json");
+        assert_eq!(fresh_raw["palette"], "graphite");
+
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": sky_app_core::settings::SCHEMA_VERSION,
+            }))
+            .expect("encode existing settings without a palette"),
+        )
+        .expect("seed existing settings without a palette");
+        assert_eq!(
+            store
+                .load()
+                .expect("existing settings keep the previous palette default")
+                .palette,
+            "aurora"
+        );
+
+        for palette in ["aurora", "minimalist", "slate", "cyberpunk", "classic"] {
+            fs::write(
+                &path,
+                serde_json::to_vec(&serde_json::json!({
+                    "schema_version": sky_app_core::settings::SCHEMA_VERSION,
+                    "palette": palette,
+                }))
+                .expect("encode existing settings"),
+            )
+            .expect("seed existing palette");
+            let loaded = store.load().expect("load existing palette");
+            assert_eq!(loaded.palette, palette);
+
+            let mut service = SettingsService::load(store.clone()).expect("load service");
+            service
+                .patch(&SettingsPatch {
+                    palette: Some("graphite".into()),
+                    ..Default::default()
+                })
+                .expect("save Graphite choice");
+            assert_eq!(store.load().expect("reload Graphite").palette, "graphite");
+
+            service
+                .patch(&SettingsPatch {
+                    palette: Some(palette.into()),
+                    ..Default::default()
+                })
+                .expect("restore existing palette");
+            assert_eq!(store.load().expect("reload saved palette").palette, palette);
+        }
+
+        fs::remove_dir_all(root).expect("remove temp root");
     }
 
     #[test]

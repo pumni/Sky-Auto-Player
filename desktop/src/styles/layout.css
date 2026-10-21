@@ -19,6 +19,10 @@ body {
   background: var(--canvas);
 }
 
+html[data-palette='graphite'] .app-shell {
+  background: var(--chrome-surface);
+}
+
 .startup-screen,
 .fatal-screen {
   display: grid;
