@@ -2191,7 +2191,7 @@ test('Player Bar keeps a centered controls row and separate timeline at supporte
     await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
     const activeShuffleTone = await shuffle.evaluate((element) => {
       const token =
-        document.documentElement.dataset.palette === 'graphite' ? '--text-primary' : '--accent';
+        document.documentElement.dataset.palette === 'graphite' ? '--accent-hover' : '--accent';
       const probe = document.createElement('span');
       probe.style.color = `var(${token})`;
       document.body.append(probe);
