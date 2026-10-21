@@ -1,11 +1,11 @@
 {
-  "version": "4.1.4",
-  "notes": "# Sky Auto Player v4.1.4\n\nSky Auto Player v4.1.4 improves playback reliability, accessibility, search and settings\ninteractions, and update progress feedback.\n\n- **Playback and input reliability:** Key press/release behavior is more consistent when\n  scheduling is delayed, late input is handled more safely, and final foreground/focus checks\n  happen close to dispatch. The player also behaves more safely when Windows process-integrity\n  constraints prevent a valid target from being selected.\n- **Appearance and accessibility:** Semantic colors and control states are more consistent, with\n  improved behavior for Windows forced-colors and accessibility settings.\n- **Search and settings:** Search focus and draft behavior are more stable, slash shortcuts stay\n  local around editable controls, and settings persistence failures provide clearer recovery and\n  feedback.\n- **Updater experience:** Cumulative download progress now reports progress more accurately.",
-  "pub_date": "2026-09-22T03:50:41Z",
+  "version": "4.2.0",
+  "notes": "# Sky Auto Player v4.2.0\n\nA refreshed desktop workbench with better library workflows, clearer playback feedback, and more reliable Windows playback.\n\n- **New:** Graphite dark theme and a responsive Library, Search, Track Browser, and Inspector.\n- **New:** Pre-playback Timing Advisory highlighting potential timing constraints without changing the music or playback behavior.\n- **Improved:** Playlist creation, playlist-scoped imports, scoped search, keyboard navigation, and selection feedback.\n- **Improved:** Persistent window and workspace layouts, adaptive Inspector, and clearer Auto Play, Shuffle, Dry Run, and playback status.\n- **Fixed:** Playback edge cases involving Stop/Skip, focus, pause/resume, key-release recovery, and Windows sleep/hibernate.",
+  "pub_date": "2026-10-21T10:39:42Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTTWdUaDRMcjJxR1JPTkFCZ0Fmd3NscG5HNUVLRG85VVVuQkVvbzFxZW1YTzhxZHFtU3Q0aTBtbUgrVmY1YmtqZkxqVi9rbmczZjR3eEZNSytyREhzVmROU2J3Mlp5dlFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMDQ4NDU4CWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuMS40X3g2NC1zZXR1cC5leGUKS2JmN3JEWXBxWUtPd3NuTzVPamVjMXVPQWp3TjVSUjZ2NnBiMkpONXJxZ0FHeHovTzIvRUpQQzdyeURDU2Z0OHJ1QXd6bFV5UUYrdXVES3FHcnJDQ1E9PQo=",
-      "url": "https://github.com/pumni/Sky-Auto-Player/releases/download/v4.1.4/Sky.Auto.Player_4.1.4_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTTWdUaDRMcjJxR1RWQ3NQZENlZWpoYTVIMkNzVnQ5RzZxWi83YTlkT2tMQjFUVjc3N1UxUndqRDVZaHFoK2QvczZHYW56cG5kOW9FRFFDbGpyVEdSbzErZ1d1aWJOWHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTc4NjA2CWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuMi4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjo0LjIuMAovajBHVWRPcy82Qm9ycDF4c1ZXeWVvdlFqUk5welk4aFlXbEJUeEZzaWVsUVFzOUovVEpXR3FreXN3akE4dlQ5SVRqSGpPVDhNTU13dWc2NzRUYXNCQT09Cg==",
+      "url": "https://github.com/pumni/Sky-Auto-Player/releases/download/v4.2.0/Sky.Auto.Player_4.2.0_x64-setup.exe"
     }
   }
 }
