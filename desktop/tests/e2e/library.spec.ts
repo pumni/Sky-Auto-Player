@@ -570,9 +570,10 @@ test('Graphite workspace header compacts by viewport and browser width over one 
     expect(geometry.divider.backgroundColor).toBe('rgb(42, 43, 44)');
     expect(geometry.divider.left).toBeCloseTo(geometry.divider.paddingLeft, 1);
     expect(geometry.divider.right).toBeCloseTo(geometry.divider.paddingRight, 1);
-    expect(
-      geometry.divider.left + geometry.divider.width + geometry.divider.right,
-    ).toBeCloseTo(geometry.divider.headerWidth, 1);
+    expect(geometry.divider.left + geometry.divider.width + geometry.divider.right).toBeCloseTo(
+      geometry.divider.headerWidth,
+      1,
+    );
     expect(geometry.browserScrollWidth).toBeLessThanOrEqual(geometry.browserWidth);
     expect(geometry.documentWidth).toBeLessThanOrEqual(viewport.width);
     await expect(page.getByRole('heading', { name: 'All Songs' })).toBeVisible();
@@ -1453,7 +1454,9 @@ test('dock and transport toggles show palette-specific active state without layo
   await expect(shuffle).toHaveAttribute('aria-pressed', 'false');
   await shuffle.press('Space');
   await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
-  expect((await measureStyle(shuffle)).color).toBe(activeShuffleTone(await measureStyle(shuffle)));
+  await expect
+    .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
+    .toBe(activeShuffleTone(await measureStyle(shuffle)));
 
   const autoPlay = player.getByRole('button', { name: 'Auto Play' });
   const autoPlayBefore = await measureStyle(autoPlay);
@@ -1494,9 +1497,9 @@ test('dock and transport toggles show palette-specific active state without layo
   await autoPlay.press('Space');
   await expect(autoPlay).toBeFocused();
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
-  expect((await measureStyle(autoPlay)).color).toBe(
-    activeAutoPlayTone(await measureStyle(autoPlay)),
-  );
+  await expect
+    .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
+    .toBe(activeAutoPlayTone(await measureStyle(autoPlay)));
   await autoPlay.press('Space');
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
 
