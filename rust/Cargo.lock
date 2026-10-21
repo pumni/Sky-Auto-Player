@@ -3253,7 +3253,7 @@ dependencies = [
 
 [[package]]
 name = "sky_desktop_shell"
-version = "4.1.4"
+version = "4.2.0"
 dependencies = [
  "getrandom 0.4.3",
  "raw-window-handle",
