@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'lib/startup_calibration_projection.ps1')
 
 function Resolve-RepositoryPath {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -529,13 +530,8 @@ $json = $evidence | ConvertTo-Json -Depth 24
 foreach ($forbidden in @('processor_name', 'processor_cores', 'windows_build', 'power_scheme', 'evidence_directory', 'sink_hwnd', 'sink_pid', 'process_start_time_filetime', 'started_utc', 'ended_utc')) {
     if ($json.Contains($forbidden)) { throw "Sanitized evidence unexpectedly contains $forbidden." }
 }
-[System.IO.File]::WriteAllText($resolvedOutput, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-$outputHash = Get-Sha256 -Path $resolvedOutput
-[System.IO.File]::WriteAllText(
-    "$resolvedOutput.sha256",
-    "$outputHash  $([System.IO.Path]::GetFileName($resolvedOutput))$([Environment]::NewLine)",
-    [System.Text.UTF8Encoding]::new($false)
-)
+# Custom OutputPath values remain supported; add a matching eol=lf attribute when checkout-time byte identity is required.
+$outputHash = Write-StartupCalibrationProjection -SerializedJson $json -OutputPath $resolvedOutput
 Write-Output "EVIDENCE $resolvedOutput"
 Write-Output "SHA256 $outputHash"
 Write-Output "VERIFIED_CASES $verifiedCaseCount"

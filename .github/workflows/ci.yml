@@ -270,6 +270,9 @@ jobs:
       - name: Run updater-bridge contract self-tests
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_validate_bridge.ps1
 
+      - name: Run startup calibration export hash self-test
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_startup_calibration_evidence_export.ps1
+
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal
 

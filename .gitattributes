@@ -1,5 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# This family includes the 2026 record; eol=lf changes checkout representation, not its Git blob.
+docs/evidence/wake-calibration-qualification-*.json text eol=lf
+docs/evidence/wake-calibration-qualification-*.json.sha256 text eol=lf
+docs/evidence/wake-calibration-qualification-20261018.json text=auto !eol
+docs/evidence/wake-calibration-qualification-20261018.json.sha256 text=auto !eol
 songs/** text eol=lf
 builtin-songs/manifest.json text eol=lf
 rust/supply-chain/*.toml text eol=lf
