@@ -10,7 +10,7 @@ V4 uses the Tauri NSIS package as the canonical Windows distribution and keeps m
 
 A fresh V4 install therefore starts with an empty primary song directory even though the repository contains a built-in catalog. Copying those product-owned files into the user-owned directory at first launch would restore the visible behavior but would mix ownership and introduce synchronization, overwrite, rename, deletion, and upgrade policy that V4 otherwise avoids.
 
-V4 has not been officially released. This decision therefore defines the V4 contract directly; no compatibility migration for prior V4 production installs is required.
+V4 had not yet been officially released at the ADR decision date, 2026-09-09. This decision therefore defined the V4 contract directly; no compatibility migration for prior V4 production installs was required.
 
 ## Decision
 

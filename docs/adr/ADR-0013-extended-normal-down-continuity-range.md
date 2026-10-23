@@ -2,37 +2,31 @@
 
 Status: Accepted.
 
-> Historical record only. Superseded for the current normal-dispatch contract
-> by [ADR-0014](ADR-0014-deterministic-prepared-dispatch.md). The former
-> normal tolerance range and rescue qualification are retired; strict timing,
-> physical feasibility, and transport evidence remain historical references.
+> Historical range and qualification record only. Current normal Down and
+> effective-min-hold semantics are in [ADR-0017](ADR-0017-current-down-continuity-and-physical-min-hold.md);
+> lifecycle and lease policy are in [ADR-0018](ADR-0018-resumable-release-barrier-and-final-lease-age.md).
 
-Supersedes: The `2,500–5,000 µs` bounds of [ADR-0012](ADR-0012-user-configurable-normal-down-continuity.md),
-and documents the removal of the dedicated "Reset to 2.5 ms" button in #287.
-All invariants from ADR-0010, ADR-0011, and ADR-0012 (non-additive formula, strict-mode sender
-cutoff, immutable authored timeline, session freezing, physical feasibility precedence, and telemetry
-schema) remain fully in force.
+At this decision date, this ADR extended the setting range recorded by
+[ADR-0012](ADR-0012-user-configurable-normal-down-continuity.md) and documented
+the #287 removal of the dedicated reset button. Runtime behavior was later
+revised by ADR-0014 through ADR-0017; this record is not current policy.
 
 Parent work orders: [#287](https://github.com/pumni/Sky-Auto-Player/issues/287) and [#288](https://github.com/pumni/Sky-Auto-Player/issues/288).
 
+Implementation history: [PR #289](https://github.com/pumni/Sky-Auto-Player/pull/289).
+
 Baseline commit: `c337412a15ec80cea76a86fe0c5d1f7b1c269e8c`.
+
+Original qualification: [ADR-0013 at the frozen WP6 checkpoint](https://github.com/pumni/Sky-Auto-Player/blob/d4e580cb46c164b3c564d8d99b2bc5f7835724d6/docs/adr/ADR-0013-extended-normal-down-continuity-range.md).
 
 ---
 
 ## Context
 
-In [ADR-0012](ADR-0012-user-configurable-normal-down-continuity.md), `normal_down_start_tolerance_us`
-was exposed as an Advanced setting provisionally bounded to `[2,500, 5,000] µs` with default `2,500 µs`.
-Experience across varied Windows environments demonstrated two user requirements:
-
-1. **Jitter Headroom under Load:** Certain host hardware configurations and background CPU
-   spikes produce Windows timer wake jitter exceeding 5.0 ms. Under the previous 5.0 ms ceiling,
-   these boundaries were dropped as `FinalSenderWindowExpired` even though physical hold and release
-   floors were completely feasible.
-2. **Rhythmic Tightening:** Users with low-jitter environments requested the option to tighten
-   continuity tolerance down to 2.0 ms to enforce tighter timing discipline closer to authored targets.
-3. **UI Streamlining (#287):** The dedicated "Reset to 2.5 ms" button added visual clutter and
-   redundancy alongside the persistent default indicator (`· default 2.5 ms`) and stepper controls (`− / +`).
+ADR-0012 bounded `normal_down_start_tolerance_us` to `[2,500, 5,000] µs`.
+This follow-up recorded requests for more than 5 ms of jitter headroom, tighter
+2 ms timing on low-jitter hosts, and removal of the redundant #287 reset button
+in favor of the default indicator and steppers.
 
 ---
 
@@ -52,12 +46,9 @@ Maximum:    10,000 µs (10.0 ms)
 Step:          500 µs (0.5 ms)
 ```
 
-- **Persistence Schema:** Remains schema version **8**. Because the schema already validates and
-  normalizes invalid persisted values to the 2,500 µs default, widening the boundary requires no schema
-  increment. Persisted values outside `[2_000, 10_000]` or unaligned to 500 µs continue to reset to 2,500 µs
-  fail-closed (no clamping).
-- **Session Freezing:** Unchanged. The resolved tolerance is converted to QPC ticks and frozen for
-  the lifetime of the prepared session. In-flight sessions never observe mid-song mutations.
+Schema remained version **8**. Persisted values outside `[2_000, 10_000]` or
+unaligned to 500 µs reset to 2,500 µs without clamping; the resolved value was
+converted to QPC ticks and frozen for the prepared session.
 
 ### 2. Removal of Dedicated Reset Button (#287)
 
@@ -68,19 +59,9 @@ Step:          500 µs (0.5 ms)
 
 ### 3. Tiered Guidance and Warning Copy
 
-To ensure safe user operation across the wider range without using misleading or forbidden terminology,
-the control presents dynamic guidance and tiered warnings based on the active value:
-
-- **Below Default (`< 2.5 ms`):**
-  *"Lower values can tighten late-note timing when they are above the active Timing Margin, but Windows wake jitter may cause more late notes to be dropped."*
-- **Default and Above (`>= 2.5 ms`):**
-  *"If notes are still dropped on fast chords under load, increase this step-by-step. Rescued notes may play slightly later than their authored time."*
-- **Moderate Tolerance Warning (`> 2.5 ms && <= 5.0 ms`):**
-  *"Values above 2.5 ms increase late-note continuity at the cost of authored timing accuracy under load."*
-- **High Tolerance Warning (`> 5.0 ms`):**
-  *"High tolerance can rescue very late notes, but in dense passages it may cause following authored notes to become stale or physically infeasible. Use only when lower values still drop notes."*
-- **Strict Mode Note:**
-  *"Applies only to normal playback Down key events. Strict timing diagnostic playback ignores this tolerance."*
+Guidance distinguished below-default, default/moderate, and high values, warned
+that continuity trades against authored timing and following-note feasibility,
+and stated that strict diagnostic playback ignored the setting.
 
 ---
 
@@ -103,9 +84,10 @@ Tested across 5 tolerance arms (`2.0`, `2.5`, `5.0`, `7.5`, `10.0 ms`), 7 inter-
 | **7,500** | 84 / 119 | 63 / 119 | 56 | 0 | 0 | 0 | 147 |
 | **10,000** | 105 / 119 | 63 / 119 | 56 | 0 | 0 | 0 | **168** |
 
-- Across all arms, `UnobservedBacklog == actually_overdue == 56` with zero false backlogs.
-- Net successful notes increased strictly monotonically with configured tolerance.
-- Zero timeline rebases, zero chord integrity splits, zero transport anomalies.
+Across the arms, `UnobservedBacklog == actually_overdue == 56` with zero false
+backlogs; net successful notes rose monotonically from 84 to 168. Timeline
+rebases, chord splits, and transport anomalies were all zero.
+
 
 ### Phase B: Real-Wait Sequential Probe (Production Waiter)
 
@@ -120,12 +102,12 @@ sequences (5,400 boundary dispatches) on live Windows thread scheduling:
 | **7,500** | 540 | 540 | 7 | 0 | 0 / 0 | 0 | 0 | 0 | 0 | 6 µs | 1,080 |
 | **10,000** | 540 | 540 | 8 | 0 | 0 / 0 | 0 | 0 | 0 | 0 | 6 µs | 1,080 |
 
-- The 10.0 ms arm demonstrated superior rescue performance (8 rescues vs 7 on 7.5 ms, 5 on 5.0 ms, and 4 on 2.5/2.0 ms).
-- Second boundaries suffered zero Final Sender Window expirations (`second FSW = 0`) across all arms.
-- Exact invariant equality maintained: `second UB == actually overdue` (zero false backlogs across all arms).
-- Zero physical window expired (`PW = 0`), zero timeline rebases, zero transport anomalies across all arms.
-- Downstream post-send readiness latency remained flat (p99 of 6 µs across all arms).
-- Net successful notes monotonic across the entire 5-arm range (`1078 <= 1078 <= 1080 <= 1080 <= 1080`).
+The 10 ms arm rescued 8 boundaries versus 7 at 7.5 ms, 5 at 5 ms, and 4 at
+2.5/2 ms. Second-boundary UB matched overdue counts; second FSW, physical
+window failures, rebases, and transport anomalies were zero. Post-send-ready
+p99 was 6 µs for every arm; net successes were 1,078, 1,078, 1,080, 1,080,
+and 1,080.
+
 
 ### Phase C: Sparse Benefit Probe (100 ms Gap)
 
@@ -154,13 +136,8 @@ Evaluated physical floor feasibility and non-bypass across 70 combinations of in
 
 ## Invariants Retained
 
-1. **Non-Additive Continuity Formula:**
-   `normal_sender_cutoff = max(physical_latest_down_start, authored_target + normal_down_start_tolerance)`
-2. **Physical Feasibility Precedence:**
-   Packets whose physical floor exceeds `physical_latest_down_start` fail closed as `PhysicalWindowExpired`.
-3. **Strict Playback Invariance:**
-   Strict playback diagnostic mode uses `physical_latest_down_start` and ignores configured tolerance.
-4. **Authored Timeline Immutability:**
-   Missed notes are never caught up or retried; timeline is never rebased.
-5. **Telemetry Schema Stability:**
-   Remains schema version 16 with existing metrics tracking rescued notes.
+The setting-era design used a non-additive cutoff, kept physical feasibility
+ahead of rescue, excluded strict mode, and never retried, rebased, or caught up
+missed notes. It recorded telemetry schema 16. The numerical qualification
+results above remain the historical evidence; current runtime policy is in
+ADR-0017/0018.

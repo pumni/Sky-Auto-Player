@@ -29,6 +29,10 @@ authority for realtime work, `SendInput` security boundary, and fail-closed
 requirements remain valid. ADR-0002 is not wholly obsolete; its accepted UI
 and safety constraints continue to govern this migration.
 
+## Consolidated accepted decision: ADR-0004
+
+ADR-0004 was accepted with ADR-0003 and ADR-0005 in [PR #81](https://github.com/pumni/Sky-Auto-Player/pull/81). It replaced the internal Python RPC incrementally with typed Rust application-service calls behind the stable Tauri commands and channels, using a bounded Rust event hub. Lifecycle events remain ordered and are never silently dropped; telemetry is coalesced latest-wins. Fatal event overflow fails closed and triggers physical cleanup. Strict WebView DTO validation, applicable cancellation/timeouts, the startup updater guard, controlled shutdown, and emergency release remain required. This decision does not change the realtime scheduler or gameplay-input mechanism; Windows `SendInput` remains the physical input boundary. See the [original ADR-0004 at the frozen WP6 checkpoint](https://github.com/pumni/Sky-Auto-Player/blob/d4e580cb46c164b3c564d8d99b2bc5f7835724d6/docs/adr/ADR-0004-direct-tauri-rust-ipc.md).
+
 ## Constraints
 
 - preserve gameplay input/timing safety and the Windows `SendInput` boundary;

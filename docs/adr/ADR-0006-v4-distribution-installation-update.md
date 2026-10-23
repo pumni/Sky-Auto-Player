@@ -37,24 +37,11 @@ is not an updater migration and must not require the v3 update protocol.
 
 ### 2. V3 and v4 use separate distribution/update namespaces
 
-The v3 GitHub Releases namespace remains legacy/frozen for v3 clients. V4 binary releases and updater
-metadata must be published through a separate release authority so that a v4 release cannot become the
-value returned to v3 clients by their existing `/releases/latest` discovery path.
-
-The preferred topology is:
-
-- source repository: `pumni/Sky-Auto-Player`;
-- v3 legacy releases: existing releases in the source repository;
-- v4 binary release authority: `pumni/Sky-Auto-Player-Releases`, a dedicated immutable release namespace;
-- v4 updater metadata: static Tauri updater metadata owned by the v4 release authority.
-
-The authority repository exists and is reviewed by WO-04. Runtime code hard-codes only the two
-allow-listed metadata paths below; it does not expose them to React or accept endpoint overrides:
-
-```text
-https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/stable/latest.json
-https://raw.githubusercontent.com/pumni/Sky-Auto-Player-Releases/main/channels/beta/latest.json
-```
+At the 2026-09-03 decision date, v3 clients selected stable releases through
+the source repository's `/releases/latest` endpoint and required the v3 asset
+contract. Publishing a v4 stable release there could therefore make v3 clients
+select an incompatible release. This ADR proposed a separate v4 authority;
+that two-repository topology was superseded by [ADR-0007](ADR-0007-single-repository-v4-release-architecture.md), and current stable/beta channel semantics are in [ADR-0009](ADR-0009-v4-github-latest-policy.md). The original full decision remains available at [ADR-0006 @ the frozen WP6 checkpoint](https://github.com/pumni/Sky-Auto-Player/blob/d4e580cb46c164b3c564d8d99b2bc5f7835724d6/docs/adr/ADR-0006-v4-distribution-installation-update.md).
 
 ### 3. The canonical v4 Windows distribution is NSIS, per-user, and updater-authenticated
 
@@ -167,19 +154,15 @@ logs.
 
 ### 9. Static updater metadata is the initial channel mechanism
 
-V4 uses static Tauri updater metadata rather than runtime scanning/sorting of GitHub Releases. Stable
-and beta, when enabled, have separate metadata authorities/endpoints. The Rust update service selects
-from an allow-listed, compiled channel configuration; the frontend cannot supply an endpoint.
-WO-04 validates that metadata points only to already-published, qualified assets in the dedicated
-authority and promotes stable/beta files as separate post-qualification actions. Qualification
-evidence binds the exact canonical installer and updater signature bytes by SHA-256; promotion
-compares those digests with the published assets and fails closed on missing or mismatched evidence.
-Stable metadata accepts only final SemVer releases while beta metadata is explicitly prerelease-only.
-The authority may remain empty until the first qualified promotion, so a missing production metadata
-file fails closed.
-
-A dedicated dynamic update service is a non-goal for v4.0. It can be introduced later if the product
-needs staged rollout, cohorts, mandatory minimum versions, or server-driven release policy.
+The accepted design uses static Tauri updater metadata and a compiled allowlist;
+the frontend cannot supply an endpoint. Stable metadata accepts final SemVer,
+beta metadata prereleases only. Qualification binds the exact canonical
+installer and updater-signature bytes by SHA-256; promotion compares published
+bytes and fails closed on missing or mismatched evidence. WO-04 validated only
+published qualified assets and separate stable/beta promotions; missing
+production metadata also fails closed. Current topology and channel authority
+are [ADR-0007](ADR-0007-single-repository-v4-release-architecture.md),
+[ADR-0009](ADR-0009-v4-github-latest-policy.md), and the release runbooks.
 
 ### 10. `xtask` remains a qualification tool, not the canonical packager
 

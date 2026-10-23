@@ -4,8 +4,12 @@ This runbook defines the operational lifecycle, physical and cryptographic custo
 backup procedures, loss and compromise response, scheduled rotation, and disaster
 recovery for the production v4 Tauri updater trust root.
 
-This document is governed by `docs/adr/ADR-0006-v4-distribution-installation-update.md`
-and `SECURITY.md`.
+This runbook is governed by `SECURITY.md`, the current release topology in
+[`ADR-0007`](adr/ADR-0007-single-repository-v4-release-architecture.md), and
+the stable/beta channel policy in
+[`ADR-0009`](adr/ADR-0009-v4-github-latest-policy.md). `ADR-0006` remains the
+historical rationale for application identity and installation/user-data
+separation.
 
 ## 1. Trust Root Architecture and Inventory
 

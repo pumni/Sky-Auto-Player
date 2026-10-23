@@ -4,23 +4,23 @@ Status: Accepted.
 
 Date: 2026-09-17.
 
-Supersedes the normal-playback policy portions of ADR-0011, ADR-0012, and
-ADR-0013. Those documents remain historical qualification records; they are
-not the current normal-dispatch contract.
+This decision superseded the normal-playback policy portions of ADR-0011,
+ADR-0012, and ADR-0013. Those documents remain historical qualification
+records. Current Down validity and hold policy is in ADR-0017; lifecycle and
+lease policy is in ADR-0018.
 
-Phase 5 clarification: [ADR-0015](ADR-0015-prepared-down-validity-and-causal-admission.md)
-refines only the prepared-Down validity and causal-admission wording below.
-The statements that a normal prepared frame has no sender cutoff and that an
-authorized late Down is always sent are superseded for paired Down frames by
-the static authored hold-validity cutoff. Unpaired Down frames retain no
-invented finite cutoff but require the exact future authorization proof. The
-prepared architecture, immutable packets, one-send transport boundary, and
-strict/diagnostic `PhysicalTimingGuard` separation remain accepted.
+The decision-time no-cutoff/always-send rule was later refined by
+[ADR-0015](ADR-0015-prepared-down-validity-and-causal-admission.md) and
+superseded by ADR-0016/0017; ADR-0018 adds lifecycle and final-lease rules.
+The immutable prepared architecture, one-send transaction boundary, and
+strict/diagnostic physical-timing separation remain part of the history.
+
+Original decision: [ADR-0014 at the frozen WP6 checkpoint](https://github.com/pumni/Sky-Auto-Player/blob/d4e580cb46c164b3c564d8d99b2bc5f7835724d6/docs/adr/ADR-0014-deterministic-prepared-dispatch.md).
 
 ## Decision
 
-Normal playback is a prepared absolute-frame dispatcher. The healthy precision
-path is:
+At this decision date, normal playback used a prepared absolute-frame
+dispatcher:
 
 ```text
 immutable prepared physical frame
@@ -34,43 +34,27 @@ immutable prepared physical frame
   -> bounded post-send state, commit, and telemetry
 ```
 
-The prepared frame and its authored deadline are immutable. Normal lateness is
-observation, not suppression: a clean, authorized prepared frame that is due
-or late gets one send attempt. Normal scheduling never retries a Down, rebases
-the timeline, or treats completion latency as a later target's deadline.
+Prepared frames and authored deadlines were immutable; a clean authorized
+boundary received one send attempt, without retry, rebase, or using completion
+latency as the next target. Mixed packets used one atomic whole-packet
+`SendInput` transaction with canonical Up-before-Down ordering and disjoint
+masks. Same-key geometry was checked before realtime execution.
 
-Completion QPC is transport and telemetry evidence only in normal mode. It does
-not feed a scheduling guard or move a later authored target. Strict/diagnostic
-mode may retain `PhysicalTimingGuard` and its physical latest-start/floor
-checks for qualification and diagnostics.
-
-Normal completion-relative hold/release floor samples, minimum observed
-intervals, and violation counts remain raw physical-forensics evidence. They
-are serialized and reported even when nonzero, but they are not a normal
-shipping verdict authority. The strict/diagnostic `PhysicalTimingGuard`
-continues to enforce its intentional physical floor and may reject a packet
-when that strict bound is violated.
-
-Focus and window identity are control-plane state plus a cheap atomic final
-proof. The supervisor's published focus state is intentionally sampled rather
-than synchronously querying Windows inside the target-crossing-to-SendInput
-envelope. If Windows changes foreground before the supervisor publishes that
-transition, one bounded observer race is permitted; a published focus loss
-before the final atomic read suppresses the send.
-
-The supervisor lease is a control-plane fail-safe. Its watchdog interrupts and
-hard-stops the worker when the heartbeat expires; it is not a musical deadline
-and cannot shorten a wait to an authored target.
-
-Same-key geometry is validated before realtime execution. Invalid same-timestamp
-Up/Down overlap is rejected at compile time, and positive but infeasible
-release gaps are rejected at session admission. Every successful physical
-packet has disjoint Up/Down masks. One physical boundary is one atomic
-`SendInput` transaction.
-
-Transport anomalies, including zero progress, partial progress, and integrity
-loss, fail closed. They never become scheduler-lateness success and never
-cause a normal Down retry. Cleanup and release diagnostics remain observable.
+Completion QPC was transport/telemetry evidence, not a normal scheduling guard.
+Strict/diagnostic mode retained `PhysicalTimingGuard` for physical floors.
+Normal hold/release samples remained raw forensics, serialized and reported even
+when nonzero, not a shipping verdict; strict diagnostics could reject a packet
+that violated the physical floor. Same-timestamp Up/Down overlap was rejected
+at compile time and infeasible release gaps at session admission.
+Focus was a published control-plane state plus a final atomic check; no
+synchronous foreground query ran inside the target-crossing-to-SendInput
+envelope, so a bounded observer race remained if Windows changed foreground
+before publication. The supervisor lease watchdog interrupted and hard-stopped
+the worker on heartbeat expiry; this was a control-plane fail-safe, not a
+musical deadline.
+Zero/partial/integrity transport failures failed closed and never became
+lateness success or a Down retry. Current admission and lifecycle authority is
+ADR-0017/0018.
 
 ## Evidence retained
 

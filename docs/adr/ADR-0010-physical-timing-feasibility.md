@@ -2,11 +2,14 @@
 
 Status: Accepted; W2 merged in PR #254.
 
-> **Partial supersession:** [ADR-0011](ADR-0011-normal-playback-down-continuity.md)
-> supersedes only this ADR's normal-playback sender-cutoff decision. The
-> physical-feasibility boundary, strict cutoff, authored timeline, hold/release,
-> safety, and no-catch-up decisions below remain in force; this ADR's historical
-> record is preserved.
+> **Historical scope:** [ADR-0011](ADR-0011-normal-playback-down-continuity.md)
+> first superseded this ADR's normal-playback sender-cutoff decision; ADR-0014
+> through ADR-0017 later revised runtime admission and hold policy. Current
+> normal Down/effective-min-hold authority is
+> [ADR-0017](ADR-0017-current-down-continuity-and-physical-min-hold.md);
+> lifecycle and lease authority is
+> [ADR-0018](ADR-0018-resumable-release-barrier-and-final-lease-age.md).
+> This ADR remains the physical-feasibility redesign and measurement record.
 
 Parent work order: [#243](https://github.com/pumni/Sky-Auto-Player/issues/243).
 W0 characterization: [#244](https://github.com/pumni/Sky-Auto-Player/issues/244).
