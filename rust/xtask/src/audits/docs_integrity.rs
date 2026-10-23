@@ -168,16 +168,15 @@ fn extract_markdown_links_from_line(
                 };
                 let label_end = cursor + 1 + label_end_offset;
                 let open_paren = label_end + 1;
-                if bytes.get(open_paren) == Some(&b'(') {
-                    if let Some((destination, link_end)) =
+                if bytes.get(open_paren) == Some(&b'(')
+                    && let Some((destination, link_end)) =
                         parse_inline_link_destination(line, open_paren)
-                    {
-                        if !destination.is_empty() {
-                            links.push((line_number, destination));
-                        }
-                        cursor = link_end;
-                        continue;
+                {
+                    if !destination.is_empty() {
+                        links.push((line_number, destination));
                     }
+                    cursor = link_end;
+                    continue;
                 }
                 cursor = label_end + 1;
             }
