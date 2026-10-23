@@ -37,12 +37,16 @@ fn native_window_icons() -> &'static IconRegistry {
 
 fn system_icon_dimensions(dpi: u32) -> Result<SystemIconDimensions, String> {
     let dpi = if dpi == 0 { DPI_BASE } else { dpi };
+    // SAFETY: the calls use documented scalar metric identifiers and a
+    // positive DPI; they do not dereference pointers.
     let small = unsafe {
         (
             GetSystemMetricsForDpi(SM_CXSMICON, dpi),
             GetSystemMetricsForDpi(SM_CYSMICON, dpi),
         )
     };
+    // SAFETY: the calls use documented scalar metric identifiers and the
+    // same positive DPI; they do not dereference pointers.
     let large = unsafe {
         (
             GetSystemMetricsForDpi(SM_CXICON, dpi),
@@ -84,10 +88,14 @@ struct Win32IconOperations;
 
 impl IconOperations for Win32IconOperations {
     fn is_window(&self, hwnd: isize) -> bool {
+        // SAFETY: this nonzero HWND comes from Tauri's Win32 window handle;
+        // IsWindow validates it without dereferencing caller-owned memory.
         hwnd != 0 && unsafe { IsWindow(hwnd_as_hwnd(hwnd)) != 0 }
     }
 
     fn load_icon(&self, width: i32, height: i32) -> Result<isize, String> {
+        // SAFETY: null requests the current process module and has no borrowed
+        // output pointer; the module is used only for a resource lookup.
         let module = unsafe { GetModuleHandleW(std::ptr::null()) };
         if module.is_null() {
             return Err("GetModuleHandleW failed while loading native window icons".into());
@@ -96,6 +104,8 @@ impl IconOperations for Win32IconOperations {
     }
 
     fn set_icon_subclass(&self, hwnd: isize) -> bool {
+        // SAFETY: hwnd is a validated live Tauri window; the callback has the
+        // required system ABI and is static for the full registration period.
         unsafe {
             SetWindowSubclass(
                 hwnd_as_hwnd(hwnd),
@@ -107,6 +117,8 @@ impl IconOperations for Win32IconOperations {
     }
 
     fn remove_icon_subclass(&self, hwnd: isize) -> bool {
+        // SAFETY: this removes the same callback/id pair while the main-thread
+        // window lifecycle still owns the HWND.
         unsafe {
             RemoveWindowSubclass(
                 hwnd_as_hwnd(hwnd),
@@ -117,12 +129,16 @@ impl IconOperations for Win32IconOperations {
     }
 
     fn send_set_icon(&self, hwnd: isize, icon_kind: usize, icon: isize) {
+        // SAFETY: the HWND and icon are owned by this operation's registry;
+        // SendMessageW is synchronous and generation checks handle reentry.
         unsafe {
             SendMessageW(hwnd_as_hwnd(hwnd), WM_SETICON, icon_kind, icon);
         }
     }
 
     fn destroy_icon(&self, icon: isize) {
+        // SAFETY: icons are created without LR_SHARED and the registry removes
+        // each owned handle exactly once before destroying it.
         unsafe { DestroyIcon(icon_as_hicon(icon)) };
     }
 }
@@ -141,6 +157,7 @@ where
     if !Win32IconOperations.is_window(hwnd) {
         return Err("cannot apply native icons to an invalid HWND".into());
     }
+    // SAFETY: hwnd was extracted from the live Tauri window and validated.
     let dpi = unsafe { GetDpiForWindow(hwnd_as_hwnd(hwnd)) };
     let (small_dimensions, large_dimensions) = system_icon_dimensions(dpi)?;
     apply_icons(
@@ -249,6 +266,8 @@ fn release_icons_for_destroy(
     destroy_icon_pair(icons, operations);
 }
 
+// SAFETY: Windows invokes this function only after the subclass is registered
+// and supplies its HWND and message arguments according to the system ABI.
 unsafe extern "system" fn icon_subclass_proc(
     hwnd: HWND,
     message: u32,
@@ -257,6 +276,8 @@ unsafe extern "system" fn icon_subclass_proc(
     _subclass_id: usize,
     _ref_data: usize,
 ) -> isize {
+    // SAFETY: Windows supplies this callback's HWND and message arguments;
+    // the registered function has the system ABI and does not retain pointers.
     unsafe {
         if message == WM_DESTROY {
             window_destroyed(hwnd as isize);
@@ -268,6 +289,8 @@ unsafe extern "system" fn icon_subclass_proc(
 fn load_resource_icon(module: HINSTANCE, width: i32, height: i32) -> Result<isize, String> {
     // Explicit dimensions make LoadImageW select the closest native image from
     // the embedded ICO resource. Omitting LR_SHARED makes each result owned.
+    // SAFETY: module is the current process module, the integer resource ID is
+    // the documented MAKEINTRESOURCE form, and the returned handle is owned.
     let icon = unsafe {
         LoadImageW(
             module,

@@ -110,10 +110,15 @@ struct Win32CaptionOperations;
 
 impl CaptionOperations for Win32CaptionOperations {
     fn is_window(&self, parent: isize) -> bool {
+        // SAFETY: `parent` was extracted from Tauri's Win32 window handle;
+        // IsWindow validates it without dereferencing caller-owned memory.
         !parent_as_hwnd(parent).is_null() && unsafe { IsWindow(parent_as_hwnd(parent)) != 0 }
     }
 
     fn create_overlay(&self, parent: isize) -> Result<isize, String> {
+        // SAFETY: SNAP_CLASS is static NUL-terminated UTF-16, parent was
+        // validated on the UI thread, and the null optional parameters are
+        // permitted for this child window. All buffers live through the call.
         let overlay = unsafe {
             SetLastError(0);
             CreateWindowExW(
@@ -132,6 +137,7 @@ impl CaptionOperations for Win32CaptionOperations {
             )
         };
         if overlay.is_null() {
+            // SAFETY: GetLastError has no pointer or handle preconditions.
             let error = unsafe { GetLastError() };
             Err(format!(
                 "CreateWindowExW failed for the native caption hit target (Win32 error {error})"
@@ -145,6 +151,8 @@ impl CaptionOperations for Win32CaptionOperations {
         // Alpha zero makes a layered child transparent to hit testing, so its
         // HTMAXBUTTON result never reaches the system Snap Layout path. One
         // alpha unit is visually imperceptible but keeps the target hittable.
+        // SAFETY: the overlay HWND is the live child created for this registry
+        // entry and remains on the same UI-thread lifecycle.
         let configured =
             unsafe { SetLayeredWindowAttributes(overlay_as_hwnd(overlay), 0, 1, LWA_ALPHA) };
         if configured == 0 {
@@ -155,6 +163,8 @@ impl CaptionOperations for Win32CaptionOperations {
     }
 
     fn set_parent_subclass(&self, parent: isize) -> bool {
+        // SAFETY: parent is a validated live Tauri HWND; the callback has the
+        // required system ABI and remains a static function for registration.
         unsafe {
             SetWindowSubclass(
                 parent_as_hwnd(parent),
@@ -166,6 +176,8 @@ impl CaptionOperations for Win32CaptionOperations {
     }
 
     fn remove_parent_subclass(&self, parent: isize) -> bool {
+        // SAFETY: this removes the same callback/id pair from the live parent
+        // HWND on its UI-thread lifecycle.
         unsafe {
             RemoveWindowSubclass(
                 parent_as_hwnd(parent),
@@ -180,6 +192,8 @@ impl CaptionOperations for Win32CaptionOperations {
     }
 
     fn destroy_overlay(&self, overlay: isize) -> bool {
+        // SAFETY: the registry owns this child HWND and calls destruction only
+        // after removing its entry, so the window is destroyed once.
         unsafe { DestroyWindow(overlay_as_hwnd(overlay)) != 0 }
     }
 }
@@ -334,6 +348,8 @@ fn destroy_partial_overlay(operations: &impl CaptionOperations, overlay: isize) 
 
 fn register_class() -> Result<(), String> {
     REGISTER_CLASS
+        // SAFETY: the class structure is fully initialized, SNAP_CLASS is a
+        // static NUL-terminated name, and the callback uses the system ABI.
         .get_or_init(|| unsafe {
             let class = WNDCLASSEXW {
                 cbSize: size_of::<WNDCLASSEXW>() as u32,
@@ -362,6 +378,7 @@ fn register_class() -> Result<(), String> {
 }
 
 fn module_instance() -> HINSTANCE {
+    // SAFETY: a null module name requests the current process module.
     unsafe { GetModuleHandleW(std::ptr::null()) }
 }
 
@@ -375,14 +392,21 @@ fn overlay_as_hwnd(overlay: isize) -> HWND {
 
 fn position_overlay(parent: isize, state: SnapOverlayState) -> Result<(), String> {
     let parent = parent_as_hwnd(parent);
+    // SAFETY: RECT contains only integers, so zero is a valid initialized
+    // output value for GetClientRect.
     let mut client = unsafe { std::mem::zeroed() };
+    // SAFETY: parent is the active main-thread HWND and `client` is a writable
+    // stack value that remains alive for the call.
     if unsafe { GetClientRect(parent, &mut client) } == 0 {
         return Err("GetClientRect failed while positioning the caption hit target".into());
     }
+    // SAFETY: the same live parent HWND is used only for a scalar DPI query.
     let dpi = unsafe { GetDpiForWindow(parent) }.max(96) as u64;
     let button_width = scale(state.button_width, dpi);
     let titlebar_height = scale(state.titlebar_height, dpi);
     let x = (client.right - button_width * (CLOSE_BUTTONS_TO_THE_RIGHT as i32 + 1)).max(0);
+    // SAFETY: parent and the registered overlay child are live on the UI
+    // thread; SetWindowPos receives no borrowed pointers.
     if unsafe {
         SetWindowPos(
             overlay_as_hwnd(state.overlay),
@@ -431,6 +455,8 @@ fn child_destroyed(overlay: HWND) {
     child_destroyed_from(overlay as isize, &SNAP_OVERLAYS, &Win32CaptionOperations);
 }
 
+// SAFETY: Windows invokes this function only after the subclass is registered
+// and supplies its HWND and message arguments according to the system ABI.
 unsafe extern "system" fn parent_subclass_proc(
     hwnd: HWND,
     message: u32,
@@ -439,6 +465,9 @@ unsafe extern "system" fn parent_subclass_proc(
     _subclass_id: usize,
     _ref_data: usize,
 ) -> LRESULT {
+    // SAFETY: Windows supplies this callback's HWND and message arguments;
+    // the function has the required system ABI, does not retain pointers, and
+    // forwards the message through DefSubclassProc before returning.
     unsafe {
         match message {
             WM_DESTROY => parent_destroying(hwnd),
@@ -453,12 +482,17 @@ unsafe extern "system" fn parent_subclass_proc(
     }
 }
 
+// SAFETY: Windows invokes this procedure only for the registered overlay class
+// and supplies its HWND and message arguments according to the system ABI.
 unsafe extern "system" fn overlay_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: Windows supplies this callback's live child HWND and message
+    // arguments; queried parent handles come from GetParent and are used only
+    // in documented window APIs before the callback returns.
     unsafe {
         match message {
             WM_NCHITTEST => HTMAXBUTTON as LRESULT,

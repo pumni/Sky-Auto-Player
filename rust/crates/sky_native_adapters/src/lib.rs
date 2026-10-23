@@ -1682,6 +1682,8 @@ fn replace_file(temp: &Path, target: &Path) -> Result<(), String> {
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
+    // SAFETY: both path buffers are NUL-terminated and stay alive for this
+    // synchronous call; their paths are owned by this function.
     let ok = unsafe {
         MoveFileExW(
             source.as_ptr(),

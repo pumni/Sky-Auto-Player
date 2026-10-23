@@ -674,6 +674,9 @@ mod tests {
             let mut vars = Vec::new();
             for (key, val) in pairs {
                 vars.push((*key, std::env::var_os(key)));
+                // SAFETY: every EnvGuard caller holds RESOLVER_TEST_LOCK, so
+                // these test-only process environment changes cannot race
+                // another resolver test in this crate.
                 unsafe {
                     std::env::set_var(key, val);
                 }
@@ -685,6 +688,9 @@ mod tests {
             let mut vars = Vec::new();
             for (key, val) in pairs {
                 vars.push((*key, std::env::var_os(key)));
+                // SAFETY: every EnvGuard caller holds RESOLVER_TEST_LOCK, so
+                // these test-only process environment changes cannot race
+                // another resolver test in this crate.
                 unsafe {
                     std::env::set_var(key, val);
                 }
@@ -697,9 +703,13 @@ mod tests {
         fn drop(&mut self) {
             for (key, prev) in &self.vars {
                 match prev {
+                    // SAFETY: EnvGuard retains the resolver test lock for its
+                    // lifetime, serializing restoration with other env tests.
                     Some(val) => unsafe {
                         std::env::set_var(key, val);
                     },
+                    // SAFETY: EnvGuard retains the resolver test lock for its
+                    // lifetime, serializing restoration with other env tests.
                     None => unsafe {
                         std::env::remove_var(key);
                     },

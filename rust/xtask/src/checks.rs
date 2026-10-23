@@ -3809,20 +3809,13 @@ const CANONICAL_DISPATCH_FILES: &[&str] = &[
     "observer_trace.rs",
     "prepared.rs",
 ];
-const ALLOWED_UNSAFE_MODULES: &[&str] = &[
-    "rust/crates/sky_dispatch_win32/src/calibration.rs",
-    "rust/crates/sky_dispatch_win32/src/clock.rs",
-    "rust/crates/sky_dispatch_win32/src/cpu.rs",
-    "rust/crates/sky_dispatch_win32/src/event.rs",
-    "rust/crates/sky_dispatch_win32/src/focus.rs",
-    "rust/crates/sky_dispatch_win32/src/input.rs",
-    "rust/crates/sky_dispatch_win32/src/input/physical.rs",
-    "rust/crates/sky_dispatch_win32/src/input/raw.rs",
-    "rust/crates/sky_dispatch_win32/src/mmcss.rs",
-    "rust/crates/sky_dispatch_win32/src/power.rs",
-    "rust/crates/sky_dispatch_win32/src/timer.rs",
-    "rust/crates/sky_dispatch_win32/src/wait.rs",
-    "rust/crates/sky_dispatch_win32/src/wait/timer.rs",
+const UNSAFE_AUDIT_SOURCE_ROOTS: &[&str] = &[
+    "rust/crates/sky_dispatch_core/src",
+    "rust/crates/sky_dispatch_win32/src",
+    "rust/crates/sky_app_core/src",
+    "rust/crates/sky_player/src",
+    "rust/crates/sky_native_adapters/src",
+    "desktop/src-tauri/src",
 ];
 
 fn load_architecture_allowlist(root: &Path) -> Result<BTreeMap<(String, String), String>> {
@@ -3993,11 +3986,110 @@ fn line_is_gated(lines: &[String], index: usize) -> bool {
         .any(|line| line.contains("cfg(any(test, feature = \"test-support\"))"))
 }
 
+#[cfg(test)]
 fn contains_unsafe_code(source: &str) -> bool {
     let source = source.replace("#![forbid(unsafe_code)]", "");
     source
         .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
         .any(|word| word == "unsafe")
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct UnsafeCodeInventory {
+    production_lines: Vec<usize>,
+    cfg_test_lines: Vec<usize>,
+}
+
+fn unsafe_code_inventory(path: &str, source: &str) -> UnsafeCodeInventory {
+    let file_is_test = path.contains("/tests/")
+        || path.ends_with("/tests.rs")
+        || source.lines().any(|line| line.trim() == "#![cfg(test)]");
+    let source = source
+        .replace("#![forbid(unsafe_code)]", "")
+        .replace("#![cfg(test)]", "");
+    let clean = strip_rust_comments(&source);
+    let lines = clean.lines().map(str::to_owned).collect::<Vec<_>>();
+    let mut test_only = vec![file_is_test; lines.len()];
+
+    for (attribute, line) in lines.iter().enumerate() {
+        if line.trim() != "#[cfg(test)]" {
+            continue;
+        }
+        let mut declaration = None;
+        for (index, candidate) in lines.iter().enumerate().skip(attribute + 1).take(5) {
+            let candidate = candidate.trim();
+            if candidate.is_empty() || candidate.starts_with("#[") {
+                continue;
+            }
+            let item = candidate
+                .strip_prefix("pub(crate) ")
+                .or_else(|| candidate.strip_prefix("pub(super) "))
+                .or_else(|| candidate.strip_prefix("pub "))
+                .unwrap_or(candidate);
+            if item.starts_with("mod ")
+                || item.starts_with("fn ")
+                || item.starts_with("const ")
+                || item.starts_with("static ")
+                || item.starts_with("struct ")
+                || item.starts_with("enum ")
+                || item.starts_with("impl ")
+                || item.starts_with("trait ")
+            {
+                declaration = Some(index);
+            }
+            break;
+        }
+        if let Some(start) = declaration {
+            let end = brace_end(&lines, start).unwrap_or(start);
+            for line in test_only
+                .iter_mut()
+                .take(end.saturating_add(1))
+                .skip(attribute)
+            {
+                *line = true;
+            }
+        }
+    }
+
+    let mut inventory = UnsafeCodeInventory::default();
+    for (index, line) in lines.iter().enumerate() {
+        let contains_token = line
+            .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+            .any(|word| word == "unsafe");
+        if contains_token {
+            let line_number = index + 1;
+            if test_only.get(index).copied().unwrap_or(false) {
+                inventory.cfg_test_lines.push(line_number);
+            } else {
+                inventory.production_lines.push(line_number);
+            }
+        }
+    }
+    inventory
+}
+
+fn audit_unsafe_source(
+    path: &str,
+    source: &str,
+    allowlist: &BTreeMap<(String, String), String>,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> UnsafeCodeInventory {
+    let inventory = unsafe_code_inventory(path, source);
+    if !inventory.production_lines.is_empty() {
+        architecture_record(
+            errors,
+            warnings,
+            allowlist,
+            path,
+            "unsafe_boundary",
+            format!(
+                "production unsafe code requires a documented module exception at lines {:?}",
+                inventory.production_lines
+            ),
+        );
+    }
+    inventory
 }
 
 pub(crate) fn architecture(root: &Path) -> Result<()> {
@@ -4200,17 +4292,6 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     );
                 }
             }
-            if contains_unsafe_code(&joined) && !ALLOWED_UNSAFE_MODULES.contains(&relative.as_str())
-            {
-                architecture_record(
-                    &mut errors,
-                    &mut warnings,
-                    &allowlist,
-                    &relative,
-                    "unsafe_boundary",
-                    "unsafe code outside allowlist",
-                );
-            }
             if crate_name == "sky_dispatch_core"
                 && (joined.contains("sky_dispatch_win32::")
                     || joined.contains("use sky_dispatch_win32"))
@@ -4312,6 +4393,67 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
             }
         }
     }
+    let mut production_unsafe_modules = BTreeSet::new();
+    let mut cfg_test_unsafe_modules = Vec::new();
+    for source_root in UNSAFE_AUDIT_SOURCE_ROOTS {
+        let absolute_root = root.join(source_root);
+        if !absolute_root.is_dir() {
+            continue;
+        }
+        for path in WalkDir::new(&absolute_root).follow_links(false) {
+            let path = path?;
+            if !path.file_type().is_file()
+                || path
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("rs")
+            {
+                continue;
+            }
+            let relative = path
+                .path()
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = fs::read_to_string(path.path())?;
+            let inventory =
+                audit_unsafe_source(&relative, &source, &allowlist, &mut errors, &mut warnings);
+            if !inventory.production_lines.is_empty() {
+                production_unsafe_modules.insert(relative.clone());
+            }
+            if !inventory.cfg_test_lines.is_empty() {
+                cfg_test_unsafe_modules.push(format!(
+                    "{relative}:{}",
+                    inventory
+                        .cfg_test_lines
+                        .iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
+            }
+        }
+    }
+    for ((path, rule), _) in &allowlist {
+        if rule == "unsafe_boundary" && !production_unsafe_modules.contains(path) {
+            errors.push(format!(
+                "[stale_unsafe_allowlist_entry] {path}: no production unsafe code remains"
+            ));
+        }
+    }
+    let production_inventory = production_unsafe_modules
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!(
+        "[xtask] unsafe boundary inventory: production={} [{}]; cfg(test)-only={} [{}]",
+        production_unsafe_modules.len(),
+        production_inventory,
+        cfg_test_unsafe_modules.len(),
+        cfg_test_unsafe_modules.join("; ")
+    );
     if !warnings.is_empty() {
         for warning in &warnings {
             println!("[xtask] architecture warning: {warning}");
@@ -5667,6 +5809,51 @@ jobs:
                 .iter()
                 .any(|pattern| "schedule.clone()".contains(pattern))
         );
+    }
+
+    #[test]
+    fn unsafe_inventory_separates_production_from_cfg_test_code() {
+        let source = r#"
+fn production_boundary() {
+    unsafe { core::hint::unreachable_unchecked() }
+}
+
+#[cfg(test)]
+mod tests {
+    fn test_boundary() {
+        unsafe { core::hint::unreachable_unchecked() }
+    }
+}
+"#;
+        let inventory = unsafe_code_inventory("desktop/src-tauri/src/inventory_fixture.rs", source);
+        assert_eq!(inventory.production_lines, vec![3]);
+        assert_eq!(inventory.cfg_test_lines, vec![9]);
+
+        let file_test = unsafe_code_inventory(
+            "rust/crates/sky_native_adapters/src/fixture.rs",
+            "#![cfg(test)]\nfn test_boundary() { unsafe { core::hint::unreachable_unchecked() } }\n",
+        );
+        assert!(file_test.production_lines.is_empty());
+        assert_eq!(file_test.cfg_test_lines, vec![2]);
+    }
+
+    #[test]
+    fn unauthorized_unsafe_is_rejected_in_shell_and_adapter_sources() {
+        let source = "fn injected() { unsafe { core::hint::unreachable_unchecked() } }\n";
+        for path in [
+            "desktop/src-tauri/src/injected.rs",
+            "rust/crates/sky_native_adapters/src/injected.rs",
+        ] {
+            let mut errors = Vec::new();
+            let mut warnings = Vec::new();
+            audit_unsafe_source(path, source, &BTreeMap::new(), &mut errors, &mut warnings);
+            assert_eq!(warnings.len(), 0, "{path}");
+            assert_eq!(errors.len(), 1, "{path}");
+            assert!(
+                errors[0].contains("[unsafe_boundary]"),
+                "{path}: {errors:?}"
+            );
+        }
     }
 
     #[test]

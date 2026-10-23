@@ -37,7 +37,9 @@ Each state has one owner and each module has a focused invariant:
 
 ## Native desktop ownership
 
-All 21 stable desktop commands have one native handler. There is no Python
+All 32 stable request/response commands have one native handler. The separate
+`subscribe_ui_events` Tauri command establishes the UI event subscription; it
+is not a request/response method in the IPC method table. There is no Python
 Core process, desktop Python IPC, or automatic fallback in the production
 router. `core.ready` remains a compatibility wire event name and is produced
 by the native runtime where the frontend contract requires it.
@@ -106,7 +108,23 @@ v3 transaction/recovery implementation is preserved in Git history and the
 
 ## Unsafe boundary and test seams
 
-Unsafe code is strictly limited to low-level Win32 platform integration (`sky_dispatch_win32`, Windows wait, timer, and `SendInput` boundaries) and must carry an explicit `// SAFETY:` justification. Application orchestration, domain policies (`sky_app_core`), Tauri command delivery, catalog indexing, calibration validation, and updater policy remain 100% safe Rust.
+Production unsafe Rust is limited to the reviewed platform boundaries below.
+The newly audited desktop and native-adapter blocks carry local `// SAFETY:`
+justifications; the existing Win32 adapter modules remain separately listed in
+the architecture allowlist. Application orchestration, domain policies
+(`sky_app_core`), Tauri command delivery, catalog indexing, calibration
+validation, and updater policy remain safe Rust.
+
+| Module | Unsafe operation | Safety invariant |
+| --- | --- | --- |
+| `rust/crates/sky_dispatch_win32/src/{calibration,clock,cpu,event,focus,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput` | Platform calls stay in the Windows adapter; owned handles are closed by their owner and physical input uses `SendInput` only. |
+| `rust/crates/sky_native_adapters/src/lib.rs` | `MoveFileExW` atomic settings replacement | NUL-terminated source and destination buffers stay live through the synchronous replace call. |
+| `desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs` | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
+
+The scanner reports unsafe code under `cfg(test)` separately from production
+unsafe. `rust/crates/sky_native_adapters/src/paths.rs` uses unsafe environment
+mutation only in serialized resolver tests; no production path changes process
+environment state.
 
 Test seams are feature-gated or test-gated and never activated by environment variables alone in production. Production packages compose safe seams explicitly while runtime builds use disabled seams. There is no foreign-language extension crate, wheel build, or Python player binding in the workspace.
 
