@@ -3,7 +3,7 @@
 Choose the smallest set of documents that matches the task. Evidence and decision records are
 revision-scoped; their presence here or in the repository does not make them current instructions.
 
-## Current contracts by task
+## Find documents by task
 
 - **Architecture and native ownership:** [architecture.md](architecture.md),
   [native-playback-ownership.md](native-playback-ownership.md), and
