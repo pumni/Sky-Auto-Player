@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type PropsWithChildren, type ReactNode } from 'react';
+import { isTauriRuntime } from '../platform/runtime';
 
 interface State {
   error: Error | null;
@@ -18,13 +19,17 @@ export class ErrorBoundary extends Component<PropsWithChildren, State> {
           <p className="eyebrow">DESKTOP UI</p>
           <h1>The desktop surface stopped rendering.</h1>
           <p>{this.state.error.message}</p>
-          <button
-            className="button button-primary"
-            type="button"
-            onClick={() => window.location.reload()}
-          >
-            Reload window
-          </button>
+          {isTauriRuntime() ? (
+            <p className="muted">Close and reopen the full application to recover.</p>
+          ) : (
+            <button
+              className="button button-primary"
+              type="button"
+              onClick={() => window.location.reload()}
+            >
+              Reload window
+            </button>
+          )}
         </main>
       );
     }
