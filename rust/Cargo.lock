@@ -3308,7 +3308,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "sky_app_core",
- "sky_player",
+ "sky_dispatch_win32",
  "windows-sys 0.61.2",
 ]
 
