@@ -21,13 +21,26 @@ export type SettingsSliceActions = Pick<
   | 'setSettingsOpen'
 >;
 
-export function createSettingsSlice(context: SettingsSliceContext): SettingsSliceActions {
+type SettingsSliceWithRefresh = SettingsSliceActions & {
+  refreshSettings: () => Promise<void>;
+};
+
+export function createSettingsSlice(context: SettingsSliceContext): SettingsSliceWithRefresh {
   const { bridge, get, set } = context;
   let settingsMutationTail: Promise<void> = Promise.resolve();
+  function enqueueSettingsOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = settingsMutationTail.then(operation);
+    // Keep later user intent runnable after any individual settings operation fails.
+    settingsMutationTail = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
 
   return {
     async patchSettings(patch) {
-      const mutation = settingsMutationTail.then(async () => {
+      return enqueueSettingsOperation(async () => {
         set({ settingsState: 'loading', settingsError: null });
         try {
           const settings = await bridge.patchSettings(patch);
@@ -64,13 +77,17 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
           return null;
         }
       });
-      // Keep the queue alive after an individual mutation fails. Later user
-      // intent must still be applied in order.
-      settingsMutationTail = mutation.then(
-        () => undefined,
-        () => undefined,
-      );
-      return mutation;
+    },
+
+    refreshSettings() {
+      return enqueueSettingsOperation(async () => {
+        try {
+          const settings = await bridge.getSettings();
+          set({ settings, settingsState: 'ready' });
+        } catch {
+          // Keep the last confirmed snapshot when a best-effort refresh fails.
+        }
+      });
     },
 
     async checkForUpdate(origin: 'manual' | 'background' = 'manual') {

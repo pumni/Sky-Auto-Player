@@ -1,7 +1,7 @@
 import { act, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
-import type { SearchRequest, SettingsPatch, UiEvent } from '../bridge/DesktopBridge';
+import type { SearchRequest, Settings, SettingsPatch, UiEvent } from '../bridge/DesktopBridge';
 import {
   AUTO_PLAY_HANDOFF_MS,
   createShuffleTraversal,
@@ -20,6 +20,33 @@ afterEach(() => window.localStorage.clear());
 
 function rowAt(store: ReturnType<typeof createDesktopStore>, index: number) {
   return selectRowAtIndex(store.getState().library, index);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function successfulCalibrationEvent(): UiEvent {
+  return {
+    v: 1,
+    name: 'calibration.finished',
+    payload: {
+      operation_id: 'calibration-refresh-test',
+      outcome: 'succeeded',
+      status: 'complete',
+      recommended_timing_margin_us: 900,
+      recommendation_qualified: true,
+      sample_count: 10,
+      source: 'qualified_calibration',
+      message: 'Calibration finished.',
+    },
+  };
 }
 
 async function startFirstSong(store: ReturnType<typeof createDesktopStore>) {
@@ -714,6 +741,113 @@ describe('desktop store', () => {
     expect(calls).toEqual([{ palette: 'slate' }, { verboseHud: true }]);
     expect(store.getState().settings?.palette).toBe('slate');
     expect(store.getState().settings?.verbose_hud).toBe(true);
+  });
+
+  it('orders a calibration refresh before a later patch even when the refresh is stale', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    const staleSettings = await bridge.getSettings();
+    store.setState({ settings: staleSettings, settingsState: 'ready' });
+
+    const refreshResponse = deferred<Settings>();
+    const order: string[] = [];
+    const originalPatch = bridge.patchSettings;
+    bridge.getSettings = async () => {
+      order.push('refresh-start');
+      const settings = await refreshResponse.promise;
+      order.push('refresh-complete');
+      return settings;
+    };
+    bridge.patchSettings = async (patch) => {
+      order.push('patch-start');
+      return originalPatch(patch);
+    };
+
+    act(() => store.getState().applyEvent(successfulCalibrationEvent()));
+    const mutation = store.getState().patchSettings({ palette: 'slate' });
+    await Promise.resolve();
+    if (order.includes('patch-start')) await mutation;
+
+    refreshResponse.resolve(staleSettings);
+    await mutation;
+    await waitFor(() => expect(order).toContain('refresh-complete'));
+
+    expect(store.getState().settings).toEqual({ ...staleSettings, palette: 'slate' });
+    expect(order).toEqual(['refresh-start', 'refresh-complete', 'patch-start']);
+    expect(store.getState().settingsState).toBe('ready');
+  });
+
+  it('runs a calibration refresh after a settings patch already in flight', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    const initialSettings = await bridge.getSettings();
+    store.setState({ settings: initialSettings, settingsState: 'ready' });
+
+    const releasePatch = deferred<void>();
+    const patchStarted = deferred<void>();
+    const order: string[] = [];
+    const originalGetSettings = bridge.getSettings;
+    const originalPatch = bridge.patchSettings;
+    bridge.patchSettings = async (patch) => {
+      order.push('patch-start');
+      patchStarted.resolve();
+      await releasePatch.promise;
+      const settings = await originalPatch(patch);
+      order.push('patch-complete');
+      return settings;
+    };
+    bridge.getSettings = async () => {
+      order.push('refresh-start');
+      const settings = await originalGetSettings();
+      order.push('refresh-complete');
+      return settings;
+    };
+
+    const mutation = store.getState().patchSettings({ verboseHud: true });
+    await patchStarted.promise;
+    act(() => store.getState().applyEvent(successfulCalibrationEvent()));
+    const refreshStartedBeforePatchFinished = order.includes('refresh-start');
+
+    releasePatch.resolve();
+    await mutation;
+    await waitFor(() =>
+      expect(order).toEqual(['patch-start', 'patch-complete', 'refresh-start', 'refresh-complete']),
+    );
+
+    expect(refreshStartedBeforePatchFinished).toBe(false);
+    expect(store.getState().settings).toEqual({ ...initialSettings, verbose_hud: true });
+    expect(store.getState().settingsState).toBe('ready');
+  });
+
+  it('handles a rejected calibration refresh without losing settings or poisoning the queue', async () => {
+    const bridge = createMockBridge();
+    const store = createDesktopStore(bridge);
+    const confirmedSettings = await bridge.getSettings();
+    store.setState({ settings: confirmedSettings, settingsState: 'ready' });
+
+    const refreshResponse = deferred<Settings>();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on('unhandledRejection', onUnhandledRejection);
+    bridge.getSettings = () => refreshResponse.promise;
+
+    try {
+      act(() => store.getState().applyEvent(successfulCalibrationEvent()));
+      refreshResponse.reject(new Error('settings GET failed'));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(unhandledRejections).toEqual([]);
+      expect(store.getState().settings).toEqual(confirmedSettings);
+      expect(store.getState().fatal).toBeNull();
+
+      const recovered = await store.getState().patchSettings({ palette: 'slate' });
+      expect(recovered?.palette).toBe('slate');
+      expect(store.getState().settings?.palette).toBe('slate');
+      expect(store.getState().settingsState).toBe('ready');
+      expect(store.getState().settingsError).toBeNull();
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
   });
 
   it('returns null and preserves cached settings when a settings patch fails', async () => {
