@@ -267,6 +267,9 @@ jobs:
       - name: Run current-candidate contract self-tests
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_validate_candidate.ps1
 
+      - name: Run installed calibration missing-binary self-test
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_installed_calibration.ps1
+
       - name: Run updater-bridge contract self-tests
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_ci_validate_bridge.ps1
 
@@ -809,6 +812,7 @@ jobs:
             -Mode Create `
             -BundleDir $env:SKY_CANDIDATE_BUNDLE `
             -PublicKeyPath $env:SKY_CANDIDATE_PUBLIC_KEY `
+            -CalibrationBinaryPath desktop/src-tauri/resources/native_calibration.exe `
             -OutputRoot $candidateRoot `
             -SourceSha $env:SKY_CI_SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw "Current-candidate contract creation failed with exit code $LASTEXITCODE" }
@@ -1153,6 +1157,7 @@ jobs:
       - name: Qualify current-user install, launch, and uninstall
         run: |
           $summary = Get-Content rust/target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
+          $candidate = Get-Content (Join-Path $env:SKY_CANDIDATE_ROOT "candidate.json") -Raw | ConvertFrom-Json
           $installer = Join-Path $env:SKY_TAURI_BUNDLE $summary.installer
           $installRoot = Join-Path $env:RUNNER_TEMP ("sky-auto-player-v4-smoke-" + [guid]::NewGuid().ToString("N"))
           $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
@@ -1165,6 +1170,8 @@ jobs:
             if ($installerRun.ExitCode -ne 0) { throw "Tauri NSIS installer exited with $($installerRun.ExitCode)" }
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed Tauri executable is missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Tauri uninstaller is missing: $uninstaller" }
+            pwsh scripts/verify_installed_calibration.ps1 -InstallRoot $installRoot -ExpectedSize ([long]$candidate.calibration_binary_size) -ExpectedSha256 ([string]$candidate.calibration_binary_sha256) -Evidence rust/target/dist/INSTALLED_CALIBRATION_EVIDENCE.json
+            if ($LASTEXITCODE -ne 0) { throw "Installed native calibration verification failed with exit code $LASTEXITCODE" }
             cargo xtask builtin-catalog verify-installed --root (Join-Path $installRoot "builtin-songs")
             if ($LASTEXITCODE -ne 0) { throw "Installed built-in catalog verification failed with exit code $LASTEXITCODE" }
             $installedPe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse |
@@ -1245,6 +1252,7 @@ jobs:
             rust/target/dist/V4_QUALIFICATION_EVIDENCE.json
             rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
             rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
+            rust/target/dist/INSTALLED_CALIBRATION_EVIDENCE.json
             rust/target/dist/SBOM.spdx.json
           if-no-files-found: error
           retention-days: 14

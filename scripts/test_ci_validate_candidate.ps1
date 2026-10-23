@@ -36,9 +36,18 @@ try {
     [IO.File]::WriteAllText((Join-Path $bundle "$installerName.sig"), "official test updater signature`n")
     $publicKey = Join-Path $tempRoot "test-public-key.pub"
     [IO.File]::WriteAllText($publicKey, "dGVzdC1wdWJsaWMta2V5")
+    $calibrationBinary = Join-Path $tempRoot "native_calibration.exe"
+    $calibrationBytes = [byte[]]::new(0x86)
+    $calibrationBytes[0] = 0x4d
+    $calibrationBytes[1] = 0x5a
+    [BitConverter]::GetBytes([int]0x80).CopyTo($calibrationBytes, 0x3c)
+    $calibrationBytes[0x80] = 0x50
+    $calibrationBytes[0x81] = 0x45
+    [BitConverter]::GetBytes([UInt16]0x8664).CopyTo($calibrationBytes, 0x84)
+    [IO.File]::WriteAllBytes($calibrationBinary, $calibrationBytes)
 
     $create = Invoke-Validator @(
-        "-Mode", "Create", "-BundleDir", $bundle, "-PublicKeyPath", $publicKey,
+        "-Mode", "Create", "-BundleDir", $bundle, "-PublicKeyPath", $publicKey, "-CalibrationBinaryPath", $calibrationBinary,
         "-OutputRoot", $candidate, "-SourceSha", $sourceSha, "-RepositoryRoot", $repoRoot
     )
     if ($create.ExitCode -ne 0) { Fail "Create mode failed: $($create.Output)" }
@@ -48,8 +57,12 @@ try {
     )
     if ($validate.ExitCode -ne 0) { Fail "Validate mode failed: $($validate.Output)" }
     $metadata = Get-Content -LiteralPath (Join-Path $candidate "candidate.json") -Raw | ConvertFrom-Json
-    if ([string]$metadata.version -ne $candidateVersion -or [string]$metadata.source_sha -ne $sourceSha) {
-        Fail "created candidate metadata did not bind version and source SHA"
+    if ([int]$metadata.schema_version -ne 2 -or [string]$metadata.version -ne $candidateVersion -or
+        [string]$metadata.source_sha -ne $sourceSha -or
+        [long]$metadata.calibration_binary_size -ne (Get-Item -LiteralPath $calibrationBinary).Length -or
+        [string]$metadata.calibration_binary_sha256 -cne (Get-FileHash -LiteralPath $calibrationBinary -Algorithm SHA256).Hash.ToLowerInvariant() -or
+        [string]$metadata.calibration_binary_architecture -cne "x86_64") {
+        Fail "created candidate metadata did not bind source, version, and calibration binary identity"
     }
     if (@(Get-ChildItem -LiteralPath $candidate -File).Count -ne 4) {
         Fail "created candidate artifact did not contain exactly four files"

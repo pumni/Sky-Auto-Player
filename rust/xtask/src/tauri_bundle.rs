@@ -10,6 +10,7 @@ const V4_BUNDLE_PUBLISHER: &str = "pumni";
 const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
+const CALIBRATION_BUILD_COMMAND: &str = "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1";
 const WINDOWS_ARCH: &str = "x64";
 const UNSIGNED_ZERO_BUDGET_MODE: &str = "unsigned-zero-budget";
 // Public Tauri updater trust material. The matching private key is generated
@@ -72,6 +73,12 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
     if string_field(config, "identifier")? != V4_IDENTIFIER {
         return Err("Tauri identifier does not match ADR-0006".into());
     }
+    let build = object(config, "build")?;
+    if build.get("beforeBuildCommand").and_then(Value::as_str) != Some(CALIBRATION_BUILD_COMMAND) {
+        return Err(
+            "Tauri beforeBuildCommand must build and stage the canonical native calibration executable".into(),
+        );
+    }
 
     let bundle = object(config, "bundle")?;
     if bundle.get("publisher").and_then(Value::as_str) != Some(V4_BUNDLE_PUBLISHER) {
@@ -94,15 +101,19 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         .get("resources")
         .and_then(Value::as_object)
         .ok_or("Tauri bundle.resources must map the immutable built-in catalog")?;
-    if resources.len() != 2
+    if resources.len() != 3
         || resources.get("../../songs/*").and_then(Value::as_str) != Some("builtin-songs/sheets")
         || resources
             .get("../../builtin-songs/manifest.json")
             .and_then(Value::as_str)
             != Some("builtin-songs/manifest.json")
+        || resources
+            .get("resources/native_calibration.exe")
+            .and_then(Value::as_str)
+            != Some("native_calibration.exe")
     {
         return Err(
-            "Tauri bundle.resources must map songs and the built-in manifest exactly".into(),
+            "Tauri bundle.resources must map songs, the built-in manifest, and native calibration exactly".into(),
         );
     }
     let windows = bundle
@@ -540,7 +551,9 @@ mod tests {
         json!({
             "productName": PRODUCT_NAME,
             "identifier": V4_IDENTIFIER,
-            "build": {},
+            "build": {
+                "beforeBuildCommand": CALIBRATION_BUILD_COMMAND
+            },
             "bundle": {
                 "active": true,
                 "publisher": V4_BUNDLE_PUBLISHER,
@@ -548,7 +561,8 @@ mod tests {
                 "createUpdaterArtifacts": true,
                 "resources": {
                     "../../songs/*": "builtin-songs/sheets",
-                    "../../builtin-songs/manifest.json": "builtin-songs/manifest.json"
+                    "../../builtin-songs/manifest.json": "builtin-songs/manifest.json",
+                    "resources/native_calibration.exe": "native_calibration.exe"
                 },
                 "windows": {
                     "signCommand": "pwsh -File ../../scripts/sign_v4_authenticode.ps1 %1",

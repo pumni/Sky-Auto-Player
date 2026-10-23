@@ -221,8 +221,15 @@ fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<
         .get("build")
         .and_then(Value::as_object)
         .ok_or_else(|| "Tauri config is missing its build object".to_owned())?;
-    if build.get("beforeBuildCommand").and_then(Value::as_str) != Some("bun run build") {
-        return Err("Tauri packaging must use `bun run build` as beforeBuildCommand".to_owned());
+    let before_build = build.get("beforeBuildCommand").and_then(Value::as_str);
+    if !before_build.is_some_and(|command| {
+        command.starts_with("bun run build && pwsh ")
+            && command.contains("../scripts/build_native_calibration.ps1")
+    }) {
+        return Err(
+            "Tauri packaging must build and stage native calibration in beforeBuildCommand"
+                .to_owned(),
+        );
     }
     let watch_folders = build
         .get("additionalWatchFolders")
@@ -1787,6 +1794,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "-Mode Create",
         "-BundleDir",
         "-PublicKeyPath",
+        "-CalibrationBinaryPath",
         "-OutputRoot",
         "-SourceSha",
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
@@ -1862,6 +1870,9 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "installer_sha256",
         "updater_signature_sha256",
         "updater_public_key_sha256",
+        "verify_installed_calibration.ps1",
+        "INSTALLED_CALIBRATION_EVIDENCE.json",
+        "calibration_binary_sha256",
         "actions/upload-artifact@",
     ] {
         if !packaged.contains(marker) {
@@ -1927,6 +1938,21 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
             )
             .into());
         }
+    }
+    let install_position = packaged
+        .find("installerRun = Start-Process")
+        .ok_or("packaged consumer must execute the exact NSIS installer")?;
+    let calibration_position = packaged
+        .find("verify_installed_calibration.ps1")
+        .ok_or("packaged consumer must verify installed native calibration")?;
+    let launch_position = packaged
+        .find("Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru")
+        .ok_or("packaged consumer must launch the installed application")?;
+    if calibration_position <= install_position || calibration_position >= launch_position {
+        return Err(
+            "installed calibration verification must follow installation and precede app launch"
+                .into(),
+        );
     }
 
     for marker in [
@@ -2038,6 +2064,9 @@ fn packaged_ci_contract_source_legacy(source: &str) -> Result<()> {
         "SBOM verification failed with exit code",
         "Tauri bundle verification failed with exit code",
         "Installed Authenticode verification failed with exit code",
+        "scripts/test_installed_calibration.ps1",
+        "verify_installed_calibration.ps1",
+        "INSTALLED_CALIBRATION_EVIDENCE.json",
         "cargo xtask builtin-catalog verify-installed",
         "CI self-signed credentials remain test-only",
         "Tauri updater signer generation failed with exit code",
@@ -2194,6 +2223,9 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
     for marker in [
         "schema_version",
         "source_sha",
+        "calibration_binary_size",
+        "calibration_binary_sha256",
+        "calibration_binary_architecture",
         "installer_sha256",
         "updater_signature_sha256",
         "updater_public_key_sha256",
@@ -2212,6 +2244,17 @@ fn packaged_ci_contract(root: &Path) -> Result<()> {
     let validator_test = root.join("scripts/test_ci_validate_candidate.ps1");
     if !validator_test.exists() {
         return Err("current-candidate validator self-test is missing".into());
+    }
+    for script in [
+        "scripts/build_native_calibration.ps1",
+        "scripts/verify_installed_calibration.ps1",
+        "scripts/test_installed_calibration.ps1",
+    ] {
+        if !root.join(script).exists() {
+            return Err(
+                format!("native calibration package contract script is missing: {script}").into(),
+            );
+        }
     }
     let bridge_validator = fs::read_to_string(root.join("scripts/ci_validate_bridge.ps1"))?;
     for marker in [
@@ -4785,7 +4828,7 @@ tauri-test = ["tauri/test"]
     fn tauri_build_freshness_contract_accepts_scoped_watchers_and_build_hook() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build",
+                "beforeBuildCommand": "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1",
                 "additionalWatchFolders": [
                     "../../rust/crates",
                     "../../rust/Cargo.toml",
@@ -4800,7 +4843,7 @@ tauri-test = ["tauri/test"]
     fn tauri_build_freshness_contract_rejects_the_workspace_root_watch() {
         let source = r#"{
             "build": {
-                "beforeBuildCommand": "bun run build",
+                "beforeBuildCommand": "bun run build && pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_native_calibration.ps1",
                 "additionalWatchFolders": [
                     "../../rust",
                     "../../rust/crates",
@@ -5378,7 +5421,7 @@ jobs:
       - run: bun run tauri build --ci --config candidate.json -- --profile dist
       - run: bun run dev:build-info -- --exe ..\\rust\\target\\dist\\sky_desktop_shell.exe
       - run: Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath
-      - run: scripts/ci_validate_candidate.ps1 -Mode Create -BundleDir $bundleDir -PublicKeyPath $publicKeyPath -OutputRoot $candidateRoot -SourceSha $env:SKY_CI_SOURCE_SHA
+      - run: scripts/ci_validate_candidate.ps1 -Mode Create -BundleDir $bundleDir -PublicKeyPath $publicKeyPath -CalibrationBinaryPath desktop/src-tauri/resources/native_calibration.exe -OutputRoot $candidateRoot -SourceSha $env:SKY_CI_SOURCE_SHA
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         path: ${{ runner.temp }}/sky-auto-player-current-candidate
   updater_contract:
@@ -5434,7 +5477,10 @@ jobs:
         run: cargo xtask verify-tauri-bundle
         # Tauri bundle verification failed with exit code
       - name: Qualify current-user install, launch, and uninstall
-        run: check sky_desktop_shell.exe uninstall.exe
+        run: installerRun = Start-Process -FilePath $installer -ArgumentList @('/S', '/NS') -Wait -PassThru
+      - run: pwsh scripts/verify_installed_calibration.ps1 -InstallRoot $installRoot -ExpectedSha256 $candidate.calibration_binary_sha256 -Evidence rust/target/dist/INSTALLED_CALIBRATION_EVIDENCE.json
+      - run: Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
+      - run: check sky_desktop_shell.exe uninstall.exe
       - run: cargo xtask builtin-catalog verify-installed --root installed/builtin-songs
       - name: Upload exact Tauri NSIS release candidate
         uses: actions/upload-artifact@v7
