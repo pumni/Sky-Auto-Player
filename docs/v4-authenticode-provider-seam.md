@@ -1,7 +1,11 @@
 # V4 Authenticode Policy and Provider Seam
 
 This document defines the Windows Authenticode boundary for the canonical v4 Tauri NSIS package.
-It is governed by `docs/adr/ADR-0006-v4-distribution-installation-update.md` and `SECURITY.md`.
+The current security and release contracts are [`SECURITY.md`](../SECURITY.md),
+[`distribution-and-update.md`](distribution-and-update.md), and
+[`v4-release-authority.md`](v4-release-authority.md). The original
+[`ADR-0006`](adr/ADR-0006-v4-distribution-installation-update.md) records design rationale; it is
+not the sole authority for current policy.
 
 ## Current pre-provider policy
 

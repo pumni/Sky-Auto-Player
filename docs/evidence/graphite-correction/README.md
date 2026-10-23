@@ -1,6 +1,10 @@
 # Graphite Workbench — final V2 evidence
 
-**Review state:** Checkpoint G's art direction was accepted for continuation. This package is the final V2 implementation evidence for Lead technical review; repository owner Visual Approval Gate #2 is still pending. PR #503 remains Draft and must not be merged before that approval.
+**Review state at preparation:** Checkpoint G's art direction was accepted for continuation. This
+package was prepared for Lead technical review while repository owner Visual Approval Gate #2 was
+pending and PR #503 was Draft. PR #503 has since merged. This archive records the request and state
+at preparation; it does not infer a separate owner signoff from the merge or change the screenshot
+source-SHA provenance recorded below.
 
 The current renders are genuine Playwright/Chromium screenshots of the application using its mock bridge and repeatable catalog/playback states. They are not synthetic UI mockups. The correction-H before images are the existing curated renders at reviewed HEAD [`62c5312`](https://github.com/pumni/Sky-Auto-Player/tree/62c5312bf1c9f90818cabfb1427bee3eb1c68d4e); the after images replace those same curated screenshot slots. The F references remain the renders from reviewed commit [`6389920`](https://github.com/pumni/Sky-Auto-Player/tree/638992059a34a5040462e87019893a6f6daf5cdf). These screenshots do not demonstrate native game playback or physical input.
 
@@ -61,7 +65,7 @@ It writes five current application captures and a measurements JSON into ignored
 
 Final verification outcomes, exact HEAD and hosted required CI run are recorded in the PR description after the final source commit. A native Tauri screenshot was not captured: `bun run tauri:dev` could not start because port 1420 was already occupied, and the existing window was occluded, so I did not bring it forward or alter the running app. Browser screenshots use a mock bridge. No native display/drag-region, display-DPI, physical-input or real-game timing acceptance is claimed.
 
-**Requested decision:** Lead to review the final source and test evidence; repository owner to explicitly approve or request changes to the five current G screenshots for Visual Approval Gate #2. This report does not approve that gate.
+**Decision requested at preparation:** Lead to review the final source and test evidence; repository owner to explicitly approve or request changes to the five current G screenshots for Visual Approval Gate #2. This report is not an approval record for that gate.
 
 ## Owner Correction I — one Browser surface and left-only row inset
 

@@ -1,6 +1,10 @@
 # Graphite Workbench: V1 visual approval
 
-## Decision requested
+This file preserves the review request prepared for PR #502. PR #502 has since merged; the request
+below records the review state at that time, not a current open decision. Screenshot source-SHA
+provenance remains as recorded below.
+
+## Decision requested at the time
 
 Please approve these Graphite preview screenshots as the visual basis for V2, or request changes to the palette, Search placement, text hierarchy, or emphasis. This approves the visual direction for the next package; it does not add Graphite to saved settings or change the default palette.
 
