@@ -79,7 +79,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
       isCurrentDetailRequest: (token) => token === detailRequestToken,
     });
     loadPage = librarySlice.loadPage;
-    const settingsSlice = createSettingsSlice({
+    const { refreshSettings, ...settingsSlice } = createSettingsSlice({
       bridge,
       get,
       set,
@@ -372,9 +372,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
             },
           });
           if (state === 'succeeded') {
-            void bridge.getSettings().then((settings) => {
-              set({ settings, settingsState: 'ready' });
-            });
+            void refreshSettings();
           }
         } else if (event.name === 'update.changed') {
           const current = get().update;
