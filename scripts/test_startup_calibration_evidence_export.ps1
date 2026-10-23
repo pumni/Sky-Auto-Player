@@ -123,6 +123,39 @@ try {
     $evidenceDirectory = Join-Path $repository 'docs/evidence'
     [System.IO.Directory]::CreateDirectory($evidenceDirectory) | Out-Null
 
+    $historicalJsonRelative = 'docs/evidence/wake-calibration-qualification-20261018.json'
+    $historicalSidecarRelative = "$historicalJsonRelative.sha256"
+    $historicalAttributes = Invoke-GitText -Repository $repository -Arguments @('check-attr', 'text', 'eol', '--', $historicalJsonRelative, $historicalSidecarRelative)
+    $historicalAttributeLines = $historicalAttributes -split $lineFeed
+    Assert-ProjectionTest ($historicalAttributeLines -ccontains ('{0}: text: auto' -f $historicalJsonRelative)) 'the historical JSON no longer uses its original text=auto attribute'
+    Assert-ProjectionTest ($historicalAttributeLines -ccontains ('{0}: eol: unspecified' -f $historicalJsonRelative)) 'the historical JSON eol attribute must remain unspecified'
+    Assert-ProjectionTest ($historicalAttributeLines -ccontains ('{0}: text: auto' -f $historicalSidecarRelative)) 'the historical sidecar no longer uses its original text=auto attribute'
+    Assert-ProjectionTest ($historicalAttributeLines -ccontains ('{0}: eol: unspecified' -f $historicalSidecarRelative)) 'the historical sidecar eol attribute must remain unspecified'
+
+    # Synthetic historical-name fixtures prove the old checkout behavior without reading repository evidence.
+    $historicalJsonPath = Join-Path $repository 'docs/evidence/wake-calibration-qualification-20261018.json'
+    $historicalSidecarPath = "$historicalJsonPath.sha256"
+    $historicalJsonText = '{ "synthetic": "checkout compatibility" }' + $carriageReturn + $lineFeed
+    $historicalSidecarText = "synthetic-only fixture" + $carriageReturn + $lineFeed
+    $historicalJsonBytes = $utf8WithoutBom.GetBytes($historicalJsonText)
+    $historicalSidecarBytes = $utf8WithoutBom.GetBytes($historicalSidecarText)
+    [System.IO.File]::WriteAllBytes($historicalJsonPath, $historicalJsonBytes)
+    [System.IO.File]::WriteAllBytes($historicalSidecarPath, $historicalSidecarBytes)
+    Invoke-GitText -Repository $repository -Arguments @('add', '--', $historicalJsonRelative, $historicalSidecarRelative) | Out-Null
+    $historicalJsonBlobId = Invoke-GitText -Repository $repository -Arguments @('rev-parse', ":$historicalJsonRelative")
+    $historicalSidecarBlobId = Invoke-GitText -Repository $repository -Arguments @('rev-parse', ":$historicalSidecarRelative")
+    $historicalStagedJsonBytes = Get-GitBlobBytes -Repository $repository -ObjectId $historicalJsonBlobId
+    $historicalStagedSidecarBytes = Get-GitBlobBytes -Repository $repository -ObjectId $historicalSidecarBlobId
+    Assert-ProjectionTest (-not ($historicalStagedJsonBytes -contains [byte]13)) 'the synthetic historical JSON was not LF-normalized in the staged blob'
+    Assert-ProjectionTest (-not ($historicalStagedSidecarBytes -contains [byte]13)) 'the synthetic historical sidecar was not LF-normalized in the staged blob'
+    [System.IO.File]::Delete($historicalJsonPath)
+    [System.IO.File]::Delete($historicalSidecarPath)
+    Invoke-GitText -Repository $repository -Arguments @('checkout-index', '--force', '--', $historicalJsonRelative, $historicalSidecarRelative) | Out-Null
+    $historicalCheckedOutJsonBytes = [System.IO.File]::ReadAllBytes($historicalJsonPath)
+    $historicalCheckedOutSidecarBytes = [System.IO.File]::ReadAllBytes($historicalSidecarPath)
+    Assert-ProjectionTest (Test-ByteArrayEqual -Left $historicalJsonBytes -Right $historicalCheckedOutJsonBytes) 'the historical-name JSON no longer checks out with its prior CRLF representation'
+    Assert-ProjectionTest (Test-ByteArrayEqual -Left $historicalSidecarBytes -Right $historicalCheckedOutSidecarBytes) 'the historical-name sidecar no longer checks out with its prior CRLF representation'
+
     $cases = @(
         @{ Name = 'wake-calibration-qualification-20991231-lf.json'; Serialized = $lfFixture },
         @{ Name = 'wake-calibration-qualification-20991231-crlf.json'; Serialized = $crlfFixture }
