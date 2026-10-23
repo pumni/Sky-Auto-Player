@@ -2,24 +2,30 @@
 
 - Status: Accepted
 - Date: 2026-09-20
-- Supersedes: the active runtime cutoff decisions in ADR-0010 through
-  ADR-0015; those records remain historical.
+- Historical runtime decision. ADR-0017 removes this ADR's strictly-future
+  authorization requirement for an eligible current Down: when live session
+  identity and final lifecycle/focus/control gates pass, and no transport
+  attempt has occurred, it receives exactly one attempt. Scheduler lateness
+  alone is not a drop cutoff. ADR-0017 also replaces this ADR's frame-only
+  physical musical-Up floor with the materialized effective minimum hold.
+  ADR-0018 owns current lifecycle and final-lease semantics.
+
+Original decision: [ADR-0016 at the frozen WP6 checkpoint](https://github.com/pumni/Sky-Auto-Player/blob/d4e580cb46c164b3c564d8d99b2bc5f7835724d6/docs/adr/ADR-0016-causal-authorization-and-floor-only-physical-timing.md).
 
 ## Decision
 
-Authored musical generations must be paired. The compiler and independent
-validator reject a musical Down that remains open at schedule end. Stale
-unmatched Up metadata remains non-musical, and safety or cleanup releases stay
-outside the generation ledger.
+At the 2026-09-20 decision date, authored musical generations had to be paired:
+the compiler and independent validator rejected an open musical Down at
+schedule end. Stale unmatched Up metadata was non-musical; safety/cleanup
+releases stayed outside the generation ledger.
 
-A prepared Down is authorized only by an exact future observation of its
-authored target and target generation. An authorized Down is sent once when
-the normal final gates pass, regardless of waiter or scheduler lateness. An
-overdue Down without that proof is `UnobservedBacklog`, performs zero Down
-`SendInput` attempts, and is never caught up.
+The historical policy required exact future observation of the authored target
+and generation. An authorized Down was sent once after normal final gates,
+regardless of waiter lateness; without proof it became `UnobservedBacklog`,
+made zero Down `SendInput` attempts, and was never caught up.
 
-Successful complete sender transactions provide only physical not-before
-floors:
+Under the historical floor-only policy, complete sender transactions provided
+physical not-before floors:
 
 ```text
 musical Up floor = Down completion + frame_base_hold
@@ -27,15 +33,21 @@ next same-key Down floor = Up completion + frame
 packet wait = max(authored target, relevant floors)
 ```
 
-The guard is per-key, fixed-size, and floor-only. Timing Margin remains part of
-authored materialization and validation; it is not added to physical floors.
-There is no latest-start boundary, pre-send sender cutoff, or lateness rejection
-for an otherwise authorized Down. Mixed packets remain one atomic
-Up-before-Down transaction, and authored timestamps never move.
+The guard was per-key, fixed-size, and floor-only; Timing Margin stayed in
+authored materialization, not physical floors. That historical decision removed
+latest-start/pre-send cutoff rejection for an otherwise authorized Down.
+ADR-0017 supersedes the strictly-future proof above for an eligible current
+Down: live session/identity and final lifecycle/focus/control gates admit
+exactly one attempt, regardless of scheduler lateness, with no lateness cutoff.
+For the physical musical-Up floor, ADR-0017 uses
+`successful_down_completion + effective_min_hold`, where the materialized
+`effective_min_hold = frame_base_hold + timing_margin`; it does not use this
+ADR's frame-only floor. Mixed packets remained one atomic Up-before-Down
+transaction; authored timestamps never moved.
 
-Transport still reports only transport facts. A complete packet updates floors
-only with trustworthy completion evidence. Partial or ambiguous Down transport
-is not retried and follows fail-closed cleanup. Safety and cleanup Ups bypass
+Transport reported transport facts only. A complete packet updated floors only
+with trustworthy completion evidence. Partial or ambiguous Down transport was
+not retried and followed fail-closed cleanup; safety/cleanup Ups bypassed
 musical floors.
 
 ## Compatibility
@@ -43,13 +55,13 @@ musical floors.
 Existing public fields for sender-window expirations, physical-window misses,
 and release-floor infeasibility remain only to avoid unrelated schema churn.
 They are deprecated, remain zero in production, and do not control execution.
-Native telemetry schema version 17 exports the authored target and physical
-floor fields without a latest-start field. Historical ADR text is not rewritten;
-current behavior is defined by this ADR and the normative timing documents.
+Native telemetry schema version 17 exports authored target and physical-floor
+fields without a latest-start field. These were decision-date compatibility
+facts; current behavior is defined by ADR-0017/0018 and normative timing docs.
 
 ## Consequences
 
-Late authorized playback preserves the live causal decision while respecting
-actual physical hold and release floors. The no-catch-up rule remains explicit,
-mixed packets remain atomic, and the real-time send path remains allocation-free
-between final admission and `SendInput`.
+That policy preserved the causal decision and physical floors while allowing
+late authorized playback. No-catch-up, atomic mixed packets, and allocation-free
+final admission remained required. Current runtime behavior is defined by
+ADR-0017/0018.

@@ -11,6 +11,11 @@ wording in the earlier decisions. It does not reopen scheduler, admission,
 transport, foreground-proof, or immutable-packet decisions accepted by
 Phases 2–4.
 
+The startup integrity admission below remains current. The runtime cutoff and
+recovery design below is historical; current Down/effective-min-hold policy is
+in ADR-0017 and lifecycle/lease policy is in ADR-0018.
+Original source: [ADR-0015 at the frozen WP6 checkpoint](https://github.com/pumni/Sky-Auto-Player/blob/d4e580cb46c164b3c564d8d99b2bc5f7835724d6/docs/adr/ADR-0015-prepared-down-validity-and-causal-admission.md).
+
 ## Decision
 
 ### 1. Startup integrity admission is control-plane only
@@ -50,82 +55,53 @@ prepared request/variant
 
 ### 2. Effective authored hold validity
 
-The authored schedule is validated before worker start with the materialized
-hold floor:
-
-```text
-effective_min_hold = frame_base_hold + Timing Margin
-authored_up >= authored_down + effective_min_hold
-```
-
-Timing Margin is included once in `effective_min_hold`; it is not added again
-as a normal recovery grace. For every prepared Down with a paired same-key
-authored Up, preparation freezes the smallest static hold slack:
-
-```text
-hold_slack = authored_up - authored_down - effective_min_hold
-prepared_sender_cutoff = physical_target + hold_slack
-```
-
-This cutoff is an authored hold-validity boundary owned by the immutable
-prepared packet. The sender compares its true pre-call QPC against it before
-`SendInput`. It is not a `PhysicalTimingWindow`, not a `PhysicalTimingGuard`
-decision, not a scheduler-lateness allowance, and never moves the authored
-target.
-
-An unpaired Down is represented by `NoPairedRelease`: it has no invented finite
-sender cutoff. It nevertheless requires the exact causal future-authorization
-proof below. Up-only safety traffic has no Down authorization requirement.
+At this decision date, preparation required
+`authored_up >= authored_down + effective_min_hold`, where
+`effective_min_hold = frame_base_hold + Timing Margin`. A paired Down froze
+`hold_slack = authored_up - authored_down - effective_min_hold`; its
+historical sender cutoff was `physical_target + hold_slack`. This was an
+authored-validity test, not a physical guard or lateness grace. An unpaired
+Down had no finite cutoff but still required causal authorization; Up-only
+safety traffic needed no Down authorization.
 
 ### 3. Causal future authorization
 
-Every prepared Down-bearing boundary carries an exact frozen identity stamp:
-prepared batch/frame identity, packet identity and masks, physical target QPC,
-and target generation. Before the target, the worker must observe that exact
-stamp while the target is strictly in the future. A sample at the target or
-after it does not authorize the Down.
-
-The proof survives waiter-entry latency and a same-boundary `Continue`/replan.
-It is cleared by a changed prepared plan or target, epoch/focus/pause reset,
-explicit suspension invalidation, or completion/missed commit. A kernel wait
-result, a wake timestamp, or a supervisor focus hint is not the proof.
-
-If a due Down lacks the exact proof, it is committed as a missed authored
-boundary and never retried or emitted as a catch-up burst. This is the causal
-`UnobservedBacklog` case, not a dynamic physical-window policy. If a paired
-Down reaches the sender after its static authored cutoff, the sender returns
-`DownExpiredBeforeSend` and the same missed-boundary recovery is used.
+The historical decision required a frozen identity stamp (prepared
+batch/frame, packet and masks, target QPC, target generation) observed strictly
+before target. Wait results, wake timestamps, and supervisor focus hints did
+not prove it. The proof survived waiter-entry latency/replan and cleared on
+plan/target, epoch, focus, pause, suspension, completion, or missed-commit
+changes. A Down without proof became `UnobservedBacklog`; a paired Down past
+its static cutoff became `DownExpiredBeforeSend`. Both were missed once,
+never retried or caught up.
 
 ### 4. Transactionally consistent normal recovery
 
-Normal prepared miss recovery has one shared bounded Up-prefix emitter and one
-frozen same-key continuation/commit path. A Mixed frame emits only its
-canonical immutable Up prefix before committing the missed Down; it does not
-rebuild a payload or invoke `PhysicalTimingWindow`/`PhysicalTimingGuard`
-policy. Up-prefix transport must be complete and confirmed, or playback fails
-closed.
-
-Recovery never retimes a later frame, rebases the timeline, retries a Down, or
-creates a stale catch-up burst. `DroppedExpired` retains its frozen
-same-key continuation semantics. Completion QPC remains sender/transport
-evidence and does not become a later scheduling deadline.
+Miss recovery used a shared bounded Up-prefix emitter and frozen same-key
+continuation/commit. A Mixed frame emitted only its canonical immutable Up
+prefix before committing the missed Down; complete confirmed Up transport was
+required or playback failed closed. It did not rebuild payloads, invoke
+physical-window/guard policy, retime later frames, rebase, retry, or catch up.
+`DroppedExpired` retained its frozen same-key continuation semantics.
+Completion QPC remained sender/transport evidence, not a later deadline.
 
 ### 5. Foreground and transport evidence boundaries
 
-The Phase 4 fresh foreground proof, lifecycle invalidation/reacquisition, and
-final atomic target/focus gate remain accepted. The startup integrity check is
-a separate control-plane admission hint; it does not replace foreground
-proof and does not claim to close the residual query-to-`SendInput` race.
-
-The true sender-owned `pre_call_qpc` is the boundary for authored sender
-validity. `SendInput` completion proves only the transport result and sender
-timing. Neither boundary proves game polling, rendering, Raw Input delivery,
-audio onset, or gameplay observation.
+Fresh foreground proof, lifecycle invalidation/reacquisition, and the final
+atomic target/focus gate remained accepted. Startup integrity was a separate
+control-plane hint and did not close the query-to-`SendInput` race. The
+sender-owned `pre_call_qpc` measured the
+historical authored-validity boundary; completion proved only transport and
+sender timing. Neither proved game polling, rendering, Raw Input, audio onset,
+or gameplay observation.
 
 ## Consequences and verification obligations
 
-- Compatible, target-higher Mismatch, target-lower Compatible, and query-failure Unknown are deterministic test cases.
-- Startup maps only Mismatch to `target_integrity_mismatch`; Unknown continues without that label.
-- Source audits must show no integrity/token query in realtime worker or prepared sender code.
-- The normal prepared path retains immutable packets, one transport transaction per physical boundary, bounded allocation-free sender behavior, and all accepted Phase-3/4 scheduling/admission semantics.
-- ADR-0010 through ADR-0013 remain historical qualification records. ADR-0014 remains accepted except for the narrowly identified normal prepared wording refined by this ADR.
+- Compatible, target-higher Mismatch, target-lower Compatible, and query-failure
+  Unknown remain startup test cases. Only Mismatch maps to
+  `target_integrity_mismatch`; Unknown continues without that label. Integrity
+  and token queries stay off the realtime/sender path.
+- Immutable packets, one transaction per boundary, bounded allocation-free
+  sender behavior, and the Phase 3/4 accepted architecture remain part of this
+  record. ADR-0010 through ADR-0013 are historical; current Down and lifecycle
+  semantics are defined by ADR-0017/0018.

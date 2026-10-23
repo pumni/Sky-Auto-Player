@@ -1,98 +1,58 @@
 # Sky Auto Player Documentation Router
 
-This router identifies the canonical documentation owner for each system concern.
+Choose the smallest set of documents that matches the task. Evidence and decision records are
+revision-scoped; their presence here or in the repository does not make them current instructions.
 
-## Evidence hierarchy
+## Find documents by task
 
-When sources disagree, prefer current observable evidence in this order:
+- **Architecture and native ownership:** [architecture.md](architecture.md),
+  [native-playback-ownership.md](native-playback-ownership.md), and
+  [rt-dispatch-architecture.md](rt-dispatch-architecture.md).
+- **Playback and timing:** [timing-principles.md](timing-principles.md),
+  [hold-frame-model.md](hold-frame-model.md), and [tuning-presets.md](tuning-presets.md).
+- **Timing or Windows qualification:** [final-down-admission-qualification.md](final-down-admission-qualification.md)
+  and [physical-key-study-method.md](physical-key-study-method.md). The associated
+  [timing observations](rt-dispatch-timing-evidence.md) are revision-scoped evidence.
+- **Desktop UI and workbench layout:** [desktop-workbench.md](desktop-workbench.md).
+- **Library and local import:** [library-v1-contract.md](library-v1-contract.md).
+- **Security and distribution:** [../SECURITY.md](../SECURITY.md),
+  [distribution-and-update.md](distribution-and-update.md),
+  [v4-release-authority.md](v4-release-authority.md),
+  [v4-tauri-packaging.md](v4-tauri-packaging.md),
+  [v4-updater-key-custody.md](v4-updater-key-custody.md),
+  [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md), and
+  [v4-release-execution-topology.md](v4-release-execution-topology.md).
+- **Toolchain and development:** [rust-toolchain-policy.md](rust-toolchain-policy.md) and
+  [../CONTRIBUTING.md](../CONTRIBUTING.md).
+- **Performance or test-pipeline work:** [desktop-startup-benchmark.md](desktop-startup-benchmark.md)
+  documents an opt-in benchmark; [maintenance-test-pipeline-report.md](maintenance-test-pipeline-report.md)
+  records measured gate coverage and costs. [Dispatch forensics](dispatch-forensics-cost-qualification.md)
+  and the [whole-stream timing advisory](prepare-whole-stream-timing-advisory.md) are
+  source-revision-scoped research, not general current behavior contracts.
 
-1. **Observed game behavior** — captured onsets/audio and reproducible behavior.
-2. **Deterministic native telemetry and frozen test vectors** — measured implementation evidence.
-3. **Current source, direct tests, enforced configuration, and CI checks** — executable repository truth.
-4. **Current contracts below** — explanatory specifications updated alongside code changes.
+## Evidence and authority
 
-Historical plans, audit reports, issue text, and obsolete work orders do not override these sources.
+Authority depends on the claim being checked; there is no single source hierarchy for every domain.
 
-## Active architecture and runtime
+- Current implementation behavior is established by source, direct tests, and configuration at the
+  exact checked-out SHA. CI reports which checks passed for its own commit.
+- Security and release requirements come from the current security and distribution contracts,
+  considered with the enforcing source and workflows.
+- Claims about Windows behavior, physical input, or observed playback require evidence from the
+  matching native environment. Browser screenshots and mock bridges establish only the UI behavior
+  they exercise.
+- Historical decisions and captures establish only what their stated revision, date, and conditions
+  support. They are not standing instructions or evidence of a current approval state.
 
-- [architecture.md](architecture.md) — Native Tauri/Rust layering, dependency direction, module ownership, and unsafe boundary.
-- [rt-dispatch-architecture.md](rt-dispatch-architecture.md) — Native real-time dispatch contract, thread split, hot-path constraints, and runtime boundary.
-- [native-playback-ownership.md](native-playback-ownership.md) — Tauri native playback module ownership, lock/lifetime map, DTO compatibility, and deprecated counter audit.
-- [final-down-admission-qualification.md](final-down-admission-qualification.md) — #483 shared final Down admission boundary, deterministic differential tests, Windows floor-oracle evidence, and native-run ledger.
-- [timing-principles.md](timing-principles.md) — Timing semantics, targets, measurement domains, and fail-closed behavior.
-- [rt-dispatch-timing-evidence.md](rt-dispatch-timing-evidence.md) — Timestamp provenance, production timing observations, offline risk model, and Windows A/B qualification plan.
-- [prepare-whole-stream-timing-advisory.md](prepare-whole-stream-timing-advisory.md) — Bounded Prepare-time whole-stream estimate, assumptions, variant identity, UI status, and limitations.
-- [dispatch-forensics-cost-qualification.md](dispatch-forensics-cost-qualification.md) — #476 ownership/cost audit, retained-design rationale, release component measurements, offline model, and Windows receive-only qualification.
-- [hold-frame-model.md](hold-frame-model.md) — User-selected FPS and authored hold materialization.
-- [tuning-presets.md](tuning-presets.md) — Native settings, playback preferences, and runtime tuning boundaries.
-- [adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md](adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md) — Current lifecycle release barrier, final Down lease proof, timing domains, and evidence limits.
-- [library-v1-contract.md](library-v1-contract.md) — Native manifest, collection, and local import contract.
+Use [adr/](adr/) for the relevant design decision and its rationale; ADRs are not all current
+contracts and need not be read as a set. Use [evidence/](evidence/) for revision-bound measurements,
+screenshots, and reports, and [releases/](releases/) for qualification records tied to a particular
+release. Check each record's source SHA, conditions, and stated limits before applying it.
 
-## Security, distribution, and toolchain
+## Verification
 
-- [../SECURITY.md](../SECURITY.md) — Canonical security policy and disclosure process.
-- [distribution-and-update.md](distribution-and-update.md) — Public package, native updater, integrity/provenance, and release contract.
-- [v4-tauri-packaging.md](v4-tauri-packaging.md) — v4 local Tauri NSIS/updater artifact qualification and current-user packaging contract.
-- [v4-release-authority.md](v4-release-authority.md) — One-repository v4 release/update runbook, immutable GitHub Releases, and channel contract.
-- [v4-updater-key-custody.md](v4-updater-key-custody.md) — v4 updater trust root custody, backup, loss, compromise, rotation, and recovery runbook.
-- [v4-authenticode-provider-seam.md](v4-authenticode-provider-seam.md) — v4 production Authenticode provider seam specification.
-- [v4-release-execution-topology.md](v4-release-execution-topology.md) — v4 production release execution topology, candidate lifecycle, and provenance boundary.
-- [rust-toolchain-policy.md](rust-toolchain-policy.md) — Rust compiler and workspace toolchain policy.
-- [desktop-startup-benchmark.md](desktop-startup-benchmark.md) — Opt-in startup markers, milestone definitions, and packaged benchmark methodology.
-
-## Development and verification
-
-The repository-level verification entry point is:
-
-```powershell
-cargo xtask check all
-```
-
-Use `static`, `rust`, or `desktop` for focused local development:
-
-```powershell
-cargo xtask check static
-cargo xtask check rust
-cargo xtask check desktop
-```
-
-- [desktop-workbench.md](desktop-workbench.md) — Desktop workbench regions, adaptive Inspector
-  presentation, keyboard/pointer interaction, focus, scrolling, and layout preferences.
-
-Packaging, Windows timing acceptance, release, and benchmark scripts are specialized evidence paths used when a change touches those boundaries.
-
-- [maintenance-test-pipeline-report.md](maintenance-test-pipeline-report.md) — Durable naming policy,
-  validation gate coverage, and measured local test pipeline costs.
-- [physical-key-study-method.md](physical-key-study-method.md) — Current receive-only physical-key
-  observation method and its deterministic cases.
-
-## Decisions and bounded evidence
-
-The following entries are historical records. Their filenames, embedded run IDs, hashes, and old
-stage labels are retained to preserve provenance; use current source and active contracts above for
-current behavior.
-
-- [r3-keyboard-final-evidence.md](r3-keyboard-final-evidence.md) — Historical final lifecycle-floor and lease-age characterization with immutable evidence links.
-- [r3-keyboard-diagnostics.md](r3-keyboard-diagnostics.md) — Historical prepared-dispatch, startup/resource, and offline receiver-polling characterization.
-- [post-adr-0017-hardening-final-evidence.md](post-adr-0017-hardening-final-evidence.md) — Historical mainline authority, ownership, lifecycle, and native qualification checkpoint.
-- `docs/adr/` — Architecture Decision Records for specific structural choices:
-  - [adr/ADR-0001-packetized-native-input-dispatch.md](adr/ADR-0001-packetized-native-input-dispatch.md)
-  - [adr/ADR-0002-tauri-desktop-ui.md](adr/ADR-0002-tauri-desktop-ui.md)
-  - [adr/ADR-0003-rust-first-clean-architecture.md](adr/ADR-0003-rust-first-clean-architecture.md)
-  - [adr/ADR-0004-direct-tauri-rust-ipc.md](adr/ADR-0004-direct-tauri-rust-ipc.md)
-  - [adr/ADR-0005-rust-xtask-release.md](adr/ADR-0005-rust-xtask-release.md)
-  - [adr/ADR-0006-v4-distribution-installation-update.md](adr/ADR-0006-v4-distribution-installation-update.md)
-  - [adr/ADR-0007-single-repository-v4-release-architecture.md](adr/ADR-0007-single-repository-v4-release-architecture.md)
-  - [adr/ADR-0008-v4-builtin-song-catalog.md](adr/ADR-0008-v4-builtin-song-catalog.md)
-  - [adr/ADR-0009-v4-github-latest-policy.md](adr/ADR-0009-v4-github-latest-policy.md)
-  - [adr/ADR-0010-physical-timing-feasibility.md](adr/ADR-0010-physical-timing-feasibility.md)
-  - [adr/ADR-0011-normal-playback-down-continuity.md](adr/ADR-0011-normal-playback-down-continuity.md)
-  - [adr/ADR-0012-user-configurable-normal-down-continuity.md](adr/ADR-0012-user-configurable-normal-down-continuity.md)
-  - [adr/ADR-0013-extended-normal-down-continuity-range.md](adr/ADR-0013-extended-normal-down-continuity-range.md)
-  - [adr/ADR-0014-deterministic-prepared-dispatch.md](adr/ADR-0014-deterministic-prepared-dispatch.md)
-  - [adr/ADR-0015-prepared-down-validity-and-causal-admission.md](adr/ADR-0015-prepared-down-validity-and-causal-admission.md)
-  - [adr/ADR-0016-causal-authorization-and-floor-only-physical-timing.md](adr/ADR-0016-causal-authorization-and-floor-only-physical-timing.md)
-  - [adr/ADR-0017-current-down-continuity-and-physical-min-hold.md](adr/ADR-0017-current-down-continuity-and-physical-min-hold.md)
-  - [adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md](adr/ADR-0018-resumable-release-barrier-and-final-lease-age.md)
-- `docs/releases/` — Release-specific qualification and acceptance records.
-- Completed experiments, past migration records, raw measurement evidence, and historical performance baselines have been retired from the active documentation tree and remain preserved in Git history (`git log`).
+The canonical pre-review command is `cargo xtask check all`; it covers static, Rust, desktop, and
+native desktop checks. Focused development commands are `cargo xtask check static`,
+`cargo xtask check rust`, and `cargo xtask check desktop`. Packaging, Windows timing acceptance,
+release, and benchmark workflows are specialized evidence paths for changes that touch those
+boundaries.

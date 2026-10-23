@@ -6,12 +6,16 @@ both docked and compact layouts.
 
 ## Inspector presentation
 
-The Inspector remains docked when the measured workbench width can retain the 56 px navigator rail,
-the 420 px minimum Track Browser, standard workbench gutters, and at least 280 px of Inspector
-content. The existing geometry solver determines that capacity. When it cannot, the Inspector is a
-temporary right-side overlay over the workbench content. Its width is computed from the measured
-CSS workbench width, is capped at 400 px, and is not a persisted pane preference. The overlay stays inside the
-workbench row, above the Track Browser, and clear of the Player Dock.
+The Inspector remains docked when the measured workbench width can retain the Navigator rail
+(56 px for Classic, 48 px for Graphite), the 420 px minimum Track Browser, standard workbench
+gutters, and at least 280 px of Inspector content. The existing geometry solver determines that
+capacity. When those constraints do not fit, the Inspector becomes a temporary right-side overlay
+over the workbench content. Its width is computed from the measured
+CSS workbench width and available space, and is not a persisted pane preference. Classic caps the
+responsive overlay at 400 px. Graphite targets 45% of the measured width, bounded to 288–352 px,
+then caps that target to the available width; at very narrow widths the available-width cap can
+make the actual overlay narrower than 288 px. The overlay stays inside the workbench row, above the
+Track Browser, and clear of the Player Dock.
 
 The overlay is non-modal. It is a labelled `region`, does not dim the application, does not trap
 focus, and does not cover the title bar or Player Dock. The user can continue to use visible Track

@@ -1,51 +1,41 @@
 # ADR-0002: Tauri Desktop UI with Shared Python Application Services (historical)
 
-Status: superseded by Wave 5 native ownership retirement
+Status: superseded by [ADR-0003](ADR-0003-rust-first-clean-architecture.md)
+only for Python application-service ownership and the Python Core sidecar.
 
 Date: 2026-08-29
 
+Original decision record: [ADR-0002 at the frozen WP6 checkpoint](https://github.com/pumni/Sky-Auto-Player/blob/d4e580cb46c164b3c564d8d99b2bc5f7835724d6/docs/adr/ADR-0002-tauri-desktop-ui.md).
+
 ## Context
 
-This ADR records the pre-Wave-5 migration decision. It is retained for
-historical rationale; its Python Core, Textual fallback, and compatibility
-claims are no longer active product requirements.
-
-The v4 desktop UI needs to share application behavior with the existing Textual
-picker without duplicating song discovery, metadata analysis, settings policy,
-or playback preparation. The migration must preserve the current timing and
-native-input boundaries while leaving a known-good fallback available.
+The v4 desktop needed to share song discovery, metadata, settings, and playback
+preparation with the existing Textual picker without duplicating policy. The
+migration had to preserve timing and native-input boundaries, proceed
+incrementally, and avoid a risky big-bang rewrite.
 
 ## Decision
 
-The desktop presentation will use Tauri 2 with React and TypeScript. A Python
-Core sidecar will own shared application services and communicate with the
-desktop shell over bounded newline-delimited JSON on inherited stdin/stdout
-pipes. The protocol is local and versioned; it is not an HTTP server, localhost
-socket, or remote-content bridge.
+The accepted 2026-08-29 design used Tauri 2 with React/TypeScript and a Python
+Core sidecar for shared services over bounded, versioned newline-delimited JSON
+on inherited stdin/stdout. It was a local pipe protocol, never an HTTP server,
+localhost socket, or remote-content bridge. ADR-0003 later superseded Python
+service ownership only; the Tauri UI, incremental migration rule, Rust authority
+for realtime behavior, and native-input safety boundaries remain valid.
 
-Rust remains the sole authority for real-time scheduling and physical playback
-dispatch. The production Win32 `SendInput` boundary remains isolated in
-`sky_dispatch_win32`. React will render state and submit high-level intent only.
+Rust remains the sole authority for realtime scheduling and physical playback;
+the Win32 `SendInput` boundary stays isolated in `sky_dispatch_win32`. React
+renders state and submits high-level intent only.
 
-Textual remains a supported fallback and consumes the same extracted Python
-orchestration services. Migration proceeds incrementally; there is no big-bang
-rewrite and no early removal of the Textual implementation.
-
-The Phase 9 product cutover makes the packaged Tauri/React desktop application
-the canonical user-facing surface. This changes product guidance and release
-documentation only; it does not remove the Textual fallback or change the
-shared service, native timing, or input boundaries.
+Textual was retained during incremental migration. The later Phase 9 product
+cutover made packaged Tauri/React the canonical surface; it did not change the
+realtime or input boundaries.
 
 ## Consequences
 
-- Playback preparation, catalog access, metadata coordination, settings, and
-  desktop DTOs live outside presentation packages.
-- Compatibility imports remain temporarily at the old Textual paths while
-  callers migrate.
-- Phase 0/1 introduce no Tauri runtime, protocol worker, or physical playback
-  behavior change.
-- Each later phase must add direct tests for behavior moved into shared
-  orchestration before reducing the corresponding Textual implementation.
+Shared preparation, catalog, metadata, settings, and DTO policy were to remain
+outside presentation packages; each migration step required direct tests before
+the corresponding Textual implementation was reduced.
 
 ## Baseline evidence
 

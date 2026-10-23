@@ -120,8 +120,7 @@ has access to the updater key only through the
 external encrypted custody boundary.
 Because it executes within GitHub Actions, `actions/attest@v4` runs directly on the exact
 candidate bytes produced by the orchestrator.
-**Under current ADR-0006 and WO-05 acceptance contracts, Topology A is the only release
-path capable of satisfying the production GitHub provenance requirement.**
+**Under the current release topology in ADR-0007, channel policy in ADR-0009, and WO-05 acceptance contracts, Topology A is the only release path capable of satisfying the production GitHub provenance requirement.**
 
 #### Topology B (Documented Provenance Gap / Non-Qualifying Fallback):
 An operator runs `scripts/orchestrate_v4_production_release.ps1` directly on an air-gapped

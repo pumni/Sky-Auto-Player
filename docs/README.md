@@ -13,4 +13,8 @@ The public website lives in [`site/`](../site/) and is built with Astro.
 - `adr/` — Architecture Decision Records for structural decisions.
 - `releases/` — Release-specific qualification and acceptance records.
 
-Completed experiments, migration history, raw evidence, and performance baselines have been retired from the active tree and remain preserved in Git history.
+Some completed experiments, migration records, raw evidence, and performance baselines remain in
+this tree as bounded records. They describe the revisions and conditions stated in each record;
+they are not standing instructions or a source of current implementation behavior. For current
+behavior, use source, tests, and configuration at the checked-out SHA. Use [`INDEX.md`](INDEX.md) to
+find the current contract for a task. Git history preserves earlier revisions of tracked records.
