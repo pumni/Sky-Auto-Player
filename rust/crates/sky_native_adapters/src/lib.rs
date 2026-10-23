@@ -397,7 +397,7 @@ fn qualification_matches(
 
 #[cfg(windows)]
 fn host_matches_current(host: &Map<String, Value>) -> bool {
-    let Ok(current) = sky_player::adapter_support::build_host_fingerprint() else {
+    let Ok(current) = sky_dispatch_win32::calibration::build_host_fingerprint() else {
         return false;
     };
     let Ok(current) = serde_json::to_value(current) else {
@@ -2193,6 +2193,39 @@ mod tests {
         let _ = fs::remove_file(path);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn calibration_resolution_fails_closed_for_mismatched_host() {
+        let path = std::env::temp_dir().join(format!(
+            "sky-mismatched-host-calibration-{}.json",
+            std::process::id()
+        ));
+        let mut cache = valid_calibration_cache(677);
+        let host = cache
+            .get_mut("host_fingerprint")
+            .and_then(Value::as_object_mut)
+            .expect("host fingerprint object");
+        let processor = host
+            .get("processor_architecture")
+            .and_then(Value::as_str)
+            .expect("processor architecture");
+        host.insert(
+            "processor_architecture".into(),
+            Value::String(format!("{processor}-mismatch")),
+        );
+        fs::write(&path, cache.to_string()).expect("cache");
+
+        assert_eq!(
+            load_calibration_resolution(&path),
+            CalibrationResolution {
+                transport_reserve_us: DEFAULT_TRANSPORT_MARGIN_US,
+                qualified: false,
+                source: CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE.into(),
+            }
+        );
+        let _ = fs::remove_file(path);
+    }
+
     fn quantiles(min: i64, max: i64) -> Value {
         serde_json::json!({
             "min": min,
@@ -2209,7 +2242,8 @@ mod tests {
         #[cfg(windows)]
         {
             serde_json::to_value(
-                sky_player::adapter_support::build_host_fingerprint().expect("host fingerprint"),
+                sky_dispatch_win32::calibration::build_host_fingerprint()
+                    .expect("host fingerprint"),
             )
             .expect("host JSON")
         }
