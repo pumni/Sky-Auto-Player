@@ -441,12 +441,14 @@ try {
             if ($installedPe.Count -eq 0) { throw "Installed tree contains no PE files" }
 
             $installedAuthEvidence = Join-Path $resolvedEvidenceDir "INSTALLED_AUTHENTICODE_EVIDENCE.json"
-            & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-                -File (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
-                -Mode $authenticodeMode `
-                -Artifact $installedPe.FullName `
-                -Evidence $installedAuthEvidence
-            if ($LASTEXITCODE -ne 0) { throw "Installed PE Authenticode verification failed" }
+            try {
+                & (Join-Path $PSScriptRoot "verify_v4_authenticode.ps1") `
+                    -Mode $authenticodeMode `
+                    -Artifact $installedPe.FullName `
+                    -Evidence $installedAuthEvidence
+            } catch {
+                throw "Installed PE Authenticode verification failed: $($_.Exception.Message)"
+            }
 
             $appProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
             $smokeScope.TrackedProcesses.Add($appProcess) | Out-Null

@@ -1177,11 +1177,14 @@ jobs:
             $installedPe = @(Get-ChildItem -LiteralPath $installRoot -File -Recurse |
               Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll') -and $_.Name -ne 'uninstall.exe' })
             if ($installedPe.Count -eq 0) { throw "Installed Tauri tree contains no project PE files" }
-            pwsh scripts/verify_v4_authenticode.ps1 `
-              -Mode unsigned-zero-budget `
-              -Artifact $installedPe.FullName `
-              -Evidence rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
-            if ($LASTEXITCODE -ne 0) { throw "Installed Authenticode verification failed with exit code $LASTEXITCODE" }
+            try {
+              & scripts/verify_v4_authenticode.ps1 `
+                -Mode unsigned-zero-budget `
+                -Artifact $installedPe.FullName `
+                -Evidence rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
+            } catch {
+              throw "Installed Authenticode verification failed: $($_.Exception.Message)"
+            }
             $env:SKY_BUILTIN_CATALOG_FRESH_SELFTEST = "1"
             try {
               $catalogSelftest = Start-Process -FilePath $appPath -ArgumentList @("--selftest-desktop-shell") -WindowStyle Hidden -Wait -PassThru
