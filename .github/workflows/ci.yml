@@ -595,6 +595,11 @@ jobs:
       - name: Fail fast on Windows validation dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
 
+      - name: Stage calibration resource for Tauri validation
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+        run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build_native_calibration.ps1
+
       - name: Repository verification — Rust
         if: needs.changes.outputs.rust_required == 'true'
         env:

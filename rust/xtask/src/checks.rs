@@ -2596,11 +2596,24 @@ fn ci_control_plane_contract(root: &Path) -> Result<()> {
     let first_repository_check_position = validate
         .find("name: Repository verification — Rust")
         .ok_or("Windows validation is missing its first repository verification step")?;
+    let calibration_resource_position = validate
+        .find("name: Stage calibration resource for Tauri validation")
+        .ok_or("Windows validation must stage the calibration resource before Tauri checks")?;
     if rust_cache_position >= dependency_check_position
-        || dependency_check_position >= first_repository_check_position
+        || dependency_check_position >= calibration_resource_position
+        || calibration_resource_position >= first_repository_check_position
     {
         return Err(
-            "Windows validation dependency check must follow setup/cache and precede repository verification".into(),
+            "Windows validation must cache dependencies, stage the calibration resource, then run repository checks".into(),
+        );
+    }
+    if validate.matches("scripts/build_native_calibration.ps1").count() != 1
+        || !validate.contains(
+            "run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build_native_calibration.ps1",
+        )
+    {
+        return Err(
+            "Windows validation must stage the locked calibration resource exactly once".into(),
         );
     }
     if validate.contains(
