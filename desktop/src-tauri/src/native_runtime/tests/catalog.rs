@@ -520,21 +520,23 @@ fn catalog_viewport_hydrates_metadata_and_liked_songs_persist_by_song_id() {
     assert_eq!(search["items"][0]["metadata_state"], "pending");
     assert_eq!(search["items"][0]["format_label"], "JSON");
 
+    let viewport_request = serde_json::json!({
+        "generation": generation,
+        "firstIndex": 0,
+        "lastIndex": 0,
+        "selectedSongId": null,
+        "songIds": [song_id.clone()]
+    });
     let viewport = runtime
-        .dispatch(
-            "catalog.set_viewport",
-            serde_json::json!({
-                "generation": generation,
-                "firstIndex": 0,
-                "lastIndex": 0,
-                "selectedSongId": null,
-                "songIds": [song_id.clone()]
-            }),
-        )
+        .dispatch("catalog.set_viewport", viewport_request.clone())
         .expect("viewport hydration");
     assert_eq!(viewport["items"][0]["metadata_state"], "ready");
     assert_eq!(viewport["items"][0]["note_count"], 2);
     assert!(viewport["items"][0]["duration_us"].as_u64().is_some());
+    let repeated_viewport = runtime
+        .dispatch("catalog.set_viewport", viewport_request)
+        .expect("cached viewport hydration");
+    assert_eq!(repeated_viewport["items"], viewport["items"]);
 
     let hydrated_detail = runtime
         .detail(crate::commands::CatalogDetailRequest {
