@@ -7,12 +7,34 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CalibrationStartAck, DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
 import { createMockBridge } from '../bridge/mockBridge';
 import { createDesktopStore, type DesktopStoreHook } from '../state/store';
 import { App } from './App';
 import { usePackagedSmokeTest } from './usePackagedSmokeTest';
+import { STARTUP_WINDOW_REVEAL_FALLBACK_MS } from '../platform/startupWindowReveal';
+
+const { isTauriRuntimeMock, nativeWindow, acknowledgeStartupReveal } = vi.hoisted(() => {
+  const nativeWindow = {
+    show: vi.fn(async () => {}),
+    minimize: vi.fn(async () => {}),
+    toggleMaximize: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    isMaximized: vi.fn(async () => false),
+    onResized: vi.fn(async () => () => {}),
+  };
+  return {
+    isTauriRuntimeMock: vi.fn(() => false),
+    nativeWindow,
+    acknowledgeStartupReveal: vi.fn(async () => undefined),
+  };
+});
+
+vi.mock('../platform/runtime', () => ({ isTauriRuntime: isTauriRuntimeMock }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: acknowledgeStartupReveal }));
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => nativeWindow }));
 
 function PackagedSmokeHarness({
   bridge,
@@ -103,9 +125,18 @@ async function createPackagedSmokeFixture() {
 describe('desktop application shell', () => {
   afterEach(() => {
     delete (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__;
+    Reflect.deleteProperty(window, '__SKY_STARTUP_WINDOW_REVEAL_COORDINATOR__');
     cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    isTauriRuntimeMock.mockReturnValue(false);
+    nativeWindow.show.mockReset().mockResolvedValue(undefined);
+    acknowledgeStartupReveal.mockReset().mockResolvedValue(undefined);
+    nativeWindow.minimize.mockReset().mockResolvedValue(undefined);
+    nativeWindow.toggleMaximize.mockReset().mockResolvedValue(undefined);
+    nativeWindow.close.mockReset().mockResolvedValue(undefined);
+    nativeWindow.isMaximized.mockReset().mockResolvedValue(false);
+    nativeWindow.onResized.mockReset().mockResolvedValue(() => {});
     window.localStorage.clear();
   });
 
@@ -232,6 +263,98 @@ describe('desktop application shell', () => {
     render(<App bridge={bridge} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Native application is unavailable');
     expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull();
+  });
+
+  it('applies the restored palette before revealing the native window', async () => {
+    isTauriRuntimeMock.mockReturnValue(true);
+    const bridge = createMockBridge();
+    const originalBootstrap = bridge.bootstrap.bind(bridge);
+    bridge.bootstrap = vi.fn(async () => {
+      const bootstrap = await originalBootstrap();
+      return {
+        ...bootstrap,
+        settings: { ...bootstrap.settings, palette: 'slate' as const },
+      };
+    });
+    const palettesWhenShown: string[] = [];
+    nativeWindow.show.mockImplementation(async () => {
+      palettesWhenShown.push(document.documentElement.dataset.palette ?? '');
+    });
+
+    render(<App bridge={bridge} />);
+    await screen.findByRole('grid', { name: 'Songs' });
+
+    expect(nativeWindow.show).toHaveBeenCalledTimes(1);
+    expect(acknowledgeStartupReveal).toHaveBeenCalledTimes(1);
+    expect(palettesWhenShown).toEqual(['slate']);
+  });
+
+  it('reveals the committed fatal bootstrap screen', async () => {
+    isTauriRuntimeMock.mockReturnValue(true);
+    const bridge = createMockBridge();
+    bridge.subscribeUiEvents = vi.fn(async () => {
+      throw new Error('Native application is unavailable');
+    });
+    const fatalUiVisibleWhenShown: boolean[] = [];
+    nativeWindow.show.mockImplementation(async () => {
+      fatalUiVisibleWhenShown.push(Boolean(document.querySelector('.fatal-screen')));
+    });
+
+    render(<App bridge={bridge} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Native application is unavailable');
+
+    expect(nativeWindow.show).toHaveBeenCalledTimes(1);
+    expect(fatalUiVisibleWhenShown).toEqual([true]);
+  });
+
+  it('reveals the branded startup screen after the bounded bootstrap delay', async () => {
+    vi.useFakeTimers();
+    isTauriRuntimeMock.mockReturnValue(true);
+    const bridge = createMockBridge();
+    const pendingBootstrap = deferred<Awaited<ReturnType<DesktopBridge['bootstrap']>>>();
+    bridge.bootstrap = vi.fn(() => pendingBootstrap.promise);
+
+    render(<App bridge={bridge} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Opening your library…')).toBeInTheDocument();
+    expect(bridge.bootstrap).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STARTUP_WINDOW_REVEAL_FALLBACK_MS);
+      await Promise.resolve();
+    });
+    expect(nativeWindow.show).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Opening your library…')).toBeInTheDocument();
+
+    const completedBootstrap = await createMockBridge().bootstrap();
+    await act(async () => {
+      pendingBootstrap.resolve(completedBootstrap);
+      await pendingBootstrap.promise;
+    });
+    expect(nativeWindow.show).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps StrictMode startup to one native subscription and one window reveal', async () => {
+    isTauriRuntimeMock.mockReturnValue(true);
+    const bridge = createMockBridge();
+    const nativeEvents = installStrictSingletonEvents(bridge);
+    const { rerender } = render(
+      <StrictMode>
+        <App bridge={bridge} />
+      </StrictMode>,
+    );
+    await screen.findByRole('grid', { name: 'Songs' });
+    rerender(
+      <StrictMode>
+        <App bridge={bridge} />
+      </StrictMode>,
+    );
+
+    expect(nativeEvents.subscriptionCount).toBe(1);
+    expect(nativeWindow.show).toHaveBeenCalledTimes(1);
   });
 
   it.each(['before', 'after'] as const)(

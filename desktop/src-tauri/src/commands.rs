@@ -1095,6 +1095,22 @@ pub struct ShutdownRequest {
     pub failed: bool,
 }
 
+#[tauri::command]
+pub fn startup_window_revealed(
+    window: tauri::WebviewWindow<super::ShellRuntime>,
+    state: State<'_, crate::startup_window::StartupWindowFailsafe>,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("startup reveal acknowledgment is only available to the main window".into());
+    }
+
+    state.inner().acknowledge_frontend_reveal(|| {
+        window
+            .is_visible()
+            .map_err(|error| format!("could not inspect main window visibility: {error}"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

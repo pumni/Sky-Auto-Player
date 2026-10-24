@@ -5,9 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
     <title>Sky Auto Player</title>
+    <link rel="stylesheet" href="/startup.css" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="startup-fallback" role="status" aria-live="polite">
+        <span class="startup-fallback-mark" aria-hidden="true">♪</span>
+        <p class="startup-fallback-eyebrow">SKY AUTO PLAYER</p>
+        <h1>Starting the desktop application…</h1>
+        <p class="startup-fallback-message">Preparing your library and saved settings.</p>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

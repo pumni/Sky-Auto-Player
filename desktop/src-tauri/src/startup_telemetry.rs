@@ -46,16 +46,26 @@ pub(crate) fn record_counters(
 }
 
 pub(crate) fn record_frontend_marker(marker: &str, frontend_elapsed_us: u64) -> Result<(), String> {
-    if !matches!(
-        marker,
-        "frontend.entry" | "react.initialize.start" | "react.shell_ready" | "react.catalog_ready"
-    ) {
+    if !is_valid_frontend_marker(marker) {
         return Err("invalid startup telemetry marker".into());
     }
     let mut fields = Map::new();
     fields.insert("frontend_elapsed_us".into(), json!(frontend_elapsed_us));
     record_fields(marker, Some(fields));
     Ok(())
+}
+
+fn is_valid_frontend_marker(marker: &str) -> bool {
+    matches!(
+        marker,
+        "frontend.entry"
+            | "react.initialize.start"
+            | "react.shell_ready"
+            | "react.catalog_ready"
+            | "window.reveal.shown"
+            | "window.reveal.failed"
+            | "window.reveal.slow_fallback"
+    )
 }
 
 fn telemetry() -> Option<&'static StartupTelemetry> {
@@ -102,5 +112,18 @@ fn record_fields(marker: &str, fields: Option<Map<String, Value>>) {
     if serde_json::to_writer(&mut *file, &Value::Object(event)).is_ok() {
         let _ = file.write_all(b"\n");
         let _ = file.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_frontend_marker;
+
+    #[test]
+    fn startup_window_reveal_diagnostics_are_allowed_frontend_markers() {
+        assert!(is_valid_frontend_marker("window.reveal.shown"));
+        assert!(is_valid_frontend_marker("window.reveal.failed"));
+        assert!(is_valid_frontend_marker("window.reveal.slow_fallback"));
+        assert!(!is_valid_frontend_marker("window.reveal/arbitrary"));
     }
 }

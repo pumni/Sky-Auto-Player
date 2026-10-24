@@ -22,12 +22,13 @@
         "height": 760,
         "minWidth": 800,
         "minHeight": 560,
-        "visible": true,
+        "visible": false,
         "focus": true,
         "resizable": true,
         "maximizable": true,
         "decorations": false,
-        "transparent": false
+        "transparent": false,
+        "backgroundColor": [11, 16, 24, 255]
       }
     ],
     "security": {

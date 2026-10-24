@@ -37,3 +37,4 @@ export const COMMANDS = {
 } as const;
 
 export const UI_EVENTS_COMMAND = 'subscribe_ui_events' as const;
+export const STARTUP_WINDOW_REVEALED_COMMAND = 'startup_window_revealed' as const;

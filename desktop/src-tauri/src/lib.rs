@@ -10,6 +10,7 @@ mod power_lifecycle;
 #[cfg(windows)]
 mod single_instance;
 mod startup_telemetry;
+mod startup_window;
 mod ui_events;
 #[cfg(windows)]
 mod windows_caption;
@@ -87,6 +88,12 @@ compile_error!(
 );
 #[cfg(all(feature = "packaged-assets", not(feature = "desktop-runtime")))]
 compile_error!("`packaged-assets` requires `desktop-runtime`");
+
+fn main_window_state_flags() -> tauri_plugin_window_state::StateFlags {
+    tauri_plugin_window_state::StateFlags::SIZE
+        | tauri_plugin_window_state::StateFlags::POSITION
+        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -255,18 +262,21 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_state_flags(
-                    tauri_plugin_window_state::StateFlags::SIZE
-                        | tauri_plugin_window_state::StateFlags::POSITION
-                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
-                )
+                .with_state_flags(main_window_state_flags())
                 .build(),
         )
         .manage(app_state)
+        .manage(startup_window::StartupWindowFailsafe::default())
         .setup(move |app| {
             use tauri::{Manager, path::BaseDirectory};
 
             startup_telemetry::record("tauri.setup.start");
+            startup_window::schedule_failsafe(
+                app.handle().clone(),
+                app.state::<startup_window::StartupWindowFailsafe>()
+                    .inner()
+                    .clone(),
+            );
 
             match app
                 .path()
@@ -421,6 +431,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
     let result = builder
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
+            commands::startup_window_revealed,
             commands::search_songs,
             commands::get_song_detail,
             commands::reload_library,
@@ -768,6 +779,41 @@ mod ipc_tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn startup_window_is_hidden_and_retains_geometry_restore_flags() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("Tauri configuration must remain valid JSON");
+        let windows = config["app"]["windows"]
+            .as_array()
+            .expect("Tauri app windows must remain an array");
+        assert_eq!(windows.len(), 1, "startup must retain one native window");
+        let main = &windows[0];
+        assert_eq!(main["label"], "main");
+        assert_eq!(main["visible"], false);
+        assert_eq!(main["backgroundColor"], json!([11, 16, 24, 255]));
+
+        let flags = super::main_window_state_flags();
+        assert!(flags.contains(tauri_plugin_window_state::StateFlags::SIZE));
+        assert!(flags.contains(tauri_plugin_window_state::StateFlags::POSITION));
+        assert!(flags.contains(tauri_plugin_window_state::StateFlags::MAXIMIZED));
+        assert!(!flags.contains(tauri_plugin_window_state::StateFlags::VISIBLE));
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json"))
+                .expect("main capability must remain valid JSON");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("main capability permissions must remain an array");
+        assert_eq!(
+            permissions
+                .iter()
+                .filter(|permission| permission.as_str() == Some("core:window:allow-show"))
+                .count(),
+            1,
+            "startup reveal must use only the narrow window show permission"
+        );
+    }
 
     struct TestInstallRoot(PathBuf);
 
