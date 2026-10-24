@@ -130,7 +130,7 @@ jobs:
 
       - name: Rust cache
         id: rust-cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust -> target"
           cache-targets: false
@@ -182,7 +182,7 @@ jobs:
             -SentinelContentSha256 $env:SKY_BRIDGE_SENTINEL_SHA256
 
       - name: Upload exact updater bridge contract
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sky-auto-player-updater-bridge-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/sky-auto-player-updater-bridge
@@ -502,7 +502,7 @@ jobs:
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-rust-1.99
 
       - name: JavaScript dependency advisory scan
-        uses: google/osv-scanner-action/osv-scanner-action@06b2ab4348248b456ee06c9e953637f55e03504f # v2.5.0
+        uses: google/osv-scanner-action/osv-scanner-action@9a96bc4d2b09685b6142bcfe25a3dc17cb2d7347 # v2.5.0
         with:
           scan-args: |-
             --lockfile=./desktop/bun.lock
@@ -585,7 +585,7 @@ jobs:
 
       - name: Rust cache
         id: rust-cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust -> target"
           cache-targets: false
@@ -741,7 +741,7 @@ jobs:
 
       - name: Rust cache
         id: rust-cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust -> target"
           cache-targets: false
@@ -828,7 +828,7 @@ jobs:
           "SKY_CANDIDATE_ROOT=$candidateRoot" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Upload exact current-candidate contract
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/sky-auto-player-current-candidate
@@ -865,13 +865,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Download current candidate from this workflow run
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/sky-auto-player-current-candidate
 
       - name: Download updater bridge from this workflow run
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sky-auto-player-updater-bridge-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/sky-auto-player-updater-bridge
@@ -936,7 +936,7 @@ jobs:
 
       - name: Rust cache
         id: rust-cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust -> target"
           cache-targets: false
@@ -1021,7 +1021,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Download current candidate from this workflow run
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sky-auto-player-current-candidate-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/sky-auto-player-current-candidate
@@ -1066,7 +1066,7 @@ jobs:
 
       - name: Rust cache
         id: rust-cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust -> target"
           cache-targets: false
@@ -1251,7 +1251,7 @@ jobs:
           $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath rust/target/dist/V4_QUALIFICATION_EVIDENCE.json -Encoding utf8
 
       - name: Upload exact Tauri NSIS release candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sky-auto-player-tauri-nsis-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
