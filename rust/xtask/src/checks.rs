@@ -882,7 +882,7 @@ fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
 
     for marker in [
         "id: metadata-app-token",
-        "uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+        "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
         "client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}",
         "private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}",
         "owner: ${{ github.repository_owner }}",
@@ -1797,7 +1797,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "-CalibrationBinaryPath",
         "-OutputRoot",
         "-SourceSha",
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
         "path: ${{ runner.temp }}/sky-auto-player-current-candidate",
     ] {
         if !candidate.contains(marker) {
@@ -1826,7 +1826,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     for marker in [
         "name: Updater fixture qualification",
         "needs: [changes, static, candidate, updater_bridge]",
-        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
         "scripts/ci_validate_candidate.ps1",
         "scripts/ci_validate_bridge.ps1",
         "-Mode Validate",
@@ -1858,7 +1858,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
     for marker in [
         "name: Packaged v4 Tauri NSIS qualification",
         "needs: [changes, static, candidate]",
-        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
         "scripts/ci_validate_candidate.ps1",
         "-Mode Validate",
         "cargo xtask verify-tauri-bundle",
@@ -5516,7 +5516,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - name: Mint release-metadata GitHub App token before publication
         id: metadata-app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
         with:
           client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}
           private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
@@ -5538,6 +5538,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 "#;
         assert!(validate_metadata_app_token_scope(workflow).is_ok());
+
+        let stale_pin = workflow.replace(
+            "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+        );
+        assert_ne!(stale_pin, workflow);
+        assert!(
+            validate_metadata_app_token_scope(&stale_pin).is_err(),
+            "metadata App token contract must reject the previous immutable SHA"
+        );
 
         let missing_client_id = workflow.replace(
             "          client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}\n",
@@ -5693,6 +5703,28 @@ jobs:
     fn packaged_ci_build_once_contract_accepts_locked_workflow() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         packaged_ci_contract(&root).expect("locked build-once CI contract must pass");
+
+        let source = fs::read_to_string(root.join(".github/workflows/ci.yml"))
+            .expect("locked CI workflow fixture must exist");
+        for (current_pin, previous_pin, action) in [
+            (
+                "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+                "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "upload-artifact",
+            ),
+            (
+                "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+                "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "download-artifact",
+            ),
+        ] {
+            let stale_pin = source.replace(current_pin, previous_pin);
+            assert_ne!(stale_pin, source, "{action} current pin must be present");
+            assert!(
+                packaged_ci_contract_source(&stale_pin).is_err(),
+                "packaged CI contract must reject the previous {action} SHA"
+            );
+        }
     }
 
     #[test]
@@ -5731,7 +5763,7 @@ jobs:
       - run: bun run dev:build-info -- --exe ..\\rust\\target\\dist\\sky_desktop_shell.exe
       - run: Remove-Item -LiteralPath $keyPath, "$keyPath.pub", $configPath
       - run: scripts/ci_validate_candidate.ps1 -Mode Create -BundleDir $bundleDir -PublicKeyPath $publicKeyPath -CalibrationBinaryPath desktop/src-tauri/resources/native_calibration.exe -OutputRoot $candidateRoot -SourceSha $env:SKY_CI_SOURCE_SHA
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         path: ${{ runner.temp }}/sky-auto-player-current-candidate
   updater_contract:
     name: Updater key-rotation contract
@@ -5748,7 +5780,7 @@ jobs:
     if: needs.changes.outputs.updater_required == 'true'
     steps:
       - name: Download updater bridge from this workflow run
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       - run: scripts/ci_validate_candidate.ps1 -Mode Validate -CandidateInstallerPath candidate.exe -CandidateSignaturePath candidate.sig -CandidateVersion 4.0.0-alpha.2 -CandidatePublicKeyPath candidate.pub
       - run: scripts/ci_validate_bridge.ps1 -Mode Validate -BridgeRoot bridge
       - run: dangerousInsecureTransportProtocol = true
@@ -5757,7 +5789,7 @@ jobs:
     name: Packaged v4 Tauri NSIS qualification
     needs: [changes, static, candidate]
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       - run: scripts/ci_validate_candidate.ps1 -Mode Validate
       - name: Build and sign canonical Tauri NSIS artifact
       - run: bun install --frozen-lockfile
