@@ -342,7 +342,7 @@ describe('desktop application shell', () => {
     const startCalled = deferred<void>();
     fixture.bridge.startCalibration = vi.fn(async () => {
       startCalled.resolve();
-      return { operation_id: 'missing-terminal', state: 'running' };
+      return { operation_id: 'missing-terminal', state: 'running' as const };
     });
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
