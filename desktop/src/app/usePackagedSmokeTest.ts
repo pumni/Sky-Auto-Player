@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
+import type { CalibrationFinished, DesktopBridge } from '../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../state/store';
 
 interface PackagedSmokeTestProps {
@@ -108,26 +108,42 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
         throw new Error('packaged GUI diagnostics disable postcondition failed');
       }
 
-      let calibrationOperationId: string | null = null;
-      let calibrationFinished: Extract<UiEvent, { name: 'calibration.finished' }>;
-      const earlyCalibrationFinished: Extract<UiEvent, { name: 'calibration.finished' }>[] = [];
-      let resolveCalibration!: (event: Extract<UiEvent, { name: 'calibration.finished' }>) => void;
-      const calibrationDone = new Promise<Extract<UiEvent, { name: 'calibration.finished' }>>(
-        (resolve) => {
-          resolveCalibration = resolve;
-        },
-      );
-      const unsubscribe = await bridge.subscribeUiEvents((event) => {
-        if (
-          event.name === 'calibration.finished' &&
-          calibrationOperationId !== null &&
-          event.payload.operation_id === calibrationOperationId
-        ) {
-          resolveCalibration(event);
-        } else if (event.name === 'calibration.finished') {
-          earlyCalibrationFinished.push(event);
-        }
+      const previousCalibrationResult = useStore.getState().calibration.result;
+      let lastObservedCalibrationResult = previousCalibrationResult;
+      let expectedOperationId: string | null = null;
+      let calibrationFinished: CalibrationFinished;
+      const earlyCalibrationResults: Array<{
+        operationId: string | null;
+        result: CalibrationFinished;
+      }> = [];
+      let resolveCalibration!: (result: CalibrationFinished) => void;
+      let rejectCalibration!: (error: Error) => void;
+      const calibrationDone = new Promise<CalibrationFinished>((resolve, reject) => {
+        resolveCalibration = resolve;
+        rejectCalibration = reject;
       });
+      const handleCalibrationResult = (operationId: string | null, result: CalibrationFinished) => {
+        if (expectedOperationId === null) {
+          earlyCalibrationResults.push({ operationId, result });
+          return;
+        }
+        if (operationId !== expectedOperationId || result.operation_id !== expectedOperationId) {
+          rejectCalibration(new Error('packaged GUI calibration operation ID mismatch'));
+          return;
+        }
+        if (!['succeeded', 'cancelled'].includes(result.outcome)) {
+          rejectCalibration(new Error('packaged GUI calibration terminal postcondition failed'));
+          return;
+        }
+        resolveCalibration(result);
+      };
+      const unsubscribe = useStore.subscribe((state) => {
+        const result = state.calibration.result;
+        if (!result || result === lastObservedCalibrationResult) return;
+        lastObservedCalibrationResult = result;
+        handleCalibrationResult(state.calibration.operationId, result);
+      });
+      let calibrationTimeout: number | null = null;
       try {
         const calibration = await bridge.startCalibration({
           mode: 'quick',
@@ -136,30 +152,41 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
           samples: null,
           timeoutSeconds: null,
         });
-        if (calibration.state !== 'running') {
+        if (calibration.state !== 'running' || !calibration.operation_id) {
           throw new Error('packaged GUI calibration did not start');
         }
-        calibrationOperationId = calibration.operation_id;
-        const early = earlyCalibrationFinished.find(
-          (event) => event.payload.operation_id === calibrationOperationId,
-        );
-        if (early) resolveCalibration(early);
-        calibrationFinished = await Promise.race([
+        expectedOperationId = calibration.operation_id;
+        const calibrationResult = Promise.race([
           calibrationDone,
-          new Promise<never>((_, reject) =>
-            window.setTimeout(
-              () => reject(new Error('packaged GUI calibration timed out')),
-              10_000,
-            ),
+          new Promise<never>(
+            (_, reject) =>
+              (calibrationTimeout = window.setTimeout(
+                () => reject(new Error('packaged GUI calibration timed out')),
+                10_000,
+              )),
           ),
         ]);
+        const pendingResults = earlyCalibrationResults.splice(0);
+        const currentCalibration = useStore.getState().calibration;
+        if (
+          currentCalibration.result &&
+          currentCalibration.result !== previousCalibrationResult &&
+          !pendingResults.some(({ result }) => result === currentCalibration.result)
+        ) {
+          pendingResults.push({
+            operationId: currentCalibration.operationId,
+            result: currentCalibration.result,
+          });
+        }
+        for (const pending of pendingResults) {
+          handleCalibrationResult(pending.operationId, pending.result);
+        }
+        calibrationFinished = await calibrationResult;
       } finally {
         unsubscribe();
+        if (calibrationTimeout !== null) window.clearTimeout(calibrationTimeout);
       }
-      if (
-        !calibrationFinished ||
-        !['succeeded', 'cancelled'].includes(calibrationFinished.payload.outcome)
-      ) {
+      if (!['succeeded', 'cancelled'].includes(calibrationFinished.outcome)) {
         throw new Error('packaged GUI calibration terminal postcondition failed');
       }
       // The controlled-close command destroys this WebView after starting
