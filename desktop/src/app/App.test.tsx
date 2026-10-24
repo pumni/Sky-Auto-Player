@@ -8,11 +8,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type {
-  CalibrationStartAck,
-  DesktopBridge,
-  UiEvent,
-} from '../bridge/DesktopBridge';
+import type { CalibrationStartAck, DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
 import { createMockBridge } from '../bridge/mockBridge';
 import { createDesktopStore, type DesktopStoreHook } from '../state/store';
 import { App } from './App';
@@ -326,9 +322,7 @@ describe('desktop application shell', () => {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     });
     await act(async () => {
-      fixture.nativeEvents.emit(
-        createCalibrationFinished('unrelated-operation', 'succeeded'),
-      );
+      fixture.nativeEvents.emit(createCalibrationFinished('unrelated-operation', 'succeeded'));
     });
 
     await waitFor(() => expect(fixture.shutdown).toHaveBeenCalledWith(true));

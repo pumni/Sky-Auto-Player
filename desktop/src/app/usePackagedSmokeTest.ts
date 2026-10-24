@@ -122,10 +122,7 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
         resolveCalibration = resolve;
         rejectCalibration = reject;
       });
-      const handleCalibrationResult = (
-        operationId: string | null,
-        result: CalibrationFinished,
-      ) => {
+      const handleCalibrationResult = (operationId: string | null, result: CalibrationFinished) => {
         if (expectedOperationId === null) {
           earlyCalibrationResults.push({ operationId, result });
           return;
@@ -161,11 +158,12 @@ export function usePackagedSmokeTest({ bridge, useStore }: PackagedSmokeTestProp
         expectedOperationId = calibration.operation_id;
         const calibrationResult = Promise.race([
           calibrationDone,
-          new Promise<never>((_, reject) =>
-            (calibrationTimeout = window.setTimeout(
-              () => reject(new Error('packaged GUI calibration timed out')),
-              10_000,
-            )),
+          new Promise<never>(
+            (_, reject) =>
+              (calibrationTimeout = window.setTimeout(
+                () => reject(new Error('packaged GUI calibration timed out')),
+                10_000,
+              )),
           ),
         ]);
         const pendingResults = earlyCalibrationResults.splice(0);
