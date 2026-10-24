@@ -86,6 +86,29 @@ function Redact-UpdaterVerifierOutput {
     return $redacted
 }
 
+function Invoke-CalibrationPayloadVerification {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstallRoot,
+        [Parameter(Mandatory = $true)]
+        [long]$ExpectedSize,
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedSha256,
+        [Parameter(Mandatory = $true)]
+        [string]$Context
+    )
+
+    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File (Join-Path $PSScriptRoot "verify_installed_calibration.ps1") `
+        -InstallRoot $InstallRoot `
+        -ExpectedSize $ExpectedSize `
+        -ExpectedSha256 $ExpectedSha256
+    $verificationExitCode = $LASTEXITCODE
+    if ($verificationExitCode -ne 0) {
+        throw "$Context failed with exit code $verificationExitCode"
+    }
+}
+
 function Get-CanonicalUpdaterKeyId {
     $tauriConfPath = Join-Path $repoRoot "desktop\src-tauri\tauri.conf.json"
     $tauriConf = Get-Content -LiteralPath $tauriConfPath -Raw | ConvertFrom-Json
@@ -427,12 +450,49 @@ try {
     $smokeRanAndPassed = $false
     if (-not $InternalSkipSmoke) {
         Write-Host "Running current-user install/launch/uninstall smoke..."
+        $calibrationResourceSize = [long]0
+        $calibrationResourceSha256 = $null
+        # Production-only staged calibration gate. Bind the installed check to this build's exact resource.
+        if (-not $InternalTestFixture) {
+            $calibrationResourcePath = Join-Path $repoRoot "desktop\src-tauri\resources\native_calibration.exe"
+            if (-not (Test-Path -LiteralPath $calibrationResourcePath -PathType Leaf)) {
+                throw "Staged native_calibration.exe is missing: $calibrationResourcePath"
+            }
+            $calibrationResource = Get-Item -LiteralPath $calibrationResourcePath -ErrorAction Stop
+            if ($calibrationResource.PSIsContainer -or
+                (($calibrationResource.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                throw "Staged native_calibration.exe must be a regular file: $calibrationResourcePath"
+            }
+            $calibrationResourceSize = [long]$calibrationResource.Length
+            if ($calibrationResourceSize -le 0) {
+                throw "Staged native_calibration.exe must be non-empty: $calibrationResourcePath"
+            }
+            $calibrationResourceSha256 = (Get-FileHash -LiteralPath $calibrationResourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($calibrationResourceSha256 -notmatch '^[0-9a-f]{64}$') {
+                throw "Staged native_calibration.exe has an invalid SHA-256 identity"
+            }
+            $calibrationResourceRoot = Split-Path -Parent $calibrationResourcePath
+            Invoke-CalibrationPayloadVerification `
+                -InstallRoot $calibrationResourceRoot `
+                -ExpectedSize $calibrationResourceSize `
+                -ExpectedSha256 $calibrationResourceSha256 `
+                -Context "Staged calibration verification"
+        }
+
         $installRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-v4-smoke-" + [guid]::NewGuid().ToString("N"))
         $appPath = Join-Path $installRoot "sky_desktop_shell.exe"
         $uninstaller = Join-Path $installRoot "uninstall.exe"
         $smokeScope = Enter-V4NsisSmokeScope -InstallRoot $installRoot -RegistryStateMode FreshInstall
         try {
             Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot | Out-Null
+            # Production-only installed calibration gate; keep it before app launch and qualification evidence.
+            if (-not $InternalTestFixture) {
+                Invoke-CalibrationPayloadVerification `
+                    -InstallRoot $installRoot `
+                    -ExpectedSize $calibrationResourceSize `
+                    -ExpectedSha256 $calibrationResourceSha256 `
+                    -Context "Installed calibration verification"
+            }
             if (-not (Test-Path -LiteralPath $appPath)) { throw "Installed executable missing: $appPath" }
             if (-not (Test-Path -LiteralPath $uninstaller)) { throw "Uninstaller missing: $uninstaller" }
 

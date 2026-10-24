@@ -3021,6 +3021,104 @@ fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn v4_production_calibration_gate_contract(orchestrator: &str) -> Result<()> {
+    let smoke_start = orchestrator
+        .find("# 10. Install / Smoke Test")
+        .ok_or("v4 production release orchestrator is missing its install smoke section")?;
+    let evidence_start = orchestrator
+        .find("# 11. Emit Deterministic Machine-Readable Evidence")
+        .ok_or("v4 production release orchestrator is missing its evidence boundary")?;
+    if evidence_start <= smoke_start {
+        return Err("v4 production calibration gate must precede qualification evidence".into());
+    }
+    let smoke = &orchestrator[smoke_start..evidence_start];
+    let staged_gate_start = smoke
+        .find("# Production-only staged calibration gate.")
+        .ok_or("production release must verify the staged calibration resource")?;
+    let install_position = smoke
+        .find("Invoke-V4NsisInstaller -InstallerPath $installerPath -InstallRoot $installRoot")
+        .ok_or("production release smoke must install the exact NSIS candidate")?;
+    let installed_gate_start = smoke
+        .find("# Production-only installed calibration gate")
+        .ok_or("production release must verify installed native calibration")?;
+    let launch_position = smoke
+        .find("Start-Process -FilePath $appPath")
+        .ok_or("production release smoke must launch the installed application")?;
+    if staged_gate_start >= install_position
+        || install_position >= installed_gate_start
+        || installed_gate_start >= launch_position
+    {
+        return Err(
+            "production calibration verification must validate the staged child, install, verify the installed child, then launch".into(),
+        );
+    }
+
+    let staged_gate = &smoke[staged_gate_start..install_position];
+    for marker in [
+        "if (-not $InternalTestFixture) {",
+        r#"Join-Path $repoRoot "desktop\src-tauri\resources\native_calibration.exe""#,
+        "Test-Path -LiteralPath $calibrationResourcePath -PathType Leaf",
+        "$calibrationResource.Attributes -band [IO.FileAttributes]::ReparsePoint",
+        "$calibrationResourceSize = [long]$calibrationResource.Length",
+        "Get-FileHash -LiteralPath $calibrationResourcePath -Algorithm SHA256",
+        "$calibrationResourceRoot = Split-Path -Parent $calibrationResourcePath",
+        "Invoke-CalibrationPayloadVerification",
+        "-InstallRoot $calibrationResourceRoot",
+        "-ExpectedSize $calibrationResourceSize",
+        "-ExpectedSha256 $calibrationResourceSha256",
+    ] {
+        if !staged_gate.contains(marker) {
+            return Err(format!(
+                "production staged calibration verification is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let installed_gate = &smoke[installed_gate_start..launch_position];
+    for marker in [
+        "if (-not $InternalTestFixture) {",
+        "Invoke-CalibrationPayloadVerification",
+        "-InstallRoot $installRoot",
+        "-ExpectedSize $calibrationResourceSize",
+        "-ExpectedSha256 $calibrationResourceSha256",
+        "-Context \"Installed calibration verification\"",
+    ] {
+        if !installed_gate.contains(marker) {
+            return Err(format!(
+                "production installed calibration verification is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let verifier = orchestrator
+        .split_once("function Invoke-CalibrationPayloadVerification")
+        .map(|(_, remainder)| remainder)
+        .ok_or("production release is missing the installed calibration verifier adapter")?;
+    let verifier = verifier
+        .split_once("\nfunction ")
+        .map(|(function, _)| function)
+        .ok_or("installed calibration verifier adapter must be a bounded function")?;
+    for marker in [
+        "verify_installed_calibration.ps1",
+        "-InstallRoot $InstallRoot",
+        "-ExpectedSize $ExpectedSize",
+        "-ExpectedSha256 $ExpectedSha256",
+        "$verificationExitCode = $LASTEXITCODE",
+        "if ($verificationExitCode -ne 0)",
+    ] {
+        if !verifier.contains(marker) {
+            return Err(format!(
+                "production installed calibration verifier adapter is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
 fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let config_path = root.join("desktop/src-tauri/tauri.conf.json");
     let config = fs::read_to_string(&config_path)?;
@@ -3398,6 +3496,23 @@ fn v4_trust_material_contract(root: &Path) -> Result<()> {
         if !orchestrator.contains(marker) {
             return Err(format!(
                 "v4 production release orchestrator is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    v4_production_calibration_gate_contract(&orchestrator)?;
+    let installed_calibration_verifier =
+        fs::read_to_string(root.join("scripts/verify_installed_calibration.ps1"))?;
+    for marker in [
+        "ExpectedSize -le 0",
+        "$sha256 -cne $ExpectedSha256.ToLowerInvariant()",
+        "$machine -ne 0x8664",
+        "WaitForExit(5000)",
+        "installed calibration --help exited with",
+    ] {
+        if !installed_calibration_verifier.contains(marker) {
+            return Err(format!(
+                "production calibration verifier is missing its fail-closed check: {marker}"
             )
             .into());
         }
@@ -4943,6 +5058,43 @@ mod tests {
 
         assert!(run_once_per_check_session(&mut completed, || Ok(())).unwrap());
         assert!(completed);
+    }
+
+    #[test]
+    fn production_release_calibration_gate_rejects_removal_or_post_evidence_move() {
+        let source = include_str!("../../../scripts/orchestrate_v4_production_release.ps1");
+        v4_production_calibration_gate_contract(source)
+            .expect("production release must verify staged and installed calibration");
+
+        let gate_start = source
+            .find("# Production-only installed calibration gate")
+            .expect("installed calibration gate marker");
+        let launch_start = source[gate_start..]
+            .find("Start-Process -FilePath $appPath")
+            .map(|offset| gate_start + offset)
+            .expect("application launch marker");
+        let installed_gate = source[gate_start..launch_start].to_owned();
+
+        let mut removed_gate = source.to_owned();
+        removed_gate.replace_range(gate_start..launch_start, "");
+        assert!(
+            v4_production_calibration_gate_contract(&removed_gate).is_err(),
+            "release contract must reject removal of installed calibration verification"
+        );
+
+        let mut moved_gate = removed_gate;
+        let evidence_start = moved_gate
+            .find("# 11. Emit Deterministic Machine-Readable Evidence")
+            .expect("qualification evidence boundary");
+        let evidence_line_end = moved_gate[evidence_start..]
+            .find('\n')
+            .map(|offset| evidence_start + offset + 1)
+            .expect("qualification evidence line end");
+        moved_gate.insert_str(evidence_line_end, &installed_gate);
+        assert!(
+            v4_production_calibration_gate_contract(&moved_gate).is_err(),
+            "release contract must reject installed calibration verification moved after evidence"
+        );
     }
 
     const VALID_TAURI_FEATURE_MANIFEST: &str = r#"
