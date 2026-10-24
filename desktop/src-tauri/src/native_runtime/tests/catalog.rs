@@ -595,6 +595,125 @@ fn catalog_viewport_hydrates_metadata_and_liked_songs_persist_by_song_id() {
 }
 
 #[test]
+fn warmed_native_catalog_routes_avoid_full_snapshot_clones() {
+    const CATALOG_SIZE: usize = 10_000;
+
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sky-native-catalog-readiness-{suffix}"));
+    fs::create_dir_all(root.join("songs")).expect("songs root");
+    fs::write(
+        root.join("config.json"),
+        serde_json::json!({"schema_version": 3}).to_string(),
+    )
+    .expect("config");
+
+    let runtime = NativeDesktopRuntime::from_install_root(root.clone()).expect("runtime");
+    let _ = catalog_generation(&runtime);
+    let (generation, first_song_id) = {
+        let mut catalog = runtime.catalog.lock().expect("catalog lock");
+        let snapshot = catalog
+            .index
+            .replace_entries((0..CATALOG_SIZE).map(|index| {
+                let path = format!("C:/catalog-readiness-v1/{index:05}.json");
+                sky_app_core::catalog::CatalogSourceEntry::path_derived(
+                    path,
+                    format!("Ready Song {index:05}"),
+                )
+            }))
+            .expect("synthetic catalog");
+        catalog.library_membership = snapshot
+            .items
+            .iter()
+            .map(|row| row.song_id.clone())
+            .collect();
+        let first_song_id = snapshot.items[0].song_id.clone();
+        (snapshot.generation, first_song_id)
+    };
+    *runtime.catalog_load.lock().expect("catalog load lock") =
+        CatalogLoadState::Ready { generation };
+    runtime
+        .analysis_cache
+        .lock()
+        .expect("analysis cache lock")
+        .insert(
+            first_song_id.clone(),
+            super::super::CachedSongAnalysis {
+                metadata: super::super::CatalogMetadata {
+                    format_label: "JSON".into(),
+                    duration_us: Some(0),
+                    note_count: Some(0),
+                    risk_level: "low".into(),
+                    state: "ready",
+                },
+                detail: None,
+            },
+        );
+
+    let source = include_str!("../catalog.rs");
+    let ensure_start = source
+        .find("pub(super) fn ensure_catalog_loaded(")
+        .expect("readiness function");
+    let ensure_end = source[ensure_start..]
+        .find("pub(super) fn reload(")
+        .map(|offset| ensure_start + offset)
+        .expect("next catalog method");
+    let ensure_source = &source[ensure_start..ensure_end];
+    assert!(ensure_source.contains("Result<u64, String>"));
+    assert!(ensure_source.contains("return Ok(*generation);"));
+    assert!(!ensure_source.contains(".snapshot()"));
+
+    let search_request = serde_json::json!({
+        "query": "",
+        "offset": 0,
+        "limit": 16,
+        "generation": generation,
+        "source": {"kind": "smart", "id": "all"}
+    });
+    let viewport_request = serde_json::json!({
+        "generation": generation,
+        "firstIndex": 0,
+        "lastIndex": 0,
+        "selectedSongId": null,
+        "songIds": [first_song_id]
+    });
+
+    for state in [
+        CatalogLoadState::Ready { generation },
+        CatalogLoadState::Cached { generation },
+        CatalogLoadState::Reconciling { generation },
+    ] {
+        let expected_state = state.clone();
+        *runtime.catalog_load.lock().expect("catalog load lock") = state;
+        let search = runtime
+            .dispatch("catalog.search", search_request.clone())
+            .expect("warmed high-cardinality search");
+        assert_eq!(search["generation"], generation);
+        assert_eq!(search["total"], CATALOG_SIZE);
+        assert_eq!(search["items"].as_array().expect("search items").len(), 16);
+
+        let viewport = runtime
+            .dispatch("catalog.set_viewport", viewport_request.clone())
+            .expect("warmed viewport");
+        assert_eq!(viewport["generation"], generation);
+        assert_eq!(viewport["items"][0]["metadata_state"], "ready");
+        let repeated = runtime
+            .dispatch("catalog.set_viewport", viewport_request.clone())
+            .expect("repeated warmed viewport");
+        assert_eq!(repeated["items"], viewport["items"]);
+        assert_eq!(
+            *runtime.catalog_load.lock().expect("catalog load lock"),
+            expected_state
+        );
+    }
+
+    runtime.shutdown();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn native_playlist_import_commits_membership_and_import_reference_together() {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)

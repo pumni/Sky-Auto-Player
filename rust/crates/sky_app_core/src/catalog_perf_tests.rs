@@ -269,7 +269,11 @@ fn bench_preoptimization_viewport_refresh(index: &CatalogIndex, first: usize, wi
 
 /// Run with `cargo test --manifest-path rust/Cargo.toml -p sky_app_core
 /// --release --locked opt_in_catalog_performance_measurement -- --ignored
-/// --nocapture`. Reports medians only; there are no timing assertions.
+/// --nocapture`. This measures pure `CatalogIndex` query/count and index-range
+/// operations only; it does not include native IPC readiness, DTO projection,
+/// file parsing, or analysis-cache hydration. Native warmed-route behavior is
+/// covered by the desktop fixture tests. Reports medians only; there are no
+/// timing assertions.
 #[test]
 #[ignore = "opt-in bounded catalog performance measurement"]
 fn opt_in_catalog_performance_measurement() {
@@ -280,7 +284,7 @@ fn opt_in_catalog_performance_measurement() {
     for size in [100, 1_000, 10_000] {
         let (catalog, all, liked, playlist) = measured_catalog(size);
         println!(
-            "catalog_perf_fixture id=catalog-query-v1 size={size} all={} liked={} playlist={} profile=release",
+            "catalog_perf_fixture id=catalog-query-v1 layer=catalog-index size={size} all={} liked={} playlist={} profile=release",
             all.len(),
             liked.len(),
             playlist.len()
@@ -393,7 +397,7 @@ fn opt_in_catalog_performance_measurement() {
                 bench_viewport_refresh(&catalog, first, VIEWPORT_WIDTH);
             });
             println!(
-                "catalog_perf size={size} workload=viewport-refresh page={position} first={first} width={VIEWPORT_WIDTH} warmup=1 sample_ms=20 samples=7 legacy_median_us={legacy:.3} current_median_us={current:.3}"
+                "catalog_perf size={size} workload=index-viewport-refresh page={position} first={first} width={VIEWPORT_WIDTH} warmup=1 sample_ms=20 samples=7 legacy_median_us={legacy:.3} current_median_us={current:.3}"
             );
         }
     }

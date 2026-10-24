@@ -463,23 +463,17 @@ impl NativeDesktopRuntime {
             .sort_by(|left, right| left.canonical_path.cmp(&right.canonical_path));
     }
 
-    pub(super) fn ensure_catalog_loaded(
-        &self,
-    ) -> Result<sky_app_core::catalog::CatalogSnapshot, String> {
+    pub(super) fn ensure_catalog_loaded(&self) -> Result<u64, String> {
         let claim = {
             let mut state = self
                 .catalog_load
                 .lock()
                 .map_err(|_| "native catalog load state lock poisoned".to_string())?;
             match &*state {
-                CatalogLoadState::Cached { .. }
-                | CatalogLoadState::Reconciling { .. }
-                | CatalogLoadState::Ready { .. } => {
-                    return self
-                        .catalog
-                        .lock()
-                        .map_err(|_| "native catalog lock poisoned".to_string())
-                        .map(|catalog| catalog.index.snapshot());
+                CatalogLoadState::Cached { generation }
+                | CatalogLoadState::Reconciling { generation }
+                | CatalogLoadState::Ready { generation } => {
+                    return Ok(*generation);
                 }
                 CatalogLoadState::Loading => {
                     return Err("catalog_loading: catalog is still loading".into());
@@ -521,10 +515,9 @@ impl NativeDesktopRuntime {
         };
         match result {
             Ok(Some((snapshot, _))) => {
-                *state = CatalogLoadState::Ready {
-                    generation: snapshot.generation,
-                };
-                Ok(snapshot)
+                let generation = snapshot.generation;
+                *state = CatalogLoadState::Ready { generation };
+                Ok(generation)
             }
             Ok(None) => {
                 *state = CatalogLoadState::Uninitialized;
@@ -862,7 +855,7 @@ impl NativeDesktopRuntime {
         let generation = if has_new_import {
             self.reload()?.generation
         } else {
-            self.ensure_catalog_loaded()?.generation
+            self.ensure_catalog_loaded()?
         };
         Ok(LibraryPlaylistImportResultDto {
             playlist: self.playlist_summary(playlist)?,
