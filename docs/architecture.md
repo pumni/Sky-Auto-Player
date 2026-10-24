@@ -44,11 +44,33 @@ Core process, desktop Python IPC, or automatic fallback in the production
 router. `core.ready` remains a compatibility wire event name and is produced
 by the native runtime where the frontend contract requires it.
 
-The native runtime owns settings persistence, catalog indexing/search/detail,
-playback planning and control, diagnostics, update policy, calibration
-orchestration, event delivery, and shutdown. The calibration measurement
-remains process-isolated in `native_calibration.exe`. V4 update operations are
-owned by the Rust `UpdateService`, which invokes the official Tauri updater.
+`NativeDesktopRuntime` in `desktop/src-tauri/src/native_runtime.rs` remains the
+composition and ownership root for settings, command routing, app coordination,
+the shared `NativeEventHub`, and shutdown. Its child modules own focused
+control-plane work while using the same runtime state:
+
+- `native_runtime/catalog.rs` owns catalog and library operations, including
+  generation-fenced loading, reconciliation, cache handling, imports, search,
+  and detail projection.
+- `native_runtime/calibration.rs` owns calibration orchestration, worker
+  cancellation, evidence validation, and admitted atomic cache publication.
+  Measurement remains process-isolated in `native_calibration.exe`.
+- `native_runtime/playback/` owns playback planning and control through
+  `NativePlaybackService`; the qualified worker and sender boundaries are
+  unchanged.
+- `NativeEventHub` stays in `native_runtime.rs` and owns shared catalog,
+  calibration, and playback event delivery. Its subscription, queue,
+  publisher, and fail-closed behavior are unchanged.
+
+V4 update operations remain owned by the Rust `UpdateService`, which invokes
+the official Tauri updater. The native test suites are grouped under
+`native_runtime/tests/` by catalog, calibration, event delivery, and playback
+integration.
+
+The architecture audit applies explicit size budgets to the native composition
+root, its ownership modules, and their grouped test suites. Remaining module
+size debt in `rust/xtask/src/checks.rs` and
+`rust/crates/sky_player/src/engine/tests.rs` is outside this maintenance scope.
 
 ## Playback boundary
 
